@@ -1,0 +1,531 @@
+{
+    "meta": {
+      "id": "PCT",
+      "name": "Patent Cooperation Treaty",
+      "code": "PCT",
+      "continent": "Global",
+      "office": "WIPO – International Bureau",
+      "officeUrl": "https://www.wipo.int/pct/en/",
+      "applicationTypes": ["international"],
+      "languages": ["ar", "zh", "en", "fr", "de", "ja", "ko", "pt", "ru", "es"],
+      "version": 1,
+      "status": "active",
+      "inheritsFrom": null,
+      "tags": ["treaty", "international_phase", "pct", "strict_formatting"],
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": "2025-01-01T00:00:00Z"
+    },
+    "structure": {
+      "defaultVariant": "standard",
+      "variants": [
+        {
+          "id": "pct_standard",
+          "label": "Standard PCT International Application",
+          "description": "International patent application filed under the Patent Cooperation Treaty for the international phase before entering national or regional phases.",
+          "sections": [
+            {
+              "id": "title",
+              "label": "Title",
+              "order": 1,
+              "canonicalKeys": ["title"],
+              "required": true,
+              "group": "header",
+              "maxLengthChars": 500,
+              "ui": {
+                "placeholder": "Enter a concise technical title",
+                "helpText": "Enter a short, specific technical title. Do not include trademarks or the word 'patent'."
+              }
+            },
+            {
+              "id": "cross_reference",
+              "label": "Cross-Reference to Related Applications",
+              "order": 2,
+              "canonicalKeys": ["cross_reference"],
+              "required": false,
+              "group": "header",
+              "ui": {
+                "placeholder": "Identify related applications and priority claims, if any.",
+                "helpText": "Use this section for priority and benefit claims (for example, earlier national, regional or international applications) and related applications, consistent with PCT Rule 4.10."
+              }
+            },
+            {
+              "id": "field",
+              "label": "Technical Field",
+              "order": 3,
+              "canonicalKeys": ["technical_field"],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "State the technical field to which the invention relates.",
+                "helpText": "1–3 sentences specifying the technical field as required by PCT Rule 5.1(a)(i); do not describe advantages or embodiments here."
+              }
+            },
+            {
+              "id": "background",
+              "label": "Background Art",
+              "order": 4,
+              "canonicalKeys": ["background_art"],
+              "required": false,
+              "group": "body",
+              "ui": {
+                "placeholder": "Describe the background art and its limitations.",
+                "helpText": "Indicate background art useful for understanding, searching and examining the invention, preferably citing documents, as per PCT Rule 5.1(a)(ii). Avoid statements that the invention is obvious."
+              }
+            },
+            {
+              "id": "summary",
+              "label": "Disclosure of Invention",
+              "order": 5,
+              "canonicalKeys": ["disclosure_of_invention"],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Provide a high-level disclosure of the invention as claimed.",
+                "helpText": "Explain the invention as claimed so that the technical problem and its solution can be understood, and state advantageous effects, if any, with reference to the background art, as per PCT Rule 5.1(a)(iii)."
+              }
+            },
+            {
+              "id": "brief_drawings",
+              "label": "Brief Description of Drawings",
+              "order": 6,
+              "canonicalKeys": ["brief_description_of_drawings"],
+              "required": false,
+              "group": "body",
+              "ui": {
+                "placeholder": "Briefly describe each figure of the drawings.",
+                "helpText": "One sentence per figure, briefly describing what is shown, to satisfy PCT Rule 5.1(a)(iv)."
+              }
+            },
+            {
+              "id": "detailed_description",
+              "label": "Mode(s) for Carrying Out the Invention",
+              "order": 7,
+              "canonicalKeys": ["best_mode", "detailed_description"],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Describe at least one way of carrying out the invention in full detail.",
+                "helpText": "Set forth at least the best mode contemplated by the applicant for carrying out the invention, using examples and referring to the drawings where appropriate, as per PCT Rule 5.1(a)(v). The description must be sufficiently clear and complete for a person skilled in the art."
+              }
+            },
+            {
+              "id": "claims",
+              "label": "Claims",
+              "order": 8,
+              "canonicalKeys": ["claims"],
+              "required": true,
+              "group": "claims",
+              "ui": {
+                "placeholder": "Independent and dependent claims for the international application.",
+                "helpText": "Present the claims in the clearest possible form, each as a single sentence where practicable, numbered consecutively, and drafted in accordance with PCT Rule 6."
+              }
+            },
+            {
+              "id": "abstract",
+              "label": "Abstract",
+              "order": 9,
+              "canonicalKeys": ["abstract"],
+              "required": true,
+              "group": "abstract",
+              "ui": {
+                "placeholder": "Concise technical abstract (preferably 50–150 words).",
+                "helpText": "Summarize the disclosure so the technical field, problem, solution and principal use can be understood, preferably in 50–150 words, without statements on alleged merits or speculative applications, as per PCT Rule 8.1."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "rules": {
+      "global": {
+        "paragraphNumberingRequired": false,
+        "maxPagesRecommended": 100,
+        "allowEquations": true,
+        "allowTables": true
+      },
+      "abstract": {
+        "wordLimit": 150,
+        "noBenefitsOrAdvantages": true,
+        "noClaimLanguage": true,
+        "singleParagraph": true
+      },
+      "claims": {
+        "twoPartFormPreferred": false,
+        "allowMultipleDependent": true,
+        "prohibitMultipleDependentOnMultipleDependent": true,
+        "preferredConnectors": ["comprising"],
+        "discouragedConnectors": [],
+        "forbiddenPhrases": [],
+        "maxIndependentClaimsBeforeExtraFee": 3,
+        "maxTotalClaimsRecommended": 20,
+        "allowReferenceNumeralsInClaims": true,
+        "requireSupportInDescription": true,
+        "unityStandard": "PCT_Rule_13"
+      },
+      "description": {
+        "requireBestModeDisclosure": true,
+        "avoidClaimLanguage": true,
+        "allowReferenceNumerals": true,
+        "requireEmbodimentSupportForAllClaims": true,
+        "industrialApplicabilitySectionRequired": false
+      },
+      "drawings": {
+        "requiredWhenApplicable": true,
+        "paperSize": "A4",
+        "colorAllowed": false,
+        "lineStyle": "black_and_white_solid",
+        "referenceNumeralsMandatoryWhenDrawings": true,
+        "minReferenceTextSizePt": 8,
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0
+      },
+      "procedural": {
+        "gracePeriodMonths": 12,
+        "foreignFilingLicenseRequired": false,
+        "idsRequired": false,
+        "priorArtDisclosureThreshold": "material_to_novelty_inventive_step",
+        "allowProvisionalPriority": true
+      },
+      "language": {
+        "allowedLanguages": ["ar", "zh", "en", "fr", "de", "ja", "ko", "pt", "ru", "es"],
+        "requiresOfficialTranslation": true
+      },
+      "sequenceListing": {
+        "requiredIfSeqDisclosed": true,
+        "format": "ST.26-XML",
+        "allowLateFurnishing": true,
+        "affectsFilingDate": true,
+        "notes": "For international applications filed on or after 1 July 2022 that disclose nucleotide or amino acid sequences, a sequence listing complying with WIPO Standard ST.26 in XML format is required. Depending on how and when the listing is furnished (for example, as a missing part of the description under PCT Rule 20.5), late submission may lead to correction of the international filing date or to limitations on the international search.",
+        "additionalFormatsAllowedForReference": ["TXT", "PDF"]
+      },
+      "pageLayout": {
+        "defaultPageSize": "A4",
+        "allowedPageSizes": ["A4"],
+        "minMarginTopCm": 2.0,
+        "minMarginBottomCm": 2.0,
+        "minMarginLeftCm": 2.5,
+        "minMarginRightCm": 2.0,
+        "recommendedFontFamily": "Times New Roman",
+        "recommendedFontSizePt": 12,
+        "recommendedLineSpacing": 1.5
+      },
+      "designatedStates": {
+        "mode": "all_by_default",
+        "electionRequired": true,
+        "notes": "Under PCT Rule 4.9(a), filing a PCT application automatically designates all PCT Contracting States. Elections for the purposes of international preliminary examination under Chapter II are made later via the demand, which generally results in the election of all previously designated States."
+      }
+    },
+    "validation": {
+      "sectionChecks": {
+        "title": [
+          {
+            "id": "title_length_words",
+            "type": "maxWords",
+            "limit": 25,
+            "severity": "warning",
+            "message": "Title appears long; consider making it more concise for clarity in the international phase."
+          },
+          {
+            "id": "title_length_chars",
+            "type": "maxChars",
+            "limit": 500,
+            "severity": "error",
+            "message": "Title exceeds the 500 character maximum typically permitted for PCT titles."
+          }
+        ],
+        "abstract": [
+          {
+            "id": "abstract_word_limit",
+            "type": "maxWords",
+            "limit": 150,
+            "severity": "error",
+            "message": "Abstract exceeds 150 words; PCT practice recommends an abstract of about 50–150 words."
+          }
+        ],
+        "claims": [
+          {
+            "id": "claims_count_recommended",
+            "type": "maxCount",
+            "limit": 20,
+            "severity": "warning",
+            "message": "Number of claims exceeds the recommended 20; a large claim set may increase fees or complexity before some receiving Offices, International Authorities and designated Offices."
+          }
+        ]
+      },
+      "crossSectionChecks": [
+        {
+          "id": "claims_supported_by_description",
+          "type": "support",
+          "from": "claims",
+          "mustBeSupportedBy": ["detailed_description"],
+          "severity": "error",
+          "message": "Some claim elements may not be clearly supported in the description of the mode(s) for carrying out the invention."
+        },
+        {
+          "id": "abstract_consistent_with_claims",
+          "type": "consistency",
+          "from": "abstract",
+          "mustBeConsistentWith": ["claims"],
+          "severity": "warning",
+          "message": "Abstract may describe features not clearly reflected in the independent claims."
+        }
+      ]
+    },
+    "prompts": {
+      "baseStyle": {
+        "tone": "technical, neutral, precise",
+        "voice": "impersonal_third_person",
+        "avoid": [
+          "marketing language",
+          "unsupported advantages",
+          "statements on commercial merit",
+          "overly legalistic boilerplate"
+        ]
+      },
+      "promptMergeStrategy": "append",
+      "sections": {
+        "title": {
+          "instruction": "Draft a concise technical title for the PCT international application.",
+          "constraints": [
+            "Do not exceed 500 characters.",
+            "Do not use trademarks or the word 'patent'."
+          ],
+          "topUp": {
+            "instruction": "Per PCT Rule 4.3, draft a title that is short, precise, and indicates the subject matter to which the invention relates.",
+            "constraints": [
+              "Maximum 500 characters",
+              "Brief and descriptive of the technical subject",
+              "No trademarks, trade names, or fanciful expressions",
+              "Suitable for publication in multiple PCT member states"
+            ],
+            "additions": [
+              "Title appears in the international publication (WIPO)",
+              "Should be suitable for translation into multiple languages"
+            ]
+          }
+        },
+        "field": {
+          "instruction": "Draft the Technical Field section for the PCT description.",
+          "constraints": [
+            "Limit to 1–3 sentences.",
+            "State the technical field without describing advantages or embodiments.",
+            "Ensure the field statement would make sense on its own to a skilled person."
+          ],
+          "topUp": {
+            "instruction": "Per PCT Rule 5.1(a)(i), draft Technical Field indicating the technical field to which the invention relates.",
+            "constraints": [
+              "1-3 sentences",
+              "Must make sense to a skilled person",
+              "No advantages, embodiments, or detailed features"
+            ],
+            "additions": [
+              "Required section under PCT Rule 5.1(a)(i)",
+              "Should be suitable for international classification purposes"
+            ]
+          }
+        },
+        "fieldOfInvention": {
+          "topUp": {
+            "instruction": "Per PCT Rule 5.1(a)(i), draft Technical Field indicating the technical field to which the invention relates.",
+            "constraints": [
+              "1-3 sentences",
+              "Must make sense to a skilled person",
+              "No advantages, embodiments, or detailed features"
+            ],
+            "additions": [
+              "Required section under PCT Rule 5.1(a)(i)"
+            ]
+          }
+        },
+        "background": {
+          "instruction": "Draft the Background Art section.",
+          "constraints": [
+            "Describe relevant prior art and its limitations, preferably citing representative documents where appropriate.",
+            "Avoid explicit admissions that specific references are prior art unless clearly intended.",
+            "Do not state that the invention is obvious or trivial."
+          ],
+          "topUp": {
+            "instruction": "Per PCT Rule 5.1(a)(ii), draft Background Art indicating prior art useful for understanding, searching, and examining the invention.",
+            "constraints": [
+              "Cite relevant prior art documents where known",
+              "Describe limitations objectively",
+              "Do not concede obviousness or lack of novelty"
+            ],
+            "additions": [
+              "Prior art citations are useful for international search",
+              "This section helps the ISA understand the technical context"
+            ]
+          }
+        },
+        "summary": {
+          "instruction": "Draft the Disclosure of Invention section.",
+          "constraints": [
+            "Explain the invention as defined in the claims so that the technical problem and its solution can be understood.",
+            "Mention advantageous effects of the invention compared with the background art, where appropriate.",
+            "Ensure consistency with the independent claims."
+          ],
+          "topUp": {
+            "instruction": "Per PCT Rule 5.1(a)(iii), draft Disclosure of Invention so the technical problem and solution can be understood, with advantageous effects relative to background art.",
+            "constraints": [
+              "Technical problem and solution must be clear",
+              "Advantageous effects compared to prior art",
+              "Align with independent claims"
+            ],
+            "additions": [
+              "Required section under PCT Rule 5.1(a)(iii)",
+              "Critical for international preliminary examination under Chapter II"
+            ]
+          }
+        },
+        "briefDescriptionOfDrawings": {
+          "importFiguresDirectly": true,
+          "topUp": {
+            "instruction": "Per PCT Rule 5.1(a)(iv), briefly describe each figure of the drawings.",
+            "constraints": [
+              "One sentence per figure",
+              "Brief description only",
+              "Required if drawings are present"
+            ],
+            "additions": [
+              "Format: 'Fig. X is a [view type] showing [subject]'"
+            ]
+          }
+        },
+        "detailedDescription": {
+          "instruction": "Draft the section describing the mode(s) for carrying out the invention.",
+          "constraints": [
+            "Describe embodiments in sufficient detail that a skilled person can carry out the invention without undue experimentation.",
+            "Set out at least the best mode contemplated by the applicant.",
+            "Ensure that each independent claim has at least one fully supporting embodiment.",
+            "Reference the drawings and reference numerals where applicable."
+          ],
+          "topUp": {
+            "instruction": "Per PCT Rule 5.1(a)(v), draft Mode(s) for Carrying Out the Invention setting out at least the best mode contemplated by the applicant.",
+            "constraints": [
+              "Best mode must be disclosed",
+              "Sufficient detail for enablement",
+              "Support for all independent claims"
+            ],
+            "additions": [
+              "Required under PCT Rule 5.1(a)(v)"
+            ]
+          }
+        },
+        "claims": {
+          "instruction": "Draft a complete set of claims compliant with PCT Rule 6 and Rule 13.",
+          "constraints": [
+            "Use 'comprising' as the preferred open-ended connector unless a closed or alternative formulation is justified.",
+            "Avoid two-part 'characterized in that' format unless specifically requested for a designated Office.",
+            "Each dependent claim must refer back to a single previous claim and not to another multiple dependent claim.",
+            "All claim features must be supported by the description of the mode(s) for carrying out the invention."
+          ],
+          "topUp": {
+            "instruction": "Per PCT Rules 6 and 13, draft claims that define the matter for which protection is sought, supported by the description.",
+            "constraints": [
+              "Each claim as single sentence where practicable",
+              "Clear, consistent terminology",
+              "Unity of invention under Rule 13 (single general inventive concept)",
+              "Multiple dependent claims cannot depend on other multiple dependents",
+              "Reference numerals may be included in claims (Rule 6.2(a))"
+            ],
+            "additions": [
+              "3+ independent claims or 15+ total claims may trigger additional search fees",
+              "Consider national phase requirements when drafting (some offices prefer two-part form)",
+              "Claims must be numbered consecutively in Arabic numerals"
+            ]
+          }
+        },
+        "abstract": {
+          "instruction": "Draft the Abstract for the PCT application.",
+          "constraints": [
+            "Preferably 50–150 words; do not exceed 150 words.",
+            "Summarize the technical disclosure so that the field, problem, solution and principal use can be understood.",
+            "Do not include statements on alleged merits, advantages or speculative applications.",
+            "Do not use claim-style language."
+          ],
+          "topUp": {
+            "instruction": "Per PCT Rule 8, draft an Abstract for searching purposes that permits quick understanding of the technical disclosure.",
+            "constraints": [
+              "50-150 words (strictly, max 150)",
+              "Technical field, problem, solution, principal use",
+              "No merits, advantages, or speculative applications",
+              "No claim-style language"
+            ],
+            "additions": [
+              "Published by WIPO in international publication",
+              "Include reference to most illustrative figure (Rule 8.1(c))",
+              "ISA may amend abstract if needed (Rule 38.2)"
+            ]
+          }
+        }
+      }
+    },
+    "export": {
+      "documentTypes": [
+        {
+          "id": "pct_spec_pdf",
+          "label": "PCT Specification PDF",
+          "includesSections": [
+            "title",
+            "field",
+            "background",
+            "summary",
+            "brief_drawings",
+            "detailed_description",
+            "claims",
+            "abstract"
+          ],
+          "pageSize": "A4",
+          "lineSpacing": 1.5,
+          "fontFamily": "Times New Roman",
+          "fontSizePt": 12,
+          "addPageNumbers": true,
+          "addParagraphNumbers": false,
+          "marginTopCm": 2.0,
+          "marginBottomCm": 2.0,
+          "marginLeftCm": 2.5,
+          "marginRightCm": 2.0
+        }
+      ],
+      "sectionHeadings": {
+        "field": "TECHNICAL FIELD",
+        "background": "BACKGROUND ART",
+        "summary": "DISCLOSURE OF INVENTION",
+        "brief_drawings": "BRIEF DESCRIPTION OF DRAWINGS",
+        "detailed_description": "MODE(S) FOR CARRYING OUT THE INVENTION",
+        "claims": "CLAIMS",
+        "abstract": "ABSTRACT"
+      }
+    },
+    "diagrams": {
+      "requiredWhenApplicable": true,
+      "supportedDiagramTypes": ["block", "flowchart", "schematic", "perspective_view"],
+      "figureLabelFormat": "Fig. {number}",
+      "autoGenerateReferenceTable": true,
+      "diagramGenerationHints": {
+        "block": "Use rectangles for components and arrows for data/control flow.",
+        "flowchart": "Use standard flowchart symbols for processes and decisions.",
+        "schematic": "Show functional relationships and reference numerals clearly.",
+        "perspective_view": "Use where overall physical form is important."
+      }
+    },
+    "crossChecks": {
+      "enableSemanticCrossCheck": true,
+      "checkList": [
+        {
+          "id": "drawings_vs_description",
+          "description": "Ensure all reference numerals in drawings are explained in the description.",
+          "from": "brief_drawings",
+          "mustBeExplainedIn": ["detailed_description"]
+        },
+        {
+          "id": "claims_vs_drawings",
+          "description": "Ensure key claimed elements appear in at least one figure when drawings are present.",
+          "from": "claims",
+          "mustBeShownIn": ["brief_drawings"]
+        }
+      ]
+    }
+  }

@@ -1,0 +1,13 @@
+-- Remove unused EMBEDDINGS and RERANK features
+-- These features were never implemented and are not part of active plans
+--
+-- Changes made:
+-- 1. Removed EMBEDDINGS and RERANK from FeatureCode enum in schema.prisma
+-- 2. Updated metering utilities to remove validation for these features
+-- 3. Removed from setup scripts and documentation
+-- 4. Database was reset and schema pushed with new enum values
+--
+-- Additional: Changed User.role to User.roles array to support multiple roles per user
+--
+-- Result: Only active features remain: PRIOR_ART_SEARCH, PATENT_DRAFTING,
+--         DIAGRAM_GENERATION, IDEA_BANK

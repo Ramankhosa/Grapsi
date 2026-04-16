@@ -1,0 +1,4298 @@
+{
+  "generatedAt": "2025-12-03T08:02:43.125Z",
+  "excludedTables": [
+    "_prisma_migrations",
+    "annexureDraft",
+    "annexureVersion",
+    "applicantProfile",
+    "draftingHistory",
+    "draftingSession",
+    "featureMapCell",
+    "featureMapOverride",
+    "featureMappingCache",
+    "job",
+    "localPatent",
+    "noveltyAssessmentLLMCall",
+    "noveltyAssessmentRun",
+    "noveltySearchLLMCall",
+    "noveltySearchRun",
+    "patent",
+    "priorArtPatent",
+    "priorArtPatentDetail",
+    "priorArtQueryVariant",
+    "priorArtQueryVariantExecution",
+    "priorArtRawDetail",
+    "priorArtRawResult",
+    "priorArtRun",
+    "priorArtScholarContent",
+    "priorArtSearchBundle",
+    "priorArtSearchHistory",
+    "priorArtUnifiedResult",
+    "priorArtVariantHit",
+    "project",
+    "projectCollaborator",
+    "relatedArtRun",
+    "relatedArtSelection",
+    "userSectionInstruction"
+  ],
+  "tables": {
+    "tenant": [],
+    "user": [],
+    "aTIToken": [],
+    "emailVerificationToken": [],
+    "passwordResetToken": [],
+    "userCredit": [],
+    "tokenNotification": [],
+    "auditLog": [],
+    "plan": [],
+    "feature": [],
+    "task": [],
+    "planFeature": [],
+    "planLLMAccess": [],
+    "policyRule": [],
+    "tenantPlan": [],
+    "lLMModelClass": [],
+    "lLMModelPrice": [],
+    "quotaAlert": [],
+    "usageMeter": [],
+    "usageReservation": [],
+    "usageLog": [],
+    "countryName": [
+      {
+        "code": "AU",
+        "name": "Australia",
+        "continent": "Oceania",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "BD",
+        "name": "Bangladesh",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "BR",
+        "name": "Brazil",
+        "continent": "South America",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "CA",
+        "name": "Canada",
+        "continent": "North America",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "CH",
+        "name": "Switzerland",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "CN",
+        "name": "China",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "DE",
+        "name": "Germany",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "ES",
+        "name": "Spain",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "EU",
+        "name": "European Union",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "FR",
+        "name": "France",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "IL",
+        "name": "Israel",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "IN",
+        "name": "India",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "IR",
+        "name": "Iran",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "JP",
+        "name": "Japan",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "KR",
+        "name": "South Korea",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "MX",
+        "name": "Mexico",
+        "continent": "North America",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "MY",
+        "name": "Malaysia",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "NZ",
+        "name": "New Zealand",
+        "continent": "Oceania",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "PK",
+        "name": "Pakistan",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "PL",
+        "name": "Poland",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "RU",
+        "name": "Russia",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "SA",
+        "name": "Saudi Arabia",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "SE",
+        "name": "Sweden",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "TW",
+        "name": "Taiwan",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "UAE",
+        "name": "United Arab Emirates",
+        "continent": "Asia",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "UK",
+        "name": "United Kingdom",
+        "continent": "Europe",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "US",
+        "name": "United States of America",
+        "continent": "North America",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      },
+      {
+        "code": "ZA",
+        "name": "South Africa",
+        "continent": "Africa",
+        "createdAt": "2025-12-03T07:54:01.589Z",
+        "updatedAt": "2025-12-03T07:54:01.589Z"
+      }
+    ],
+    "countryProfile": [],
+    "countrySectionMapping": [
+      {
+        "id": "dd2cf8a368eaa5a8cfaa98c724db97cb",
+        "country_code": "EU",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "6650e371cdcab774760a01ff9e0d498d",
+        "country_code": "CH",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "5b6d05e3d1b85b5771b6fe8a93cd8bf5",
+        "country_code": "FR",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "49fe31193d521837c6502501d8971aac",
+        "country_code": "DE",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "453cbdc01c0f2c83812405e742a625d9",
+        "country_code": "SE",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "c09023a46a4863b9913fdb34afe2702a",
+        "country_code": "ES",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "ce508dcbbe9c76fa20bdcfe753590471",
+        "country_code": "PL",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "dec97934c4b4fbe500a55a4f2215dde0",
+        "country_code": "BR",
+        "superset_code": "01. Title",
+        "heading": "Título da Invenção",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "e2f5cf6e46034a07522fdb5a4803581e",
+        "country_code": "UAE",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "0c9a4dc68a25d470d2011b6740e0d0c1",
+        "country_code": "IL",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "4a49d81c46b82e5b136754fa75d1efb1",
+        "country_code": "US",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "7a4b4d6c46a3ee33f0c19dfef69e5268",
+        "country_code": "IN",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "9bc38559ef3a2b080c1cbdba9b7455f7",
+        "country_code": "PK",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "ea63e8012b6e465c5ac52a57fe4732c8",
+        "country_code": "BD",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "878d7ea17a1e09418f85b278b339495c",
+        "country_code": "AU",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "75d92ace2087a32608c410c9e59cfef1",
+        "country_code": "NZ",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "8060f171b7ddb3e026f25ddd8b70ac28",
+        "country_code": "UK",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "e7e15dd524529693f8af814f22d19858",
+        "country_code": "CA",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "e8b0ccb9fdc93b744ae8d0bda20da68b",
+        "country_code": "CN",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "b7b2743801e1aa8813abca8faab6cbf3",
+        "country_code": "KR",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "5e1170e876d3f6caccea4cf4361ad028",
+        "country_code": "TW",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "2cce6fa28711a34752d3ad10bef54556",
+        "country_code": "IR",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "64fcebe914abc83990bdb5b598032107",
+        "country_code": "MY",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "36f3271d452d42862a65574b7aa45e10",
+        "country_code": "JP",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "ccfad644b902cf5f6bc1b6c78173b16f",
+        "country_code": "RU",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "72eeeb16431947a8d1b3f770928206e9",
+        "country_code": "MX",
+        "superset_code": "01. Title",
+        "heading": "Título de la Invención",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "a2ea0fd29bb5f55193e77fa98b2a396c",
+        "country_code": "SA",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "faf05eb2d30e77b349a99e35705cbe90",
+        "country_code": "ZA",
+        "superset_code": "01. Title",
+        "heading": "Title of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "title"
+      },
+      {
+        "id": "aa04ce27787198e5b7d7655060bfea27",
+        "country_code": "EU",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "74e141cf0146a244afa6d4d376c21370",
+        "country_code": "CH",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "eb3917c48a8781612247e40641bfbd62",
+        "country_code": "FR",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "611797dd133e3870a8760cc3dd6ad302",
+        "country_code": "DE",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "7211efc339c0d5d879d22784a360c515",
+        "country_code": "SE",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "66afb61287ad5cbc2261fad4479bd541",
+        "country_code": "ES",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "8fa9e9b71cbd3ff4d55def4f6f81256e",
+        "country_code": "PL",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "7c15668236fe8d4a4da14d824ffd3a8d",
+        "country_code": "BR",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "e99caa581f27c1a89d6c8281444b8abf",
+        "country_code": "UAE",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "dbe7d95c5bfc397155ab5a4b8d99fc09",
+        "country_code": "IL",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "24dc8f825ea1d0f5c6c3d8a5eb632456",
+        "country_code": "US",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "ba15b4d43aec2df0b80cc34d3522f763",
+        "country_code": "IN",
+        "superset_code": "02. Preamble",
+        "heading": "The following specification particularly describes...",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "dcabb6b60bfcd3b27718bdaf31abcecd",
+        "country_code": "PK",
+        "superset_code": "02. Preamble",
+        "heading": "The following specification particularly describes...",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "aa24596977e47c606cb00b5196c8a317",
+        "country_code": "BD",
+        "superset_code": "02. Preamble",
+        "heading": "The following specification particularly describes...",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "449cd109a54d69b66523d470aca81b97",
+        "country_code": "AU",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "af4afad5c1bd6df84beba9f70a917c92",
+        "country_code": "NZ",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "e6c8e050fea9ebd09231ec520999dd37",
+        "country_code": "UK",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "8ec1a980da8bbb44684f347d7d46ad5d",
+        "country_code": "CA",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "dbb3248785a4b2da8979c9d462ef16a0",
+        "country_code": "CN",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "1a8932b40c2adde0100661ff89153d36",
+        "country_code": "KR",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "2d2313a154b2aebf05a991dd30da2a7b",
+        "country_code": "TW",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "649c65d4ef55f02994d5b808a8cf2130",
+        "country_code": "IR",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "34bb80bfc396759dc1f41c8e60da649b",
+        "country_code": "MY",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "6f4fe5265190cd3a1debd05d52632b78",
+        "country_code": "JP",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "4f5e54ad950652c4634d2f09df4051c0",
+        "country_code": "RU",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "9540ea9b49f97c4fbad27812326112ca",
+        "country_code": "MX",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "aff21cbf3c4064187dc20d82a7e45f5b",
+        "country_code": "SA",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "b81a2f48748fe8ae4b9e4c929e1b90a1",
+        "country_code": "ZA",
+        "superset_code": "02. Preamble",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "preamble"
+      },
+      {
+        "id": "223e480e5cdbf654422c4247e4324f3e",
+        "country_code": "EU",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "5c954ef05a891f6beb6dd01f75a982cf",
+        "country_code": "CH",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "205fec4fb76e430b99aa8de1925936b4",
+        "country_code": "FR",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "f6a69fa8cb4014d0d65318964fee08d4",
+        "country_code": "DE",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "de9509edd520523415272ca9d64f7cbb",
+        "country_code": "SE",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "918ac235b1fc522493f76329718b2d82",
+        "country_code": "ES",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "4f14b09d7db9a04ec51352a755d978d4",
+        "country_code": "PL",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "af26623441cbd4e4992c5f6f8e36f330",
+        "country_code": "BR",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "e8982d26c7631bdf3fd59c88b062d04a",
+        "country_code": "UAE",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "4468edfc8f026c799032254494efae96",
+        "country_code": "IL",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "de12bc5307524da450e2aee82731ad1a",
+        "country_code": "US",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "Cross-Reference... / Gov. License Rights",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "3d6e3a2ccbe5304efc240830a78467ae",
+        "country_code": "IN",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "029da93b1a2ddad7d0a0cf3ff7e6824d",
+        "country_code": "PK",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "4cdaca1cc5b53c54e705c7c064235c8d",
+        "country_code": "BD",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "83a277adfb83667067f65231914a28cf",
+        "country_code": "AU",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "d6cbd667e87292c79c869a838115b014",
+        "country_code": "NZ",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "1dc1aa2eb8e66783cc8d5267b3c37f09",
+        "country_code": "UK",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "b67e974c7ad02a3679c3a7930ac02a9a",
+        "country_code": "CA",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "2a8cb29b443f019a87d7db55a1d79988",
+        "country_code": "CN",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "c9f012438c5967e87cace33222f7da2f",
+        "country_code": "KR",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "d3a551b914c55842774cdad0e341e6fe",
+        "country_code": "TW",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "8b67ed19242325e2fe368adedb15b7a9",
+        "country_code": "IR",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "37fea46ec8874e957d980d6d52ea129a",
+        "country_code": "MY",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "55d68dc3cd6320467cdd101f1813e3b4",
+        "country_code": "JP",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "98b43141b216ed0809a687738e5d1119",
+        "country_code": "RU",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "4997495fd0f045162106bed62058d4a8",
+        "country_code": "MX",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "0554868bf304a7f27792f7db3274a49e",
+        "country_code": "SA",
+        "superset_code": "03. Cross-Ref/Fed",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "crossReference"
+      },
+      {
+        "id": "b31c41a08dfc1a4a644e559f1f37d7c2",
+        "country_code": "EU",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "8b9e70f20ef469427a58e68aec7ddaa3",
+        "country_code": "CH",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "2e78d0e02231c589de70a9ae0b73713d",
+        "country_code": "FR",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "945b6008b5409dc1bcca7f95d935552e",
+        "country_code": "DE",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "1f3cd7d20cd9c8cff7f85a228112f688",
+        "country_code": "SE",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "11502781d0f1d926871fb056f61cd889",
+        "country_code": "ES",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "fccceb29b3312a55c2a7846452d56140",
+        "country_code": "PL",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "9b5862023660495ca2e1c5bdf7063b7d",
+        "country_code": "BR",
+        "superset_code": "04. Tech Field",
+        "heading": "Campo da Invenção",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "eb61a0a2f536222a8b0cbe29a58ad199",
+        "country_code": "UAE",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "3676889532178110b53d7dc68c012e5b",
+        "country_code": "IL",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "4c4c7576c59dfc40a8cd4f6a1a555113",
+        "country_code": "US",
+        "superset_code": "04. Tech Field",
+        "heading": "Field of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "52d2f0c7cca301b7239be5066aa66948",
+        "country_code": "IN",
+        "superset_code": "04. Tech Field",
+        "heading": "Field of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "67cac36a0c8e887164011d3c9998fd29",
+        "country_code": "PK",
+        "superset_code": "04. Tech Field",
+        "heading": "Field of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "3ee34794746f1b44035b0946d7da2e57",
+        "country_code": "BD",
+        "superset_code": "04. Tech Field",
+        "heading": "Field of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "085285c3683e0ac6b4dc6835f1f78b66",
+        "country_code": "AU",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "1ce5e4da0e774e6f777f3339ff4fbb9f",
+        "country_code": "NZ",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "787818197cfd2bcebcd325d63a3f8af3",
+        "country_code": "UK",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "aee227cfbd5680354c471ade49d91486",
+        "country_code": "CA",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "d0a1ab0b6233c024db3a4f86a84078b7",
+        "country_code": "CN",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "5b49f0db74bb1288f59bdf79c7101e13",
+        "country_code": "KR",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "3724ff6158667625024fee225e31dd6a",
+        "country_code": "TW",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "ed2f528550873015d076c85ccf3e09a4",
+        "country_code": "IR",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "3bda0286e7a0daa8b7739e392d197d92",
+        "country_code": "MY",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "22ec49933ff225395d0366e4ff83563f",
+        "country_code": "JP",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "110b5900667ee300f36da0fdc78f4584",
+        "country_code": "RU",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "010c71616493bdf7e33b7a00fc16b7e5",
+        "country_code": "MX",
+        "superset_code": "04. Tech Field",
+        "heading": "Campo Técnico",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "77e4b28ab14b039e83d62d47295df39e",
+        "country_code": "SA",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "74b7e06cccc59c419d5aa0629ae005d0",
+        "country_code": "ZA",
+        "superset_code": "04. Tech Field",
+        "heading": "Technical Field",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "fieldOfInvention"
+      },
+      {
+        "id": "6bdda9f41cbe15dbdfbef641ff1066ce",
+        "country_code": "EU",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "bd0f29428f7cfcc4a33b7e47e2bec88f",
+        "country_code": "CH",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "ecec2b9ae734d41cae62244ea2b1f5c2",
+        "country_code": "FR",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "47e63eaa366f2f043d6c77b8b798e295",
+        "country_code": "DE",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "78e142e8d0950f0fecc4250bf57ac5bc",
+        "country_code": "SE",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "5a76cbe5822f16c869bfadde31ee9903",
+        "country_code": "ES",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "a4f061986fbf0afdd3c3f143f207ef87",
+        "country_code": "PL",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "99dfc37f420245751c73ab40ef84b777",
+        "country_code": "BR",
+        "superset_code": "05. Background",
+        "heading": "Fundamentos da Invenção",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "ecc1e0452d48c8c07d3c4f549721899a",
+        "country_code": "UAE",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "8820b11e7e28ba21ded277fabbed61a9",
+        "country_code": "IL",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "02dc5f8299c770a6f4e6724093c8bb78",
+        "country_code": "US",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "0ccc71f23d9d1dcb83e1b6a1a790bb8f",
+        "country_code": "IN",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "c1366d4b05df6d2d2a4673f29d597255",
+        "country_code": "PK",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "ec5283bd4b5db7eebf348cdc6d1e3787",
+        "country_code": "BD",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "efc9243128cc888dd7b659b73e5948fb",
+        "country_code": "AU",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "46477c3e2bd88a600b588edb4dfb0d23",
+        "country_code": "NZ",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "96d8f009acbea4d63055a17cf3fab6a4",
+        "country_code": "UK",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "ec6315f069550fbd6147218ce2a57397",
+        "country_code": "CA",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "ce84cca9da48b0214cd5e47214173247",
+        "country_code": "CN",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "89b32661affd13e7f979c853ba078ca2",
+        "country_code": "KR",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "08b74a6388d6d5741d8c3d5b1926e1f9",
+        "country_code": "TW",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "caef8a036cc1623d38ff19f3bc075959",
+        "country_code": "IR",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "18720166e617046d8eb1b16d7b9f2d2c",
+        "country_code": "MY",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "cbc2487a0679b67ff038e6a3a9d1e6a2",
+        "country_code": "JP",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "8250570d714b14de03dd95472dc44547",
+        "country_code": "RU",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "5704f7592cec1f7a5f97876d8631164a",
+        "country_code": "MX",
+        "superset_code": "05. Background",
+        "heading": "Antecedentes de la Invención",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "416a9b733edad45e7bda5151a60d5975",
+        "country_code": "SA",
+        "superset_code": "05. Background",
+        "heading": "Background Art",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "3499f6d0fe11c99dd415bf3ef0f66582",
+        "country_code": "ZA",
+        "superset_code": "05. Background",
+        "heading": "Background of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "background"
+      },
+      {
+        "id": "2c80d11e56e5e99e1b58e2d398d9743b",
+        "country_code": "EU",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "6d16e076fdccdbe6bae1c9c39c2acc34",
+        "country_code": "CH",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "4b21715655cfa725024cf994e11c5bbb",
+        "country_code": "FR",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "e25cd40b6da6597e3a82e08b37247bff",
+        "country_code": "DE",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "e52dea1244fd1c4e1a73af7b02b4e2f9",
+        "country_code": "SE",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "4c84a7e1d13bfcb25af50cef9d1b6c29",
+        "country_code": "ES",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "1367d7d0bd317a183b90b9d9bf2eeba8",
+        "country_code": "PL",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "87a3816f61fff541c51ba96d30e8f64d",
+        "country_code": "BR",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "67740ae52c3a9ec06e655bc8bc2d5cbf",
+        "country_code": "UAE",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "1a99ee2a50935a9e452bb827049ce21d",
+        "country_code": "IL",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "01985aa68c33b72d5e64a67b3d70203b",
+        "country_code": "US",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "3bd0a2bae397b673d3ff21064e5303c2",
+        "country_code": "IN",
+        "superset_code": "06. Objects",
+        "heading": "Object(s) of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "b3750bb48b35a33a2a86055d31ec4c16",
+        "country_code": "PK",
+        "superset_code": "06. Objects",
+        "heading": "Object(s) of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "98d3721576822a5236c1e354e392edc6",
+        "country_code": "BD",
+        "superset_code": "06. Objects",
+        "heading": "Object(s) of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "9ab38d6ed9a8470d31128c32764cfd6f",
+        "country_code": "AU",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "3f21b0d73026c0e6d71807d5959d0457",
+        "country_code": "NZ",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "d9a9881c6b5c737b958379dec8092298",
+        "country_code": "UK",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "384eae11b4d64835961d45ecef344898",
+        "country_code": "CA",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "e49360e15df6eb3f3cb06f1afa800ca9",
+        "country_code": "CN",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "bbe42b56148eb68265df0761349e9a80",
+        "country_code": "KR",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "d7fd90dad1db8e22705c5d352670f69e",
+        "country_code": "TW",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "aa7e77831a20dec9850b57075a91d31a",
+        "country_code": "IR",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "3b66a046b3ac914faaa6a2d5d16218eb",
+        "country_code": "MY",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "c1d64dda3ff950cdbf3232dfe8162ebc",
+        "country_code": "JP",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "44b90d0886c00f45d79dd269583779d8",
+        "country_code": "RU",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "47c854e6d79a79699dafdd8587386b50",
+        "country_code": "MX",
+        "superset_code": "06. Objects",
+        "heading": "Objetivo de la invención",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "38c998e3218b011e395c0bced90a909b",
+        "country_code": "SA",
+        "superset_code": "06. Objects",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "d5326475fd723a05964786d0d003e093",
+        "country_code": "ZA",
+        "superset_code": "06. Objects",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "objectsOfInvention"
+      },
+      {
+        "id": "c8820f33cfd4c921aab8cb9adeae39e9",
+        "country_code": "EU",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "b59b8c4eea43382791b1d9c641b924fb",
+        "country_code": "CH",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "37465263fced8d3fa418776ddc93d44f",
+        "country_code": "FR",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "2c32e6f60108400605a2f63cf09e25dc",
+        "country_code": "DE",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "ff373d87f9c15637cfc5114d5d7847c3",
+        "country_code": "SE",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "df7f8f1aae6d276699e89480e2014d7c",
+        "country_code": "ES",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "1129ade47ae22971992ab05920dd480e",
+        "country_code": "PL",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "d149d50f09c4413335610766faf00ae0",
+        "country_code": "BR",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Sumário da Invenção",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "09ad7b39dad3d362d45a06d39f8febbf",
+        "country_code": "UAE",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "0baabd8c0c40942e32851db0c35975c4",
+        "country_code": "IL",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "02296bb3a8d638ca5082400ee56c0438",
+        "country_code": "US",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Brief Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "9224b2e1e41354d91b9556f94da22873",
+        "country_code": "IN",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "19a34af2fe168ba84144a69c9833bf81",
+        "country_code": "PK",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "fada2facda6788807437d882c5d338fb",
+        "country_code": "BD",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "897d802a673fa0ee04c3944aeb34ae59",
+        "country_code": "AU",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "526c9fa8f308642f28fca0929ea9495a",
+        "country_code": "NZ",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "af3c4b756f95f48499d1394f7d4a7dc2",
+        "country_code": "UK",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "3c7e15e257676d73ab3b4aa113feda3c",
+        "country_code": "CA",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "d70ef765458d9f86d7e87014004de5f5",
+        "country_code": "CN",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "08e70441c968accf91a152b54b536c31",
+        "country_code": "KR",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Content of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "46286c53d25ce571ab37feda56cfd7db",
+        "country_code": "TW",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Content of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "dff3637c6d59e90cbca7623edbd1e840",
+        "country_code": "IR",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "d4831946bdff625b4f8298c0ececf151",
+        "country_code": "MY",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "7927ce2ba9ec7d9d0bd6b683f68c3729",
+        "country_code": "JP",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "7b6736526547aa97ba81c00919e27092",
+        "country_code": "RU",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "3c4678a15077363ae91fd9e68931cc94",
+        "country_code": "MX",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Breve Resumen de la Invención",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "14484b14c32bd538c65d01c7e696bee7",
+        "country_code": "SA",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "1f541359d6fefbd95b5e8a6146f53c18",
+        "country_code": "ZA",
+        "superset_code": "07. Summary (Gen)",
+        "heading": "Summary of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "summary"
+      },
+      {
+        "id": "963347b8a799d6f53db5f9f3267a843a",
+        "country_code": "EU",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "221630a956c6b64ad233a087e3cf316c",
+        "country_code": "CH",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "81fec696e970876bbc8af9730e15a6c2",
+        "country_code": "FR",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "15f33d7991df1aa4279c785ec314ee83",
+        "country_code": "DE",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "12855d8e30c64bc5617dfb1a38ffcd5b",
+        "country_code": "SE",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "5be71b7f7fc2b24321a7f24bc382ca48",
+        "country_code": "ES",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "11c532884a006842a7a22c9cf8af519a",
+        "country_code": "PL",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "673bdb4f43ef08ba0a3419314e0058e1",
+        "country_code": "BR",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "5fde21343f39a7c4c45ba52c903d544c",
+        "country_code": "UAE",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "c29fab1cdeaec30e33b550b811fd6edd",
+        "country_code": "IL",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "2729f4ae8e70b54743506272a992c854",
+        "country_code": "US",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "3957516b330a49ea9d7eaacf10d30621",
+        "country_code": "IN",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "c25ad4ea275db33856d8f135e4bc6e33",
+        "country_code": "PK",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "7ecc8d3633434fd16dc2412c644b0b5a",
+        "country_code": "BD",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "7bc7ccc0e2c080182da6022811cec4a4",
+        "country_code": "AU",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "b4ae3f8c674139f260bff0f6365a6b9a",
+        "country_code": "NZ",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "6b08735ddfd73f343c64bf25df527721",
+        "country_code": "UK",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "4b700c703f87b75e74e1d2396ef1faf8",
+        "country_code": "CA",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "7ac15a28dc551601fe75e0cfd99d1f6a",
+        "country_code": "CN",
+        "superset_code": "07a. Tech Problem",
+        "heading": "Technical Problem",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "4cc2a2973383f7f57e25d755dc07ee44",
+        "country_code": "KR",
+        "superset_code": "07a. Tech Problem",
+        "heading": "Technical Problem",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "725d560ec3c606a215fbc788f4883e04",
+        "country_code": "TW",
+        "superset_code": "07a. Tech Problem",
+        "heading": "Technical Problem",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "b9980474e89115396541230b0c587c95",
+        "country_code": "IR",
+        "superset_code": "07a. Tech Problem",
+        "heading": "Technical Problem",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "4ed9dcca5e8e16c18fe603c7a7d7a3b2",
+        "country_code": "MY",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "40ec5d73c54ee0f835415ea9ca36223a",
+        "country_code": "JP",
+        "superset_code": "07a. Tech Problem",
+        "heading": "Technical Problem",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "5ae0530b63f68821f2c2acaca9f423a6",
+        "country_code": "RU",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "a469961074676357cc860385da2e476b",
+        "country_code": "MX",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "7a939b701d667f16e88ef4147a66157a",
+        "country_code": "SA",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "8937f297fdda6fccc200be0bceea3aa3",
+        "country_code": "ZA",
+        "superset_code": "07a. Tech Problem",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalProblem"
+      },
+      {
+        "id": "e77a82eaab497ffa20013fdd6317fe29",
+        "country_code": "EU",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "97b60a34fb3b9364e73ae7afdd14198b",
+        "country_code": "CH",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "875a5cd8a034716b8df2d28fe89e86a6",
+        "country_code": "FR",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "983764425f92052b4ad9931ecbfc969f",
+        "country_code": "DE",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "8d44314133e48fd5da73cd9545488740",
+        "country_code": "SE",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "503333a0bcaef7b2f59f9543bc9ff618",
+        "country_code": "ES",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "29c7beb0523c9f9fa29b51dd6f13f837",
+        "country_code": "PL",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "b65891cf5b889e116ba1d8fa803233f9",
+        "country_code": "BR",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "07e9601a9408b2263a9d5c8c4d58855e",
+        "country_code": "UAE",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "f4312d2b0c6963e96528cf5c3e9391d5",
+        "country_code": "IL",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "6a4645e1a116e9235c3ca224937e8a22",
+        "country_code": "US",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "150742d79fba99ceb0fe755ae1681852",
+        "country_code": "IN",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "9c5ea4d2526d375abb222e32b62775a6",
+        "country_code": "PK",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "b0739c026d64258cbda8e75f59469ccb",
+        "country_code": "BD",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "26274b3fb86b49d8dc845d83c38bbf0e",
+        "country_code": "AU",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "a1f78fa856c4defbed23a548313799f4",
+        "country_code": "NZ",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "9e5f4e834b73c0d1878e4b173b0eb351",
+        "country_code": "UK",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "bbfd977aa1e31ac8307f388e33bacd45",
+        "country_code": "CA",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "9d364d443765c3065b626a64b7446306",
+        "country_code": "CN",
+        "superset_code": "07b. Tech Solution",
+        "heading": "Technical Solution",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "10896f2d5fbaf5489405d17b894c3a17",
+        "country_code": "KR",
+        "superset_code": "07b. Tech Solution",
+        "heading": "Technical Solution",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "ee49a8cc7f837154dea332450145a6d8",
+        "country_code": "TW",
+        "superset_code": "07b. Tech Solution",
+        "heading": "Technical Solution",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "e4d2c7d6c0087fc0b4e36d05a0e1ffb1",
+        "country_code": "IR",
+        "superset_code": "07b. Tech Solution",
+        "heading": "Technical Solution",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "4ae6c9dddc527a9a88d3fea82e65597a",
+        "country_code": "MY",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "3120dbdcf4c597ded9b0ece2ae29092d",
+        "country_code": "JP",
+        "superset_code": "07b. Tech Solution",
+        "heading": "Solution to Problem",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "3e74e9d447c191256b695011c231129d",
+        "country_code": "RU",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "bfa31b570144bbf4e0cde264c2b8a9f8",
+        "country_code": "MX",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "ed2ebbaba5e76e3ec9b64017ef29ad21",
+        "country_code": "SA",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "6a5a5352b41b6fcfc52386866009f1d0",
+        "country_code": "ZA",
+        "superset_code": "07b. Tech Solution",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "technicalSolution"
+      },
+      {
+        "id": "5578be76e8e05d46c424632d697152ee",
+        "country_code": "EU",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "eef0e8c407bec159978f6d3039fb6691",
+        "country_code": "CH",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "7bb2b9c6cc5c42a56ca8bcfb48fb83ae",
+        "country_code": "FR",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "dfe8bd895e0c1eb8da215b2c249023ad",
+        "country_code": "DE",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "80f24b39a0ff20a1fa0d4f0ef1b77c3b",
+        "country_code": "SE",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "998d9443dc06ea303c9c0b541fd89fd9",
+        "country_code": "ES",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "2d67922294d31e3765d7eb381f362f58",
+        "country_code": "PL",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "61f389b0d2345e6d7c7d1be6f81436f0",
+        "country_code": "BR",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "7b5a858045a22bcdcce9fc19090a6bca",
+        "country_code": "UAE",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "7d94d11606500dee1d74ba1175dde46b",
+        "country_code": "IL",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "824a76090a8d1595c874f9d0f7cb0a50",
+        "country_code": "US",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "51d3829b881b5465c7dc73d9a4bba2b7",
+        "country_code": "IN",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "e6344f3e19ff18a66b20e80e501c2e42",
+        "country_code": "PK",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "3a9c6f5c1f6311caeafa2aafec0eefc4",
+        "country_code": "BD",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "32cc6622fa57040975aca4f3e2e37d64",
+        "country_code": "AU",
+        "superset_code": "07c. Effects",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "9a18180eab17e8d2f38032cb8b1b4459",
+        "country_code": "NZ",
+        "superset_code": "07c. Effects",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "ea21c27511ae8a5a6454c38c512e5695",
+        "country_code": "UK",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "10e3b9c771df0364347ec94023da11e5",
+        "country_code": "CA",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "e8e9b461d5dc7e14aedb3a7dc6b61426",
+        "country_code": "CN",
+        "superset_code": "07c. Effects",
+        "heading": "Advantageous Effects",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "9fbaed9b1e287fc346f8cb056ef52329",
+        "country_code": "KR",
+        "superset_code": "07c. Effects",
+        "heading": "Advantageous Effects",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "04572b09e45bae22ffb698841d29df6f",
+        "country_code": "TW",
+        "superset_code": "07c. Effects",
+        "heading": "Advantageous Effects",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "dd9ce4c2203cd53a2c9a07e5dc2758cc",
+        "country_code": "IR",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "2ce7275dd99f44c0bb19a44e6b12f508",
+        "country_code": "MY",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "0b7a69638f77ee3fc2cdffbf64dee83a",
+        "country_code": "JP",
+        "superset_code": "07c. Effects",
+        "heading": "Advantageous Effects of Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "18dc7982df3ec192499384bf5d2438dd",
+        "country_code": "RU",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "e3cabe9f0666beb2bdc7c321053ad2f9",
+        "country_code": "MX",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "45662d9e9027f381ffb88e9c0003798b",
+        "country_code": "SA",
+        "superset_code": "07c. Effects",
+        "heading": "(Recommended)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "9a78f3d1e9c84b04fd754ad0de4b1efb",
+        "country_code": "ZA",
+        "superset_code": "07c. Effects",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "advantageousEffects"
+      },
+      {
+        "id": "6e44204511e0f5198330e11b9bb5520a",
+        "country_code": "EU",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "c2aff7ac4011b4e7797745830a7abc4a",
+        "country_code": "CH",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "661d5de6200bc0e73537ff595da706d2",
+        "country_code": "FR",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "ea6f84a012157d905d5c8e0591786623",
+        "country_code": "DE",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "844285016894c46862fdbb2ce3d0b6fb",
+        "country_code": "SE",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "f7ea1725571abec2b44fca9ec19732bd",
+        "country_code": "ES",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "66b87d8e9c8b356a93aa05c5cddb0725",
+        "country_code": "PL",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "5e3c66ef9e9a70772d814ee7b2a89a52",
+        "country_code": "BR",
+        "superset_code": "08. Drawings",
+        "heading": "Breve Descrição dos Desenhos",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "bfca95658d0956a5acbdf2feee644aa7",
+        "country_code": "UAE",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "1ec4a8ea62982137218ce5332e37fa0e",
+        "country_code": "IL",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "c1e54a7ab67b3874471656990efdb2c8",
+        "country_code": "ES",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "12ac07d7d61e2d9054c2634ac19b5f3f",
+        "country_code": "US",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Several Views of the Drawing",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "d564eaaebdb2bdcd9ab65f93e1ebcd6d",
+        "country_code": "IN",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Accompanying Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "15b42a0a144478b91e95ddcc32195ef8",
+        "country_code": "PK",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Accompanying Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "a14dc557d353581944139f7857fe352c",
+        "country_code": "BD",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Accompanying Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "1ca03fed361e3c5d1c456b6644ea4971",
+        "country_code": "AU",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "5ac068bc272678a33708edb0eab89a95",
+        "country_code": "NZ",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "18d393b37337af5a1c6e23f663c4bdb9",
+        "country_code": "UK",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "72faba1cc89f4f1f9f35a1f91c9b2aad",
+        "country_code": "CA",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "bac57b3f45ccf47651d6673e7d7b7979",
+        "country_code": "CN",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "a9134d21f564a42c19de0d28705d748b",
+        "country_code": "KR",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "bbe562978db9c956473f39ec8a7d32c5",
+        "country_code": "TW",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "33ec4a9f028620bf78018723d21ce03a",
+        "country_code": "IR",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "57d50941c3f13c508e9da977bf05a9bf",
+        "country_code": "MY",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "6f082e89e2a3cd6c5b6b9568519a116f",
+        "country_code": "JP",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "27bedccb0c4ae05e34e0dd71fe8e518d",
+        "country_code": "RU",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "a52212bc001a4fc32d32460df9f7545a",
+        "country_code": "MX",
+        "superset_code": "08. Drawings",
+        "heading": "Breve Descripción de las Figuras",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "ad54d562cc2adc621e1ef44ae0bacb3c",
+        "country_code": "SA",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "dda9a9b3fa5faa05a8293adddf2675ac",
+        "country_code": "ZA",
+        "superset_code": "08. Drawings",
+        "heading": "Brief Description of the Drawings",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "briefDescriptionOfDrawings"
+      },
+      {
+        "id": "98e550d4b1f7cb8467462d94e48cbe65",
+        "country_code": "EU",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description (or \"Description of Embodiments\")",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "c61323c97682a41d12718a96ea0874b0",
+        "country_code": "CH",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description (or \"Description of Embodiments\")",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "aedaae860534c13e1c8f4a2bbe148a3d",
+        "country_code": "FR",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description (or \"Description of Embodiments\")",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "e6343cb8a7ca4808ef73ce4e417bb68e",
+        "country_code": "DE",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description (or \"Description of Embodiments\")",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "80fcf0c1c8eca61e4f4c8764b688bd14",
+        "country_code": "SE",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description (or \"Description of Embodiments\")",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "7649a8bf772dd707384fa5adde42c95e",
+        "country_code": "ES",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description (or \"Description of Embodiments\")",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "c4c89be53f42a21930e48213954a6ec4",
+        "country_code": "PL",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description (or \"Description of Embodiments\")",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "389ff1a657e802b6c799f99e412fc36a",
+        "country_code": "BR",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Descrição Detalhada da Invenção",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "f9470309c44c3e9c724175d8aeef8694",
+        "country_code": "UAE",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "ec6ab2fcb71ae70e3c2de0a3e916f8ba",
+        "country_code": "IL",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "8c6d833c9b6f6830d4010839f56a0087",
+        "country_code": "US",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "72e99fea458de42e8833ae8938432255",
+        "country_code": "IN",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "bafc4b7c1b4ef7aba0f2e3464f7a1a8c",
+        "country_code": "PK",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "62b368293ba404341e43fb66b102ef6a",
+        "country_code": "BD",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "a5b0b0b19f6c57fa86e3d85e50b083e7",
+        "country_code": "AU",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Description of Embodiments",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "928a8d4380c2c1a0c54a56dfc3529fdb",
+        "country_code": "NZ",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Description of Embodiments",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "4c7f4cfa1df182f53c7fface46053f32",
+        "country_code": "UK",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "5c76b06f7636876fd1af34009b68ef88",
+        "country_code": "CA",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "b0cd5bb99b0109ff664a8113c7ac3cfa",
+        "country_code": "CN",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Specific Mode for Carrying Out the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "14bd7d8ae61deabbb3f130a95eca7484",
+        "country_code": "KR",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "17b3ed014e3a41ed0b8c2c799654f9eb",
+        "country_code": "TW",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "4d48f3df541767384cb4e06fc4454a99",
+        "country_code": "IR",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "12904d12e3cfc4c5fdda9320f2781443",
+        "country_code": "MY",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "b07a0552dd0f0cef5b271578c96d4a3f",
+        "country_code": "JP",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "8b797ced27f2262896eddbbaed2152a6",
+        "country_code": "RU",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description of the Invention",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "f72b89e250eb517ec3f8decee8fed900",
+        "country_code": "MX",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Descripción Detallada",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "c7e7cf6c58e6bcec498ef439c4942eee",
+        "country_code": "SA",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "17d7e432a3a970f814986ea4a6661b61",
+        "country_code": "ZA",
+        "superset_code": "09. Detailed Desc",
+        "heading": "Detailed Description",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "detailedDescription"
+      },
+      {
+        "id": "0af6cc5f333c7bad841e1c2f548f1d6d",
+        "country_code": "EU",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "b28b151cff2f862b1b85da930d297811",
+        "country_code": "CH",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "9d6f7d393cc2cd501bdef915caf6ce72",
+        "country_code": "FR",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "bb2a2311ddc19f0d02c033b32eb40e6b",
+        "country_code": "DE",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "89fd56c9ab5798af6b4e905cb366e46d",
+        "country_code": "SE",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "8170951c80be0dfa2a7e831512d647d3",
+        "country_code": "PL",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "4b4d6528c6f9a909f086e46ec8896ccf",
+        "country_code": "BR",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "173e85cbef866bb7715ce255ce8179e3",
+        "country_code": "UAE",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "b167d8ddca0d81c85d463bb51e024059",
+        "country_code": "IL",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "844459352c07bb70d548229314f04ee6",
+        "country_code": "US",
+        "superset_code": "10. Best Mode",
+        "heading": "Best Mode (NA in Desc)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "66868b009e0c2726c7a79f7da94611e7",
+        "country_code": "IN",
+        "superset_code": "10. Best Mode",
+        "heading": "(Include in Detailed Desc)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "283b0642e23fd7a6fa547bfec773bc94",
+        "country_code": "PK",
+        "superset_code": "10. Best Mode",
+        "heading": "(Include in Detailed Desc)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "49fda8621c23a1478d70c52a6564cfc5",
+        "country_code": "BD",
+        "superset_code": "10. Best Mode",
+        "heading": "(Include in Detailed Desc)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "41e3692fee22b6af5108de5a5ac448d5",
+        "country_code": "AU",
+        "superset_code": "10. Best Mode",
+        "heading": "Best Method of Performance",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "6841ca774b4ee7f827fcf9d09604ad8f",
+        "country_code": "NZ",
+        "superset_code": "10. Best Mode",
+        "heading": "Best Method of Performance",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "ce9fb41bad672255c23e8da60457c656",
+        "country_code": "UK",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "6d5d8a3ec4920f75d7f200adfd47c16d",
+        "country_code": "CA",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "da901d4d9afc59f5b3aee550947de6b9",
+        "country_code": "CN",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "d08e84e025898091814e334d25a86f2c",
+        "country_code": "KR",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "efb5833ffc33aa0cbea20018a39cf408",
+        "country_code": "TW",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "b4c651f1046fb26119716ffd5b823162",
+        "country_code": "IR",
+        "superset_code": "10. Best Mode",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "a1cf6a74fa3fce2b842b16d2114c3090",
+        "country_code": "MY",
+        "superset_code": "10. Best Mode",
+        "heading": "Best Mode",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "85710b7c5f7d3d0c20edf46ab794e4ab",
+        "country_code": "JP",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "7867bae542cbe18aa34ab7a99937c72c",
+        "country_code": "RU",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "b3e33a73f731c91250dd0116843c8a66",
+        "country_code": "MX",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "02e10d0ac5c3d2c53ce25859d94ff7f1",
+        "country_code": "SA",
+        "superset_code": "10. Best Mode",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "c4e0726362905b65a62ad828e480f759",
+        "country_code": "ZA",
+        "superset_code": "10. Best Mode",
+        "heading": "Best Method of Performance",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "bestMethod"
+      },
+      {
+        "id": "9bca21ebe59f3020bbd2767f79b8eb83",
+        "country_code": "EU",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "57f08a21ff3abf0310be9e82e39f8a2b",
+        "country_code": "CH",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "bd6cf0dea17f308a2315d23f3deeef9c",
+        "country_code": "FR",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "3f326c96d40895ad0c655e98743f7365",
+        "country_code": "DE",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "06d827eedf87cd7efd20a73da4471a27",
+        "country_code": "SE",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "3829be34db328776732698d8a8b7f8ce",
+        "country_code": "ES",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "1e208490eb324da5a072ee84409a198a",
+        "country_code": "PL",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "54cdf400941761f2825342863c99a0aa",
+        "country_code": "BR",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "b0264f1a2b9ed32072e3a73e492e0508",
+        "country_code": "UAE",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(Required if not obvious)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "29693a9ed46b690994f692716ff70d87",
+        "country_code": "IL",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(Required if not obvious)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "5ed9f508acd0b9d61ebaa0ad09d3a867",
+        "country_code": "US",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(N/A - Utility)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "49f9237c3c5e54730d29fcc7b74eafcf",
+        "country_code": "IN",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "229e2bc6012b4342e3ec8a1bd3d5b8cd",
+        "country_code": "PK",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "c36812497f8666c32c824dad5feb393d",
+        "country_code": "BD",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "f28c3b375797367489843e12c839891d",
+        "country_code": "AU",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "35a27f9fcb770e166739be648f707bad",
+        "country_code": "NZ",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(Recommended/NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "99c18cb4a903ba261ac2f3bf84c7d5b5",
+        "country_code": "UK",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "8e4aff6c336edcaea6a4b4395bc00192",
+        "country_code": "CA",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(N/A)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "faddfd5bd1cb1398df0f8141587704f0",
+        "country_code": "CN",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "5a76e6a806af71894ca52f8060231415",
+        "country_code": "KR",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "7f9313de5f4fc2e2a5bec1672bb2132b",
+        "country_code": "TW",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "b0b49ef2a0ec917d55abbd1900779aab",
+        "country_code": "IR",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "c5afdb05687aea3c9052e21a268ba885",
+        "country_code": "MY",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "a50abf35bed3618b41f94225de363fb2",
+        "country_code": "JP",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "Industrial Applicability",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "b20e3671131cb4685b251fc087615f4f",
+        "country_code": "RU",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(Required if needed)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "04f51eca73e39d74f62933b48d81b302",
+        "country_code": "MX",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "011e648d9ca759249fc82f466e2b536d",
+        "country_code": "SA",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "d74c350df8089ab8c9b43461f7887f96",
+        "country_code": "ZA",
+        "superset_code": "11. Ind. Applicability",
+        "heading": "(NA)",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "industrialApplicability"
+      },
+      {
+        "id": "b7526b560221bc3099f7cd19ac341983",
+        "country_code": "EU",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "a78c6774665fe6eff9cbfec0f35bc65c",
+        "country_code": "CH",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "f40b7769f47b9529dd8aa3cb2110a532",
+        "country_code": "FR",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "8d90e4bb87f3953e8c5e01c105515b09",
+        "country_code": "DE",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "9ee43ee6cb080c6e90a36acecf315bf6",
+        "country_code": "SE",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "774e046d4fd4245c9ab50e70f71dc2b7",
+        "country_code": "ES",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "69b1b3217ab18db062d87de1f1b2429e",
+        "country_code": "PL",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "cd32803d4fc6f4db11fd34cef8e550a0",
+        "country_code": "BR",
+        "superset_code": "12. Claims",
+        "heading": "Reivindicações",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "00ebbffab445f6d6bf6242ea356d0ff2",
+        "country_code": "UAE",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "b4c011036fb9054fc99d6b24a65b37c0",
+        "country_code": "IL",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "2f17ee501150726da4b82229f5fc94d9",
+        "country_code": "US",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "a45187aa05f73058f326efd681656958",
+        "country_code": "IN",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "b88c5dcb2d87fabe951fbb7fdb1f4bc8",
+        "country_code": "PK",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "568cc110f48c41c5e0c32659bdd80a77",
+        "country_code": "BD",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "04236aa825e5a39a7811ebae6d30b81b",
+        "country_code": "AU",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "04411f8e656977470d59e41d2d9bb0d6",
+        "country_code": "NZ",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "6e3a229e90fdc5a4d5688c15553d10e4",
+        "country_code": "UK",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "ed0c6ddad625a98a8144a97cc09b0dd5",
+        "country_code": "CA",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "09584ebcf52205f60317e312d0c9c408",
+        "country_code": "CN",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "003244a21203c08c4609bb1f374ccaaa",
+        "country_code": "KR",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "42d95a395d3c59f8726bd05bb6fd6257",
+        "country_code": "TW",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "c859be0d317227b1772cd59fab5662f1",
+        "country_code": "IR",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "cbe191aa0cbcf445c229389889b1164a",
+        "country_code": "MY",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "90d5a3f6223a872d76ba71aa161e65db",
+        "country_code": "JP",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "e1c67439086542eaa8e3931a5e8eeeeb",
+        "country_code": "RU",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "56d96c1c5f3bfcbde564244ebfe047f9",
+        "country_code": "MX",
+        "superset_code": "12. Claims",
+        "heading": "Reivindicaciones",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "8063a3d92b23bc4c6deb38aa592e6275",
+        "country_code": "SA",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "78ba7c34bed4b04c60ea6525f7a4da16",
+        "country_code": "ZA",
+        "superset_code": "12. Claims",
+        "heading": "Claims",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "claims"
+      },
+      {
+        "id": "d58055dc4afdd81336295ad1a37b2f37",
+        "country_code": "EU",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "30a917a7dbb6ee4a0b9ee017174f7422",
+        "country_code": "CH",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "2204e5b01c591bebc8dc6c3c600f2fac",
+        "country_code": "FR",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "b90739bedd788a95566221312ab876c2",
+        "country_code": "DE",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "627a9807030a1c2d52962f34cfe9ae65",
+        "country_code": "SE",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "5875410c7e323dd07af7acf55b605a63",
+        "country_code": "ES",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "76e0f0be7fa1714f889a56edac7cc721",
+        "country_code": "PL",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "9a29bcfdbf6b2f4f442d7da62008a471",
+        "country_code": "BR",
+        "superset_code": "13. Abstract",
+        "heading": "Resumo",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "c691223a65d9436833410e6ae4e8e3ce",
+        "country_code": "UAE",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "1cda5c4f12fdaf896b91462f044ca919",
+        "country_code": "IL",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "08adbafb87132eaf93e8d0f1199abbf6",
+        "country_code": "US",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract of the Disclosure",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "1a691aede02921d2340282ae0da1bdc7",
+        "country_code": "IN",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "85e03edf97e4c9da7e502ff5ae982677",
+        "country_code": "PK",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "a18ec0de22ebc3d0801c5eb03d217d61",
+        "country_code": "BD",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "dbd4197d5733015a3e3ee00b9df161c1",
+        "country_code": "AU",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "ef8540a443070e4936e16eb9d2aafb17",
+        "country_code": "NZ",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "ca57d0305a109cc96000dce36db3eddb",
+        "country_code": "UK",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "159ae25f77c973b74677143793946351",
+        "country_code": "CA",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "7495fd71f32a241e4779b0f015a6c7a2",
+        "country_code": "CN",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "865b34e1e1735c0ce796fe4ac59520e7",
+        "country_code": "KR",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "4320205a82b50b0c566951cd9db7b8ae",
+        "country_code": "TW",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "ab195129d46c208dd9f90a96fe7d6431",
+        "country_code": "IR",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "ac27fa07e4ccb21ef05e44bd65b85439",
+        "country_code": "MY",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "10367ca0f30a4a1993d896803aa48d1f",
+        "country_code": "JP",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "b340f2c3dfec410983d2ebe1f7f78a0b",
+        "country_code": "RU",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "6f27e01839ff5228579552c265e3bae6",
+        "country_code": "MX",
+        "superset_code": "13. Abstract",
+        "heading": "Resumen",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "e985ed6da5c3b40ce6df0d73e05ecbc4",
+        "country_code": "SA",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      },
+      {
+        "id": "2c88de93315da162d2958a5363ec4e7e",
+        "country_code": "ZA",
+        "superset_code": "13. Abstract",
+        "heading": "Abstract",
+        "created_at": "2025-12-03T07:54:01.559Z",
+        "updated_at": "2025-12-03T07:54:01.559Z",
+        "section_key": "abstract"
+      }
+    ],
+    "countrySectionPrompt": [],
+    "countrySectionPromptHistory": [],
+    "styleProfile": [],
+    "styleTrainingJob": [],
+    "document": [],
+    "diagramSource": [],
+    "figurePlan": [],
+    "ideaBankIdea": [],
+    "ideaBankReservation": [],
+    "ideaBankHistory": [],
+    "ideaBankSuggestion": [],
+    "ideaRecord": [],
+    "aggregationSnapshot": []
+  }
+}

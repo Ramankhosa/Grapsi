@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "DraftingSessionStatus" ADD VALUE IF NOT EXISTS 'COUNTRY_WISE_DRAFTING';
+

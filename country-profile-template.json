@@ -1,0 +1,409 @@
+{
+  "meta": {
+    "id": "XX",
+    "code": "XX",
+    "name": "Country Name",
+    "continent": "Continent Name",
+    "office": "Patent Office Name",
+    "officeUrl": "https://patent-office-url.com",
+    "applicationTypes": ["standard"],
+    "languages": ["en"],
+    "version": 1,
+    "status": "active",
+    "inheritsFrom": null,
+    "tags": ["tag1", "tag2"],
+    "createdAt": "2025-01-01T00:00:00Z",
+    "updatedAt": "2025-01-01T00:00:00Z"
+  },
+
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Standard Patent Application",
+        "description": "Standard patent application under local patent law.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title",
+            "order": 1,
+            "canonicalKeys": ["title"],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Enter a concise technical title",
+              "helpText": "Short technical designation. Avoid trademarks and non-technical wording."
+            }
+          },
+          {
+            "id": "cross_reference",
+            "label": "Cross-Reference to Related Applications",
+            "order": 2,
+            "canonicalKeys": ["cross_reference"],
+            "required": false,
+            "group": "header",
+            "ui": {
+              "placeholder": "List related applications.",
+              "helpText": "Used for priority/benefit claims; supply application numbers and dates."
+            }
+          },
+          {
+            "id": "field",
+            "label": "Technical Field",
+            "order": 3,
+            "canonicalKeys": ["technical_field"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "State the technical field.",
+              "helpText": "1-3 sentences indicating the technical field."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background Art",
+            "order": 4,
+            "canonicalKeys": ["background"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Describe prior art known to the applicant.",
+              "helpText": "Summarize relevant prior art and its shortcomings without admitting obviousness."
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Summary of the Invention",
+            "order": 5,
+            "canonicalKeys": ["summary_of_invention"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide the gist of the invention.",
+              "helpText": "Explain the problem, the solution, and essential features."
+            }
+          },
+          {
+            "id": "brief_drawings",
+            "label": "Brief Description of Drawings",
+            "order": 6,
+            "canonicalKeys": ["brief_description_of_drawings"],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "Describe each figure (if applicable).",
+              "helpText": "One line per figure; required only when drawings are included."
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Description of the Invention",
+            "order": 7,
+            "canonicalKeys": ["detailed_description"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide sufficient detail to enable a skilled person.",
+              "helpText": "Describe embodiments with enough detail for reproduction."
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 8,
+            "canonicalKeys": ["claims"],
+            "required": true,
+            "group": "claims",
+            "ui": {
+              "placeholder": "Draft independent and dependent claims.",
+              "helpText": "Claims must be clear, concise and supported by the description."
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 9,
+            "canonicalKeys": ["abstract"],
+            "required": true,
+            "group": "abstract",
+            "ui": {
+              "placeholder": "Summarize the technical disclosure.",
+              "helpText": "≤150 words; technical field, problem, solution and use."
+            }
+          }
+        ]
+      }
+    ]
+  },
+
+  "rules": {
+    "global": {
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": true,
+      "noClaimLanguage": true,
+      "singleParagraph": true
+    },
+    "claims": {
+      "twoPartFormPreferred": false,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": false,
+      "preferredConnectors": ["comprising"],
+      "discouragedConnectors": [],
+      "forbiddenPhrases": [],
+      "maxIndependentClaimsBeforeExtraFee": 0,
+      "maxTotalClaimsRecommended": 20,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_inventive_concept"
+    },
+    "description": {
+      "requireBestModeDisclosure": true,
+      "avoidClaimLanguage": true,
+      "allowReferenceNumerals": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5
+    },
+    "procedural": {
+      "gracePeriodMonths": 12,
+      "foreignFilingLicenseRequired": false,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "no_formal_ids",
+      "allowProvisionalPriority": true
+    },
+    "language": {
+      "allowedLanguages": ["en"],
+      "requiresOfficialTranslation": false
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "Sequence listing may be furnished after filing.",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": ["TXT", "PDF"]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": ["A4"],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5
+    }
+  },
+
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length_words",
+          "type": "maxWords",
+          "limit": 25,
+          "severity": "warning",
+          "message": "Title appears long; consider making it more concise."
+        },
+        {
+          "id": "title_length_chars",
+          "type": "maxChars",
+          "limit": 500,
+          "severity": "error",
+          "message": "Title exceeds the 500-character limit."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_word_limit",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "error",
+          "message": "Abstract exceeds the 150-word limit."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_count_recommended",
+          "type": "maxCount",
+          "limit": 20,
+          "severity": "warning",
+          "message": "More than 20 claims may increase examination fees."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": ["detailed_description"],
+        "severity": "error",
+        "message": "Some claims may lack explicit support in the description."
+      },
+      {
+        "id": "abstract_consistent_with_claims",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": ["claims"],
+        "severity": "warning",
+        "message": "Abstract may cover features not reflected in the claims."
+      }
+    ]
+  },
+
+  "prompts": {
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "overly legalistic boilerplate"
+      ]
+    },
+    "sections": {
+      "title": {
+        "instruction": "Draft a concise technical title suitable for patent applications.",
+        "constraints": [
+          "Do not exceed 500 characters.",
+          "Do not use trademarks or the word 'patent'."
+        ]
+      },
+      "field": {
+        "instruction": "Draft the Technical Field section.",
+        "constraints": [
+          "Limit to 1-3 sentences.",
+          "State the technical field without describing advantages or embodiments."
+        ]
+      },
+      "background": {
+        "instruction": "Draft the Background Art section.",
+        "constraints": [
+          "Describe relevant prior art and its limitations.",
+          "Avoid explicit admissions that cited references are prior art unless intentional."
+        ]
+      },
+      "summary": {
+        "instruction": "Draft the Summary of the Invention section.",
+        "constraints": [
+          "Explain the technical problem and the inventive solution.",
+          "Ensure consistency with the independent claims."
+        ]
+      },
+      "detailed_description": {
+        "instruction": "Draft the detailed description of the invention.",
+        "constraints": [
+          "Describe embodiments with enough detail for reproduction.",
+          "Reference drawings where applicable.",
+          "Ensure each independent claim has supporting embodiments."
+        ]
+      },
+      "claims": {
+        "instruction": "Draft a full set of claims compliant with local practice.",
+        "constraints": [
+          "Use 'comprising' unless a closed transition is required.",
+          "Multiple dependent claims permitted.",
+          "Claims must be clear, concise and supported by the description."
+        ]
+      },
+      "abstract": {
+        "instruction": "Draft the Abstract section.",
+        "constraints": [
+          "≤150 words.",
+          "Single paragraph.",
+          "State the technical field, problem, solution and principal use."
+        ]
+      }
+    }
+  },
+
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "Specification PDF",
+        "includesSections": [
+          "title",
+          "field",
+          "background",
+          "summary",
+          "brief_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "lineSpacing": 1.5,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false,
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0
+      }
+    ],
+    "sectionHeadings": {
+      "field": "TECHNICAL FIELD",
+      "background": "BACKGROUND ART",
+      "summary": "SUMMARY OF THE INVENTION",
+      "brief_drawings": "BRIEF DESCRIPTION OF DRAWINGS",
+      "detailed_description": "DESCRIPTION OF THE INVENTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": ["block", "flowchart", "schematic", "perspective_view"],
+    "figureLabelFormat": "Fig. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles and arrows for components and flow.",
+      "flowchart": "Use standard flowchart symbols for processes and decisions.",
+      "schematic": "Show functional relationships and reference numerals clearly.",
+      "perspective_view": "Use when overall physical form is important."
+    }
+  },
+
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Verify that all reference numerals in drawings are defined in the description.",
+        "from": "brief_drawings",
+        "mustBeExplainedIn": ["detailed_description"]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Verify that major claimed elements appear in at least one figure when drawings are provided.",
+        "from": "claims",
+        "mustBeShownIn": ["brief_drawings"]
+      }
+    ]
+  }
+}

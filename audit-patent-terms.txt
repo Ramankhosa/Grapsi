@@ -1,0 +1,197 @@
+# PATENT-SPECIFIC TERMINOLOGY AUDIT REPORT
+## Phase 0 Task 0.1 - Codebase Audit Results
+
+**Date:** December 28, 2025
+**Total files containing patent terms:** 400+ files across multiple categories
+
+---
+
+## SUMMARY STATISTICS
+
+| Term | Files Found | Primary Category |
+|------|-------------|------------------|
+| `patent` | 143 files | Patent-specific services, APIs, components |
+| `claim` | 66 files | Patent drafting, claim refinement stages |
+| `invention` | 62 files | Idea processing, normalization |
+| `novelty` | 87 files | Novelty search, assessment services |
+| `jurisdiction` | 72 files | Multi-jurisdiction support, country profiles |
+| `country` | 50 files | Country profile management |
+| `prior art` | 39 files | Prior art search, analysis |
+| `CPC` | 10 files | Patent classification systems |
+| `IPC` | 9 files | Patent classification systems |
+
+---
+
+## FILE CATEGORIZATION & ACTION RECOMMENDATIONS
+
+### 🔴 PATENT-SPECIFIC SERVICES (NEED MAJOR MODIFICATION/REPLACEMENT)
+
+#### Core Patent Drafting Logic
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/lib/drafting-service.ts` | patent, invention, claims, jurisdiction, country, prior art, CPC, IPC | Core patent drafting service with LLM prompts for patent sections, claim generation, jurisdiction handling | **REPLACE**: Create new `paper-drafting-service.ts` with citation integration instead of claims |
+| `src/lib/novelty-search-service.ts` | novelty, patent, invention, prior art, jurisdiction | AI-powered patent search and novelty assessment | **REPLACE**: Convert to `literature-search-service.ts` for academic papers |
+| `src/lib/prior-art-search.ts` | prior art, patent, novelty | Patent search integration | **REPLACE**: Convert to academic literature search |
+| `src/lib/prior-art-normalization.ts` | prior art, patent | Patent data normalization | **REPLACE**: Convert to academic search result normalization |
+
+#### Jurisdiction & Country Management
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/lib/multi-jurisdiction-service.ts` | jurisdiction, patent, country | Multi-country patent filing support | **REPLACE**: Convert to publication venue management for journals/conferences |
+| `src/lib/country-profile-service.ts` | country, jurisdiction, patent | Country-specific patent rules | **REPLACE**: Convert to publication venue rules (APA, IEEE, etc.) |
+| `src/types/country-profile.ts` | jurisdiction, country, patent, claims | Type definitions for patent jurisdictions | **REPLACE**: Create paper type and citation style types |
+| `src/lib/jurisdiction-style-service.ts` | jurisdiction, patent | Jurisdiction-specific formatting | **REPLACE**: Convert to citation style service |
+
+#### Patent-Specific Features
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/lib/patent-drafting-tracker.ts` | patent | Patent drafting progress tracking | **MODIFY**: Convert to paper drafting tracker |
+| `src/lib/novelty-assessment.ts` | novelty, patent, prior art | Patent novelty evaluation | **REPLACE**: Convert to literature gap analysis |
+
+---
+
+### 🟡 PATENT-SPECIFIC COMPONENTS (NEED MODIFICATION/REPLACEMENT)
+
+#### Stage Components
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/lib/stage-navigation-config.ts` | invention, claims, jurisdiction, patent, prior art, CPC, IPC, novelty | Defines patent drafting workflow stages | **REPLACE**: Create paper writing stages (topic entry, literature search, outline planning, etc.) |
+| `src/components/drafting/IdeaEntryStage.tsx` | invention, patent | Initial invention description input | **REPLACE**: Convert to TopicEntryStage for research questions |
+| `src/components/drafting/RelatedArtStage.tsx` | prior art, patent, novelty | Patent prior art analysis | **REPLACE**: Convert to LiteratureSearchStage for academic search |
+| `src/components/drafting/ClaimRefinementStage.tsx` | claims, patent, prior art | Patent claim refinement | **REPLACE**: Convert to SectionDraftingStage with citation insertion |
+| `src/components/drafting/AnnexureDraftStage.tsx` | patent, jurisdiction | Patent section drafting | **REPLACE**: Convert to SectionDraftingStage for paper sections |
+
+#### Novelty Search Components
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/components/novelty-search/NoveltySearchWorkflow.tsx` | novelty, patent, prior art | Patent novelty search UI | **REPLACE**: Convert to literature search interface |
+| `src/components/novelty-search/NoveltySearchCard.tsx` | novelty, patent | Novelty search results | **MODIFY**: Convert to academic search results |
+| `src/components/novelty-search/NoveltySearchReportPage.tsx` | novelty, patent, prior art | Novelty assessment reports | **REPLACE**: Convert to literature review reports |
+
+#### Patent-Specific UI
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/components/patents/RichTextEditor.tsx` | patent | Patent-specific rich text editor | **MODIFY**: Add citation insertion capabilities |
+| `src/components/patents/FileUpload.tsx` | patent | Patent document upload | **MODIFY**: Convert to general document upload |
+
+---
+
+### 🟢 CORE INFRASTRUCTURE (LIKELY KEEP AS-IS)
+
+#### Database & API Infrastructure
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `prisma/schema.prisma` | patent (table names) | Database schema with patent tables | **MODIFY**: Rename tables (patent → paper, idea_record → research_topic) |
+| `src/app/api/patents/` (entire directory) | patent | Patent CRUD APIs | **RENAME**: Change to `/api/papers/` routes |
+| `src/lib/auth.ts` | (minimal patent references) | Authentication logic | **KEEP**: Generic auth, minimal patent coupling |
+| `src/lib/mailer.ts` | (minimal patent references) | Email service | **KEEP**: Generic email service |
+
+#### Generic UI Components
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/components/ui/` | (minimal patent references) | Generic UI components | **KEEP**: Reusable components |
+| `src/components/Header.tsx` | (minimal patent references) | Site header | **MODIFY**: Update branding from patent to paper writing |
+| `src/lib/base-patent-service.ts` | patent | Base service class | **RENAME**: To `base-paper-service.ts` |
+
+---
+
+### 🔵 SHARED UTILITIES (LIKELY KEEP AS-IS)
+
+#### Generic Services
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/lib/serpapi-provider.ts` | (generic search provider) | Search API integration | **MODIFY**: Extend for academic APIs (Semantic Scholar, CrossRef) |
+| `src/lib/ai-review-service.ts` | (generic AI service) | LLM integration | **KEEP**: Generic AI service |
+| `src/lib/service-access-middleware.ts` | (generic middleware) | Service access control | **KEEP**: Generic middleware |
+
+#### Configuration & Admin
+| File Path | Terms Found | Context | Action Needed |
+|-----------|-------------|---------|---------------|
+| `src/app/super-admin/` | patent, jurisdiction | Admin interfaces | **MODIFY**: Convert jurisdiction config to publication venue config |
+| `src/components/super-admin/country-profiles/` | country, jurisdiction | Country profile management | **REPLACE**: Convert to publication venue management |
+
+---
+
+## CRITICAL DEPENDENCY ANALYSIS
+
+### High-Risk Files (Core Logic)
+1. **`src/lib/drafting-service.ts`** - Central patent drafting logic, heavily patent-specific
+2. **`src/lib/stage-navigation-config.ts`** - Defines entire patent workflow
+3. **`src/lib/novelty-search-service.ts`** - Patent search functionality
+4. **`src/types/country-profile.ts`** - Type system for jurisdictions
+
+### Database Schema Dependencies
+- `Patent` table → rename to `Paper`
+- `CountryProfile` → rename to `PublicationVenue`
+- `IdeaRecord` → rename to `ResearchTopic`
+- Add new tables: `PaperTypeDefinition`, `CitationStyleDefinition`, `Citation`
+
+### API Route Dependencies
+- `/api/patents/` → `/api/papers/`
+- `/api/country-profiles/` → `/api/publication-venues/`
+- Add new routes: `/api/citation-styles/`, `/api/paper-types/`
+
+---
+
+## IMPLEMENTATION PRIORITY ORDER
+
+### Phase 1 Priority (Database Schema)
+1. Rename core tables (Patent → Paper, etc.)
+2. Add new paper-specific tables
+3. Update foreign key relationships
+
+### Phase 2 Priority (Core Services)
+1. Replace `drafting-service.ts` with paper drafting service
+2. Replace `novelty-search-service.ts` with literature search service
+3. Convert jurisdiction services to publication venue services
+
+### Phase 3 Priority (Components)
+1. Update stage navigation configuration
+2. Replace patent-specific stage components
+3. Convert admin interfaces
+
+### Phase 4 Priority (API Routes)
+1. Rename patent routes to paper routes
+2. Add new citation and literature search APIs
+3. Update admin routes for paper types and citation styles
+
+---
+
+## MIGRATION RISK ASSESSMENT
+
+### Low Risk
+- UI components (can be replaced incrementally)
+- Admin interfaces (can be updated after core services)
+- Generic utilities (minimal changes needed)
+
+### Medium Risk
+- Database schema (requires careful migration)
+- API routes (need to maintain backward compatibility during transition)
+- Authentication (minimal patent coupling)
+
+### High Risk
+- Core services (`drafting-service.ts`, `novelty-search-service.ts`)
+- Stage navigation configuration
+- Type definitions
+
+---
+
+## RECOMMENDED APPROACH
+
+1. **Start with database schema changes** (Phase 1) - foundation must be solid
+2. **Implement core services in parallel** with feature flags for gradual rollout
+3. **Replace UI components incrementally** - users can use old patent flows while new paper flows are developed
+4. **Maintain dual functionality** during transition with feature flags
+5. **Test extensively** - each component replacement could break existing patent workflows
+
+---
+
+## FEATURE FLAG STRATEGY
+
+Add these feature flags to control rollout:
+- `ENABLE_PAPER_WRITING`: Enable new paper writing flows
+- `ENABLE_CITATIONS`: Enable citation management
+- `ENABLE_LITERATURE_SEARCH`: Enable academic search
+- `DISABLE_PATENT_DRAFTING`: Gradually disable old patent flows
+
+This allows safe, incremental deployment without breaking existing patent users.

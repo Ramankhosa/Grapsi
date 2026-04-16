@@ -1,0 +1,531 @@
+{
+    "meta": {
+      "id": "CA",
+      "code": "CA",
+      "name": "Canada",
+      "continent": "North America",
+      "office": "Canadian Intellectual Property Office",
+      "officeUrl": "https://ised-isde.canada.ca/site/canadian-intellectual-property-office/en/patents",
+      "applicationTypes": ["utility"],
+      "languages": ["en", "fr"],
+      "status": "active",
+      "version": 2,
+      "inheritsFrom": null,
+      "tags": ["bilingual", "national_phase", "treaty_harmonized"],
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": "2025-01-01T00:00:00Z"
+    },
+  
+    "structure": {
+      "defaultVariant": "standard",
+      "variants": [
+        {
+          "id": "standard",
+          "label": "Standard Canadian Patent Application",
+          "description": "Canadian patent application under the Patent Act and Patent Rules, including direct filings and PCT national phase entries.",
+          "sections": [
+            {
+              "id": "title",
+              "label": "Title",
+              "order": 1,
+              "canonicalKeys": ["title"],
+              "required": true,
+              "group": "header",
+              "maxLengthChars": 500,
+              "ui": {
+                "placeholder": "Enter a concise technical title",
+                "helpText": "Short technical designation. Avoid trademarks and non-technical wording."
+              }
+            },
+            {
+              "id": "cross_reference",
+              "label": "Cross-Reference to Related Applications",
+              "order": 2,
+              "canonicalKeys": ["cross_reference"],
+              "required": false,
+              "group": "header",
+              "ui": {
+                "placeholder": "List related CA, foreign or PCT applications.",
+                "helpText": "Used for priority/benefit claims; supply application numbers and dates."
+              }
+            },
+            {
+              "id": "field",
+              "label": "Technical Field",
+              "order": 3,
+              "canonicalKeys": ["technical_field"],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "State the technical field.",
+                "helpText": "1–3 sentences indicating the technical field, consistent with abstract rules."
+              }
+            },
+            {
+              "id": "background",
+              "label": "Background Art",
+              "order": 4,
+              "canonicalKeys": ["background"],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Describe prior art known to the applicant.",
+                "helpText": "Summarize relevant prior art and its shortcomings without admitting obviousness."
+              }
+            },
+            {
+              "id": "summary",
+              "label": "Disclosure of Invention",
+              "order": 5,
+              "canonicalKeys": ["disclosure_of_invention"],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Provide the gist of the invention.",
+                "helpText": "Explain the problem, the solution, and essential features as required by Canadian disclosure rules."
+              }
+            },
+            {
+              "id": "brief_drawings",
+              "label": "Brief Description of Drawings",
+              "order": 6,
+              "canonicalKeys": ["brief_description_of_drawings"],
+              "required": false,
+              "group": "body",
+              "ui": {
+                "placeholder": "Describe each figure (if applicable).",
+                "helpText": "One line per figure; required only when drawings are included."
+              }
+            },
+            {
+              "id": "modes_for_carrying_out",
+              "label": "Mode(s) for Carrying Out the Invention",
+              "order": 7,
+              "canonicalKeys": ["modes_for_carrying_out"],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Provide sufficient detail to enable a skilled person.",
+                "helpText": "Canadian Patent Act s.27(3): Must correctly and fully describe at least one workable mode. Preferred embodiments encouraged."
+              }
+            },
+            {
+              "id": "claims",
+              "label": "Claims",
+              "order": 8,
+              "canonicalKeys": ["claims"],
+              "required": true,
+              "group": "claims",
+              "ui": {
+                "placeholder": "Draft independent and dependent claims.",
+                "helpText": "Claims must be clear, concise and fully supported by the description as required by the Patent Rules."
+              }
+            },
+            {
+              "id": "abstract",
+              "label": "Abstract",
+              "order": 9,
+              "canonicalKeys": ["abstract"],
+              "required": true,
+              "group": "abstract",
+              "ui": {
+                "placeholder": "Summarize the technical disclosure.",
+                "helpText": "≤150 words; technical field, problem, solution and use. No advantages or value statements (per CIPO abstract guidelines)."
+              }
+            }
+          ]
+        }
+      ]
+    },
+  
+    "rules": {
+      "global": {
+        "paragraphNumberingRequired": false,
+        "maxPagesRecommended": 100,
+        "allowEquations": true,
+        "allowTables": true
+      },
+      "abstract": {
+        "wordLimit": 150,
+        "noBenefitsOrAdvantages": true,
+        "noClaimLanguage": true,
+        "singleParagraph": true
+      },
+      "claims": {
+        "twoPartFormPreferred": false,
+        "allowMultipleDependent": true,
+        "prohibitMultipleDependentOnMultipleDependent": false,
+        "preferredConnectors": ["comprising"],
+        "discouragedConnectors": [],
+        "forbiddenPhrases": [],
+        "maxIndependentClaimsBeforeExtraFee": 0,
+        "maxTotalClaimsRecommended": 20,
+        "allowReferenceNumeralsInClaims": true,
+        "requireSupportInDescription": true,
+        "unityStandard": "single_inventive_concept"
+      },
+      "description": {
+        "requireBestModeDisclosure": false,
+        "avoidClaimLanguage": false,
+        "allowReferenceNumerals": true,
+        "requireEmbodimentSupportForAllClaims": true,
+        "industrialApplicabilitySectionRequired": false
+      },
+      "drawings": {
+        "requiredWhenApplicable": true,
+        "paperSize": "LETTER_OR_A4",
+        "colorAllowed": false,
+        "lineStyle": "black_and_white_solid",
+        "referenceNumeralsMandatoryWhenDrawings": true,
+        "minReferenceTextSizePt": 9,
+        "marginTopCm": 2.5,
+        "marginBottomCm": 1.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 1.5
+      },
+      "procedural": {
+        "gracePeriodMonths": 12,
+        "foreignFilingLicenseRequired": false,
+        "idsRequired": false,
+        "priorArtDisclosureThreshold": "duty_of_candour_not_formal_ids",
+        "allowProvisionalPriority": false
+      },
+      "language": {
+        "allowedLanguages": ["en", "fr"],
+        "requiresOfficialTranslation": false
+      },
+      "sequenceListing": {
+        "requiredIfSeqDisclosed": true,
+        "format": "ST.26-XML",
+        "allowLateFurnishing": true,
+        "lateFurnishingNotes": "ST.26 sequence listing may be furnished after filing or at national phase entry without loss of filing date.",
+        "affectsFilingDate": false,
+        "additionalFormatsAllowedForReference": []
+      },
+      "pageLayout": {
+        "defaultPageSize": "LETTER",
+        "allowedPageSizes": ["LETTER", "A4"],
+        "minMarginTopCm": 2.0,
+        "minMarginBottomCm": 2.0,
+        "minMarginLeftCm": 2.5,
+        "minMarginRightCm": 2.0,
+        "recommendedFontFamily": "Times New Roman",
+        "recommendedFontSizePt": 12,
+        "recommendedLineSpacing": 1.5
+      }
+    },
+  
+    "validation": {
+      "sectionChecks": {
+        "title": [
+          {
+            "id": "title_length_words",
+            "type": "maxWords",
+            "limit": 25,
+            "severity": "warning",
+            "message": "Title appears long; consider making it more concise."
+          },
+          {
+            "id": "title_length_chars",
+            "type": "maxChars",
+            "limit": 500,
+            "severity": "error",
+            "message": "Title exceeds the 500-character limit."
+          }
+        ],
+        "abstract": [
+          {
+            "id": "abstract_word_limit",
+            "type": "maxWords",
+            "limit": 150,
+            "severity": "error",
+            "message": "Abstract exceeds the 150-word limit."
+          }
+        ],
+        "claims": [
+          {
+            "id": "claims_count_recommended",
+            "type": "maxCount",
+            "limit": 20,
+            "severity": "warning",
+            "message": "More than 20 claims may increase examination fees."
+          }
+        ]
+      },
+      "crossSectionChecks": [
+        {
+          "id": "claims_supported_by_description",
+          "type": "support",
+          "from": "claims",
+          "mustBeSupportedBy": ["modes_for_carrying_out"],
+          "severity": "error",
+          "message": "Some claims may lack explicit support in the detailed description."
+        },
+        {
+          "id": "abstract_consistent_with_claims",
+          "type": "consistency",
+          "from": "abstract",
+          "mustBeConsistentWith": ["claims"],
+          "severity": "warning",
+          "message": "Abstract may cover features not reflected in the independent claims."
+        }
+      ]
+    },
+  
+    "prompts": {
+      "baseStyle": {
+        "tone": "technical, neutral, precise",
+        "voice": "impersonal_third_person",
+        "avoid": [
+          "marketing language",
+          "unsupported advantages",
+          "comparisons implying obviousness"
+        ]
+      },
+      "promptMergeStrategy": "append",
+      "sections": {
+        "title": {
+          "instruction": "Draft a concise technical title suitable for a Canadian patent application.",
+          "constraints": [
+            "Under 500 characters.",
+            "Avoid trademarks and the word 'patent'."
+          ],
+          "topUp": {
+            "instruction": "Per CIPO guidelines and Patent Rules, draft a title that is brief, technically descriptive, and identifies the invention.",
+            "constraints": [
+              "Maximum 500 characters",
+              "No trade names, trade marks, or personal names",
+              "Suitable for both English and French examination"
+            ],
+            "additions": [
+              "Canada is bilingual - title should be clear in both languages"
+            ]
+          }
+        },
+        "field": {
+          "instruction": "Draft the Technical Field section.",
+          "constraints": [
+            "Limit to 1–3 sentences.",
+            "Specify the technical field without describing embodiments or advantages."
+          ],
+          "topUp": {
+            "instruction": "Per CIPO practice, draft Technical Field indicating the area to which the invention pertains.",
+            "constraints": [
+              "1-3 sentences",
+              "Technical area only",
+              "No features or advantages"
+            ],
+            "additions": [
+              "Should align with abstract requirements"
+            ]
+          }
+        },
+        "fieldOfInvention": {
+          "topUp": {
+            "instruction": "Per CIPO practice, draft Technical Field indicating the technical area of the invention.",
+            "constraints": [
+              "1-3 sentences",
+              "No embodiments or advantages"
+            ],
+            "additions": []
+          }
+        },
+        "background": {
+          "instruction": "Draft the Background Art section.",
+          "constraints": [
+            "Summarize prior art known to the applicant and key limitations.",
+            "Avoid explicit admissions that cited references are prior art unless intentional."
+          ],
+          "topUp": {
+            "instruction": "Per CIPO guidelines, draft Background Art describing relevant prior technology without prejudicing patentability.",
+            "constraints": [
+              "Use objective, neutral language",
+              "Summarize relevant prior art and limitations",
+              "Avoid harmful admissions"
+            ],
+            "additions": [
+              "Canada has duty of candour but no formal IDS like USPTO",
+              "Do not deliberately conceal material prior art"
+            ]
+          }
+        },
+        "summary": {
+          "instruction": "Draft the Disclosure of Invention section.",
+          "constraints": [
+            "State the technical problem and the inventive solution.",
+            "Ensure consistency with the independent claims.",
+            "Avoid promotional or value-based wording."
+          ],
+          "topUp": {
+            "instruction": "Per Canadian Patent Rules, draft Disclosure of Invention explaining the problem, solution, and essential features.",
+            "constraints": [
+              "Technical problem and solution",
+              "Align with independent claims",
+              "No promotional language"
+            ],
+            "additions": [
+              "Disclosure should meet s.27(3) of the Patent Act requirements"
+            ]
+          }
+        },
+        "briefDescriptionOfDrawings": {
+          "importFiguresDirectly": true,
+          "topUp": {
+            "instruction": "Per CIPO formatting guidelines, briefly describe each drawing figure.",
+            "constraints": [
+              "One sentence per figure",
+              "Required if drawings are present"
+            ],
+            "additions": []
+          }
+        },
+        "modes_for_carrying_out": {
+          "instruction": "Draft the Mode(s) for Carrying Out the Invention.",
+          "constraints": [
+            "Describe embodiments with enough detail for a skilled person to work the invention (s.27(3)).",
+            "Reference drawings where applicable.",
+            "Ensure each independent claim has at least one supporting embodiment."
+          ],
+          "topUp": {
+            "instruction": "Per s.27(3) of the Canadian Patent Act, draft Mode(s) for Carrying Out the Invention correctly and fully describing the invention.",
+            "constraints": [
+              "At least one workable mode must be described",
+              "Sufficient detail for skilled person to work invention",
+              "Each independent claim needs supporting embodiment",
+              "Reference drawings with consistent numerals"
+            ],
+            "additions": [
+              "Canada does NOT require best mode disclosure (unlike US)",
+              "But must correctly and fully describe at least one workable mode",
+              "Preferred embodiments encouraged but not mandatory"
+            ]
+          }
+        },
+        "detailedDescription": {
+          "topUp": {
+            "instruction": "Per s.27(3) of the Canadian Patent Act, draft detailed description correctly and fully describing the invention.",
+            "constraints": [
+              "At least one workable mode",
+              "Sufficient for skilled person to practice",
+              "Support for all claims"
+            ],
+            "additions": [
+              "No best mode requirement in Canada"
+            ]
+          }
+        },
+        "claims": {
+          "instruction": "Draft a full set of claims compliant with Canadian practice.",
+          "constraints": [
+            "Use 'comprising' unless a closed transition is required.",
+            "Multiple dependent claims permitted.",
+            "Claims must be clear, concise and supported by the description."
+          ],
+          "topUp": {
+            "instruction": "Per Patent Rules and CIPO Manual of Patent Office Practice (MOPOP), draft claims that are clear, concise, and supported.",
+            "constraints": [
+              "Clear and concise language",
+              "Multiple dependent claims allowed (including on other multiple dependents)",
+              "Single inventive concept (unity)",
+              "All features supported by description"
+            ],
+            "additions": [
+              "No per-claim fees for excess claims in Canada",
+              "Unity assessed under 'single general inventive concept' standard",
+              "Reference numerals may be included"
+            ]
+          }
+        },
+        "abstract": {
+          "instruction": "Draft the Abstract.",
+          "constraints": [
+            "≤150 words.",
+            "Single paragraph.",
+            "State the technical field, problem, solution and principal use.",
+            "Do not include advantages, value statements or claim language."
+          ],
+          "topUp": {
+            "instruction": "Per CIPO abstract guidelines, draft an Abstract summarizing the technical disclosure for searching purposes.",
+            "constraints": [
+              "Maximum 150 words",
+              "Single paragraph",
+              "Technical field, problem, solution, principal use",
+              "No advantages, value statements, or claim language"
+            ],
+            "additions": [
+              "Abstract is for information/search purposes only",
+              "Reference illustrative figure if drawings present"
+            ]
+          }
+        }
+      }
+    },
+  
+    "export": {
+      "documentTypes": [
+        {
+          "id": "spec_pdf",
+          "label": "Canadian Specification PDF",
+          "includesSections": [
+            "title",
+            "field",
+            "background",
+            "summary",
+            "brief_drawings",
+            "modes_for_carrying_out",
+            "claims",
+            "abstract"
+          ],
+          "pageSize": "LETTER",
+          "lineSpacing": 1.5,
+          "fontFamily": "Times New Roman",
+          "fontSizePt": 12,
+          "addPageNumbers": true,
+          "addParagraphNumbers": false,
+          "marginTopCm": 2.0,
+          "marginBottomCm": 2.0,
+          "marginLeftCm": 2.5,
+          "marginRightCm": 2.0
+        }
+      ],
+      "sectionHeadings": {
+        "field": "TECHNICAL FIELD",
+        "background": "BACKGROUND ART",
+        "summary": "DISCLOSURE OF INVENTION",
+        "brief_drawings": "BRIEF DESCRIPTION OF DRAWINGS",
+        "modes_for_carrying_out": "MODE(S) FOR CARRYING OUT THE INVENTION",
+        "claims": "CLAIMS",
+        "abstract": "ABSTRACT"
+      }
+    },
+  
+    "diagrams": {
+      "requiredWhenApplicable": true,
+      "supportedDiagramTypes": ["block", "flowchart", "schematic", "perspective_view"],
+      "figureLabelFormat": "Fig. {number}",
+      "autoGenerateReferenceTable": true,
+      "diagramGenerationHints": {
+        "block": "Use rectangles and arrows for components and flow; match numerals with description.",
+        "flowchart": "Use standard symbols for method steps; keep consistent with claimed method flow."
+      }
+    },
+  
+    "crossChecks": {
+      "enableSemanticCrossCheck": true,
+      "checkList": [
+        {
+          "id": "drawings_vs_description",
+          "description": "Verify that all reference numerals in drawings are defined in the description.",
+          "from": "brief_drawings",
+          "mustBeExplainedIn": ["modes_for_carrying_out"]
+        },
+        {
+          "id": "claims_vs_drawings",
+          "description": "Verify that major claimed elements appear in at least one figure when drawings are provided.",
+          "from": "claims",
+          "mustBeShownIn": ["brief_drawings"]
+        }
+      ]
+    }
+  }
+  

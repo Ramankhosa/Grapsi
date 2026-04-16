@@ -1,0 +1,509 @@
+{
+  "meta": {
+    "id": "IN",
+    "code": "IN",
+    "name": "India",
+    "continent": "Asia",
+    "office": "Office of the Controller General of Patents, Designs & Trade Marks (CGPDTM)",
+    "officeUrl": "https://ipindia.gov.in",
+    "applicationTypes": [
+      "ordinary",
+      "convention",
+      "PCT national phase"
+    ],
+    "languages": [
+      "en",
+      "hi"
+    ],
+    "version": 5,
+    "status": "active",
+    "inheritsFrom": null,
+    "promptMergeStrategy": "append",
+    "tags": [
+      "indian",
+      "complete_specification",
+      "national_phase",
+      "form_2"
+    ],
+    "createdAt": "2025-11-28T00:00:00Z",
+    "updatedAt": "2025-11-29T12:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Indian Complete Specification (Form 2)",
+        "description": "Complete specification for a patent application filed using Form 2 under the Patents Act, 1970 and Patents Rules, 2003.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "ui": {
+              "placeholder": "Enter a concise technical title (≤15 words).",
+              "helpText": "Title must indicate the specific features of the invention and is normally in not more than 15 words, as per Rule 13(7)(a) of the Patents Rules, 2003. No strict character limit exists in the Rules; focus on brevity and clarity, avoiding trademarks, personal names and the word 'patent'."
+            }
+          },
+          {
+            "id": "field",
+            "label": "Field of Invention",
+            "order": 2,
+            "canonicalKeys": [
+              "field_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "State the technical field of the invention.",
+              "helpText": "1–3 sentences indicating the technical field to which the invention relates; usually the opening part of the description as per the Manual of Patent Office Practice and Procedure."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background and Prior Art",
+            "order": 3,
+            "canonicalKeys": [
+              "background"
+            ],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "Describe prior art and problems addressed by the invention.",
+              "helpText": "Briefly describe the prior art and the technical problem addressed. Avoid unnecessary admissions that specific documents are prior art and avoid statements implying the invention is obvious or a mere workshop modification."
+            }
+          },
+          {
+            "id": "objects",
+            "label": "Object(s) of the Invention",
+            "order": 4,
+            "canonicalKeys": [
+              "objectsOfInvention",
+              "objects",
+              "objects_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "State the principal and additional objects of the invention.",
+              "helpText": "Clearly articulate the technical problems associated with existing technology (prior art) and the specific solutions provided by the invention. Use statements like 'The principal object of this invention is to...' or 'Another object of this invention is to...' to outline specific goals achieved. This section should directly correlate with the features mentioned in the claims."
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Summary / Statement of Invention",
+            "order": 5,
+            "canonicalKeys": [
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide a concise summary or statement of the invention.",
+              "helpText": "Provide a concise summary of the invention highlighting the essential features and distinguishing aspects over the known art, consistent with the independent claims. Recommended by the Manual to precede the detailed description for clarity."
+            }
+          },
+          {
+            "id": "brief_drawings",
+            "label": "Brief Description of the Drawings",
+            "order": 6,
+            "canonicalKeys": [
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "List each figure briefly (e.g., 'FIG. 1 is a schematic view of ...').",
+              "helpText": "List each drawing figure with a one-line description (e.g., 'FIG. 1 is a schematic view of a system configuration'). Ensure figure numbering and captions match the drawing sheets filed under Rule 15."
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Detailed Description of the Invention",
+            "order": 7,
+            "canonicalKeys": [
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide a full detailed description with reference to drawings where applicable.",
+              "helpText": "Describe the invention in full detail, including best mode, so that a person skilled in the art can perform the invention, as required by Section 10(4) of the Patents Act, 1970. Refer consistently to reference numerals in the drawings and provide sufficient embodiments to support all claims."
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 8,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "ui": {
+              "placeholder": "Write independent and dependent claims in separate numbered paragraphs.",
+              "helpText": "Claims must define the matter for which protection is sought and be supported by the description as per Section 10(4) and (5). Use clear, precise language; maintain unity of invention; and draft each claim as a single sentence with proper dependencies."
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 9,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "ui": {
+              "placeholder": "Short technical abstract (≤150 words) starting with the title.",
+              "helpText": "Provide a concise summary in not more than 150 words, commencing with the title of the invention and indicating the technical field, technical advancement and principal use of the invention, in line with Section 10(4)(d) and Rule 13(7)(b). Avoid claim-style wording."
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": false,
+      "noClaimLanguage": true,
+      "singleParagraph": true
+    },
+    "claims": {
+      "twoPartFormPreferred": true,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": false,
+      "preferredConnectors": [
+        "comprising",
+        "including"
+      ],
+      "discouragedConnectors": [],
+      "forbiddenPhrases": [],
+      "maxIndependentClaimsBeforeExtraFee": 10,
+      "maxTotalClaimsRecommended": 10,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_inventive_concept_Section_10_5"
+    },
+    "description": {
+      "requireBestModeDisclosure": true,
+      "avoidClaimLanguage": true,
+      "allowReferenceNumerals": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": true,
+      "colorUsageNote": "Colour drawings are accepted only when absolutely essential for understanding; otherwise black-and-white line drawings in black ink are required under Rule 15.",
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5
+    },
+    "procedural": {
+      "gracePeriodMonths": 0,
+      "gracePeriodNotes": "India has no general grace period; only limited exceptions (e.g., Section 31 exhibitions and learned society disclosures) where specific conditions must be satisfied.",
+      "foreignFilingLicenseRequired": true,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "known_relevant_art_and_section_8_information",
+      "allowProvisionalPriority": true,
+      "completeSpecificationDueMonths": 12
+    },
+    "language": {
+      "allowedLanguages": [
+        "en",
+        "hi"
+      ],
+      "requiresOfficialTranslation": false
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "Sequence listing for nucleotide and amino acid sequences must be furnished in XML format compliant with WIPO Standard ST.26; text (TXT) or PDF may be filed for reference where permitted.",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": [
+        "TXT",
+        "PDF"
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": [
+        "A4"
+      ],
+      "minMarginTopCm": 4.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 4.0,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length_words",
+          "type": "maxWords",
+          "limit": 15,
+          "severity": "warning",
+          "message": "Title appears long; Indian practice under Rule 13(7)(a) expects a specific title normally in not more than 15 words."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_word_limit",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "error",
+          "message": "Abstract exceeds the 150 word limit under Rule 13(7)(b)."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_count_recommended",
+          "type": "maxCount",
+          "limit": 10,
+          "severity": "warning",
+          "message": "Number of claims exceeds 10; additional official fees apply for each claim beyond ten under the First Schedule. Keep claim set succinct and consistent with unity of invention under Section 10(5)."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ],
+        "severity": "error",
+        "message": "Some claim elements may not be clearly supported in the detailed description as required by Section 10(4)."
+      },
+      {
+        "id": "abstract_consistent_with_claims",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": [
+          "claims"
+        ],
+        "severity": "warning",
+        "message": "Abstract may describe features not clearly reflected in the independent claims; ensure consistency with the claimed subject-matter."
+      }
+    ]
+  },
+  "prompts": {
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "overly legalistic phrasing"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "For Indian jurisdiction under Rule 13(7)(a), ensure the title is specific, indicates the features of the invention, and is normally expressed in not more than 15 words.",
+        "constraints": [
+            "Avoid trademarks and personal names per Indian Patent Manual guidelines",
+            "Focus on brevity and clarity per Patents Rules, 2003"
+        ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Per Indian Patent Office Manual of Practice and Procedure, this section opens the description and indicates the technical field to which the invention relates.",
+        "constraints": [
+            "Limit to 1–3 sentences as per Manual guidelines",
+            "State the general and specific technical field without advantages or embodiments"
+        ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Per Indian Patent Manual, briefly describe the prior art and the technical problem addressed. Exercise care in characterizing prior art to avoid prejudicing patentability.",
+          "constraints": [
+            "Avoid unnecessary admissions that particular documents are prior art",
+            "Do not state that the invention is obvious, trivial or a mere workshop modification",
+            "Focus on technical limitations of conventional approaches"
+          ]
+        }
+      },
+      "objectsOfInvention": {
+        "topUp": {
+          "instruction": "Per Indian Patent Office practice, draft the 'Object(s) of the Invention' section to clearly articulate the technical problems with existing prior art and the specific solutions provided by the invention. This section is placed after Background and before Summary in Indian Complete Specifications (Form 2).",
+        "constraints": [
+            "Use statements beginning with 'The principal object of this invention is to...' or 'Another object of this invention is to...'",
+            "NEVER use 'The object...' (singular definite) as this implies only one objective",
+            "Focus on technical results achieved (e.g., 'to improve efficiency'), not the means",
+            "Each objective should correlate directly with features mentioned in the claims",
+            "Describe what the invention achieves, not how it achieves it"
+          ],
+          "additions": [
+            "Acknowledge closest prior art and clearly distinguish how the invention improves upon it",
+            "Ensure objectives can be substantiated by the detailed description and claims",
+            "Do not admit non-patentability or state invention is obvious",
+            "Avoid vague or non-technical goals focusing only on commercial success",
+            "Do not overstate benefits - stick to demonstrable technical advantages"
+        ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Per Manual of Patent Office Practice and Procedure, provide a concise summary highlighting essential features and distinguishing aspects over known art, consistent with independent claims.",
+        "constraints": [
+            "This summary should precede the detailed description for clarity",
+            "Ensure consistency with the scope of independent claims"
+        ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Per Section 10(4) of the Patents Act, 1970, describe the invention in full detail including the best method of performing it, so that a person skilled in the art can work the invention.",
+        "constraints": [
+            "Include best method of performing the invention as required by Section 10(4)(b)",
+            "Provide sufficient embodiments to support all claims",
+            "Refer consistently to reference numerals in drawings"
+          ],
+          "additions": [
+            "Each independent claim must have at least one supporting embodiment"
+        ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft claims compliant with Section 10(4) and (5) of the Indian Patents Act, 1970. Claims must define the matter for which protection is sought, be clear and succinct, and be fairly based on the matter disclosed in the specification.",
+        "constraints": [
+            "Use 'comprising' as preferred open connector; 'including' acceptable; 'consisting of' for narrow scope",
+            "Prefer two-part format (preamble + 'characterised in that') when defining improvements",
+            "Multiple dependent claims permitted including on other multiple dependent claims",
+            "Maintain unity of invention under Section 10(5)"
+          ],
+          "additions": [
+            "All claims must be fully supported by the detailed description",
+            "Each claim must define matter for which protection is sought per Section 10(4)"
+        ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Per Section 10(4)(d) and Rule 13(7)(b), provide a concise summary in not more than 150 words, commencing with the title and indicating technical field, technical advancement, and principal use.",
+          "constraints": [
+            "Hard limit of 150 words under Indian Rules",
+            "Must commence with the title of the invention",
+            "Indicate technical field, advancement, and principal use"
+          ],
+          "additions": [
+            "Avoid claim-style wording per Manual guidelines"
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "importFiguresDirectly": true,
+        "topUp": {
+          "instruction": "List each drawing figure with a one-line description ensuring figure numbering and captions match the drawing sheets filed under Rule 15.",
+        "constraints": [
+            "Use format: 'FIG. X is a [type] view of [subject]'",
+            "Ensure consistent numbering with actual drawing sheets"
+        ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "in_spec_pdf",
+        "label": "Indian Complete Specification PDF (Form 2)",
+        "includesSections": [
+          "title",
+          "field",
+          "background",
+          "objects",
+          "summary",
+          "brief_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "marginTopCm": 4.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 4.0,
+        "marginRightCm": 2.0,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "lineSpacing": 1.5,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false
+      }
+    ],
+    "sectionHeadings": {
+      "field": "FIELD OF INVENTION",
+      "background": "BACKGROUND AND PRIOR ART",
+      "objects": "OBJECT(S) OF THE INVENTION",
+      "summary": "SUMMARY / STATEMENT OF INVENTION",
+      "brief_drawings": "BRIEF DESCRIPTION OF THE DRAWINGS",
+      "detailed_description": "DETAILED DESCRIPTION OF THE INVENTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view"
+    ],
+    "figureLabelFormat": "Fig. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for components and arrows for data or control flow; keep labelling consistent with the detailed description.",
+      "flowchart": "Use standard flowchart symbols for processes and decisions; ensure the flow reflects the claimed method steps."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure all reference numerals in drawings are defined in the detailed description.",
+        "from": "brief_drawings",
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed elements appear in at least one figure when drawings are present.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "brief_drawings"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,1277 @@
+[
+  {
+    "id": "cmj1dkme6001pn8b3uprqqmo3",
+    "countryCode": "AU",
+    "sectionKey": "abstract",
+    "instruction": "Per IP Australia guidelines, draft an Abstract of 50-150 words summarizing technical disclosure.",
+    "constraints": [
+      "50-150 words preferred, max 150",
+      "Single paragraph",
+      "Technical summary only—no advantages/marketing",
+      "Enable quick understanding of field and main features"
+    ],
+    "additions": [
+      "IP Australia may amend abstracts exceeding 150 words",
+      "Reference most illustrative figure if drawings present"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.823Z",
+    "updatedAt": "2025-12-11T11:48:57.823Z"
+  },
+  {
+    "id": "cmj1dkmdo001an8b33dxd37zc",
+    "countryCode": "AU",
+    "sectionKey": "background",
+    "instruction": "Per IP Australia guidelines, draft Background Art describing relevant prior technology without prejudicing patentability.",
+    "constraints": [
+      "Use objective, neutral language",
+      "Avoid suggesting the invention is obvious",
+      "No harmful admissions against novelty/inventive step"
+    ],
+    "additions": [
+      "Australia has no formal IDS requirement but applicants should not deliberately mislead",
+      "Use hedging language where appropriate"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.805Z",
+    "updatedAt": "2025-12-11T11:48:57.805Z"
+  },
+  {
+    "id": "cmj1dkmds001gn8b3oqu2zbkt",
+    "countryCode": "AU",
+    "sectionKey": "briefDescriptionOfDrawings",
+    "instruction": "Per IP Australia formatting guidelines, briefly describe each drawing figure.",
+    "constraints": [
+      "One sentence per figure",
+      "Format: 'Fig. X is a [view type] showing [subject]'",
+      "Match figure order in drawings"
+    ],
+    "additions": [
+      "Required if drawings are present"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.809Z",
+    "updatedAt": "2025-12-11T11:48:57.809Z"
+  },
+  {
+    "id": "cmj1dkmdy001mn8b3tlxuirlf",
+    "countryCode": "AU",
+    "sectionKey": "claims",
+    "instruction": "Draft claims compliant with Section 40 of the Patents Act 1990. Claims must be clear, succinct, and fairly based on description.",
+    "constraints": [
+      "Each claim as single sentence",
+      "Multiple dependent claims permitted (including on other multiple dependents)",
+      "Claims must be fairly based on disclosed matter",
+      "All claims relate to single inventive concept"
+    ],
+    "additions": [
+      "Australia allows multiple dependent claims on two or more other claims",
+      "Unity follows 'single inventive concept' standard",
+      "Claims must be clear and succinct per s.40(3)"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.814Z",
+    "updatedAt": "2025-12-11T11:48:57.814Z"
+  },
+  {
+    "id": "cmj1dkmdv001jn8b3g15kcb45",
+    "countryCode": "AU",
+    "sectionKey": "detailed_description",
+    "instruction": "Per Section 40(2)(a) of the Patents Act 1990, draft a Description of Embodiments fully describing the invention including best method.",
+    "constraints": [
+      "Sufficient detail for skilled person to perform invention",
+      "Disclose best method known to applicant (mandatory in AU)",
+      "Consistent reference numerals matching drawings",
+      "Include practical examples where applicable"
+    ],
+    "additions": [
+      "Australia requires 'best method' disclosure (s.40(2)(aa))",
+      "Description must be clear and complete enough to perform invention",
+      "Include industrial applicability where not self-evident"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.811Z",
+    "updatedAt": "2025-12-11T11:48:57.811Z"
+  },
+  {
+    "id": "cmj1dkmdm0017n8b3y7cg9q5i",
+    "countryCode": "AU",
+    "sectionKey": "field",
+    "instruction": "Draft the Technical Field section.",
+    "constraints": [
+      "Limit to 1–3 sentences.",
+      "State the technical field without describing advantages or embodiments."
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.803Z",
+    "updatedAt": "2025-12-11T11:48:57.803Z"
+  },
+  {
+    "id": "cmj1dkmdk0014n8b3h5omu5rv",
+    "countryCode": "AU",
+    "sectionKey": "fieldOfInvention",
+    "instruction": "Per IP Australia specification guidelines, draft a Technical Field identifying the technical area of the invention.",
+    "constraints": [
+      "1-3 sentences maximum",
+      "State technical field objectively",
+      "No features or advantages"
+    ],
+    "additions": [
+      "May reference IPC/CPC classification areas"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.800Z",
+    "updatedAt": "2025-12-11T11:48:57.800Z"
+  },
+  {
+    "id": "cmj1dkmdq001dn8b3240mhiq1",
+    "countryCode": "AU",
+    "sectionKey": "summary",
+    "instruction": "Per IP Australia practice, draft a Summary stating technical problem, inventive solution, and advantageous effects.",
+    "constraints": [
+      "Align with independent claims scope",
+      "Use flexible language ('in embodiments', 'according to aspects')",
+      "Include brief statement of advantages"
+    ],
+    "additions": [
+      "Structure: problem → solution → advantages"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.807Z",
+    "updatedAt": "2025-12-11T11:48:57.807Z"
+  },
+  {
+    "id": "cmj1dkmde0011n8b3vvgepvje",
+    "countryCode": "AU",
+    "sectionKey": "title",
+    "instruction": "Per IP Australia guidelines and Patents Act 1990, draft a title that is brief, technically descriptive, and identifies the subject matter.",
+    "constraints": [
+      "Maximum 500 characters",
+      "No trade names, trade marks, or personal names",
+      "Sentence case, no terminal period"
+    ],
+    "additions": [
+      "Title should align with technical field and claims"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.794Z",
+    "updatedAt": "2025-12-11T11:48:57.794Z"
+  },
+  {
+    "id": "cmj1dkmfz002jn8b36qtl7620",
+    "countryCode": "CA",
+    "sectionKey": "abstract",
+    "instruction": "Per CIPO abstract guidelines, draft an Abstract summarizing the technical disclosure for searching purposes.",
+    "constraints": [
+      "Maximum 150 words",
+      "Single paragraph",
+      "Technical field, problem, solution, principal use",
+      "No advantages, value statements, or claim language"
+    ],
+    "additions": [
+      "Abstract is for information/search purposes only",
+      "Reference illustrative figure if drawings present"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.888Z",
+    "updatedAt": "2025-12-11T11:48:57.888Z"
+  },
+  {
+    "id": "cmj1dkmet0021n8b3y75o964k",
+    "countryCode": "CA",
+    "sectionKey": "background",
+    "instruction": "Per CIPO guidelines, draft Background Art describing relevant prior technology without prejudicing patentability.",
+    "constraints": [
+      "Use objective, neutral language",
+      "Summarize relevant prior art and limitations",
+      "Avoid harmful admissions"
+    ],
+    "additions": [
+      "Canada has duty of candour but no formal IDS like USPTO",
+      "Do not deliberately conceal material prior art"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.845Z",
+    "updatedAt": "2025-12-11T11:48:57.845Z"
+  },
+  {
+    "id": "cmj1dkmf80027n8b3cxxl1m7u",
+    "countryCode": "CA",
+    "sectionKey": "briefDescriptionOfDrawings",
+    "instruction": "Per CIPO formatting guidelines, briefly describe each drawing figure.",
+    "constraints": [
+      "One sentence per figure",
+      "Required if drawings are present"
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.860Z",
+    "updatedAt": "2025-12-11T11:48:57.860Z"
+  },
+  {
+    "id": "cmj1dkmfq002gn8b3mkkehinm",
+    "countryCode": "CA",
+    "sectionKey": "claims",
+    "instruction": "Per Patent Rules and CIPO Manual of Patent Office Practice (MOPOP), draft claims that are clear, concise, and supported.",
+    "constraints": [
+      "Clear and concise language",
+      "Multiple dependent claims allowed (including on other multiple dependents)",
+      "Single inventive concept (unity)",
+      "All features supported by description"
+    ],
+    "additions": [
+      "No per-claim fees for excess claims in Canada",
+      "Unity assessed under 'single general inventive concept' standard",
+      "Reference numerals may be included"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.879Z",
+    "updatedAt": "2025-12-11T11:48:57.879Z"
+  },
+  {
+    "id": "cmj1dkmfl002dn8b3iohk5d62",
+    "countryCode": "CA",
+    "sectionKey": "detailedDescription",
+    "instruction": "Per s.27(3) of the Canadian Patent Act, draft detailed description correctly and fully describing the invention.",
+    "constraints": [
+      "At least one workable mode",
+      "Sufficient for skilled person to practice",
+      "Support for all claims"
+    ],
+    "additions": [
+      "No best mode requirement in Canada"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.874Z",
+    "updatedAt": "2025-12-11T11:48:57.874Z"
+  },
+  {
+    "id": "cmj1dkmei001vn8b367ihfcdq",
+    "countryCode": "CA",
+    "sectionKey": "field",
+    "instruction": "Per CIPO practice, draft Technical Field indicating the area to which the invention pertains.",
+    "constraints": [
+      "1-3 sentences",
+      "Technical area only",
+      "No features or advantages"
+    ],
+    "additions": [
+      "Should align with abstract requirements"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.835Z",
+    "updatedAt": "2025-12-11T11:48:57.835Z"
+  },
+  {
+    "id": "cmj1dkmem001yn8b3zcrj563k",
+    "countryCode": "CA",
+    "sectionKey": "fieldOfInvention",
+    "instruction": "Per CIPO practice, draft Technical Field indicating the technical area of the invention.",
+    "constraints": [
+      "1-3 sentences",
+      "No embodiments or advantages"
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.838Z",
+    "updatedAt": "2025-12-11T11:48:57.838Z"
+  },
+  {
+    "id": "cmj1dkmfc002an8b39tzyo5c5",
+    "countryCode": "CA",
+    "sectionKey": "modes_for_carrying_out",
+    "instruction": "Per s.27(3) of the Canadian Patent Act, draft Mode(s) for Carrying Out the Invention correctly and fully describing the invention.",
+    "constraints": [
+      "At least one workable mode must be described",
+      "Sufficient detail for skilled person to work invention",
+      "Each independent claim needs supporting embodiment",
+      "Reference drawings with consistent numerals"
+    ],
+    "additions": [
+      "Canada does NOT require best mode disclosure (unlike US)",
+      "But must correctly and fully describe at least one workable mode",
+      "Preferred embodiments encouraged but not mandatory"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.865Z",
+    "updatedAt": "2025-12-11T11:48:57.865Z"
+  },
+  {
+    "id": "cmj1dkmez0024n8b3mdaipagt",
+    "countryCode": "CA",
+    "sectionKey": "summary",
+    "instruction": "Per Canadian Patent Rules, draft Disclosure of Invention explaining the problem, solution, and essential features.",
+    "constraints": [
+      "Technical problem and solution",
+      "Align with independent claims",
+      "No promotional language"
+    ],
+    "additions": [
+      "Disclosure should meet s.27(3) of the Patent Act requirements"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.852Z",
+    "updatedAt": "2025-12-11T11:48:57.852Z"
+  },
+  {
+    "id": "cmj1dkmea001sn8b3km0798dv",
+    "countryCode": "CA",
+    "sectionKey": "title",
+    "instruction": "Per CIPO guidelines and Patent Rules, draft a title that is brief, technically descriptive, and identifies the invention.",
+    "constraints": [
+      "Maximum 500 characters",
+      "No trade names, trade marks, or personal names",
+      "Suitable for both English and French examination"
+    ],
+    "additions": [
+      "Canada is bilingual - title should be clear in both languages"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.827Z",
+    "updatedAt": "2025-12-11T11:48:57.827Z"
+  },
+  {
+    "id": "cmj1dkmhm0037n8b3vi42gy97",
+    "countryCode": "IN",
+    "sectionKey": "abstract",
+    "instruction": "Per Section 10(4)(d) and Rule 13(7)(b), provide a concise summary in not more than 150 words, commencing with the title and indicating technical field, technical advancement, and principal use.",
+    "constraints": [
+      "Hard limit of 150 words under Indian Rules",
+      "Must commence with the title of the invention",
+      "Indicate technical field, advancement, and principal use"
+    ],
+    "additions": [
+      "Avoid claim-style wording per Manual guidelines"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.946Z",
+    "updatedAt": "2025-12-11T11:48:57.946Z"
+  },
+  {
+    "id": "cmj1dkmgp002sn8b30p3by662",
+    "countryCode": "IN",
+    "sectionKey": "background",
+    "instruction": "cite prior art while dicussing relevant invention features,processes, design, limitations.",
+    "constraints": [
+      "One paragraph should not contain more than two to three lines and should be complete in itself."
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 4,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": "superadmin@spotipr.com",
+    "createdAt": "2025-12-11T11:48:57.914Z",
+    "updatedAt": "2025-12-18T08:55:38.956Z"
+  },
+  {
+    "id": "cmj1dkmht003an8b31sb0w3hp",
+    "countryCode": "IN",
+    "sectionKey": "briefDescriptionOfDrawings",
+    "instruction": "List each drawing figure with a one-line description ensuring figure numbering and captions match the drawing sheets filed under Rule 15.",
+    "constraints": [
+      "Use format: 'FIG. X is a [type] view of [subject]'",
+      "Ensure consistent numbering with actual drawing sheets"
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.953Z",
+    "updatedAt": "2025-12-11T11:48:57.953Z"
+  },
+  {
+    "id": "cmj1dkmhf0034n8b3anl7p5o8",
+    "countryCode": "IN",
+    "sectionKey": "claims",
+    "instruction": "Draft claims compliant with Section 10(4) and (5) of the Indian Patents Act, 1970. Claims must define the matter for which protection is sought, be clear and succinct, and be fairly based on the matter disclosed in the specification.",
+    "constraints": [
+      "Use 'comprising' as preferred open connector; 'including' acceptable; 'consisting of' for narrow scope",
+      "Prefer two-part format (preamble + 'characterised in that') when defining improvements",
+      "Multiple dependent claims permitted including on other multiple dependent claims",
+      "Maintain unity of invention under Section 10(5)"
+    ],
+    "additions": [
+      "All claims must be fully supported by the detailed description",
+      "Each claim must define matter for which protection is sought per Section 10(4)"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.940Z",
+    "updatedAt": "2025-12-11T11:48:57.940Z"
+  },
+  {
+    "id": "cmj1dkmh70031n8b3xt2cvm41",
+    "countryCode": "IN",
+    "sectionKey": "detailedDescription",
+    "instruction": "PARAGRAPH FORMATTING REQUIREMENT (STRICT):\n\n- Each disclosure unit must appear in its own paragraph.\n- Insert exactly one blank line between paragraphs.\n- Do not continue a paragraph once the disclosure unit is complete.\n- If additional disclosure is needed, start a new paragraph.\n",
+    "constraints": [],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 5,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": "superadmin@spotipr.com",
+    "createdAt": "2025-12-11T11:48:57.932Z",
+    "updatedAt": "2025-12-18T08:58:58.669Z"
+  },
+  {
+    "id": "cmj1dkmgg002pn8b3z46p3vh3",
+    "countryCode": "IN",
+    "sectionKey": "fieldOfInvention",
+    "instruction": "Per Indian Patent Office Manual of Practice and Procedure, this section opens the description and indicates the technical field to which the invention relates.",
+    "constraints": [
+      "Limit to 1–3 sentences as per Manual guidelines",
+      "State the general and specific technical field without advantages or embodiments"
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.905Z",
+    "updatedAt": "2025-12-11T11:48:57.905Z"
+  },
+  {
+    "id": "cmj1dkmgt002vn8b30sujnreu",
+    "countryCode": "IN",
+    "sectionKey": "objectsOfInvention",
+    "instruction": "Per Indian Patent Office practice, draft the 'Object(s) of the Invention' section to clearly articulate the technical problems with existing prior art and the specific solutions provided by the invention. This section is placed after Background and before Summary in Indian Complete Specifications (Form 2).",
+    "constraints": [
+      "Use statements beginning with 'The principal object of this invention is to...' or 'Another object of this invention is to...'",
+      "NEVER use 'The object...' (singular definite) as this implies only one objective",
+      "Focus on technical results achieved (e.g., 'to improve efficiency'), not the means",
+      "Each objective should correlate directly with features mentioned in the claims",
+      "Describe what the invention achieves, not how it achieves it"
+    ],
+    "additions": [
+      "Acknowledge closest prior art and clearly distinguish how the invention improves upon it",
+      "Ensure objectives can be substantiated by the detailed description and claims",
+      "Do not admit non-patentability or state invention is obvious",
+      "Avoid vague or non-technical goals focusing only on commercial success",
+      "Do not overstate benefits - stick to demonstrable technical advantages"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.918Z",
+    "updatedAt": "2025-12-11T11:48:57.918Z"
+  },
+  {
+    "id": "cmj4andmk0002fq2qri165y8t",
+    "countryCode": "IN",
+    "sectionKey": "preamble",
+    "instruction": "just say the following in the output, nothing else, print ,\"The following specification describes the invention..\"",
+    "constraints": [],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "superadmin@spotipr.com",
+    "updatedBy": null,
+    "createdAt": "2025-12-13T12:50:26.109Z",
+    "updatedAt": "2025-12-13T12:50:26.109Z"
+  },
+  {
+    "id": "cmj1dkmgx002yn8b3szaxvex3",
+    "countryCode": "IN",
+    "sectionKey": "summary",
+    "instruction": "Per Manual of Patent Office Practice and Procedure, provide a concise summary highlighting essential features and distinguishing aspects over known art, consistent with independent claims.",
+    "constraints": [
+      "This summary should precede the detailed description for clarity",
+      "Ensure consistency with the scope of independent claims"
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.922Z",
+    "updatedAt": "2025-12-11T11:48:57.922Z"
+  },
+  {
+    "id": "cmj1dkmgb002mn8b3cvpbmdas",
+    "countryCode": "IN",
+    "sectionKey": "title",
+    "instruction": "For Indian jurisdiction under Rule 13(7)(a), ensure the title is specific, indicates the features of the invention, and is normally expressed in not more than 15 words.",
+    "constraints": [
+      "Avoid trademarks and personal names per Indian Patent Manual guidelines",
+      "Focus on brevity and clarity per Patents Rules, 2003"
+    ],
+    "additions": [],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.900Z",
+    "updatedAt": "2025-12-11T11:48:57.900Z"
+  },
+  {
+    "id": "cmj1dkmjq004an8b3do7wtp8q",
+    "countryCode": "JP",
+    "sectionKey": "abstract",
+    "instruction": "Per JPO practice, draft a concise Abstract summarizing the gist of the invention.",
+    "constraints": [
+      "Single paragraph, ~150 words recommended (max 200)",
+      "Technical summary only",
+      "No advantages, marketing language, or claim references",
+      "~800 characters maximum for Japanese version"
+    ],
+    "additions": [
+      "Abstract may be shortened by JPO/JAPIO on publication",
+      "This is for information/searching purposes only"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.023Z",
+    "updatedAt": "2025-12-11T11:48:58.023Z"
+  },
+  {
+    "id": "cmj1dkmj3003vn8b3y7ewwtqk",
+    "countryCode": "JP",
+    "sectionKey": "advantageousEffects",
+    "instruction": "Draft the Advantageous Effects sub-section per JPO requirements, listing specific technical advantages.",
+    "constraints": [
+      "List specific, measurable technical advantages",
+      "Support with specification features",
+      "No marketing or commercial language"
+    ],
+    "additions": [
+      "This corresponds to 【発明の効果】"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.000Z",
+    "updatedAt": "2025-12-11T11:48:58.000Z"
+  },
+  {
+    "id": "cmj1dkmic003jn8b3g44c8c0i",
+    "countryCode": "JP",
+    "sectionKey": "background",
+    "instruction": "Per JPO practice, draft Background Art describing conventional technology and prior art relevant to understanding the invention.",
+    "constraints": [
+      "Describe limitations objectively without disparaging specific patents",
+      "Do not fully state problem/solution here - reserve for Summary",
+      "Use neutral language about prior art drawbacks"
+    ],
+    "additions": [
+      "Japan has no formal IDS requirement but applicants should not deliberately conceal known prior art",
+      "This section corresponds to 【背景技術】 in Japanese filings",
+      "Consider separate Citation List section for prior art references"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.973Z",
+    "updatedAt": "2025-12-11T11:48:57.973Z"
+  },
+  {
+    "id": "cmj1dkmja003yn8b3pf1kap2z",
+    "countryCode": "JP",
+    "sectionKey": "briefDescriptionOfDrawings",
+    "instruction": "Per JPO formatting, provide brief one-sentence description for each drawing figure.",
+    "constraints": [
+      "One sentence per figure",
+      "Format: 'FIG. X is a [view type] of [subject]'",
+      "No detailed operation - reserve for Description of Embodiments"
+    ],
+    "additions": [
+      "This corresponds to 【図面の簡単な説明】"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.006Z",
+    "updatedAt": "2025-12-11T11:48:58.006Z"
+  },
+  {
+    "id": "cmj1dkmjn0047n8b3nof72gzq",
+    "countryCode": "JP",
+    "sectionKey": "claims",
+    "instruction": "Draft claims per Patent Act Article 36 and JPO Examination Guidelines, ensuring support and clarity.",
+    "constraints": [
+      "Each claim supported by description",
+      "Clear, consistent terminology",
+      "Single general inventive concept (unity)",
+      "Multiple dependent claims allowed but cannot depend on other multiple dependents"
+    ],
+    "additions": [
+      "Fee based on total number of claims, not just independents",
+      "Multiple independent claims for different categories (product, method) are acceptable",
+      "Reference numerals may be included in claims"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.020Z",
+    "updatedAt": "2025-12-11T11:48:58.020Z"
+  },
+  {
+    "id": "cmj1dkmjg0041n8b32ywae5bz",
+    "countryCode": "JP",
+    "sectionKey": "detailedDescription",
+    "instruction": "Per Patent Act Article 36(4)(i), draft Description of Embodiments enabling a skilled person to carry out the invention without undue experimentation.",
+    "constraints": [
+      "Include embodiment regarded as best mode",
+      "Sufficient detail for enablement",
+      "Use consistent reference numerals matching drawings",
+      "Avoid claim-style language"
+    ],
+    "additions": [
+      "This corresponds to 【発明を実施するための形態】",
+      "Japan requires best mode disclosure integrated in this section",
+      "Consider paragraph numbering in format 【0001】"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.013Z",
+    "updatedAt": "2025-12-11T11:48:58.013Z"
+  },
+  {
+    "id": "cmj1dkmi6003gn8b3je040nfl",
+    "countryCode": "JP",
+    "sectionKey": "fieldOfInvention",
+    "instruction": "Per JPO specification guidelines, draft a Technical Field section stating the technical area of the invention.",
+    "constraints": [
+      "Neutral technical terminology",
+      "No advantages or problem discussion",
+      "May include classification terms"
+    ],
+    "additions": [
+      "This section corresponds to 【技術分野】 in Japanese filings"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.967Z",
+    "updatedAt": "2025-12-11T11:48:57.967Z"
+  },
+  {
+    "id": "cmj1dkmjk0044n8b3cdl50pqc",
+    "countryCode": "JP",
+    "sectionKey": "industrialApplicability",
+    "instruction": "Draft Industrial Applicability section if applicability is not self-evident from other sections.",
+    "constraints": [
+      "Explain how invention can be used in industry",
+      "Specific practical applications"
+    ],
+    "additions": [
+      "This corresponds to 【産業上の利用可能性】",
+      "Optional - can be omitted if self-evident"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.016Z",
+    "updatedAt": "2025-12-11T11:48:58.016Z"
+  },
+  {
+    "id": "cmj1dkmih003mn8b3kifl9wzy",
+    "countryCode": "JP",
+    "sectionKey": "summary",
+    "instruction": "Per JPO practice, draft Summary of Invention with clear problem-solution structure including Technical Problem, Solution to Problem, and Advantageous Effects.",
+    "constraints": [
+      "Use problem-solution structure required by JPO",
+      "Technical Problem: state objective technical problem",
+      "Solution to Problem: describe how invention solves it",
+      "Advantageous Effects: list technical benefits",
+      "Align with independent claims"
+    ],
+    "additions": [
+      "This section corresponds to 【発明の概要】 in Japanese filings",
+      "JPO strongly prefers explicit problem-solution format",
+      "Effects should be technical, not commercial"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.977Z",
+    "updatedAt": "2025-12-11T11:48:57.977Z"
+  },
+  {
+    "id": "cmj1dkmiq003pn8b38xlai9bi",
+    "countryCode": "JP",
+    "sectionKey": "technicalProblem",
+    "instruction": "Draft the Technical Problem sub-section per JPO requirements, stating the objective technical problem to be solved.",
+    "constraints": [
+      "State problem objectively, not subjectively",
+      "Problem should be recognizable by skilled person",
+      "Solvable by the distinguishing features of the invention"
+    ],
+    "additions": [
+      "This corresponds to 【発明が解決しようとする課題】"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.987Z",
+    "updatedAt": "2025-12-11T11:48:57.987Z"
+  },
+  {
+    "id": "cmj1dkmix003sn8b3av1v755t",
+    "countryCode": "JP",
+    "sectionKey": "technicalSolution",
+    "instruction": "Draft the Solution to Problem sub-section per JPO requirements, describing how the invention solves the technical problem.",
+    "constraints": [
+      "Directly address the Technical Problem",
+      "Explain cause-effect relationship",
+      "Describe technical mechanism"
+    ],
+    "additions": [
+      "This corresponds to 【課題を解決するための手段】"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.994Z",
+    "updatedAt": "2025-12-11T11:48:57.994Z"
+  },
+  {
+    "id": "cmj1dkmhz003dn8b3l6umgel6",
+    "countryCode": "JP",
+    "sectionKey": "title",
+    "instruction": "Per JPO practice and Patent Act Article 36, draft a concise technical title that identifies the invention without marketing language or trademarks.",
+    "constraints": [
+      "Maximum 500 characters",
+      "No trade names, trade marks, personal names, or superlatives",
+      "Must be technical and descriptive",
+      "Avoid fanciful or abstract terms"
+    ],
+    "additions": [
+      "Title will be translated to Japanese for official filing"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:57.959Z",
+    "updatedAt": "2025-12-11T11:48:57.959Z"
+  },
+  {
+    "id": "cmj1dkmlf0054n8b3yjgrstwv",
+    "countryCode": "PCT",
+    "sectionKey": "abstract",
+    "instruction": "Per PCT Rule 8, draft an Abstract for searching purposes that permits quick understanding of the technical disclosure.",
+    "constraints": [
+      "50-150 words (strictly, max 150)",
+      "Technical field, problem, solution, principal use",
+      "No merits, advantages, or speculative applications",
+      "No claim-style language"
+    ],
+    "additions": [
+      "Published by WIPO in international publication",
+      "Include reference to most illustrative figure (Rule 8.1(c))",
+      "ISA may amend abstract if needed (Rule 38.2)"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.083Z",
+    "updatedAt": "2025-12-11T11:48:58.083Z"
+  },
+  {
+    "id": "cmj1dkmkd004mn8b3lmoe9yyt",
+    "countryCode": "PCT",
+    "sectionKey": "background",
+    "instruction": "Per PCT Rule 5.1(a)(ii), draft Background Art indicating prior art useful for understanding, searching, and examining the invention.",
+    "constraints": [
+      "Cite relevant prior art documents where known",
+      "Describe limitations objectively",
+      "Do not concede obviousness or lack of novelty"
+    ],
+    "additions": [
+      "Prior art citations are useful for international search",
+      "This section helps the ISA understand the technical context"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.045Z",
+    "updatedAt": "2025-12-11T11:48:58.045Z"
+  },
+  {
+    "id": "cmj1dkmkq004sn8b3tiwjyhrz",
+    "countryCode": "PCT",
+    "sectionKey": "briefDescriptionOfDrawings",
+    "instruction": "Per PCT Rule 5.1(a)(iv), briefly describe each figure of the drawings.",
+    "constraints": [
+      "One sentence per figure",
+      "Brief description only",
+      "Required if drawings are present"
+    ],
+    "additions": [
+      "Format: 'Fig. X is a [view type] showing [subject]'"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.058Z",
+    "updatedAt": "2025-12-11T11:48:58.058Z"
+  },
+  {
+    "id": "cmj1dkml60051n8b3emdoeu46",
+    "countryCode": "PCT",
+    "sectionKey": "claims",
+    "instruction": "Per PCT Rules 6 and 13, draft claims that define the matter for which protection is sought, supported by the description.",
+    "constraints": [
+      "Each claim as single sentence where practicable",
+      "Clear, consistent terminology",
+      "Unity of invention under Rule 13 (single general inventive concept)",
+      "Multiple dependent claims cannot depend on other multiple dependents",
+      "Reference numerals may be included in claims (Rule 6.2(a))"
+    ],
+    "additions": [
+      "3+ independent claims or 15+ total claims may trigger additional search fees",
+      "Consider national phase requirements when drafting (some offices prefer two-part form)",
+      "Claims must be numbered consecutively in Arabic numerals"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.075Z",
+    "updatedAt": "2025-12-11T11:48:58.075Z"
+  },
+  {
+    "id": "cmj1dkmku004vn8b32vkzg52q",
+    "countryCode": "PCT",
+    "sectionKey": "detailed_description",
+    "instruction": "Per PCT Rule 5.1(a)(v), draft Mode(s) for Carrying Out the Invention setting out at least the best mode contemplated by the applicant.",
+    "constraints": [
+      "Best mode contemplated by applicant must be disclosed",
+      "Sufficient detail for enablement by skilled person",
+      "Each independent claim needs supporting embodiment",
+      "Reference drawings with consistent numerals"
+    ],
+    "additions": [
+      "Required section under PCT Rule 5.1(a)(v)",
+      "Best mode disclosure required for many national phases",
+      "Use examples where they add clarity"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.062Z",
+    "updatedAt": "2025-12-11T11:48:58.062Z"
+  },
+  {
+    "id": "cmj1dkmky004yn8b3bgyxji39",
+    "countryCode": "PCT",
+    "sectionKey": "detailedDescription",
+    "instruction": "Per PCT Rule 5.1(a)(v), draft Mode(s) for Carrying Out the Invention setting out at least the best mode contemplated by the applicant.",
+    "constraints": [
+      "Best mode must be disclosed",
+      "Sufficient detail for enablement",
+      "Support for all independent claims"
+    ],
+    "additions": [
+      "Required under PCT Rule 5.1(a)(v)"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.067Z",
+    "updatedAt": "2025-12-11T11:48:58.067Z"
+  },
+  {
+    "id": "cmj1dkmk2004gn8b3mrrowz50",
+    "countryCode": "PCT",
+    "sectionKey": "field",
+    "instruction": "Per PCT Rule 5.1(a)(i), draft Technical Field indicating the technical field to which the invention relates.",
+    "constraints": [
+      "1-3 sentences",
+      "Must make sense to a skilled person",
+      "No advantages, embodiments, or detailed features"
+    ],
+    "additions": [
+      "Required section under PCT Rule 5.1(a)(i)",
+      "Should be suitable for international classification purposes"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.035Z",
+    "updatedAt": "2025-12-11T11:48:58.035Z"
+  },
+  {
+    "id": "cmj1dkmk6004jn8b38u031ium",
+    "countryCode": "PCT",
+    "sectionKey": "fieldOfInvention",
+    "instruction": "Per PCT Rule 5.1(a)(i), draft Technical Field indicating the technical field to which the invention relates.",
+    "constraints": [
+      "1-3 sentences",
+      "Must make sense to a skilled person",
+      "No advantages, embodiments, or detailed features"
+    ],
+    "additions": [
+      "Required section under PCT Rule 5.1(a)(i)"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.038Z",
+    "updatedAt": "2025-12-11T11:48:58.038Z"
+  },
+  {
+    "id": "cmj1dkmkh004pn8b36pt3tpfv",
+    "countryCode": "PCT",
+    "sectionKey": "summary",
+    "instruction": "Per PCT Rule 5.1(a)(iii), draft Disclosure of Invention so the technical problem and solution can be understood, with advantageous effects relative to background art.",
+    "constraints": [
+      "Technical problem and solution must be clear",
+      "Advantageous effects compared to prior art",
+      "Align with independent claims"
+    ],
+    "additions": [
+      "Required section under PCT Rule 5.1(a)(iii)",
+      "Critical for international preliminary examination under Chapter II"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.050Z",
+    "updatedAt": "2025-12-11T11:48:58.050Z"
+  },
+  {
+    "id": "cmj1dkmjz004dn8b3u7vsd6x2",
+    "countryCode": "PCT",
+    "sectionKey": "title",
+    "instruction": "Per PCT Rule 4.3, draft a title that is short, precise, and indicates the subject matter to which the invention relates.",
+    "constraints": [
+      "Maximum 500 characters",
+      "Brief and descriptive of the technical subject",
+      "No trademarks, trade names, or fanciful expressions",
+      "Suitable for publication in multiple PCT member states"
+    ],
+    "additions": [
+      "Title appears in the international publication (WIPO)",
+      "Should be suitable for translation into multiple languages"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.031Z",
+    "updatedAt": "2025-12-11T11:48:58.031Z"
+  },
+  {
+    "id": "cmj1dkmmv005sn8b394x9rdtf",
+    "countryCode": "US",
+    "sectionKey": "abstract",
+    "instruction": "Per 37 CFR 1.72(b) and MPEP 608.01(b), draft an Abstract suitable for publication that allows quick determination of the nature of the technical disclosure.",
+    "constraints": [
+      "Maximum 150 words (strictly enforced)",
+      "Single paragraph format",
+      "Technical summary only—no legal phraseology",
+      "Must not discuss merits or speculative applications"
+    ],
+    "additions": [
+      "Include reference to the figure that best characterizes the invention (e.g., '(FIG. 1)')",
+      "The USPTO may shorten abstracts exceeding 150 words",
+      "The abstract is published in the Official Gazette"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.135Z",
+    "updatedAt": "2025-12-11T11:48:58.135Z"
+  },
+  {
+    "id": "cmj1dkmlx005dn8b397kktqrs",
+    "countryCode": "US",
+    "sectionKey": "background",
+    "instruction": "Per MPEP 608.01(c) and 37 CFR 1.71, draft a Background that describes relevant prior art without making admissions harmful to patentability.",
+    "constraints": [
+      "Avoid statements like 'it is known in the art' without careful consideration",
+      "Do not characterize prior art in ways that suggest the invention is obvious",
+      "Use 'conventional approaches' rather than 'well-known' where possible",
+      "Do not admit that any specific reference constitutes prior art"
+    ],
+    "additions": [
+      "Under 35 USC 102/103, statements in the background may be used against patentability",
+      "Consider using hedging language: 'Some approaches have attempted...'",
+      "IDS obligations under 37 CFR 1.56 require disclosure of material prior art"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.101Z",
+    "updatedAt": "2025-12-11T11:48:58.101Z"
+  },
+  {
+    "id": "cmj1dkmmf005mn8b3ncltjgf2",
+    "countryCode": "US",
+    "sectionKey": "briefDescriptionOfDrawings",
+    "instruction": "Per 37 CFR 1.74, provide a brief description of each drawing figure before the detailed description.",
+    "constraints": [
+      "One sentence per figure",
+      "Use format: 'FIG. X is a [view type] showing [what it depicts]'",
+      "View types: block diagram, flowchart, perspective view, cross-sectional view"
+    ],
+    "additions": [
+      "This section should follow the order of figures in the drawings",
+      "Reference numerals need not be listed here—they belong in the detailed description"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.120Z",
+    "updatedAt": "2025-12-11T11:48:58.120Z"
+  },
+  {
+    "id": "cmj1dkmmn005pn8b3e87bh47c",
+    "countryCode": "US",
+    "sectionKey": "claims",
+    "instruction": "Draft claims compliant with 35 USC 112 and 37 CFR 1.75. Use open-ended 'comprising' language for flexibility.",
+    "constraints": [
+      "Each claim must be a single sentence",
+      "Maintain proper antecedent basis ('a processor'...'the processor')",
+      "Independent claims: system/apparatus, method, and optionally CRM claims",
+      "Dependent claims must reference only one prior claim (no multiple dependencies in US)",
+      "Avoid 'means for' unless invoking 35 USC 112(f)"
+    ],
+    "additions": [
+      "Per 37 CFR 1.75(c), multiple dependent claims are allowed but incur extra fees",
+      "Consider 3 independent claims and 17 dependent claims before excess claim fees apply",
+      "Use 'configured to' or 'adapted to' for functional language without invoking 112(f)"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.128Z",
+    "updatedAt": "2025-12-11T11:48:58.128Z"
+  },
+  {
+    "id": "cmj1dkmm9005jn8b38v8ew6rg",
+    "countryCode": "US",
+    "sectionKey": "detailedDescription",
+    "instruction": "Per 35 USC 112(a) and MPEP 2161-2165, draft a Detailed Description that satisfies the written description, enablement, and best mode requirements.",
+    "constraints": [
+      "Describe in sufficient detail to enable a person of ordinary skill to make and use the invention (enablement)",
+      "Demonstrate possession of the claimed invention (written description)",
+      "Disclose the best mode contemplated by the inventor (best mode)",
+      "Use reference numerals consistently with the drawings"
+    ],
+    "additions": [
+      "Include multiple embodiments and alternatives using 'in another embodiment...'",
+      "The USPTO requires the best mode known at the time of filing to be disclosed",
+      "Support for functional claim language should be explicit in the description"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.113Z",
+    "updatedAt": "2025-12-11T11:48:58.113Z"
+  },
+  {
+    "id": "cmj1dkmlq005an8b3qx3360gs",
+    "countryCode": "US",
+    "sectionKey": "fieldOfInvention",
+    "instruction": "Per MPEP 608.01(c), draft a concise Field of the Invention that identifies the technical area without describing the invention itself.",
+    "constraints": [
+      "1-3 sentences maximum",
+      "State only the technical field (e.g., 'data processing', 'chemical compositions')",
+      "Do not describe specific features, advantages, or embodiments"
+    ],
+    "additions": [
+      "This section helps the examiner classify the invention for searching purposes"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.094Z",
+    "updatedAt": "2025-12-11T11:48:58.094Z"
+  },
+  {
+    "id": "cmj1dkmm2005gn8b3mj22do3z",
+    "countryCode": "US",
+    "sectionKey": "summary",
+    "instruction": "Per MPEP 608.01(d), draft a Summary that provides a general statement of the invention suitable for publication in the Official Gazette.",
+    "constraints": [
+      "Align closely with independent claim 1",
+      "Include all essential elements of the broadest claim",
+      "Use 'in one embodiment', 'in aspects', 'according to various embodiments' for flexibility",
+      "Avoid unnecessary limitations not in the claims"
+    ],
+    "additions": [
+      "The summary may be used by the USPTO for publication purposes",
+      "Consider including a brief statement of advantageous effects"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.107Z",
+    "updatedAt": "2025-12-11T11:48:58.107Z"
+  },
+  {
+    "id": "cmj1dkmlj0057n8b3dvjkha8u",
+    "countryCode": "US",
+    "sectionKey": "title",
+    "instruction": "Per 37 CFR 1.72(a), draft a title that is brief, technical, and specific to the invention. Avoid abstract or fanciful terms.",
+    "constraints": [
+      "Maximum 500 characters per USPTO rules",
+      "Do not include trademarks, trade names, or personal names",
+      "Use sentence case without a terminal period",
+      "Avoid words like 'new', 'improved', 'novel'"
+    ],
+    "additions": [
+      "The title appears at the top of the specification and should match Form PTO/SB/16 if used"
+    ],
+    "importFiguresDirectly": false,
+    "version": 1,
+    "status": "ACTIVE",
+    "createdBy": "system:seed",
+    "updatedBy": null,
+    "createdAt": "2025-12-11T11:48:58.088Z",
+    "updatedAt": "2025-12-11T11:48:58.088Z"
+  }
+]

@@ -1,0 +1,870 @@
+{
+    "meta": {
+    "id": "JP",
+    "code": "JP",
+    "name": "Japan",
+    "continent": "Asia",
+    "office": "Japan Patent Office",
+    "officeUrl": "https://www.jpo.go.jp/e/index.html",
+    "applicationTypes": [
+    "standard"
+    ],
+    "languages": [
+    "ja",
+    "en"
+    ],
+    "version": 5,
+    "status": "active",
+    "inheritsFrom": null,
+    "tags": [
+    "national_phase",
+    "pct_national_phase",
+    "paris",
+    "foreign_language_filing_supported",
+    "caf_compliant"
+    ],
+    "createdAt": "2025-11-28T00:00:00Z",
+    "updatedAt": "2025-11-28T00:00:02Z"
+    },
+    "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+    {
+    "id": "standard",
+    "label": "Standard Patent Application",
+    "description": "Standard Japanese patent application under the Patent Act (Law No. 121 of 1959, as amended) and associated Enforcement Regulations.",
+    "sections": [
+    {
+    "id": "title",
+    "label": "Title of Invention",
+    "order": 1,
+    "canonicalKeys": [
+    "title"
+    ],
+    "required": true,
+    "group": "header",
+    "maxLengthChars": 500,
+    "ui": {
+    "placeholder": "Enter a concise title of the invention",
+    "helpText": "Provide a short technical title identifying the invention. Avoid marketing language, trade names, personal names or overly broad phrases."
+    },
+    "rules": {
+    "forbidTradeMarks": true,
+    "forbidPersonalNames": true,
+    "forbidSuperlatives": true,
+    "mustBeTechnical": true
+    }
+    },
+    {
+    "id": "cross_reference",
+    "label": "Cross-Reference to Related Applications (optional)",
+    "order": 2,
+    "canonicalKeys": [
+    "cross_reference"
+    ],
+    "required": false,
+    "group": "header",
+    "maxLengthChars": 2000,
+    "ui": {
+    "placeholder": "Indicate priority/related applications, if needed",
+    "helpText": "This section is optional and may be used to mention priority or related applications where not already fully captured in the request form. Keep it brief and factual."
+    },
+    "rules": {
+    "preferredLocation": "request_form",
+    "notes": [
+    "In JPO practice, priority and related application data are primarily handled in the Request form. Use this section only if additional explanatory context is necessary in the specification."
+    ]
+    }
+    },
+    {
+    "id": "technical_field",
+    "label": "Technical Field",
+    "order": 3,
+    "canonicalKeys": [
+    "technical_field"
+    ],
+    "required": true,
+    "group": "body",
+    "maxLengthChars": 4000,
+    "ui": {
+    "placeholder": "Describe the technical field of the invention",
+    "helpText": "State the technical field to which the invention pertains. Use neutral, technical language and, where appropriate, include classification terms or general field names."
+    }
+    },
+    {
+    "id": "background_art",
+    "label": "Background Art",
+    "order": 4,
+    "canonicalKeys": [
+    "background",
+    "background_art"
+    ],
+    "required": true,
+    "group": "body",
+    "maxLengthChars": 10000,
+    "ui": {
+    "placeholder": "Describe background art and conventional techniques",
+    "helpText": "Explain conventional technology and prior art relevant to understanding the invention. Describe drawbacks or limitations in objective terms, but avoid criticizing specific prior patents by name. Do not fully state the invention’s technical problem, solution, or advantages here—reserve those for the Summary of Invention."
+    }
+    },
+    {
+    "id": "citation_list",
+    "label": "Citation List (optional)",
+    "order": 5,
+    "canonicalKeys": [
+    "citation_list",
+    "prior_art_references"
+    ],
+    "required": false,
+    "group": "body",
+    "maxLengthChars": 8000,
+    "ui": {
+    "placeholder": "List patent and non-patent literature, if desired",
+    "helpText": "Optional section to list prior art references. Separate patent literature and non-patent literature where possible, using consistent citation style. Include this section only if you actually have prior art references to list."
+    }
+    },
+    {
+    "id": "summary_of_invention",
+    "label": "Summary of Invention",
+    "order": 6,
+    "canonicalKeys": [
+    "summary",
+    "summary_of_invention"
+    ],
+    "required": true,
+    "group": "body",
+    "maxLengthChars": 12000,
+    "ui": {
+    "placeholder": "Summarize the invention in terms of problem and solution",
+    "helpText": "State the technical problem to be solved, the solution provided by the invention, and any advantageous effects, in a clear problem–solution structure. Keep language aligned with the claims and avoid excessive marketing language."
+    },
+    "rules": {
+    "mustIncludeProblemSolution": true,
+    "alignWithClaims": true
+    }
+    },
+    {
+    "id": "brief_description_of_drawings",
+    "label": "Brief Description of Drawings",
+    "order": 7,
+    "canonicalKeys": [
+    "brief_description_of_drawings"
+    ],
+    "required": false,
+    "group": "body",
+    "maxLengthChars": 8000,
+    "ui": {
+    "placeholder": "Briefly describe each figure (if drawings are provided)",
+    "helpText": "For each drawing figure, provide a one-sentence description (e.g., \"FIG. 1 is a block diagram of...\"). Do not describe details that belong in the embodiments."
+    }
+    },
+    {
+    "id": "description_of_embodiments",
+    "label": "Description of Embodiments",
+    "order": 8,
+    "canonicalKeys": [
+    "detailed_description",
+    "description_of_embodiments"
+    ],
+    "required": true,
+    "group": "body",
+    "maxLengthChars": 60000,
+    "ui": {
+    "placeholder": "Provide a detailed description of embodiments of the invention",
+    "helpText": "Describe one or more embodiments in sufficient detail to enable a person skilled in the art to carry out the invention without undue experimentation. Include the embodiment considered the best mode. Use reference numerals consistently with the drawings."
+    },
+    "rules": {
+    "requireEnablement": true,
+    "requireSupportForAllClaims": true,
+    "requireBestModeDisclosure": true,
+    "allowReferenceNumerals": true,
+    "avoidClaimStyleLanguage": true
+    }
+    },
+    {
+    "id": "industrial_applicability",
+    "label": "Industrial Applicability (optional)",
+    "order": 9,
+    "canonicalKeys": [
+    "industrial_applicability"
+    ],
+    "required": false,
+    "group": "body",
+    "maxLengthChars": 4000,
+    "ui": {
+    "placeholder": "Explain industrial applicability if not obvious",
+    "helpText": "This section is optional. Describe how the invention can be used in industry where such applicability is not self-evident from the other sections."
+    }
+    },
+    {
+    "id": "reference_signs_list",
+    "label": "Reference Signs List (optional)",
+    "order": 10,
+    "canonicalKeys": [
+    "reference_signs_list",
+    "reference_numerals_list"
+    ],
+    "required": false,
+    "group": "body",
+    "maxLengthChars": 4000,
+    "ui": {
+    "placeholder": "List reference numerals and their meanings",
+    "helpText": "Optional section listing each reference numeral and its corresponding element name for clarity, especially when many numerals are used in the drawings."
+    }
+    },
+    {
+    "id": "claims",
+    "label": "Claims",
+    "order": 11,
+    "canonicalKeys": [
+    "claims"
+    ],
+    "required": true,
+    "group": "claims",
+    "maxLengthChars": 30000,
+    "ui": {
+    "placeholder": "Draft claims defining the scope of protection",
+    "helpText": "Draft one or more claims supported by the description. Use clear, consistent terminology. Independent claims should define the essential features. Dependent claims may further limit the invention."
+    },
+    "rules": {
+    "allowMultipleIndependentClaims": true,
+    "allowMultipleDependentClaims": true,
+    "allowMultipleDependencyOnPluralClaims": true,
+    "dependentCannotDependOnMultipleMultipleDependent": true,
+    "requireSingleGeneralInventiveConcept": true,
+    "mustBeSupportedByDescription": true,
+    "forbidExcessiveFunctionalOnlyLanguage": true
+    }
+    },
+    {
+    "id": "abstract",
+    "label": "Abstract",
+    "order": 12,
+    "canonicalKeys": [
+    "abstract"
+    ],
+    "required": true,
+    "group": "abstract",
+    "maxLengthChars": 1000,
+    "ui": {
+    "placeholder": "Provide a brief summary of the invention",
+    "helpText": "Write a concise summary of the invention. Typically one paragraph, stating the gist of the invention and its main technical features. Avoid advantages, marketing language, and references to claims."
+    },
+    "rules": {
+    "singleParagraph": true,
+    "forbidAdvantages": true,
+    "forbidMarketingLanguage": true,
+    "maxWordsRecommended": 150,
+    "hardCapWordsUI": 200
+    }
+    }
+    ]
+    }
+    ]
+    },
+    "rules": {
+    "global": {
+    "requiresClaims": true,
+    "requiresAbstract": true,
+    "requiresDrawingsIfReferenced": true,
+    "paragraphNumberingRequired": true,
+    "paragraphNumberFormat": "〖0001〗",
+    "maxPagesRecommended": 100,
+    "allowEquations": true,
+    "allowTables": true,
+    "notes": [
+    "No formal maximum page limit in JPO practice; keep the description as concise as compatible with full enablement. Many JP specifications fall in the 20–50 page range.",
+    "All substantive content must be in Japanese for grant; English may be used at filing under foreign-language application rules with later Japanese translation.",
+    "Use horizontal (left-to-right) text only for the description, with approximately 40 characters per line and not more than 50 lines per page. Do not use vertical text."
+    ]
+    },
+    "pageLayout": {
+    "defaultPageSize": "A4",
+    "allowedPageSizes": ["A4"],
+    "minMarginTopCm": 2.0,
+    "minMarginBottomCm": 2.0,
+    "minMarginLeftCm": 2.0,
+    "minMarginRightCm": 2.0,
+    "recommendedFontFamily": "serif_or_sans_serif",
+    "recommendedFontSizePt": 12,
+    "recommendedLineSpacing": 1.5,
+    "paperSize": "A4",
+    "marginTopMinCm": 2.0,
+    "marginBottomMinCm": 2.0,
+    "marginLeftMinCm": 2.0,
+    "marginRightMinCm": 2.0,
+    "marginLeftMaxCm": 2.3,
+    "marginRightMaxCm": 2.3,
+    "lineSpacing": "1.5",
+    "fontSizePt": 12,
+    "fontFamily": "serif_or_sans_serif",
+    "linesPerPageRecommended": 40,
+    "charsPerLineRecommended": 40,
+    "pageNumberPosition": "upper_right",
+    "notes": [
+    "Description and drawings must be on A4 paper with margins of at least 2 cm on all sides; left and right margins should not exceed 2.3 cm.",
+    "Use easily readable fonts and ensure text contrast suitable for black-and-white reproduction.",
+    "The 40-characters-per-line guidance is strict for Japanese text; English lines may naturally vary around this value as long as margins and readability are preserved."
+    ]
+    },
+    "description": {
+    "requireEnablement": true,
+    "requireBestModeDisclosure": true,
+    "requireSupportForClaims": true,
+    "requireEmbodimentSupportForAllClaims": true,
+    "industrialApplicabilitySectionRequired": false,
+    "allowReferenceNumerals": true,
+    "avoidClaimLanguage": true,
+    "allowExamples": true,
+    "allowComparativeExamples": true,
+    "elementsSizing": {
+    "maxWidthMm": 170,
+    "maxHeightMm": 255,
+    "notes": [
+    "Chemical formulas, mathematical formulas, and tables must fit within 170 mm × 255 mm and cannot extend across pages.",
+    "Use portrait orientation (A4 ‘height long’) only; landscape orientation for formulas or tables is not permitted."
+    ]
+    },
+    "notes": [
+    "The description must be clear and sufficient for a person skilled in the art to carry out the invention (Article 36(4)(i)).",
+    "At least one embodiment considered the best mode should be described as part of the embodiments section, consistent with JPO drafting practice."
+    ]
+    },
+    "claims": {
+    "twoPartFormPreferred": false,
+    "allowMultipleDependent": true,
+    "prohibitMultipleDependentOnMultipleDependent": true,
+    "preferredConnectors": ["comprising"],
+    "discouragedConnectors": [],
+    "forbiddenPhrases": [],
+    "maxIndependentClaimsBeforeExtraFee": 10,
+    "allowReferenceNumeralsInClaims": true,
+    "requireSupportInDescription": true,
+    "unityStandard": "single_general_inventive_concept",
+    "allowMultipleIndependentClaims": true,
+    "allowMultipleDependentClaims": true,
+    "allowMultipleDependencyOnPluralClaims": true,
+    "dependentCannotDependOnMultipleMultipleDependent": true,
+    "unityRequirement": "single_general_inventive_concept",
+    "maxIndependentClaimsRecommended": null,
+    "maxTotalClaimsRecommended": 20,
+    "feeModel": {
+    "extraFeeBasedOnIndependents": false,
+    "extraFeeBasedOnTotalClaims": true,
+    "note": "Examination and annuity fees are calculated based on the total number of claims; there is no separate fee based purely on the number of independent claims."
+    },
+    "notes": [
+    "No hard legal limit on the number of claims. However, larger claim sets increase official fees and examiner workload.",
+    "Unity of invention under Article 37 requires that the claims relate to a single general inventive concept.",
+    "Multiple dependent claims may refer to two or more preceding claims, but must not depend on other multiple dependent claims."
+    ]
+    },
+    "abstract": {
+    "wordLimit": 150,
+    "noBenefitsOrAdvantages": true,
+    "noClaimLanguage": true,
+    "singleParagraph": true,
+    "singleParagraphRequired": true,
+    "maxWordsRecommended": 150,
+    "hardCapWordsUI": 200,
+    "maxLengthCharsRecommended": 800,
+    "forbidAdvantages": true,
+    "forbidClaimReferences": true,
+    "forbidMarketingLanguage": true,
+    "notes": [
+    "The abstract should provide a brief summary of the disclosure. There is no explicit statutory word or character limit, but keeping it concise (~100–150 English words or roughly ≤800 characters) is consistent with JPO and JAPIO publication practice.",
+    "Avoid statements of advantages, commercial value, or speculative effects."
+    ]
+    },
+    "drawings": {
+    "requiredWhenApplicable": true,
+    "paperSize": "A4",
+    "colorAllowed": false,
+    "lineStyle": "black_and_white_solid",
+    "referenceNumeralsMandatoryWhenDrawings": true,
+    "minReferenceTextSizePt": 8,
+    "marginTopCm": 2.5,
+    "marginBottomCm": 1.0,
+    "marginLeftCm": 2.5,
+    "marginRightCm": 1.5,
+    "requiredIfReferenced": true,
+    "colorsAllowed": false,
+    "shadingAllowed": true,
+    "grayscaleAllowed": true,
+    "marginTopMinCm": 2.0,
+    "marginBottomMinCm": 2.0,
+    "marginLeftMinCm": 2.0,
+    "marginRightMinCm": 2.0,
+    "marginLeftMaxCm": 2.3,
+    "marginRightMaxCm": 2.3,
+    "minTextHeightMm": 2.8,
+    "typesAllowed": [
+    "block_diagram",
+    "flowchart",
+    "schematic",
+    "perspective_view",
+    "cross_section",
+    "graph",
+    "table",
+    "exploded_view"
+    ],
+    "notes": [
+    "Drawings must be suitable for black-and-white reproduction. Standard practice is to use black line drawings, solid lines, and hatching.",
+    "Grayscale or photographic images (e.g., micrographs, spectrograms, complex images that cannot be represented adequately by conventional line drawings) are acceptable only where necessary and must still reproduce clearly in black-and-white.",
+    "Reference numerals should be used consistently and correspond to those in the description."
+    ]
+    },
+    "language": {
+    "allowedLanguages": [
+    "ja",
+    "en"
+    ],
+    "requiresOfficialTranslation": true,
+    "notes": [
+    "The granted patent will be in Japanese. English may be used at filing in a foreign-language written application, with a Japanese translation due within the statutory period under Article 36-2.",
+    "For PCT national phase entry in Japan, a Japanese translation of the international application must be filed in accordance with national phase timing rules (typically by the national entry date, with special windows in certain late-entry situations).",
+    "Translations of foreign-language applications are assessed for added matter; ensure that the Japanese translation does not introduce subject matter beyond the content of the original application."
+    ]
+    },
+    "procedural": {
+    "gracePeriodMonths": 12,
+    "foreignFilingLicenseRequired": false,
+    "idsRequired": false,
+    "priorArtDisclosureThreshold": "no_formal_ids",
+    "allowProvisionalPriority": true,
+    "allowProvisionalPriorityNotes": [
+    "Priority may be claimed from applications that qualify as a regular national filing under the Paris Convention, including provisional applications or provisional specifications in systems such as the US, UK, and Australia, provided they adequately disclose the invention."
+    ],
+    "notes": [
+    "Japan provides a 12-month grace period under Article 30 for certain disclosures by the applicant or related persons (including specified exhibitions and cases of abuse), subject to proper declaration and conditions.",
+    "To invoke the grace period, a request/declaration must be made at filing and a proving document for the disclosed invention is, in principle, to be submitted within 30 days from the filing date (or national-phase entry), in accordance with Article 30(2) practice.",
+    "The grace period applies only to enumerated acts under Article 30(1), such as disclosures by the applicant or right holder, specified exhibitions, or disclosures against the will of the applicant (abuse).",
+    "Japan does not use a US-style Information Disclosure Statement (IDS) system; however, applicants should avoid deliberate concealment of known prior art."
+    ]
+    },
+    "sequenceListing": {
+    "requiredIfSeqDisclosed": true,
+    "allowLateFurnishing": true,
+    "affectsFilingDate": false,
+    "additionalFormatsAllowedForReference": ["TXT", "PDF"],
+    "requiredIfSequencesDisclosed": true,
+    "standard": "WIPO ST.26",
+    "format": "XML",
+    "notes": [
+    "If nucleotide or amino acid sequences are disclosed, a sequence listing compliant with WIPO ST.26 in XML format is required.",
+    "Late furnishing is possible under certain conditions but may involve additional procedures or fees."
+    ]
+    }
+    },
+    "validation": {
+    "sectionChecks": {
+    "title": [
+        {
+        "id": "title_length",
+        "type": "maxChars",
+        "limit": 500,
+        "severity": "warning",
+        "message": "Title is unusually long. Consider shortening to a concise technical expression."
+        }
+    ],
+    "abstract": [
+        {
+        "id": "abstract_length",
+        "type": "maxWords",
+        "limit": 200,
+        "severity": "warning",
+        "message": "Abstract exceeds 200 words. JPO practice prefers concise abstracts (~150 words)."
+        },
+        {
+        "id": "abstract_chars",
+        "type": "maxChars",
+        "limit": 800,
+        "severity": "warning",
+        "message": "Abstract exceeds ~800 characters. JPO/JAPIO publication practice favors concise abstracts and longer texts may be shortened on publication."
+        }
+    ],
+    "description_of_embodiments": []
+    },
+    "crossSectionChecks": [
+    {
+    "id": "claims_vs_summary_consistency",
+    "from": "claims",
+    "to": "summary_of_invention",
+    "type": "consistency",
+    "severity": "warning",
+    "message": "Key elements in the independent claims are not reflected in the Summary of Invention. Consider aligning the summary with the claimed problem–solution."
+    },
+    {
+    "id": "claims_vs_description_support",
+    "from": "claims",
+    "to": "description_of_embodiments",
+    "type": "support",
+    "severity": "error",
+    "message": "Claims appear broader than the embodiments disclosed. Ensure that each claimed feature is enabled by the Description of Embodiments."
+    },
+    {
+    "id": "abstract_vs_description_consistency",
+    "from": "abstract",
+    "to": "description_of_embodiments",
+    "type": "consistency",
+    "severity": "warning",
+    "message": "The Abstract does not accurately reflect the main embodiment(s) described. Adjust for consistency."
+    },
+    {
+    "id": "unity_check",
+    "from": "claims",
+    "to": "description_of_embodiments",
+    "type": "consistency",
+    "severity": "warning",
+    "message": "Claims may relate to multiple general inventive concepts. Check unity of invention under Article 37 and consider divisional strategy."
+    },
+    {
+    "id": "drawing_consistency",
+    "from": "brief_description_of_drawings",
+    "to": "description_of_embodiments",
+    "type": "reference",
+    "severity": "error",
+    "message": "One or more figure numbers or reference signs in Brief Description of Drawings do not appear or are not explained in the Description of Embodiments. Ensure every figure and reference sign used in the drawings is supported and described."
+    }
+    ]
+    },
+    "prompts": {
+    "systemPrompt": "You are an expert Japanese patent drafter assisting in the preparation of a Japanese patent specification in compliance with the Japan Patent Office (JPO) practice. Follow the section structure, rules, and validation constraints given in the JSON configuration. Use neutral, technical language, ensure enablement for a person skilled in the art, and maintain consistency across sections.",
+    "promptMergeStrategy": "append",
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Per JPO practice and Patent Act Article 36, draft a concise technical title that identifies the invention without marketing language or trademarks.",
+          "constraints": [
+            "Maximum 500 characters",
+            "No trade names, trade marks, personal names, or superlatives",
+            "Must be technical and descriptive",
+            "Avoid fanciful or abstract terms"
+          ],
+          "additions": [
+            "Title will be translated to Japanese for official filing"
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Per JPO specification guidelines, draft a Technical Field section stating the technical area of the invention.",
+          "constraints": [
+            "Neutral technical terminology",
+            "No advantages or problem discussion",
+            "May include classification terms"
+          ],
+          "additions": [
+            "This section corresponds to 【技術分野】 in Japanese filings"
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Per JPO practice, draft Background Art describing conventional technology and prior art relevant to understanding the invention.",
+          "constraints": [
+            "Describe limitations objectively without disparaging specific patents",
+            "Do not fully state problem/solution here - reserve for Summary",
+            "Use neutral language about prior art drawbacks"
+          ],
+          "additions": [
+            "Japan has no formal IDS requirement but applicants should not deliberately conceal known prior art",
+            "This section corresponds to 【背景技術】 in Japanese filings",
+            "Consider separate Citation List section for prior art references"
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Per JPO practice, draft Summary of Invention with clear problem-solution structure including Technical Problem, Solution to Problem, and Advantageous Effects.",
+          "constraints": [
+            "Use problem-solution structure required by JPO",
+            "Technical Problem: state objective technical problem",
+            "Solution to Problem: describe how invention solves it",
+            "Advantageous Effects: list technical benefits",
+            "Align with independent claims"
+          ],
+          "additions": [
+            "This section corresponds to 【発明の概要】 in Japanese filings",
+            "JPO strongly prefers explicit problem-solution format",
+            "Effects should be technical, not commercial"
+          ]
+        }
+      },
+      "technicalProblem": {
+        "topUp": {
+          "instruction": "Draft the Technical Problem sub-section per JPO requirements, stating the objective technical problem to be solved.",
+          "constraints": [
+            "State problem objectively, not subjectively",
+            "Problem should be recognizable by skilled person",
+            "Solvable by the distinguishing features of the invention"
+          ],
+          "additions": [
+            "This corresponds to 【発明が解決しようとする課題】"
+          ]
+        }
+      },
+      "technicalSolution": {
+        "topUp": {
+          "instruction": "Draft the Solution to Problem sub-section per JPO requirements, describing how the invention solves the technical problem.",
+          "constraints": [
+            "Directly address the Technical Problem",
+            "Explain cause-effect relationship",
+            "Describe technical mechanism"
+          ],
+          "additions": [
+            "This corresponds to 【課題を解決するための手段】"
+          ]
+        }
+      },
+      "advantageousEffects": {
+        "topUp": {
+          "instruction": "Draft the Advantageous Effects sub-section per JPO requirements, listing specific technical advantages.",
+          "constraints": [
+            "List specific, measurable technical advantages",
+            "Support with specification features",
+            "No marketing or commercial language"
+          ],
+          "additions": [
+            "This corresponds to 【発明の効果】"
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Per JPO formatting, provide brief one-sentence description for each drawing figure.",
+          "constraints": [
+            "One sentence per figure",
+            "Format: 'FIG. X is a [view type] of [subject]'",
+            "No detailed operation - reserve for Description of Embodiments"
+          ],
+          "additions": [
+            "This corresponds to 【図面の簡単な説明】"
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Per Patent Act Article 36(4)(i), draft Description of Embodiments enabling a skilled person to carry out the invention without undue experimentation.",
+          "constraints": [
+            "Include embodiment regarded as best mode",
+            "Sufficient detail for enablement",
+            "Use consistent reference numerals matching drawings",
+            "Avoid claim-style language"
+          ],
+          "additions": [
+            "This corresponds to 【発明を実施するための形態】",
+            "Japan requires best mode disclosure integrated in this section",
+            "Consider paragraph numbering in format 【0001】"
+          ]
+        }
+      },
+      "industrialApplicability": {
+        "topUp": {
+          "instruction": "Draft Industrial Applicability section if applicability is not self-evident from other sections.",
+          "constraints": [
+            "Explain how invention can be used in industry",
+            "Specific practical applications"
+          ],
+          "additions": [
+            "This corresponds to 【産業上の利用可能性】",
+            "Optional - can be omitted if self-evident"
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft claims per Patent Act Article 36 and JPO Examination Guidelines, ensuring support and clarity.",
+          "constraints": [
+            "Each claim supported by description",
+            "Clear, consistent terminology",
+            "Single general inventive concept (unity)",
+            "Multiple dependent claims allowed but cannot depend on other multiple dependents"
+          ],
+          "additions": [
+            "Fee based on total number of claims, not just independents",
+            "Multiple independent claims for different categories (product, method) are acceptable",
+            "Reference numerals may be included in claims"
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Per JPO practice, draft a concise Abstract summarizing the gist of the invention.",
+          "constraints": [
+            "Single paragraph, ~150 words recommended (max 200)",
+            "Technical summary only",
+            "No advantages, marketing language, or claim references",
+            "~800 characters maximum for Japanese version"
+          ],
+          "additions": [
+            "Abstract may be shortened by JPO/JAPIO on publication",
+            "This is for information/searching purposes only"
+          ]
+        }
+      }
+    },
+    "sectionPrompts": {
+    "title": {
+    "role": "assistant",
+    "content": "Generate a concise technical title for the invention. Avoid marketing language, trade names, and personal names. The title should briefly identify the invention’s technical subject matter."
+    },
+    "technical_field": {
+    "role": "assistant",
+    "content": "Draft the Technical Field section. State clearly the technical field to which the invention pertains, using neutral technical terminology and avoiding discussion of advantages or problems."
+    },
+    "background_art": {
+    "role": "assistant",
+    "content": "Draft the Background Art section. Describe conventional technology and prior art relevant to understanding the invention. Identify drawbacks or limitations in objective terms, without disparaging specific prior patents by name. Do not fully state the technical problem, solution, or advantageous effects of the invention here; reserve those for the Summary of Invention."
+    },
+    "citation_list": {
+    "role": "assistant",
+    "content": "If prior art references are available, list them in a Citation List section, separating patent literature and non-patent literature. Use consistent citation style and avoid commentary; this section is optional and should be omitted if no references are being cited."
+    },
+    "summary_of_invention": {
+    "role": "assistant",
+    "content": "Draft the Summary of Invention. Present the technical problem arising from the Background Art, the solution provided by the invention, and any advantageous effects in a clear problem–solution structure. Use language aligned with the independent claims and avoid excessive promotional tone."
+    },
+    "brief_description_of_drawings": {
+    "role": "assistant",
+    "content": "Draft the Brief Description of Drawings. For each figure, provide a one-sentence description (e.g., \"FIG. 1 is a block diagram of...\"). Do not include detailed operation or advantages; reserve such details for the Description of Embodiments section."
+    },
+    "description_of_embodiments": {
+    "role": "assistant",
+    "content": "Draft the Description of Embodiments, providing one or more embodiments in sufficient detail to enable a person skilled in the art to carry out the invention without undue experimentation. Include the embodiment regarded as the best mode. Use consistent reference numerals corresponding to the drawings and avoid drafting in pure claim-style language."
+    },
+    "industrial_applicability": {
+    "role": "assistant",
+    "content": "Optionally draft the Industrial Applicability section, explaining how the invention can be used in industry where this is not obvious. If applicability is self-evident, this section may be omitted or kept very brief."
+    },
+    "reference_signs_list": {
+    "role": "assistant",
+    "content": "Optionally draft a Reference Signs List, listing each reference numeral and its corresponding element name for clarity, especially where numerous numerals appear in the drawings."
+    },
+    "claims": {
+    "role": "assistant",
+    "content": "Draft the Claims defining the scope of protection. Prepare at least one independent claim capturing the essential features, and dependent claims that add further limitations. Ensure each claim is supported by the description, uses clear and consistent terminology, and maintains unity of invention (a single general inventive concept)."
+    },
+    "abstract": {
+    "role": "assistant",
+    "content": "Draft a single-paragraph Abstract summarizing the gist of the invention and its main technical features. Keep it concise (ideally around 150 words, not exceeding 200 words). Avoid advantages, speculative effects, marketing language, and references to specific claims."
+    }
+    }
+    },
+    "export": {
+    "documentTypes": {
+    "spec_pdf": {
+    "label": "Specification (JP-compliant PDF)",
+    "includesSections": [
+    "title",
+    "technical_field",
+    "background_art",
+    "citation_list",
+    "summary_of_invention",
+    "brief_description_of_drawings",
+    "description_of_embodiments",
+    "industrial_applicability",
+    "reference_signs_list",
+    "claims",
+    "abstract"
+    ],
+    "paperSize": "A4",
+    "addParagraphNumbers": true,
+    "includePageNumbers": true,
+    "fontSizePt": 12,
+    "lineSpacing": "1.5",
+    "notes": [
+    "This export is intended to approximate a JPO-compliant filing format, including paragraph numbers in the 〖0001〗 style.",
+    "Optional sections such as Citation List, Industrial Applicability, and Reference Signs List should be omitted automatically from the final export if they are empty.",
+    "Ensure all section headings follow the recommended labels (e.g., 〖Technical Field〗, 〖Background Art〗) when translated into Japanese or formatted for filing."
+    ]
+    },
+    "claims_pdf": {
+    "label": "Claims-only PDF",
+    "includesSections": [
+    "claims"
+    ],
+    "paperSize": "A4",
+    "addParagraphNumbers": false,
+    "includePageNumbers": true
+    },
+    "abstract_pdf": {
+    "label": "Abstract-only PDF",
+    "includesSections": [
+    "title",
+    "abstract"
+    ],
+    "paperSize": "A4",
+    "addParagraphNumbers": false,
+    "includePageNumbers": false
+    },
+    "sequence_st26": {
+    "label": "ST.26 XML Sequence Listing",
+    "includesSections": [],
+    "paperSize": null,
+    "addParagraphNumbers": false,
+    "includePageNumbers": false
+    }
+    },
+    "sectionHeadings": {
+    "title": "Title of Invention",
+    "technical_field": "〖Technical Field 〗",
+    "background_art": "〖Background Art 〗",
+    "citation_list": "〖Citation List 〗",
+    "summary_of_invention": "〖Summary of Invention 〗",
+    "brief_description_of_drawings": "〖Brief Description of Drawings 〗",
+    "description_of_embodiments": "〖Description of Embodiments 〗",
+    "industrial_applicability": "〖Industrial Applicability 〗",
+    "reference_signs_list": "〖Reference Signs List 〗",
+    "claims": "Claims",
+    "abstract": "Abstract"
+    }
+    },
+    "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+    "block",
+    "flowchart",
+    "schematic",
+    "perspective_view",
+    "cross_section",
+    "graph",
+    "table",
+    "exploded_view"
+    ],
+    "figureLabelFormat": "FIG. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+    "block": "Use rectangles for hardware or software components and arrows for signal, data, or control flow. Labels should match reference numerals used in the Description of Embodiments.",
+    "flowchart": "Use standard flowchart symbols for processes and decisions. Ensure the flow corresponds to the claimed method steps and that step numbering matches the description.",
+    "schematic": "Use simplified circuit or system symbols showing functional relationships. Keep linework clean for black-and-white reproduction and match labels to the claims and description.",
+    "perspective_view": "Use perspective or isometric views to show overall apparatus structure. Ensure all important structural elements are labeled with reference numerals.",
+    "cross_section": "Use cross-sectional views to clarify internal structure. Hatching must be used to distinguish different materials or components where appropriate.",
+    "graph": "Use clear axes labels, units, and legends. Graphs must remain readable when reproduced in black-and-white.",
+    "table": "Use tables for parameter lists, experimental results, or configuration options. Tables must fit within the allowed A4 printable area and not span multiple pages.",
+    "exploded_view": "Use exploded views to show assembly relationships between components. Ensure each part is assigned a unique reference numeral referenced in the Description of Embodiments."
+    }
+    },
+    "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+    {
+    "id": "drawings_vs_description",
+    "description": "Ensure all figure numbers and reference numerals mentioned in the Brief Description of Drawings are defined and explained in the Description of Embodiments.",
+    "from": "brief_description_of_drawings",
+    "mustBeExplainedIn": [
+    "description_of_embodiments"
+    ]
+    },
+    {
+    "id": "claims_vs_drawings",
+    "description": "Ensure that key claimed structural elements appear in at least one drawing figure when drawings are present, and that figure references can be traced via the Brief Description of Drawings.",
+    "from": "claims",
+    "mustBeShownIn": [
+    "brief_description_of_drawings"
+    ]
+    }
+    ]
+    }
+    }
+    

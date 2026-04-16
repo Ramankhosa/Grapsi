@@ -1,0 +1,212 @@
+[
+  {
+    "code": "AU",
+    "name": "Australia",
+    "continent": "Oceania",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "BD",
+    "name": "Bangladesh",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "BR",
+    "name": "Brazil",
+    "continent": "South America",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "CA",
+    "name": "Canada",
+    "continent": "North America",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "CH",
+    "name": "Switzerland",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "CN",
+    "name": "China",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "DE",
+    "name": "Germany",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "EP",
+    "name": "European Patent Office",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T12:25:36.545Z",
+    "updatedAt": "2025-12-11T12:25:36.545Z"
+  },
+  {
+    "code": "ES",
+    "name": "Spain",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "EU",
+    "name": "European Union",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "FR",
+    "name": "France",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "IL",
+    "name": "Israel",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "IN",
+    "name": "India",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "IR",
+    "name": "Iran",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "JP",
+    "name": "Japan",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "KR",
+    "name": "South Korea",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "MX",
+    "name": "Mexico",
+    "continent": "North America",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "MY",
+    "name": "Malaysia",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "NZ",
+    "name": "New Zealand",
+    "continent": "Oceania",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "PCT",
+    "name": "PCT International",
+    "continent": "International",
+    "createdAt": "2025-12-11T12:25:36.518Z",
+    "updatedAt": "2025-12-11T12:25:36.518Z"
+  },
+  {
+    "code": "PK",
+    "name": "Pakistan",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "PL",
+    "name": "Poland",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "RU",
+    "name": "Russia",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "SA",
+    "name": "Saudi Arabia",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "SE",
+    "name": "Sweden",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "TW",
+    "name": "Taiwan",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "UAE",
+    "name": "United Arab Emirates",
+    "continent": "Asia",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "UK",
+    "name": "United Kingdom",
+    "continent": "Europe",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "US",
+    "name": "United States of America",
+    "continent": "North America",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  },
+  {
+    "code": "ZA",
+    "name": "South Africa",
+    "continent": "Africa",
+    "createdAt": "2025-12-11T17:18:19.040Z",
+    "updatedAt": "2025-12-11T17:18:19.040Z"
+  }
+]

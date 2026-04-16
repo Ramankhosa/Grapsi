@@ -1,0 +1,549 @@
+{
+    "meta": {
+      "id": "AU",
+      "name": "Australia",
+      "code": "AU",
+      "continent": "Oceania",
+      "office": "IP Australia \u2013 Australian Patent Office",
+      "officeUrl": "https://www.ipaustralia.gov.au/patents",
+      "applicationTypes": [
+        "standard"
+      ],
+      "languages": [
+        "en"
+      ],
+      "version": 1,
+      "status": "active",
+      "inheritsFrom": null,
+      "tags": [
+        "anglophone",
+        "national_phase",
+        "standard_patent"
+      ],
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": "2025-01-01T00:00:00Z"
+    },
+    "structure": {
+      "defaultVariant": "au_standard",
+      "variants": [
+        {
+          "id": "au_standard",
+          "label": "Australian Standard Patent Application",
+          "description": "Standard patent application under the Australian Patents Act 1990, including direct filings and national phase entries.",
+          "sections": [
+            {
+              "id": "title",
+              "label": "Title",
+              "order": 1,
+              "canonicalKeys": [
+                "title"
+              ],
+              "required": true,
+              "group": "header",
+              "maxLengthChars": 500,
+              "ui": {
+                "placeholder": "Enter a concise technical title of the invention.",
+                "helpText": "Short, specific technical title; do not include trademarks or the word 'patent'."
+              }
+            },
+            {
+              "id": "cross_reference",
+              "label": "Cross-Reference to Related Applications",
+              "order": 2,
+              "canonicalKeys": [
+                "cross_reference"
+              ],
+              "required": false,
+              "group": "header",
+              "ui": {
+                "placeholder": "Identify related Australian, PCT or foreign applications, if any.",
+                "helpText": "Use for priority and divisional relationships; include application numbers and filing dates where relevant."
+              }
+            },
+            {
+              "id": "field",
+              "label": "Technical Field",
+              "order": 3,
+              "canonicalKeys": [
+                "technical_field"
+              ],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "State the technical field or field of the invention.",
+                "helpText": "1\u20133 sentences describing the technical field, consistent with IP Australia's specification guidance."
+              }
+            },
+            {
+              "id": "background",
+              "label": "Background Art",
+              "order": 4,
+              "canonicalKeys": [
+                "background_art"
+              ],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Describe relevant background art and problems.",
+                "helpText": "Explain prior techniques and issues they present without conceding obviousness."
+              }
+            },
+            {
+              "id": "summary",
+              "label": "Summary of the Invention",
+              "order": 5,
+              "canonicalKeys": [
+                "summary_of_invention"
+              ],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Provide a high-level summary of the invention.",
+                "helpText": "Cover the technical problem, solution and advantageous effects of the invention in line with IP Australia guidance."
+              }
+            },
+            {
+              "id": "brief_drawings",
+              "label": "Brief Description of Drawings",
+              "order": 6,
+              "canonicalKeys": [
+                "brief_description_of_drawings"
+              ],
+              "required": false,
+              "group": "body",
+              "ui": {
+                "placeholder": "List each figure briefly, where drawings are provided.",
+                "helpText": "One line per figure, for example: 'Fig. 1 is a schematic view of a representative embodiment.'"
+              }
+            },
+            {
+              "id": "detailed_description",
+              "label": "Description of Embodiments",
+              "order": 7,
+              "canonicalKeys": [
+                "description_of_embodiments",
+                "detailed_description"
+              ],
+              "required": true,
+              "group": "body",
+              "ui": {
+                "placeholder": "Provide a full description of embodiments of the invention.",
+                "helpText": "Fully describe the invention so it can be performed, including the best method known, with examples and industrial applicability where relevant."
+              }
+            },
+            {
+              "id": "claims",
+              "label": "Claims",
+              "order": 8,
+              "canonicalKeys": [
+                "claims"
+              ],
+              "required": true,
+              "group": "claims",
+              "ui": {
+                "placeholder": "Independent and dependent claims.",
+                "helpText": "Draft clear, concise claims defining a single inventive concept; dependent claims may refer to one or more earlier claims."
+              }
+            },
+            {
+              "id": "abstract",
+              "label": "Abstract",
+              "order": 9,
+              "canonicalKeys": [
+                "abstract"
+              ],
+              "required": true,
+              "group": "abstract",
+              "ui": {
+                "placeholder": "Brief summary of the invention (50\u2013150 words).",
+                "helpText": "Provide a concise technical summary; IP Australia guidance suggests 50\u2013150 words."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "rules": {
+      "global": {
+        "paragraphNumberingRequired": false,
+        "maxPagesRecommended": 100,
+        "allowEquations": true,
+        "allowTables": true
+      },
+      "abstract": {
+        "wordLimit": 150,
+        "noBenefitsOrAdvantages": false,
+        "noClaimLanguage": true,
+        "singleParagraph": true
+      },
+      "claims": {
+        "twoPartFormPreferred": false,
+        "allowMultipleDependent": true,
+        "prohibitMultipleDependentOnMultipleDependent": false,
+        "preferredConnectors": [
+          "comprising"
+        ],
+        "discouragedConnectors": [],
+        "forbiddenPhrases": [],
+        "maxIndependentClaimsBeforeExtraFee": 0,
+        "maxTotalClaimsRecommended": 20,
+        "allowReferenceNumeralsInClaims": true,
+        "requireSupportInDescription": true,
+        "unityStandard": "single_inventive_concept"
+      },
+      "description": {
+        "requireBestModeDisclosure": true,
+        "avoidClaimLanguage": true,
+        "allowReferenceNumerals": true,
+        "requireEmbodimentSupportForAllClaims": true,
+        "industrialApplicabilitySectionRequired": false
+      },
+      "drawings": {
+        "requiredWhenApplicable": true,
+        "paperSize": "A4",
+        "colorAllowed": false,
+        "lineStyle": "black_and_white_solid",
+        "referenceNumeralsMandatoryWhenDrawings": true,
+        "minReferenceTextSizePt": 12,
+        "marginTopCm": 2.5,
+        "marginBottomCm": 1.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 1.5
+      },
+      "procedural": {
+        "gracePeriodMonths": 12,
+        "foreignFilingLicenseRequired": false,
+        "idsRequired": false,
+        "priorArtDisclosureThreshold": "no_formal_ids",
+        "allowProvisionalPriority": true
+      },
+      "language": {
+        "allowedLanguages": [
+          "en"
+        ],
+        "requiresOfficialTranslation": false
+      },
+      "sequenceListing": {
+        "requiredIfSeqDisclosed": true,
+        "format": "ST.26-XML",
+        "allowLateFurnishing": true,
+        "affectsFilingDate": false,
+        "notes": "If nucleotide and/or amino acid sequences are disclosed, a sequence listing compliant with WIPO ST.26 in XML format is required. IP Australia allows listings prepared using the WIPO Sequence Suite.",
+        "additionalFormatsAllowedForReference": [
+          "TXT",
+          "PDF"
+        ]
+      },
+      "pageLayout": {
+        "defaultPageSize": "A4",
+        "allowedPageSizes": [
+          "A4"
+        ],
+        "minMarginTopCm": 2.0,
+        "minMarginBottomCm": 2.0,
+        "minMarginLeftCm": 2.5,
+        "minMarginRightCm": 2.0,
+        "recommendedFontFamily": "Times New Roman",
+        "recommendedFontSizePt": 12,
+        "recommendedLineSpacing": 1.5
+      }
+    },
+    "validation": {
+      "sectionChecks": {
+        "title": [
+          {
+            "id": "title_length_words",
+            "type": "maxWords",
+            "limit": 25,
+            "severity": "warning",
+            "message": "Title appears long; consider making it more concise."
+          },
+          {
+            "id": "title_length_chars",
+            "type": "maxChars",
+            "limit": 500,
+            "severity": "error",
+            "message": "Title exceeds 500 characters."
+          }
+        ],
+        "abstract": [
+          {
+            "id": "abstract_word_limit",
+            "type": "maxWords",
+            "limit": 150,
+            "severity": "error",
+            "message": "Abstract exceeds the 150 word limit suggested by IP Australia."
+          }
+        ],
+        "claims": [
+          {
+            "id": "claims_count_fee_threshold",
+            "type": "maxCount",
+            "limit": 20,
+            "severity": "warning",
+            "message": "Number of claims exceeds 20; additional official fees may be payable in Australia."
+          }
+        ]
+      },
+      "crossSectionChecks": [
+        {
+          "id": "claims_supported_by_description",
+          "type": "support",
+          "from": "claims",
+          "mustBeSupportedBy": [
+            "detailed_description"
+          ],
+          "severity": "error",
+          "message": "Some claim elements may not be clearly supported in the description of embodiments."
+        },
+        {
+          "id": "abstract_consistent_with_claims",
+          "type": "consistency",
+          "from": "abstract",
+          "mustBeConsistentWith": [
+            "claims"
+          ],
+          "severity": "warning",
+          "message": "Abstract may describe features not clearly reflected in the independent claims."
+        }
+      ]
+    },
+    "prompts": {
+      "baseStyle": {
+        "tone": "technical, neutral, precise",
+        "voice": "impersonal_third_person",
+        "avoid": [
+          "marketing language",
+          "unsupported advantages",
+          "overly legalistic boilerplate"
+        ]
+      },
+      "promptMergeStrategy": "append",
+      "sections": {
+        "title": {
+          "instruction": "Draft a concise technical title for the Australian standard patent application.",
+          "constraints": [
+            "Do not exceed 500 characters.",
+            "Do not use trademarks or the word 'patent'."
+          ],
+          "topUp": {
+            "instruction": "Per IP Australia guidelines and Patents Act 1990, draft a title that is brief, technically descriptive, and identifies the subject matter.",
+            "constraints": [
+              "Maximum 500 characters",
+              "No trade names, trade marks, or personal names",
+              "Sentence case, no terminal period"
+            ],
+            "additions": [
+              "Title should align with technical field and claims"
+            ]
+          }
+        },
+        "fieldOfInvention": {
+          "topUp": {
+            "instruction": "Per IP Australia specification guidelines, draft a Technical Field identifying the technical area of the invention.",
+            "constraints": [
+              "1-3 sentences maximum",
+              "State technical field objectively",
+              "No features or advantages"
+            ],
+            "additions": [
+              "May reference IPC/CPC classification areas"
+            ]
+          }
+        },
+        "background": {
+          "instruction": "Draft the Background Art section.",
+          "constraints": [
+            "Describe relevant prior art and its limitations.",
+            "Avoid explicit admissions that particular documents are prior art unless clearly signalled.",
+            "Do not state that the invention is obvious or trivial."
+          ],
+          "topUp": {
+            "instruction": "Per IP Australia guidelines, draft Background Art describing relevant prior technology without prejudicing patentability.",
+            "constraints": [
+              "Use objective, neutral language",
+              "Avoid suggesting the invention is obvious",
+              "No harmful admissions against novelty/inventive step"
+            ],
+            "additions": [
+              "Australia has no formal IDS requirement but applicants should not deliberately mislead",
+              "Use hedging language where appropriate"
+            ]
+          }
+        },
+        "summary": {
+          "instruction": "Draft the Summary of the Invention section.",
+          "constraints": [
+            "Outline the technical problem, the solution provided by the invention and its advantageous effects.",
+            "Ensure consistency with the independent claims."
+          ],
+          "topUp": {
+            "instruction": "Per IP Australia practice, draft a Summary stating technical problem, inventive solution, and advantageous effects.",
+            "constraints": [
+              "Align with independent claims scope",
+              "Use flexible language ('in embodiments', 'according to aspects')",
+              "Include brief statement of advantages"
+            ],
+            "additions": [
+              "Structure: problem → solution → advantages"
+            ]
+          }
+        },
+        "briefDescriptionOfDrawings": {
+          "topUp": {
+            "instruction": "Per IP Australia formatting guidelines, briefly describe each drawing figure.",
+            "constraints": [
+              "One sentence per figure",
+              "Format: 'Fig. X is a [view type] showing [subject]'",
+              "Match figure order in drawings"
+            ],
+            "additions": [
+              "Required if drawings are present"
+            ]
+          }
+        },
+        "detailedDescription": {
+          "instruction": "Draft the Description of Embodiments section.",
+          "constraints": [
+            "Describe embodiments in sufficient detail that a skilled person could perform the invention.",
+            "Disclose the best method known to the applicant of performing the invention.",
+            "Include examples and industrial applicability where appropriate.",
+            "Reference drawings and reference numerals where applicable."
+          ],
+          "topUp": {
+            "instruction": "Per Section 40(2)(a) of the Patents Act 1990, draft a Description of Embodiments fully describing the invention including best method.",
+            "constraints": [
+              "Sufficient detail for skilled person to perform invention",
+              "Disclose best method known to applicant (mandatory in AU)",
+              "Consistent reference numerals matching drawings",
+              "Include practical examples where applicable"
+            ],
+            "additions": [
+              "Australia requires 'best method' disclosure (s.40(2)(aa))",
+              "Description must be clear and complete enough to perform invention",
+              "Include industrial applicability where not self-evident"
+            ]
+          }
+        },
+        "claims": {
+          "instruction": "Draft a full set of claims compliant with Australian patent practice.",
+          "constraints": [
+            "Use 'comprising' as the default open transitional term unless a closed scope is specifically required.",
+            "Draft each claim as a single sentence.",
+            "Dependent claims may refer to one or more previous claims, including other multiple dependent claims.",
+            "All claim features must be supported by the description of embodiments and define a single inventive concept."
+          ],
+          "topUp": {
+            "instruction": "Draft claims compliant with Section 40 of the Patents Act 1990. Claims must be clear, succinct, and fairly based on description.",
+            "constraints": [
+              "Each claim as single sentence",
+              "Multiple dependent claims permitted (including on other multiple dependents)",
+              "Claims must be fairly based on disclosed matter",
+              "All claims relate to single inventive concept"
+            ],
+            "additions": [
+              "Australia allows multiple dependent claims on two or more other claims",
+              "Unity follows 'single inventive concept' standard",
+              "Claims must be clear and succinct per s.40(3)"
+            ]
+          }
+        },
+        "abstract": {
+          "instruction": "Draft the Abstract section.",
+          "constraints": [
+            "Aim for 50\u2013150 words; do not exceed 150 words.",
+            "Summarize the invention so that key technical features and use can be quickly understood.",
+            "Do not use claim-style language."
+          ],
+          "topUp": {
+            "instruction": "Per IP Australia guidelines, draft an Abstract of 50-150 words summarizing technical disclosure.",
+            "constraints": [
+              "50-150 words preferred, max 150",
+              "Single paragraph",
+              "Technical summary only—no advantages/marketing",
+              "Enable quick understanding of field and main features"
+            ],
+            "additions": [
+              "IP Australia may amend abstracts exceeding 150 words",
+              "Reference most illustrative figure if drawings present"
+            ]
+          }
+        }
+      }
+    },
+    "export": {
+      "documentTypes": [
+        {
+          "id": "au_spec_pdf",
+          "label": "Australian Specification PDF",
+          "includesSections": [
+            "title",
+            "field",
+            "background",
+            "summary",
+            "brief_drawings",
+            "detailed_description",
+            "claims",
+            "abstract"
+          ],
+          "pageSize": "A4",
+          "lineSpacing": 1.5,
+          "fontFamily": "Times New Roman",
+          "fontSizePt": 12,
+          "addPageNumbers": true,
+          "addParagraphNumbers": false,
+          "marginTopCm": 2.0,
+          "marginBottomCm": 2.0,
+          "marginLeftCm": 2.5,
+          "marginRightCm": 2.0
+        }
+      ],
+      "sectionHeadings": {
+        "field": "TECHNICAL FIELD",
+        "background": "BACKGROUND ART",
+        "summary": "SUMMARY OF THE INVENTION",
+        "brief_drawings": "BRIEF DESCRIPTION OF DRAWINGS",
+        "detailed_description": "DESCRIPTION OF EMBODIMENTS",
+        "claims": "CLAIMS",
+        "abstract": "ABSTRACT"
+      }
+    },
+    "diagrams": {
+      "requiredWhenApplicable": true,
+      "supportedDiagramTypes": [
+        "block",
+        "flowchart",
+        "schematic",
+        "perspective_view"
+      ],
+      "figureLabelFormat": "Fig. {number}",
+      "autoGenerateReferenceTable": true,
+      "diagramGenerationHints": {
+        "block": "Use rectangles for components and arrows for data/control flow; keep labels consistent with the description of embodiments.",
+        "flowchart": "Use standard flowchart symbols for processes and decisions; ensure the flow reflects the claimed method steps.",
+        "schematic": "Show functional relationships and reference numerals clearly.",
+        "perspective_view": "Use when overall physical form is important for understanding the invention."
+      }
+    },
+    "crossChecks": {
+      "enableSemanticCrossCheck": true,
+      "checkList": [
+        {
+          "id": "drawings_vs_description",
+          "description": "Ensure all reference numerals in drawings are explained in the description of embodiments.",
+          "from": "brief_drawings",
+          "mustBeExplainedIn": [
+            "detailed_description"
+          ]
+        },
+        {
+          "id": "claims_vs_drawings",
+          "description": "Ensure key claimed elements appear in at least one figure when drawings are present.",
+          "from": "claims",
+          "mustBeShownIn": [
+            "brief_drawings"
+          ]
+        }
+      ]
+    }
+  }  

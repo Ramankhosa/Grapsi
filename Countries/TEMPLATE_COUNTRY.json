@@ -1,0 +1,416 @@
+{
+  "_comment": "This is a template for creating new country profile JSON files. Copy this file and rename to [COUNTRY_CODE].json",
+  "_instructions": [
+    "1. Replace all [PLACEHOLDERS] with actual values",
+    "2. Update meta section with country-specific information",
+    "3. Define structure.variants with sections applicable to this jurisdiction",
+    "4. Add topUp prompts for sections that need jurisdiction-specific guidance",
+    "5. Configure rules based on the country's patent law requirements",
+    "6. Set up validation checks per local patent office guidelines",
+    "7. Upload the completed JSON via the admin panel"
+  ],
+  
+  "meta": {
+    "id": "[COUNTRY_CODE]",
+    "code": "[COUNTRY_CODE]",
+    "name": "[COUNTRY_NAME]",
+    "continent": "[Asia|Europe|North America|South America|Africa|Oceania|International]",
+    "office": "[Official Patent Office Name]",
+    "officeUrl": "[https://patent-office-website.gov]",
+    "applicationTypes": [
+      "ordinary",
+      "convention",
+      "PCT national phase"
+    ],
+    "languages": [
+      "en"
+    ],
+    "version": 1,
+    "status": "draft",
+    "inheritsFrom": null,
+    "promptMergeStrategy": "append",
+    "tags": [
+      "[country_tag]",
+      "[region_tag]"
+    ],
+    "createdAt": "[ISO_DATE]",
+    "updatedAt": "[ISO_DATE]"
+  },
+
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "[Country] Patent Specification",
+        "description": "Standard patent specification format for [Country]",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title",
+            "order": 1,
+            "canonicalKeys": ["title"],
+            "required": true,
+            "group": "header",
+            "ui": {
+              "placeholder": "Enter a concise technical title",
+              "helpText": "[Country-specific title guidance]"
+            }
+          },
+          {
+            "id": "field",
+            "label": "Technical Field",
+            "order": 2,
+            "canonicalKeys": ["field_of_invention"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "State the technical field",
+              "helpText": "[Country-specific field guidance]"
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background",
+            "order": 3,
+            "canonicalKeys": ["background"],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "Describe prior art and problems",
+              "helpText": "[Country-specific background guidance]"
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Summary of Invention",
+            "order": 4,
+            "canonicalKeys": ["summary_of_invention"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide invention summary",
+              "helpText": "[Country-specific summary guidance]"
+            }
+          },
+          {
+            "id": "brief_drawings",
+            "label": "Brief Description of Drawings",
+            "order": 5,
+            "canonicalKeys": ["brief_description_of_drawings"],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "List figures briefly",
+              "helpText": "[Country-specific drawings guidance]"
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Detailed Description",
+            "order": 6,
+            "canonicalKeys": ["detailed_description"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide full detailed description",
+              "helpText": "[Country-specific description guidance]"
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 7,
+            "canonicalKeys": ["claims"],
+            "required": true,
+            "group": "claims",
+            "ui": {
+              "placeholder": "Write patent claims",
+              "helpText": "[Country-specific claims guidance]"
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 8,
+            "canonicalKeys": ["abstract"],
+            "required": true,
+            "group": "abstract",
+            "ui": {
+              "placeholder": "Short technical abstract",
+              "helpText": "[Country-specific abstract guidance]"
+            }
+          }
+        ]
+      }
+    ]
+  },
+
+  "rules": {
+    "global": {
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": false,
+      "noClaimLanguage": true,
+      "singleParagraph": true
+    },
+    "claims": {
+      "twoPartFormPreferred": false,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": false,
+      "preferredConnectors": ["comprising", "including"],
+      "discouragedConnectors": [],
+      "forbiddenPhrases": [],
+      "maxIndependentClaimsBeforeExtraFee": 3,
+      "maxTotalClaimsRecommended": 20,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "[reference_to_local_law]"
+    },
+    "description": {
+      "requireBestModeDisclosure": true,
+      "avoidClaimLanguage": true,
+      "allowReferenceNumerals": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "colorUsageNote": "[Color usage rules]",
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5
+    },
+    "procedural": {
+      "gracePeriodMonths": 12,
+      "gracePeriodNotes": "[Grace period rules]",
+      "foreignFilingLicenseRequired": false,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "[disclosure_requirement]",
+      "allowProvisionalPriority": true,
+      "completeSpecificationDueMonths": 12
+    },
+    "language": {
+      "allowedLanguages": ["en"],
+      "requiresOfficialTranslation": false
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "[Sequence listing rules]",
+      "affectsFilingDate": false
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": ["A4"],
+      "minMarginTopCm": 2.5,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5
+    }
+  },
+
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxWords",
+          "limit": 15,
+          "severity": "warning",
+          "message": "[Country-specific title length warning]"
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_word_limit",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "error",
+          "message": "[Country-specific abstract limit error]"
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": ["detailed_description"],
+        "severity": "error",
+        "message": "[Country-specific support requirement message]"
+      }
+    ]
+  },
+
+  "prompts": {
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "overly legalistic phrasing"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "[Country-specific title drafting guidance referencing local law/rules]",
+          "constraints": [
+            "[Country-specific constraint 1]",
+            "[Country-specific constraint 2]"
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "[Country-specific field section guidance]",
+          "constraints": [
+            "[Constraint per local practice]"
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "[Country-specific background guidance, especially regarding prior art characterization]",
+          "constraints": [
+            "[Local rules on prior art admission]",
+            "[Guidance on problem statement]"
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "[Country-specific summary requirements]",
+          "constraints": [
+            "[Local consistency requirements]"
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "[Country-specific enablement requirements, best mode if applicable]",
+          "constraints": [
+            "[Enablement standard per local law]",
+            "[Best mode requirement if any]"
+          ],
+          "additions": [
+            "[Additional local requirements]"
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "[Country-specific claims drafting guidance with law references]",
+          "constraints": [
+            "[Claim format requirements]",
+            "[Connector preferences]",
+            "[Dependency rules]"
+          ],
+          "additions": [
+            "[Unity of invention standard]",
+            "[Support requirements]"
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "[Country-specific abstract requirements with word limits and format]",
+          "constraints": [
+            "[Word limit per local rules]",
+            "[Format requirements]"
+          ]
+        }
+      }
+    }
+  },
+
+  "export": {
+    "documentTypes": [
+      {
+        "id": "[country_code]_spec_pdf",
+        "label": "[Country] Patent Specification PDF",
+        "includesSections": [
+          "title",
+          "field",
+          "background",
+          "summary",
+          "brief_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "marginTopCm": 2.5,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "lineSpacing": 1.5,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false
+      }
+    ],
+    "sectionHeadings": {
+      "field": "TECHNICAL FIELD",
+      "background": "BACKGROUND",
+      "summary": "SUMMARY OF THE INVENTION",
+      "brief_drawings": "BRIEF DESCRIPTION OF THE DRAWINGS",
+      "detailed_description": "DETAILED DESCRIPTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view"
+    ],
+    "figureLabelFormat": "Fig. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for components and arrows for connections.",
+      "flowchart": "Use standard flowchart symbols for processes and decisions."
+    }
+  },
+
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure all reference numerals in drawings are defined in description.",
+        "from": "brief_drawings",
+        "mustBeExplainedIn": ["detailed_description"]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure claimed elements appear in drawings when applicable.",
+        "from": "claims",
+        "mustBeShownIn": ["brief_drawings"]
+      }
+    ]
+  }
+}
+

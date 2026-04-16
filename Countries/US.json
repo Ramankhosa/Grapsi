@@ -1,0 +1,506 @@
+{
+  "meta": {
+    "id": "US",
+    "name": "United States",
+    "code": "US",
+    "continent": "North America",
+    "office": "USPTO",
+    "officeUrl": "https://www.uspto.gov",
+    "applicationTypes": ["utility"],
+    "languages": ["en"],
+    "version": 2,
+    "status": "active",
+    "inheritsFrom": null,
+    "tags": ["anglophone", "strict_claims", "national_phase"],
+    "createdAt": "2025-01-01T00:00:00Z",
+    "updatedAt": "2025-01-01T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Standard US Utility Application",
+        "description": "Regular non-provisional utility application under 35 USC 111(a) or national phase under 35 USC 371.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title",
+            "order": 1,
+            "canonicalKeys": ["title"],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Enter a concise technical title",
+              "helpText": "Must be short and specific; no trademarks, no word 'patent'. Max 500 characters as per 37 CFR 1.72(a)."
+            }
+          },
+          {
+            "id": "cross_reference",
+            "label": "Cross-Reference to Related Applications",
+            "order": 2,
+            "canonicalKeys": ["cross_reference"],
+            "required": false,
+            "group": "header",
+            "ui": {
+              "placeholder": "Identify related US or foreign applications, if any.",
+              "helpText": "Include application number and filing date; use for priority/benefit claims and related applications as per 37 CFR 1.78."
+            }
+          },
+          {
+            "id": "field",
+            "label": "Field of the Invention",
+            "order": 3,
+            "canonicalKeys": ["field_of_invention"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "State the technical field of the invention.",
+              "helpText": "1-3 sentences indicating the technical field; avoid advantages or embodiments here."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background of the Invention",
+            "order": 4,
+            "canonicalKeys": ["background"],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "Describe prior art and problems.",
+              "helpText": "Explain limitations of known techniques without conceding obviousness."
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Summary of the Invention",
+            "order": 5,
+            "canonicalKeys": ["summary_of_invention"],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide a high-level summary of the invention.",
+              "helpText": "Outline the invention and key aspects; may mention advantages as per MPEP summary guidance, but keep consistent with the claims."
+            }
+          },
+          {
+            "id": "brief_drawings",
+            "label": "Brief Description of the Drawings",
+            "order": 6,
+            "canonicalKeys": ["brief_description_of_drawings"],
+            "required": false,
+            "group": "body",
+            "ui": {
+              "placeholder": "List each figure briefly.",
+              "helpText": "One line per figure, for example: 'Fig. 1 is a schematic view of a system configuration.'"
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Detailed Description",
+            "order": 7,
+            "canonicalKeys": ["detailed_description"],
+            "required": true,
+            "group": "body",
+            "ui": {
+              "placeholder": "Provide a full detailed description.",
+              "helpText": "Describe embodiments in sufficient detail to enable practice of the invention and satisfy 35 USC 112; reference the drawings where appropriate."
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 8,
+            "canonicalKeys": ["claims"],
+            "required": true,
+            "group": "claims",
+            "ui": {
+              "placeholder": "Independent and dependent claims.",
+              "helpText": "Each claim as a separate numbered paragraph, compliant with 35 USC 112 and 37 CFR 1.75."
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 9,
+            "canonicalKeys": ["abstract"],
+            "required": true,
+            "group": "abstract",
+            "ui": {
+              "placeholder": "Short technical abstract.",
+              "helpText": "Up to 150 words, technical only; no advantages or marketing."
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": false,
+      "noClaimLanguage": true,
+      "singleParagraph": true
+    },
+    "claims": {
+      "twoPartFormPreferred": false,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": true,
+      "preferredConnectors": ["comprising"],
+      "discouragedConnectors": ["consisting of"],
+      "forbiddenPhrases": [],
+      "maxIndependentClaimsBeforeExtraFee": 3,
+      "maxTotalClaimsRecommended": 20,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "US_restriction_practice"
+    },
+    "description": {
+      "requireBestModeDisclosure": true,
+      "avoidClaimLanguage": true,
+      "allowReferenceNumerals": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "LETTER",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5
+    },
+    "procedural": {
+      "gracePeriodMonths": 12,
+      "foreignFilingLicenseRequired": true,
+      "idsRequired": true,
+      "priorArtDisclosureThreshold": "material_to_patentability",
+      "allowProvisionalPriority": true
+    },
+    "language": {
+      "allowedLanguages": ["en"],
+      "requiresOfficialTranslation": false
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "Required for nucleotide and amino acid sequence listings as per USPTO adoption of WIPO ST.26.",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": ["PDF"]
+    },
+    "pageLayout": {
+      "defaultPageSize": "LETTER",
+      "allowedPageSizes": ["A4", "LETTER"],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 1.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 1.5,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length_words",
+          "type": "maxWords",
+          "limit": 25,
+          "severity": "warning",
+          "message": "Title appears long; USPTO prefers short, specific titles."
+        },
+        {
+          "id": "title_length_chars",
+          "type": "maxChars",
+          "limit": 500,
+          "severity": "error",
+          "message": "Title exceeds the 500 character maximum under 37 CFR 1.72(a)."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_word_limit",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "error",
+          "message": "Abstract exceeds the 150 word limit."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_count_recommended",
+          "type": "maxCount",
+          "limit": 20,
+          "severity": "warning",
+          "message": "Number of claims exceeds recommended 20; may increase examination costs."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": ["detailed_description"],
+        "severity": "error",
+        "message": "Some claim elements may not be clearly supported in the detailed description."
+      },
+      {
+        "id": "abstract_consistent_with_claims",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": ["claims"],
+        "severity": "warning",
+        "message": "Abstract may describe features not clearly reflected in the independent claims."
+      }
+    ]
+  },
+  "prompts": {
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "overly legalistic phrasing"
+      ]
+    },
+    "promptMergeStrategy": "append",
+    "sections": {
+      "title": {
+        "instruction": "Draft a concise technical title for the US patent application.",
+        "constraints": [
+          "Do not exceed 500 characters.",
+          "Do not use trademarks or the word 'patent'."
+        ],
+        "topUp": {
+          "instruction": "Per 37 CFR 1.72(a), draft a title that is brief, technical, and specific to the invention. Avoid abstract or fanciful terms.",
+          "constraints": [
+            "Maximum 500 characters per USPTO rules",
+            "Do not include trademarks, trade names, or personal names",
+            "Use sentence case without a terminal period",
+            "Avoid words like 'new', 'improved', 'novel'"
+          ],
+          "additions": [
+            "The title appears at the top of the specification and should match Form PTO/SB/16 if used"
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Per MPEP 608.01(c), draft a concise Field of the Invention that identifies the technical area without describing the invention itself.",
+          "constraints": [
+            "1-3 sentences maximum",
+            "State only the technical field (e.g., 'data processing', 'chemical compositions')",
+            "Do not describe specific features, advantages, or embodiments"
+          ],
+          "additions": [
+            "This section helps the examiner classify the invention for searching purposes"
+          ]
+        }
+      },
+      "background": {
+        "instruction": "Draft the Background of the Invention section.",
+        "constraints": [
+          "Describe relevant prior art and its limitations.",
+          "Avoid explicit admissions that specific references are prior art unless clearly signaled.",
+          "Do not state that the invention is obvious or trivial."
+        ],
+        "topUp": {
+          "instruction": "Per MPEP 608.01(c) and 37 CFR 1.71, draft a Background that describes relevant prior art without making admissions harmful to patentability.",
+          "constraints": [
+            "Avoid statements like 'it is known in the art' without careful consideration",
+            "Do not characterize prior art in ways that suggest the invention is obvious",
+            "Use 'conventional approaches' rather than 'well-known' where possible",
+            "Do not admit that any specific reference constitutes prior art"
+          ],
+          "additions": [
+            "Under 35 USC 102/103, statements in the background may be used against patentability",
+            "Consider using hedging language: 'Some approaches have attempted...'",
+            "IDS obligations under 37 CFR 1.56 require disclosure of material prior art"
+          ]
+        }
+      },
+      "summary": {
+        "instruction": "Draft the Summary of the Invention section.",
+        "constraints": [
+          "Provide a high-level overview of the inventive concept.",
+          "Ensure consistency with the independent claims."
+        ],
+        "topUp": {
+          "instruction": "Per MPEP 608.01(d), draft a Summary that provides a general statement of the invention suitable for publication in the Official Gazette.",
+          "constraints": [
+            "Align closely with independent claim 1",
+            "Include all essential elements of the broadest claim",
+            "Use 'in one embodiment', 'in aspects', 'according to various embodiments' for flexibility",
+            "Avoid unnecessary limitations not in the claims"
+          ],
+          "additions": [
+            "The summary may be used by the USPTO for publication purposes",
+            "Consider including a brief statement of advantageous effects"
+          ]
+        }
+      },
+      "detailedDescription": {
+        "instruction": "Draft the Detailed Description section.",
+        "constraints": [
+          "Describe embodiments in sufficient detail to practice the invention.",
+          "Ensure each independent claim has at least one supporting embodiment.",
+          "Reference drawings where applicable."
+        ],
+        "topUp": {
+          "instruction": "Per 35 USC 112(a) and MPEP 2161-2165, draft a Detailed Description that satisfies the written description, enablement, and best mode requirements.",
+          "constraints": [
+            "Describe in sufficient detail to enable a person of ordinary skill to make and use the invention (enablement)",
+            "Demonstrate possession of the claimed invention (written description)",
+            "Disclose the best mode contemplated by the inventor (best mode)",
+            "Use reference numerals consistently with the drawings"
+          ],
+          "additions": [
+            "Include multiple embodiments and alternatives using 'in another embodiment...'",
+            "The USPTO requires the best mode known at the time of filing to be disclosed",
+            "Support for functional claim language should be explicit in the description"
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "importFiguresDirectly": true,
+        "topUp": {
+          "instruction": "Per 37 CFR 1.74, provide a brief description of each drawing figure before the detailed description.",
+          "constraints": [
+            "One sentence per figure",
+            "Use format: 'FIG. X is a [view type] showing [what it depicts]'",
+            "View types: block diagram, flowchart, perspective view, cross-sectional view"
+          ],
+          "additions": [
+            "This section should follow the order of figures in the drawings",
+            "Reference numerals need not be listed here—they belong in the detailed description"
+          ]
+        }
+      },
+      "claims": {
+        "instruction": "Draft a full set of claims compliant with US patent practice.",
+        "constraints": [
+          "Use 'comprising' as the preferred connector.",
+          "Avoid two-part 'characterized in that' format.",
+          "Each dependent claim must reference a single prior claim.",
+          "Claims must be supported by the detailed description."
+        ],
+        "topUp": {
+          "instruction": "Draft claims compliant with 35 USC 112 and 37 CFR 1.75. Use open-ended 'comprising' language for flexibility.",
+          "constraints": [
+            "Each claim must be a single sentence",
+            "Maintain proper antecedent basis ('a processor'...'the processor')",
+            "Independent claims: system/apparatus, method, and optionally CRM claims",
+            "Dependent claims must reference only one prior claim (no multiple dependencies in US)",
+            "Avoid 'means for' unless invoking 35 USC 112(f)"
+          ],
+          "additions": [
+            "Per 37 CFR 1.75(c), multiple dependent claims are allowed but incur extra fees",
+            "Consider 3 independent claims and 17 dependent claims before excess claim fees apply",
+            "Use 'configured to' or 'adapted to' for functional language without invoking 112(f)"
+          ]
+        }
+      },
+      "abstract": {
+        "instruction": "Draft the Abstract section.",
+        "constraints": [
+          "No more than 150 words.",
+          "Summarize the technical disclosure without mentioning advantages or benefits.",
+          "Do not use claim-style language."
+        ],
+        "topUp": {
+          "instruction": "Per 37 CFR 1.72(b) and MPEP 608.01(b), draft an Abstract suitable for publication that allows quick determination of the nature of the technical disclosure.",
+          "constraints": [
+            "Maximum 150 words (strictly enforced)",
+            "Single paragraph format",
+            "Technical summary only—no legal phraseology",
+            "Must not discuss merits or speculative applications"
+          ],
+          "additions": [
+            "Include reference to the figure that best characterizes the invention (e.g., '(FIG. 1)')",
+            "The USPTO may shorten abstracts exceeding 150 words",
+            "The abstract is published in the Official Gazette"
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "US Specification PDF",
+        "includesSections": [
+          "title",
+          "field",
+          "background",
+          "summary",
+          "brief_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "LETTER",
+        "lineSpacing": 1.5,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false,
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0
+      }
+    ],
+    "sectionHeadings": {
+      "field": "FIELD OF THE INVENTION",
+      "background": "BACKGROUND OF THE INVENTION",
+      "summary": "SUMMARY OF THE INVENTION",
+      "brief_drawings": "BRIEF DESCRIPTION OF THE DRAWINGS",
+      "detailed_description": "DETAILED DESCRIPTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": ["block", "flowchart", "schematic", "perspective_view"],
+    "figureLabelFormat": "Fig. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for components and arrows for data or control flow; keep labeling consistent with the detailed description.",
+      "flowchart": "Use standard flowchart symbols for processes and decisions; ensure the flow reflects the claimed method steps."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure all reference numerals in drawings are defined in the detailed description.",
+        "from": "brief_drawings",
+        "mustBeExplainedIn": ["detailed_description"]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed elements appear in at least one figure when drawings are present.",
+        "from": "claims",
+        "mustBeShownIn": ["brief_drawings"]
+      }
+    ]
+  }
+}
