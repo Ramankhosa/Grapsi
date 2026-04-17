@@ -750,6 +750,7 @@ async function persistDraft(
     status: mapCatalogStatusToFundingStatus('DRAFT'),
     catalog_status: 'DRAFT' as FundingCallStatus,
     visibility: operator.role === 'USER' ? 'TENANT_PRIVATE' : 'GLOBAL_PUBLISHED',
+    tenantId: operator.role === 'USER' ? operator.tenantId || null : null,
     title: draftValues.scheme_title || draftValues.agency_name || job.source_url || 'Untitled funding call',
     agencyName: draftValues.agency_name || null,
     sourceUrl: job.source_url || null,

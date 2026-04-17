@@ -948,3 +948,26 @@
     position: static;
   }
 }
+
+.prep-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.prep-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.prep-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.28);
+  border-radius: 9999px;
+}
+
+.prep-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.42);
+}
+
+.prep-scroll-fade {
+  mask-image: linear-gradient(to right, transparent 0, black 20px, black calc(100% - 20px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 20px, black calc(100% - 20px), transparent 100%);
+}

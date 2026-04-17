@@ -69,7 +69,12 @@ type IntakeJobDetailsLike = {
     input_type: FundingInputType
     source_url?: string | null
     status: FundingIntakeJobStatus
+    duplicate_status?: 'none' | 'candidate_found' | 'exact_match_found' | 'resolved' | null
     linked_funding_call_id?: string | null
+    source_file_path?: string | null
+    raw_text?: string | null
+    normalized_text?: string | null
+    fetch_metadata_json?: unknown
     created_at: Date
     updated_at: Date
     error_code?: string | null
@@ -81,6 +86,100 @@ type IntakeJobDetailsLike = {
   draftValues?: Partial<FundingDraftValues> | null
   call?: FundingCallLike | null
   duplicates?: DuplicateCandidateLike[] | null
+}
+
+function buildDerivedAssets(details: IntakeJobDetailsLike): FundingImportJobView['assets'] {
+  const createdAt = details.job.created_at.toISOString()
+  const fetchMetadata =
+    details.job.fetch_metadata_json && typeof details.job.fetch_metadata_json === 'object' && !Array.isArray(details.job.fetch_metadata_json)
+      ? (details.job.fetch_metadata_json as Record<string, unknown>)
+      : {}
+  const assets: FundingImportJobView['assets'] = []
+
+  if (details.job.input_type === 'pdf' && details.job.source_file_path) {
+    const fileName = details.job.source_file_path.split(/[\\/]/).pop() || 'upload.pdf'
+    assets.push({
+      id: `${details.job.id}:uploaded-file`,
+      kind: 'UPLOADED_FILE',
+      fileName: String(fetchMetadata.original_name || fileName),
+      mimeType: String(fetchMetadata.mime || 'application/pdf'),
+      byteSize: typeof fetchMetadata.bytes === 'number' ? fetchMetadata.bytes : null,
+      storagePath: details.job.source_file_path,
+      textPreview: null,
+      createdAt,
+    })
+  }
+
+  if (details.job.input_type === 'url' && details.job.source_url) {
+    assets.push({
+      id: `${details.job.id}:fetched-source`,
+      kind: 'FETCHED_SOURCE',
+      fileName: null,
+      mimeType: typeof fetchMetadata.contentType === 'string' ? fetchMetadata.contentType : null,
+      byteSize: null,
+      storagePath: details.job.source_url,
+      textPreview: details.job.raw_text?.slice(0, 400) || null,
+      createdAt,
+    })
+  }
+
+  if (details.job.input_type === 'text' && details.job.raw_text) {
+    assets.push({
+      id: `${details.job.id}:raw-text`,
+      kind: 'RAW_TEXT',
+      fileName: null,
+      mimeType: 'text/plain',
+      byteSize: Buffer.byteLength(details.job.raw_text, 'utf8'),
+      storagePath: null,
+      textPreview: details.job.raw_text.slice(0, 400),
+      createdAt,
+    })
+  }
+
+  if (details.job.input_type === 'pdf' && details.job.raw_text) {
+    assets.push({
+      id: `${details.job.id}:extracted-text`,
+      kind: 'EXTRACTED_TEXT',
+      fileName: null,
+      mimeType: 'text/plain',
+      byteSize: Buffer.byteLength(details.job.raw_text, 'utf8'),
+      storagePath: null,
+      textPreview: details.job.raw_text.slice(0, 400),
+      createdAt,
+    })
+  }
+
+  if (details.job.normalized_text) {
+    assets.push({
+      id: `${details.job.id}:normalized-text`,
+      kind: 'NORMALIZED_TEXT',
+      fileName: null,
+      mimeType: 'text/plain',
+      byteSize: Buffer.byteLength(details.job.normalized_text, 'utf8'),
+      storagePath: null,
+      textPreview: details.job.normalized_text.slice(0, 400),
+      createdAt,
+    })
+  }
+
+  return assets
+}
+
+function mapOutcome(details: IntakeJobDetailsLike): FundingImportJobView['outcome'] {
+  if (details.job.status === 'failed' || details.job.status === 'canceled') {
+    return 'FAILED'
+  }
+
+  if (details.job.linked_funding_call_id) {
+    const reusedExisting = (details.duplicates || []).some((duplicate) => duplicate.candidate_funding_call_id === details.job.linked_funding_call_id)
+    return reusedExisting ? 'REUSED_EXISTING' : 'CREATED'
+  }
+
+  if (details.job.duplicate_status === 'candidate_found' || details.job.duplicate_status === 'exact_match_found') {
+    return 'DUPLICATE_BLOCKED'
+  }
+
+  return null
 }
 
 function serializeDate(value: Date | string | null | undefined): string | null {
@@ -200,7 +299,7 @@ export function toFundingImportJobView(details: IntakeJobDetailsLike | null): Fu
     sourceLocator: sourceUrl,
     visibility: details.call?.visibility || 'TENANT_PRIVATE',
     status: mapJobStatus(details.job.status),
-    outcome: details.job.linked_funding_call_id ? 'CREATED' : null,
+    outcome: mapOutcome(details),
     errorCode: details.job.error_code || null,
     errorMessage: details.job.error_message || null,
     startedAt: serializeDate(details.job.started_at),
@@ -238,7 +337,7 @@ export function toFundingImportJobView(details: IntakeJobDetailsLike | null): Fu
       score: duplicate.match_score || 0,
       reason: mapDuplicateReason(duplicate.match_type),
     })),
-    assets: [],
+    assets: buildDerivedAssets(details),
     createdAt: details.job.created_at.toISOString(),
     updatedAt: details.job.updated_at.toISOString(),
   }
@@ -266,6 +365,10 @@ export function toFundingCallDetail(
   options?: { recentJobs?: FundingImportJobView[] }
 ): FundingCallDetail {
   const summary = toFundingCallSummary(call)
+  const recentJobAssets = (options?.recentJobs || []).flatMap((job) => job.assets || [])
+  const assets = recentJobAssets.filter(
+    (asset, index, list) => list.findIndex((candidate) => candidate.id === asset.id) === index
+  )
 
   return {
     ...summary,
@@ -293,7 +396,7 @@ export function toFundingCallDetail(
         ? (call.normalizedMetadata as Record<string, unknown>)
         : null),
     llmExtraction: null,
-    assets: [],
+    assets,
     recentJobs: options?.recentJobs || [],
   }
 }

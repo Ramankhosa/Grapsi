@@ -8,6 +8,17 @@ import { fundingIntakeService } from '@/lib/fundingIntake/service'
 
 export const runtime = 'nodejs'
 
+class FundingImportRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string
+  ) {
+    super(message)
+    this.name = 'FundingImportRequestError'
+  }
+}
+
 function parseVisibility(value: FormDataEntryValue | string | null | undefined) {
   return value === 'GLOBAL_PUBLISHED' ? 'GLOBAL_PUBLISHED' : 'TENANT_PRIVATE'
 }
@@ -29,20 +40,36 @@ async function parseCreateRequest(request: NextRequest) {
     const inputType = parseInputType(formData.get('inputType')) || (file instanceof File ? 'file' : null)
 
     if (inputType !== 'file' || !(file instanceof File)) {
-      throw new Error('Multipart imports require a single file')
+      throw new FundingImportRequestError('Multipart imports require a single file', 400, 'INVALID_MULTIPART_UPLOAD')
     }
 
-    return {
-      inputType,
-      visibility,
-      sourceFile: await stagePdfUpload(file),
-    } as const
+    try {
+      const stagedPdf = await stagePdfUpload(file)
+
+      return {
+        inputType,
+        visibility,
+        sourceFile: stagedPdf,
+      } as const
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to stage upload'
+      if (message.includes('Only PDF files are supported')) {
+        throw new FundingImportRequestError(message, 400, 'UNSUPPORTED_FILE_TYPE')
+      }
+
+      if (message.includes('too large')) {
+        throw new FundingImportRequestError(message, 400, 'FILE_TOO_LARGE')
+      }
+
+      throw error
+    }
+
   }
 
   const body = await request.json()
   const inputType = parseInputType(body.inputType)
   if (!inputType) {
-    throw new Error('inputType must be one of url, file, or text')
+    throw new FundingImportRequestError('inputType must be one of url, file, or text', 400, 'INVALID_INPUT_TYPE')
   }
 
   return {
@@ -99,6 +126,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ job: details ? toFundingImportJobView(details) : null }, { status: 201 })
   } catch (error) {
     console.error('[Funding/Imports] POST error:', error)
+
+    if (error instanceof FundingImportRequestError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
+    }
+
+    if (error instanceof Error) {
+      if (error.message === 'sourceUrl is required for URL intake') {
+        return NextResponse.json({ error: error.message, code: 'SOURCE_URL_REQUIRED' }, { status: 400 })
+      }
+
+      if (error.message === 'sourceText is required for text intake') {
+        return NextResponse.json({ error: error.message, code: 'RAW_TEXT_REQUIRED' }, { status: 400 })
+      }
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to create funding import' },
       { status: 500 }

@@ -21,6 +21,7 @@ export interface TestUser {
 
 export async function resetPhase1Data() {
   await prisma.grantSession.deleteMany()
+  await prisma.tenantPlan.deleteMany()
   await prisma.fundingImportAsset.deleteMany()
   await prisma.fundingCallTemplateRevision.deleteMany()
   await prisma.fundingCallTemplate.deleteMany()

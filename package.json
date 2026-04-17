@@ -21,10 +21,13 @@
     "db:export": "node scripts/comprehensive-seed.js --export-only",
     "import:local-patents": "node scripts/import-local-patents-from-csv.js patients11.csv",
     "seed:adminplans": "node scripts/adminplans-seed.js",
-    "llm:add-thinking-models": "tsx scripts/add-thinking-models.ts",
+    "llm:add-thinking-models": "node ./node_modules/tsx/dist/cli.cjs scripts/add-thinking-models.ts",
     "test": "vitest run",
-    "test:phase1": "tsx scripts/run-phase1-tests.ts",
-    "test:phase2": "tsx scripts/run-phase2-tests.ts"
+    "test:phase1": "node ./node_modules/tsx/dist/cli.cjs scripts/run-phase1-tests.ts",
+    "test:phase2": "node ./node_modules/tsx/dist/cli.cjs scripts/run-phase2-tests.ts",
+    "ops:funding-repair": "node ./node_modules/tsx/dist/cli.cjs scripts/run-funding-repair.ts",
+    "seed:funding-finder": "node ./node_modules/tsx/dist/cli.cjs scripts/seed-funding-finder-verification.ts",
+    "verify:funding-finder": "node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-finder.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
@@ -103,7 +106,9 @@
     "react-dom": "^18",
     "react-hot-toast": "^2.6.0",
     "react-icons": "^5.6.0",
+    "react-markdown": "^10.1.0",
     "recharts": "^3.2.1",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.1",
     "twitter-api-v2": "^1.28.0",
     "zod": "^3.22.4"
@@ -127,7 +132,7 @@
     "postcss": "^8.4.32",
     "prisma": "^5.9.1",
     "tailwindcss": "^3.4.0",
-    "tsx": "^4.20.0",
+    "tsx": "^4.21.0",
     "typescript": "^5",
     "vitest": "^2.1.9"
   },

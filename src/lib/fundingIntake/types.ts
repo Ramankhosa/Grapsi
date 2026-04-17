@@ -96,6 +96,7 @@ export interface IntakeOperator {
   userId: string;
   email: string;
   role: 'ADMIN' | 'CURATOR' | 'USER';
+  tenantId?: string | null;
 }
 
 export interface IntakeJobSummary {

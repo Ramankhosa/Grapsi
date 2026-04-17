@@ -53,7 +53,14 @@ export function buildFundingCallAccessWhere(actor: FundingActor): Prisma.Funding
 
   return {
     OR: [
-      { visibility: 'GLOBAL_PUBLISHED' },
+      {
+        visibility: 'GLOBAL_PUBLISHED',
+        is_active: { not: false },
+        OR: [
+          { status: 'PUBLISHED' },
+          { catalog_status: 'PUBLISHED' },
+        ],
+      },
       ...(actor.tenantId
         ? [
             {

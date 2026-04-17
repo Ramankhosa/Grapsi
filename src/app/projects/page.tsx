@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
@@ -31,8 +31,11 @@ interface Project {
 export default function ProjectsPage() {
   const { user, isLoading: authLoading } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [projects, setProjects] = useState<Project[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [creatingGrantPrepFor, setCreatingGrantPrepFor] = useState<string | null>(null)
+  const fundingCallId = searchParams?.get('fundingCallId') || null
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -70,6 +73,37 @@ export default function ProjectsPage() {
       case 'IN_PROGRESS': return 'bg-blue-500/10 text-blue-600 border-blue-500/20'
       case 'COMPLETED': return 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
       default: return 'bg-slate-500/10 text-slate-600 border-slate-500/20'
+    }
+  }
+
+  const startGrantPrepForProject = async (projectId: string) => {
+    if (!fundingCallId) return
+
+    try {
+      setCreatingGrantPrepFor(projectId)
+      const response = await fetch(`/api/projects/${projectId}/grants`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`,
+        },
+        body: JSON.stringify({
+          fundingCallId,
+          engagementMode: 'guided',
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to start grant prep')
+      }
+
+      router.push(`/projects/${projectId}/grants/${data.session.id}/prep`)
+    } catch (error) {
+      console.error('Failed to start grant prep:', error)
+      alert(error instanceof Error ? error.message : 'Failed to start grant prep')
+    } finally {
+      setCreatingGrantPrepFor(null)
     }
   }
 
@@ -186,6 +220,12 @@ export default function ProjectsPage() {
           </div>
         </div>
 
+        {fundingCallId ? (
+          <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-900">
+            Choose a project to start grant prep for the selected funding call.
+          </div>
+        ) : null}
+
         {/* Projects Grid */}
         {projects.length === 0 ? (
           <motion.div 
@@ -287,13 +327,24 @@ export default function ProjectsPage() {
                       )}
                     </div>
 
-                    {/* Action Button */}
-                    <Link href={`/projects/${project.id}`}>
-                      <button className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-xl transition-all duration-200 group-hover:shadow-lg">
-                        <span>Open Project</span>
-                        <ChevronRight className="w-4 h-4 opacity-0 -ml-2 group-hover:opacity-100 group-hover:ml-0 transition-all duration-200" />
-                      </button>
-                    </Link>
+                    {/* Action Buttons */}
+                    <div className="space-y-2">
+                      {fundingCallId ? (
+                        <button
+                          onClick={() => void startGrantPrepForProject(project.id)}
+                          disabled={creatingGrantPrepFor === project.id}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-xl transition-all duration-200 group-hover:shadow-lg disabled:opacity-60"
+                        >
+                          <span>{creatingGrantPrepFor === project.id ? 'Starting...' : 'Start Grant Prep'}</span>
+                        </button>
+                      ) : null}
+                      <Link href={`/projects/${project.id}`}>
+                        <button className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-xl transition-all duration-200 group-hover:shadow-lg">
+                          <span>Open Project</span>
+                          <ChevronRight className="w-4 h-4 opacity-0 -ml-2 group-hover:opacity-100 group-hover:ml-0 transition-all duration-200" />
+                        </button>
+                      </Link>
+                    </div>
                   </div>
                 </div>
               </motion.div>

@@ -18,6 +18,16 @@ export async function POST(request: NextRequest, { params }: { params: { jobId: 
     return NextResponse.json({ job: details ? toFundingImportJobView(details) : null })
   } catch (error) {
     console.error('[Funding/Imports/:jobId/retry] POST error:', error)
+    if (error instanceof Error) {
+      if (error.message === 'Funding intake job not found') {
+        return NextResponse.json({ error: error.message, code: 'NOT_FOUND' }, { status: 404 })
+      }
+
+      if (error.message === 'Only failed jobs can be retried') {
+        return NextResponse.json({ error: error.message, code: 'RETRY_NOT_ALLOWED' }, { status: 409 })
+      }
+    }
+
     return NextResponse.json({ error: 'Failed to retry funding import job' }, { status: 500 })
   }
 }

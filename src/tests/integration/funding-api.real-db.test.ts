@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { POST as archiveFundingCallRoute } from '@/app/api/super-admin/funding/calls/[callId]/archive/route'
 import { POST as publishFundingCallRoute } from '@/app/api/super-admin/funding/calls/[callId]/publish/route'
+import { POST as archiveFundingCallRoute } from '@/app/api/super-admin/funding/calls/[callId]/archive/route'
 import { GET as getFundingCallRoute } from '@/app/api/funding/calls/[callId]/route'
 import { GET as listFundingCallsRoute } from '@/app/api/funding/calls/route'
 import { GET as getFundingImportJobRoute } from '@/app/api/funding/imports/[jobId]/route'
 import { POST as resolveDuplicateRoute } from '@/app/api/funding/imports/[jobId]/resolve-duplicate/route'
 import { POST as retryFundingImportRoute } from '@/app/api/funding/imports/[jobId]/retry/route'
 import { GET as listFundingImportsRoute, POST as createFundingImportRoute } from '@/app/api/funding/imports/route'
+import { POST as fundingImportDecisionRoute } from '@/app/api/funding/import/[id]/decision/route'
 import { prisma } from '@/lib/prisma'
 import {
   createJsonRequest,
@@ -18,10 +19,7 @@ import {
   resetPhase1Data,
 } from '@/tests/integration/helpers/phase1-test-helpers'
 import {
-  createFundingDocxFile,
-  createFundingHtmlFile,
   createFundingPdfFile,
-  createFundingTextFile,
   startFundingFixtureServer,
 } from '@/tests/integration/helpers/phase2-funding-fixtures'
 
@@ -50,8 +48,37 @@ async function createTenantAnalyst(prefix: string) {
   return { tenant, user, token: tokenFor(user, tenant.atiId) }
 }
 
+async function waitForFundingImportJob(
+  jobId: string,
+  token: string,
+  terminalStatuses: Array<'NEEDS_REVIEW' | 'COMPLETED' | 'FAILED'> = ['NEEDS_REVIEW', 'COMPLETED', 'FAILED'],
+  timeoutMs = 90000
+) {
+  const deadline = Date.now() + timeoutMs
+  let lastBody: any = null
+
+  while (Date.now() < deadline) {
+    const response = await getFundingImportJobRoute(
+      createJsonRequest(`/api/funding/imports/${jobId}`, token, 'GET'),
+      { params: { jobId } }
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    lastBody = body
+
+    if (terminalStatuses.includes(body.job.status)) {
+      return body.job
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+
+  throw new Error(`Timed out waiting for funding job ${jobId}. Last body: ${JSON.stringify(lastBody)}`)
+}
+
 describe('Funding ingestion real DB integration', () => {
-  it('tenant-private URL import creates a published tenant funding call and import assets', async () => {
+  it('tenant-private URL import creates a reviewable intake job with derived assets and normalized facts', async () => {
     const fixture = await createTenantAnalyst('phase2-url-import')
     const server = await startFundingFixtureServer()
 
@@ -66,30 +93,21 @@ describe('Funding ingestion real DB integration', () => {
       const body = await response.json()
 
       expect(response.status).toBe(201)
-      expect(body.job.status).toBe('COMPLETED')
-      expect(body.job.outcome).toBe('CREATED')
+      expect(['PENDING', 'PROCESSING', 'NEEDS_REVIEW']).toContain(body.job.status)
 
-      const fundingCall = await prisma.fundingCall.findUnique({
-        where: { id: body.job.resultFundingCallId },
-      })
+      const job = await waitForFundingImportJob(body.job.id, fixture.token)
 
-      expect(fundingCall?.tenantId).toBe(fixture.tenant.id)
-      expect(fundingCall?.status).toBe('PUBLISHED')
-      expect(fundingCall?.title?.toLowerCase()).toContain('community climate action fund')
-
-      const assets = await prisma.fundingImportAsset.findMany({
-        where: { jobId: body.job.id },
-        orderBy: { createdAt: 'asc' },
-      })
-
-      expect(assets.some((asset) => asset.kind === 'FETCHED_SOURCE')).toBe(true)
-      expect(assets.some((asset) => asset.kind === 'NORMALIZED_TEXT')).toBe(true)
+      expect(job.status).toBe('NEEDS_REVIEW')
+      expect(job.resultFundingCallId).toBeNull()
+      expect(job.normalizedFacts?.title?.toLowerCase()).toContain('community climate action fund')
+      expect(job.assets.some((asset: any) => asset.kind === 'FETCHED_SOURCE')).toBe(true)
+      expect(job.assets.some((asset: any) => asset.kind === 'NORMALIZED_TEXT')).toBe(true)
     } finally {
       await server.close()
     }
   })
 
-  it('pasted text import creates a tenant-scoped funding call', async () => {
+  it('pasted text import creates a tenant review job with normalized text assets', async () => {
     const fixture = await createTenantAnalyst('phase2-text-import')
 
     const response = await createFundingImportRoute(
@@ -109,46 +127,40 @@ describe('Funding ingestion real DB integration', () => {
     const body = await response.json()
 
     expect(response.status).toBe(201)
-    expect(body.job.status).toBe('COMPLETED')
+    expect(['PENDING', 'PROCESSING', 'NEEDS_REVIEW']).toContain(body.job.status)
 
-    const call = await prisma.fundingCall.findUnique({ where: { id: body.job.resultFundingCallId } })
-    expect(call?.tenantId).toBe(fixture.tenant.id)
-    expect(call?.title?.toLowerCase()).toContain('rural innovation challenge 2026')
-  }, 60000)
+    const job = await waitForFundingImportJob(body.job.id, fixture.token)
+    expect(job.status).toBe('NEEDS_REVIEW')
+    expect(job.normalizedFacts?.title?.toLowerCase()).toContain('rural innovation challenge 2026')
+    expect(job.assets.some((asset: any) => asset.kind === 'RAW_TEXT')).toBe(true)
+    expect(job.assets.some((asset: any) => asset.kind === 'NORMALIZED_TEXT')).toBe(true)
+  }, 90000)
 
-  it('file imports support txt, html, docx, and pdf and persist source assets', async () => {
+  it('file imports support PDF uploads and surface uploaded plus extracted assets', async () => {
     const fixture = await createTenantAnalyst('phase2-file-import')
-    const files = [
-      createFundingTextFile(),
-      createFundingHtmlFile(),
-      await createFundingDocxFile(),
-      await createFundingPdfFile(),
-    ]
+    const file = await createFundingPdfFile()
 
-    for (const file of files) {
-      const response = await createFundingImportRoute(
-        createMultipartRequest({
-          path: '/api/funding/imports',
-          token: fixture.token,
-          fields: {
-            inputType: 'file',
-            visibility: 'TENANT_PRIVATE',
-          },
-          file,
-        })
-      )
-      const body = await response.json()
-
-      expect(response.status).toBe(201)
-      expect(body.job.status).toBe('COMPLETED')
-
-      const assets = await prisma.fundingImportAsset.findMany({
-        where: { jobId: body.job.id },
+    const response = await createFundingImportRoute(
+      createMultipartRequest({
+        path: '/api/funding/imports',
+        token: fixture.token,
+        fields: {
+          inputType: 'file',
+          visibility: 'TENANT_PRIVATE',
+        },
+        file,
       })
+    )
+    const body = await response.json()
 
-      expect(assets.some((asset) => asset.kind === 'UPLOADED_FILE')).toBe(true)
-      expect(assets.some((asset) => asset.kind === 'NORMALIZED_TEXT')).toBe(true)
-    }
+    expect(response.status).toBe(201)
+    expect(['PENDING', 'PROCESSING', 'NEEDS_REVIEW']).toContain(body.job.status)
+
+    const job = await waitForFundingImportJob(body.job.id, fixture.token)
+    expect(job.status).toBe('NEEDS_REVIEW')
+    expect(job.assets.some((asset: any) => asset.kind === 'UPLOADED_FILE')).toBe(true)
+    expect(job.assets.some((asset: any) => asset.kind === 'EXTRACTED_TEXT')).toBe(true)
+    expect(job.assets.some((asset: any) => asset.kind === 'NORMALIZED_TEXT')).toBe(true)
   }, 120000)
 
   it('invalid funding import payload returns 400', async () => {
@@ -186,7 +198,7 @@ describe('Funding ingestion real DB integration', () => {
     expect(response.status).toBe(403)
   })
 
-  it('super admin global import lands in READY_FOR_REVIEW and not PUBLISHED', async () => {
+  it('super admin global import creates a review job and does not auto-create a published call', async () => {
     const superAdmin = await createUser({
       tenantId: null,
       emailPrefix: 'phase2-superadmin',
@@ -211,13 +223,13 @@ describe('Funding ingestion real DB integration', () => {
     const body = await response.json()
 
     expect(response.status).toBe(201)
-    const call = await prisma.fundingCall.findUnique({ where: { id: body.job.resultFundingCallId } })
-    expect(call?.tenantId).toBeNull()
-    expect(call?.status).toBe('READY_FOR_REVIEW')
-    expect(call?.publishedAt).toBeNull()
+
+    const job = await waitForFundingImportJob(body.job.id, token)
+    expect(job.status).toBe('NEEDS_REVIEW')
+    expect(job.resultFundingCallId).toBeNull()
   })
 
-  it('exact duplicate URL auto-reuses an existing funding call', async () => {
+  it('exact duplicate URL requires review and can be resolved to an existing call', async () => {
     const fixture = await createTenantAnalyst('phase2-duplicate-url')
     const server = await startFundingFixtureServer()
 
@@ -227,9 +239,13 @@ describe('Funding ingestion real DB integration', () => {
           tenantId: fixture.tenant.id,
           visibility: 'TENANT_PRIVATE',
           status: 'PUBLISHED',
+          catalog_status: 'PUBLISHED',
           title: 'Community Climate Action Fund',
           agencyName: 'Global Resilience Council',
+          agency_name: 'Global Resilience Council',
+          scheme_title: 'Community Climate Action Fund',
           sourceUrl: server.url,
+          source_url: server.url,
           sourceDomain: '127.0.0.1',
           sourceFingerprint: 'existing-fingerprint',
           summary: 'Existing call',
@@ -249,27 +265,54 @@ describe('Funding ingestion real DB integration', () => {
       const body = await response.json()
 
       expect(response.status).toBe(201)
-      expect(body.job.outcome).toBe('REUSED_EXISTING')
-      expect(body.job.resultFundingCallId).toBe(existing.id)
+
+      const job = await waitForFundingImportJob(body.job.id, fixture.token)
+      expect(job.status).toBe('NEEDS_REVIEW')
+      expect(job.outcome).toBe('DUPLICATE_BLOCKED')
+      expect(job.duplicateCandidates).toHaveLength(1)
+
+      const resolveResponse = await resolveDuplicateRoute(
+        createJsonRequest(
+          `/api/funding/imports/${body.job.id}/resolve-duplicate`,
+          fixture.token,
+          'POST',
+          {
+            resolution: 'reuse_existing',
+            fundingCallId: existing.id,
+          }
+        ),
+        { params: { jobId: body.job.id } }
+      )
+      const resolveBody = await resolveResponse.json()
+
+      expect(resolveResponse.status).toBe(200)
+      expect(resolveBody.job.status).toBe('COMPLETED')
+      expect(resolveBody.job.outcome).toBe('REUSED_EXISTING')
+      expect(resolveBody.job.resultFundingCallId).toBe(existing.id)
     } finally {
       await server.close()
     }
   })
 
-  it('ambiguous duplicate match moves the job to NEEDS_REVIEW and can be resolved to an existing call', async () => {
+  it('ambiguous duplicate match moves the job to review and can be resolved to an existing call', async () => {
     const fixture = await createTenantAnalyst('phase2-duplicate-review')
     const existing = await prisma.fundingCall.create({
       data: {
         tenantId: fixture.tenant.id,
         visibility: 'TENANT_PRIVATE',
         status: 'PUBLISHED',
+        catalog_status: 'PUBLISHED',
         title: 'Climate Resilience Innovation Grant',
         agencyName: 'Urban Futures Agency',
+        agency_name: 'Urban Futures Agency',
+        scheme_title: 'Climate Resilience Innovation Grant',
         sourceUrl: 'https://example.com/original-call',
+        source_url: 'https://example.com/original-call',
         sourceDomain: 'example.com',
         programIdentifier: 'UFA-CLIMATE-2026',
         summary: 'Original funding call',
         deadlineAt: new Date('2026-11-30T00:00:00.000Z'),
+        close_date: new Date('2026-11-30T00:00:00.000Z'),
         sourceType: 'URL',
         createdByUserId: fixture.user.id,
         updatedByUserId: fixture.user.id,
@@ -291,9 +334,11 @@ describe('Funding ingestion real DB integration', () => {
     )
     const createBody = await createResponse.json()
 
-    expect(createResponse.status).toBe(202)
-    expect(createBody.job.status).toBe('NEEDS_REVIEW')
-    expect(createBody.job.duplicateCandidates).toHaveLength(1)
+    expect(createResponse.status).toBe(201)
+
+    const reviewJob = await waitForFundingImportJob(createBody.job.id, fixture.token)
+    expect(reviewJob.status).toBe('NEEDS_REVIEW')
+    expect(reviewJob.duplicateCandidates).toHaveLength(1)
 
     const resolveResponse = await resolveDuplicateRoute(
       createJsonRequest(
@@ -314,7 +359,7 @@ describe('Funding ingestion real DB integration', () => {
     expect(resolveBody.job.resultFundingCallId).toBe(existing.id)
   })
 
-  it('retry reruns failed jobs and leaves already-completed jobs alone', async () => {
+  it('retry reruns failed jobs and rejects retry on non-failed jobs', async () => {
     const fixture = await createTenantAnalyst('phase2-retry')
     const server = await startFundingFixtureServer()
 
@@ -329,13 +374,14 @@ describe('Funding ingestion real DB integration', () => {
       const failedBody = await failedCreateResponse.json()
 
       expect(failedCreateResponse.status).toBe(201)
-      expect(failedBody.job.status).toBe('FAILED')
 
-      await prisma.fundingImportJob.update({
+      const failedJob = await waitForFundingImportJob(failedBody.job.id, fixture.token, ['FAILED'], 30000)
+      expect(failedJob.status).toBe('FAILED')
+
+      await prisma.fundingIntakeJob.update({
         where: { id: failedBody.job.id },
         data: {
-          sourceLocator: server.url,
-          rawPayload: { sourceUrl: server.url, visibility: 'TENANT_PRIVATE' },
+          source_url: server.url,
         },
       })
 
@@ -346,7 +392,10 @@ describe('Funding ingestion real DB integration', () => {
       const retryBody = await retryResponse.json()
 
       expect(retryResponse.status).toBe(200)
-      expect(retryBody.job.status).toBe('COMPLETED')
+      expect(['PENDING', 'PROCESSING']).toContain(retryBody.job.status)
+
+      const retriedJob = await waitForFundingImportJob(failedBody.job.id, fixture.token)
+      expect(retriedJob.status).toBe('NEEDS_REVIEW')
 
       const secondRetryResponse = await retryFundingImportRoute(
         createJsonRequest(`/api/funding/imports/${failedBody.job.id}/retry`, fixture.token, 'POST'),
@@ -372,9 +421,11 @@ describe('Funding ingestion real DB integration', () => {
       data: {
         visibility: 'GLOBAL_PUBLISHED',
         status: 'PUBLISHED',
+        catalog_status: 'PUBLISHED',
         title: 'Global Visible Call',
         sourceType: 'URL',
         sourceUrl: 'https://example.com/global-visible',
+        source_url: 'https://example.com/global-visible',
         createdByUserId: tenantFixture.user.id,
         updatedByUserId: tenantFixture.user.id,
       },
@@ -384,9 +435,11 @@ describe('Funding ingestion real DB integration', () => {
         tenantId: tenantFixture.tenant.id,
         visibility: 'TENANT_PRIVATE',
         status: 'PUBLISHED',
+        catalog_status: 'PUBLISHED',
         title: 'Tenant Visible Call',
         sourceType: 'URL',
         sourceUrl: 'https://example.com/tenant-visible',
+        source_url: 'https://example.com/tenant-visible',
         createdByUserId: tenantFixture.user.id,
         updatedByUserId: tenantFixture.user.id,
       },
@@ -396,9 +449,11 @@ describe('Funding ingestion real DB integration', () => {
         tenantId: otherTenant.id,
         visibility: 'TENANT_PRIVATE',
         status: 'PUBLISHED',
+        catalog_status: 'PUBLISHED',
         title: 'Foreign Tenant Call',
         sourceType: 'URL',
         sourceUrl: 'https://example.com/tenant-hidden',
+        source_url: 'https://example.com/tenant-hidden',
         createdByUserId: otherUser.id,
         updatedByUserId: otherUser.id,
       },
@@ -407,9 +462,11 @@ describe('Funding ingestion real DB integration', () => {
       data: {
         visibility: 'GLOBAL_PUBLISHED',
         status: 'READY_FOR_REVIEW',
+        catalog_status: 'DRAFT',
         title: 'Global Hidden Review Call',
         sourceType: 'URL',
         sourceUrl: 'https://example.com/global-review',
+        source_url: 'https://example.com/global-review',
         createdByUserId: tenantFixture.user.id,
         updatedByUserId: tenantFixture.user.id,
       },
@@ -441,9 +498,11 @@ describe('Funding ingestion real DB integration', () => {
       data: {
         visibility: 'GLOBAL_PUBLISHED',
         status: 'READY_FOR_REVIEW',
+        catalog_status: 'DRAFT',
         title: 'Moderation Target Call',
         sourceType: 'URL',
         sourceUrl: 'https://example.com/moderation-target',
+        source_url: 'https://example.com/moderation-target',
         createdByUserId: superAdmin.id,
         updatedByUserId: superAdmin.id,
       },
@@ -471,7 +530,7 @@ describe('Funding ingestion real DB integration', () => {
     expect(updated?.status).toBe('ARCHIVED')
   })
 
-  it('funding import detail route returns persisted normalized facts and assets', async () => {
+  it('funding import detail route returns normalized facts and local draft creation yields call detail assets', async () => {
     const fixture = await createTenantAnalyst('phase2-job-detail')
 
     const createResponse = await createFundingImportRoute(
@@ -489,19 +548,34 @@ describe('Funding ingestion real DB integration', () => {
     )
     const createBody = await createResponse.json()
 
-    const detailResponse = await getFundingImportJobRoute(
+    const reviewJob = await waitForFundingImportJob(createBody.job.id, fixture.token)
+    expect(reviewJob.normalizedFacts?.title).toContain('Digital Equity Growth Fund')
+    expect(reviewJob.assets.length).toBeGreaterThan(0)
+
+    const decisionResponse = await fundingImportDecisionRoute(
+      createJsonRequest(`/api/funding/import/${createBody.job.id}/decision`, fixture.token, 'POST', {
+        action: 'create_private_draft',
+      }),
+      { params: { id: createBody.job.id } }
+    )
+    const decisionBody = await decisionResponse.json()
+
+    expect(decisionResponse.status).toBe(200)
+    expect(decisionBody.fundingCallId).toBeTruthy()
+
+    const refreshedDetailResponse = await getFundingImportJobRoute(
       createJsonRequest(`/api/funding/imports/${createBody.job.id}`, fixture.token, 'GET'),
       { params: { jobId: createBody.job.id } }
     )
-    const detailBody = await detailResponse.json()
+    const refreshedDetailBody = await refreshedDetailResponse.json()
 
-    expect(detailResponse.status).toBe(200)
-    expect(detailBody.job.normalizedFacts.title).toContain('Digital Equity Growth Fund')
-    expect(detailBody.job.assets.length).toBeGreaterThan(0)
+    expect(refreshedDetailResponse.status).toBe(200)
+    expect(refreshedDetailBody.job.status).toBe('COMPLETED')
+    expect(refreshedDetailBody.job.resultFundingCallId).toBe(decisionBody.fundingCallId)
 
     const callDetailResponse = await getFundingCallRoute(
-      createJsonRequest(`/api/funding/calls/${createBody.job.resultFundingCallId}`, fixture.token, 'GET'),
-      { params: { callId: createBody.job.resultFundingCallId } }
+      createJsonRequest(`/api/funding/calls/${decisionBody.fundingCallId}`, fixture.token, 'GET'),
+      { params: { callId: decisionBody.fundingCallId } }
     )
     const callDetailBody = await callDetailResponse.json()
 
@@ -510,5 +584,5 @@ describe('Funding ingestion real DB integration', () => {
 
     const listJobsResponse = await listFundingImportsRoute(createJsonRequest('/api/funding/imports', fixture.token, 'GET'))
     expect(listJobsResponse.status).toBe(200)
-  })
+  }, 120000)
 })

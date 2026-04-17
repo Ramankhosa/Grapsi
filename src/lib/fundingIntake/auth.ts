@@ -28,6 +28,7 @@ export function toFundingOperator(actor: FundingActor): IntakeOperator | null {
     userId: actor.id,
     email: actor.email,
     role,
+    tenantId: actor.tenantId,
   }
 }
 

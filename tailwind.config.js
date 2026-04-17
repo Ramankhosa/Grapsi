@@ -1,6 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
+    './pages/**/*.{js,ts,jsx,tsx,mdx}',
     './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
     './src/components/**/*.{js,ts,jsx,tsx,mdx}',
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
@@ -58,10 +59,35 @@ module.exports = {
           500: '#10b981',
           600: '#059669',
         },
+        prep: {
+          surface: '#f4fbf8',
+          border: '#d6eee4',
+          accent: '#0f766e',
+          accentDark: '#115e59',
+          muted: '#64748b',
+          chatUser: '#0f766e',
+          chatAssistant: '#f8fafc',
+          inputBg: '#f1f5f9',
+          chipStrong: '#ccfbf1',
+        },
       },
       fontFamily: {
         sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
         serif: ['var(--font-cormorant)', 'serif'],
+      },
+      boxShadow: {
+        'prep-card': '0 10px 25px rgba(15, 23, 42, 0.08)',
+        'prep-card-hover': '0 16px 40px rgba(15, 23, 42, 0.12)',
+        'prep-float': '0 28px 70px rgba(15, 23, 42, 0.18)',
+      },
+      animation: {
+        'pulse-slow': 'prepPulse 2.4s ease-in-out infinite',
+      },
+      keyframes: {
+        prepPulse: {
+          '0%, 100%': { transform: 'scale(1)', opacity: '0.2' },
+          '50%': { transform: 'scale(1.05)', opacity: '0.32' },
+        },
       },
     },
   },

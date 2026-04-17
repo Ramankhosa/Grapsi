@@ -51,9 +51,24 @@ export async function POST(request: NextRequest, { params }: { params: { jobId: 
       })
 
       await prisma.fundingIntakeDuplicate.updateMany({
-        where: { job_id: params.jobId },
+        where: {
+          job_id: params.jobId,
+          candidate_funding_call_id: { not: fundingCallId },
+        },
         data: {
           resolution: 'ignored',
+          resolved_by_user_id: auth.operator.userId,
+          resolved_at: new Date(),
+        },
+      })
+
+      await prisma.fundingIntakeDuplicate.updateMany({
+        where: {
+          job_id: params.jobId,
+          candidate_funding_call_id: fundingCallId,
+        },
+        data: {
+          resolution: 'merged_to_existing',
           resolved_by_user_id: auth.operator.userId,
           resolved_at: new Date(),
         },

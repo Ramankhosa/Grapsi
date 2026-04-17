@@ -234,6 +234,18 @@ enum GrantSessionStatus {
   COMPLETED
 }
 
+enum GrantBlueprintStatus {
+  DRAFT
+  FROZEN
+}
+
+enum GrantSectionDraftStatus {
+  NOT_STARTED
+  DRAFT
+  REVIEWED
+  APPROVED
+}
+
 // Service types for access control
 enum ServiceType {
   PATENT_DRAFTING
@@ -322,6 +334,9 @@ model Tenant {
   fundingImportJobs                  FundingImportJob[]
   grantSessions                      GrantSession[]
   grantPrepSessions                  GrantPrepSession[]
+  grantBlueprints                    GrantBlueprint[]
+  grantSectionDrafts                 GrantSectionDraft[]
+  grantStructuredFieldResponses      GrantStructuredFieldResponse[]
   recommendationConversations        RecommendationConversation[]
   recommendationConversationMessages RecommendationConversationMessage[]
   recommendationConversationRuns     RecommendationConversationRun[]
@@ -641,6 +656,9 @@ model Project {
   patents           Patent[]
   grantSessions     GrantSession[]
   grantPrepSessions GrantPrepSession[]
+  grantBlueprints   GrantBlueprint[]
+  grantSectionDrafts GrantSectionDraft[]
+  grantStructuredFieldResponses GrantStructuredFieldResponse[]
   noveltySearchRuns NoveltySearchRun[]
   user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -794,6 +812,7 @@ model FundingCall {
   intake_jobs                 FundingIntakeJob[]              @relation("FundingCallIntakeJobs")
   grantSessions               GrantSession[]
   grantPrepSessions           GrantPrepSession[]
+  grantBlueprints             GrantBlueprint[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -1140,6 +1159,10 @@ model GrantSession {
   project         Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fundingCall     FundingCall        @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
+  prepSession     GrantPrepSession?
+  blueprint       GrantBlueprint?
+  sectionDrafts   GrantSectionDraft[]
+  structuredFieldResponses GrantStructuredFieldResponse[]
 
   @@index([projectId, status])
   @@index([tenantId])
@@ -1174,6 +1197,7 @@ model GrantPrepSession {
   frozen_payload_version         String?
   frozen_payload_hash            String?
   frozen_at                      DateTime?
+  grant_session_id               String?                 @unique
   papsi_session_id               String?
   papsi_launch_url               String?
   last_handoff_error             String?
@@ -1183,6 +1207,8 @@ model GrantPrepSession {
   project                        Project                 @relation(fields: [project_id], references: [id], onDelete: Cascade)
   tenant                         Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user                           User                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  grantSession                   GrantSession?           @relation(fields: [grant_session_id], references: [id], onDelete: SetNull)
+  launchedBlueprints             GrantBlueprint[]        @relation("GrantPrepSourceBlueprint")
   messages                       GrantPrepMessage[]
 
   @@index([tenantId], map: "idx_grant_prep_sessions_tenant_id")
@@ -1219,6 +1245,103 @@ model GrantPrepMessage {
   @@index([session_id, created_at], map: "idx_grant_prep_messages_session_created_at")
   @@index([stage_key], map: "idx_grant_prep_messages_stage_key")
   @@map("grant_prep_messages")
+}
+
+model GrantBlueprint {
+  id                     String               @id @default(cuid())
+  grantSessionId         String               @unique
+  tenantId               String
+  projectId              String
+  fundingCallId          String
+  sourcePrepSessionId    String?
+  sourceTemplateRevisionId String?
+  sourceGuidelineRevisionId String?
+  status                 GrantBlueprintStatus @default(DRAFT)
+  version                Int                  @default(1)
+  compiledTemplateJson   Json
+  sectionPlanJson        Json
+  freezePayloadJson      Json?
+  globalKeywordsJson     Json?
+  createdByUserId        String
+  updatedByUserId        String
+  frozenAt               DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  grantSession           GrantSession         @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  tenant                 Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project                Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fundingCall            FundingCall          @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
+  sourcePrepSession      GrantPrepSession?    @relation("GrantPrepSourceBlueprint", fields: [sourcePrepSessionId], references: [id], onDelete: SetNull)
+  sectionDrafts          GrantSectionDraft[]
+
+  @@index([tenantId, projectId])
+  @@index([fundingCallId])
+  @@map("grant_blueprints")
+}
+
+model GrantSectionDraft {
+  id                   String                  @id @default(cuid())
+  grantSessionId       String
+  blueprintId          String
+  tenantId             String
+  projectId            String
+  sectionKey           String
+  label                String
+  sectionType          String
+  sectionOrder         Int
+  required             Boolean                @default(true)
+  wordBudget           Int?
+  characterLimit       Int?
+  purpose              String                 @db.Text
+  reviewerIntent       String?                @db.Text
+  dependenciesJson     Json?
+  mustCoverJson        Json?
+  mustAvoidJson        Json?
+  sourceTemplatePointer String?
+  content              String?                @db.Text
+  status               GrantSectionDraftStatus @default(NOT_STARTED)
+  version              Int                    @default(1)
+  llmPromptUsed        String?                @db.Text
+  llmResponse          String?                @db.Text
+  llmTokensUsed        Int?
+  createdByUserId      String
+  updatedByUserId      String
+  generatedAt          DateTime?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  grantSession         GrantSession           @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  blueprint            GrantBlueprint         @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project              Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  structuredResponses  GrantStructuredFieldResponse[]
+
+  @@unique([grantSessionId, sectionKey], map: "grant_section_drafts_session_section_key_unique")
+  @@index([blueprintId, sectionOrder])
+  @@index([tenantId, projectId])
+  @@map("grant_section_drafts")
+}
+
+model GrantStructuredFieldResponse {
+  id               String            @id @default(cuid())
+  grantSessionId   String
+  sectionDraftId   String
+  tenantId         String
+  projectId        String
+  sectionKey       String
+  fieldKey         String
+  responseJson     Json
+  updatedByUserId  String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  grantSession     GrantSession      @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  sectionDraft     GrantSectionDraft @relation(fields: [sectionDraftId], references: [id], onDelete: Cascade)
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionDraftId, fieldKey], map: "grant_structured_field_responses_section_field_unique")
+  @@index([grantSessionId, sectionKey])
+  @@index([tenantId, projectId])
+  @@map("grant_structured_field_responses")
 }
 
 model RecommendationConversation {
