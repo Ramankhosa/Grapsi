@@ -20,13 +20,43 @@ type CatalogCallSummary = {
   embedding_status: 'not_generated' | 'generated' | 'failed';
 };
 
+type EmbeddingCoverage = {
+  publishedActiveTotal: number;
+  publishedActiveEmbedded: number;
+  publishedActiveMissingEmbedding: number;
+  publishedActiveFailedEmbedding: number;
+};
+
+type EmbeddingHealth = {
+  configured: boolean;
+  circuitOpen: boolean;
+  consecutiveFailures: number;
+  lastError: string | null;
+  lastFailureAt: string | null;
+  nextRetryAt: string | null;
+  modelName: string;
+  outputDimensionality: number;
+};
+
+type ResearchAreaCoverage = {
+  total: number;
+  current: number;
+  missing: number;
+  stale: number;
+  embeddingVersion: string;
+};
+
 const STATUS_OPTIONS = ['ALL', 'DRAFT', 'PUBLISHED', 'ARCHIVED', 'REJECTED'] as const;
 
 export default function FundingCatalogAdminPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
   const [calls, setCalls] = useState<CatalogCallSummary[]>([]);
+  const [coverage, setCoverage] = useState<EmbeddingCoverage | null>(null);
+  const [embeddingHealth, setEmbeddingHealth] = useState<EmbeddingHealth | null>(null);
+  const [researchAreaCoverage, setResearchAreaCoverage] = useState<ResearchAreaCoverage | null>(null);
   const [loading, setLoading] = useState(true);
+  const [backfillBusy, setBackfillBusy] = useState<'funding_calls' | 'research_areas' | 'all' | null>(null);
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>('ALL');
 
   const userRoles = user?.roles || [];
@@ -53,10 +83,34 @@ export default function FundingCatalogAdminPage() {
         throw new Error(data.message || 'Failed to load funding catalog');
       }
       setCalls(data.calls || []);
+      setCoverage(data.coverage || null);
+      setEmbeddingHealth(data.embeddingHealth || null);
+      setResearchAreaCoverage(data.researchAreaCoverage || null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to load funding catalog');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runBackfill(target: 'funding_calls' | 'research_areas' | 'all') {
+    setBackfillBusy(target);
+    try {
+      const response = await fetch('/api/admin/funding/embeddings/backfill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, limit: 25 }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to backfill embeddings');
+      }
+      toast.success('Embedding backfill completed');
+      await loadCalls();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to backfill embeddings');
+    } finally {
+      setBackfillBusy(null);
     }
   }
 
@@ -128,6 +182,89 @@ export default function FundingCatalogAdminPage() {
             </div>
           </div>
         </div>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Embedding Operations</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Coverage is measured against published active funding calls and saved researcher areas.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => runBackfill('funding_calls')}
+                disabled={backfillBusy !== null}
+                className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {backfillBusy === 'funding_calls' ? 'Backfilling Funding...' : 'Backfill Funding'}
+              </button>
+              <button
+                type="button"
+                onClick={() => runBackfill('research_areas')}
+                disabled={backfillBusy !== null}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {backfillBusy === 'research_areas' ? 'Backfilling Research Areas...' : 'Backfill Research Areas'}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-4">
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Published Active</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">{coverage?.publishedActiveTotal || 0}</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Embedded</div>
+              <div className="mt-2 text-2xl font-semibold text-emerald-700">{coverage?.publishedActiveEmbedded || 0}</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Missing Vectors</div>
+              <div className="mt-2 text-2xl font-semibold text-amber-700">{coverage?.publishedActiveMissingEmbedding || 0}</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Failed Embeddings</div>
+              <div className="mt-2 text-2xl font-semibold text-rose-700">{coverage?.publishedActiveFailedEmbedding || 0}</div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Embedding Provider</div>
+              <div className="mt-2 text-sm font-medium text-slate-900">
+                {embeddingHealth?.configured ? embeddingHealth.modelName : 'Not configured'}
+              </div>
+              <div className="mt-2 text-sm text-slate-600">
+                Circuit: {embeddingHealth?.circuitOpen ? 'open' : 'closed'}
+                {embeddingHealth?.nextRetryAt ? ` · retry ${new Date(embeddingHealth.nextRetryAt).toLocaleTimeString()}` : ''}
+              </div>
+              {embeddingHealth?.lastError && (
+                <div className="mt-2 text-xs text-rose-700">{embeddingHealth.lastError}</div>
+              )}
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Research Area Vectors</div>
+              <div className="mt-2 text-sm text-slate-700">
+                Current: <span className="font-semibold text-slate-900">{researchAreaCoverage?.current || 0}</span> / {researchAreaCoverage?.total || 0}
+              </div>
+              <div className="mt-1 text-sm text-slate-700">
+                Missing: <span className="font-semibold text-amber-700">{researchAreaCoverage?.missing || 0}</span>
+              </div>
+              <div className="mt-1 text-sm text-slate-700">
+                Stale: <span className="font-semibold text-rose-700">{researchAreaCoverage?.stale || 0}</span>
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Failure Count</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">{embeddingHealth?.consecutiveFailures || 0}</div>
+              <div className="mt-2 text-xs text-slate-500">
+                Output dims: {embeddingHealth?.outputDimensionality || 0}
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">

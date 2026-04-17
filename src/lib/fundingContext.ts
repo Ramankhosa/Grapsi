@@ -152,12 +152,12 @@ export function buildCallAnalysisCompatibleContext(context: FundingCallContext) 
 
 export async function resolveProjectFundingContext(
   projectId: string,
-  user: { id: string; email?: string | null }
+  user: { id: string; email?: string | null; tenantId?: string | null }
 ): Promise<FundingCallContext> {
   const project = await prisma.project.findFirst({
     where: {
       id: projectId,
-      userId: user.id,
+      ...(user.tenantId ? { tenantId: user.tenantId } : {}),
     },
     select: {
       id: true,

@@ -4,6 +4,7 @@ import prisma from '../prisma';
 import { DRAFT_MINIMUM_FIELDS } from '../fundingIntake/constants';
 import type { FundingDraftValues, IntakeOperator } from '../fundingIntake/types';
 import { normalizeDraftInput } from '../fundingIntake/utils';
+import type { EmbeddingServiceHealth } from './embeddingService';
 import { EmbeddingService } from './embeddingService';
 
 type CatalogMetadata = Record<string, any>;
@@ -28,6 +29,20 @@ export interface FundingCatalogSummary {
 export interface PublishReadiness {
   ready: boolean;
   missingFields: string[];
+}
+
+export interface FundingEmbeddingCoverageSummary {
+  publishedActiveTotal: number;
+  publishedActiveEmbedded: number;
+  publishedActiveMissingEmbedding: number;
+  publishedActiveFailedEmbedding: number;
+}
+
+export interface FundingEmbeddingBackfillResult {
+  processed: number;
+  succeeded: number;
+  failed: number;
+  errors: Array<{ id: string; error: string }>;
 }
 
 const embeddingService = new EmbeddingService();
@@ -135,6 +150,10 @@ function buildCatalogMetadata(
 
 function hasDraftValuesChanged(current: FundingDraftValues, next: FundingDraftValues) {
   return JSON.stringify(current) !== JSON.stringify(next);
+}
+
+function toCount(value: bigint | number | null | undefined) {
+  return Number(value || 0);
 }
 
 function buildSearchableDocument(values: FundingDraftValues): string {
@@ -267,6 +286,51 @@ async function updateStoredEmbedding(
 }
 
 export class FundingCatalogService {
+  getEmbeddingServiceHealth(): EmbeddingServiceHealth {
+    return embeddingService.getHealth();
+  }
+
+  async getEmbeddingCoverageSummary(): Promise<FundingEmbeddingCoverageSummary> {
+    const rows = await prisma.$queryRaw<
+      Array<{
+        publishedActiveTotal: bigint | number;
+        publishedActiveEmbedded: bigint | number;
+        publishedActiveMissingEmbedding: bigint | number;
+        publishedActiveFailedEmbedding: bigint | number;
+      }>
+    >(PrismaNamespace.sql`
+      SELECT
+        COUNT(*) FILTER (
+          WHERE catalog_status = 'PUBLISHED'
+            AND COALESCE(is_active, true) = true
+        ) AS "publishedActiveTotal",
+        COUNT(*) FILTER (
+          WHERE catalog_status = 'PUBLISHED'
+            AND COALESCE(is_active, true) = true
+            AND embedding IS NOT NULL
+        ) AS "publishedActiveEmbedded",
+        COUNT(*) FILTER (
+          WHERE catalog_status = 'PUBLISHED'
+            AND COALESCE(is_active, true) = true
+            AND embedding IS NULL
+        ) AS "publishedActiveMissingEmbedding",
+        COUNT(*) FILTER (
+          WHERE catalog_status = 'PUBLISHED'
+            AND COALESCE(is_active, true) = true
+            AND COALESCE(metadata ->> 'embedding_status', '') = 'failed'
+        ) AS "publishedActiveFailedEmbedding"
+      FROM funding_calls
+    `);
+
+    const row = rows[0];
+    return {
+      publishedActiveTotal: toCount(row?.publishedActiveTotal),
+      publishedActiveEmbedded: toCount(row?.publishedActiveEmbedded),
+      publishedActiveMissingEmbedding: toCount(row?.publishedActiveMissingEmbedding),
+      publishedActiveFailedEmbedding: toCount(row?.publishedActiveFailedEmbedding),
+    };
+  }
+
   async listFundingCalls(status?: FundingCallStatus | null): Promise<FundingCatalogSummary[]> {
     const calls = await prisma.fundingCall.findMany({
       where: status ? { catalog_status: status } : undefined,
@@ -309,6 +373,86 @@ export class FundingCatalogService {
         embedding_status: getEmbeddingStatus(call, embeddingMap.get(call.id) || false),
       };
     });
+  }
+
+  async backfillPublishedEmbeddings(limit = 25): Promise<FundingEmbeddingBackfillResult> {
+    const candidates = await prisma.$queryRaw<Array<{ id: string }>>(
+      PrismaNamespace.sql`
+        SELECT id::text AS id
+        FROM funding_calls
+        WHERE catalog_status = 'PUBLISHED'
+          AND COALESCE(is_active, true) = true
+          AND (
+            embedding IS NULL
+            OR COALESCE(metadata ->> 'embedding_status', '') = 'failed'
+          )
+        ORDER BY updated_at DESC
+        LIMIT ${Math.max(1, Math.min(limit, 100))}
+      `
+    );
+
+    const result: FundingEmbeddingBackfillResult = {
+      processed: candidates.length,
+      succeeded: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (const candidate of candidates) {
+      const current = await prisma.fundingCall.findUnique({
+        where: { id: candidate.id },
+      });
+
+      if (!current) {
+        result.failed += 1;
+        result.errors.push({ id: candidate.id, error: 'Funding call not found' });
+        continue;
+      }
+
+      const draftValues = buildDraftValuesFromCall(current);
+
+      try {
+        const embedding = await generateEmbedding(draftValues);
+        const now = new Date().toISOString();
+        const metadata = buildCatalogMetadata(current.metadata, {
+          embedding_status: 'generated',
+          embedding_updated_at: now,
+          embedding_error: null,
+        });
+
+        await prisma.$transaction(async (tx) => {
+          await tx.fundingCall.update({
+            where: { id: current.id },
+            data: {
+              metadata: metadata as any,
+            },
+          });
+
+          await updateStoredEmbedding(tx, current.id, embedding);
+        });
+
+        result.succeeded += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const metadata = buildCatalogMetadata(current.metadata, {
+          embedding_status: 'failed',
+          embedding_updated_at: new Date().toISOString(),
+          embedding_error: message,
+        });
+
+        await prisma.fundingCall.update({
+          where: { id: current.id },
+          data: {
+            metadata: metadata as any,
+          },
+        });
+
+        result.failed += 1;
+        result.errors.push({ id: current.id, error: message });
+      }
+    }
+
+    return result;
   }
 
   async getFundingCallDetails(fundingCallId: string) {

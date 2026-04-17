@@ -280,7 +280,7 @@ export default function ProjectDashboardPage() {
             <Zap className="w-5 h-5 text-ai-blue-500" />
             <h2 className="text-lg font-semibold text-slate-800">Quick Actions</h2>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             <Link
               href={`/patents/draft/new?projectId=${projectId}`}
               className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-ai-blue-500/50 hover:shadow-lg hover:shadow-ai-blue-500/10 transition-all duration-300"
@@ -307,6 +307,20 @@ export default function ProjectDashboardPage() {
                 <p className="text-sm text-slate-500">Comprehensive patent novelty assessment</p>
               </div>
               <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-1 transition-all" />
+            </Link>
+
+            <Link
+              href={`/projects/${projectId}/grants`}
+              className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/10 transition-all duration-300"
+            >
+              <div className="p-3 bg-emerald-50 rounded-xl mr-4 group-hover:bg-emerald-600 transition-colors">
+                <BrainCircuit className="w-6 h-6 text-emerald-600 group-hover:text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-slate-900 group-hover:text-emerald-600 transition-colors">Grant Prep</h3>
+                <p className="text-sm text-slate-500">Launch call-aware grant ideation and prep workflow</p>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all" />
             </Link>
           </div>
         </motion.div>

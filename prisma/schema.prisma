@@ -195,6 +195,35 @@ enum FundingDuplicateResolution {
   create_new_anyway
 }
 
+enum GrantPrepMode {
+  template_driven
+  guided_fallback
+  template_only
+  lightweight
+  standalone
+}
+
+enum GrantPrepEngagementMode {
+  guided
+  hybrid
+  express
+}
+
+enum GrantPrepStatus {
+  active
+  ready
+  handoff_failed
+  handed_off
+  launched
+  archived
+}
+
+enum GrantPrepMarkerStatus {
+  valid
+  repaired
+  invalid
+}
+
 enum GrantSessionStatus {
   SETUP
   PREP_OPTIONAL
@@ -289,9 +318,13 @@ model Tenant {
   ideationSessions IdeationSession[]
 
   // Funding and grant relations
-  fundingCalls      FundingCall[]
-  fundingImportJobs FundingImportJob[]
-  grantSessions     GrantSession[]
+  fundingCalls                       FundingCall[]
+  fundingImportJobs                  FundingImportJob[]
+  grantSessions                      GrantSession[]
+  grantPrepSessions                  GrantPrepSession[]
+  recommendationConversations        RecommendationConversation[]
+  recommendationConversationMessages RecommendationConversationMessage[]
+  recommendationConversationRuns     RecommendationConversationRun[]
 
   // Trial campaign relations
   trialCampaigns TrialCampaign[]
@@ -407,6 +440,7 @@ model User {
   libraryConnections LibraryConnection[]
 
   // Funding finder and researcher profile relations
+  grant_prep_sessions                GrantPrepSession[]
   recommendation_conversations       RecommendationConversation[]
   researcher_profile                 ResearcherProfile?
   researcher_notification_preference ResearcherNotificationPreference?
@@ -606,6 +640,7 @@ model Project {
   collaborators     ProjectCollaborator[]
   patents           Patent[]
   grantSessions     GrantSession[]
+  grantPrepSessions GrantPrepSession[]
   noveltySearchRuns NoveltySearchRun[]
   user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -758,6 +793,7 @@ model FundingCall {
   guideline_runs              FundingCallGuidelineRun[]
   intake_jobs                 FundingIntakeJob[]              @relation("FundingCallIntakeJobs")
   grantSessions               GrantSession[]
+  grantPrepSessions           GrantPrepSession[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -917,6 +953,7 @@ model FundingCallTemplate {
   status              FundingCallTemplateStatus     @default(draft)
   grant_template_json Json                          @default("{}")
   compatibility_json  Json?
+  compiledGrantTemplateJson Json?                   @map("compiled_grant_template_json")
   compiled_papsi_json Json?
   current_revision_no Int                           @default(0)
   last_edited_by      String?
@@ -1110,9 +1147,84 @@ model GrantSession {
   @@map("grant_sessions")
 }
 
+model GrantPrepSession {
+  id                             String                  @id @default(cuid())
+  tenantId                       String
+  project_id                     String
+  user_id                        String
+  funding_call_id                String?
+  template_revision_id           String?
+  guideline_revision_id          String?
+  selected_thrust_area_rule_keys String[]                @default([])
+  mode                           GrantPrepMode
+  engagement_mode                GrantPrepEngagementMode @default(guided)
+  stage_selection_version        String                  @default("v1")
+  auto_enabled_stage_keys        String[]                @default([])
+  manual_enabled_stage_keys      String[]                @default([])
+  manual_disabled_stage_keys     String[]                @default([])
+  active_stage_key               String
+  enabled_stage_keys             String[]                @default([])
+  disabled_stage_keys            String[]                @default([])
+  stage_mapping_json             Json
+  stage_states_json              Json
+  global_keywords_json           Json
+  overall_readiness              Float                   @default(0)
+  status                         GrantPrepStatus         @default(active)
+  frozen_payload_json            Json?
+  frozen_payload_version         String?
+  frozen_payload_hash            String?
+  frozen_at                      DateTime?
+  papsi_session_id               String?
+  papsi_launch_url               String?
+  last_handoff_error             String?
+  created_at                     DateTime                @default(now())
+  updated_at                     DateTime                @updatedAt
+  funding_call                   FundingCall?            @relation(fields: [funding_call_id], references: [id], onDelete: SetNull)
+  project                        Project                 @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  tenant                         Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                           User                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  messages                       GrantPrepMessage[]
+
+  @@index([tenantId], map: "idx_grant_prep_sessions_tenant_id")
+  @@index([project_id], map: "idx_grant_prep_sessions_project_id")
+  @@index([user_id], map: "idx_grant_prep_sessions_user_id")
+  @@index([funding_call_id], map: "idx_grant_prep_sessions_funding_call_id")
+  @@index([status], map: "idx_grant_prep_sessions_status")
+  @@map("grant_prep_sessions")
+}
+
+model GrantPrepMessage {
+  id                      String                @id @default(cuid())
+  session_id              String
+  stage_key               String
+  role                    String
+  content                 String
+  client_message_id       String?
+  marker_version          String?
+  marker_status           GrantPrepMarkerStatus?
+  readiness_snapshot      Float?
+  points_covered_snapshot Json?
+  current_point           String?
+  captured_content_json   Json?
+  steering_events_json    Json?
+  suggested_follow_ups    String[]              @default([])
+  suggested_answers       Json?
+  quality_assessment      String?
+  is_critique             Boolean               @default(false)
+  created_at              DateTime              @default(now())
+  updated_at              DateTime              @updatedAt
+  session                 GrantPrepSession      @relation(fields: [session_id], references: [id], onDelete: Cascade)
+
+  @@unique([session_id, client_message_id], map: "grant_prep_messages_session_client_message_unique")
+  @@index([session_id, created_at], map: "idx_grant_prep_messages_session_created_at")
+  @@index([stage_key], map: "idx_grant_prep_messages_stage_key")
+  @@map("grant_prep_messages")
+}
+
 model RecommendationConversation {
   id                              String                              @id @default(cuid())
   user_id                         String
+  tenantId                        String?                             @map("tenant_id")
   title                           String                              @default("New Funding Chat")
   current_input_mode              String                              @default("research_area")
   current_query_json              Json                                @default("{}")
@@ -1124,10 +1236,13 @@ model RecommendationConversation {
   created_at                      DateTime                            @default(now())
   updated_at                      DateTime                            @updatedAt
   user                            User                                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  tenant                          Tenant?                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   messages                        RecommendationConversationMessage[]
   runs                            RecommendationConversationRun[]
 
   @@index([user_id], map: "idx_recommendation_conversations_user_id")
+  @@index([tenantId], map: "idx_recommendation_conversations_tenant_id")
+  @@index([tenantId, updated_at], map: "idx_recommendation_conversations_tenant_updated_at")
   @@index([updated_at], map: "idx_recommendation_conversations_updated_at")
   @@index([last_run_id], map: "idx_recommendation_conversations_last_run_id")
   @@map("recommendation_conversations")
@@ -1136,6 +1251,7 @@ model RecommendationConversation {
 model RecommendationConversationMessage {
   id                           String                     @id @default(cuid())
   conversation_id              String
+  tenantId                     String?                    @map("tenant_id")
   turn_index                   Int
   role                         String
   message_type                 String
@@ -1147,8 +1263,11 @@ model RecommendationConversationMessage {
   client_turn_id               String?
   created_at                   DateTime                   @default(now())
   conversation                 RecommendationConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  tenant                       Tenant?                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([conversation_id], map: "idx_recommendation_conversation_messages_conversation_id")
+  @@index([tenantId], map: "idx_recommendation_conversation_messages_tenant_id")
+  @@index([tenantId, created_at], map: "idx_recommendation_conversation_messages_tenant_created_at")
   @@index([conversation_id, turn_index], map: "idx_recommendation_conversation_messages_turn_index")
   @@index([conversation_id, created_at], map: "idx_recommendation_conversation_messages_created_at")
   @@map("recommendation_conversation_messages")
@@ -1157,6 +1276,7 @@ model RecommendationConversationMessage {
 model RecommendationConversationRun {
   id                      String                     @id @default(cuid())
   conversation_id         String
+  tenantId                String?                    @map("tenant_id")
   trigger_message_id      String?
   turn_index              Int
   run_index               Int
@@ -1168,9 +1288,12 @@ model RecommendationConversationRun {
   no_results_reason       String?
   created_at              DateTime                   @default(now())
   conversation            RecommendationConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  tenant                  Tenant?                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([conversation_id, run_index], map: "recommendation_conversation_runs_run_index_unique")
   @@index([conversation_id], map: "idx_recommendation_conversation_runs_conversation_id")
+  @@index([tenantId], map: "idx_recommendation_conversation_runs_tenant_id")
+  @@index([tenantId, created_at], map: "idx_recommendation_conversation_runs_tenant_created_at")
   @@index([conversation_id, turn_index], map: "idx_recommendation_conversation_runs_turn_index")
   @@map("recommendation_conversation_runs")
 }

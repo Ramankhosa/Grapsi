@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { requireRecommendationUser } from '@/lib/recommendations/request-auth'
+import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
@@ -11,13 +11,13 @@ const updateSchema = z.object({
 })
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
-    const conversation = await recommendationConversationService.getConversation(auth.userId, params.id)
+    const conversation = await recommendationConversationService.getConversation(auth.userId, auth.tenantId, params.id)
     return NextResponse.json({ conversation })
   } catch (error) {
     return NextResponse.json(
@@ -31,14 +31,19 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
     const parsed = updateSchema.parse(await request.json())
-    const conversation = await recommendationConversationService.updateConversation(auth.userId, params.id, parsed.title)
+    const conversation = await recommendationConversationService.updateConversation(
+      auth.userId,
+      auth.tenantId,
+      params.id,
+      parsed.title
+    )
     return NextResponse.json({ conversation })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -59,13 +64,13 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
-    await recommendationConversationService.deleteConversation(auth.userId, params.id)
+    await recommendationConversationService.deleteConversation(auth.userId, auth.tenantId, params.id)
     return NextResponse.json({ ok: true })
   } catch (error) {
     return NextResponse.json(

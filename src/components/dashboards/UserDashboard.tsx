@@ -19,7 +19,8 @@ import {
   TrendingUp,
   Calendar,
   Target,
-  Library
+  Library,
+  Search
 } from 'lucide-react'
 
 interface Paper {
@@ -142,14 +143,49 @@ export default function UserDashboard() {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
+  const fundingActions = (
+    <div className="space-y-3">
+      <button
+        onClick={() => router.push('/finder')}
+        className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-emerald-200 hover:bg-emerald-50 transition-colors text-left"
+      >
+        <div className="p-2 bg-emerald-100 rounded-lg">
+          <Search className="w-4 h-4 text-emerald-600" />
+        </div>
+        <div>
+          <div className="font-medium text-slate-900">Find Funding</div>
+          <div className="text-xs text-slate-500">Search the directory and use the AI finder</div>
+        </div>
+      </button>
+      <button
+        onClick={() => router.push('/funding/imports')}
+        className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-amber-200 hover:bg-amber-50 transition-colors text-left"
+      >
+        <div className="p-2 bg-amber-100 rounded-lg">
+          <Calendar className="w-4 h-4 text-amber-600" />
+        </div>
+        <div>
+          <div className="font-medium text-slate-900">Funding Imports</div>
+          <div className="text-xs text-slate-500">Bring in new calls from URL, PDF, or pasted text</div>
+        </div>
+      </button>
+    </div>
+  )
+
   // Check if paper writing feature is enabled
   if (!isFeatureEnabled('ENABLE_PAPER_WRITING_UI')) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-6">
-        <div className="text-center max-w-md">
-          <BookOpen className="w-16 h-16 text-slate-400 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-slate-900 mb-2">Paper Writing</h2>
-          <p className="text-slate-600">Paper writing features are not currently enabled.</p>
+        <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="mb-8 text-center">
+            <BookOpen className="w-16 h-16 text-slate-400 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-slate-900 mb-2">Paper Writing</h2>
+            <p className="text-slate-600">Paper writing features are not currently enabled.</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-6">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">Funding Workspace</h3>
+            {fundingActions}
+          </div>
         </div>
       </div>
     )
@@ -178,7 +214,7 @@ export default function UserDashboard() {
                 Welcome back{user?.email ? `, ${user.email.split('@')[0]}` : ''}!
               </h1>
               <p className="text-slate-600 mt-1">
-                Continue working on your research papers
+                Continue working on your research papers and funding opportunities
               </p>
             </div>
             <button
@@ -384,6 +420,7 @@ export default function UserDashboard() {
                     <div className="text-xs text-slate-500">Organize your citations & libraries</div>
                   </div>
                 </button>
+                {fundingActions}
               </div>
             </div>
 

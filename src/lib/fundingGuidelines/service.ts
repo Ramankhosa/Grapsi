@@ -4,6 +4,7 @@ import type {
   FundingCallGuideline,
   FundingCallGuidelineStatus,
   FundingGuidelineLifecycleStatus,
+  FundingRevisionStatus,
 } from '@prisma/client';
 import prisma from '../prisma';
 import type { IntakeOperator } from '../fundingIntake/types';
@@ -18,6 +19,48 @@ import { buildGuidelineSummary, createEmptyGuidelinePack, generateGuidelineDiffS
 
 function asJson(value: unknown) {
   return value as Prisma.InputJsonValue;
+}
+
+function canonicalRevisionStatusFromGuidelineStatus(
+  status: FundingCallGuidelineStatus
+): FundingRevisionStatus {
+  return status === 'approved' ? 'APPROVED' : 'DRAFT';
+}
+
+function serializeGuidelineRevision(revision: any) {
+  if (!revision) {
+    return revision;
+  }
+
+  return {
+    ...revision,
+    guideline_id: revision.guideline_id ?? revision.guidelineId,
+    revision_no: revision.revision_no ?? revision.version,
+    approved_state:
+      revision.approved_state ??
+      (revision.status === 'APPROVED' ? 'approved' : 'draft'),
+    guideline_pack_json: revision.guideline_pack_json ?? revision.extractedPayload,
+    summary_json: revision.summary_json ?? revision.summaryJson ?? null,
+    editor_user_id: revision.editor_user_id ?? revision.createdByUserId ?? null,
+    created_at: revision.created_at ?? revision.createdAt ?? null,
+  };
+}
+
+async function findGuidelineRevisionByVersion(guidelineId: string, revisionNo: number) {
+  return prisma.fundingCallGuidelineRevision.findFirst({
+    where: {
+      OR: [
+        {
+          guidelineId,
+          version: revisionNo,
+        },
+        {
+          guideline_id: guidelineId,
+          revision_no: revisionNo,
+        },
+      ],
+    },
+  });
 }
 
 function extractGuidelineSummary(guideline: FundingCallGuideline | null) {
@@ -121,9 +164,10 @@ async function ensureGuidelineRecord(fundingCallId: string, operator: IntakeOper
       data: {
         guidelineId: created.id,
         version: 1,
+        status: 'DRAFT',
         extractedPayload: asJson(emptyPack),
+        summaryJson: asJson(buildGuidelineSummary(emptyPack)),
         createdByUserId: operator.userId,
-        guideline_id: created.id,
         revision_no: 1,
         revision_type: 'manual_edit',
         guideline_pack_json: asJson(emptyPack),
@@ -163,15 +207,16 @@ async function createRevision(
   const revisionNo = guideline.current_revision_no + 1;
 
   await tx.fundingCallGuidelineRevision.create({
-    data: {
-      guidelineId: guideline.id,
-      version: revisionNo,
-      extractedPayload: asJson(options.guidelinePack),
-      createdByUserId: options.editorUserId,
-      guideline_id: guideline.id,
-      revision_no: revisionNo,
-      revision_type: options.revisionType,
-      guideline_pack_json: asJson(options.guidelinePack),
+      data: {
+        guidelineId: guideline.id,
+        version: revisionNo,
+        status: canonicalRevisionStatusFromGuidelineStatus(options.approvedState),
+        extractedPayload: asJson(options.guidelinePack),
+        summaryJson: asJson(buildGuidelineSummary(normalizeGuidelinePack(options.guidelinePack))),
+        createdByUserId: options.editorUserId,
+        revision_no: revisionNo,
+        revision_type: options.revisionType,
+        guideline_pack_json: asJson(options.guidelinePack),
       diff_summary: options.diffSummary,
       editor_user_id: options.editorUserId,
       approved_state: options.approvedState,
@@ -274,7 +319,7 @@ export class FundingGuidelineService {
         where: { fundingCallId: fundingCallId },
         select: {
           revisions: {
-            orderBy: { revision_no: 'desc' },
+            orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
             take: 20,
           },
         },
@@ -285,7 +330,7 @@ export class FundingGuidelineService {
       fundingCall: call,
       guideline: extractGuidelineSummary(guideline),
       runs,
-      revisions: revisions?.revisions || [],
+      revisions: (revisions?.revisions || []).map(serializeGuidelineRevision),
     };
   }
 
@@ -381,14 +426,7 @@ export class FundingGuidelineService {
 
   async revertGuideline(fundingCallId: string, revisionNo: number, operator: IntakeOperator, changeNotes?: string) {
     const { guideline } = await ensureGuidelineRecord(fundingCallId, operator);
-    const targetRevision = await prisma.fundingCallGuidelineRevision.findUnique({
-      where: {
-        guideline_id_revision_no: {
-          guideline_id: guideline.id,
-          revision_no: revisionNo,
-        },
-      },
-    });
+    const targetRevision = await findGuidelineRevisionByVersion(guideline.id, revisionNo);
 
     if (!targetRevision) {
       throw new Error('Guideline revision not found');
@@ -569,7 +607,7 @@ export class FundingGuidelineService {
   async listRevisions(fundingCallId: string, limit = 20) {
     await ensureFundingCall(fundingCallId);
     const guideline = await prisma.fundingCallGuideline.findUnique({
-      where: { funding_call_id: fundingCallId },
+      where: { fundingCallId: fundingCallId },
       select: { id: true },
     });
 
@@ -577,17 +615,21 @@ export class FundingGuidelineService {
       return [];
     }
 
-    return prisma.fundingCallGuidelineRevision.findMany({
-      where: { guideline_id: guideline.id },
-      orderBy: { revision_no: 'desc' },
+    const revisions = await prisma.fundingCallGuidelineRevision.findMany({
+      where: {
+        OR: [{ guidelineId: guideline.id }, { guideline_id: guideline.id }],
+      },
+      orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
       take: Math.min(Math.max(limit, 1), 50),
     });
+
+    return revisions.map(serializeGuidelineRevision);
   }
 
   async getRevision(fundingCallId: string, revisionNo: number) {
     await ensureFundingCall(fundingCallId);
     const guideline = await prisma.fundingCallGuideline.findUnique({
-      where: { funding_call_id: fundingCallId },
+      where: { fundingCallId: fundingCallId },
       select: { id: true },
     });
 
@@ -595,19 +637,12 @@ export class FundingGuidelineService {
       return null;
     }
 
-    return prisma.fundingCallGuidelineRevision.findUnique({
-      where: {
-        guideline_id_revision_no: {
-          guideline_id: guideline.id,
-          revision_no: revisionNo,
-        },
-      },
-    });
+    return serializeGuidelineRevision(await findGuidelineRevisionByVersion(guideline.id, revisionNo));
   }
 
   async resolvePinnedApprovedRevisionForFundingCall(fundingCallId: string) {
     const guideline = await prisma.fundingCallGuideline.findUnique({
-      where: { funding_call_id: fundingCallId },
+      where: { fundingCallId: fundingCallId },
       select: {
         id: true,
         status: true,
@@ -621,9 +656,9 @@ export class FundingGuidelineService {
 
     return prisma.fundingCallGuidelineRevision.findUnique({
       where: {
-        guideline_id_revision_no: {
-          guideline_id: guideline.id,
-          revision_no: guideline.current_revision_no,
+        guidelineId_version: {
+          guidelineId: guideline.id,
+          version: guideline.current_revision_no,
         },
       },
     });
@@ -634,7 +669,7 @@ export class FundingGuidelineService {
     const [guidelineRevision, template] = await Promise.all([
       this.resolvePinnedApprovedRevisionForFundingCall(fundingCallId),
       prisma.fundingCallTemplate.findUnique({
-        where: { funding_call_id: fundingCallId },
+        where: { fundingCallId: fundingCallId },
         select: {
           id: true,
           status: true,

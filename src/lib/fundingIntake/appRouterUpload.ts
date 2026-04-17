@@ -4,8 +4,7 @@ import os from 'os'
 import path from 'path'
 
 import type { IntakeSubmitInput } from './types'
-
-const MAX_INTAKE_PDF_BYTES = 20 * 1024 * 1024
+import { MAX_INTAKE_PDF_BYTES } from './upload'
 
 export async function stagePdfUpload(file: File): Promise<NonNullable<IntakeSubmitInput['sourceFile']>> {
   if (file.type !== 'application/pdf') {
@@ -21,7 +20,14 @@ export async function stagePdfUpload(file: File): Promise<NonNullable<IntakeSubm
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
   const targetPath = path.join(os.tmpdir(), `funding-intake-${Date.now()}-${safeName}`)
 
-  await fs.writeFile(targetPath, bytes)
+  try {
+    await fs.writeFile(targetPath, bytes)
+  } catch (error) {
+    await fs.unlink(targetPath).catch(() => undefined)
+    throw new Error(
+      `Failed to stage intake PDF upload${error instanceof Error && error.message ? `: ${error.message}` : ''}`
+    )
+  }
 
   return {
     originalName: file.name || 'upload.pdf',

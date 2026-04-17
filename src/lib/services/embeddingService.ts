@@ -5,10 +5,39 @@ interface EmbeddingResponse {
   error?: string;
 }
 
+export interface EmbeddingServiceHealth {
+  configured: boolean;
+  circuitOpen: boolean;
+  consecutiveFailures: number;
+  lastError: string | null;
+  lastFailureAt: string | null;
+  nextRetryAt: string | null;
+  modelName: string;
+  outputDimensionality: number;
+}
+
+type EmbeddingCircuitState = {
+  consecutiveFailures: number;
+  lastError: string | null;
+  lastFailureAt: number | null;
+  openUntil: number | null;
+};
+
+const EMBEDDING_FAILURE_THRESHOLD = Number(process.env.EMBEDDING_FAILURE_THRESHOLD || 3);
+const EMBEDDING_COOLDOWN_MS = Number(process.env.EMBEDDING_COOLDOWN_MS || 120000);
+const EMBEDDING_REQUEST_TIMEOUT_MS = Number(process.env.EMBEDDING_REQUEST_TIMEOUT_MS || 20000);
+
 /**
  * Service to generate vector embeddings for text using Google's Embeddings API or alternatives
  */
 export class EmbeddingService {
+  private static circuitState: EmbeddingCircuitState = {
+    consecutiveFailures: 0,
+    lastError: null,
+    lastFailureAt: null,
+    openUntil: null,
+  };
+
   private apiKey: string;
   private apiUrl: string;
   private modelName: string;
@@ -25,6 +54,55 @@ export class EmbeddingService {
       console.warn('Google API key not found. Vector embeddings will not work.');
     }
   }
+
+  private isCircuitOpen() {
+    const openUntil = EmbeddingService.circuitState.openUntil;
+    if (!openUntil) {
+      return false;
+    }
+
+    if (Date.now() >= openUntil) {
+      EmbeddingService.circuitState.openUntil = null;
+      return false;
+    }
+
+    return true;
+  }
+
+  private registerSuccess() {
+    EmbeddingService.circuitState = {
+      consecutiveFailures: 0,
+      lastError: null,
+      lastFailureAt: null,
+      openUntil: null,
+    };
+  }
+
+  private registerFailure(message: string) {
+    const nextFailures = EmbeddingService.circuitState.consecutiveFailures + 1;
+    const now = Date.now();
+
+    EmbeddingService.circuitState = {
+      consecutiveFailures: nextFailures,
+      lastError: message,
+      lastFailureAt: now,
+      openUntil: nextFailures >= EMBEDDING_FAILURE_THRESHOLD ? now + EMBEDDING_COOLDOWN_MS : null,
+    };
+  }
+
+  getHealth(): EmbeddingServiceHealth {
+    const state = EmbeddingService.circuitState;
+    return {
+      configured: Boolean(this.apiKey),
+      circuitOpen: this.isCircuitOpen(),
+      consecutiveFailures: state.consecutiveFailures,
+      lastError: state.lastError,
+      lastFailureAt: state.lastFailureAt ? new Date(state.lastFailureAt).toISOString() : null,
+      nextRetryAt: state.openUntil ? new Date(state.openUntil).toISOString() : null,
+      modelName: this.modelName,
+      outputDimensionality: this.outputDimensionality,
+    };
+  }
   
   /**
    * Generate embeddings for the provided text
@@ -37,6 +115,13 @@ export class EmbeddingService {
       return { 
         embedding: [], 
         error: 'API key not configured' 
+      };
+    }
+
+    if (this.isCircuitOpen()) {
+      return {
+        embedding: [],
+        error: 'Embedding provider circuit is temporarily open',
       };
     }
     
@@ -53,19 +138,33 @@ export class EmbeddingService {
           headers: {
             'Content-Type': 'application/json',
             'x-goog-api-key': this.apiKey,
-          }
+          },
+          timeout: EMBEDDING_REQUEST_TIMEOUT_MS,
         }
       );
       
       // Extract embedding from response
       const embedding = response.data?.embedding?.values || [];
+
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        const message = 'Embedding provider returned an empty embedding';
+        this.registerFailure(message);
+        return {
+          embedding: [],
+          error: message,
+        };
+      }
+
+      this.registerSuccess();
       
       return { embedding };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.registerFailure(message);
       console.error('Error generating embedding:', error);
       return { 
         embedding: [], 
-        error: error instanceof Error ? error.message : String(error)
+        error: message
       };
     }
   }

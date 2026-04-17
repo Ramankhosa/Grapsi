@@ -4,7 +4,7 @@ import fs from 'fs';
 import formidable, { type File } from 'formidable';
 import type { NextApiRequest } from 'next';
 
-const MAX_INTAKE_PDF_BYTES = 20 * 1024 * 1024;
+export const MAX_INTAKE_PDF_BYTES = 20 * 1024 * 1024;
 const INTAKE_PDF_MIME = new Set(['application/pdf']);
 
 export async function readJsonBody<T>(req: NextApiRequest): Promise<T> {

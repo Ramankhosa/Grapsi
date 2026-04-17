@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-import { requireRecommendationUser } from '@/lib/recommendations/request-auth'
+import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
-    const conversation = await recommendationConversationService.resetFilters(auth.userId, params.id)
+    const conversation = await recommendationConversationService.resetFilters(auth.userId, auth.tenantId, params.id)
     return NextResponse.json({ conversation })
   } catch (error) {
     return NextResponse.json(

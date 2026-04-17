@@ -20,7 +20,22 @@ import type { RecommendationSearchFilters } from '../recommendations/types';
 import { EmbeddingService } from './embeddingService';
 
 const embeddingService = new EmbeddingService();
-const RESEARCH_AREA_EMBEDDING_VERSION = 'research-area-v1';
+export const RESEARCH_AREA_EMBEDDING_VERSION = 'research-area-v1';
+
+export interface ResearchAreaEmbeddingCoverage {
+  total: number;
+  current: number;
+  missing: number;
+  stale: number;
+  embeddingVersion: string;
+}
+
+export interface EmbeddingBackfillResult {
+  processed: number;
+  succeeded: number;
+  failed: number;
+  errors: Array<{ id: string; error: string }>;
+}
 
 type UserWithResearcherRelations = Awaited<ReturnType<typeof prisma.user.findUnique>>;
 
@@ -428,6 +443,91 @@ export class ResearcherProfileService {
       researchAreas,
       profileDefaultContext,
     };
+  }
+
+  async getResearchAreaEmbeddingCoverage(): Promise<ResearchAreaEmbeddingCoverage> {
+    const rows = await prisma.$queryRaw<
+      Array<{
+        total: bigint | number;
+        current: bigint | number;
+        missing: bigint | number;
+        stale: bigint | number;
+      }>
+    >(Prisma.sql`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (
+          WHERE embedding IS NOT NULL
+            AND embedding_version = ${RESEARCH_AREA_EMBEDDING_VERSION}
+        ) AS current,
+        COUNT(*) FILTER (WHERE embedding IS NULL) AS missing,
+        COUNT(*) FILTER (
+          WHERE embedding IS NULL
+             OR embedding_version IS NULL
+             OR embedding_version <> ${RESEARCH_AREA_EMBEDDING_VERSION}
+        ) AS stale
+      FROM researcher_saved_research_areas
+    `);
+
+    const row = rows[0];
+    return {
+      total: Number(row?.total || 0),
+      current: Number(row?.current || 0),
+      missing: Number(row?.missing || 0),
+      stale: Number(row?.stale || 0),
+      embeddingVersion: RESEARCH_AREA_EMBEDDING_VERSION,
+    };
+  }
+
+  async backfillResearchAreaEmbeddings(limit = 25): Promise<EmbeddingBackfillResult> {
+    const candidates = await prisma.researcherSavedResearchArea.findMany({
+      where: {
+        OR: [
+          { embedding_version: null },
+          { embedding_version: { not: RESEARCH_AREA_EMBEDDING_VERSION } },
+        ],
+      },
+      orderBy: [{ updated_at: 'desc' }],
+      take: Math.max(1, Math.min(limit, 100)),
+    });
+
+    const result: EmbeddingBackfillResult = {
+      processed: candidates.length,
+      succeeded: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (const area of candidates) {
+      try {
+        const normalizedText = normalizeWhitespace(area.normalized_text || area.research_area || area.label || '');
+        if (!normalizedText) {
+          throw new Error('Saved research area has no text to embed');
+        }
+
+        const { embedding, error } = await embeddingService.generateEmbedding(normalizedText);
+        if (error || embedding.length === 0) {
+          throw new Error(error || 'Embedding generation returned no vector');
+        }
+
+        await prisma.$executeRaw`
+          UPDATE researcher_saved_research_areas
+          SET embedding = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)},
+              embedding_version = ${RESEARCH_AREA_EMBEDDING_VERSION}
+          WHERE id = ${area.id}
+        `;
+
+        result.succeeded += 1;
+      } catch (error) {
+        result.failed += 1;
+        result.errors.push({
+          id: area.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return result;
   }
 }
 

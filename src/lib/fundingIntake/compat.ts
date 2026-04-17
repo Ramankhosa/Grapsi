@@ -1,6 +1,98 @@
-import type { FundingCallDetail, FundingCallSummary, FundingImportJobView } from '@/types/funding'
+import type { FundingDraftValues, FundingInputType, FundingIntakeJobStatus } from '@/lib/fundingIntake/types'
+import type { FundingCallDetail, FundingCallSummary, FundingImportJobView, FundingIntakeLlmExtraction } from '@/types/funding'
 
-function mapInputType(inputType: string | null | undefined): 'url' | 'file' | 'text' {
+type CallCatalogStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'REJECTED' | 'FAILED'
+
+type FundingCallLike = {
+  id: string
+  title?: string | null
+  scheme_title?: string | null
+  agency_name?: string | null
+  agencyName?: string | null
+  programIdentifier?: string | null
+  source_url?: string | null
+  sourceUrl?: string | null
+  description?: string | null
+  summary?: string | null
+  visibility?: FundingCallSummary['visibility'] | null
+  status?: string | null
+  catalog_status?: CallCatalogStatus | null
+  close_date?: Date | string | null
+  deadlineAt?: Date | string | null
+  publishedAt?: Date | string | null
+  archivedAt?: Date | string | null
+  updatedAt?: Date | string | null
+  updated_at?: Date | string | null
+  sourceDomain?: string | null
+  source_domain?: string | null
+  sourceFingerprint?: string | null
+  source_text_hash?: string | null
+  extracted_json?: unknown
+  metadata?: unknown
+  normalizedMetadata?: unknown
+}
+
+type ExtractionRecordLike = {
+  extractor_model?: string | null
+  extractor_version?: string | null
+  prompt_version?: string | null
+  extracted_json?: unknown
+  confidence_json?: unknown
+  evidence_json?: unknown
+  missing_fields_json?: unknown
+}
+
+type CompatExtractionPayload = {
+  fields?: Record<string, { value?: unknown }>
+  warnings?: string[]
+}
+
+type DuplicateCandidateLike = {
+  candidate_funding_call_id: string
+  match_type?: string | null
+  match_score: number
+  candidate?: {
+    id: string
+    agency_name?: string | null
+    scheme_title?: string | null
+    status?: string | null
+    catalog_status?: string | null
+    source_url?: string | null
+    official_urls?: string[]
+    close_date?: Date | null
+  } | null
+}
+
+type IntakeJobDetailsLike = {
+  job: {
+    id: string
+    input_type: FundingInputType
+    source_url?: string | null
+    status: FundingIntakeJobStatus
+    linked_funding_call_id?: string | null
+    created_at: Date
+    updated_at: Date
+    error_code?: string | null
+    error_message?: string | null
+    started_at?: Date | string | null
+    completed_at?: Date | string | null
+  }
+  extraction?: ExtractionRecordLike | null
+  draftValues?: Partial<FundingDraftValues> | null
+  call?: FundingCallLike | null
+  duplicates?: DuplicateCandidateLike[] | null
+}
+
+function serializeDate(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value)
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null
+}
+
+function mapInputType(inputType: FundingInputType | null | undefined): FundingImportJobView['inputType'] {
   if (inputType === 'pdf') {
     return 'file'
   }
@@ -8,7 +100,7 @@ function mapInputType(inputType: string | null | undefined): 'url' | 'file' | 't
   return inputType === 'text' ? 'text' : 'url'
 }
 
-function mapJobStatus(status: string | null | undefined): FundingImportJobView['status'] {
+function mapJobStatus(status: FundingIntakeJobStatus | null | undefined): FundingImportJobView['status'] {
   switch (status) {
     case 'queued':
     case 'fetching':
@@ -46,20 +138,61 @@ function mapDuplicateReason(matchType: string | null | undefined) {
     case 'exact_fingerprint':
       return 'exact_url' as const
     case 'same_deadline_cluster':
-      return 'title_agency_deadline' as const
+    case 'fuzzy_title_agency':
     default:
       return 'title_agency_deadline' as const
   }
 }
 
-export function toFundingImportJobView(details: any): FundingImportJobView {
-  const extraction = details?.extraction
-  const extractedPayload = extraction?.extracted_json || null
+function buildLlmExtraction(
+  extraction: ExtractionRecordLike | null | undefined,
+  draftValues: Partial<FundingDraftValues> | null | undefined
+): FundingIntakeLlmExtraction | null {
+  if (!extraction) {
+    return null
+  }
+
+  return {
+    payload:
+      extraction.extracted_json &&
+      typeof extraction.extracted_json === 'object' &&
+      !Array.isArray(extraction.extracted_json)
+        ? (extraction.extracted_json as CompatExtractionPayload as FundingIntakeLlmExtraction['payload'])
+        : { fields: {}, warnings: [] },
+    draftValues: draftValues || {},
+    extractorModel: extraction.extractor_model || '',
+    extractorVersion: extraction.extractor_version || '',
+    promptVersion: extraction.prompt_version || '',
+    confidenceByField:
+      extraction.confidence_json && typeof extraction.confidence_json === 'object' && !Array.isArray(extraction.confidence_json)
+        ? (extraction.confidence_json as Record<string, number>)
+        : {},
+    evidenceByField:
+      extraction.evidence_json && typeof extraction.evidence_json === 'object' && !Array.isArray(extraction.evidence_json)
+        ? (extraction.evidence_json as Record<string, string | null>)
+        : {},
+    missingFieldKeys: Array.isArray(extraction.missing_fields_json)
+      ? extraction.missing_fields_json.map((value) => String(value || '')).filter(Boolean)
+      : [],
+  }
+}
+
+export function toFundingImportJobView(details: IntakeJobDetailsLike | null): FundingImportJobView {
+  if (!details) {
+    throw new Error('Funding import job details are required')
+  }
+
+  const extractedPayload =
+    details.extraction?.extracted_json &&
+    typeof details.extraction.extracted_json === 'object' &&
+    !Array.isArray(details.extraction.extracted_json)
+      ? (details.extraction.extracted_json as CompatExtractionPayload)
+      : null
   const titleField = extractedPayload?.fields?.scheme_title?.value
   const agencyField = extractedPayload?.fields?.agency_name?.value
   const deadlineField = extractedPayload?.fields?.close_date?.value
   const summaryField = extractedPayload?.fields?.description?.value
-  const sourceUrl = details?.job?.source_url || null
+  const sourceUrl = details.job.source_url || null
 
   return {
     id: details.job.id,
@@ -70,52 +203,48 @@ export function toFundingImportJobView(details: any): FundingImportJobView {
     outcome: details.job.linked_funding_call_id ? 'CREATED' : null,
     errorCode: details.job.error_code || null,
     errorMessage: details.job.error_message || null,
-    startedAt: details.job.started_at ? new Date(details.job.started_at).toISOString() : null,
-    completedAt: details.job.completed_at ? new Date(details.job.completed_at).toISOString() : null,
+    startedAt: serializeDate(details.job.started_at),
+    completedAt: serializeDate(details.job.completed_at),
     resultFundingCallId: details.job.linked_funding_call_id || null,
     normalizedFacts: extractedPayload
       ? {
-          title: typeof titleField === 'string' && titleField.trim() ? titleField : details.draftValues?.scheme_title || 'Untitled',
-          agencyName: typeof agencyField === 'string' ? agencyField : details.draftValues?.agency_name || null,
+          title:
+            typeof titleField === 'string' && titleField.trim()
+              ? titleField
+              : details.draftValues?.scheme_title || 'Untitled',
+          agencyName:
+            typeof agencyField === 'string' && agencyField.trim()
+              ? agencyField
+              : details.draftValues?.agency_name || null,
           programIdentifier: null,
           deadlineAt: typeof deadlineField === 'string' ? deadlineField : null,
-          summary: typeof summaryField === 'string' ? summaryField : details.draftValues?.description || null,
+          summary:
+            typeof summaryField === 'string' && summaryField.trim()
+              ? summaryField
+              : details.draftValues?.description || null,
           keywords: [],
           sourceUrl,
           sourceDomain: null,
         }
       : null,
-    llmExtraction: extraction
-      ? {
-          payload: extractedPayload,
-          draftValues: details.draftValues || {},
-          extractorModel: extraction.extractor_model || '',
-          extractorVersion: extraction.extractor_version || '',
-          promptVersion: extraction.prompt_version || '',
-          confidenceByField: extraction.confidence_json || {},
-          evidenceByField: extraction.evidence_json || {},
-          missingFieldKeys: extraction.missing_fields_json || [],
-        }
-      : null,
-    duplicateCandidates: Array.isArray(details.duplicates)
-      ? details.duplicates.map((duplicate: any) => ({
-          fundingCallId: duplicate.candidate_funding_call_id,
-          title: duplicate.candidate?.scheme_title || 'Untitled',
-          agencyName: duplicate.candidate?.agency_name || null,
-          sourceUrl: duplicate.candidate?.source_url || null,
-          programIdentifier: null,
-          deadlineAt: duplicate.candidate?.close_date ? new Date(duplicate.candidate.close_date).toISOString() : null,
-          score: duplicate.match_score || 0,
-          reason: mapDuplicateReason(duplicate.match_type),
-        }))
-      : [],
+    llmExtraction: buildLlmExtraction(details.extraction, details.draftValues),
+    duplicateCandidates: (details.duplicates || []).map((duplicate) => ({
+      fundingCallId: duplicate.candidate_funding_call_id,
+      title: duplicate.candidate?.scheme_title || 'Untitled',
+      agencyName: duplicate.candidate?.agency_name || null,
+      sourceUrl: duplicate.candidate?.source_url || null,
+      programIdentifier: null,
+      deadlineAt: serializeDate(duplicate.candidate?.close_date),
+      score: duplicate.match_score || 0,
+      reason: mapDuplicateReason(duplicate.match_type),
+    })),
     assets: [],
-    createdAt: new Date(details.job.created_at).toISOString(),
-    updatedAt: new Date(details.job.updated_at).toISOString(),
+    createdAt: details.job.created_at.toISOString(),
+    updatedAt: details.job.updated_at.toISOString(),
   }
 }
 
-export function toFundingCallSummary(call: any): FundingCallSummary {
+export function toFundingCallSummary(call: FundingCallLike): FundingCallSummary {
   return {
     id: call.id,
     title: call.title || call.scheme_title || 'Untitled funding call',
@@ -125,18 +254,17 @@ export function toFundingCallSummary(call: any): FundingCallSummary {
     summary: call.description || call.summary || null,
     visibility: call.visibility || 'TENANT_PRIVATE',
     status: mapCallStatus(call.catalog_status || call.status || null),
-    deadlineAt: call.close_date
-      ? new Date(call.close_date).toISOString()
-      : call.deadlineAt
-        ? new Date(call.deadlineAt).toISOString()
-        : null,
-    publishedAt: call.publishedAt ? new Date(call.publishedAt).toISOString() : null,
-    archivedAt: call.archivedAt ? new Date(call.archivedAt).toISOString() : null,
-    updatedAt: new Date(call.updatedAt || call.updated_at || Date.now()).toISOString(),
+    deadlineAt: serializeDate(call.close_date || call.deadlineAt || null),
+    publishedAt: serializeDate(call.publishedAt),
+    archivedAt: serializeDate(call.archivedAt),
+    updatedAt: serializeDate(call.updatedAt || call.updated_at) || new Date().toISOString(),
   }
 }
 
-export function toFundingCallDetail(call: any, options?: { recentJobs?: FundingImportJobView[] }): FundingCallDetail {
+export function toFundingCallDetail(
+  call: FundingCallLike,
+  options?: { recentJobs?: FundingImportJobView[] }
+): FundingCallDetail {
   const summary = toFundingCallSummary(call)
 
   return {
@@ -148,14 +276,22 @@ export function toFundingCallDetail(call: any, options?: { recentJobs?: FundingI
           title: call.scheme_title || call.title || 'Untitled funding call',
           agencyName: call.agency_name || call.agencyName || null,
           programIdentifier: call.programIdentifier || null,
-          deadlineAt: call.close_date ? new Date(call.close_date).toISOString() : null,
+          deadlineAt: serializeDate(call.close_date),
           summary: call.description || call.summary || null,
           keywords: [],
           sourceUrl: call.source_url || call.sourceUrl || null,
           sourceDomain: call.sourceDomain || call.source_domain || null,
         }
       : null,
-    normalizedMetadata: call.metadata || call.normalizedMetadata || null,
+    normalizedMetadata:
+      (call.metadata && typeof call.metadata === 'object' && !Array.isArray(call.metadata)
+        ? (call.metadata as Record<string, unknown>)
+        : null) ||
+      (call.normalizedMetadata &&
+      typeof call.normalizedMetadata === 'object' &&
+      !Array.isArray(call.normalizedMetadata)
+        ? (call.normalizedMetadata as Record<string, unknown>)
+        : null),
     llmExtraction: null,
     assets: [],
     recentJobs: options?.recentJobs || [],

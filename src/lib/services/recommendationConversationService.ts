@@ -714,9 +714,9 @@ function getLatestRun(detail: RecommendationConversationDetail) {
 }
 
 export class RecommendationConversationService {
-  private async getConversationRecord(userId: string, conversationId: string) {
+  private async getConversationRecord(userId: string, tenantId: string, conversationId: string) {
     const conversation = await prisma.recommendationConversation.findFirst({
-      where: { id: conversationId, user_id: userId },
+      where: { id: conversationId, user_id: userId, tenantId },
       include: {
         messages: { orderBy: { created_at: 'asc' } },
         runs: { orderBy: { run_index: 'asc' } },
@@ -727,9 +727,9 @@ export class RecommendationConversationService {
     return conversation as ConversationPayload;
   }
 
-  async listConversations(userId: string) {
+  async listConversations(userId: string, tenantId: string) {
     const conversations = await prisma.recommendationConversation.findMany({
-      where: { user_id: userId },
+      where: { user_id: userId, tenantId },
       include: {
         messages: { orderBy: { created_at: 'desc' }, take: 1 },
         runs: { orderBy: { run_index: 'desc' }, take: 1 },
@@ -744,10 +744,11 @@ export class RecommendationConversationService {
     }));
   }
 
-  async createConversation(userId: string, seedTitle?: string) {
+  async createConversation(userId: string, tenantId: string, seedTitle?: string) {
     const created = await prisma.recommendationConversation.create({
       data: {
         user_id: userId,
+        tenantId,
         title: seedTitle ? seedTitle.slice(0, 120) : 'New Funding Chat',
         current_input_mode: 'research_area',
         current_query_json: createDefaultConversationState('research_area').query as Prisma.InputJsonValue,
@@ -762,33 +763,33 @@ export class RecommendationConversationService {
     return mapConversationDetail(created as ConversationPayload);
   }
 
-  async getConversation(userId: string, conversationId: string) {
-    const conversation = await this.getConversationRecord(userId, conversationId);
+  async getConversation(userId: string, tenantId: string, conversationId: string) {
+    const conversation = await this.getConversationRecord(userId, tenantId, conversationId);
     return mapConversationDetail(conversation);
   }
 
-  async updateConversation(userId: string, conversationId: string, title: string) {
+  async updateConversation(userId: string, tenantId: string, conversationId: string, title: string) {
     const normalizedTitle = normalizeWhitespace(title).slice(0, 120) || 'New Funding Chat';
     const updated = await prisma.recommendationConversation.updateMany({
-      where: { id: conversationId, user_id: userId },
+      where: { id: conversationId, user_id: userId, tenantId },
       data: { title: normalizedTitle },
     });
 
     if (!updated.count) throw new Error('Conversation not found');
-    return this.getConversation(userId, conversationId);
+    return this.getConversation(userId, tenantId, conversationId);
   }
 
-  async deleteConversation(userId: string, conversationId: string) {
+  async deleteConversation(userId: string, tenantId: string, conversationId: string) {
     const deleted = await prisma.recommendationConversation.deleteMany({
-      where: { id: conversationId, user_id: userId },
+      where: { id: conversationId, user_id: userId, tenantId },
     });
 
     if (!deleted.count) throw new Error('Conversation not found');
   }
 
-  async clearConversation(userId: string, conversationId: string) {
+  async clearConversation(userId: string, tenantId: string, conversationId: string) {
     const existing = await prisma.recommendationConversation.findFirst({
-      where: { id: conversationId, user_id: userId },
+      where: { id: conversationId, user_id: userId, tenantId },
       select: { id: true },
     });
 
@@ -796,11 +797,11 @@ export class RecommendationConversationService {
 
     await prisma.$transaction(async (tx) => {
       await tx.recommendationConversationRun.deleteMany({
-        where: { conversation_id: conversationId },
+        where: { conversation_id: conversationId, tenantId },
       });
 
       await tx.recommendationConversationMessage.deleteMany({
-        where: { conversation_id: conversationId },
+        where: { conversation_id: conversationId, tenantId },
       });
 
       await tx.recommendationConversation.update({
@@ -819,15 +820,15 @@ export class RecommendationConversationService {
       });
     });
 
-    return this.getConversation(userId, conversationId);
+    return this.getConversation(userId, tenantId, conversationId);
   }
 
-  private async reserveTurn(userId: string, conversationId: string, input: RecommendationConversationMessageRequest) {
+  private async reserveTurn(userId: string, tenantId: string, conversationId: string, input: RecommendationConversationMessageRequest) {
     const userContent = buildUserMessageContent(input);
 
     return prisma.$transaction(async (tx) => {
       const existing = await tx.recommendationConversation.findFirst({
-        where: { id: conversationId, user_id: userId },
+        where: { id: conversationId, user_id: userId, tenantId },
         select: { id: true, last_turn_index: true },
       });
 
@@ -842,6 +843,7 @@ export class RecommendationConversationService {
       const userMessage = await tx.recommendationConversationMessage.create({
         data: {
           conversation_id: conversationId,
+          tenantId,
           turn_index: nextTurnIndex,
           role: 'user',
           message_type: 'user_message',
@@ -1410,6 +1412,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
 
   private async persistOutcome(params: {
     userId: string;
+    tenantId: string;
     conversationId: string;
     userMessageId: string;
     turnIndex: number;
@@ -1429,6 +1432,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
         const createdRun = await tx.recommendationConversationRun.create({
           data: {
             conversation_id: params.conversationId,
+            tenantId: params.tenantId,
             trigger_message_id: params.userMessageId,
             turn_index: params.turnIndex,
             run_index: (latestRun?.run_index || 0) + 1,
@@ -1450,6 +1454,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
       await tx.recommendationConversationMessage.create({
         data: {
           conversation_id: params.conversationId,
+          tenantId: params.tenantId,
           turn_index: params.turnIndex,
           role: 'assistant',
           message_type: params.outcome.messageType,
@@ -1466,7 +1471,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
       });
 
       const updated = await tx.recommendationConversation.updateMany({
-        where: { id: params.conversationId, user_id: params.userId, last_turn_index: params.turnIndex },
+        where: { id: params.conversationId, user_id: params.userId, tenantId: params.tenantId, last_turn_index: params.turnIndex },
         data: {
           current_input_mode: params.outcome.nextState?.inputMode,
           current_query_json: params.outcome.nextState?.query as Prisma.InputJsonValue | undefined,
@@ -1487,15 +1492,20 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     });
 
     return {
-      conversation: await this.getConversation(params.userId, params.conversationId),
+      conversation: await this.getConversation(params.userId, params.tenantId, params.conversationId),
       stale,
       clientTurnId: params.clientTurnId || null,
     };
   }
 
-  async processMessage(userId: string, conversationId: string, input: RecommendationConversationMessageRequest): Promise<RecommendationConversationMutationResponse> {
-    const reserved = await this.reserveTurn(userId, conversationId, input);
-    const conversation = await this.getConversation(userId, conversationId);
+  async processMessage(
+    userId: string,
+    tenantId: string,
+    conversationId: string,
+    input: RecommendationConversationMessageRequest
+  ): Promise<RecommendationConversationMutationResponse> {
+    const reserved = await this.reserveTurn(userId, tenantId, conversationId, input);
+    const conversation = await this.getConversation(userId, tenantId, conversationId);
     const state: ConversationState = {
       inputMode: conversation.currentInputMode,
       query: conversation.currentQuery,
@@ -1523,6 +1533,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
 
     return this.persistOutcome({
       userId,
+      tenantId,
       conversationId,
       userMessageId: reserved.userMessageId,
       turnIndex: reserved.turnIndex,
@@ -1533,17 +1544,21 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
 
   async confirmPendingPatch(
     userId: string,
+    tenantId: string,
     conversationId: string,
     options: { confirm?: boolean; editedQueryPatch?: RecommendationConversationQueryState['query']; editedFilterPatch?: RecommendationSearchFilters }
   ): Promise<RecommendationConversationMutationResponse> {
-    const conversation = await this.getConversationRecord(userId, conversationId);
+    const conversation = await this.getConversationRecord(userId, tenantId, conversationId);
     const state = buildConversationState(conversation);
     const pendingPatch = state.pendingPatch;
     if (!pendingPatch) throw new Error('No pending filter patch to confirm');
 
     const currentStateHash = buildConversationStateHash(state.inputMode, state.query, state.filters);
     if (currentStateHash !== pendingPatch.baseStateHash) {
-      await prisma.recommendationConversation.update({ where: { id: conversationId }, data: { pending_filter_patch_json: Prisma.DbNull, pending_filter_patch_turn_index: null } });
+      await prisma.recommendationConversation.update({
+        where: { id: conversationId },
+        data: { pending_filter_patch_json: Prisma.DbNull, pending_filter_patch_turn_index: null },
+      });
       throw new Error('Pending patch is stale and has been cleared');
     }
 
@@ -1564,6 +1579,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
 
     return this.persistOutcome({
       userId,
+      tenantId,
       conversationId,
       userMessageId: conversation.messages[conversation.messages.length - 1]?.id || conversationId,
       turnIndex,
@@ -1583,8 +1599,8 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     });
   }
 
-  async resetFilters(userId: string, conversationId: string): Promise<RecommendationConversationMutationResponse> {
-    const conversation = await this.getConversationRecord(userId, conversationId);
+  async resetFilters(userId: string, tenantId: string, conversationId: string): Promise<RecommendationConversationMutationResponse> {
+    const conversation = await this.getConversationRecord(userId, tenantId, conversationId);
     const state = buildConversationState(conversation);
     const turnIndex = state.lastTurnIndex + 1;
     await prisma.recommendationConversation.update({ where: { id: conversationId }, data: { last_turn_index: turnIndex } });
@@ -1596,6 +1612,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
 
     return this.persistOutcome({
       userId,
+      tenantId,
       conversationId,
       userMessageId: conversation.messages[conversation.messages.length - 1]?.id || conversationId,
       turnIndex,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { requireRecommendationUser } from '@/lib/recommendations/request-auth'
+import { requireRecommendationTenantUser, requireRecommendationUser } from '@/lib/recommendations/request-auth'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
@@ -11,13 +11,13 @@ const createSchema = z.object({
 })
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
-    const conversations = await recommendationConversationService.listConversations(auth.userId)
+    const conversations = await recommendationConversationService.listConversations(auth.userId, auth.tenantId)
     return NextResponse.json({ conversations })
   } catch (error) {
     return NextResponse.json(
@@ -31,14 +31,18 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
     const parsed = createSchema.parse(await request.json().catch(() => ({})))
-    const conversation = await recommendationConversationService.createConversation(auth.userId, parsed.title)
+    const conversation = await recommendationConversationService.createConversation(
+      auth.userId,
+      auth.tenantId,
+      parsed.title
+    )
     return NextResponse.json({ conversation }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {

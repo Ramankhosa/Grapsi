@@ -6,6 +6,7 @@ import type {
   FundingCallTemplate,
   FundingCallTemplateStatus,
   FundingTemplateLifecycleStatus,
+  FundingRevisionStatus,
 } from '@prisma/client';
 import prisma from '../prisma';
 import type { IntakeOperator } from '../fundingIntake/types';
@@ -63,6 +64,60 @@ function readAssetMetadata(value: Prisma.JsonValue | null | undefined): Record<s
     : {};
 }
 
+function getEffectiveCompiledTemplateJson(value: {
+  compiledGrantTemplateJson?: Prisma.JsonValue | null;
+  compiled_papsi_json?: Prisma.JsonValue | null;
+}) {
+  return value.compiledGrantTemplateJson ?? value.compiled_papsi_json ?? null;
+}
+
+function canonicalRevisionStatusFromTemplateStatus(
+  status: FundingCallTemplateStatus
+): FundingRevisionStatus {
+  return status === 'approved' ? 'APPROVED' : 'DRAFT';
+}
+
+function serializeTemplateRevision(revision: any) {
+  if (!revision) {
+    return revision;
+  }
+
+  const effectiveCompiledTemplateJson = getEffectiveCompiledTemplateJson(revision);
+
+  return {
+    ...revision,
+    template_id: revision.template_id ?? revision.templateId,
+    revision_no: revision.revision_no ?? revision.version,
+    approved_state:
+      revision.approved_state ??
+      (revision.status === 'APPROVED' ? 'approved' : 'draft'),
+    grant_template_json: revision.grant_template_json ?? revision.extractedPayload,
+    compatibility_json: revision.compatibility_json ?? revision.summaryJson ?? null,
+    compiled_grant_template_json: effectiveCompiledTemplateJson,
+    compiledGrantTemplateJson: effectiveCompiledTemplateJson,
+    compiled_papsi_json: revision.compiled_papsi_json ?? effectiveCompiledTemplateJson,
+    editor_user_id: revision.editor_user_id ?? revision.createdByUserId ?? null,
+    created_at: revision.created_at ?? revision.createdAt ?? null,
+  };
+}
+
+async function findTemplateRevisionByVersion(templateId: string, revisionNo: number) {
+  return prisma.fundingCallTemplateRevision.findFirst({
+    where: {
+      OR: [
+        {
+          templateId,
+          version: revisionNo,
+        },
+        {
+          template_id: templateId,
+          revision_no: revisionNo,
+        },
+      ],
+    },
+  });
+}
+
 async function getNextSequenceNo(
   fundingCallId: string,
   tx?: Prisma.TransactionClient
@@ -87,7 +142,9 @@ function extractTemplateSummary(template: FundingCallTemplate | null) {
     current_revision_no: template.current_revision_no,
     grant_template_json: template.grant_template_json,
     compatibility_json: template.compatibility_json,
-    compiled_papsi_json: template.compiled_papsi_json,
+    compiled_grant_template_json: getEffectiveCompiledTemplateJson(template),
+    compiledGrantTemplateJson: getEffectiveCompiledTemplateJson(template),
+    compiled_papsi_json: template.compiled_papsi_json ?? getEffectiveCompiledTemplateJson(template),
     last_edited_by: template.last_edited_by,
     last_edited_at: template.last_edited_at,
     approved_by: template.approved_by,
@@ -141,7 +198,7 @@ async function ensureTemplateRecord(fundingCallId: string, operator: IntakeOpera
         status: 'draft',
         grant_template_json: asJson(grantTemplate),
         compatibility_json: asJson(compatibility),
-        compiled_papsi_json: Prisma.DbNull,
+        compiledGrantTemplateJson: Prisma.DbNull,
         current_revision_no: 1,
         last_edited_by: operator.email,
         last_edited_at: new Date(),
@@ -152,14 +209,14 @@ async function ensureTemplateRecord(fundingCallId: string, operator: IntakeOpera
       data: {
         templateId: created.id,
         version: 1,
+        status: 'DRAFT',
         extractedPayload: asJson(grantTemplate),
         createdByUserId: operator.userId,
-        template_id: created.id,
         revision_no: 1,
         revision_type: 'manual_create',
         grant_template_json: asJson(grantTemplate),
         compatibility_json: asJson(compatibility),
-        compiled_papsi_json: Prisma.DbNull,
+        compiledGrantTemplateJson: Prisma.DbNull,
         diff_summary: generateDiffSummary(null, grantTemplate),
         editor_user_id: operator.userId,
         approved_state: 'draft',
@@ -200,14 +257,14 @@ async function createRevision(
     data: {
       templateId: template.id,
       version: revisionNo,
+      status: canonicalRevisionStatusFromTemplateStatus(options.approvedState),
       extractedPayload: asJson(options.grantTemplate),
       createdByUserId: options.editorUserId,
-      template_id: template.id,
       revision_no: revisionNo,
       revision_type: options.revisionType,
       grant_template_json: asJson(options.grantTemplate),
       compatibility_json: asJson(options.compatibility),
-      compiled_papsi_json: Prisma.DbNull,
+      compiledGrantTemplateJson: Prisma.DbNull,
       diff_summary: options.diffSummary,
       editor_user_id: options.editorUserId,
       approved_state: options.approvedState,
@@ -279,7 +336,7 @@ export class FundingTemplateService {
         where: { fundingCallId: fundingCallId },
         select: {
           revisions: {
-            orderBy: { revision_no: 'desc' },
+            orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
             take: 20,
           },
         },
@@ -291,7 +348,7 @@ export class FundingTemplateService {
       template: extractTemplateSummary(template),
       assets,
       runs,
-      revisions: revisions?.revisions || [],
+      revisions: (revisions?.revisions || []).map(serializeTemplateRevision),
     };
   }
 
@@ -333,7 +390,7 @@ export class FundingTemplateService {
         data: {
           grant_template_json: asJson(nextTemplate),
           compatibility_json: asJson(compatibility),
-          compiled_papsi_json: Prisma.DbNull,
+          compiledGrantTemplateJson: Prisma.DbNull,
           current_revision_no: revisionNo,
           last_edited_by: operator.email,
           last_edited_at: new Date(),
@@ -396,14 +453,7 @@ export class FundingTemplateService {
 
   async revertTemplate(fundingCallId: string, revisionNo: number, operator: IntakeOperator, changeNotes?: string) {
     const { template } = await ensureTemplateRecord(fundingCallId, operator);
-    const targetRevision = await prisma.fundingCallTemplateRevision.findUnique({
-      where: {
-        template_id_revision_no: {
-          template_id: template.id,
-          revision_no: revisionNo,
-        },
-      },
-    });
+    const targetRevision = await findTemplateRevisionByVersion(template.id, revisionNo);
 
     if (!targetRevision) {
       throw new Error('Template revision not found');
@@ -430,7 +480,7 @@ export class FundingTemplateService {
         data: {
           grant_template_json: asJson(revertedTemplate),
           compatibility_json: asJson(compatibility),
-          compiled_papsi_json: Prisma.DbNull,
+          compiledGrantTemplateJson: Prisma.DbNull,
           current_revision_no: nextRevisionNo,
           status: nextTemplateStatus,
           last_edited_by: operator.email,
@@ -454,7 +504,7 @@ export class FundingTemplateService {
 
   async listRevisions(fundingCallId: string, limit = 20) {
     const template = await prisma.fundingCallTemplate.findUnique({
-      where: { funding_call_id: fundingCallId },
+      where: { fundingCallId: fundingCallId },
       select: { id: true },
     });
 
@@ -462,16 +512,20 @@ export class FundingTemplateService {
       return [];
     }
 
-    return prisma.fundingCallTemplateRevision.findMany({
-      where: { template_id: template.id },
-      orderBy: { revision_no: 'desc' },
+    const revisions = await prisma.fundingCallTemplateRevision.findMany({
+      where: {
+        OR: [{ templateId: template.id }, { template_id: template.id }],
+      },
+      orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
       take: Math.max(1, Math.min(limit, 100)),
     });
+
+    return revisions.map(serializeTemplateRevision);
   }
 
   async getRevision(fundingCallId: string, revisionNo: number) {
     const template = await prisma.fundingCallTemplate.findUnique({
-      where: { funding_call_id: fundingCallId },
+      where: { fundingCallId: fundingCallId },
       select: { id: true },
     });
 
@@ -479,14 +533,7 @@ export class FundingTemplateService {
       return null;
     }
 
-    return prisma.fundingCallTemplateRevision.findUnique({
-      where: {
-        template_id_revision_no: {
-          template_id: template.id,
-          revision_no: revisionNo,
-        },
-      },
-    });
+    return serializeTemplateRevision(await findTemplateRevisionByVersion(template.id, revisionNo));
   }
 
   async listAssets(fundingCallId: string) {
@@ -860,7 +907,7 @@ export class FundingTemplateService {
         data: {
           grant_template_json: asJson(mergeResult.mergedTemplate),
           compatibility_json: asJson(compatibility),
-          compiled_papsi_json: Prisma.DbNull,
+          compiledGrantTemplateJson: Prisma.DbNull,
           current_revision_no: revisionNo,
           status: 'draft',
           last_edited_by: operator.email,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { requireRecommendationUser } from '@/lib/recommendations/request-auth'
+import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
@@ -13,14 +13,19 @@ const requestSchema = z.object({
 })
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
     return auth.response
   }
 
   try {
     const parsed = requestSchema.parse(await request.json().catch(() => ({})))
-    const response = await recommendationConversationService.confirmPendingPatch(auth.userId, params.id, parsed)
+    const response = await recommendationConversationService.confirmPendingPatch(
+      auth.userId,
+      auth.tenantId,
+      params.id,
+      parsed
+    )
     return NextResponse.json(response)
   } catch (error) {
     if (error instanceof z.ZodError) {
