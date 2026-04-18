@@ -4,6 +4,7 @@ import type {
   RecommendationInputMode,
   RecommendationNoResultsReason,
   RecommendationRawResultItem,
+  RecommendationSearchDiagnostics,
   RecommendationSearchFilters,
 } from './types';
 
@@ -63,6 +64,7 @@ export interface RecommendationConversationRunRecord {
   degradedMode: RecommendationDegradedMode;
   lowConfidence: boolean;
   noResultsReason: RecommendationNoResultsReason;
+  searchDiagnostics: RecommendationSearchDiagnostics | null;
   results: RecommendationRawResultItem[];
 }
 
@@ -93,6 +95,7 @@ export interface RecommendationConversationMessageRequest {
   inputMode?: RecommendationInputMode;
   manualQueryPatch?: RecommendationConversationQueryState['query'];
   manualFilterPatch?: RecommendationSearchFilters;
+  replaceManualFilters?: boolean;
   clientTurnId?: string;
 }
 

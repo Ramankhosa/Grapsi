@@ -239,6 +239,11 @@ enum GrantBlueprintStatus {
   FROZEN
 }
 
+enum ProjectType {
+  PATENT
+  GRANT
+}
+
 enum GrantSectionDraftStatus {
   NOT_STARTED
   DRAFT
@@ -647,6 +652,7 @@ model UserServiceQuota {
 model Project {
   id                String                @id @default(cuid())
   name              String
+  projectType       ProjectType           @default(PATENT)
   userId            String
   tenantId          String
   createdAt         DateTime              @default(now())
@@ -1406,6 +1412,7 @@ model RecommendationConversationRun {
   normalized_request_json Json
   result_snapshot_json    Json
   result_ids_json         Json
+  search_diagnostics_json Json?
   degraded_mode           String?
   low_confidence          Boolean                    @default(false)
   no_results_reason       String?

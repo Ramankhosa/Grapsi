@@ -1,10 +1,8 @@
 import { FaFilter, FaRedo, FaSlidersH, FaTimes } from 'react-icons/fa';
-import type { RecommendationConversationPendingPatch } from '../lib/recommendations/chatTypes';
 import type { RecommendationSearchFilters } from '../lib/recommendations/types';
 
 interface FinderActiveFilterBarProps {
   filters: Required<RecommendationSearchFilters>;
-  pendingPatch: RecommendationConversationPendingPatch | null;
   onRemoveArrayValue: (key: keyof RecommendationSearchFilters, value: string) => void;
   onClearScalar: (key: keyof RecommendationSearchFilters) => void;
   onOpenFilters: () => void;
@@ -48,7 +46,6 @@ function renderChipValues(filters: Required<RecommendationSearchFilters>) {
 
 export default function FinderActiveFilterBar({
   filters,
-  pendingPatch,
   onRemoveArrayValue,
   onClearScalar,
   onOpenFilters,
@@ -98,12 +95,6 @@ export default function FinderActiveFilterBar({
           </button>
         </div>
       </div>
-
-      {pendingPatch ? (
-        <div className="mt-4 rounded-[22px] border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-          <span className="font-semibold">Pending confirmation:</span> {pendingPatch.summary}
-        </div>
-      ) : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
         {chips.length === 0 ? (

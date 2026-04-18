@@ -7,6 +7,7 @@ import { prisma } from '@/lib/prisma'
 
 const createProjectSchema = z.object({
   name: z.string().min(1, 'Project name is required').max(200, 'Project name too long'),
+  projectType: z.enum(['PATENT', 'GRANT']).optional().default('PATENT'),
 })
 
 const allowedRoles = ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
@@ -53,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { name } = createProjectSchema.parse(body)
+    const { name, projectType } = createProjectSchema.parse(body)
 
     const hasPermission = user.roles?.some((role: string) => allowedRoles.includes(role))
     if (!hasPermission) {
@@ -63,6 +64,7 @@ export async function POST(request: NextRequest) {
     const project = await prisma.project.create({
       data: {
         name,
+        projectType,
         userId: user.id,
         tenantId: user.tenantId,
       },

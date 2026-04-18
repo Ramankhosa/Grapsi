@@ -56,6 +56,7 @@ interface Patent {
 interface Project {
   id: string
   name: string
+  projectType?: 'PATENT' | 'GRANT'
   createdAt: string
   applicantProfile?: ApplicantProfile
   collaborators?: Collaborator[]
@@ -206,6 +207,8 @@ export default function ProjectDashboardPage() {
     return null
   }
 
+  const isGrantProject = project.projectType === 'GRANT'
+
   return (
     <div className="min-h-screen bg-slate-50 relative overflow-hidden">
       {/* Subtle Background Grid */}
@@ -231,7 +234,7 @@ export default function ProjectDashboardPage() {
               <div>
                 <div className="flex items-center gap-2 text-sm font-mono text-ai-blue-600 mb-1">
                   <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                  PROJECT WORKSPACE
+                  {isGrantProject ? 'GRANT WORKSPACE' : 'PROJECT WORKSPACE'}
                 </div>
                 <h1 className="text-2xl font-bold text-slate-900 tracking-tight">{project.name}</h1>
                 <p className="text-sm text-slate-500 flex items-center gap-1.5 mt-1">
@@ -252,7 +255,7 @@ export default function ProjectDashboardPage() {
                 <Settings className="w-4 h-4" />
                 <span className="hidden sm:inline">Manage</span>
               </Link>
-              {!project.applicantProfile && (
+              {!isGrantProject && !project.applicantProfile && (
                 <Link
                   href={`/projects/${projectId}/applicant`}
                   className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-ai-blue-600 rounded-lg hover:bg-ai-blue-700 transition-all duration-200 shadow-sm"
@@ -282,34 +285,6 @@ export default function ProjectDashboardPage() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             <Link
-              href={`/patents/draft/new?projectId=${projectId}`}
-              className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-ai-blue-500/50 hover:shadow-lg hover:shadow-ai-blue-500/10 transition-all duration-300"
-            >
-              <div className="p-3 bg-ai-blue-50 rounded-xl mr-4 group-hover:bg-ai-blue-600 group-hover:text-white transition-colors">
-                <PenTool className="w-6 h-6 text-ai-blue-600 group-hover:text-white" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold text-slate-900 group-hover:text-ai-blue-600 transition-colors">Draft New Patent</h3>
-                <p className="text-sm text-slate-500">Start AI-powered patent drafting workflow</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-ai-blue-500 group-hover:translate-x-1 transition-all" />
-            </Link>
-
-            <Link
-              href={`/novelty-search?projectId=${projectId}`}
-              className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-purple-500/50 hover:shadow-lg hover:shadow-purple-500/10 transition-all duration-300"
-            >
-              <div className="p-3 bg-purple-50 rounded-xl mr-4 group-hover:bg-purple-600 group-hover:text-white transition-colors">
-                <Search className="w-6 h-6 text-purple-600 group-hover:text-white" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold text-slate-900 group-hover:text-purple-600 transition-colors">Novelty Search</h3>
-                <p className="text-sm text-slate-500">Comprehensive patent novelty assessment</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-1 transition-all" />
-            </Link>
-
-            <Link
               href={`/projects/${projectId}/grants`}
               className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/10 transition-all duration-300"
             >
@@ -322,61 +297,127 @@ export default function ProjectDashboardPage() {
               </div>
               <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all" />
             </Link>
+
+            {isGrantProject ? (
+              <Link
+                href="/finder"
+                className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-sky-500/50 hover:shadow-lg hover:shadow-sky-500/10 transition-all duration-300"
+              >
+                <div className="p-3 bg-sky-50 rounded-xl mr-4 group-hover:bg-sky-600 transition-colors">
+                  <Sparkles className="w-6 h-6 text-sky-600 group-hover:text-white" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-slate-900 group-hover:text-sky-600 transition-colors">Funding Discovery</h3>
+                  <p className="text-sm text-slate-500">Find new funding calls and launch additional grant prep sessions</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-sky-500 group-hover:translate-x-1 transition-all" />
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href={`/patents/draft/new?projectId=${projectId}`}
+                  className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-ai-blue-500/50 hover:shadow-lg hover:shadow-ai-blue-500/10 transition-all duration-300"
+                >
+                  <div className="p-3 bg-ai-blue-50 rounded-xl mr-4 group-hover:bg-ai-blue-600 group-hover:text-white transition-colors">
+                    <PenTool className="w-6 h-6 text-ai-blue-600 group-hover:text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-slate-900 group-hover:text-ai-blue-600 transition-colors">Draft New Patent</h3>
+                    <p className="text-sm text-slate-500">Start AI-powered patent drafting workflow</p>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-ai-blue-500 group-hover:translate-x-1 transition-all" />
+                </Link>
+
+                <Link
+                  href={`/novelty-search?projectId=${projectId}`}
+                  className="group flex items-center p-5 bg-white border-2 border-slate-200 rounded-xl hover:border-purple-500/50 hover:shadow-lg hover:shadow-purple-500/10 transition-all duration-300"
+                >
+                  <div className="p-3 bg-purple-50 rounded-xl mr-4 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                    <Search className="w-6 h-6 text-purple-600 group-hover:text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-slate-900 group-hover:text-purple-600 transition-colors">Novelty Search</h3>
+                    <p className="text-sm text-slate-500">Comprehensive patent novelty assessment</p>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-1 transition-all" />
+                </Link>
+              </>
+            )}
           </div>
         </motion.div>
 
-        {/* Patents Section */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2, duration: 0.4 }}
-          className="mb-8"
-        >
-          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-ai-blue-500" />
-                  <h2 className="text-lg font-semibold text-slate-900">Patents</h2>
-                  <span className="ml-2 px-2 py-0.5 text-xs font-mono bg-slate-100 text-slate-600 rounded-full">
-                    {patents.length} total
-                  </span>
+        {isGrantProject ? (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2, duration: 0.4 }}
+            className="mb-8"
+          >
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-6 py-5">
+              <div className="flex items-start gap-3">
+                <BrainCircuit className="mt-0.5 h-5 w-5 text-emerald-700" />
+                <div>
+                  <h2 className="text-lg font-semibold text-emerald-950">Grant project workspace</h2>
+                  <p className="mt-1 text-sm leading-6 text-emerald-900">
+                    This project is reserved for funding-linked grant prep, blueprint planning, local drafting, and export.
+                    Patent drafting actions are intentionally hidden here.
+                  </p>
                 </div>
-                <Link
-                  href={`/patents/draft/new?projectId=${projectId}`}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-ai-blue-600 rounded-lg hover:bg-ai-blue-700 transition-all duration-200 shadow-sm"
-                >
-                  <Plus className="w-4 h-4" />
-                  New Patent
-                </Link>
               </div>
             </div>
-
-            <div className="p-6">
-              {patents.length === 0 ? (
-                <div className="text-center py-12">
-                  <div className="relative inline-block mb-4">
-                    <div className="absolute inset-0 bg-ai-blue-500/20 blur-2xl rounded-full" />
-                    <div className="relative p-5 bg-slate-50 rounded-2xl border border-slate-200">
-                      <Layers className="w-12 h-12 text-slate-300" />
-                    </div>
+          </motion.div>
+        ) : (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2, duration: 0.4 }}
+            className="mb-8"
+          >
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-ai-blue-500" />
+                    <h2 className="text-lg font-semibold text-slate-900">Patents</h2>
+                    <span className="ml-2 px-2 py-0.5 text-xs font-mono bg-slate-100 text-slate-600 rounded-full">
+                      {patents.length} total
+                    </span>
                   </div>
-                  <h3 className="text-lg font-semibold text-slate-800 mb-2">No patents yet</h3>
-                  <p className="text-slate-500 mb-6 max-w-sm mx-auto">
-                    Start by creating your first patent application using our AI-powered drafting system.
-                  </p>
                   <Link
                     href={`/patents/draft/new?projectId=${projectId}`}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-ai-blue-600 rounded-lg hover:bg-ai-blue-700 transition-all shadow-sm"
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-ai-blue-600 rounded-lg hover:bg-ai-blue-700 transition-all duration-200 shadow-sm"
                   >
                     <Plus className="w-4 h-4" />
-                    Create First Patent
+                    New Patent
                   </Link>
                 </div>
-              ) : (
-                <div className="max-h-[1200px] overflow-y-auto pr-1">
-                  <div className="space-y-3">
-                    {patents.map((patent, index) => (
+              </div>
+
+              <div className="p-6">
+                {patents.length === 0 ? (
+                  <div className="text-center py-12">
+                    <div className="relative inline-block mb-4">
+                      <div className="absolute inset-0 bg-ai-blue-500/20 blur-2xl rounded-full" />
+                      <div className="relative p-5 bg-slate-50 rounded-2xl border border-slate-200">
+                        <Layers className="w-12 h-12 text-slate-300" />
+                      </div>
+                    </div>
+                    <h3 className="text-lg font-semibold text-slate-800 mb-2">No patents yet</h3>
+                    <p className="text-slate-500 mb-6 max-w-sm mx-auto">
+                      Start by creating your first patent application using our AI-powered drafting system.
+                    </p>
+                    <Link
+                      href={`/patents/draft/new?projectId=${projectId}`}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-ai-blue-600 rounded-lg hover:bg-ai-blue-700 transition-all shadow-sm"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Create First Patent
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="max-h-[1200px] overflow-y-auto pr-1">
+                    <div className="space-y-3">
+                      {patents.map((patent, index) => (
                       <motion.div
                         key={patent.id}
                         initial={{ opacity: 0, x: -10 }}
@@ -433,27 +474,29 @@ export default function ProjectDashboardPage() {
             </div>
           </div>
         </motion.div>
+        )}
 
-        {/* Novelty Search History Section */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3, duration: 0.4 }}
-          id="novelty-search-history"
-        >
-          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50">
-              <div className="flex items-center gap-2">
-                <BrainCircuit className="w-5 h-5 text-purple-500" />
-                <h2 className="text-lg font-semibold text-slate-900">Novelty Search History</h2>
+        {!isGrantProject ? (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3, duration: 0.4 }}
+            id="novelty-search-history"
+          >
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <BrainCircuit className="w-5 h-5 text-purple-500" />
+                  <h2 className="text-lg font-semibold text-slate-900">Novelty Search History</h2>
+                </div>
+                <p className="text-sm text-slate-500 mt-1">View and access reports from previous novelty searches</p>
               </div>
-              <p className="text-sm text-slate-500 mt-1">View and access reports from previous novelty searches</p>
+              <div className="p-6">
+                <NoveltySearchHistory projectId={projectId} showStats={false} />
+              </div>
             </div>
-            <div className="p-6">
-              <NoveltySearchHistory projectId={projectId} showStats={false} />
-            </div>
-          </div>
-        </motion.div>
+          </motion.div>
+        ) : null}
 
         {/* Back to Projects */}
         <div className="mt-8 text-center">

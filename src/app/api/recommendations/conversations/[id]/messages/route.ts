@@ -36,6 +36,7 @@ const requestSchema = z.object({
   inputMode: z.enum(['research_area', 'paper_metadata']).optional(),
   manualQueryPatch: z.record(z.any()).optional(),
   manualFilterPatch: filterSchema.optional(),
+  replaceManualFilters: z.boolean().optional(),
 })
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {

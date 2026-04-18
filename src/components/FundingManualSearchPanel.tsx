@@ -139,7 +139,6 @@ export default function FundingManualSearchPanel({
         <div className="px-6 py-5">
           <FinderActiveFilterBar
             filters={filters}
-            pendingPatch={null}
             onRemoveArrayValue={onRemoveArrayValue}
             onClearScalar={onClearScalar}
             onOpenFilters={onOpenFilters}

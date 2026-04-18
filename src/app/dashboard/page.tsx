@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import SuperAdminDashboard from '@/components/dashboards/SuperAdminDashboard'
 import TenantAdminDashboard from '@/components/dashboards/TenantAdminDashboard'
-import UserDashboard from '@/components/dashboards/UserDashboard'
+import UserProductChooser from '@/components/dashboards/UserProductChooser'
 import { PageLoadingBird } from '@/components/ui/loading-bird'
 
 export default function DashboardPage() {
@@ -37,7 +37,6 @@ export default function DashboardPage() {
     return <TenantAdminDashboard />
   }
 
-  // For individual users (OWNER role) and analysts - show user dashboard
-  // Individual users get analyst-like interface with optional tenant admin access
-  return <UserDashboard />
+  // For individual users (OWNER role) and analysts - show the product chooser
+  return <UserProductChooser />
 }

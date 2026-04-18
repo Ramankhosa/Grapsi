@@ -43,7 +43,11 @@ export async function requireFundingActor(
   if (!actor.tenantId && !actor.isSuperAdmin) {
     return {
       response: NextResponse.json(
-        { error: 'A tenant-scoped account is required for funding access', code: 'TENANT_REQUIRED' },
+        {
+          error: 'A tenant-scoped account is required for funding access',
+          message: 'A tenant-scoped account is required for funding access',
+          code: 'TENANT_REQUIRED',
+        },
         { status: 403 }
       ),
     }
@@ -51,8 +55,30 @@ export async function requireFundingActor(
 
   if (options?.requireWriteSuperAdmin && !actor.isSuperAdminWriter) {
     return {
-      response: NextResponse.json({ error: 'Super admin write access required' }, { status: 403 }),
+      response: NextResponse.json(
+        { error: 'Super admin write access required', message: 'Super admin write access required' },
+        { status: 403 }
+      ),
     }
+  }
+
+  // Super admins must not be constrained by tenant-level feature access controls.
+  // Many platform operators are linked to a tenant record for other product areas.
+  if (actor.isSuperAdmin) {
+    if (!actor.tenantId && !options?.allowPlatform) {
+      return {
+        response: NextResponse.json(
+          {
+            error: 'Tenant-scoped funding access is required',
+            message: 'Tenant-scoped funding access is required',
+            code: 'TENANT_REQUIRED',
+          },
+          { status: 403 }
+        ),
+      }
+    }
+
+    return { actor, user }
   }
 
   if (actor.tenantId) {
@@ -63,7 +89,11 @@ export async function requireFundingActor(
   } else if (!options?.allowPlatform) {
     return {
       response: NextResponse.json(
-        { error: 'Tenant-scoped funding access is required', code: 'TENANT_REQUIRED' },
+        {
+          error: 'Tenant-scoped funding access is required',
+          message: 'Tenant-scoped funding access is required',
+          code: 'TENANT_REQUIRED',
+        },
         { status: 403 }
       ),
     }
@@ -79,7 +109,11 @@ export function assertVisibilityAccess(
   if (visibility === 'TENANT_PRIVATE') {
     if (!actor.tenantId) {
       return NextResponse.json(
-        { error: 'Tenant-scoped users are required for private funding imports', code: 'TENANT_REQUIRED' },
+        {
+          error: 'Tenant-scoped users are required for private funding imports',
+          message: 'Tenant-scoped users are required for private funding imports',
+          code: 'TENANT_REQUIRED',
+        },
         { status: 403 }
       )
     }
@@ -88,7 +122,11 @@ export function assertVisibilityAccess(
 
   if (!actor.isSuperAdminWriter) {
     return NextResponse.json(
-      { error: 'Only super admins can create or moderate global funding calls', code: 'SUPER_ADMIN_REQUIRED' },
+      {
+        error: 'Only super admins can create or moderate global funding calls',
+        message: 'Only super admins can create or moderate global funding calls',
+        code: 'SUPER_ADMIN_REQUIRED',
+      },
       { status: 403 }
     )
   }

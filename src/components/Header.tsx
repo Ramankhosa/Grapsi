@@ -338,6 +338,14 @@ export default function Header() {
                           Platform Admin
                         </div>
                         <Link
+                          href="/super-admin/funding"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>💼</span>
+                          <span>Funding Control</span>
+                        </Link>
+                        <Link
                           href="/super-admin/jurisdiction-config"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
                           onClick={closeMenu}

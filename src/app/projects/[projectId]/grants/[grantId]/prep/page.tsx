@@ -146,18 +146,21 @@ export default function GrantPrepPage() {
   }, [prepContext?.warning, sessionData?.last_handoff_error, viewportWidth]);
 
   useEffect(() => {
-    if (authLoading || !user || !projectId) return;
+    if (authLoading || !user || !projectId || !grantId) return;
 
     let cancelled = false;
     const bootstrap = async () => {
       try {
         setLoading(true);
-        const response = await axios.post(
-          '/api/grant-prep/sessions',
-          { projectId, engagementMode: 'guided' },
+        const response = await axios.get(
+          `/api/projects/${projectId}/grants/${grantId}`,
           axiosConfig()
         );
-        if (!cancelled) await hydrateSession(response.data.session.id);
+        if (cancelled) return;
+        setSessionData(response.data.session);
+        setPrepContext(response.data.prepContext);
+        setFundingContext(response.data.fundingContext);
+        setDraftingContext(response.data.draftingContext);
       } catch (error) {
         toast.error(
           axios.isAxiosError(error) && error.response?.data?.message
@@ -173,7 +176,7 @@ export default function GrantPrepPage() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, projectId, user, hydrateSession, axiosConfig]);
+  }, [authLoading, projectId, grantId, user, axiosConfig]);
 
   // EC-9: prevent text selection during drag
   useEffect(() => {

@@ -309,7 +309,8 @@ export default function FundingIntakeJobPage() {
   const [deletingJob, setDeletingJob] = useState(false);
 
   const userRoles = user?.roles || [];
-  const isFundingOperator = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
+  const canReadFundingIntake = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
+  const canWriteFundingIntake = userRoles.includes('SUPER_ADMIN');
   const callId = details?.call?.id || details?.job.linked_funding_call_id || linkedCallOverrideId || null;
   const isActiveJob = useMemo(
     () => details && ['queued', 'fetching', 'extracting'].includes(details.job.status),
@@ -350,10 +351,10 @@ export default function FundingIntakeJobPage() {
   }, [isLoading, router, user]);
 
   useEffect(() => {
-    if (user && isFundingOperator && id) {
+    if (user && canReadFundingIntake && id) {
       void loadDetails(true);
     }
-  }, [user, id, isFundingOperator]);
+  }, [user, id, canReadFundingIntake]);
 
   useEffect(() => {
     if (!isActiveJob || !id) {
@@ -410,6 +411,10 @@ export default function FundingIntakeJobPage() {
   }
 
   async function ensureDraftExists() {
+    if (!canWriteFundingIntake) {
+      throw new Error('Write access required. You have viewer-only access.');
+    }
+
     if (callId) {
       return callId;
     }
@@ -474,6 +479,11 @@ export default function FundingIntakeJobPage() {
   }
 
   async function handleSaveDraft(extractAll: boolean) {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return null;
+    }
+
     if (!id) {
       return null;
     }
@@ -566,6 +576,11 @@ export default function FundingIntakeJobPage() {
   }
 
   async function handleExtractAll() {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
+
     if (!id) {
       return;
     }
@@ -597,6 +612,11 @@ export default function FundingIntakeJobPage() {
   }
 
   async function handleJobAction(action: 'retry' | 'cancel') {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
+
     if (!id) {
       return;
     }
@@ -614,6 +634,11 @@ export default function FundingIntakeJobPage() {
   }
 
   async function handleDeleteJob() {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
+
     if (!id) {
       return;
     }
@@ -969,6 +994,11 @@ export default function FundingIntakeJobPage() {
   }
 
   async function handleCallAction(action: 'publish' | 'archive' | 'reject') {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
+
     if (!callId) {
       return;
     }
@@ -1008,7 +1038,7 @@ export default function FundingIntakeJobPage() {
     return <div className="flex min-h-screen items-center justify-center text-gray-600">Loading funding intake workspace...</div>;
   }
 
-  if (!isFundingOperator || !details) {
+  if (!canReadFundingIntake || !details) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
@@ -1050,6 +1080,11 @@ export default function FundingIntakeJobPage() {
             <p className="mt-3 text-sm text-slate-600">
               Source type: {details.job.input_type.toUpperCase()} | Job status: {details.job.status.replace(/_/g, ' ')} | Submitted by {details.submitter?.email || 'unknown'}
             </p>
+            {!canWriteFundingIntake && (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                Viewer access is read-only. Only SUPER_ADMIN users can create, update, or publish intake jobs.
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <Link href="/admin/funding/intake" className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
@@ -1059,7 +1094,7 @@ export default function FundingIntakeJobPage() {
               <button
                 type="button"
                 onClick={() => handleCallAction('archive')}
-                disabled={callBusy !== null}
+                disabled={!canWriteFundingIntake || callBusy !== null}
                 className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {callBusy === 'archive' ? 'Archiving...' : 'Archive Published Call'}
@@ -1069,7 +1104,7 @@ export default function FundingIntakeJobPage() {
               <button
                 type="button"
                 onClick={handleDeleteJob}
-                disabled={deletingJob}
+                disabled={!canWriteFundingIntake || deletingJob}
                 className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {deletingJob ? 'Deleting...' : 'Delete Intake Job'}
@@ -1084,7 +1119,8 @@ export default function FundingIntakeJobPage() {
               <button
                 type="button"
                 onClick={() => handleJobAction('retry')}
-                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white"
+                disabled={!canWriteFundingIntake}
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Retry Job
               </button>
@@ -1093,7 +1129,8 @@ export default function FundingIntakeJobPage() {
               <button
                 type="button"
                 onClick={() => handleJobAction('cancel')}
-                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white"
+                disabled={!canWriteFundingIntake}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel Job
               </button>
@@ -1182,7 +1219,7 @@ export default function FundingIntakeJobPage() {
                       <button
                         type="button"
                         onClick={handleExtractAll}
-                        disabled={extractingAll}
+                        disabled={!canWriteFundingIntake || extractingAll}
                         className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {extractingAll ? 'Running...' : 'Extract All From Source'}
@@ -1228,7 +1265,7 @@ export default function FundingIntakeJobPage() {
                     <button
                       type="button"
                       onClick={() => void handleSaveDraftAndOpen('guidelines')}
-                      disabled={savingDraft}
+                      disabled={!canWriteFundingIntake || savingDraft}
                       className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 disabled:opacity-50"
                     >
                       {savingDraft ? 'Saving...' : 'Save Draft and Open Guidelines'}
@@ -1236,7 +1273,7 @@ export default function FundingIntakeJobPage() {
                     <button
                       type="button"
                       onClick={() => void handleSaveDraftAndOpen('template')}
-                      disabled={savingDraft}
+                      disabled={!canWriteFundingIntake || savingDraft}
                       className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
                     >
                       {savingDraft ? 'Saving...' : 'Save Draft and Open Template'}
@@ -1275,7 +1312,7 @@ export default function FundingIntakeJobPage() {
                 <button
                   type="button"
                   onClick={() => handleSaveDraft(false)}
-                  disabled={savingDraft || !['needs_review', 'draft_created'].includes(details.job.status)}
+                  disabled={!canWriteFundingIntake || savingDraft || !['needs_review', 'draft_created'].includes(details.job.status)}
                   className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingDraft ? 'Saving...' : 'Save Draft Only'}
@@ -1283,7 +1320,7 @@ export default function FundingIntakeJobPage() {
                 <button
                   type="button"
                   onClick={() => handleSaveDraft(true)}
-                  disabled={savingDraft || !['needs_review', 'draft_created'].includes(details.job.status)}
+                  disabled={!canWriteFundingIntake || savingDraft || !['needs_review', 'draft_created'].includes(details.job.status)}
                   className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingDraft ? 'Saving...' : 'Save Draft + Extract All'}
@@ -1317,6 +1354,7 @@ export default function FundingIntakeJobPage() {
                                   [duplicate.id]: event.target.value,
                                 }))
                               }
+                              disabled={!canWriteFundingIntake}
                               className="w-full max-w-xs rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                             >
                               <option value="pending">Pending</option>
@@ -1885,11 +1923,11 @@ export default function FundingIntakeJobPage() {
                 <h2 className="text-xl font-semibold text-slate-900">Publish</h2>
                 <p className="mt-1 text-sm text-slate-600">Publish remains warning-only for incomplete guidelines or templates, but the readiness split is visible here. Guideline and template statuses below come from their dedicated tabs, not from any inline editor on this page.</p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleCallAction('publish')}
-                  disabled={!callId || callBusy !== null || !details.publishReadiness?.ready}
+                  disabled={!canWriteFundingIntake || !callId || callBusy !== null || !details.publishReadiness?.ready}
                   className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {callBusy === 'publish' ? 'Publishing...' : 'Publish'}
@@ -1897,7 +1935,7 @@ export default function FundingIntakeJobPage() {
                 <button
                   type="button"
                   onClick={() => handleCallAction('archive')}
-                  disabled={!callId || callBusy !== null}
+                  disabled={!canWriteFundingIntake || !callId || callBusy !== null}
                   className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {callBusy === 'archive' ? 'Archiving...' : 'Archive'}
@@ -1905,11 +1943,23 @@ export default function FundingIntakeJobPage() {
                 <button
                   type="button"
                   onClick={() => handleCallAction('reject')}
-                  disabled={!callId || callBusy !== null}
+                  disabled={!canWriteFundingIntake || !callId || callBusy !== null}
                   className="rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {callBusy === 'reject' ? 'Rejecting...' : 'Reject'}
                 </button>
+                <Link
+                  href="/admin/funding/intake"
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"
+                >
+                  Back to Intake Dashboard
+                </Link>
+                <Link
+                  href="/admin/funding/intake#submit-intake-source"
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800"
+                >
+                  Initiate Another Call
+                </Link>
               </div>
             </div>
 

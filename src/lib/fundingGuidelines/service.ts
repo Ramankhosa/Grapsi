@@ -645,48 +645,116 @@ export class FundingGuidelineService {
       where: { fundingCallId: fundingCallId },
       select: {
         id: true,
-        status: true,
         current_revision_no: true,
       },
     });
 
-    if (!guideline || guideline.status !== 'approved' || guideline.current_revision_no <= 0) {
+    if (!guideline) {
       return null;
     }
 
-    return prisma.fundingCallGuidelineRevision.findUnique({
-      where: {
-        guidelineId_version: {
-          guidelineId: guideline.id,
-          version: guideline.current_revision_no,
+    if (guideline.current_revision_no > 0) {
+      const pinnedRevision = await prisma.fundingCallGuidelineRevision.findUnique({
+        where: {
+          guidelineId_version: {
+            guidelineId: guideline.id,
+            version: guideline.current_revision_no,
+          },
         },
+      });
+
+      if (
+        pinnedRevision &&
+        (pinnedRevision.status === 'APPROVED' || pinnedRevision.approved_state === 'approved')
+      ) {
+        return pinnedRevision;
+      }
+    }
+
+    // Repair-mode fallback for records where the guideline is approved but the
+    // current revision pointer still references a draft revision.
+    return prisma.fundingCallGuidelineRevision.findFirst({
+      where: {
+        OR: [
+          { guidelineId: guideline.id, status: 'APPROVED' },
+          { guidelineId: guideline.id, approved_state: 'approved' },
+          { guideline_id: guideline.id, status: 'APPROVED' },
+          { guideline_id: guideline.id, approved_state: 'approved' },
+        ],
+      },
+      orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
+    });
+  }
+
+  async resolveApprovedTemplateForFundingCall(fundingCallId: string) {
+    const template = await prisma.fundingCallTemplate.findUnique({
+      where: { fundingCallId: fundingCallId },
+      select: {
+        id: true,
+        status: true,
+        current_revision_no: true,
+        grant_template_json: true,
+        compatibility_json: true,
       },
     });
+
+    if (!template) {
+      return null;
+    }
+
+    if (template.status === 'approved') {
+      return template;
+    }
+
+    const approvedRevision = await prisma.fundingCallTemplateRevision.findFirst({
+      where: {
+        OR: [
+          { templateId: template.id, status: 'APPROVED' },
+          { templateId: template.id, approved_state: 'approved' },
+          { template_id: template.id, status: 'APPROVED' },
+          { template_id: template.id, approved_state: 'approved' },
+        ],
+      },
+      orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
+      select: {
+        version: true,
+        revision_no: true,
+        grant_template_json: true,
+        extractedPayload: true,
+        compatibility_json: true,
+        summaryJson: true,
+      },
+    });
+
+    if (!approvedRevision) {
+      return null;
+    }
+
+    return {
+      id: template.id,
+      status: 'approved' as const,
+      current_revision_no:
+        approvedRevision.version ||
+        approvedRevision.revision_no ||
+        template.current_revision_no,
+      grant_template_json:
+        approvedRevision.grant_template_json ?? approvedRevision.extractedPayload,
+      compatibility_json:
+        approvedRevision.compatibility_json ?? approvedRevision.summaryJson ?? null,
+    };
   }
 
   async getDraftingContext(fundingCallId: string) {
     const call = await ensureFundingCall(fundingCallId);
     const [guidelineRevision, template] = await Promise.all([
       this.resolvePinnedApprovedRevisionForFundingCall(fundingCallId),
-      prisma.fundingCallTemplate.findUnique({
-        where: { fundingCallId: fundingCallId },
-        select: {
-          id: true,
-          status: true,
-          current_revision_no: true,
-          grant_template_json: true,
-          compatibility_json: true,
-        },
-      }),
+      this.resolveApprovedTemplateForFundingCall(fundingCallId),
     ]);
 
     return {
       fundingCall: call,
       approvedGuidelineRevision: guidelineRevision,
-      approvedTemplate:
-        template && template.status === 'approved'
-          ? template
-          : null,
+      approvedTemplate: template,
     };
   }
 }

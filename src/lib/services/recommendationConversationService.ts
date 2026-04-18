@@ -41,9 +41,11 @@ import type {
   InternalRecommendationSearchResponse,
   RecommendationInputMode,
   RecommendationRawResultItem,
+  RecommendationSearchDiagnostics,
   RecommendationSearchFilters,
 } from '../recommendations/types';
 import {
+  buildCountryMatchKeys,
   normalizeApplicationLanguageList,
   normalizeCareerStageList,
   normalizeCountryInput,
@@ -59,7 +61,9 @@ import {
 import {
   CAREER_STAGE_ALIASES,
   FUNDING_KIND_ALIASES,
+  GEOGRAPHY_SCOPE_ALIASES,
   INSTITUTION_TYPE_ALIASES,
+  REGION_ALIASES,
   SPONSOR_TYPE_ALIASES,
 } from '../recommendations/constants';
 import { recommendationSearchService } from './recommendationSearchService';
@@ -163,6 +167,33 @@ function coercePendingPatch(rawPatch: unknown): RecommendationConversationPendin
   };
 }
 
+function coerceSearchDiagnostics(rawDiagnostics: unknown): RecommendationSearchDiagnostics | null {
+  if (!rawDiagnostics || typeof rawDiagnostics !== 'object') {
+    return null;
+  }
+
+  const diagnostics = rawDiagnostics as Record<string, unknown>;
+  const rawRecovery =
+    diagnostics.strictFilterRecovery && typeof diagnostics.strictFilterRecovery === 'object'
+      ? (diagnostics.strictFilterRecovery as Record<string, unknown>)
+      : null;
+
+  if (!rawRecovery) {
+    return null;
+  }
+
+  return {
+    strictFilterRecovery: {
+      retryFilters: coerceConversationFilters(rawRecovery.retryFilters),
+      relaxedFilterKeys: Array.isArray(rawRecovery.relaxedFilterKeys)
+        ? rawRecovery.relaxedFilterKeys
+            .map((value) => String(value || '') as keyof RecommendationSearchFilters)
+            .filter((value) => value in createDefaultFilters())
+        : [],
+    },
+  };
+}
+
 function buildConversationState(record: ConversationPayload): ConversationState {
   const inputMode = normalizeInputMode(record.current_input_mode);
   return {
@@ -189,6 +220,7 @@ function mapRunRecord(run: ConversationPayload['runs'][number]): RecommendationC
       run.no_results_reason === 'query_too_weak'
         ? run.no_results_reason
         : null,
+    searchDiagnostics: coerceSearchDiagnostics((run as { search_diagnostics_json?: unknown }).search_diagnostics_json),
     results: Array.isArray(run.result_snapshot_json)
       ? (run.result_snapshot_json as unknown as RecommendationRawResultItem[])
       : [],
@@ -360,6 +392,265 @@ function applyStateNormalization(
   return { inputMode, query: queryStateFromNormalized(inputMode, normalized.normalizedQuery), filters: normalized.filters };
 }
 
+const INFERRED_CONFIRMATION_FILTER_KEYS: Array<keyof RecommendationSearchFilters> = [
+  'geographyScope',
+  'eligibleCountries',
+  'eligibleRegions',
+  'hostCountries',
+  'funderCountries',
+  'fundingKinds',
+  'institutionTypes',
+  'careerStages',
+  'citizenshipRequirements',
+  'residencyRequirements',
+  'applicationLanguages',
+  'sponsorTypes',
+  'deadlineFrom',
+  'deadlineTo',
+  'rollingOnly',
+  'amountMin',
+  'amountMax',
+];
+
+const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> = {
+  geographyScope: 'Geography scope',
+  eligibleCountries: 'Eligible countries',
+  eligibleRegions: 'Eligible regions',
+  hostCountries: 'Host countries',
+  funderCountries: 'Funder countries',
+  fundingKinds: 'Funding types',
+  institutionTypes: 'Institution types',
+  careerStages: 'Career stages',
+  citizenshipRequirements: 'Citizenship',
+  residencyRequirements: 'Residency',
+  applicationLanguages: 'Application languages',
+  sponsorTypes: 'Sponsor types',
+  deadlineFrom: 'Deadline window',
+  deadlineTo: 'Deadline window',
+  rollingOnly: 'Rolling only',
+  amountMin: 'Minimum amount',
+  amountMax: 'Maximum amount',
+};
+
+const TOPIC_PIVOT_STOP_WORDS = new Set([
+  'find', 'show', 'search', 'funding', 'grant', 'grants', 'fellowship', 'fellowships', 'for', 'the', 'and', 'or',
+  'with', 'in', 'to', 'of', 'on', 'opportunities', 'opportunity', 'research',
+]);
+
+function isActiveFilterValue(
+  value: Required<RecommendationSearchFilters>[keyof RecommendationSearchFilters]
+) {
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  return value !== null && value !== undefined && value !== false && value !== '';
+}
+
+function formatFilterDescription(
+  filters: Required<RecommendationSearchFilters>,
+  key: keyof RecommendationSearchFilters
+) {
+  const label = FILTER_LABELS[key] || String(key);
+
+  switch (key) {
+    case 'deadlineFrom':
+    case 'deadlineTo': {
+      if (!filters.deadlineFrom && !filters.deadlineTo) return null;
+      const window = [filters.deadlineFrom || 'any time', filters.deadlineTo || 'open end'].join(' to ');
+      return `${label}: ${window}`;
+    }
+    case 'rollingOnly':
+      return filters.rollingOnly ? 'Rolling only' : null;
+    case 'amountMin':
+      return filters.amountMin !== null ? `${label}: ${filters.amountMin}` : null;
+    case 'amountMax':
+      return filters.amountMax !== null ? `${label}: ${filters.amountMax}` : null;
+    default: {
+      const value = filters[key];
+      if (!Array.isArray(value) || value.length === 0) {
+        return null;
+      }
+      return `${label}: ${value.slice(0, 3).join(', ')}`;
+    }
+  }
+}
+
+function describeActiveFilters(
+  filters: Required<RecommendationSearchFilters>,
+  keys?: Array<keyof RecommendationSearchFilters>
+) {
+  const orderedKeys = keys || [
+    'fundingKinds',
+    'hostCountries',
+    'eligibleCountries',
+    'eligibleRegions',
+    'careerStages',
+    'institutionTypes',
+    'sponsorTypes',
+    'citizenshipRequirements',
+    'residencyRequirements',
+    'applicationLanguages',
+    'geographyScope',
+    'funderCountries',
+    'deadlineFrom',
+    'rollingOnly',
+    'amountMin',
+    'amountMax',
+  ];
+  const seen = new Set<string>();
+  const descriptions: string[] = [];
+
+  for (const key of orderedKeys) {
+    if (!isActiveFilterValue(filters[key])) {
+      continue;
+    }
+    const description = formatFilterDescription(filters, key);
+    if (description && !seen.has(description)) {
+      seen.add(description);
+      descriptions.push(description);
+    }
+  }
+
+  return descriptions;
+}
+
+function collectTopicTokens(value: string) {
+  return Array.from(
+    new Set(
+      normalizeKey(value)
+        .split(/\s+/)
+        .filter((token) => token.length > 2 && !TOPIC_PIVOT_STOP_WORDS.has(token))
+    )
+  );
+}
+
+function computeTopicSimilarity(left: string, right: string) {
+  const leftTokens = new Set(collectTopicTokens(left));
+  const rightTokens = new Set(collectTopicTokens(right));
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return 1;
+  }
+
+  let overlap = 0;
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  });
+
+  return overlap / new Set([...leftTokens, ...rightTokens]).size;
+}
+
+function hasTopicPivot(currentQuery: string, nextQuery: string) {
+  const current = normalizeWhitespace(currentQuery);
+  const next = normalizeWhitespace(nextQuery);
+  if (!current || !next || normalizeKey(current) === normalizeKey(next)) {
+    return false;
+  }
+  return computeTopicSimilarity(current, next) < 0.3;
+}
+
+function messageMatchesCountry(normalizedMessage: string, country: string) {
+  return buildCountryMatchKeys([country]).some((alias) => normalizedMessage.includes(alias));
+}
+
+function messageMatchesAliasedValue(
+  normalizedMessage: string,
+  canonicalValue: string,
+  aliases: Record<string, string>
+) {
+  if (normalizedMessage.includes(normalizeKey(canonicalValue))) {
+    return true;
+  }
+  return Object.entries(aliases).some(([alias, value]) => value === canonicalValue && normalizedMessage.includes(alias));
+}
+
+function filterValueExplicitlyRequested(
+  message: string,
+  filters: Required<RecommendationSearchFilters>,
+  key: keyof RecommendationSearchFilters
+) {
+  const normalizedMessage = normalizeKey(message);
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  switch (key) {
+    case 'eligibleCountries':
+    case 'hostCountries':
+    case 'funderCountries':
+    case 'citizenshipRequirements':
+    case 'residencyRequirements':
+      return (filters[key] as string[]).every((value) => messageMatchesCountry(normalizedMessage, value));
+    case 'eligibleRegions':
+      return filters.eligibleRegions.every((value) => messageMatchesAliasedValue(normalizedMessage, value, REGION_ALIASES));
+    case 'geographyScope':
+      return filters.geographyScope.every((value) => messageMatchesAliasedValue(normalizedMessage, value, GEOGRAPHY_SCOPE_ALIASES));
+    case 'fundingKinds':
+      return filters.fundingKinds.every((value) => messageMatchesAliasedValue(normalizedMessage, value, FUNDING_KIND_ALIASES));
+    case 'institutionTypes':
+      return filters.institutionTypes.every((value) => messageMatchesAliasedValue(normalizedMessage, value, INSTITUTION_TYPE_ALIASES));
+    case 'careerStages':
+      return filters.careerStages.every((value) => messageMatchesAliasedValue(normalizedMessage, value, CAREER_STAGE_ALIASES));
+    case 'sponsorTypes':
+      return filters.sponsorTypes.every((value) => messageMatchesAliasedValue(normalizedMessage, value, SPONSOR_TYPE_ALIASES));
+    case 'applicationLanguages':
+      return filters.applicationLanguages.every((value) => normalizedMessage.includes(normalizeKey(value)));
+    case 'deadlineFrom':
+    case 'deadlineTo': {
+      const patch = extractDeadlinePatch(message);
+      if (!patch) {
+        return false;
+      }
+      return patch.deadlineFrom === filters.deadlineFrom && patch.deadlineTo === filters.deadlineTo;
+    }
+    case 'rollingOnly':
+      return filters.rollingOnly && normalizedMessage.includes('rolling');
+    case 'amountMin':
+      return filters.amountMin !== null && new RegExp(`\\b${filters.amountMin}\\b`).test(normalizedMessage);
+    case 'amountMax':
+      return filters.amountMax !== null && new RegExp(`\\b${filters.amountMax}\\b`).test(normalizedMessage);
+    default:
+      return true;
+  }
+}
+
+function collectImplicitFilterKeys(
+  message: string,
+  filters: Required<RecommendationSearchFilters>
+) {
+  const defaults = createDefaultFilters();
+  return INFERRED_CONFIRMATION_FILTER_KEYS.filter((key) => {
+    if (JSON.stringify(filters[key]) === JSON.stringify(defaults[key])) {
+      return false;
+    }
+    return !filterValueExplicitlyRequested(message, filters, key);
+  });
+}
+
+function buildForcedConfirmationCopy(
+  filters: Required<RecommendationSearchFilters>,
+  implicitFilterKeys: Array<keyof RecommendationSearchFilters>,
+  inferredFromProfile: string[]
+) {
+  const inferredFilterDescriptions = describeActiveFilters(filters, implicitFilterKeys);
+  const profileText = inferredFromProfile.length > 0
+    ? ` I also used profile-based context: ${inferredFromProfile.join(', ')}.`
+    : '';
+  if (inferredFilterDescriptions.length === 0) {
+    return {
+      summary: `Confirm the inferred filters before I rerun the grounded search.${profileText}`.trim(),
+      assistantSuggestion: `I inferred some filters from your request.${profileText} Confirm them before I rerun the grounded search.`.trim(),
+    };
+  }
+
+  const joined = inferredFilterDescriptions.join('; ');
+  return {
+    summary: `Confirm these inferred filters before I rerun the grounded search: ${joined}.${profileText}`.trim(),
+    assistantSuggestion: `Before I rerun the search, confirm these inferred filters: ${joined}.${profileText}`.trim(),
+  };
+}
+
 function resolveOrdinalResults(run: RecommendationConversationRunRecord | undefined, ordinals: number[]) {
   if (!run || ordinals.length === 0) return [];
   return ordinals.map((ordinal) => run.results[ordinal - 1]).filter((result): result is RecommendationRawResultItem => Boolean(result));
@@ -367,14 +658,23 @@ function resolveOrdinalResults(run: RecommendationConversationRunRecord | undefi
 
 function buildDeterministicSearchSummary(response: InternalRecommendationSearchResponse, preface: string) {
   if (response.rawResults.length === 0) {
+    const activeFilters = describeActiveFilters(response.appliedFilters);
+    const activeFilterText = activeFilters.length > 0 ? `\n\nI searched with these active filters:\n- ${activeFilters.join('\n- ')}` : '';
+    const retryFilters = response.strictFilterRecovery
+      ? describeActiveFilters(response.appliedFilters, response.strictFilterRecovery.relaxedFilterKeys)
+      : [];
+    const retryText =
+      response.noResultsReason === 'filters_too_strict' && retryFilters.length > 0
+        ? `\n\nYou can retry without these restrictive filters:\n- ${retryFilters.join('\n- ')}`
+        : '';
     const suggestionText = response.relaxationSuggestions.length > 0 ? `\n\nNext steps:\n- ${response.relaxationSuggestions.join('\n- ')}` : '';
     const noResultsText =
       response.noResultsReason === 'filters_too_strict'
-        ? 'The current filters are too strict for the published catalog.'
+        ? 'No published funding calls matched all of the active filters in the current search.'
         : response.noResultsReason === 'query_too_weak'
           ? 'The query is too weak for reliable matching.'
           : 'No published funding calls matched the current search.';
-    return `${preface}\n\n${noResultsText}${suggestionText}`;
+    return `${preface}\n\n${noResultsText}${activeFilterText}${retryText}${suggestionText}`;
   }
 
   const lines = response.rawResults.slice(0, CHAT_INLINE_RESULT_LIMIT).map((result, index) => {
@@ -568,6 +868,7 @@ ${JSON.stringify(
       noResultsReason: response.noResultsReason,
       appliedFilters: response.appliedFilters,
       relaxationSuggestions: response.relaxationSuggestions,
+      strictFilterRecovery: response.strictFilterRecovery,
     },
     null,
     2
@@ -581,7 +882,8 @@ Rules:
 - Relative date filters have already been resolved by the system into concrete dates.
 - Never say that you do not know or do not have access to the current date.
 - Mention degraded or low-confidence mode when relevant.
-- If no results match the current date/filter window, say that clearly and use the relaxation suggestions if provided.`;
+- If no results match the current date/filter window, say that clearly, name the active filters, and mention the retry path when strictFilterRecovery is present.
+- Never claim that filters were automatically relaxed unless strictFilterRecovery indicates a user retry path.`;
 
   return generateGroundedTextWithLLM(prompt, fallback);
 }
@@ -947,7 +1249,7 @@ Think step by step about what the user wants, then return a JSON object with thi
 
 RULES:
 1. REASONING FIRST: Always fill the "reasoning" field before deciding on intent. Think about what the user literally said, what they might mean given the conversation history, and what their researcher profile implies.
-2. INDIRECT LANGUAGE: If the user says "I'm presenting at a conference in Berlin next month", infer: intent=new_search, fundingKinds=["Travel Grant","Conference Grant"], hostCountries=["Germany"], deadlineFrom/To for next month. Explain this in reasoning.
+2. INDIRECT LANGUAGE: If the user says "I'm presenting at a conference in Berlin next month", you may infer: intent=new_search, fundingKinds=["Travel Grant","Conference Grant"], hostCountries=["Germany"], deadlineFrom/To for next month. Explain this in reasoning and set requiresConfirmation=true before rerunning the search.
 3. PROFILE INFERENCE: When the user says something vague like "find grants for me" or "any funding I'm eligible for", use their researcher profile to fill in the research area, career stage, country, and institution type. List what you inferred in "inferredFromProfile".
 4. CONVERSATION CONTEXT: Use the conversation history to resolve references like "those", "similar", "the second one", "go back to the earlier search". If the user says "something similar but in Europe", keep the current query but change geography.
 5. NEW vs REFINE: If the user is clearly changing the research topic (e.g. "what about renewable energy instead?"), use intent=new_search and resetFilters=true to clear topic-specific filters but you may keep sensible universal filters like career stage or country. If they are narrowing the current search, use intent=refine_filters and resetFilters=false.
@@ -956,7 +1258,7 @@ RULES:
 8. ANSWERABLE FROM RESULTS: If the user asks a question that can be answered from LATEST RESULTS without re-searching (e.g. "are any of these rolling?", "which ones are open to India?"), use intent=general_help, set assistantSuggestion to the answer, and do NOT trigger a new search.
 9. EXPLAIN/COMPARE: For "explain result 2" or "tell me more about the first one", use intent=explain_result with referencedOrdinals. For "compare 1 and 3", use intent=compare_results. Ordinal words like "first"=1, "second"=2, "last"=last result.
 10. NEVER invent funding opportunities, amounts, deadlines, or URLs.
-11. requiresConfirmation should be true ONLY when you are inferring significant filter changes the user did not explicitly request.
+11. requiresConfirmation should be true whenever you infer filters the user did not explicitly request or did not state directly, especially for geography, career stage, institution type, citizenship, funding type, or deadline filters, and always when using profile-based inference.
 
 Return ONLY the JSON object, no markdown fences, no extra text.`;
 
@@ -985,19 +1287,31 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
   ): ParsedTurn {
     const intent = String(parsed.intent || 'new_search');
     const validIntents = ['new_search', 'refine_filters', 'clear_filters', 'compare_results', 'explain_result', 'browse_more', 'clarification_needed', 'general_help'];
-    const safeIntent = (validIntents.includes(intent) ? intent : 'new_search') as RecommendationConversationIntent;
+    let safeIntent = (validIntents.includes(intent) ? intent : 'new_search') as RecommendationConversationIntent;
 
     const inputMode = parsed.inputMode ? normalizeInputMode(parsed.inputMode) : params.state.inputMode;
     const filterSuggestions = parsed.filterSuggestions && typeof parsed.filterSuggestions === 'object'
       ? this.cleanFilterPatch(parsed.filterSuggestions as Partial<RecommendationSearchFilters>)
       : {};
+    const queryRewrite = typeof parsed.queryRewrite === 'string' ? normalizeWhitespace(parsed.queryRewrite) : '';
+
+    if (
+      safeIntent === 'refine_filters' &&
+      inputMode === 'research_area' &&
+      params.state.inputMode === 'research_area' &&
+      queryRewrite
+    ) {
+      const currentResearchArea = normalizeWhitespace((params.state.query as { researchArea?: string }).researchArea || '');
+      if (hasTopicPivot(currentResearchArea, queryRewrite)) {
+        safeIntent = 'new_search';
+      }
+    }
 
     let nextState: ParsedTurn['nextState'];
     if (['new_search', 'refine_filters', 'clear_filters', 'browse_more'].includes(safeIntent)) {
       const shouldReset = parsed.resetFilters === true || safeIntent === 'clear_filters' || safeIntent === 'new_search';
       const baseFilters = shouldReset ? createDefaultFilters() : cloneFilters(params.state.filters);
       const patchedFilters = mergeFilterPatch(baseFilters, filterSuggestions);
-      const queryRewrite = typeof parsed.queryRewrite === 'string' ? normalizeWhitespace(parsed.queryRewrite) : '';
       const query =
         inputMode === 'paper_metadata'
           ? cloneQuery(inputMode, params.state.query)
@@ -1028,6 +1342,44 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
       inferredFromProfile: Array.isArray(parsed.inferredFromProfile)
         ? parsed.inferredFromProfile.map((v) => String(v || '')).filter(Boolean)
         : [],
+    };
+  }
+
+  private parseFastPathTurn(params: {
+    message: string;
+    state: ConversationState;
+    latestRun?: RecommendationConversationRunRecord;
+  }) {
+    const heuristic = this.parseTurnHeuristically(params);
+    if (!heuristic) {
+      return null;
+    }
+
+    return ['compare_results', 'explain_result', 'browse_more', 'clear_filters'].includes(heuristic.intent)
+      ? heuristic
+      : null;
+  }
+
+  private applyParsedTurnGuard(
+    parsed: ParsedTurn,
+    params: { message: string }
+  ): ParsedTurn {
+    if (!parsed.nextState || parsed.intent !== 'new_search') {
+      return parsed;
+    }
+
+    const implicitFilterKeys = collectImplicitFilterKeys(params.message, parsed.nextState.filters);
+    const inferredFromProfile = parsed.inferredFromProfile || [];
+    if (implicitFilterKeys.length === 0 && inferredFromProfile.length === 0) {
+      return parsed;
+    }
+
+    const confirmationCopy = buildForcedConfirmationCopy(parsed.nextState.filters, implicitFilterKeys, inferredFromProfile);
+    return {
+      ...parsed,
+      requiresConfirmation: true,
+      summary: confirmationCopy.summary,
+      assistantSuggestion: confirmationCopy.assistantSuggestion,
     };
   }
 
@@ -1184,11 +1536,16 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     conversationDetail: RecommendationConversationDetail;
     researcherContext?: ResearcherFinderContext | null;
   }) {
+    const fastPath = this.parseFastPathTurn(params);
+    if (fastPath) {
+      return this.applyParsedTurnGuard(fastPath, params);
+    }
+
     const llmResult = await this.parseTurnWithLLM(params);
-    if (llmResult) return llmResult;
+    if (llmResult) return this.applyParsedTurnGuard(llmResult, params);
 
     const heuristicResult = this.parseTurnHeuristically(params);
-    if (heuristicResult) return heuristicResult;
+    if (heuristicResult) return this.applyParsedTurnGuard(heuristicResult, params);
 
     return {
       intent: 'clarification_needed' as RecommendationConversationIntent,
@@ -1235,10 +1592,13 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
       const nextQuery = params.input.manualQueryPatch
         ? coerceConversationQuery(nextInputMode, params.input.manualQueryPatch)
         : cloneQuery(nextInputMode, params.state.query);
+      const nextFilters = params.input.replaceManualFilters
+        ? coerceConversationFilters(params.input.manualFilterPatch || {})
+        : mergeFilterPatch(params.state.filters, this.cleanFilterPatch(params.input.manualFilterPatch || {}));
       const nextState = applyStateNormalization(
         nextInputMode,
         nextQuery,
-        mergeFilterPatch(params.state.filters, this.cleanFilterPatch(params.input.manualFilterPatch || {}))
+        nextFilters
       );
 
       if (!isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)) {
@@ -1443,6 +1803,9 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
             } as Prisma.InputJsonValue,
             result_snapshot_json: params.outcome.run.rawResults as unknown as Prisma.InputJsonValue,
             result_ids_json: params.outcome.run.rawResults.map((result) => result.id) as unknown as Prisma.InputJsonValue,
+            search_diagnostics_json: params.outcome.run.strictFilterRecovery
+              ? ({ strictFilterRecovery: params.outcome.run.strictFilterRecovery } as unknown as Prisma.InputJsonValue)
+              : Prisma.DbNull,
             degraded_mode: params.outcome.run.degradedMode,
             low_confidence: params.outcome.run.lowConfidence,
             no_results_reason: params.outcome.run.noResultsReason,

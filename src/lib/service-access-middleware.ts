@@ -98,6 +98,7 @@ export async function enforceServiceAccess(
         response: NextResponse.json(
           {
             error: userMessage,
+            message: userMessage,
             reason: result.reason || `You do not have access to ${serviceType}`,
             code: errorCode,
             quotaInfo: result.remainingQuota ? {

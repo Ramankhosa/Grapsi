@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
@@ -8,10 +9,23 @@ import type { FundingCallSummary, FundingImportInputType, FundingImportJobView, 
 
 type ImportMode = FundingImportInputType
 
+type FundingImportsPageProps = {
+  basePath?: string
+  title?: string
+  description?: string
+  requireSuperAdmin?: boolean
+}
+
 const POLL_INTERVAL_MS = 15000
 
-export default function FundingImportsPage() {
-  const { token, user } = useAuth()
+export default function FundingImportsPage({
+  basePath = '/funding',
+  title = 'Funding Imports',
+  description = 'Import funding calls from URLs, uploaded files, or pasted text. Patent workflows stay untouched.',
+  requireSuperAdmin = false,
+}: FundingImportsPageProps = {}) {
+  const { token, user, isLoading: authLoading } = useAuth()
+  const router = useRouter()
   const isSuperAdmin = useMemo(
     () => user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER'),
     [user?.roles]
@@ -61,6 +75,21 @@ export default function FundingImportsPage() {
       setLoading(false)
     }
   }, [token])
+
+  useEffect(() => {
+    if (!requireSuperAdmin || authLoading) {
+      return
+    }
+
+    if (!user) {
+      router.replace('/login')
+      return
+    }
+
+    if (!isSuperAdmin) {
+      router.replace('/dashboard')
+    }
+  }, [authLoading, isSuperAdmin, requireSuperAdmin, router, user])
 
   useEffect(() => {
     fetchData()
@@ -176,6 +205,10 @@ export default function FundingImportsPage() {
     await fetchData()
   }
 
+  if (requireSuperAdmin && (authLoading || !isSuperAdmin)) {
+    return <div className="p-8 text-sm text-gray-600">Checking platform access...</div>
+  }
+
   if (!token) {
     return <div className="p-8 text-sm text-gray-600">Log in to access funding imports.</div>
   }
@@ -185,10 +218,8 @@ export default function FundingImportsPage() {
       <div className="mx-auto max-w-6xl space-y-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-semibold">Funding Imports</h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Import funding calls from URLs, uploaded files, or pasted text. Patent workflows stay untouched.
-            </p>
+            <h1 className="text-3xl font-semibold">{title}</h1>
+            <p className="mt-2 text-sm text-slate-600">{description}</p>
           </div>
           <button
             type="button"
@@ -313,7 +344,7 @@ export default function FundingImportsPage() {
                     <div className="flex flex-wrap gap-2">
                       {job.resultFundingCallId ? (
                         <Link
-                          href={`/funding/calls/${job.resultFundingCallId}`}
+                          href={`${basePath}/calls/${job.resultFundingCallId}`}
                           className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium hover:bg-slate-100"
                         >
                           View Call
@@ -361,7 +392,7 @@ export default function FundingImportsPage() {
                             <div>
                               <p className="text-sm font-medium text-slate-900">{candidate.title}</p>
                               <p className="text-xs text-slate-500">
-                                {candidate.agencyName || 'Unknown agency'} · {candidate.reason} · score {candidate.score}
+                                {candidate.agencyName || 'Unknown agency'} - {candidate.reason} - score {candidate.score}
                               </p>
                             </div>
                             <button
@@ -393,14 +424,14 @@ export default function FundingImportsPage() {
               {calls.map((call) => (
                 <Link
                   key={call.id}
-                  href={`/funding/calls/${call.id}`}
+                  href={`${basePath}/calls/${call.id}`}
                   className="block rounded-xl border border-slate-200 p-4 hover:bg-slate-50"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium text-slate-900">{call.title}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {call.agencyName || 'Unknown agency'} · {call.visibility} · {call.status}
+                        {call.agencyName || 'Unknown agency'} - {call.visibility} - {call.status}
                       </p>
                     </div>
                     <span className="text-xs text-slate-400">{new Date(call.updatedAt).toLocaleString()}</span>

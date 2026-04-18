@@ -13,9 +13,11 @@ import type {
   InternalRecommendationSearchResponse,
   NormalizedRecommendationSearchRequest,
   RecommendationCandidate,
+  RecommendationSearchFilters,
   RecommendationSearchRequest,
   RecommendationSearchResponse,
   RecommendationSearchResultItem,
+  RecommendationStrictFilterRecovery,
 } from '../recommendations/types';
 import {
   buildCountryMatchKeys,
@@ -35,10 +37,28 @@ const NO_RESULT_SCORE_THRESHOLD = 0.2;
 const LOW_CONFIDENCE_THRESHOLD = 0.35;
 const RESEARCH_AREA_ENRICHMENT_MODEL = 'gemini-2.0-flash-lite';
 const QUERY_ENRICHMENT_CACHE_VERSION = 'v1';
+const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilters>> = [
+  ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages'],
+  ['hostCountries', 'eligibleRegions', 'geographyScope', 'funderCountries'],
+  ['eligibleCountries'],
+  ['fundingKinds'],
+  ['deadlineFrom', 'deadlineTo', 'rollingOnly', 'amountMin', 'amountMax'],
+];
 
 type SearchExecutionResult = {
   candidates: RecommendationCandidate[];
   degradedMode: 'full_text_only' | null;
+};
+
+type ScoredCandidate = {
+  candidate: RecommendationCandidate;
+  score: number;
+};
+
+type RankedExecution = {
+  filteredScored: ScoredCandidate[];
+  topScore: number;
+  lowConfidence: boolean;
 };
 
 type ResearchAreaEnrichmentCacheInput = {
@@ -82,7 +102,7 @@ function buildBaseConditions(
 ) {
   const { filters } = normalized;
   const conditions: Prisma.Sql[] = [
-    Prisma.sql`status = 'PUBLISHED'`,
+    Prisma.sql`(status = 'PUBLISHED' OR catalog_status = 'PUBLISHED')`,
     Prisma.sql`COALESCE(is_active, true) = true`,
   ];
 
@@ -399,6 +419,78 @@ function buildRelaxationSuggestions(normalized: NormalizedRecommendationSearchRe
   return suggestions.slice(0, 3);
 }
 
+function hasActiveUserFilters(filters: Required<RecommendationSearchFilters>) {
+  return Object.entries(filters).some(([key, value]) => {
+    if (key === 'includeExpired' || key === 'limit' || key === 'sort') {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return value !== null && value !== undefined && value !== false && value !== '';
+  });
+}
+
+function isFilterValueActive(
+  value: Required<RecommendationSearchFilters>[keyof RecommendationSearchFilters]
+) {
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  return value !== null && value !== undefined && value !== false && value !== '';
+}
+
+function cloneFilters(filters: Required<RecommendationSearchFilters>): Required<RecommendationSearchFilters> {
+  return {
+    ...filters,
+    geographyScope: [...filters.geographyScope],
+    eligibleCountries: [...filters.eligibleCountries],
+    eligibleRegions: [...filters.eligibleRegions],
+    hostCountries: [...filters.hostCountries],
+    funderCountries: [...filters.funderCountries],
+    fundingKinds: [...filters.fundingKinds],
+    institutionTypes: [...filters.institutionTypes],
+    careerStages: [...filters.careerStages],
+    citizenshipRequirements: [...filters.citizenshipRequirements],
+    residencyRequirements: [...filters.residencyRequirements],
+    applicationLanguages: [...filters.applicationLanguages],
+    sponsorTypes: [...filters.sponsorTypes],
+  };
+}
+
+function clearFilterKey(
+  filters: Required<RecommendationSearchFilters>,
+  key: keyof RecommendationSearchFilters
+) {
+  switch (key) {
+    case 'geographyScope':
+    case 'eligibleCountries':
+    case 'eligibleRegions':
+    case 'hostCountries':
+    case 'funderCountries':
+    case 'fundingKinds':
+    case 'institutionTypes':
+    case 'careerStages':
+    case 'citizenshipRequirements':
+    case 'residencyRequirements':
+    case 'applicationLanguages':
+    case 'sponsorTypes':
+      filters[key] = [] as never;
+      break;
+    case 'deadlineFrom':
+    case 'deadlineTo':
+      filters[key] = '' as never;
+      break;
+    case 'rollingOnly':
+      filters[key] = false as never;
+      break;
+    case 'amountMin':
+    case 'amountMax':
+      filters[key] = null as never;
+      break;
+  }
+}
+
 function scoreCandidate(candidate: RecommendationCandidate, normalized: NormalizedRecommendationSearchRequest) {
   const textRank = normalizeTextRank(candidate.textRank);
   const researchTags = normalized.normalizedQuery.researchTags;
@@ -514,6 +606,72 @@ function buildResearchAreaEnrichmentCacheInput(
 }
 
 export class RecommendationSearchService {
+  private rankExecution(
+    normalized: NormalizedRecommendationSearchRequest,
+    execution: SearchExecutionResult
+  ): RankedExecution {
+    const hasSemanticCandidates = execution.candidates.some((candidate) => candidate.semanticSimilarity >= 0.08);
+    const scoreThreshold = hasSemanticCandidates ? NO_RESULT_SCORE_THRESHOLD : 0.08;
+    const lowConfidenceThreshold = hasSemanticCandidates ? LOW_CONFIDENCE_THRESHOLD : 0.2;
+    const scored = sortCandidates(
+      execution.candidates.map((candidate) => ({
+        candidate,
+        score: scoreCandidate(candidate, normalized),
+      })),
+      normalized
+    );
+
+    const topScore = scored[0]?.score || 0;
+    const lowConfidence = topScore >= scoreThreshold && topScore < lowConfidenceThreshold;
+    const filteredScored = scored.filter((item) => item.score >= scoreThreshold).slice(0, normalized.filters.limit);
+
+    return {
+      filteredScored,
+      topScore,
+      lowConfidence,
+    };
+  }
+
+  private async buildStrictFilterRecovery(
+    normalized: NormalizedRecommendationSearchRequest
+  ): Promise<RecommendationStrictFilterRecovery | null> {
+    if (!hasActiveUserFilters(normalized.filters)) {
+      return null;
+    }
+
+    let retryFilters = cloneFilters(normalized.filters);
+    const relaxedFilterKeys: Array<keyof RecommendationSearchFilters> = [];
+
+    for (const tier of STRICT_FILTER_RECOVERY_LADDER) {
+      const activeTierKeys = tier.filter((key) => isFilterValueActive(retryFilters[key]));
+      if (activeTierKeys.length === 0) {
+        continue;
+      }
+
+      activeTierKeys.forEach((key) => {
+        clearFilterKey(retryFilters, key);
+        if (!relaxedFilterKeys.includes(key)) {
+          relaxedFilterKeys.push(key);
+        }
+      });
+
+      const relaxedNormalized = {
+        ...normalized,
+        filters: cloneFilters(retryFilters),
+      };
+      const relaxedExecution = await this.executeSearch(relaxedNormalized, false);
+      const relaxedRanking = this.rankExecution(relaxedNormalized, relaxedExecution);
+      if (relaxedRanking.filteredScored.length > 0) {
+        return {
+          retryFilters: cloneFilters(relaxedNormalized.filters),
+          relaxedFilterKeys,
+        };
+      }
+    }
+
+    return null;
+  }
+
   private applyResearchAreaEnrichment(
     normalized: NormalizedRecommendationSearchRequest,
     rewrittenResearchArea: string,
@@ -733,42 +891,22 @@ Rules:
     normalized: NormalizedRecommendationSearchRequest,
     execution: SearchExecutionResult
   ): Promise<{ response: InternalRecommendationSearchResponse; topScore: number }> {
-    const hasSemanticCandidates = execution.candidates.some((candidate) => candidate.semanticSimilarity >= 0.08);
-    const scoreThreshold = hasSemanticCandidates ? NO_RESULT_SCORE_THRESHOLD : 0.08;
-    const lowConfidenceThreshold = hasSemanticCandidates ? LOW_CONFIDENCE_THRESHOLD : 0.2;
-    const scored = sortCandidates(
-      execution.candidates.map((candidate) => ({
-        candidate,
-        score: scoreCandidate(candidate, normalized),
-      })),
-      normalized
-    );
-
-    const topScore = scored[0]?.score || 0;
-    const lowConfidence = topScore >= scoreThreshold && topScore < lowConfidenceThreshold;
-    const filteredScored = scored.filter((item) => item.score >= scoreThreshold).slice(0, normalized.filters.limit);
+    const ranked = this.rankExecution(normalized, execution);
+    const { filteredScored, lowConfidence, topScore } = ranked;
 
     let noResultsReason: RecommendationSearchResponse['noResultsReason'] = null;
     let relaxationSuggestions: string[] = [];
+    let strictFilterRecovery: RecommendationStrictFilterRecovery | null = null;
 
     if (filteredScored.length === 0) {
-      const hasFilters = Object.entries(normalized.filters).some(([key, value]) => {
-        if (key === 'includeExpired' || key === 'limit' || key === 'sort') {
-          return false;
-        }
-        if (Array.isArray(value)) {
-          return value.length > 0;
-        }
-        return value !== null && value !== undefined && value !== false;
-      });
-
-      if (hasFilters) {
-        const diagnostic = await this.executeSearch(normalized, true);
-        noResultsReason = diagnostic.candidates.length > 0 ? 'filters_too_strict' : normalized.normalizedQuery.queryStrength === 'weak' ? 'query_too_weak' : 'no_match';
-      } else {
-        noResultsReason = normalized.normalizedQuery.queryStrength === 'weak' ? 'query_too_weak' : 'no_match';
-      }
-
+      strictFilterRecovery = hasActiveUserFilters(normalized.filters)
+        ? await this.buildStrictFilterRecovery(normalized)
+        : null;
+      noResultsReason = strictFilterRecovery
+        ? 'filters_too_strict'
+        : normalized.normalizedQuery.queryStrength === 'weak'
+          ? 'query_too_weak'
+          : 'no_match';
       relaxationSuggestions = buildRelaxationSuggestions(normalized, noResultsReason);
     }
 
@@ -783,6 +921,7 @@ Rules:
         lowConfidence,
         noResultsReason,
         relaxationSuggestions,
+        strictFilterRecovery,
         results: rawResults.map(({ fullDescription, description, amountMin, amountMax, currency, eligibilityText, contactInfo, geographyScope, funderCountry, citizenshipRequirements, residencyRequirements, applicationLanguages, semanticSimilarity, textRank, ...publicFields }) => publicFields),
         rawResults,
         totalResults: rawResults.length,
@@ -1100,8 +1239,8 @@ Rules:
             WHERE ${combineConditions(baseConditions)}
             ORDER BY ${
               normalized.filters.sort === 'deadline_soonest'
-                ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, updated_at DESC NULLS LAST, scheme_title ASC`
-                : Prisma.sql`updated_at DESC NULLS LAST, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
+                ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, "updatedAt" DESC NULLS LAST, scheme_title ASC`
+                : Prisma.sql`"updatedAt" DESC NULLS LAST, COALESCE(close_date, expiration_date) ASC NULLS LAST, scheme_title ASC`
             }
             LIMIT ${pageSize}
             OFFSET ${safeOffset}

@@ -1,11 +1,21 @@
+import React from 'react';
 import { FaRobot, FaUserCircle } from 'react-icons/fa';
-import type { RecommendationConversationMessageRecord, RecommendationConversationRunRecord } from '../lib/recommendations/chatTypes';
+
+import type {
+  RecommendationConversationMessageRecord,
+  RecommendationConversationRunRecord,
+} from '../lib/recommendations/chatTypes';
+import type { RecommendationRawResultItem } from '../lib/recommendations/types';
 
 interface FinderChatMessageProps {
   message: RecommendationConversationMessageRecord;
   runs: RecommendationConversationRunRecord[];
   onExplainResult?: (payload: { runId: string; resultId: string; ordinal: number }) => void;
   onBeginWriting?: (payload: { resultId: string }) => void;
+  strictRecoveryAction?: {
+    summary: string;
+    onRetry: () => void;
+  } | null;
 }
 
 function formatTime(value: string) {
@@ -16,11 +26,84 @@ function formatTime(value: string) {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+function formatAmountValue(value: number) {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+}
+
+function formatAmountRange(result: RecommendationRawResultItem) {
+  if (result.amountMin === null && result.amountMax === null) {
+    return null;
+  }
+
+  const currency = result.currency ? `${result.currency} ` : '';
+  if (result.amountMin !== null && result.amountMax !== null) {
+    return `${currency}${formatAmountValue(result.amountMin)} - ${formatAmountValue(result.amountMax)}`.trim();
+  }
+
+  return `${currency}${formatAmountValue(result.amountMin ?? result.amountMax ?? 0)}`.trim();
+}
+
+function formatDeadlineStatus(result: RecommendationRawResultItem) {
+  if (result.isRolling) {
+    return {
+      label: 'Rolling',
+      className: 'bg-slate-950 text-white',
+    };
+  }
+
+  if (!result.closeDate) {
+    return {
+      label: 'Open',
+      className: 'bg-slate-100 text-slate-700',
+    };
+  }
+
+  const closeDate = new Date(result.closeDate);
+  if (Number.isNaN(closeDate.getTime())) {
+    return {
+      label: 'Open',
+      className: 'bg-slate-100 text-slate-700',
+    };
+  }
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startOfCloseDate = new Date(closeDate.getFullYear(), closeDate.getMonth(), closeDate.getDate());
+  const daysUntilClose = Math.ceil((startOfCloseDate.getTime() - startOfToday.getTime()) / 86400000);
+
+  if (daysUntilClose < 0) {
+    return {
+      label: 'Closed',
+      className: 'bg-rose-100 text-rose-900',
+    };
+  }
+
+  if (daysUntilClose === 0) {
+    return {
+      label: 'Closes today',
+      className: 'bg-amber-100 text-amber-900',
+    };
+  }
+
+  if (daysUntilClose <= 30) {
+    return {
+      label: `Closes in ${daysUntilClose} day${daysUntilClose === 1 ? '' : 's'}`,
+      className: 'bg-amber-100 text-amber-900',
+    };
+  }
+
+  return {
+    label: closeDate.toLocaleDateString(),
+    className: 'bg-slate-100 text-slate-700',
+  };
+}
+
 export default function FinderChatMessage({
   message,
   runs,
   onExplainResult,
   onBeginWriting,
+  strictRecoveryAction = null,
 }: FinderChatMessageProps) {
   const citedRun = message.citations ? runs.find((run) => run.id === message.citations?.runId) : null;
   const citedResults = message.citations
@@ -36,7 +119,11 @@ export default function FinderChatMessage({
 
   return (
     <div className={`flex gap-4 ${assistant ? 'items-start' : 'items-start flex-row-reverse'}`}>
-      <div className={`mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${assistant ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950 text-white'}`}>
+      <div
+        className={`mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${
+          assistant ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950 text-white'
+        }`}
+      >
         {assistant ? <FaRobot /> : <FaUserCircle />}
       </div>
 
@@ -45,95 +132,145 @@ export default function FinderChatMessage({
           <div className={`text-xs font-semibold uppercase tracking-[0.18em] ${labelClass}`}>
             {assistant ? 'GrantGenie Finder' : 'You'}
           </div>
-          <div className={`text-[11px] uppercase tracking-[0.16em] ${timeClass}`}>
-            {formatTime(message.createdAt)}
-          </div>
+          <div className={`text-[11px] uppercase tracking-[0.16em] ${timeClass}`}>{formatTime(message.createdAt)}</div>
         </div>
 
-        <div className={`mt-3 whitespace-pre-wrap text-sm leading-7 ${bodyClass}`}>
-          {message.content}
-        </div>
+        <div className={`mt-3 whitespace-pre-wrap text-sm leading-7 ${bodyClass}`}>{message.content}</div>
+
+        {assistant && strictRecoveryAction ? (
+          <div className="mt-4 rounded-[20px] border border-amber-300 bg-amber-50 px-4 py-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">Retry Available</div>
+            <p className="mt-2 text-sm leading-6 text-amber-950">{strictRecoveryAction.summary}</p>
+            <button
+              type="button"
+              onClick={strictRecoveryAction.onRetry}
+              className="mt-3 rounded-full bg-amber-500 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-950 transition-colors hover:bg-amber-400"
+            >
+              Retry without these filters
+            </button>
+          </div>
+        ) : null}
 
         {citedResults.length > 0 ? (
           <div className="mt-4 grid gap-3">
-            {citedResults.map((result, index) => (
-              <div
-                key={result.id}
-                className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">{result.agencyName}</div>
-                    <div className="mt-1 text-sm font-semibold text-slate-950">{index + 1}. {result.schemeTitle}</div>
-                  </div>
-                  <div className="rounded-full bg-slate-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white">
-                    {result.isRolling ? 'Rolling' : result.closeDate ? new Date(result.closeDate).toLocaleDateString() : 'Open'}
-                  </div>
-                </div>
+            {citedResults.map((result, index) => {
+              const amount = formatAmountRange(result);
+              const deadlineStatus = formatDeadlineStatus(result);
+              const eligibilityCopy = result.eligibilitySummary || result.eligibilityText || null;
+              const description =
+                result.shortDescription ||
+                result.matchReasons.slice(0, 2).join(' | ') ||
+                result.eligibilitySummary ||
+                result.eligibilityText;
 
-                <div className="mt-3 text-sm leading-6 text-slate-700">
-                  {result.shortDescription || result.matchReasons.slice(0, 2).join(' | ') || result.eligibilitySummary}
-                </div>
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {result.fundingKinds.slice(0, 2).map((kind) => (
-                    <span key={kind} className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700">
-                      {kind}
-                    </span>
-                  ))}
-                  {result.eligibleCountries.slice(0, 1).map((country) => (
-                    <span key={country} className="rounded-full border border-white bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-900">
-                      {country}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {onBeginWriting ? (
-                    <button
-                      type="button"
-                      onClick={() => onBeginWriting({ resultId: result.id })}
-                      className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:border-emerald-700 hover:bg-emerald-700"
+              return (
+                <div
+                  key={result.id}
+                  className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                        {result.agencyName}
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-slate-950">
+                        {index + 1}. {result.schemeTitle}
+                      </div>
+                    </div>
+                    <div
+                      className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${deadlineStatus.className}`}
                     >
-                      Begin Writing
-                    </button>
+                      {deadlineStatus.label}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-sm leading-6 text-slate-700">{description}</div>
+
+                  {eligibilityCopy ? (
+                    <div className="mt-3 rounded-[18px] border border-white/70 bg-white/75 px-3 py-3 text-sm leading-6 text-slate-700">
+                      <span className="font-semibold text-slate-900">Eligibility:</span> {eligibilityCopy}
+                    </div>
                   ) : null}
-                  {onExplainResult ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onExplainResult({
-                          runId: citedRun?.id || message.citations?.runId || '',
-                          resultId: result.id,
-                          ordinal: (citedRun?.results.findIndex((item) => item.id === result.id) ?? index) + 1,
-                        })
-                      }
-                      className="rounded-full border border-emerald-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800 transition-colors hover:bg-emerald-100"
-                    >
-                      Explain In Chat
-                    </button>
-                  ) : null}
-                  <a
-                    href={`/finder/calls/${result.id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-full border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800"
-                  >
-                    Show Details
-                  </a>
-                  {result.officialUrls[0] ? (
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {amount ? (
+                      <span className="rounded-full border border-white bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700">
+                        Amount: {amount}
+                      </span>
+                    ) : null}
+                    {result.fundingKinds.slice(0, 2).map((kind) => (
+                      <span
+                        key={kind}
+                        className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700"
+                      >
+                        {kind}
+                      </span>
+                    ))}
+                    {result.eligibleCountries.slice(0, 1).map((country) => (
+                      <span
+                        key={country}
+                        className="rounded-full border border-white bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-900"
+                      >
+                        {country}
+                      </span>
+                    ))}
+                    {!result.eligibleCountries.length && result.hostCountries.slice(0, 1).map((country) => (
+                      <span
+                        key={country}
+                        className="rounded-full border border-white bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-900"
+                      >
+                        Host: {country}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {onBeginWriting ? (
+                      <button
+                        type="button"
+                        onClick={() => onBeginWriting({ resultId: result.id })}
+                        className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:border-emerald-700 hover:bg-emerald-700"
+                      >
+                        Write Grant
+                      </button>
+                    ) : null}
+                    {onExplainResult ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onExplainResult({
+                            runId: citedRun?.id || message.citations?.runId || '',
+                            resultId: result.id,
+                            ordinal: (citedRun?.results.findIndex((item) => item.id === result.id) ?? index) + 1,
+                          })
+                        }
+                        className="rounded-full border border-emerald-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800 transition-colors hover:bg-emerald-100"
+                      >
+                        Explain In Chat
+                      </button>
+                    ) : null}
                     <a
-                      href={result.officialUrls[0]}
+                      href={`/finder/calls/${result.id}`}
                       target="_blank"
                       rel="noreferrer"
                       className="rounded-full border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800"
                     >
-                      Open Source
+                      Show Details
                     </a>
-                  ) : null}
+                    {result.officialUrls[0] ? (
+                      <a
+                        href={result.officialUrls[0]}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-full border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800"
+                      >
+                        Open Source
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : null}
       </div>

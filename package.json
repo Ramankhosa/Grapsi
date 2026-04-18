@@ -27,7 +27,8 @@
     "test:phase2": "node ./node_modules/tsx/dist/cli.cjs scripts/run-phase2-tests.ts",
     "ops:funding-repair": "node ./node_modules/tsx/dist/cli.cjs scripts/run-funding-repair.ts",
     "seed:funding-finder": "node ./node_modules/tsx/dist/cli.cjs scripts/seed-funding-finder-verification.ts",
-    "verify:funding-finder": "node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-finder.ts"
+    "verify:funding-finder": "node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-finder.ts",
+    "verify:funding-grant-launch": "node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-grant-launch.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

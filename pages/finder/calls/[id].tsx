@@ -50,6 +50,7 @@ export default function FundingCallDetailsPage() {
   const [call, setCall] = useState<FundingCallDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [startingGrantPrep, setStartingGrantPrep] = useState(false)
 
   const isAdmin = useMemo(
     () => Boolean(user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER')),
@@ -96,6 +97,31 @@ export default function FundingCallDetailsPage() {
     }
   }, [authFetch, id, user])
 
+  async function handleStartGrantPrep() {
+    if (!call?.id) return
+
+    setStartingGrantPrep(true)
+    setError(null)
+    try {
+      const response = await authFetch(`/api/funding/calls/${call.id}/start-grant-prep`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ engagementMode: 'guided' }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.message || 'Failed to start grant prep')
+      }
+      await router.push(payload.launchUrl)
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to start grant prep')
+    } finally {
+      setStartingGrantPrep(false)
+    }
+  }
+
   if (isLoading || loading) {
     return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white">Loading funding call...</div>
   }
@@ -128,12 +154,14 @@ export default function FundingCallDetailsPage() {
           </Link>
           <div className="flex flex-wrap items-center gap-3">
             {(call.catalog_status === 'PUBLISHED' || call.status === 'PUBLISHED') ? (
-              <Link
-                href={`/projects?fundingCallId=${call.id}`}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800"
+              <button
+                type="button"
+                onClick={() => void handleStartGrantPrep()}
+                disabled={startingGrantPrep}
+                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                Start Grant Prep
-              </Link>
+                {startingGrantPrep ? 'Opening Grant Prep...' : 'Write Grant'}
+              </button>
             ) : null}
             {call.official_urls?.[0] ? (
               <a

@@ -26,6 +26,15 @@ export interface RecommendationSearchFilters {
   sort?: RecommendationSort;
 }
 
+export interface RecommendationStrictFilterRecovery {
+  retryFilters: Required<RecommendationSearchFilters>;
+  relaxedFilterKeys: Array<keyof RecommendationSearchFilters>;
+}
+
+export interface RecommendationSearchDiagnostics {
+  strictFilterRecovery?: RecommendationStrictFilterRecovery | null;
+}
+
 export interface PaperMetadataQuery {
   title?: string;
   abstract?: string;
@@ -126,6 +135,7 @@ export interface RecommendationSearchResponse {
   lowConfidence: boolean;
   noResultsReason: RecommendationNoResultsReason;
   relaxationSuggestions: string[];
+  strictFilterRecovery?: RecommendationStrictFilterRecovery | null;
   results: RecommendationSearchResultItem[];
   totalResults: number;
 }

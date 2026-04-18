@@ -1,13 +1,31 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
 import type { FundingCallDetail } from '@/types/funding'
 
-export default function FundingCallDetailPage({ callId }: { callId: string }) {
-  const { token, user } = useAuth()
+type FundingCallDetailPageProps = {
+  callId: string
+  backHref?: string
+  backLabel?: string
+  requireSuperAdmin?: boolean
+}
+
+export default function FundingCallDetailPage({
+  callId,
+  backHref = '/funding/imports',
+  backLabel = 'Back to funding imports',
+  requireSuperAdmin = false,
+}: FundingCallDetailPageProps) {
+  const { token, user, isLoading: authLoading } = useAuth()
+  const router = useRouter()
+  const isSuperAdmin = useMemo(
+    () => user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER'),
+    [user?.roles]
+  )
   const isSuperAdminWriter = useMemo(() => user?.roles?.includes('SUPER_ADMIN'), [user?.roles])
 
   const [call, setCall] = useState<FundingCallDetail | null>(null)
@@ -38,6 +56,21 @@ export default function FundingCallDetailPage({ callId }: { callId: string }) {
   }, [callId, token])
 
   useEffect(() => {
+    if (!requireSuperAdmin || authLoading) {
+      return
+    }
+
+    if (!user) {
+      router.replace('/login')
+      return
+    }
+
+    if (!isSuperAdmin) {
+      router.replace('/dashboard')
+    }
+  }, [authLoading, isSuperAdmin, requireSuperAdmin, router, user])
+
+  useEffect(() => {
     fetchCall()
   }, [fetchCall])
 
@@ -64,6 +97,10 @@ export default function FundingCallDetailPage({ callId }: { callId: string }) {
     }
   }
 
+  if (requireSuperAdmin && (authLoading || !isSuperAdmin)) {
+    return <div className="p-8 text-sm text-gray-600">Checking platform access...</div>
+  }
+
   if (!token) {
     return <div className="p-8 text-sm text-gray-600">Log in to access funding calls.</div>
   }
@@ -73,12 +110,12 @@ export default function FundingCallDetailPage({ callId }: { callId: string }) {
       <div className="mx-auto max-w-5xl space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <Link href="/funding/imports" className="text-sm text-slate-500 hover:text-slate-700">
-              Back to funding imports
+            <Link href={backHref} className="text-sm text-slate-500 hover:text-slate-700">
+              {backLabel}
             </Link>
             <h1 className="mt-2 text-3xl font-semibold">{call?.title || 'Funding Call'}</h1>
             <p className="mt-2 text-sm text-slate-600">
-              {call?.agencyName || 'Unknown agency'} · {call?.visibility || '...'} · {call?.status || '...'}
+              {call?.agencyName || 'Unknown agency'} - {call?.visibility || '...'} - {call?.status || '...'}
             </p>
           </div>
 
@@ -190,7 +227,7 @@ export default function FundingCallDetailPage({ callId }: { callId: string }) {
                       <div>
                         <p className="text-sm font-medium text-slate-900">{job.normalizedFacts?.title || call.title}</p>
                         <p className="mt-1 text-xs text-slate-500">
-                          {job.status} · {job.inputType} · {new Date(job.updatedAt).toLocaleString()}
+                          {job.status} - {job.inputType} - {new Date(job.updatedAt).toLocaleString()}
                         </p>
                       </div>
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">{job.outcome || 'n/a'}</span>

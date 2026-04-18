@@ -4,7 +4,13 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
 }
 
-const prismaBase = globalForPrisma.prisma ?? new PrismaClient()
+const prismaOptions = process.env.DATABASE_URL
+  ? {
+      datasourceUrl: process.env.DATABASE_URL,
+    }
+  : undefined
+
+const prismaBase = globalForPrisma.prisma ?? new PrismaClient(prismaOptions)
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prismaBase
 

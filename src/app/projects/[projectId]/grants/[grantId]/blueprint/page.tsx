@@ -192,7 +192,7 @@ export default function GrantBlueprintPage() {
             <h1 className="mt-3 text-3xl font-bold text-slate-900">Grant Blueprint</h1>
             <p className="mt-2 text-sm text-slate-600">
               {workspace.grantSession.fundingCall?.scheme_title || 'Local grant workspace'}
-              {workspace.grantSession.fundingCall?.agency_name ? ` · ${workspace.grantSession.fundingCall.agency_name}` : ''}
+              {workspace.grantSession.fundingCall?.agency_name ? ` - ${workspace.grantSession.fundingCall.agency_name}` : ''}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">

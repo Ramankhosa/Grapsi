@@ -5,8 +5,14 @@ import crypto from 'crypto'
 import { prisma } from '@/lib/prisma'
 import dotenv from 'dotenv'
 
-// Load environment variables
-dotenv.config()
+const globalForAuthEnv = globalThis as typeof globalThis & {
+  __grapsiAuthDotenvLoaded?: boolean
+}
+
+if (!globalForAuthEnv.__grapsiAuthDotenvLoaded) {
+  dotenv.config({ quiet: true })
+  globalForAuthEnv.__grapsiAuthDotenvLoaded = true
+}
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 12)
@@ -449,4 +455,3 @@ export async function createAuditLog({
     }
   })
 }
-

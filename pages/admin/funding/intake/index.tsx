@@ -22,6 +22,20 @@ type JobSummary = {
   } | null;
 };
 
+function readApiErrorMessage(data: any, fallback: string) {
+  if (data && typeof data === 'object') {
+    const message = typeof data.message === 'string'
+      ? data.message
+      : typeof data.error === 'string'
+        ? data.error
+        : null;
+    if (message && message.trim()) {
+      return message;
+    }
+  }
+  return fallback;
+}
+
 export default function FundingIntakeAdminPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
@@ -36,7 +50,8 @@ export default function FundingIntakeAdminPage() {
   const [actioningJobId, setActioningJobId] = useState<string | null>(null);
 
   const userRoles = user?.roles || [];
-  const isFundingOperator = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
+  const canReadFundingIntake = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
+  const canWriteFundingIntake = userRoles.includes('SUPER_ADMIN');
 
   const activeJobs = useMemo(
     () => jobs.filter((job) => ['queued', 'fetching', 'extracting'].includes(job.status)),
@@ -50,10 +65,10 @@ export default function FundingIntakeAdminPage() {
   }, [isLoading, router, user]);
 
   useEffect(() => {
-    if (user && isFundingOperator) {
+    if (user && canReadFundingIntake) {
       void loadJobs();
     }
-  }, [user, isFundingOperator]);
+  }, [user, canReadFundingIntake]);
 
   useEffect(() => {
     if (!activeJobs.length) {
@@ -76,7 +91,7 @@ export default function FundingIntakeAdminPage() {
       const response = await fetch('/api/admin/funding/intake');
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to load intake jobs');
+        throw new Error(readApiErrorMessage(data, 'Failed to load intake jobs'));
       }
       setJobs(data.jobs || []);
     } catch (error) {
@@ -90,6 +105,10 @@ export default function FundingIntakeAdminPage() {
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
     setSubmitting(true);
 
     try {
@@ -118,7 +137,7 @@ export default function FundingIntakeAdminPage() {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to create funding intake job');
+        throw new Error(readApiErrorMessage(data, 'Failed to create funding intake job'));
       }
 
       toast.success('Funding intake job created');
@@ -136,6 +155,10 @@ export default function FundingIntakeAdminPage() {
   }
 
   async function handleJobAction(jobId: string, action: 'retry' | 'cancel') {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
     try {
       setActioningJobId(`${jobId}:${action}`);
       const response = await fetch(`/api/admin/funding/intake/${jobId}/${action}`, {
@@ -143,7 +166,7 @@ export default function FundingIntakeAdminPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.message || `Failed to ${action} job`);
+        throw new Error(readApiErrorMessage(data, `Failed to ${action} job`));
       }
       toast.success(`Job ${action}ed`);
       await loadJobs(false);
@@ -159,6 +182,11 @@ export default function FundingIntakeAdminPage() {
       return;
     }
 
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
+
     if (!window.confirm('Archive the published funding call first? You can delete the intake job after archiving.')) {
       return;
     }
@@ -170,7 +198,7 @@ export default function FundingIntakeAdminPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to archive funding call');
+        throw new Error(readApiErrorMessage(data, 'Failed to archive funding call'));
       }
       toast.success('Published funding call archived. Delete is now enabled.');
       await loadJobs(false);
@@ -182,6 +210,11 @@ export default function FundingIntakeAdminPage() {
   }
 
   async function handleDeleteJob(job: JobSummary) {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
+
     if (
       !window.confirm(
         'Delete this intake job? Any unpublished draft, guideline, template, and uploaded intake artifacts created by this job will also be removed.'
@@ -203,7 +236,7 @@ export default function FundingIntakeAdminPage() {
         if (response.status === 409 && data.reason === 'cancel_before_delete') {
           throw new Error('Cancel the active job first, then delete it.');
         }
-        throw new Error(data.message || 'Failed to delete intake job');
+        throw new Error(readApiErrorMessage(data, 'Failed to delete intake job'));
       }
       toast.success(data.deletedFundingCallId ? 'Intake job and linked unpublished call deleted.' : 'Intake job deleted.');
       await loadJobs(false);
@@ -218,7 +251,7 @@ export default function FundingIntakeAdminPage() {
     return <div className="min-h-screen flex items-center justify-center text-gray-600">Loading...</div>;
   }
 
-  if (!isFundingOperator) {
+  if (!canReadFundingIntake) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 px-6">
         <div className="max-w-lg rounded-2xl border border-red-200 bg-white p-8 text-center shadow-sm">
@@ -255,8 +288,13 @@ export default function FundingIntakeAdminPage() {
         </div>
 
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1.1fr),minmax(0,0.9fr)]">
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <section id="submit-intake-source" className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-slate-900">Submit intake source</h2>
+            {!canWriteFundingIntake && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                Viewer access is read-only. Only SUPER_ADMIN users can create or modify intake jobs.
+              </div>
+            )}
             <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
               <div className="flex flex-wrap gap-3">
                 <button
@@ -283,33 +321,36 @@ export default function FundingIntakeAdminPage() {
               </div>
 
               {inputType === 'url' ? (
-                <label className="block">
+                <label key="intake-url-input" className="block">
                   <span className="mb-2 block text-sm font-medium text-slate-700">Funding opportunity URL</span>
                   <input
                     value={sourceUrl}
                     onChange={(event) => setSourceUrl(event.target.value)}
+                    disabled={!canWriteFundingIntake}
                     className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                     placeholder="https://agency.example.org/funding/call"
                   />
                 </label>
               ) : inputType === 'text' ? (
-                <label className="block">
+                <label key="intake-text-input" className="block">
                   <span className="mb-2 block text-sm font-medium text-slate-700">Funding opportunity text</span>
                   <textarea
                     value={sourceText}
                     onChange={(event) => setSourceText(event.target.value)}
                     rows={12}
+                    disabled={!canWriteFundingIntake}
                     className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                     placeholder="Paste the funding opportunity announcement here"
                   />
                 </label>
               ) : (
-                <label className="block">
+                <label key="intake-pdf-input" className="block">
                   <span className="mb-2 block text-sm font-medium text-slate-700">Funding opportunity PDF</span>
                   <input
                     type="file"
                     accept=".pdf,application/pdf"
                     onChange={(event) => setSourcePdf(event.target.files?.[0] || null)}
+                    disabled={!canWriteFundingIntake}
                     className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   />
                   <p className="mt-2 text-xs text-slate-500">PDF intake stores the uploaded file once, derives canonical text from it, and reuses that same source for extract-all.</p>
@@ -322,6 +363,7 @@ export default function FundingIntakeAdminPage() {
                   value={operatorNotes}
                   onChange={(event) => setOperatorNotes(event.target.value)}
                   rows={3}
+                  disabled={!canWriteFundingIntake}
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   placeholder="Optional reviewer notes for the draft or source"
                 />
@@ -331,11 +373,11 @@ export default function FundingIntakeAdminPage() {
                 V1 rules: only HTTPS URLs are accepted for web intake, private-network URLs are blocked, PDF transcription requires Gemini multimodal support, and extraction runs asynchronously.
               </div>
 
-              <button
-                type="submit"
-                disabled={submitting || (inputType === 'pdf' && !sourcePdf)}
-                className="inline-flex items-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-              >
+                <button
+                  type="submit"
+                  disabled={!canWriteFundingIntake || submitting || (inputType === 'pdf' && !sourcePdf)}
+                  className="inline-flex items-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
                 {submitting ? 'Submitting...' : 'Create Intake Job'}
               </button>
             </form>
@@ -449,7 +491,7 @@ export default function FundingIntakeAdminPage() {
                             <button
                               type="button"
                               onClick={() => handleJobAction(job.id, 'retry')}
-                              disabled={actioningJobId !== null}
+                              disabled={!canWriteFundingIntake || actioningJobId !== null}
                               className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
                             >
                               {actioningJobId === `${job.id}:retry` ? 'Retrying...' : 'Retry'}
@@ -459,7 +501,7 @@ export default function FundingIntakeAdminPage() {
                             <button
                               type="button"
                               onClick={() => handleJobAction(job.id, 'cancel')}
-                              disabled={actioningJobId !== null}
+                              disabled={!canWriteFundingIntake || actioningJobId !== null}
                               className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800"
                             >
                               {actioningJobId === `${job.id}:cancel` ? 'Canceling...' : 'Cancel'}
@@ -469,7 +511,7 @@ export default function FundingIntakeAdminPage() {
                             <button
                               type="button"
                               onClick={() => handleArchiveLinkedCall(job)}
-                              disabled={actioningJobId !== null}
+                              disabled={!canWriteFundingIntake || actioningJobId !== null}
                               className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {actioningJobId === `${job.id}:archive` ? 'Archiving...' : 'Archive Call'}
@@ -479,7 +521,7 @@ export default function FundingIntakeAdminPage() {
                             <button
                               type="button"
                               onClick={() => handleDeleteJob(job)}
-                              disabled={actioningJobId !== null}
+                              disabled={!canWriteFundingIntake || actioningJobId !== null}
                               className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {actioningJobId === `${job.id}:delete` ? 'Deleting...' : 'Delete'}

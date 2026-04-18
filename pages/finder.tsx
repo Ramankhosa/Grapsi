@@ -5,7 +5,6 @@ import { useRouter } from 'next/router';
 import {
   FaArrowLeft,
   FaBolt,
-  FaCheck,
   FaExclamationTriangle,
   FaFilter,
   FaPaperclip,
@@ -17,6 +16,9 @@ import {
 } from 'react-icons/fa';
 import FinderActiveFilterBar from '@/components/FinderActiveFilterBar';
 import FinderChatMessage from '@/components/FinderChatMessage';
+import FinderPendingFilterConfirmationBar from '@/components/FinderPendingFilterConfirmationBar';
+import FinderPendingTurnMessage from '@/components/FinderPendingTurnMessage';
+import FinderStrictFilterRecoveryNotice from '@/components/FinderStrictFilterRecoveryNotice';
 // FinderConversationSidebar removed from layout — single-conversation UX
 // import FinderConversationSidebar from '@/components/FinderConversationSidebar';
 import FundingChatFilterDrawer from '@/components/FundingChatFilterDrawer';
@@ -24,9 +26,17 @@ import FundingCallImportModal from '@/components/FundingCallImportModal';
 import FundingDirectoryPanel from '@/components/FundingDirectoryPanel';
 import type {
   RecommendationConversationDetail,
+  RecommendationConversationMessageRequest,
   RecommendationConversationRunRecord,
   RecommendationConversationSummary,
 } from '@/lib/recommendations/chatTypes';
+import {
+  buildArrayValueRemovedFilters,
+  buildFinderConversationStarters,
+  buildClearedScalarFilters,
+  buildRetryWithoutFiltersRequest,
+  describeStrictRecoverySentence,
+} from '@/lib/recommendations/finderUi';
 import type { ResearcherFinderContext } from '@/lib/researcherProfile/types';
 import type {
   DirectoryFacetDimension,
@@ -68,18 +78,19 @@ const manualDefaultFilters: Required<RecommendationSearchFilters> = {
   sort: 'deadline_soonest',
 };
 
-const conversationStarters = [
-  'Find international fellowships in AI for healthcare.',
-  'Show climate adaptation grants open to Indian universities.',
-  'I need travel grants for presenting research in Europe.',
-  'Find infrastructure funding for an AI and data lab.',
-];
-
 type AttachedQueryContext = {
   label: string;
   queryText: string;
   sourceLabel: string;
 } | null;
+
+type PendingTurnState = {
+  createdAt: string;
+  error: string | null;
+  message: string;
+  request: RecommendationConversationMessageRequest;
+  status: 'pending' | 'failed';
+};
 
 function buildSummary(detail: RecommendationConversationDetail): RecommendationConversationSummary {
   const preview = [...detail.messages].reverse().find((message) => message.content.trim().length > 0)?.content || null;
@@ -142,6 +153,7 @@ export default function FinderPage() {
   const { user, isLoading, authFetch, logout } = useAuth();
   const router = useRouter();
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [finderTab, setFinderTab] = useState<FinderTab>('manual');
   const [conversations, setConversations] = useState<RecommendationConversationSummary[]>([]);
@@ -175,6 +187,7 @@ export default function FinderPage() {
   const [directorySelections, setDirectorySelections] = useState<Array<{ dimension: DirectoryFacetDimension; value: string }>>([]);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingTurn, setPendingTurn] = useState<PendingTurnState | null>(null);
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -191,7 +204,7 @@ export default function FinderPage() {
   useEffect(() => {
     if (!chatScrollRef.current) return;
     chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-  }, [conversation?.messages.length, conversation?.lastRunId, sending]);
+  }, [conversation?.messages.length, conversation?.lastRunId, pendingTurn?.status, sending]);
 
   const activeRun = useMemo<RecommendationConversationRunRecord | null>(() => {
     if (!conversation) return null;
@@ -199,12 +212,27 @@ export default function FinderPage() {
     return conversation.runs.find((run) => run.id === conversation.lastRunId) || conversation.runs[conversation.runs.length - 1] || null;
   }, [conversation]);
 
+  const starterPrompts = useMemo(() => buildFinderConversationStarters(finderContext), [finderContext]);
+
+  const latestAssistantMessageId = useMemo(() => {
+    if (!conversation) return null;
+    for (let index = conversation.messages.length - 1; index >= 0; index -= 1) {
+      if (conversation.messages[index]?.role === 'assistant') {
+        return conversation.messages[index].id;
+      }
+    }
+    return null;
+  }, [conversation]);
+
+  const hasRenderableConversationMessages = Boolean((conversation?.messages.length || 0) > 0 || pendingTurn);
+
   async function loadConversation(conversationId: string) {
     setLoadingConversation(true);
     setError(null);
     try {
       const payload = await apiRequest<{ conversation: RecommendationConversationDetail }>(authFetch, `/api/recommendations/conversations/${conversationId}`);
       setConversation(payload.conversation);
+      setPendingTurn(null);
       setConversations((current) => {
         const summary = buildSummary(payload.conversation);
         const rest = current.filter((item) => item.id !== summary.id);
@@ -227,6 +255,7 @@ export default function FinderPage() {
         body: JSON.stringify({}),
       });
       setConversation(payload.conversation);
+      setPendingTurn(null);
       setConversations((current) => [buildSummary(payload.conversation), ...current.filter((item) => item.id !== payload.conversation.id)]);
       setComposer('');
       setAttachedContext(null);
@@ -425,6 +454,7 @@ export default function FinderPage() {
 
   function updateConversationFromResponse(detail: RecommendationConversationDetail) {
     setConversation(detail);
+    setPendingTurn(null);
     setConversations((current) => {
       const summary = buildSummary(detail);
       const rest = current.filter((item) => item.id !== summary.id);
@@ -541,15 +571,31 @@ export default function FinderPage() {
     await loadManualDirectory(manualActiveQuery || manualQuery, manualFilters, manualPage - 1);
   }
 
-  async function postConversationMessage(payload: {
-    message?: string;
-    manualQueryPatch?: unknown;
-    manualFilterPatch?: RecommendationSearchFilters;
-    inputMode?: 'research_area' | 'paper_metadata';
-  }) {
+  async function postConversationMessage(
+    payload: RecommendationConversationMessageRequest,
+    options?: {
+      clearComposerOnSuccess?: boolean;
+      onSuccess?: () => void;
+      optimisticMessage?: string | null;
+    }
+  ) {
     if (!conversation) return false;
     setSending(true);
     setError(null);
+    const optimisticMessage = options?.optimisticMessage?.trim() || '';
+    const optimisticTurn = optimisticMessage
+      ? {
+          createdAt: new Date().toISOString(),
+          error: null,
+          message: optimisticMessage,
+          request: { ...payload },
+          status: 'pending' as const,
+        }
+      : null;
+
+    if (optimisticTurn) {
+      setPendingTurn(optimisticTurn);
+    }
 
     try {
       const previousFilters = conversation.currentFilters;
@@ -567,10 +613,22 @@ export default function FinderPage() {
       }
 
       updateConversationFromResponse(response.conversation);
-      setComposer('');
+      if (options?.clearComposerOnSuccess) {
+        setComposer('');
+      }
+      options?.onSuccess?.();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
+      const message = err instanceof Error ? err.message : 'Failed to send message';
+      if (optimisticTurn) {
+        setPendingTurn({
+          ...optimisticTurn,
+          error: message,
+          status: 'failed',
+        });
+      } else {
+        setError(message);
+      }
       return false;
     } finally {
       setSending(false);
@@ -578,23 +636,28 @@ export default function FinderPage() {
   }
 
   async function handleSendMessage(message: string) {
-    return postConversationMessage({ message });
+    return postConversationMessage({ message }, { optimisticMessage: message });
   }
 
   async function handleSubmitComposer() {
     const trimmed = composer.trim();
     if (!trimmed) return;
 
-    const success = await postConversationMessage({
-      message: trimmed,
-      inputMode: attachedContext ? 'research_area' : undefined,
-      manualQueryPatch: attachedContext ? { researchArea: attachedContext.queryText } : undefined,
-    });
-
-    if (success) {
-      setAttachedContext(null);
-      setAttachMenuOpen(false);
-    }
+    await postConversationMessage(
+      {
+        message: trimmed,
+        inputMode: attachedContext ? 'research_area' : undefined,
+        manualQueryPatch: attachedContext ? { researchArea: attachedContext.queryText } : undefined,
+      },
+      {
+        clearComposerOnSuccess: true,
+        optimisticMessage: trimmed,
+        onSuccess: () => {
+          setAttachedContext(null);
+          setAttachMenuOpen(false);
+        },
+      }
+    );
   }
 
   async function handleApplyFilters() {
@@ -602,6 +665,7 @@ export default function FinderPage() {
     await postConversationMessage({
       message: 'Apply these filter changes.',
       manualFilterPatch: filterDraft,
+      replaceManualFilters: true,
     });
   }
 
@@ -646,6 +710,7 @@ export default function FinderPage() {
     const success = await postConversationMessage({
       message: 'Undo the last filter change.',
       manualFilterPatch: lastUndoFilters,
+      replaceManualFilters: true,
     });
     if (success) {
       setLastUndoFilters(null);
@@ -654,23 +719,46 @@ export default function FinderPage() {
 
   async function handleRemoveArrayValue(key: keyof RecommendationSearchFilters, value: string) {
     if (!conversation) return;
-    const nextFilters = { ...conversation.currentFilters } as RecommendationSearchFilters;
-    const current = Array.isArray(nextFilters[key]) ? ([...(nextFilters[key] as string[])] as string[]) : [];
-    nextFilters[key] = current.filter((item) => item !== value) as never;
-    await postConversationMessage({ message: `Remove ${value} from the active filters.`, manualFilterPatch: nextFilters });
+    const nextFilters = buildArrayValueRemovedFilters(conversation.currentFilters, key, value);
+    await postConversationMessage({
+      message: `Remove ${value} from the active filters.`,
+      manualFilterPatch: nextFilters,
+      replaceManualFilters: true,
+    });
   }
 
   async function handleClearScalar(key: keyof RecommendationSearchFilters) {
     if (!conversation) return;
-    const nextFilters = { ...conversation.currentFilters } as RecommendationSearchFilters;
-    if (key === 'rollingOnly' || key === 'includeExpired') {
-      nextFilters[key] = false as never;
-    } else if (key === 'amountMin' || key === 'amountMax') {
-      nextFilters[key] = null as never;
-    } else {
-      delete nextFilters[key];
-    }
-    await postConversationMessage({ message: `Clear the ${String(key)} filter.`, manualFilterPatch: nextFilters });
+    const nextFilters = buildClearedScalarFilters(conversation.currentFilters, key);
+    await postConversationMessage({
+      message: `Clear the ${String(key)} filter.`,
+      manualFilterPatch: nextFilters,
+      replaceManualFilters: true,
+    });
+  }
+
+  async function handleRetryWithoutStrictFilters() {
+    if (!activeRun?.searchDiagnostics?.strictFilterRecovery) return;
+    await postConversationMessage(buildRetryWithoutFiltersRequest(activeRun.searchDiagnostics.strictFilterRecovery));
+  }
+
+  async function handleRetryPendingTurn() {
+    if (!pendingTurn || pendingTurn.status !== 'failed') return;
+    await postConversationMessage(pendingTurn.request, {
+      clearComposerOnSuccess: composer.trim() === pendingTurn.message.trim(),
+      optimisticMessage: pendingTurn.message,
+    });
+  }
+
+  function handleEditPendingTurn() {
+    if (!pendingTurn) return;
+    setComposer(pendingTurn.message);
+    setPendingTurn(null);
+    composerRef.current?.focus();
+  }
+
+  function handleDismissPendingTurn() {
+    setPendingTurn(null);
   }
 
   function handleAttachResearchContext(label: string, queryText: string, sourceLabel: string) {
@@ -683,13 +771,28 @@ export default function FinderPage() {
     await handleSendMessage(`Explain result ${payload.ordinal}.`);
   }
 
-  function handleBeginWritingFromCall(fundingCallId: string) {
-    const callbackUrl = `/dashboard?createProject=1&fundingCallId=${encodeURIComponent(fundingCallId)}`;
-    if (user) {
-      router.push(callbackUrl);
+  async function handleBeginWritingFromCall(fundingCallId: string) {
+    const callbackUrl = `/finder/calls/${encodeURIComponent(fundingCallId)}`;
+    if (!user) {
+      router.push(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
       return;
     }
-    router.push(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
+
+    setError(null);
+    try {
+      const payload = await apiRequest<{ launchUrl: string }>(
+        authFetch,
+        `/api/funding/calls/${fundingCallId}/start-grant-prep`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ engagementMode: 'guided' }),
+        }
+      );
+      await router.push(payload.launchUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start grant prep');
+    }
   }
 
   const savedResearchAreas = finderContext?.researchAreas || [];
@@ -821,7 +924,6 @@ export default function FinderPage() {
               {conversation ? (
                 <FinderActiveFilterBar
                   filters={conversation.currentFilters}
-                  pendingPatch={conversation.pendingFilterPatch}
                   onRemoveArrayValue={handleRemoveArrayValue}
                   onClearScalar={handleClearScalar}
                   onOpenFilters={() => setFilterDrawerOpen(true)}
@@ -908,43 +1010,26 @@ export default function FinderPage() {
               ) : null}
 
               <div ref={chatScrollRef} className="h-[60vh] overflow-y-auto bg-[linear-gradient(180deg,_rgba(248,250,252,0.7),_rgba(255,255,255,0.98))] px-6 py-6">
-                {conversation?.pendingFilterPatch ? (
-                  <div className="mb-5 rounded-[24px] border border-amber-300 bg-amber-50 p-5">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">Pending Filter Confirmation</div>
-                    <p className="mt-2 text-sm leading-6 text-amber-950">{conversation.pendingFilterPatch.summary}</p>
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      <button
-                        type="button"
-                        onClick={() => handleConfirmPending(true)}
-                        className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400"
-                      >
-                        <FaCheck />
-                        Confirm
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleConfirmPending(false)}
-                        className="inline-flex items-center gap-2 rounded-2xl border border-amber-300 px-4 py-3 text-sm font-semibold text-amber-950 transition-colors hover:bg-amber-100"
-                      >
-                        <FaTimes />
-                        Reject
-                      </button>
-                    </div>
-                  </div>
+                {conversation && activeRun?.noResultsReason === 'filters_too_strict' && activeRun.searchDiagnostics?.strictFilterRecovery ? (
+                  <FinderStrictFilterRecoveryNotice
+                    filters={conversation.currentFilters}
+                    recovery={activeRun.searchDiagnostics.strictFilterRecovery}
+                    onRetry={handleRetryWithoutStrictFilters}
+                  />
                 ) : null}
-
-                {!conversation || conversation.messages.length === 0 ? (
+                {!conversation || !hasRenderableConversationMessages ? (
                   <div className="space-y-4 rounded-[24px] border border-dashed border-slate-300 bg-slate-50 p-6">
                     <div className="text-lg font-semibold text-slate-900">Start with a plain-language funding request</div>
                     <p className="text-sm leading-6 text-slate-600">
-                      Example: “Find fellowships for AI in healthcare,” “Show travel grants in Europe,” or “Find climate research grants for universities in India.”
+                      Example: "Find fellowships for AI in healthcare," "Show travel grants in Europe," or "Find climate research grants for universities in India."
                     </p>
                     <div className="grid gap-3 md:grid-cols-2">
-                      {conversationStarters.map((starter) => (
+                      {starterPrompts.map((starter) => (
                         <button
                           key={starter}
                           type="button"
                           onClick={() => handleSendMessage(starter)}
+                          disabled={sending || !conversation}
                           className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-left text-sm font-medium text-slate-700 transition-colors hover:border-emerald-400 hover:text-emerald-700"
                         >
                           {starter}
@@ -961,8 +1046,32 @@ export default function FinderPage() {
                         runs={conversation.runs}
                         onExplainResult={handleExplainResult}
                         onBeginWriting={({ resultId }) => handleBeginWritingFromCall(resultId)}
+                        strictRecoveryAction={
+                          message.id === latestAssistantMessageId &&
+                          activeRun?.noResultsReason === 'filters_too_strict' &&
+                          activeRun.searchDiagnostics?.strictFilterRecovery
+                            ? {
+                                summary: describeStrictRecoverySentence(
+                                  conversation.currentFilters,
+                                  activeRun.searchDiagnostics.strictFilterRecovery
+                                ),
+                                onRetry: handleRetryWithoutStrictFilters,
+                              }
+                            : null
+                        }
                       />
                     ))}
+                    {pendingTurn ? (
+                      <FinderPendingTurnMessage
+                        createdAt={pendingTurn.createdAt}
+                        message={pendingTurn.message}
+                        status={pendingTurn.status}
+                        error={pendingTurn.error}
+                        onRetry={handleRetryPendingTurn}
+                        onEdit={handleEditPendingTurn}
+                        onDismiss={handleDismissPendingTurn}
+                      />
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -985,6 +1094,15 @@ export default function FinderPage() {
                       Remove
                     </button>
                   </div>
+                ) : null}
+
+                {conversation?.pendingFilterPatch ? (
+                  <FinderPendingFilterConfirmationBar
+                    pendingPatch={conversation.pendingFilterPatch}
+                    disabled={sending}
+                    onConfirm={() => handleConfirmPending(true)}
+                    onReject={() => handleConfirmPending(false)}
+                  />
                 ) : null}
 
                 <form
@@ -1086,6 +1204,7 @@ export default function FinderPage() {
                     </button>
 
                     <textarea
+                      ref={composerRef}
                       rows={2}
                       value={composer}
                       onChange={(event) => setComposer(event.target.value)}
@@ -1105,7 +1224,7 @@ export default function FinderPage() {
                       className="inline-flex h-12 shrink-0 items-center gap-2 rounded-2xl bg-emerald-600 px-5 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_4px_20px_rgba(16,185,129,0.4)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                     >
                       <FaPaperPlane />
-                      {sending ? 'Thinking...' : 'Send'}
+                      {sending ? 'Searching...' : 'Send'}
                     </button>
                   </div>
                 </form>

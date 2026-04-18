@@ -240,21 +240,79 @@ export async function resolveProjectFundingContext(
     throw new Error(visibility.reason)
   }
 
-  const activeTemplate = call.active_template_id
-    ? await prisma.fundingCallTemplate.findFirst({
-        where: {
-          id: call.active_template_id,
-          fundingCallId: call.id,
-          status: 'approved',
-        },
-        select: {
-          id: true,
-          current_revision_no: true,
-          grant_template_json: true,
-          compatibility_json: true,
-        },
-      })
-    : null
+  const [guidelineRecord, templateRecord] = await Promise.all([
+    prisma.fundingCallGuideline.findUnique({
+      where: { fundingCallId: call.id },
+      select: {
+        id: true,
+      },
+    }),
+    prisma.fundingCallTemplate.findUnique({
+      where: { fundingCallId: call.id },
+      select: {
+        id: true,
+        status: true,
+        current_revision_no: true,
+        grant_template_json: true,
+        compatibility_json: true,
+      },
+    }),
+  ])
+
+  const [approvedGuidelineRevision, approvedTemplateRevision] = await Promise.all([
+    guidelineRecord
+      ? prisma.fundingCallGuidelineRevision.findFirst({
+          where: {
+            OR: [
+              { guidelineId: guidelineRecord.id, status: 'APPROVED' },
+              { guidelineId: guidelineRecord.id, approved_state: 'approved' },
+              { guideline_id: guidelineRecord.id, status: 'APPROVED' },
+              { guideline_id: guidelineRecord.id, approved_state: 'approved' },
+            ],
+          },
+          orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
+          select: { id: true },
+        })
+      : Promise.resolve(null),
+    templateRecord && templateRecord.status !== 'approved'
+      ? prisma.fundingCallTemplateRevision.findFirst({
+          where: {
+            OR: [
+              { templateId: templateRecord.id, status: 'APPROVED' },
+              { templateId: templateRecord.id, approved_state: 'approved' },
+              { template_id: templateRecord.id, status: 'APPROVED' },
+              { template_id: templateRecord.id, approved_state: 'approved' },
+            ],
+          },
+          orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
+          select: {
+            version: true,
+            revision_no: true,
+            grant_template_json: true,
+            extractedPayload: true,
+            compatibility_json: true,
+            summaryJson: true,
+          },
+        })
+      : Promise.resolve(null),
+  ])
+
+  const activeTemplate =
+    templateRecord?.status === 'approved'
+      ? templateRecord
+      : templateRecord && approvedTemplateRevision
+        ? {
+            id: templateRecord.id,
+            current_revision_no:
+              approvedTemplateRevision.version ||
+              approvedTemplateRevision.revision_no ||
+              templateRecord.current_revision_no,
+            grant_template_json:
+              approvedTemplateRevision.grant_template_json ?? approvedTemplateRevision.extractedPayload,
+            compatibility_json:
+              approvedTemplateRevision.compatibility_json ?? approvedTemplateRevision.summaryJson ?? null,
+          }
+        : null
 
   const isPrivateDraft = call.catalog_status === 'DRAFT' || call.is_active === false
   const verificationStatus = getFundingCallVerificationStatus(call.metadata)
@@ -282,8 +340,8 @@ export async function resolveProjectFundingContext(
     fundingKinds: call.funding_kinds || [],
     officialUrls: call.official_urls || [],
     sourceUrl: call.source_url || null,
-    guidelineStatus: call.guideline_status || null,
-    templateStatus: call.template_status || null,
+    guidelineStatus: approvedGuidelineRevision ? 'approved' : call.guideline_status || null,
+    templateStatus: activeTemplate ? 'approved' : call.template_status || null,
     approvedGuidelineRevision: null,
     approvedTemplate: activeTemplate
       ? {

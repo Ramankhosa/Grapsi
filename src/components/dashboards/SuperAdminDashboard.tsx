@@ -332,6 +332,7 @@ export default function SuperAdminDashboard() {
       title: 'Access Management',
       icon: '🔐',
       items: [
+        { label: 'Funding Control', icon: '$', href: '/super-admin/funding', badge: 'NEW' },
         { label: 'Trial Campaigns', icon: '📧', href: '/super-admin/trial-campaigns', badge: 'NEW' },
         { label: 'ATI Token Management', icon: '🎟️', href: '/ati-management' },
         { label: 'Service Control', icon: '🎛️', href: '/super-admin/service-control' }
