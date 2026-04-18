@@ -111,6 +111,19 @@ export interface FundingCallDetail extends FundingCallSummary {
   extractedFacts?: NormalizedFundingFacts | null
   normalizedMetadata?: Record<string, unknown> | null
   llmExtraction?: FundingIntakeLlmExtraction | null
+  description?: string | null
+  eligibilityText?: string | null
+  expectedDeliverablesText?: string | null
+  amountMin?: number | null
+  amountMax?: number | null
+  currency?: string | null
+  projectDurationText?: string | null
+  officialUrls?: string[]
+  disciplines?: string[]
+  institutionTypes?: string[]
+  citizenshipRequirements?: string[]
+  applicationLanguages?: string[]
+  contactInfo?: string | null
   assets: FundingImportAssetView[]
   recentJobs: FundingImportJobView[]
 }

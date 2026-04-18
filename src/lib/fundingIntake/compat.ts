@@ -9,6 +9,18 @@ type FundingCallLike = {
   scheme_title?: string | null
   agency_name?: string | null
   agencyName?: string | null
+  eligibility_text?: string | null
+  expected_deliverables_text?: string | null
+  amount_min?: number | null
+  amount_max?: number | null
+  currency?: string | null
+  project_duration_text?: string | null
+  official_urls?: string[] | null
+  disciplines?: string[] | null
+  institution_types?: string[] | null
+  citizenship_requirements?: string[] | null
+  application_languages?: string[] | null
+  contact_info?: string | null
   programIdentifier?: string | null
   source_url?: string | null
   sourceUrl?: string | null
@@ -396,6 +408,26 @@ export function toFundingCallDetail(
         ? (call.normalizedMetadata as Record<string, unknown>)
         : null),
     llmExtraction: null,
+    description: call.description || call.summary || null,
+    eligibilityText: call.eligibility_text || null,
+    expectedDeliverablesText: call.expected_deliverables_text || null,
+    amountMin: typeof call.amount_min === 'number' ? call.amount_min : null,
+    amountMax: typeof call.amount_max === 'number' ? call.amount_max : null,
+    currency: call.currency || null,
+    projectDurationText: call.project_duration_text || null,
+    officialUrls: Array.isArray(call.official_urls) ? call.official_urls.filter(Boolean) : [],
+    disciplines: Array.isArray(call.disciplines) ? call.disciplines.filter(Boolean) : [],
+    institutionTypes: Array.isArray(call.institution_types) ? call.institution_types.filter(Boolean) : [],
+    citizenshipRequirements: Array.isArray(call.citizenship_requirements)
+      ? call.citizenship_requirements.filter(Boolean)
+      : [],
+    applicationLanguages: Array.isArray(call.application_languages)
+      ? call.application_languages.filter(Boolean)
+      : [],
+    contactInfo:
+      typeof call.contact_info === 'string' && call.contact_info.trim().length > 0
+        ? call.contact_info
+        : null,
     assets,
     recentJobs: options?.recentJobs || [],
   }

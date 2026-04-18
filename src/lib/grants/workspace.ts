@@ -11,6 +11,7 @@ import {
 } from '@/lib/grantPrep/server'
 import type { GrantTemplateDocument, FundingTemplateItem } from '@/lib/fundingTemplates/types'
 import { normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
+import { blueprintService, type BlueprintFreezeReadiness } from '@/lib/services/blueprint-service'
 import type {
   CompiledGrantTemplate,
   CompiledGrantTemplateSection,
@@ -49,6 +50,14 @@ export interface LocalGrantLaunchPreview {
   canLaunch: boolean
   grantSessionId: string | null
   launchUrl: string | null
+}
+
+export interface GrantProposalFoundation {
+  thesisStatement: string
+  centralObjective: string
+  keyContributions: string[]
+  status: string | null
+  version: number | null
 }
 
 function asJson(value: unknown) {
@@ -392,6 +401,401 @@ function buildStructuredScaffold(
   }
 }
 
+function isDraftableGrantSection(
+  sectionType: CompiledGrantTemplateSectionType | string
+): boolean {
+  return sectionType === 'narrative' || sectionType === 'short_answer'
+}
+
+function buildGrantPaperTypeCode(templateRevisionId: string | null | undefined) {
+  const value = String(templateRevisionId || '').trim()
+  return value ? `GRANT_TEMPLATE::${value}` : null
+}
+
+function sanitizeFoundation(input?: Partial<GrantProposalFoundation> | null) {
+  return {
+    thesisStatement: String(input?.thesisStatement || '').trim(),
+    centralObjective: String(input?.centralObjective || '').trim(),
+    keyContributions: asStringArray(input?.keyContributions || []),
+  }
+}
+
+function buildShadowResearchTopic(input: {
+  projectName: string
+  fundingCallTitle: string | null
+  sectionPlan: GrantBlueprintPlanSection[]
+  globalKeywords: string[]
+}) {
+  const title = input.projectName.trim() || input.fundingCallTitle?.trim() || 'Grant proposal'
+  const firstNarrative = input.sectionPlan.find((section) => isDraftableGrantSection(section.sectionType))
+
+  return {
+    title,
+    topicDescription: input.fundingCallTitle
+      ? `Grant proposal aligned to ${input.fundingCallTitle}.`
+      : 'Grant proposal workspace.',
+    researchQuestion: firstNarrative?.purpose?.trim()
+      ? `How should the proposal satisfy ${firstNarrative.label} while addressing the funding call priorities?`
+      : `How should this proposal satisfy the funding call requirements?`,
+    methodology: 'OTHER' as const,
+    contributionType: 'APPLIED' as const,
+    keywords: input.globalKeywords,
+    subQuestions: [] as string[],
+    techniques: [] as string[],
+    tools: [] as string[],
+  }
+}
+
+function buildPaperSectionPlanFromGrantSections(
+  sectionPlan: GrantBlueprintPlanSection[],
+  existingSectionPlan: unknown
+) {
+  const existingItems = Array.isArray(existingSectionPlan) ? existingSectionPlan : []
+  const existingByKey = new Map(
+    existingItems
+      .map((item) => asObject(item))
+      .map((item) => [String(item.sectionKey || '').trim(), item] as const)
+      .filter(([sectionKey]) => Boolean(sectionKey))
+  )
+
+  return [...sectionPlan]
+    .filter((section) => isDraftableGrantSection(section.sectionType))
+    .sort((left, right) => left.order - right.order)
+    .map((section) => {
+      const existing = existingByKey.get(section.sectionKey) || {}
+      const existingThematic = asObject(existing.thematicBlueprint)
+      const mustCoverTyping =
+        Object.keys(asObject(existing.mustCoverTyping)).length > 0
+          ? asObject(existing.mustCoverTyping)
+          : asObject(existingThematic.mustCoverTyping)
+      const suggestedCitationCountRaw =
+        existing.suggestedCitationCount ?? existingThematic.suggestedCitationCount
+      const suggestedCitationCount = Number.isFinite(Number(suggestedCitationCountRaw))
+        ? Number(suggestedCitationCountRaw)
+        : undefined
+
+      const thematicBlueprint = {
+        mustCover: [...section.mustCover],
+        mustAvoid: [...section.mustAvoid],
+        ...(Object.keys(mustCoverTyping).length > 0 ? { mustCoverTyping } : {}),
+        ...(typeof suggestedCitationCount === 'number'
+          ? { suggestedCitationCount }
+          : {}),
+      }
+
+      return {
+        sectionKey: section.sectionKey,
+        purpose: section.purpose,
+        mustCover: [...section.mustCover],
+        mustAvoid: [...section.mustAvoid],
+        ...(typeof section.wordBudget === 'number'
+          ? { wordBudget: section.wordBudget }
+          : {}),
+        dependencies: [...section.dependencies],
+        outputsPromised: asStringArray(existing.outputsPromised),
+        ...(Object.keys(mustCoverTyping).length > 0 ? { mustCoverTyping } : {}),
+        ...(typeof suggestedCitationCount === 'number'
+          ? { suggestedCitationCount }
+          : {}),
+        thematicBlueprint,
+        ...(existing.rhetoricalBlueprint ? { rhetoricalBlueprint: existing.rhetoricalBlueprint } : {}),
+      }
+    })
+}
+
+async function ensureGrantShadowWorkspaceTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    grantSessionId: string
+    draftingSessionId: string | null
+    tenantId: string
+    projectId: string
+    projectName: string
+    fundingCallTitle: string | null
+    templateRevisionId: string | null
+    userId: string
+    sectionPlan: GrantBlueprintPlanSection[]
+    globalKeywords: string[]
+    blueprintStatus: 'DRAFT' | 'FROZEN'
+    foundation?: Partial<GrantProposalFoundation> | null
+    resetStatus?: boolean
+  }
+) {
+  let draftingSession = input.draftingSessionId
+    ? await tx.draftingSession.findUnique({
+        where: { id: input.draftingSessionId },
+        include: {
+          paperBlueprint: true,
+          researchTopic: true,
+        },
+      })
+    : null
+
+  if (!draftingSession) {
+    const shadowPatentTitle = `[Grant Shadow ${input.grantSessionId}] ${input.projectName || input.fundingCallTitle || 'Grant proposal'}`
+    const existingPatent = await tx.patent.findFirst({
+      where: {
+        projectId: input.projectId,
+        title: shadowPatentTitle,
+      },
+      select: { id: true },
+    })
+
+    const patentId =
+      existingPatent?.id ||
+      (
+        await tx.patent.create({
+          data: {
+            projectId: input.projectId,
+            createdBy: input.userId,
+            title: shadowPatentTitle,
+          },
+          select: { id: true },
+        })
+      ).id
+
+    draftingSession = await tx.draftingSession.create({
+      data: {
+        patentId,
+        userId: input.userId,
+        tenantId: input.tenantId,
+        status: 'IDEA_ENTRY',
+        literatureReviewStatus: 'NOT_STARTED',
+      },
+      include: {
+        paperBlueprint: true,
+        researchTopic: true,
+      },
+    })
+
+    await tx.grantSession.update({
+      where: { id: input.grantSessionId },
+      data: {
+        draftingSessionId: draftingSession.id,
+      },
+    })
+  }
+
+  if (!draftingSession.researchTopic) {
+    await tx.researchTopic.create({
+      data: {
+        sessionId: draftingSession.id,
+        ...buildShadowResearchTopic({
+          projectName: input.projectName,
+          fundingCallTitle: input.fundingCallTitle,
+          sectionPlan: input.sectionPlan,
+          globalKeywords: input.globalKeywords,
+        }),
+      },
+    })
+  }
+
+  const currentBlueprint = draftingSession.paperBlueprint
+  const foundation = sanitizeFoundation(
+    input.foundation || {
+      thesisStatement: currentBlueprint?.thesisStatement || '',
+      centralObjective: currentBlueprint?.centralObjective || '',
+      keyContributions: currentBlueprint?.keyContributions || [],
+    }
+  )
+  const paperTypeCode = buildGrantPaperTypeCode(input.templateRevisionId)
+  const nextSectionPlan = buildPaperSectionPlanFromGrantSections(
+    input.sectionPlan,
+    currentBlueprint?.sectionPlan
+  )
+
+  if (!currentBlueprint) {
+    await tx.paperBlueprint.create({
+      data: {
+        sessionId: draftingSession.id,
+        thesisStatement: foundation.thesisStatement,
+        centralObjective: foundation.centralObjective,
+        keyContributions: foundation.keyContributions,
+        sectionPlan: asJson(nextSectionPlan),
+        paperTypeCode,
+        methodologyType: 'OTHER',
+        status: input.blueprintStatus === 'FROZEN' ? 'FROZEN' : 'DRAFT',
+        frozenAt: input.blueprintStatus === 'FROZEN' ? new Date() : null,
+      },
+    })
+
+    return {
+      draftingSessionId: draftingSession.id,
+    }
+  }
+
+  const nextStatus = input.resetStatus
+    ? 'DRAFT'
+    : currentBlueprint.status
+  const nextFrozenAt = input.resetStatus
+    ? null
+    : currentBlueprint.status === 'FROZEN'
+      ? currentBlueprint.frozenAt || new Date()
+      : null
+
+  const paperBlueprintUpdate = {
+    thesisStatement: foundation.thesisStatement,
+    centralObjective: foundation.centralObjective,
+    keyContributions: foundation.keyContributions,
+    sectionPlan: nextSectionPlan,
+    paperTypeCode,
+    methodologyType: 'OTHER',
+    status: nextStatus,
+    frozenAt: nextFrozenAt,
+  }
+
+  const currentSnapshot = {
+    thesisStatement: currentBlueprint.thesisStatement,
+    centralObjective: currentBlueprint.centralObjective,
+    keyContributions: currentBlueprint.keyContributions,
+    sectionPlan: currentBlueprint.sectionPlan,
+    paperTypeCode: currentBlueprint.paperTypeCode,
+    methodologyType: currentBlueprint.methodologyType,
+    status: currentBlueprint.status,
+    frozenAt: currentBlueprint.frozenAt ? currentBlueprint.frozenAt.toISOString() : null,
+  }
+
+  const nextSnapshot = {
+    ...paperBlueprintUpdate,
+    frozenAt: paperBlueprintUpdate.frozenAt
+      ? paperBlueprintUpdate.frozenAt.toISOString()
+      : null,
+  }
+
+  if (JSON.stringify(currentSnapshot) !== JSON.stringify(nextSnapshot)) {
+    await tx.paperBlueprint.update({
+      where: { sessionId: draftingSession.id },
+      data: {
+        thesisStatement: foundation.thesisStatement,
+        centralObjective: foundation.centralObjective,
+        keyContributions: foundation.keyContributions,
+        sectionPlan: asJson(nextSectionPlan),
+        paperTypeCode,
+        methodologyType: 'OTHER',
+        status: nextStatus,
+        frozenAt: nextFrozenAt,
+        version: { increment: 1 },
+      },
+    })
+  }
+
+  return {
+    draftingSessionId: draftingSession.id,
+  }
+}
+
+async function ensureGrantShadowWorkspace(input: {
+  grantSessionId: string
+  tenantId: string
+  userId?: string
+}) {
+  const grantSession = await prisma.grantSession.findFirst({
+    where: {
+      id: input.grantSessionId,
+      tenantId: input.tenantId,
+    },
+    include: {
+      project: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      fundingCall: {
+        select: {
+          scheme_title: true,
+        },
+      },
+      blueprint: true,
+    },
+  })
+
+  if (!grantSession?.blueprint) {
+    return null
+  }
+  const blueprint = grantSession.blueprint
+
+  const sectionPlan = Array.isArray(blueprint.sectionPlanJson)
+    ? (blueprint.sectionPlanJson as unknown as GrantBlueprintPlanSection[])
+    : []
+
+  return prisma.$transaction((tx) =>
+    ensureGrantShadowWorkspaceTx(tx, {
+      grantSessionId: grantSession.id,
+      draftingSessionId: grantSession.draftingSessionId,
+      tenantId: grantSession.tenantId,
+      projectId: grantSession.projectId,
+      projectName: grantSession.project.name || '',
+      fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
+      templateRevisionId: blueprint.sourceTemplateRevisionId || null,
+      userId: input.userId || grantSession.updatedByUserId,
+      sectionPlan,
+      globalKeywords: asStringArray(blueprint.globalKeywordsJson),
+      blueprintStatus: blueprint.status,
+    })
+  )
+}
+
+async function loadGrantWorkspaceRecord(input: {
+  grantSessionId: string
+  tenantId: string
+}) {
+  return prisma.grantSession.findFirst({
+    where: {
+      id: input.grantSessionId,
+      tenantId: input.tenantId,
+    },
+    include: {
+      project: {
+        select: {
+          id: true,
+          name: true,
+          tenantId: true,
+        },
+      },
+      fundingCall: {
+        select: {
+          id: true,
+          scheme_title: true,
+          agency_name: true,
+          close_date: true,
+          amount_min: true,
+          amount_max: true,
+          currency: true,
+        },
+      },
+      prepSession: {
+        include: {
+          project: {
+            select: {
+              id: true,
+              name: true,
+              tenantId: true,
+            },
+          },
+        },
+      },
+      draftingSession: {
+        include: {
+          paperBlueprint: true,
+        },
+      },
+      blueprint: {
+        include: {
+          sectionDrafts: {
+            include: {
+              structuredResponses: true,
+            },
+            orderBy: {
+              sectionOrder: 'asc',
+            },
+          },
+        },
+      },
+    },
+  })
+}
+
 async function ensureGrantSessionAnchor(tx: Prisma.TransactionClient, input: {
   prepSession: NonNullable<Awaited<ReturnType<typeof loadGrantPrepSession>>>
   fundingCallId: string
@@ -657,6 +1061,20 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       }
     }
 
+    await ensureGrantShadowWorkspaceTx(tx, {
+      grantSessionId: grantSession.id,
+      draftingSessionId: grantSession.draftingSessionId,
+      tenantId: input.actor.tenantId,
+      projectId: state.prepSession.project_id,
+      projectName: state.prepSession.project.name || '',
+      fundingCallTitle: state.serverContext.fundingContext.title || null,
+      templateRevisionId: state.templateState.templateRevisionId,
+      userId: input.actor.id,
+      sectionPlan: state.sectionPlan,
+      globalKeywords: state.freeze.payload.globalKeywords,
+      blueprintStatus: 'DRAFT',
+    })
+
     const launchUrl = `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/blueprint`
     await tx.grantPrepSession.update({
       where: { id: state.prepSession.id },
@@ -693,58 +1111,22 @@ export async function getGrantWorkspace(input: {
   grantSessionId: string
   tenantId: string
 }) {
-  const grantSession = await prisma.grantSession.findFirst({
-    where: {
-      id: input.grantSessionId,
-      tenantId: input.tenantId,
-    },
-    include: {
-      project: {
-        select: {
-          id: true,
-          name: true,
-          tenantId: true,
-        },
-      },
-      fundingCall: {
-        select: {
-          id: true,
-          scheme_title: true,
-          agency_name: true,
-          close_date: true,
-          amount_min: true,
-          amount_max: true,
-          currency: true,
-        },
-      },
-      prepSession: {
-        include: {
-          project: {
-            select: {
-              id: true,
-              name: true,
-              tenantId: true,
-            },
-          },
-        },
-      },
-      blueprint: {
-        include: {
-          sectionDrafts: {
-            include: {
-              structuredResponses: true,
-            },
-            orderBy: {
-              sectionOrder: 'asc',
-            },
-          },
-        },
-      },
-    },
-  })
+  let grantSession = await loadGrantWorkspaceRecord(input)
 
   if (!grantSession) {
     return null
+  }
+
+  if (grantSession.blueprint) {
+    await ensureGrantShadowWorkspace({
+      grantSessionId: input.grantSessionId,
+      tenantId: input.tenantId,
+      userId: grantSession.updatedByUserId,
+    })
+    grantSession = await loadGrantWorkspaceRecord(input)
+    if (!grantSession) {
+      return null
+    }
   }
 
   const sectionPlan = Array.isArray(grantSession.blueprint?.sectionPlanJson)
@@ -754,6 +1136,27 @@ export async function getGrantWorkspace(input: {
   const sectionDrafts = (grantSession.blueprint?.sectionDrafts || []).filter((draft) =>
     activeSectionKeys.size === 0 ? true : activeSectionKeys.has(draft.sectionKey)
   )
+  const proposalFoundation = grantSession.draftingSession?.paperBlueprint
+    ? {
+        thesisStatement: grantSession.draftingSession.paperBlueprint.thesisStatement,
+        centralObjective: grantSession.draftingSession.paperBlueprint.centralObjective,
+        keyContributions: grantSession.draftingSession.paperBlueprint.keyContributions,
+        status: grantSession.draftingSession.paperBlueprint.status,
+        version: grantSession.draftingSession.paperBlueprint.version,
+      }
+    : {
+        thesisStatement: '',
+        centralObjective: '',
+        keyContributions: [],
+        status: null,
+        version: null,
+      }
+  const freezeReadiness: BlueprintFreezeReadiness = grantSession.draftingSession?.id
+    ? await blueprintService.getFreezeReadiness(grantSession.draftingSession.id)
+    : {
+        ok: false,
+        issues: ['Proposal foundation is not ready yet'],
+      }
 
   return {
     grantSession,
@@ -764,6 +1167,8 @@ export async function getGrantWorkspace(input: {
           sectionDrafts,
         }
       : null,
+    proposalFoundation,
+    freezeReadiness,
   }
 }
 
@@ -771,7 +1176,8 @@ export async function updateBlueprintPlan(input: {
   grantSessionId: string
   tenantId: string
   userId: string
-  sections: GrantBlueprintPlanSection[]
+  sections?: GrantBlueprintPlanSection[]
+  foundation?: Partial<GrantProposalFoundation> | null
 }) {
   const workspace = await getGrantWorkspace({
     grantSessionId: input.grantSessionId,
@@ -781,6 +1187,14 @@ export async function updateBlueprintPlan(input: {
     throw new Error('Grant blueprint not found')
   }
   const blueprint = workspace.blueprint
+  if (blueprint.status === 'FROZEN') {
+    throw new Error('Cannot update a frozen grant blueprint. Unfreeze it first.')
+  }
+
+  const nextSections = input.sections || workspace.blueprint.sectionPlan
+  if (!input.sections && !input.foundation) {
+    throw new Error('No blueprint changes were provided')
+  }
 
   const existingPlan = workspace.blueprint.sectionPlan
   const lockedSectionMeta = new Map(
@@ -794,7 +1208,7 @@ export async function updateBlueprintPlan(input: {
     ])
   )
 
-  for (const section of input.sections) {
+  for (const section of nextSections) {
     const locked = lockedSectionMeta.get(section.sectionKey)
     if (!locked) {
       throw new Error(`Unknown blueprint section: ${section.sectionKey}`)
@@ -808,11 +1222,27 @@ export async function updateBlueprintPlan(input: {
     }
   }
 
-  const orderedSections = [...input.sections]
+  const orderedSections = [...nextSections]
     .sort((left, right) => left.order - right.order)
     .map((section, index) => ({ ...section, order: index + 1 }))
 
   await prisma.$transaction(async (tx) => {
+    await ensureGrantShadowWorkspaceTx(tx, {
+      grantSessionId: input.grantSessionId,
+      draftingSessionId: workspace.grantSession.draftingSessionId,
+      tenantId: input.tenantId,
+      projectId: workspace.grantSession.projectId,
+      projectName: workspace.grantSession.project.name || '',
+      fundingCallTitle: workspace.grantSession.fundingCall?.scheme_title || null,
+      templateRevisionId: blueprint.sourceTemplateRevisionId || null,
+      userId: input.userId,
+      sectionPlan: orderedSections,
+      globalKeywords: asStringArray(blueprint.globalKeywordsJson),
+      blueprintStatus: 'DRAFT',
+      foundation: input.foundation,
+      resetStatus: true,
+    })
+
     await tx.grantBlueprint.update({
       where: { id: blueprint.id },
       data: {
@@ -824,24 +1254,34 @@ export async function updateBlueprintPlan(input: {
       },
     })
 
-    for (const section of orderedSections) {
-      await tx.grantSectionDraft.updateMany({
-        where: {
-          grantSessionId: input.grantSessionId,
-          sectionKey: section.sectionKey,
-        },
-        data: {
-          label: section.label,
-          sectionOrder: section.order,
-          wordBudget: section.wordBudget,
-          characterLimit: section.characterLimit,
-          purpose: section.purpose,
-          reviewerIntent: section.reviewerIntent,
-          mustCoverJson: asJson(section.mustCover),
-          mustAvoidJson: asJson(section.mustAvoid),
-          updatedByUserId: input.userId,
-        },
-      })
+    await tx.grantSession.update({
+      where: { id: input.grantSessionId },
+      data: {
+        status: 'BLUEPRINT',
+        updatedByUserId: input.userId,
+      },
+    })
+
+    if (input.sections) {
+      for (const section of orderedSections) {
+        await tx.grantSectionDraft.updateMany({
+          where: {
+            grantSessionId: input.grantSessionId,
+            sectionKey: section.sectionKey,
+          },
+          data: {
+            label: section.label,
+            sectionOrder: section.order,
+            wordBudget: section.wordBudget,
+            characterLimit: section.characterLimit,
+            purpose: section.purpose,
+            reviewerIntent: section.reviewerIntent,
+            mustCoverJson: asJson(section.mustCover),
+            mustAvoidJson: asJson(section.mustAvoid),
+            updatedByUserId: input.userId,
+          },
+        })
+      }
     }
   })
 }
@@ -861,12 +1301,74 @@ export async function setGrantBlueprintStatus(input: {
   }
   const blueprint = workspace.blueprint
 
+  if (input.status === 'FROZEN') {
+    const shadowWorkspace = await ensureGrantShadowWorkspace({
+      grantSessionId: input.grantSessionId,
+      tenantId: input.tenantId,
+      userId: input.userId,
+    })
+
+    if (!shadowWorkspace?.draftingSessionId) {
+      throw new Error('Proposal foundation workspace could not be initialized')
+    }
+
+    const readiness = await blueprintService.getFreezeReadiness(shadowWorkspace.draftingSessionId)
+    if (!readiness.ok) {
+      throw new Error(readiness.issues.join('\n'))
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.paperBlueprint.update({
+        where: { sessionId: shadowWorkspace.draftingSessionId },
+        data: {
+          status: 'FROZEN',
+          frozenAt: new Date(),
+        },
+      })
+
+      await tx.grantBlueprint.update({
+        where: { id: blueprint.id },
+        data: {
+          status: 'FROZEN',
+          frozenAt: new Date(),
+          updatedByUserId: input.userId,
+        },
+      })
+
+      await tx.grantSession.update({
+        where: { id: input.grantSessionId },
+        data: {
+          status: 'DRAFTING',
+          updatedByUserId: input.userId,
+        },
+      })
+    })
+
+    return
+  }
+
   await prisma.$transaction(async (tx) => {
+    if (workspace.grantSession.draftingSessionId) {
+      await tx.paperSection.updateMany({
+        where: { sessionId: workspace.grantSession.draftingSessionId },
+        data: { isStale: true },
+      })
+
+      await tx.paperBlueprint.updateMany({
+        where: { sessionId: workspace.grantSession.draftingSessionId },
+        data: {
+          status: 'REVISION_PENDING',
+          frozenAt: null,
+          version: { increment: 1 },
+        },
+      })
+    }
+
     await tx.grantBlueprint.update({
       where: { id: blueprint.id },
       data: {
-        status: input.status,
-        frozenAt: input.status === 'FROZEN' ? new Date() : null,
+        status: 'DRAFT',
+        frozenAt: null,
         updatedByUserId: input.userId,
       },
     })
@@ -874,7 +1376,7 @@ export async function setGrantBlueprintStatus(input: {
     await tx.grantSession.update({
       where: { id: input.grantSessionId },
       data: {
-        status: input.status === 'FROZEN' ? 'DRAFTING' : 'BLUEPRINT',
+        status: 'BLUEPRINT',
         updatedByUserId: input.userId,
       },
     })

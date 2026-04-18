@@ -27,8 +27,15 @@ const planSectionSchema = z.object({
   seededContext: z.string().default(''),
 })
 
+const proposalFoundationSchema = z.object({
+  thesisStatement: z.string().default(''),
+  centralObjective: z.string().default(''),
+  keyContributions: z.array(z.string()).default([]),
+})
+
 const updateBlueprintSchema = z.object({
-  sections: z.array(planSectionSchema).min(1),
+  sections: z.array(planSectionSchema).min(1).optional(),
+  foundation: proposalFoundationSchema.optional(),
 })
 
 const blueprintActionSchema = z.object({
@@ -62,6 +69,8 @@ export async function GET(
   return NextResponse.json({
     grantSession: workspace.grantSession,
     blueprint: workspace.blueprint,
+    proposalFoundation: workspace.proposalFoundation,
+    freezeReadiness: workspace.freezeReadiness,
     launchPreview: preview,
   })
 }
@@ -78,7 +87,13 @@ export async function PATCH(
 
   try {
     const payload = updateBlueprintSchema.parse(await request.json())
-    const sections = payload.sections.map((section) => ({
+    if (!payload.sections && !payload.foundation) {
+      return NextResponse.json(
+        { message: 'Provide blueprint sections or proposal foundation updates.' },
+        { status: 400 }
+      )
+    }
+    const sections = payload.sections?.map((section) => ({
       ...section,
       wordBudget: section.wordBudget ?? null,
       characterLimit: section.characterLimit ?? null,
@@ -90,6 +105,7 @@ export async function PATCH(
       tenantId: actor.tenantId,
       userId: actor.id,
       sections,
+      foundation: payload.foundation,
     })
 
     const workspace = await getGrantWorkspace({
@@ -99,6 +115,8 @@ export async function PATCH(
 
     return NextResponse.json({
       blueprint: workspace?.blueprint || null,
+      proposalFoundation: workspace?.proposalFoundation || null,
+      freezeReadiness: workspace?.freezeReadiness || null,
     })
   } catch (error) {
     console.error('[Grant Blueprint] update error:', error)
@@ -106,7 +124,7 @@ export async function PATCH(
       {
         message: error instanceof Error ? error.message : 'Failed to update grant blueprint',
       },
-      { status: 500 }
+      { status: 400 }
     )
   }
 }
@@ -159,14 +177,20 @@ export async function POST(
     return NextResponse.json({
       grantSession: workspace?.grantSession || null,
       blueprint: workspace?.blueprint || null,
+      proposalFoundation: workspace?.proposalFoundation || null,
+      freezeReadiness: workspace?.freezeReadiness || null,
     })
   } catch (error) {
     console.error('[Grant Blueprint] action error:', error)
+    const issues = error instanceof Error
+      ? error.message.split('\n').map((issue) => issue.trim()).filter(Boolean)
+      : []
     return NextResponse.json(
       {
         message: error instanceof Error ? error.message : 'Failed to process grant blueprint action',
+        issues,
       },
-      { status: 500 }
+      { status: 400 }
     )
   }
 }

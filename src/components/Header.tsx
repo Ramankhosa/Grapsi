@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import { BookOpen, Plus, FileText, Bell, Library } from 'lucide-react'
+import { FileText, Bell, Library } from 'lucide-react'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
@@ -174,17 +174,9 @@ export default function Header() {
                   🔍 Search
                 </Link>
 
-                {/* Paper Writing Navigation (when feature enabled) */}
+                {/* Shared research library navigation */}
                 {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && (
                   <>
-                    <Link
-                      href="/papers"
-                      className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
-                    >
-                      <BookOpen className="w-4 h-4 mr-1" />
-                      Papers
-                    </Link>
-
                     <Link
                       href="/library"
                       className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
@@ -192,14 +184,6 @@ export default function Header() {
                       <Library className="w-4 h-4 mr-1" />
                       Library
                     </Link>
-
-                    <button
-                      onClick={() => window.location.href = '/papers/new'}
-                      className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-violet-500 transition-all duration-200"
-                    >
-                      <Plus className="w-4 h-4 mr-1" />
-                      New Paper
-                    </button>
                   </>
                 )}
 
@@ -266,17 +250,9 @@ export default function Header() {
                       <span>Projects</span>
                     </Link>
 
-                    {/* Paper Writing Links (when feature enabled) */}
+                    {/* Shared research library links */}
                     {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && (
                       <>
-                        <Link
-                          href="/papers"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                          onClick={closeMenu}
-                        >
-                          <span>📄</span>
-                          <span>My Papers</span>
-                        </Link>
                         <Link
                           href="/library"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
@@ -284,14 +260,6 @@ export default function Header() {
                         >
                           <span>📚</span>
                           <span>Reference Library</span>
-                        </Link>
-                        <Link
-                          href="/papers/new"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                          onClick={closeMenu}
-                        >
-                          <span>✨</span>
-                          <span>New Paper</span>
                         </Link>
                       </>
                     )}

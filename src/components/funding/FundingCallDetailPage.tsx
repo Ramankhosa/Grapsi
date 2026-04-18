@@ -33,6 +33,27 @@ export default function FundingCallDetailPage({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
+  const formattedFunding = useMemo(() => {
+    if (!call) return null
+    const formatter = new Intl.NumberFormat('en-IN', {
+      maximumFractionDigits: 0,
+    })
+
+    if (typeof call.amountMin === 'number' && typeof call.amountMax === 'number') {
+      return `${call.currency || ''} ${formatter.format(call.amountMin)} - ${formatter.format(call.amountMax)}`.trim()
+    }
+
+    if (typeof call.amountMax === 'number') {
+      return `${call.currency || ''} ${formatter.format(call.amountMax)}`.trim()
+    }
+
+    if (typeof call.amountMin === 'number') {
+      return `${call.currency || ''} ${formatter.format(call.amountMin)}`.trim()
+    }
+
+    return null
+  }, [call])
+
   const fetchCall = useCallback(async () => {
     if (!token) {
       return
@@ -158,6 +179,10 @@ export default function FundingCallDetailPage({
                 <h2 className="text-xl font-semibold">Core Details</h2>
                 <div className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
                   <div>
+                    <p className="font-medium text-slate-500">Agency</p>
+                    <p className="mt-1 text-slate-800">{call.agencyName || 'Not available'}</p>
+                  </div>
+                  <div>
                     <p className="font-medium text-slate-500">Source URL</p>
                     <p className="mt-1 break-all text-slate-800">{call.sourceUrl || 'Not available'}</p>
                   </div>
@@ -175,12 +200,42 @@ export default function FundingCallDetailPage({
                     <p className="font-medium text-slate-500">Source Domain</p>
                     <p className="mt-1 text-slate-800">{call.sourceDomain || 'Not available'}</p>
                   </div>
+                  <div>
+                    <p className="font-medium text-slate-500">Funding</p>
+                    <p className="mt-1 text-slate-800">{formattedFunding || 'Not detected'}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-500">Project Duration</p>
+                    <p className="mt-1 text-slate-800">{call.projectDurationText || 'Not detected'}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-500">Contact</p>
+                    <p className="mt-1 break-all text-slate-800">{call.contactInfo || 'Not available'}</p>
+                  </div>
                 </div>
 
-                {call.summary ? (
+                {call.description || call.summary ? (
                   <div className="mt-6">
-                    <p className="font-medium text-slate-500">Summary</p>
-                    <p className="mt-2 text-sm leading-6 text-slate-700">{call.summary}</p>
+                    <p className="font-medium text-slate-500">Description</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {call.description || call.summary}
+                    </p>
+                  </div>
+                ) : null}
+
+                {call.eligibilityText ? (
+                  <div className="mt-6">
+                    <p className="font-medium text-slate-500">Eligibility</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{call.eligibilityText}</p>
+                  </div>
+                ) : null}
+
+                {call.expectedDeliverablesText && call.expectedDeliverablesText !== '[object Object]' ? (
+                  <div className="mt-6">
+                    <p className="font-medium text-slate-500">Expected Deliverables</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {call.expectedDeliverablesText}
+                    </p>
                   </div>
                 ) : null}
 
@@ -199,22 +254,104 @@ export default function FundingCallDetailPage({
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h2 className="text-xl font-semibold">Import Assets</h2>
-                <div className="mt-4 space-y-3">
-                  {call.assets.map((asset) => (
-                    <div key={asset.id} className="rounded-xl border border-slate-200 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                          {asset.kind}
-                        </span>
-                        <span className="text-xs text-slate-400">{new Date(asset.createdAt).toLocaleString()}</span>
+                <h2 className="text-xl font-semibold">Call Facts</h2>
+                <div className="mt-4 space-y-5">
+                  <div>
+                    <p className="font-medium text-slate-500">Disciplines</p>
+                    {call.disciplines?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {call.disciplines.map((value) => (
+                          <span key={value} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700">
+                            {value}
+                          </span>
+                        ))}
                       </div>
-                      <p className="mt-2 text-sm text-slate-700">{asset.fileName || asset.mimeType || 'Stored asset'}</p>
-                      {asset.textPreview ? <p className="mt-2 text-xs text-slate-500">{asset.textPreview}</p> : null}
-                    </div>
-                  ))}
-                  {call.assets.length === 0 ? <p className="text-sm text-slate-500">No assets attached yet.</p> : null}
+                    ) : (
+                      <p className="mt-1 text-sm text-slate-500">Not detected</p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-500">Institution Types</p>
+                    {call.institutionTypes?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {call.institutionTypes.map((value) => (
+                          <span key={value} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700">
+                            {value}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-sm text-slate-500">Not detected</p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-500">Citizenship Requirements</p>
+                    {call.citizenshipRequirements?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {call.citizenshipRequirements.map((value) => (
+                          <span key={value} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700">
+                            {value}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-sm text-slate-500">Not detected</p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-500">Application Languages</p>
+                    {call.applicationLanguages?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {call.applicationLanguages.map((value) => (
+                          <span key={value} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700">
+                            {value}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-sm text-slate-500">Not detected</p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-500">Official URLs</p>
+                    {call.officialUrls?.length ? (
+                      <div className="mt-2 space-y-2">
+                        {call.officialUrls.map((url) => (
+                          <a
+                            key={url}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block break-all text-sm text-sky-700 hover:text-sky-900"
+                          >
+                            {url}
+                          </a>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-sm text-slate-500">Not detected</p>
+                    )}
+                  </div>
                 </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-semibold">Import Assets</h2>
+              <div className="mt-4 space-y-3">
+                {call.assets.map((asset) => (
+                  <div key={asset.id} className="rounded-xl border border-slate-200 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                        {asset.kind}
+                      </span>
+                      <span className="text-xs text-slate-400">{new Date(asset.createdAt).toLocaleString()}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-700">{asset.fileName || asset.mimeType || 'Stored asset'}</p>
+                    {asset.textPreview ? <p className="mt-2 text-xs text-slate-500">{asset.textPreview}</p> : null}
+                  </div>
+                ))}
+                {call.assets.length === 0 ? <p className="text-sm text-slate-500">No assets attached yet.</p> : null}
               </div>
             </section>
 

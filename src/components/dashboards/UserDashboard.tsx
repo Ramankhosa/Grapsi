@@ -60,6 +60,7 @@ interface DashboardStats {
 export default function UserDashboard() {
   const { user } = useAuth()
   const router = useRouter()
+  const paperUiEnabled = false
   const [papers, setPapers] = useState<Paper[]>([])
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState<DashboardStats>({
@@ -104,12 +105,12 @@ export default function UserDashboard() {
   const userId = user?.user_id
   
   useEffect(() => {
-    if (userId && isFeatureEnabled('ENABLE_PAPER_WRITING_UI')) {
+    if (userId && paperUiEnabled && isFeatureEnabled('ENABLE_PAPER_WRITING_UI')) {
       fetchPapers()
-    } else if (!userId) {
+    } else {
       setLoading(false)
     }
-  }, [userId, fetchPapers])
+  }, [userId, fetchPapers, paperUiEnabled])
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -199,14 +200,14 @@ export default function UserDashboard() {
   )
 
   // Check if paper writing feature is enabled
-  if (!isFeatureEnabled('ENABLE_PAPER_WRITING_UI')) {
+  if (!paperUiEnabled || !isFeatureEnabled('ENABLE_PAPER_WRITING_UI')) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-6">
         <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-8 text-center">
             <BookOpen className="w-16 h-16 text-slate-400 mx-auto mb-4" />
-            <h2 className="text-xl font-semibold text-slate-900 mb-2">Paper Writing</h2>
-            <p className="text-slate-600">Paper writing features are not currently enabled.</p>
+            <h2 className="text-xl font-semibold text-slate-900 mb-2">Grant Workspace</h2>
+            <p className="text-slate-600">This deployment now exposes the grant-writing workspace only.</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-6">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">Funding Workspace</h3>

@@ -1157,6 +1157,7 @@ model GrantSession {
   projectId       String
   tenantId        String
   fundingCallId   String
+  draftingSessionId String?          @unique
   status          GrantSessionStatus @default(SETUP)
   createdByUserId String
   updatedByUserId String
@@ -1165,6 +1166,7 @@ model GrantSession {
   project         Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fundingCall     FundingCall        @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
+  draftingSession DraftingSession?   @relation("GrantShadowWorkspace", fields: [draftingSessionId], references: [id], onDelete: SetNull)
   prepSession     GrantPrepSession?
   blueprint       GrantBlueprint?
   sectionDrafts   GrantSectionDraft[]
@@ -2818,6 +2820,7 @@ model DraftingSession {
   paperType               PaperTypeDefinition?     @relation(fields: [paperTypeId], references: [id])
   citationStyle           CitationStyleDefinition? @relation(fields: [citationStyleId], references: [id])
   publicationVenue        PublicationVenue?        @relation(fields: [publicationVenueId], references: [id])
+  grantSession            GrantSession?            @relation("GrantShadowWorkspace")
   citations               Citation[]
   figurePlans             FigurePlan[]
   diagramSources          DiagramSource[]

@@ -100,6 +100,11 @@ export interface BlueprintContext {
   preferredTerms: Record<string, string>;
 }
 
+export interface BlueprintFreezeReadiness {
+  ok: boolean;
+  issues: string[];
+}
+
 // ============================================================================
 // Methodology-Specific Section Patterns
 // ============================================================================
@@ -295,6 +300,24 @@ class BlueprintService {
     }
 
     return this.transformBlueprint(blueprint);
+  }
+
+  /**
+   * Return freeze-readiness without mutating state
+   */
+  async getFreezeReadiness(sessionId: string): Promise<BlueprintFreezeReadiness> {
+    const blueprint = await prisma.paperBlueprint.findUnique({
+      where: { sessionId }
+    });
+
+    if (!blueprint) {
+      return {
+        ok: false,
+        issues: ['Blueprint not found']
+      };
+    }
+
+    return this.collectFreezeReadiness(blueprint);
   }
 
   /**
@@ -757,28 +780,48 @@ CRITICAL RULES:
   }
 
   private validateBlueprintForFreeze(blueprint: PaperBlueprint): void {
+    const readiness = this.collectFreezeReadiness(blueprint);
+    if (!readiness.ok) {
+      throw new Error(readiness.issues[0] || 'Blueprint is not ready to freeze');
+    }
+  }
+
+  private collectFreezeReadiness(blueprint: PaperBlueprint): BlueprintFreezeReadiness {
+    const issues: string[] = [];
+
     if (!blueprint.thesisStatement || blueprint.thesisStatement.trim().length < 20) {
-      throw new Error('Thesis statement is too short or missing');
+      issues.push('Thesis statement must be at least 20 characters');
     }
 
     if (!blueprint.centralObjective || blueprint.centralObjective.trim().length < 20) {
-      throw new Error('Central objective is too short or missing');
+      issues.push('Central objective must be at least 20 characters');
     }
 
     if (!blueprint.keyContributions || blueprint.keyContributions.length < 2) {
-      throw new Error('At least 2 key contributions are required');
+      issues.push('At least 2 key contributions are required');
     }
 
     const sectionPlan = this.normalizeSectionPlan(blueprint.sectionPlan as unknown as SectionPlanItem[]);
     if (!sectionPlan || sectionPlan.length < 3) {
-      throw new Error('Section plan must have at least 3 sections');
+      issues.push('Section plan must have at least 3 sections');
     }
 
-    // Validate no circular dependencies
-    this.validateNoCyclicDependencies(sectionPlan);
+    try {
+      this.validateNoCyclicDependencies(sectionPlan);
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : 'Section plan has cyclic dependencies');
+    }
 
-    // Validate mustCover items don't heavily overlap
-    this.validateNoHeavyOverlap(sectionPlan);
+    try {
+      this.validateNoHeavyOverlap(sectionPlan);
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : 'Section plan has overlapping dimensions');
+    }
+
+    return {
+      ok: issues.length === 0,
+      issues
+    };
   }
 
   private validateNoCyclicDependencies(sectionPlan: SectionPlanItem[]): void {
