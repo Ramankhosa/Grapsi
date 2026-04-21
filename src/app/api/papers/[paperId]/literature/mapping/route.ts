@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
+import {
+  filterGrantBackedLiteratureSections,
+  isGrantBackedPaperTypeCode,
+} from '@/lib/grants/blueprintMetadata';
 import { llmGateway } from '@/lib/metering/gateway';
 import { defaultConfig as meteringDefaultConfig } from '@/lib/metering/config';
 import { createReservationService } from '@/lib/metering/reservation';
@@ -67,6 +72,19 @@ function isReviewPaper(paperTypeCode?: string | null): boolean {
          normalized.includes('survey') ||
          normalized.includes('meta-analysis') ||
          normalized.includes('systematic');
+}
+
+function filterSectionsForLiteratureMapping(
+  sections: BlueprintWithSectionPlan['sectionPlan'],
+  paperTypeCode?: string | null
+) {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return filterGrantBackedLiteratureSections(sections);
+  }
+
+  return isReviewPaper(paperTypeCode)
+    ? sections
+    : sections.filter((section) => isLiteratureMappingSection(section.sectionKey));
 }
 
 async function runBatchesInParallel<T, R>(
@@ -169,16 +187,11 @@ function toMappingStatus(suggestion: CitationAnalysis): PaperBlueprintMapping['m
   return 'MAPPED';
 }
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({
-      where: { id: sessionId },
-      include: { researchTopic: true, ideaRecord: true }
-    });
-  }
-
-  return prisma.draftingSession.findFirst({
-    where: { id: sessionId, userId: user.id },
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {
     include: { researchTopic: true, ideaRecord: true }
   });
 }
@@ -202,12 +215,12 @@ function buildPrompt(
   // Filter sections for dimension mapping:
   // - For review papers: include all sections
   // - For other papers: only Introduction, Literature Review, and Methodology
-  const isReview = isReviewPaper(blueprint.paperTypeCode ?? undefined);
-  const sectionsForMapping = isReview 
-    ? blueprint.sectionPlan 
-    : blueprint.sectionPlan.filter(s => isLiteratureMappingSection(s.sectionKey));
+  const sectionsForMapping = filterSectionsForLiteratureMapping(
+    blueprint.sectionPlan,
+    blueprint.paperTypeCode ?? undefined
+  );
   
-  console.log(`[CitationMapping] Paper type: ${blueprint.paperTypeCode || 'unknown'}, isReview: ${isReview}, sections for mapping: ${sectionsForMapping.map(s => s.sectionKey).join(', ')}`);
+  console.log(`[CitationMapping] Paper type: ${blueprint.paperTypeCode || 'unknown'}, sections for mapping: ${sectionsForMapping.map(s => s.sectionKey).join(', ')}`);
 
   // Build blueprint sections string
   const sectionsText = sectionsForMapping.map((section, idx) => {
@@ -369,10 +382,10 @@ function parseAndValidateLLMResponse(
   // Filter sections for dimension mapping:
   // - For review papers: include all sections
   // - For other papers: only Introduction, Literature Review, and Methodology
-  const isReview = isReviewPaper(blueprint.paperTypeCode);
-  const sectionsForValidation = isReview
-    ? blueprint.sectionPlan
-    : blueprint.sectionPlan.filter(s => isLiteratureMappingSection(s.sectionKey));
+  const sectionsForValidation = filterSectionsForLiteratureMapping(
+    blueprint.sectionPlan,
+    blueprint.paperTypeCode
+  );
 
   for (const section of sectionsForValidation) {
     validSectionKeys.add(section.sectionKey);
@@ -468,10 +481,10 @@ function calculateBlueprintCoverage(
   let coveredDimensions = 0;
 
   // Filter sections for coverage calculation
-  const isReview = isReviewPaper(blueprint.paperTypeCode ?? undefined);
-  const sectionsForCoverage = isReview 
-    ? blueprint.sectionPlan 
-    : blueprint.sectionPlan.filter(s => isLiteratureMappingSection(s.sectionKey));
+  const sectionsForCoverage = filterSectionsForLiteratureMapping(
+    blueprint.sectionPlan,
+    blueprint.paperTypeCode ?? undefined
+  );
 
   for (const section of sectionsForCoverage) {
     const dimensions = section.mustCover || [];

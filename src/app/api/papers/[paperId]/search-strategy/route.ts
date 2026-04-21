@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { buildGrantBackedSearchStrategy } from '@/lib/grants/searchStrategy';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { llmGateway } from '@/lib/metering/gateway';
 
 export const runtime = 'nodejs';
@@ -50,6 +52,8 @@ interface GeneratedQuery {
   suggestedSources: string[];
   suggestedYearFrom?: number;
   suggestedYearTo?: number;
+  searchIntent?: string;
+  dimensionTargets?: Array<{ sectionKey: string; dimension: string; dimensionType?: string }>;
 }
 
 interface LLMStrategyResponse {
@@ -58,29 +62,21 @@ interface LLMStrategyResponse {
   queries: GeneratedQuery[];
 }
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({ 
-      where: { id: sessionId },
-      include: { 
-        researchTopic: true, 
-        ideaRecord: true,
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
+    include: { 
+      researchTopic: true, 
+      ideaRecord: true,
+      paperType: true,
+      paperBlueprint: true,
         citationSearchStrategy: {
           include: { queries: { orderBy: { priority: 'asc' } } }
         }
       }
-    });
-  }
-
-  return prisma.draftingSession.findFirst({
-    where: { id: sessionId, userId: user.id },
-    include: { 
-      researchTopic: true, 
-      ideaRecord: true,
-      citationSearchStrategy: {
-        include: { queries: { orderBy: { priority: 'asc' } } }
-      }
-    }
   });
 }
 
@@ -181,7 +177,7 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'read');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -200,13 +196,19 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
     ).length;
     const totalQueries = queries.length;
     const progress = totalQueries > 0 ? Math.round((completedQueries / totalQueries) * 100) : 0;
+    const hydratedQueries = session.citationSearchStrategy.queries.map((q) => ({
+      ...q,
+      searchIntent: (q.suggestedFilters as { searchIntent?: string } | null)?.searchIntent || null,
+      dimensionTargets: (q.suggestedFilters as { dimensionTargets?: unknown[] } | null)?.dimensionTargets || [],
+    }));
 
     return NextResponse.json({
       strategy: {
         ...session.citationSearchStrategy,
         progress,
         completedQueries,
-        totalQueries
+        totalQueries,
+        queries: hydratedQueries,
       }
     });
 
@@ -243,7 +245,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -309,43 +311,63 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       || session.ideaRecord?.logic
       || '';
 
-    if (!paperAbstract && !researchFocus) {
+    const grantBackedStrategy = session.paperBlueprint
+      ? buildGrantBackedSearchStrategy({
+          researchTopic: {
+            title: session.researchTopic?.title || paperTitle,
+            researchQuestion: session.researchTopic?.researchQuestion || paperAbstract,
+            keywords,
+          },
+          blueprint: {
+            paperTypeCode: session.paperBlueprint.paperTypeCode,
+            sectionPlan: Array.isArray(session.paperBlueprint.sectionPlan)
+              ? session.paperBlueprint.sectionPlan as any[]
+              : [],
+          },
+        })
+      : null;
+
+    if (!paperAbstract && !researchFocus && !grantBackedStrategy) {
       return NextResponse.json({ 
         error: 'Please complete the Research Topic stage first to generate search strategy' 
       }, { status: 400 });
     }
 
-    // Build prompt and call LLM
-    const prompt = buildStrategyPrompt(paperTitle, paperAbstract, keywords, researchFocus);
-    const authHeader = request.headers.get('authorization') || '';
-
-    const llmResult = await llmGateway.executeLLMOperation(
-      { headers: { authorization: authHeader } },
-      {
-        taskCode: 'SEARCH_STRATEGY_GEN',
-        stageCode: 'LITERATURE_SEARCH',
-        prompt,
-        parameters: { temperature: 0.4 },
-        idempotencyKey: `search-strategy-${sessionId}-${Date.now()}`,
-        metadata: { sessionId }
-      }
-    );
-
-    if (!llmResult.success || !llmResult.response) {
-      console.error('[SearchStrategy] LLM call failed:', llmResult.error);
-      return NextResponse.json({ 
-        error: llmResult.error?.message || 'Failed to generate search strategy' 
-      }, { status: 500 });
-    }
-
-    // Parse response
     let strategyData: LLMStrategyResponse;
-    try {
-      strategyData = parseStrategyResponse(llmResult.response.output);
-    } catch (parseError) {
-      console.error('[SearchStrategy] Parse error:', parseError);
-      console.error('Raw output:', llmResult.response.output);
-      return NextResponse.json({ error: 'Failed to parse AI response' }, { status: 500 });
+    let aiModelUsed = 'grant_blueprint_bundle';
+
+    if (grantBackedStrategy) {
+      strategyData = grantBackedStrategy;
+    } else {
+      const prompt = buildStrategyPrompt(paperTitle, paperAbstract, keywords, researchFocus);
+      const authHeader = request.headers.get('authorization') || '';
+
+      const llmResult = await llmGateway.executeLLMOperation(
+        { headers: { authorization: authHeader } },
+        {
+          taskCode: 'SEARCH_STRATEGY_GEN',
+          stageCode: 'LITERATURE_SEARCH',
+          prompt,
+          parameters: { temperature: 0.4 },
+          idempotencyKey: `search-strategy-${sessionId}-${Date.now()}`,
+          metadata: { sessionId }
+        }
+      );
+
+      if (!llmResult.success || !llmResult.response) {
+        console.error('[SearchStrategy] LLM call failed:', llmResult.error);
+        return NextResponse.json({ 
+          error: llmResult.error?.message || 'Failed to generate search strategy' 
+        }, { status: 500 });
+      }
+
+      try {
+        strategyData = parseStrategyResponse(llmResult.response.output);
+        aiModelUsed = llmResult.response.modelClass || 'unknown';
+      } catch (parseError) {
+        console.error('[SearchStrategy] Parse error:', parseError);
+        return NextResponse.json({ error: 'Failed to parse AI response' }, { status: 500 });
+      }
     }
 
     // Delete existing strategy if regenerating
@@ -365,7 +387,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         researchFocus,
         summary: strategyData.summary,
         estimatedPapers: strategyData.estimatedPapers,
-        aiModelUsed: llmResult.response.modelClass || 'unknown',
+        aiModelUsed,
         status: 'READY',
         queries: {
           create: strategyData.queries.map(q => ({
@@ -376,6 +398,10 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
             suggestedSources: q.suggestedSources,
             suggestedYearFrom: q.suggestedYearFrom,
             suggestedYearTo: q.suggestedYearTo,
+            suggestedFilters: {
+              ...(q.searchIntent ? { searchIntent: q.searchIntent } : {}),
+              ...(q.dimensionTargets ? { dimensionTargets: q.dimensionTargets } : {}),
+            },
             status: 'PENDING'
           }))
         }
@@ -405,7 +431,12 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         ...strategy,
         progress: 0,
         completedQueries: 0,
-        totalQueries: strategy.queries.length
+        totalQueries: strategy.queries.length,
+        queries: strategy.queries.map((q) => ({
+          ...q,
+          searchIntent: (q.suggestedFilters as { searchIntent?: string } | null)?.searchIntent || null,
+          dimensionTargets: (q.suggestedFilters as { dimensionTargets?: unknown[] } | null)?.dimensionTargets || [],
+        })),
       }
     }, { status: 201 });
 
@@ -427,7 +458,7 @@ export async function PATCH(request: NextRequest, context: { params: { paperId: 
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -544,7 +575,7 @@ export async function DELETE(request: NextRequest, context: { params: { paperId:
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }

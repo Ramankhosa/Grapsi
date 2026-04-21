@@ -29,6 +29,7 @@ export const templateItemSchema = z.object({
   key: z.string().trim().min(1),
   label: z.string().trim().min(1),
   type: z.enum(FUNDING_TEMPLATE_ITEM_TYPES),
+  workflowMode: z.string().optional().default('team_manual'),
   required: z.boolean().optional().default(false),
   repeatable: z.boolean().optional().default(false),
   visibleWhen: z.string().nullable().optional(),
@@ -53,6 +54,7 @@ export const budgetCategorySchema = z.object({
 export const budgetSchema = z.object({
   required: z.boolean().optional().default(false),
   yearWise: z.boolean().optional().default(false),
+  workflowMode: z.string().optional().default('app_support'),
   categories: z.array(budgetCategorySchema).optional().default([]),
   caps: z.record(jsonSchema).nullable().optional(),
   justificationNotes: z.string().nullable().optional(),

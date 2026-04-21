@@ -131,6 +131,9 @@ export async function POST(
       {
         session: serializeGrantPrepSession(result.session),
         reused: result.reused,
+        grantSessionId: result.grantSessionId || null,
+        launchUrl: result.launchUrl || null,
+        prepUrl: result.prepUrl || null,
       },
       { status: result.reused ? 200 : 201 }
     )

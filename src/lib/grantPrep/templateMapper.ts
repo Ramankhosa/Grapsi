@@ -2,6 +2,7 @@ import { normalizeGrantTemplate } from '../fundingTemplates/utils';
 import type { FundingTemplateItem, GrantTemplateDocument } from '../fundingTemplates/types';
 import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY } from './stageLibrary';
 import type { GrantPrepStageKey, GrantPrepStageMapping, GrantPrepStageMappingEntry } from './types';
+import type { GrantWorkflowMode } from '@/types/grant';
 
 type TemplateBlock = 'sections' | 'questions' | 'evaluationCriteria' | 'submissionRules' | 'budget';
 
@@ -10,6 +11,7 @@ type TemplateLikeItem = {
   label: string;
   guidance?: string | null;
   block: TemplateBlock;
+  workflowMode?: GrantWorkflowMode;
 };
 
 function slug(value: string) {
@@ -34,11 +36,15 @@ function getTemplateItems(templateInput: unknown): TemplateLikeItem[] {
 
   const pushItems = (block: TemplateBlock, entries: FundingTemplateItem[]) => {
     for (const item of entries) {
+      if ((block === 'sections' || block === 'questions') && item.workflowMode !== 'app_draft') {
+        continue;
+      }
       items.push({
         key: item.key,
         label: item.label,
         guidance: item.guidance,
         block,
+        workflowMode: item.workflowMode,
       });
     }
   };

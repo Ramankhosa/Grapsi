@@ -1388,6 +1388,7 @@ export default function LiteratureSearchStage({
         },
         body: JSON.stringify({
           query: searchQuery,
+          strategyQueryId: strategyId || undefined,
           sources: searchSources,
           yearFrom: parsedYearFrom && Number.isFinite(parsedYearFrom) ? parsedYearFrom : undefined,
           yearTo: parsedYearTo && Number.isFinite(parsedYearTo) ? parsedYearTo : undefined,

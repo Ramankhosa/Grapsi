@@ -8,6 +8,7 @@ import type {
   GrantPrepSuggestedAnswer,
 } from '../../lib/grantPrep/types';
 import type { GuidelinePackDocument, FundingGuidelineRuleItem } from '../../lib/fundingGuidelines/types';
+import type { CompiledGrantTemplateSectionType, GrantWorkflowMode } from '../../types/grant';
 
 export type PrepMessage = {
   id: string;
@@ -67,6 +68,14 @@ export type PrepDraftingContext = {
 
 export type PrepHandoffPreview = {
   blockers: Array<{ stageKey: string; pointKey: string; message: string }>;
+  sectionPreview?: Array<{
+    sectionKey: string;
+    label: string;
+    sectionType: CompiledGrantTemplateSectionType;
+    workflowMode: GrantWorkflowMode;
+    required: boolean;
+  }>;
+  canLaunch?: boolean;
 };
 
 export type PrepRuleGroup = {

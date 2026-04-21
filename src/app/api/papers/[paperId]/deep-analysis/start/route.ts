@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import { featureFlags } from '@/lib/feature-flags';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { extractTenantContextFromRequest } from '@/lib/metering/auth-bridge';
 import { deepAnalysisService } from '@/lib/services/deep-analysis-service';
 import { MAX_DEEP_ANALYSIS_CONCURRENCY } from '@/lib/services/deep-analysis-types';
@@ -15,16 +16,11 @@ const startSchema = z.object({
   concurrency: z.number().int().min(1).max(MAX_DEEP_ANALYSIS_CONCURRENCY).optional().default(MAX_DEEP_ANALYSIS_CONCURRENCY),
 });
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({
-      where: { id: sessionId },
-      select: { id: true, tenantId: true },
-    });
-  }
-
-  return prisma.draftingSession.findFirst({
-    where: { id: sessionId, userId: user.id },
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {
     select: { id: true, tenantId: true },
   });
 }

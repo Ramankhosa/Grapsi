@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, BrainCircuit, ExternalLink, FileText, Loader2, Plus, Sparkles } from 'lucide-react'
@@ -37,18 +37,7 @@ export default function ProjectGrantsPage() {
   const [creating, setCreating] = useState(false)
   const [creatingForGrant, setCreatingForGrant] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!authLoading && !user) {
-      router.push('/login')
-      return
-    }
-
-    if (user && projectId) {
-      void loadSessions()
-    }
-  }, [authLoading, user, projectId, router])
-
-  async function loadSessions() {
+  const loadSessions = useCallback(async () => {
     try {
       setLoading(true)
       const response = await fetch(`/api/projects/${projectId}/grants`, {
@@ -69,7 +58,18 @@ export default function ProjectGrantsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId])
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/login')
+      return
+    }
+
+    if (user && projectId) {
+      void loadSessions()
+    }
+  }, [authLoading, user, projectId, router, loadSessions])
 
   async function startGrantPrep(selectedFundingCallId?: string | null) {
     try {
@@ -91,7 +91,11 @@ export default function ProjectGrantsPage() {
         throw new Error(data.message || 'Failed to start grant prep')
       }
 
-      router.push(`/projects/${projectId}/grants/${data.session.id}/prep`)
+      router.push(
+        data.launchUrl ||
+        data.prepUrl ||
+        `/projects/${projectId}/grants/${data.session.id}/prep`
+      )
     } catch (error) {
       console.error('Failed to create grant prep session:', error)
       alert(error instanceof Error ? error.message : 'Failed to create grant prep session')
@@ -118,7 +122,11 @@ export default function ProjectGrantsPage() {
       if (!response.ok) {
         throw new Error(data.message || 'Failed to open grant prep')
       }
-      router.push(`/projects/${projectId}/grants/${data.session.id}/prep`)
+      router.push(
+        data.launchUrl ||
+        data.prepUrl ||
+        `/projects/${projectId}/grants/${grantSessionId}/workspace?stage=GRANTMENTOR`
+      )
     } catch (error) {
       console.error('Failed to open grant prep:', error)
       alert(error instanceof Error ? error.message : 'Failed to open grant prep')
@@ -233,10 +241,10 @@ export default function ProjectGrantsPage() {
                           <div className="mt-2 text-xs text-slate-500">Updated {new Date(grantSession.updatedAt).toLocaleString()}</div>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <Link href={`/projects/${projectId}/grants/${grantSession.id}/blueprint`} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                            Blueprint
+                          <Link href={`/projects/${projectId}/grants/${grantSession.id}/workspace`} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                            Workspace
                           </Link>
-                          <Link href={`/projects/${projectId}/grants/${grantSession.id}/draft`} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-100">
+                          <Link href={`/projects/${projectId}/grants/${grantSession.id}/workspace?stage=SECTION_DRAFTING`} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-100">
                             Draft
                           </Link>
                           <button

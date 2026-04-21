@@ -3,11 +3,12 @@ import path from 'path';
 import { generateFromGemini } from '../geminiService';
 import { generateFromOpenAI } from '../openaiService';
 import { parseJsonResponse } from '../fundingIntake/utils';
+import { normalizeGrantWorkflowMode } from '../grants/workflowMode';
 import { buildAssetSequenceMap, buildCompatibilitySummary, normalizeGrantTemplate, sortAndDeduplicateGrantTemplate } from './utils';
 import type { FundingTemplateCompatibilitySummary, GrantTemplateDocument } from './types';
 
-const TEMPLATE_PROMPT_VERSION = 'funding-template-v1';
-const TEMPLATE_EXTRACTOR_VERSION = 'funding-template-extractor-v1';
+const TEMPLATE_PROMPT_VERSION = 'funding-template-v4';
+const TEMPLATE_EXTRACTOR_VERSION = 'funding-template-extractor-v4';
 
 const SYSTEM_INSTRUCTIONS = `
 You extract grant application templates from funding template assets.
@@ -20,6 +21,21 @@ If later assets repeat a field already seen in an earlier asset, do not repeat i
 If two assets disagree, keep the earliest well-supported version and add a warning.
 Flatten the output into the exact top-level arrays shown in the schema.
 Do not return nested section/question hierarchies or alternate field names like section_id, question_id, title, or instructions unless they are mapped into the exact schema fields.
+Scan the entire asset before finalizing extraction. Do not stop after the first column or primary content block.
+Treat left-column, right-column, sidebar, callout, inset, appendix, and table-adjacent content as equally important sources.
+If the asset is multi-column, extract fields and subsection headings from every column in reading order.
+Every visible subsection heading, subheading, panel heading, or grouped prompt label that organizes one or more response items MUST be preserved as its own item in template.sections with type "section".
+Do not collapse subsection headings into parent guidance or notes only. If a right-column block contains distinct subsections, each subsection must appear explicitly in the extracted template.
+Use template.questions for discrete fillable fields and template.sections for narrative prompts or subsection containers, even when the source visually nests them.
+Every extracted response-bearing item MUST include workflowMode:
+- app_draft: substantive proposal content the app should draft and use in prep/blueprint/dimension flows.
+- app_support: structured support content the app should keep visible but exclude from ideation/dimension/AI drafting.
+- team_manual: team-owned/admin/compliance/upload content that should remain visible but stay out of prep/blueprint/dimension/AI drafting.
+Classify app_draft for objectives, problem statement, summary, aim/scope, detailed proposal, methodology/workplan narrative, impact, outcomes, sustainability, risks/mitigation, and justification text.
+Classify app_support for budget overview, budget categories, structured implementation matrices, and other structured support blocks.
+Classify team_manual for personnel details, institution metadata, category selectors, declarations, proofs, certificates, letters, annexures, attachments, signatures, and uploads.
+Preserve section-specific instructions, reviewer-facing guidance, explicit required inclusions, and exact word/character limits on the extracted item they belong to.
+When a heading or prompt includes both the section label and embedded drafting instructions, keep the label concise in "label" and place the drafting instructions in "guidance" without dropping any concrete requirements.
 `;
 
 export interface TemplateExtractionAssetInput {
@@ -47,6 +63,10 @@ export interface TemplateExtractionResult {
 type GrantTemplateItemType = 'field' | 'section' | 'table' | 'budget' | 'attachment' | 'checklist' | 'rule' | 'rubric';
 type GrantTemplateSupportLevel = 'full' | 'partial' | 'manual' | 'unsupported';
 
+function coerceWorkflowMode(value: unknown, fallback: 'app_draft' | 'app_support' | 'team_manual' = 'team_manual') {
+  return normalizeGrantWorkflowMode(value, fallback);
+}
+
 function buildPromptPreamble(): string {
   return `
 ${SYSTEM_INSTRUCTIONS}
@@ -59,6 +79,7 @@ Return JSON in this exact shape:
         "key": "string",
         "label": "string",
         "type": "field|section|table|budget|attachment|checklist|rule|rubric",
+        "workflowMode": "app_draft|app_support|team_manual",
         "required": true,
         "repeatable": false,
         "visibleWhen": "string|null",
@@ -82,10 +103,29 @@ Return JSON in this exact shape:
         ]
       }
     ],
-    "sections": [],
+    "sections": [
+      {
+        "key": "string",
+        "label": "string",
+        "type": "section",
+        "workflowMode": "app_draft|app_support|team_manual",
+        "required": true,
+        "repeatable": false,
+        "visibleWhen": "string|null",
+        "wordLimit": 0,
+        "charLimit": 0,
+        "options": ["string"],
+        "schema": {},
+        "guidance": "string|null",
+        "supportLevel": "full|partial|manual|unsupported",
+        "confidence": 0.0,
+        "sourceAnchors": []
+      }
+    ],
     "budget": {
       "required": true,
       "yearWise": false,
+      "workflowMode": "app_support",
       "categories": [
         {
           "key": "string",
@@ -113,6 +153,8 @@ Return JSON in this exact shape:
   },
   "warnings": ["string"]
 }
+Use the same item fields shown in the questions example for sections, attachments, evaluationCriteria, and submissionRules.items.
+Preserve all visible subsection headings in template.sections, including headings that appear in right-hand columns or secondary panels.
 `;
 }
 
@@ -445,6 +487,11 @@ function coerceTemplateItem(
   fallbackKeyPrefix: string,
   parentLabel?: string
 ): Record<string, unknown> {
+  const primitiveLabel =
+    typeof item === 'string' || typeof item === 'number'
+      ? String(item).trim()
+      : '';
+
   const label = String(
     item?.label ||
       item?.title ||
@@ -452,11 +499,15 @@ function coerceTemplateItem(
       item?.question ||
       item?.section ||
       item?.heading ||
+      item?.subheading ||
+      item?.groupLabel ||
+      item?.prompt ||
+      primitiveLabel ||
       `${fallbackKeyPrefix} item`
   ).trim();
 
   const key = slugifyTemplateKey(
-    item?.key || item?.id || item?.question_id || item?.section_id || label,
+    item?.key || item?.id || item?.question_id || item?.section_id || primitiveLabel || label,
     fallbackKeyPrefix
   );
 
@@ -464,6 +515,9 @@ function coerceTemplateItem(
     key,
     label,
     type: coerceItemType(item?.type || item?.fieldType || item?.inputType || item?.kind, fallbackType),
+    workflowMode: coerceWorkflowMode(
+      item?.workflowMode || item?.workflow_mode || item?.ownershipMode || item?.ownerMode
+    ),
     required: Boolean(item?.required ?? item?.mandatory ?? item?.isRequired),
     repeatable: Boolean(item?.repeatable ?? item?.multiple),
     visibleWhen: item?.visibleWhen || item?.condition || item?.visibility || null,
@@ -490,6 +544,78 @@ function coerceTemplateItem(
   };
 }
 
+function pickFirstArray(...values: unknown[]): any[] {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+
+  return [];
+}
+
+const FIELD_CHILD_COLLECTION_KEYS = ['questions', 'items', 'fields', 'prompts'] as const;
+const SECTION_CHILD_COLLECTION_KEYS = ['sections', 'subsections', 'subSections', 'children', 'blocks', 'groups'] as const;
+
+function pushFlattenedTemplateItem(
+  item: any,
+  fallbackType: GrantTemplateItemType,
+  fallbackKeyPrefix: string,
+  normalizedQuestions: Array<Record<string, unknown>>,
+  normalizedSections: Array<Record<string, unknown>>,
+  parentLabel?: string
+): void {
+  const coerced = coerceTemplateItem(item, fallbackType, fallbackKeyPrefix, parentLabel);
+  if (coerced.type === 'field') {
+    normalizedQuestions.push(coerced);
+  } else {
+    normalizedSections.push(coerced);
+  }
+
+  const nextParentLabel = String(coerced.label || parentLabel || '').trim() || parentLabel;
+  flattenNestedTemplateChildren(item, normalizedQuestions, normalizedSections, fallbackKeyPrefix, nextParentLabel);
+}
+
+function flattenNestedTemplateChildren(
+  item: any,
+  normalizedQuestions: Array<Record<string, unknown>>,
+  normalizedSections: Array<Record<string, unknown>>,
+  fallbackKeyPrefix: string,
+  parentLabel?: string
+): void {
+  if (!item || typeof item !== 'object') {
+    return;
+  }
+
+  for (const key of FIELD_CHILD_COLLECTION_KEYS) {
+    const children = Array.isArray(item[key]) ? item[key] : [];
+    for (let index = 0; index < children.length; index += 1) {
+      pushFlattenedTemplateItem(
+        children[index],
+        'field',
+        `${fallbackKeyPrefix}_${key}_${index + 1}`,
+        normalizedQuestions,
+        normalizedSections,
+        parentLabel
+      );
+    }
+  }
+
+  for (const key of SECTION_CHILD_COLLECTION_KEYS) {
+    const children = Array.isArray(item[key]) ? item[key] : [];
+    for (let index = 0; index < children.length; index += 1) {
+      pushFlattenedTemplateItem(
+        children[index],
+        'section',
+        `${fallbackKeyPrefix}_${key}_${index + 1}`,
+        normalizedQuestions,
+        normalizedSections,
+        parentLabel
+      );
+    }
+  }
+}
+
 function coerceBudgetBlock(value: any): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -506,6 +632,7 @@ function coerceBudgetBlock(value: any): Record<string, unknown> | null {
   return {
     required: Boolean(value.required),
     yearWise: Boolean(value.yearWise || value.year_wise || value.yearly),
+    workflowMode: coerceWorkflowMode(value.workflowMode || value.workflow_mode, 'app_support'),
     categories: categories.map((category: any, index: number) => ({
       key: slugifyTemplateKey(category?.key || category?.label || category?.title || `budget_${index + 1}`, `budget_${index + 1}`),
       label: String(category?.label || category?.title || category?.key || `Budget Category ${index + 1}`).trim(),
@@ -521,16 +648,12 @@ function coerceBudgetBlock(value: any): Record<string, unknown> | null {
   };
 }
 
-function coerceTemplateShape(raw: any): Record<string, unknown> {
+export function coerceTemplateShape(raw: any): Record<string, unknown> {
   const base = raw && typeof raw === 'object' ? raw : {};
-  const topLevelQuestions = Array.isArray(base.questions) ? base.questions : [];
-  const topLevelSections = Array.isArray(base.sections) ? base.sections : [];
-  const topLevelAttachments = Array.isArray(base.attachments) ? base.attachments : [];
-  const topLevelEvaluation = Array.isArray(base.evaluationCriteria)
-    ? base.evaluationCriteria
-    : Array.isArray(base.criteria)
-      ? base.criteria
-      : [];
+  const topLevelQuestions = pickFirstArray(base.questions, base.items, base.fields);
+  const topLevelSections = pickFirstArray(base.sections, base.subsections, base.groups);
+  const topLevelAttachments = pickFirstArray(base.attachments, base.uploads);
+  const topLevelEvaluation = pickFirstArray(base.evaluationCriteria, base.criteria, base.rubrics);
   const submissionRules = base.submissionRules && typeof base.submissionRules === 'object'
     ? base.submissionRules
     : base.submission_rules && typeof base.submission_rules === 'object'
@@ -541,34 +664,23 @@ function coerceTemplateShape(raw: any): Record<string, unknown> {
   const normalizedSections: Array<Record<string, unknown>> = [];
 
   for (let index = 0; index < topLevelQuestions.length; index += 1) {
-    const coerced = coerceTemplateItem(topLevelQuestions[index], 'field', `question_${index + 1}`);
-    if (coerced.type === 'section') {
-      normalizedSections.push(coerced);
-    } else {
-      normalizedQuestions.push(coerced);
-    }
+    pushFlattenedTemplateItem(
+      topLevelQuestions[index],
+      'field',
+      `question_${index + 1}`,
+      normalizedQuestions,
+      normalizedSections
+    );
   }
 
   for (let index = 0; index < topLevelSections.length; index += 1) {
-    const section = topLevelSections[index];
-    const sectionLabel = String(section?.label || section?.title || section?.name || `Section ${index + 1}`).trim();
-    normalizedSections.push(coerceTemplateItem(section, 'section', `section_${index + 1}`));
-
-    if (Array.isArray(section?.questions)) {
-      for (let questionIndex = 0; questionIndex < section.questions.length; questionIndex += 1) {
-        const coercedChild = coerceTemplateItem(
-          section.questions[questionIndex],
-          'section',
-          `section_${index + 1}_item_${questionIndex + 1}`,
-          sectionLabel
-        );
-        if (coercedChild.type === 'field') {
-          normalizedQuestions.push(coercedChild);
-        } else {
-          normalizedSections.push(coercedChild);
-        }
-      }
-    }
+    pushFlattenedTemplateItem(
+      topLevelSections[index],
+      'section',
+      `section_${index + 1}`,
+      normalizedQuestions,
+      normalizedSections
+    );
   }
 
   return {

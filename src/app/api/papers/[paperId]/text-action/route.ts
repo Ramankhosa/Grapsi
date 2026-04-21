@@ -4,13 +4,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyJWT, type JWTPayload } from '@/lib/auth';
+import { verifyJWT } from '@/lib/auth';
 import { 
   performTextAction, 
   getContentSuggestions,
   type TextActionType 
 } from '@/lib/paper/text-action-service';
-import { prisma } from '@/lib/prisma';
+import { canAccessDraftingSession } from '@/lib/grants/shadowSessionAccess';
 import { polishDraftMarkdown } from '@/lib/markdown-draft-formatter';
 
 // ============================================================================
@@ -89,14 +89,13 @@ export async function POST(
     }
 
     // Verify session ownership
-    const session = await prisma.draftingSession.findFirst({
-      where: {
-        id: paperId,
-        userId
-      }
-    });
+    const hasAccess = await canAccessDraftingSession(paperId, {
+      id: userId,
+      roles: decoded.roles,
+      tenantId: decoded.tenant_id,
+    }, 'editContent');
 
-    if (!session) {
+    if (!hasAccess) {
       return NextResponse.json(
         { error: 'Paper session not found or access denied' },
         { status: 404 }
@@ -175,14 +174,13 @@ export async function GET(
     }
 
     // Verify session ownership
-    const session = await prisma.draftingSession.findFirst({
-      where: {
-        id: paperId,
-        userId
-      }
-    });
+    const hasAccess = await canAccessDraftingSession(paperId, {
+      id: userId,
+      roles: decoded.roles,
+      tenantId: decoded.tenant_id,
+    }, 'read');
 
-    if (!session) {
+    if (!hasAccess) {
       return NextResponse.json(
         { error: 'Paper session not found or access denied' },
         { status: 404 }

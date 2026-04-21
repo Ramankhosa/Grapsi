@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { paperSectionService } from '@/lib/services/paper-section-service';
 import { isFeatureEnabled } from '@/lib/feature-flags';
 import { extractTenantContextFromRequest } from '@/lib/metering/auth-bridge';
@@ -73,12 +74,14 @@ function parseFigureSelections(value: unknown): Record<string, { useFigures: boo
   return normalized;
 }
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({ where, select: { id: true, userId: true, tenantId: true, bgGenStatus: true } });
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
+    select: { id: true, userId: true, tenantId: true, bgGenStatus: true }
+  });
 }
 
 async function resolveTenantContext(
@@ -141,7 +144,7 @@ export async function GET(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'read');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -173,7 +176,7 @@ export async function POST(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }

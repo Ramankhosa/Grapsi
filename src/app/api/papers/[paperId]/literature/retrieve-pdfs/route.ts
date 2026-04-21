@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { featureFlags } from '@/lib/feature-flags';
 import {
   paperAcquisitionService,
@@ -21,13 +22,11 @@ const requestSchema = z.object({
 
 const DEEP_LABELS = new Set(['DEEP_ANCHOR', 'DEEP_SUPPORT', 'DEEP_STRESS_TEST']);
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({ where: { id: sessionId } });
-  }
-  return prisma.draftingSession.findFirst({
-    where: { id: sessionId, userId: user.id },
-  });
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {});
 }
 
 function normalizeDoi(value: unknown): string | null {

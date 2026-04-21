@@ -971,7 +971,7 @@ export default function PaperFigurePlannerStage({
     setLoadingSuggestions(true);
     setSuggestionsRequested(true);
     
-    const requestState = startCancelableRequest('Generating AI suggestions', 120000);
+    const requestState = startCancelableRequest('Generating AI suggestions', 180000);
     try {
       const paperSections = getSectionMapFromSession(session);
       const normalizedPrefs = normalizePrefs();

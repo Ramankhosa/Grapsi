@@ -52,6 +52,7 @@ function makeTemplateItem(key: string, label: string, guidance: string) {
     key,
     label,
     type: 'section' as const,
+    workflowMode: 'app_draft' as const,
     required: false,
     repeatable: false,
     supportLevel: 'full' as const,
@@ -129,6 +130,7 @@ function buildPseudoTemplate(mode: PseudoTemplateMode) {
     template.budget = {
       required: true,
       yearWise: false,
+      workflowMode: 'app_support',
       categories: [
         {
           key: 'core_budget',

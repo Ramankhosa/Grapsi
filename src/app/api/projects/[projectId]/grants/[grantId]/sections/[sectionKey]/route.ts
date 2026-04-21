@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { generateGrantSectionDraft, saveGrantSectionDraft } from '@/lib/grants/drafting'
+import { saveGrantSectionDraft } from '@/lib/grants/drafting'
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 
@@ -53,14 +53,12 @@ export async function POST(
 
   try {
     generateSchema.parse(await request.json())
-    const section = await generateGrantSectionDraft({
-      grantSessionId: grantId,
-      tenantId: actor.tenantId,
-      sectionKey,
-      userId: actor.id,
-    })
-
-    return NextResponse.json({ section })
+    return NextResponse.json(
+      {
+        message: 'App Draft sections are generated in the linked literature workspace.',
+      },
+      { status: 409 }
+    )
   } catch (error) {
     console.error('[Grant Section] generate error:', error)
     return NextResponse.json(
@@ -101,7 +99,11 @@ export async function PATCH(
       {
         message: error instanceof Error ? error.message : 'Failed to save the grant section',
       },
-      { status: 500 }
+      {
+        status: error instanceof Error && error.message.includes('literature workspace')
+          ? 409
+          : 500,
+      }
     )
   }
 }

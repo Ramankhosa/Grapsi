@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { literatureSearchService } from '@/lib/services/literature-search-service';
 import { featureFlags } from '@/lib/feature-flags';
 
@@ -10,6 +11,7 @@ export const dynamic = 'force-dynamic';
 
 const searchSchema = z.object({
   query: z.string().min(2),
+  strategyQueryId: z.string().min(1).optional(),
   sources: z.array(z.string().min(1)).optional(),
   yearFrom: z.number().int().optional(),
   yearTo: z.number().int().optional(),
@@ -52,17 +54,11 @@ function sanitizeForPostgres(obj: any): any {
   return obj;
 }
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({ where: { id: sessionId } });
-  }
-
-  return prisma.draftingSession.findFirst({
-    where: {
-      id: sessionId,
-      userId: user.id
-    }
-  });
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {});
 }
 
 export async function POST(request: NextRequest, context: { params: { paperId: string } }) {
@@ -124,6 +120,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     const searchRun = await prisma.literatureSearchRun.create({
       data: {
         sessionId,
+        strategyQueryId: data.strategyQueryId,
         query: data.query,
         sources: data.sources || result.sources,
         yearFrom: data.yearFrom,

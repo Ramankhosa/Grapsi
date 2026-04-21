@@ -858,7 +858,12 @@ export class FundingTemplateService {
     });
   }
 
-  async applyRun(fundingCallId: string, runId: string, operator: IntakeOperator) {
+  async applyRun(
+    fundingCallId: string,
+    runId: string,
+    operator: IntakeOperator,
+    options?: { mode?: 'replace' | 'merge' }
+  ) {
     const { template } = await ensureTemplateRecord(fundingCallId, operator);
     const run = await this.getRun(fundingCallId, runId);
 
@@ -877,35 +882,49 @@ export class FundingTemplateService {
       select: { id: true, sequence_no: true },
       orderBy: [{ sequence_no: 'asc' }, { created_at: 'asc' }],
     });
-    const mergeResult = mergeGrantTemplates(currentTemplate, incomingTemplate, run.id, {
-      assetSequenceById: buildAssetSequenceMap(assets),
-    });
-    const mergedWarnings = Array.from(
-      new Set([
-        ...getCompatibilityWarnings(template.compatibility_json),
-        ...getCompatibilityWarnings(run.compatibility_json),
-      ])
-    );
-    const compatibility = buildCompatibilitySummary(mergeResult.mergedTemplate, mergedWarnings, {
+    const assetSequenceById = buildAssetSequenceMap(assets);
+    const mode = options?.mode === 'merge' ? 'merge' : 'replace';
+    const nextTemplate = mode === 'merge'
+      ? mergeGrantTemplates(currentTemplate, incomingTemplate, run.id, {
+          assetSequenceById,
+        }).mergedTemplate
+      : sortAndDeduplicateGrantTemplate(incomingTemplate, {
+          assetSequenceById,
+          runId: run.id,
+        });
+    const compatibilityWarnings = mode === 'merge'
+      ? Array.from(
+          new Set([
+            ...getCompatibilityWarnings(template.compatibility_json),
+            ...getCompatibilityWarnings(run.compatibility_json),
+          ])
+        )
+      : getCompatibilityWarnings(run.compatibility_json);
+    const compatibility = buildCompatibilitySummary(nextTemplate, compatibilityWarnings, {
       lastRunId: run.id,
     });
-    const diffSummary = `Applied extraction run ${run.id}: ${generateDiffSummary(currentTemplate, mergeResult.mergedTemplate)}`;
+    const diffSummary = mode === 'merge'
+      ? `Merged extraction run ${run.id}: ${generateDiffSummary(currentTemplate, nextTemplate)}`
+      : `Applied extraction run ${run.id} as current template: ${generateDiffSummary(currentTemplate, nextTemplate)}`;
 
     await prisma.$transaction(async (tx) => {
       const revisionNo = await createRevision(tx, template, {
         revisionType: 'extraction_import',
-        grantTemplate: mergeResult.mergedTemplate,
+        grantTemplate: nextTemplate,
         compatibility,
         editorUserId: operator.userId,
         approvedState: 'draft',
-        changeNotes: `Applied extraction run ${run.id}`,
+        changeNotes:
+          mode === 'merge'
+            ? `Merged extraction run ${run.id}`
+            : `Applied extraction run ${run.id} as current template`,
         diffSummary,
       });
 
       await tx.fundingCallTemplate.update({
         where: { id: template.id },
         data: {
-          grant_template_json: asJson(mergeResult.mergedTemplate),
+          grant_template_json: asJson(nextTemplate),
           compatibility_json: asJson(compatibility),
           compiledGrantTemplateJson: Prisma.DbNull,
           current_revision_no: revisionNo,

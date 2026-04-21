@@ -17,6 +17,8 @@ import {
   Target,
   type LucideIcon
 } from 'lucide-react'
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata'
+import { getGrantBackedSectionPlan } from '@/lib/grants/paperSectionConfig'
 import { countPendingRewriteIssues, getLatestPaperReview } from '@/lib/paper-review-utils'
 
 // ============================================================================
@@ -159,6 +161,19 @@ function getPaperTypeSectionConfig(session: any): {
   optionalSections: string[]
   sectionOrder: string[]
 } {
+  const grantPaperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+  if (isGrantBackedPaperTypeCode(grantPaperTypeCode)) {
+    const sections = getGrantBackedSectionPlan(grantPaperTypeCode, session?.paperBlueprint?.sectionPlan)
+    const sectionOrder = sections.map((section) => section.sectionKey)
+    const requiredSections = sections
+      .filter((section) => section.required === true)
+      .map((section) => section.sectionKey)
+    const optionalSections = sections
+      .filter((section) => section.required !== true)
+      .map((section) => section.sectionKey)
+    return { requiredSections, optionalSections, sectionOrder }
+  }
+
   const paperType = session?.paperType
   const requiredSections = normalizeStringArray(paperType?.requiredSections)
   const optionalSections = normalizeStringArray(paperType?.optionalSections)
@@ -174,6 +189,19 @@ function getPaperTypeSectionConfig(session: any): {
 }
 
 function getDraftSectionSubStages(session: any): SubStageDefinition[] {
+  const grantPaperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+  if (isGrantBackedPaperTypeCode(grantPaperTypeCode)) {
+    const sections = getGrantBackedSectionPlan(grantPaperTypeCode, session?.paperBlueprint?.sectionPlan)
+    return sections.map((section) => ({
+      key: section.sectionKey,
+      label: section.displayLabel || formatSectionLabel(section.sectionKey),
+      icon: FileText,
+      description: section.required ? 'Required section' : 'Optional section',
+      required: section.required === true,
+      getStatus: (currentSession: any) => getPaperSectionStatus(currentSession, section.sectionKey).status
+    }))
+  }
+
   const { requiredSections, sectionOrder } = getPaperTypeSectionConfig(session)
   if (sectionOrder.length === 0) return []
 
@@ -221,6 +249,19 @@ function getHumanizationSectionStatus(session: any, sectionKey: string): SubStag
 }
 
 function getHumanizationSubStages(session: any): SubStageDefinition[] {
+  const grantPaperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+  if (isGrantBackedPaperTypeCode(grantPaperTypeCode)) {
+    const sections = getGrantBackedSectionPlan(grantPaperTypeCode, session?.paperBlueprint?.sectionPlan)
+    return sections.map((section) => ({
+      key: section.sectionKey,
+      label: section.displayLabel || formatSectionLabel(section.sectionKey),
+      icon: FileText,
+      description: section.required ? 'Required section' : 'Optional section',
+      required: section.required === true,
+      getStatus: (currentSession: any) => getHumanizationSectionStatus(currentSession, section.sectionKey)
+    }))
+  }
+
   const { requiredSections, sectionOrder } = getPaperTypeSectionConfig(session)
   if (sectionOrder.length === 0) return []
 
@@ -377,7 +418,8 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         description: 'Select a paper type',
         required: true,
         getStatus: (session) => {
-          return session?.paperType?.code || session?.paperTypeId ? 'completed' : 'pending'
+          const paperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+          return paperTypeCode || session?.paperTypeId ? 'completed' : 'pending'
         }
       },
       {

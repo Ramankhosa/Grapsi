@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
 import { blueprintService } from './blueprint-service';
 import { citationMappingService, type CitationMetaSnapshot, type PaperBlueprintMapping } from './citation-mapping-service';
 import { citationCoverageDistributor, type AssignedCitation } from './citation-coverage-distributor';
@@ -140,7 +141,41 @@ type EvidencePackSelectionLimits = {
   minAllowedCitationKeys: number;
 };
 
-function getEvidencePackSelectionLimits(sectionKey: string): EvidencePackSelectionLimits {
+function getEvidencePackSelectionLimits(
+  sectionKey: string,
+  options?: {
+    paperTypeCode?: string | null;
+    mustCoverCount?: number;
+    suggestedCitationCount?: number | null;
+  }
+): EvidencePackSelectionLimits {
+  if (isGrantBackedPaperTypeCode(options?.paperTypeCode)) {
+    const mustCoverCount = options?.mustCoverCount || 0;
+    const suggestedCitationCount = options?.suggestedCitationCount || 0;
+
+    if (suggestedCitationCount >= 10 || mustCoverCount >= 4) {
+      return {
+        perDimensionTopK: 4,
+        maxAllowedCitationKeys: 60,
+        minAllowedCitationKeys: 18,
+      };
+    }
+
+    if (suggestedCitationCount >= 5 || mustCoverCount >= 2) {
+      return {
+        perDimensionTopK: 3,
+        maxAllowedCitationKeys: 40,
+        minAllowedCitationKeys: 12,
+      };
+    }
+
+    return {
+      perDimensionTopK: 3,
+      maxAllowedCitationKeys: 25,
+      minAllowedCitationKeys: 0,
+    };
+  }
+
   const normalized = normalizeSectionKey(sectionKey);
   if (normalized === 'literature_review' || normalized === 'related_work') {
     return {
@@ -826,7 +861,11 @@ class EvidencePackService {
 
     const perDimension = new Map<string, EvidenceCitation[]>();
     const sectionKeyNormalized = normalizeSectionKey(section.sectionKey);
-    const selectionLimits = getEvidencePackSelectionLimits(sectionKeyNormalized);
+    const selectionLimits = getEvidencePackSelectionLimits(sectionKeyNormalized, {
+      paperTypeCode: blueprint.paperTypeCode,
+      mustCoverCount: mustCover.length,
+      suggestedCitationCount: section.suggestedCitationCount,
+    });
 
     // Deep evidence cards are primary evidence. They are linked by section/dimension via EvidenceCardMapping.
     const deepMappings = await this.loadDeepCardMappings(sessionId);

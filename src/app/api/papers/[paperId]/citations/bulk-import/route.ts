@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { citationService } from '@/lib/services/citation-service';
 import { citationStyleService, type CitationData } from '@/lib/services/citation-style-service';
 import { citationMappingService, type CitationMetaSnapshot, type PaperBlueprintMapping } from '@/lib/services/citation-mapping-service';
@@ -41,13 +42,11 @@ const bulkImportSchema = z.object({
   })).min(1).max(250)
 });
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {
     include: {
       citationStyle: true
     }

@@ -1,6 +1,10 @@
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
 import type { PrepHandoffPreview } from './types';
+import {
+  getGrantWorkflowBadgeLabel,
+  getGrantWorkflowManualDetail,
+} from '@/lib/grants/workflowMode';
 
 type Props = {
   isOpen: boolean;
@@ -21,6 +25,10 @@ export default function GrantPrepHandoffModal({
   onLaunch,
   launching,
 }: Props) {
+  const previewSections = preview?.sectionPreview || [];
+  const appDraftCount = previewSections.filter((section) => section.workflowMode === 'app_draft').length;
+  const manualDraftCount = previewSections.length - appDraftCount;
+
   return (
     <Transition.Root show={isOpen} as={Fragment}>
       <Dialog as="div" className="relative z-40" onClose={onClose}>
@@ -52,6 +60,48 @@ export default function GrantPrepHandoffModal({
                 <div className="mt-2 text-sm text-slate-600">
                   Review blockers before freezing the Grant Prep snapshot and launching the local Grapsi grant workspace.
                 </div>
+                {previewSections.length > 0 ? (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Section Ownership
+                    </div>
+                    <div className="mt-2 text-sm text-slate-700">
+                      {appDraftCount} App Draft, {manualDraftCount} Manual Drafting
+                    </div>
+                    <div className="mt-3 max-h-56 space-y-2 overflow-y-auto">
+                      {previewSections.map((section) => (
+                        <div
+                          key={section.sectionKey}
+                          className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          <span className="font-medium text-slate-900">{section.label}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            section.workflowMode === 'app_draft'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : section.workflowMode === 'app_support'
+                                ? 'bg-sky-100 text-sky-800'
+                                : 'bg-amber-100 text-amber-900'
+                          }`}>
+                            {getGrantWorkflowBadgeLabel(section.workflowMode)}
+                          </span>
+                          {section.workflowMode !== 'app_draft' ? (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                              {getGrantWorkflowManualDetail(section.workflowMode)}
+                            </span>
+                          ) : null}
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                            {section.sectionType}
+                          </span>
+                          {section.required ? (
+                            <span className="rounded-full bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                              Required
+                            </span>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="mt-4 space-y-3">
                   {!preview || preview.blockers.length === 0 ? (

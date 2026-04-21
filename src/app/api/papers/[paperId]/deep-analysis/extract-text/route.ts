@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import { featureFlags } from '@/lib/feature-flags';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { proactiveParsingService } from '@/lib/services/proactive-parsing-service';
 
 export const runtime = 'nodejs';
@@ -9,12 +10,11 @@ export const dynamic = 'force-dynamic';
 
 const DEEP_LABELS = ['DEEP_ANCHOR', 'DEEP_SUPPORT', 'DEEP_STRESS_TEST'];
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({ where: { id: sessionId }, select: { id: true } });
-  }
-  return prisma.draftingSession.findFirst({
-    where: { id: sessionId, userId: user.id },
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {
     select: { id: true },
   });
 }

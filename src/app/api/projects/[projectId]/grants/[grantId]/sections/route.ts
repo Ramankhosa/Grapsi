@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { generateGrantSectionDraft } from '@/lib/grants/drafting'
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 
@@ -59,24 +58,12 @@ export async function POST(
       return NextResponse.json({ message: 'Grant workspace not found' }, { status: 404 })
     }
 
-    const generatedSections = []
-    for (const section of workspace.blueprint.sectionDrafts) {
-      if (section.sectionType !== 'narrative' && section.sectionType !== 'short_answer') {
-        continue
-      }
-      generatedSections.push(
-        await generateGrantSectionDraft({
-          grantSessionId: grantId,
-          tenantId: actor.tenantId,
-          sectionKey: section.sectionKey,
-          userId: actor.id,
-        })
-      )
-    }
-
-    return NextResponse.json({
-      sections: generatedSections,
-    })
+    return NextResponse.json(
+      {
+        message: 'App Draft sections are generated in the linked literature workspace.',
+      },
+      { status: 409 }
+    )
   } catch (error) {
     console.error('[Grant Sections] generate-all error:', error)
     return NextResponse.json(

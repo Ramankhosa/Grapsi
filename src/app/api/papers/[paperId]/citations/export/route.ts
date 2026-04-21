@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { citationService } from '@/lib/services/citation-service';
 import type { CitationData } from '@/lib/services/citation-style-service';
 import { exportCitationsToBibtex } from '@/lib/export/bibtex-export';
 
 export const runtime = 'nodejs';
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'read', {
     include: { citationStyle: true }
   });
 }

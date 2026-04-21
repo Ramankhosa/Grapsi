@@ -9,6 +9,10 @@
  */
 
 import { prisma } from '../prisma';
+import {
+  filterGrantBackedLiteratureSections,
+  isGrantBackedPaperTypeCode,
+} from '@/lib/grants/blueprintMetadata';
 import { llmGateway, type TenantContext } from '../metering';
 import { blueprintService, type BlueprintWithSectionPlan, type SectionPlanItem } from './blueprint-service';
 import type { Citation, CitationUsage } from '@prisma/client';
@@ -192,6 +196,12 @@ function filterSectionsForLiteratureMapping(
   sections: SectionPlanItem[],
   paperTypeCode?: string | null
 ): SectionPlanItem[] {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    const filtered = filterGrantBackedLiteratureSections(sections);
+    console.log(`Grant-backed paper (${paperTypeCode}) - filtered to ${filtered.length} blueprint-driven sections`);
+    return filtered;
+  }
+
   const isReview = isReviewPaper(paperTypeCode);
   if (isReview) {
     console.log(`📚 Review paper detected (${paperTypeCode}) - including all sections for mapping`);
@@ -245,7 +255,8 @@ class CitationMappingService {
     const validationStructures = this.buildBlueprintValidationStructures(blueprint);
 
     // 4. Process in batches (parallel with limit)
-    const batchSize = BATCH_CONFIG.BATCH_SIZE;
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
+    const batchSize = grantBacked ? 1 : BATCH_CONFIG.BATCH_SIZE;
     const limitedCitations = citations.slice(0, BATCH_CONFIG.MAX_PAPERS_PER_RUN);
     const totalBatches = Math.ceil(limitedCitations.length / batchSize);
     const batches: CitationForMapping[][] = [];
@@ -256,7 +267,7 @@ class CitationMappingService {
 
     const batchResults = await this.runBatchesInParallel(
       batches,
-      BATCH_CONFIG.PARALLEL_BATCH_LIMIT,
+      grantBacked ? 1 : BATCH_CONFIG.PARALLEL_BATCH_LIMIT,
       async (batch, batchIndex) => {
         const batchNum = batchIndex + 1;
         console.log(`📋 Processing batch ${batchNum}/${totalBatches} (${batch.length} papers)`);
@@ -434,6 +445,15 @@ class CitationMappingService {
       .replace(/[\s-]+/g, '_');
   }
 
+  private trimForPrompt(value: string | null | undefined, maxLength: number): string {
+    const normalized = String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return '';
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+  }
+
   /**
    * Build the LLM prompt for blueprint mapping
    * More complex than boolean relevance - extracts section + dimensions + remarks
@@ -452,13 +472,23 @@ class CitationMappingService {
       blueprint.paperTypeCode
     );
     
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
+
     // Build section context with mustCover items (dimensions) and their types
     const sectionContext = sectionsForMapping.map(section => {
       const dimensionsWithTypes = section.mustCover.map((mc, i) => {
         const dimType = section.mustCoverTyping?.[mc] || 'empirical';
         return `  ${i + 1}. "${mc}" [${dimType}]`;
       }).join('\n');
-      
+
+      if (grantBacked) {
+        return [
+          `SECTION: ${section.sectionKey}`,
+          `DIMENSIONS:`,
+          dimensionsWithTypes,
+        ].join('\n');
+      }
+
       return `
 SECTION: ${section.sectionKey}
 PURPOSE: ${section.purpose}
@@ -471,13 +501,47 @@ MUST AVOID: ${section.mustAvoid.slice(0, 3).join(', ')}`;
     // Build paper context
     const paperContext = papers.map((p, i) => `
 PAPER ${i + 1} [ID: ${p.id}] [KEY: ${p.citationKey}]:
-- Title: ${p.title}
+- Title: ${this.trimForPrompt(p.title, grantBacked ? 220 : 400)}
 - Year: ${p.year || 'Unknown'}
 - Venue: ${p.venue || 'Unknown'}
 - Positional Relation: ${p.positionalRelation || 'Not specified'}
-${p.positionalRelationRationale ? `- Positional Rationale: ${p.positionalRelationRationale}` : ''}
-- Abstract: ${p.abstract || 'No abstract available'}
+${p.positionalRelationRationale && !grantBacked ? `- Positional Rationale: ${this.trimForPrompt(p.positionalRelationRationale, 220)}` : ''}
+- Abstract: ${this.trimForPrompt(p.abstract || 'No abstract available', grantBacked ? 900 : 2200)}
 `).join('\n');
+
+    if (grantBacked) {
+      return `Map each paper to grant blueprint dimensions.
+
+Rules:
+- Use ONLY the sections and exact dimension text listed below.
+- A paper may map to 0-3 dimensions.
+- Choose the best sectionKey or null if nothing fits.
+- Remarks must be 1 sentence, grounded in the abstract only.
+- Return valid JSON only.
+
+SECTIONS
+${sectionContext}
+
+PAPERS
+${paperContext}
+
+Return a JSON array:
+[
+  {
+    "paperId": "exact paper ID",
+    "citationKey": "exact citation key",
+    "sectionKey": "exact blueprint section key or null",
+    "dimensionMappings": [
+      {
+        "dimensionIndex": 1,
+        "dimension": "exact dimension text",
+        "remark": "one grounded sentence",
+        "confidence": "HIGH" | "MEDIUM" | "LOW"
+      }
+    ]
+  }
+]`;
+    }
 
     return `You are an academic research analyst mapping literature to a paper blueprint.
 

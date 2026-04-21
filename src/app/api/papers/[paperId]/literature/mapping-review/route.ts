@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { blueprintService } from '@/lib/services/blueprint-service';
 
 export const runtime = 'nodejs';
@@ -18,19 +19,14 @@ const actionSchema = z.object({
   reviewComment: z.string().optional()
 });
 
-type SessionUser = { id: string; roles?: string[] };
+type SessionUser = { id: string; roles?: string[]; tenantId?: string | null };
 
 function normalizeToken(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 async function getSessionForUser(sessionId: string, user: SessionUser) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {
     select: {
       id: true
     }

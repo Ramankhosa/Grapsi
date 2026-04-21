@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import {
+  GRANT_BLUEPRINT_DIMENSION_TYPES,
+  GRANT_CITATION_MODES,
+  GRANT_SECTION_SEMANTICS,
+  GRANT_WORKFLOW_MODES,
+} from '@/types/grant'
 
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import {
@@ -15,6 +21,8 @@ const planSectionSchema = z.object({
   label: z.string().min(1),
   order: z.number().int().positive(),
   sectionType: z.enum(['narrative', 'short_answer', 'checklist', 'table', 'budget_rows']),
+  workflowMode: z.enum(GRANT_WORKFLOW_MODES).default('team_manual'),
+  citationMode: z.enum(GRANT_CITATION_MODES).optional().nullable(),
   required: z.boolean(),
   wordBudget: z.number().int().nullable().optional(),
   characterLimit: z.number().int().nullable().optional(),
@@ -24,6 +32,28 @@ const planSectionSchema = z.object({
   sourceTemplatePointer: z.string().nullable().optional(),
   mustCover: z.array(z.string()).default([]),
   mustAvoid: z.array(z.string()).default([]),
+  mustCoverTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
+  suggestedCitationCount: z.number().int().min(0).max(50).nullable().optional(),
+  thematicBlueprint: z.object({
+    mustCover: z.array(z.string()).default([]),
+    mustAvoid: z.array(z.string()).default([]),
+    mustCoverTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
+    suggestedCitationCount: z.number().int().min(0).max(50).optional(),
+  }).nullable().optional(),
+  grantSemantic: z.enum(GRANT_SECTION_SEMANTICS).nullable().optional(),
+  prepContextBlock: z.object({
+    stageKeys: z.array(z.string()).default([]),
+    bullets: z.array(z.string()).default([]),
+    keywords: z.array(z.string()).default([]),
+  }).nullable().optional(),
+  grantRuleProfile: z.object({
+    requiredPoints: z.array(z.string()).default([]),
+    evaluationFocus: z.array(z.string()).default([]),
+    reviewerSignals: z.array(z.string()).default([]),
+    avoidRules: z.array(z.string()).default([]),
+    formatConstraints: z.array(z.string()).default([]),
+    narrativeConstraints: z.array(z.string()).default([]),
+  }).nullable().optional(),
   seededContext: z.string().default(''),
 })
 

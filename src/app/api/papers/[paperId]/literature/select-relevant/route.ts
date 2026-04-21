@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
+import {
+  filterGrantBackedLiteratureSections,
+  isGrantBackedPaperTypeCode,
+} from '@/lib/grants/blueprintMetadata';
 import { llmGateway } from '@/lib/metering/gateway';
 import { defaultConfig as meteringDefaultConfig } from '@/lib/metering/config';
 import { createReservationService } from '@/lib/metering/reservation';
@@ -337,16 +342,12 @@ function deduplicatePapers(papers: any[]) {
   return unique;
 }
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({ 
-      where: { id: sessionId },
-      include: { researchTopic: true, ideaRecord: true }
-    });
-  }
-
-  return prisma.draftingSession.findFirst({
-    where: { id: sessionId, userId: user.id },
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
     include: { researchTopic: true, ideaRecord: true }
   });
 }
@@ -452,6 +453,19 @@ function isReviewPaper(paperTypeCode?: string): boolean {
          normalized.includes('survey') || 
          normalized.includes('meta-analysis') ||
          normalized.includes('systematic');
+}
+
+function filterSectionsForLiteratureMapping(
+  sections: SectionPlanItem[],
+  paperTypeCode?: string | null
+): SectionPlanItem[] {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return filterGrantBackedLiteratureSections(sections);
+  }
+
+  return isReviewPaper(paperTypeCode || undefined)
+    ? sections
+    : sections.filter((section) => isLiteratureMappingSection(section.sectionKey));
 }
 
 function normalizePdfStatus(value: unknown): 'UPLOADED' | 'PARSING' | 'READY' | 'FAILED' | 'NONE' {
@@ -1020,7 +1034,8 @@ function buildPrompt(
     pdfStatus?: string | null;
     archetype?: string | null;
   }>,
-  blueprint?: BlueprintWithSectionPlan | null
+  blueprint?: BlueprintWithSectionPlan | null,
+  preferredDimensionTargets?: Array<{ sectionKey: string; dimension: string; dimensionType?: string }>
 ): string {
   const paperList = papers.map((p, idx) => {
     const authorStr = p.authors?.slice(0, 3).join(', ') || 'Unknown';
@@ -1042,15 +1057,19 @@ function buildPrompt(
   // Build blueprint sections string if available
   let blueprintSection = '';
   let dimensionMappingInstructions = '';
+  const preferredTargets = Array.isArray(preferredDimensionTargets)
+    ? preferredDimensionTargets.filter((item) => item?.sectionKey && item?.dimension)
+    : [];
   
   if (blueprint && blueprint.sectionPlan && blueprint.sectionPlan.length > 0) {
     // Filter sections for dimension mapping:
     // - For review papers: include all sections
     // - For other papers: only Introduction, Literature Review, and Methodology
     const isReview = isReviewPaper(blueprint.paperTypeCode ?? undefined);
-    const sectionsForMapping = isReview 
-      ? blueprint.sectionPlan 
-      : blueprint.sectionPlan.filter(s => isLiteratureMappingSection(s.sectionKey));
+    const sectionsForMapping = filterSectionsForLiteratureMapping(
+      blueprint.sectionPlan,
+      blueprint.paperTypeCode ?? undefined
+    );
     
     console.log(`[LiteratureRelevance] Paper type: ${blueprint.paperTypeCode || 'unknown'}, isReview: ${isReview}, sections for mapping: ${sectionsForMapping.map(s => s.sectionKey).join(', ')}`);
     
@@ -1095,6 +1114,16 @@ ${sectionsText}
    Do NOT use PDF/Open Access status to decide deep-worthiness.
 `;
   }
+
+  const preferredTargetSection = preferredTargets.length > 0
+    ? `
+SEARCH QUERY TARGETS (PRIOR CONTEXT ONLY):
+This search run originated from a query designed to cover these blueprint dimensions:
+${preferredTargets.map((target, index) => `  ${index + 1}. ${target.sectionKey} -> "${target.dimension}"${target.dimensionType ? ` [${target.dimensionType}]` : ''}`).join('\n')}
+
+Use these as a relevance prior, but you may still map a paper to any stronger blueprint dimension supported by the abstract.
+`
+    : '';
 
   const baseTasks = `
 For each paper, determine:
@@ -1216,6 +1245,7 @@ For each paper, determine:
 RESEARCH QUESTION:
 ${researchQuestion}
 ${blueprintSection}
+${preferredTargetSection}
 CANDIDATE PAPERS:
 ${paperList}
 
@@ -1304,7 +1334,7 @@ function parseAndValidateLLMResponse(
     const isReview = isReviewPaper(blueprint.paperTypeCode ?? undefined);
     const sectionsForValidation = isReview
       ? blueprint.sectionPlan
-      : blueprint.sectionPlan.filter(s => isLiteratureMappingSection(s.sectionKey));
+      : filterSectionsForLiteratureMapping(blueprint.sectionPlan, blueprint.paperTypeCode ?? undefined);
 
     for (const section of sectionsForValidation) {
       validSectionKeys.add(section.sectionKey);
@@ -1496,7 +1526,7 @@ function calculateBlueprintCoverage(
   const isReview = isReviewPaper(blueprint.paperTypeCode ?? undefined);
   const sectionsForCoverage = isReview 
     ? blueprint.sectionPlan 
-    : blueprint.sectionPlan.filter(s => isLiteratureMappingSection(s.sectionKey));
+    : filterSectionsForLiteratureMapping(blueprint.sectionPlan, blueprint.paperTypeCode ?? undefined);
 
   for (const section of sectionsForCoverage) {
     const dimensions = section.mustCover || [];
@@ -1712,7 +1742,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
 
     // Get session
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -1723,7 +1753,10 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
 
     // Get the search run
     const searchRun = await prisma.literatureSearchRun.findFirst({
-      where: { id: searchRunId, sessionId }
+      where: { id: searchRunId, sessionId },
+      include: {
+        strategyQuery: true,
+      },
     });
     
     if (!searchRun) {
@@ -1755,6 +1788,9 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     if (includeBlueprint) {
       blueprint = await blueprintService.getBlueprint(sessionId);
     }
+    const preferredDimensionTargets = Array.isArray((searchRun.strategyQuery?.suggestedFilters as any)?.dimensionTargets)
+      ? (searchRun.strategyQuery?.suggestedFilters as any).dimensionTargets
+      : [];
 
     // Get research question from session or blueprint
     const researchQuestion = blueprint?.centralObjective
@@ -2018,7 +2054,8 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         const prompt = buildPrompt(
           researchQuestion,
           batch,
-          blueprint
+          blueprint,
+          preferredDimensionTargets
         );
 
         // The metering system enforces a per-task concurrency limit on active
@@ -2516,7 +2553,7 @@ export async function PATCH(request: NextRequest, context: { params: { paperId: 
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -2571,7 +2608,7 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'read');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }

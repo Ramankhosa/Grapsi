@@ -99,7 +99,11 @@ export default function ProjectsPage() {
         throw new Error(data.message || 'Failed to start grant prep')
       }
 
-      router.push(`/projects/${projectId}/grants/${data.session.id}/prep`)
+      router.push(
+        data.launchUrl ||
+        data.prepUrl ||
+        `/projects/${projectId}/grants/${data.session.id}/prep`
+      )
     } catch (error) {
       console.error('Failed to start grant prep:', error)
       alert(error instanceof Error ? error.message : 'Failed to start grant prep')

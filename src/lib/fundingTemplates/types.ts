@@ -1,3 +1,5 @@
+import type { GrantWorkflowMode } from '@/types/grant';
+
 export const FUNDING_TEMPLATE_ITEM_TYPES = [
   'field',
   'section',
@@ -36,6 +38,7 @@ export interface FundingTemplateItem {
   key: string;
   label: string;
   type: FundingTemplateItemType;
+  workflowMode: GrantWorkflowMode;
   required: boolean;
   repeatable: boolean;
   visibleWhen?: string | null;
@@ -60,6 +63,7 @@ export interface FundingTemplateBudgetCategory {
 export interface FundingTemplateBudget {
   required: boolean;
   yearWise: boolean;
+  workflowMode: GrantWorkflowMode;
   categories: FundingTemplateBudgetCategory[];
   caps?: Record<string, JsonValue> | null;
   justificationNotes?: string | null;

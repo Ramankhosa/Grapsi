@@ -1,13 +1,6 @@
-import { generateFromGemini } from '@/lib/geminiService'
-import { getGrantPrepGeminiModel } from '@/lib/grantPrep/model'
 import prisma from '@/lib/prisma'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => String(item || '').trim()).filter(Boolean)
-    : []
-}
+import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 
 function stringifyStructuredSection(value: unknown) {
   if (!value) return ''
@@ -31,55 +24,6 @@ function stringifyStructuredSection(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
-function buildGrantSectionPrompt(input: {
-  projectTitle: string
-  fundingCallTitle: string
-  fundingAgencyName: string
-  freezePayload: Record<string, unknown> | null
-  section: {
-    label: string
-    sectionKey: string
-    sectionType: string
-    purpose: string
-    reviewerIntent: string | null
-    wordBudget: number | null
-    characterLimit: number | null
-    mustCover: string[]
-    mustAvoid: string[]
-  }
-  precedingSections: Array<{ label: string; content: string }>
-}) {
-  const priorContext = input.precedingSections
-    .filter((section) => section.content.trim().length > 0)
-    .map((section) => `${section.label}:\n${section.content}`)
-    .join('\n\n')
-
-  const freezePayload = input.freezePayload ? JSON.stringify(input.freezePayload, null, 2) : 'null'
-
-  return [
-    'You are drafting a grant proposal section inside Grapsi.',
-    'Return only the section draft text. Do not use markdown fences.',
-    `Project title: ${input.projectTitle}`,
-    `Funding call: ${input.fundingCallTitle}`,
-    `Agency: ${input.fundingAgencyName}`,
-    `Section key: ${input.section.sectionKey}`,
-    `Section label: ${input.section.label}`,
-    `Section type: ${input.section.sectionType}`,
-    `Purpose: ${input.section.purpose}`,
-    input.section.reviewerIntent ? `Reviewer intent: ${input.section.reviewerIntent}` : null,
-    input.section.wordBudget ? `Target word budget: ${input.section.wordBudget}` : null,
-    input.section.characterLimit ? `Maximum characters: ${input.section.characterLimit}` : null,
-    input.section.mustCover.length > 0 ? `Must cover: ${input.section.mustCover.join('; ')}` : null,
-    input.section.mustAvoid.length > 0 ? `Must avoid: ${input.section.mustAvoid.join('; ')}` : null,
-    priorContext ? `Earlier approved/generated sections:\n${priorContext}` : null,
-    `Grant prep freeze payload:\n${freezePayload}`,
-    'Write in a professional grant-writing style aligned to the funding call.',
-    'Do not invent facts beyond the supplied project and prep context.',
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-}
-
 export async function generateGrantSectionDraft(input: {
   grantSessionId: string
   tenantId: string
@@ -91,79 +35,29 @@ export async function generateGrantSectionDraft(input: {
     tenantId: input.tenantId,
   })
 
-  if (!workspace?.blueprint) {
+  if (!workspace || !workspace.blueprint) {
     throw new Error('Grant workspace not found')
   }
 
-  if (workspace.blueprint.status !== 'FROZEN') {
+  const blueprint = workspace.blueprint
+
+  if (blueprint.status !== 'FROZEN') {
     throw new Error('Freeze the blueprint before generating draft sections.')
   }
 
-  const sectionDraft = workspace.blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
+  const sectionDraft = blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
   if (!sectionDraft) {
     throw new Error('Grant section not found')
   }
 
-  if (!['narrative', 'short_answer'].includes(sectionDraft.sectionType)) {
-    throw new Error('Structured sections are edited manually in the draft workspace.')
+  if (!isGrantSectionAutoDraftable({
+    sectionType: sectionDraft.sectionType,
+    workflowMode: (sectionDraft as { workflowMode?: string }).workflowMode,
+  })) {
+    throw new Error('Only app draft sections are eligible for AI generation.')
   }
 
-  const sectionPlan = workspace.blueprint.sectionPlan.find((section) => section.sectionKey === input.sectionKey)
-  if (!sectionPlan) {
-    throw new Error('Grant blueprint section is missing from the plan')
-  }
-
-  const precedingSections = workspace.blueprint.sectionDrafts
-    .filter((section) => section.sectionOrder < sectionDraft.sectionOrder)
-    .map((section) => ({
-      label: section.label,
-      content: section.content || '',
-    }))
-
-  const prompt = buildGrantSectionPrompt({
-    projectTitle: workspace.grantSession.project.name,
-    fundingCallTitle: workspace.grantSession.fundingCall.scheme_title || 'Funding Call',
-    fundingAgencyName: workspace.grantSession.fundingCall.agency_name || '',
-    freezePayload: (workspace.blueprint.freezePayloadJson || null) as Record<string, unknown> | null,
-    section: {
-      label: sectionDraft.label,
-      sectionKey: sectionDraft.sectionKey,
-      sectionType: sectionDraft.sectionType,
-      purpose: sectionDraft.purpose,
-      reviewerIntent: sectionDraft.reviewerIntent,
-      wordBudget: sectionDraft.wordBudget,
-      characterLimit: sectionDraft.characterLimit,
-      mustCover: asStringArray(sectionDraft.mustCoverJson),
-      mustAvoid: asStringArray(sectionDraft.mustAvoidJson),
-    },
-    precedingSections,
-  })
-
-  const content = (await generateFromGemini(prompt, getGrantPrepGeminiModel())).trim()
-  if (!content) {
-    throw new Error('The drafting model returned an empty response.')
-  }
-
-  return prisma.grantSectionDraft.update({
-    where: {
-      grantSessionId_sectionKey: {
-        grantSessionId: input.grantSessionId,
-        sectionKey: input.sectionKey,
-      },
-    },
-    data: {
-      content,
-      status: 'DRAFT',
-      version: { increment: 1 },
-      llmPromptUsed: prompt,
-      llmResponse: content,
-      generatedAt: new Date(),
-      updatedByUserId: input.userId,
-    },
-    include: {
-      structuredResponses: true,
-    },
-  })
+  throw new Error('App draft sections are generated in the linked literature workspace.')
 }
 
 export async function saveGrantSectionDraft(input: {
@@ -180,20 +74,25 @@ export async function saveGrantSectionDraft(input: {
     tenantId: input.tenantId,
   })
 
-  if (!workspace?.blueprint) {
+  if (!workspace || !workspace.blueprint) {
     throw new Error('Grant workspace not found')
   }
 
-  const sectionDraft = workspace.blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
+  const blueprint = workspace.blueprint
+  const sectionDraft = blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
   if (!sectionDraft) {
     throw new Error('Grant section not found')
+  }
+
+  if (sectionDraft.workflowMode === 'app_draft') {
+    throw new Error('App draft sections are edited in the linked literature workspace.')
   }
 
   return prisma.$transaction(async (tx) => {
     let savedDraft = sectionDraft
 
     if (sectionDraft.sectionType === 'narrative' || sectionDraft.sectionType === 'short_answer') {
-      savedDraft = await tx.grantSectionDraft.update({
+      const updatedDraft = await tx.grantSectionDraft.update({
         where: { id: sectionDraft.id },
         data: {
           content: input.content ?? sectionDraft.content,
@@ -205,6 +104,11 @@ export async function saveGrantSectionDraft(input: {
           structuredResponses: true,
         },
       })
+      savedDraft = {
+        ...updatedDraft,
+        workflowMode: sectionDraft.workflowMode,
+        citationMode: sectionDraft.citationMode,
+      }
     } else if (typeof input.structuredData !== 'undefined') {
       await tx.grantStructuredFieldResponse.upsert({
         where: {
@@ -229,7 +133,7 @@ export async function saveGrantSectionDraft(input: {
         },
       })
 
-      savedDraft = await tx.grantSectionDraft.update({
+      const updatedDraft = await tx.grantSectionDraft.update({
         where: { id: sectionDraft.id },
         data: {
           status: input.markReviewed ? 'REVIEWED' : 'DRAFT',
@@ -240,6 +144,11 @@ export async function saveGrantSectionDraft(input: {
           structuredResponses: true,
         },
       })
+      savedDraft = {
+        ...updatedDraft,
+        workflowMode: sectionDraft.workflowMode,
+        citationMode: sectionDraft.citationMode,
+      }
     }
 
     return savedDraft
@@ -258,4 +167,3 @@ export function renderGrantSectionForExport(sectionDraft: {
   const structuredData = sectionDraft.structuredResponses.find((response) => response.fieldKey === 'structuredData')
   return stringifyStructuredSection(structuredData?.responseJson)
 }
-

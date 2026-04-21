@@ -1628,6 +1628,134 @@ function buildRenderSpecForSuggestion(suggestion: FigureSuggestion): FigureRende
   }
 }
 
+const MAX_SUGGESTION_CONTEXT_CHARS = 8000
+const MAX_SUGGESTION_CONTEXT_SECTIONS = 8
+
+function normalizeSuggestionSectionText(content: string): string {
+  return sanitizeAscii(content || '', true)
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
+function scoreSuggestionSection(sectionKey: string, content: string): number {
+  const rawKey = sanitizeAscii(sectionKey || '').toLowerCase()
+  const normalizedSection = normalizeSectionType(sectionKey)
+
+  let score = 45
+  if (normalizedSection === 'selected_content') score = 100
+  else if (normalizedSection === 'results') score = 96
+  else if (normalizedSection === 'methodology') score = 92
+  else if (normalizedSection === 'introduction') score = 78
+  else if (normalizedSection === 'literature_review') score = 64
+  else if (normalizedSection === 'discussion') score = 60
+  else if (normalizedSection === 'conclusion') score = 54
+
+  if (/\b(objective|aim|goal|overview|summary|specific_aims|problem|need|rationale)\b/.test(rawKey)) {
+    score = Math.max(score, 80)
+  }
+  if (/\b(method|approach|workflow|pipeline|protocol|implementation|design|plan|strategy|work_plan|work_package)\b/.test(rawKey)) {
+    score = Math.max(score, 92)
+  }
+  if (/\b(result|outcome|deliverable|evaluation|validation|benchmark|milestone|success)\b/.test(rawKey)) {
+    score = Math.max(score, 90)
+  }
+  if (/\b(impact|significance|translation|benefit|risk|limitation)\b/.test(rawKey)) {
+    score = Math.max(score, 62)
+  }
+  if (/\b(budget|resource|personnel|team|timeline|ethic|governance|management|compliance)\b/.test(rawKey)) {
+    score = Math.min(score, 28)
+  }
+  if (/\b\d+(?:\.\d+)?\b/.test(content)) {
+    score += 4
+  }
+
+  return score
+}
+
+function buildSuggestionSectionsContext(sections?: Record<string, string>): string {
+  if (!sections) return ''
+
+  const rankedSections = Object.entries(sections)
+    .map(([sectionKey, content], index) => {
+      const normalizedContent = normalizeSuggestionSectionText(content)
+      if (!normalizedContent) return null
+
+      const score = scoreSuggestionSection(sectionKey, normalizedContent)
+      const sectionLimit = score >= 92
+        ? 1400
+        : score >= 78
+          ? 1100
+          : 800
+
+      return {
+        sectionKey,
+        originalIndex: index,
+        score,
+        sectionLimit,
+        content: normalizedContent
+      }
+    })
+    .filter((section): section is {
+      sectionKey: string
+      originalIndex: number
+      score: number
+      sectionLimit: number
+      content: string
+    } => Boolean(section))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score
+      return left.originalIndex - right.originalIndex
+    })
+
+  if (rankedSections.length === 0) {
+    return ''
+  }
+
+  let usedChars = 0
+  const selectedSections: typeof rankedSections = []
+
+  for (const section of rankedSections) {
+    if (selectedSections.length >= MAX_SUGGESTION_CONTEXT_SECTIONS) break
+
+    const remainingChars = MAX_SUGGESTION_CONTEXT_CHARS - usedChars
+    if (remainingChars < 250 && selectedSections.length > 0) break
+
+    const allowedChars = Math.min(section.sectionLimit, remainingChars)
+    if (allowedChars < 250) continue
+
+    const truncatedContent = section.content.length > allowedChars
+      ? `${section.content.slice(0, Math.max(allowedChars - 3, 0)).trimEnd()}...`
+      : section.content
+
+    selectedSections.push({
+      ...section,
+      content: truncatedContent
+    })
+    usedChars += truncatedContent.length
+  }
+
+  if (selectedSections.length === 0) {
+    return ''
+  }
+
+  const orderedSections = [...selectedSections].sort((left, right) => left.originalIndex - right.originalIndex)
+  let sectionBlock = 'Sections:\n'
+
+  for (const section of orderedSections) {
+    sectionBlock += `\n--- ${section.sectionKey} ---\n${section.content}\n`
+  }
+
+  const omittedCount = rankedSections.length - orderedSections.length
+  if (omittedCount > 0) {
+    sectionBlock += `\n[${omittedCount} additional sections omitted to stay within the figure-suggestion context budget]\n`
+  }
+
+  return sectionBlock
+}
+
 function hasQuantitativeEvidence(request: FigureSuggestionRequest): boolean {
   const source = sanitizeAscii(
     `${request.datasetDescription || ''}\n${request.paperAbstract || ''}\n${Object.values(request.sections || {}).join('\n')}`
@@ -2887,15 +3015,9 @@ export async function generateFigureSuggestions(
     paperContext += `- quantitativeEvidenceDetected: ${quantitativeDataAvailable ? 'yes' : 'no'}\n\n`
 
     if (request.sections) {
-      paperContext += 'Sections:\n'
-      for (const [section, content] of Object.entries(request.sections)) {
-        if (content && content.trim()) {
-          // Truncate long sections to avoid token limits
-          const truncated = content.length > 2000 
-            ? content.slice(0, 2000) + '...' 
-            : content
-          paperContext += `\n--- ${section} ---\n${truncated}\n`
-        }
+      const sectionContext = buildSuggestionSectionsContext(request.sections)
+      if (sectionContext) {
+        paperContext += sectionContext
       }
     }
 

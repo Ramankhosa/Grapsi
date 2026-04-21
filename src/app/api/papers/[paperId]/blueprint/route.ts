@@ -15,6 +15,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { extractTenantContextFromRequest } from '@/lib/metering/auth-bridge';
 import {
   blueprintService,
@@ -60,7 +62,7 @@ const thematicBlueprintSchema = z.object({
   mustCover: z.array(z.string().min(10).max(200)),
   mustAvoid: z.array(z.string()),
   mustCoverTyping: z.record(z.string(), dimensionTypeEnum).optional(),
-  suggestedCitationCount: z.number().min(1).max(50).optional()
+  suggestedCitationCount: z.number().min(0).max(50).optional()
 });
 
 const updateBlueprintSchema = z.object({
@@ -77,7 +79,7 @@ const updateBlueprintSchema = z.object({
     wordBudget: z.number().optional(),
     dependencies: z.array(z.string()),
     outputsPromised: z.array(z.string()),
-    suggestedCitationCount: z.number().min(1).max(50).optional(),
+    suggestedCitationCount: z.number().min(0).max(50).optional(),
     thematicBlueprint: thematicBlueprintSchema.optional(),
     rhetoricalBlueprint: rhetoricalBlueprintSchema.optional()
   })).optional(),
@@ -93,13 +95,12 @@ const freezeSchema = z.object({
 // Helper Functions
 // ============================================================================
 
-async function getSessionWithTopic(sessionId: string, user: { id: string; roles?: string[] }) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+async function getSessionWithTopic(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
     include: {
       researchTopic: true,
       paperType: true,
@@ -137,7 +138,7 @@ export async function GET(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionWithTopic(sessionId, user);
+    const session = await getSessionWithTopic(sessionId, user, 'read');
 
     if (!session) {
       return NextResponse.json(
@@ -147,12 +148,14 @@ export async function GET(
     }
 
     const blueprint = await blueprintService.getBlueprint(sessionId);
+    const grantManaged = isGrantBackedPaperTypeCode(blueprint?.paperTypeCode || session.paperBlueprint?.paperTypeCode);
 
     return NextResponse.json({
       success: true,
       blueprint,
       hasBlueprint: !!blueprint,
-      isFrozen: blueprint?.status === 'FROZEN'
+      isFrozen: blueprint?.status === 'FROZEN',
+      grantManaged,
     });
   } catch (error) {
     console.error('[Blueprint] GET error:', error);
@@ -181,7 +184,7 @@ export async function POST(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionWithTopic(sessionId, user);
+    const session = await getSessionWithTopic(sessionId, user, 'editContent');
 
     if (!session) {
       return NextResponse.json(
@@ -190,10 +193,18 @@ export async function POST(
       );
     }
 
+    const grantManaged = isGrantBackedPaperTypeCode(session.paperBlueprint?.paperTypeCode);
+
     const body = await request.json();
 
     // Handle freeze/unfreeze actions
     if (body.action === 'freeze' || body.action === 'unfreeze') {
+      if (grantManaged) {
+        return NextResponse.json(
+          { error: 'This blueprint is managed from the linked grant workspace.' },
+          { status: 409 }
+        );
+      }
       const data = freezeSchema.parse(body);
 
       if (data.action === 'freeze') {
@@ -249,6 +260,13 @@ export async function POST(
 
     // Handle generate action
     const data = generateBlueprintSchema.parse(body);
+
+    if (grantManaged) {
+      return NextResponse.json(
+        { error: 'This blueprint is managed from the linked grant workspace.' },
+        { status: 409 }
+      );
+    }
 
     if (!session.researchTopic) {
       return NextResponse.json(
@@ -360,7 +378,7 @@ export async function PUT(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionWithTopic(sessionId, user);
+    const session = await getSessionWithTopic(sessionId, user, 'editContent');
 
     if (!session) {
       return NextResponse.json(
@@ -373,6 +391,13 @@ export async function PUT(
       return NextResponse.json(
         { error: 'No blueprint exists. Generate one first.' },
         { status: 400 }
+      );
+    }
+
+    if (isGrantBackedPaperTypeCode(session.paperBlueprint.paperTypeCode)) {
+      return NextResponse.json(
+        { error: 'This blueprint is managed from the linked grant workspace.' },
+        { status: 409 }
       );
     }
 
@@ -429,4 +454,3 @@ export async function PUT(
     );
   }
 }
-

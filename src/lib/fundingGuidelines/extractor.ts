@@ -4,7 +4,7 @@ import { parseJsonResponse } from '../fundingIntake/utils';
 import type { GuidelinePackDocument } from './types';
 import { normalizeGuidelinePack } from './utils';
 
-const FUNDING_GUIDELINE_PROMPT_VERSION = 'funding-guideline-v1';
+const FUNDING_GUIDELINE_PROMPT_VERSION = 'funding-guideline-v2';
 const FUNDING_GUIDELINE_EXTRACTOR_VERSION = '1.0.0';
 
 export type GuidelineExtractionInput = {
@@ -49,6 +49,9 @@ Focus on reviewer-facing guidance, application constraints, and rule-like inform
 Do not reconstruct the application template structure here.
 Only return rules explicitly supported by the source facts or source text.
 If a block is unsupported, return an empty array for that block.
+Keep rule extraction atomic: split combined paragraphs into separate rule items whenever the source states separate obligations, limits, or reviewer expectations.
+Preserve exact numeric limits, page caps, character caps, file-format constraints, and explicit must/do-not wording from the source whenever available.
+Separate narrative/reviewer rules from operational submission steps as cleanly as the source allows.
 Return strict JSON only.
 `;
 
@@ -163,4 +166,3 @@ export async function extractFundingGuidelines(input: GuidelineExtractionInput):
     promptVersion: FUNDING_GUIDELINE_PROMPT_VERSION,
   };
 }
-

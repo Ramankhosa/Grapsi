@@ -2,18 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import { featureFlags } from '@/lib/feature-flags';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { deepAnalysisService } from '@/lib/services/deep-analysis-service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({ where: { id: sessionId }, select: { id: true } });
-  }
-
-  return prisma.draftingSession.findFirst({
-    where: { id: sessionId, userId: user.id },
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'read', {
     select: { id: true },
   });
 }

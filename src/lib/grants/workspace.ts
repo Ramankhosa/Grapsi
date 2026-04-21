@@ -4,38 +4,45 @@ import prisma from '@/lib/prisma'
 import { buildGrantPrepFreezePayload } from '@/lib/grantPrep/handoff/handoffBuilder'
 import type { GrantPrepActor } from '@/lib/grantPrep/access'
 import {
+  buildGeneratedGrantProposalFoundation,
+  collectGrantCapturedKeywords,
+  enrichGrantBlueprintSections,
+  type GrantBlueprintEnrichmentContext,
+  shouldBackfillProposalFoundation,
+} from '@/lib/grants/blueprintEnrichment'
+import { generateGrantBlueprintWithLlm } from '@/lib/grants/blueprintLlmGeneration'
+import { normalizeGrantCitationMode } from '@/lib/grants/citationMode'
+import {
+  buildGrantThematicBlueprint,
+  normalizeGrantMustCoverTyping,
+  normalizeGrantSuggestedCitationCount,
+} from '@/lib/grants/blueprintMetadata'
+import {
+  isGrantSectionAutoDraftable,
+  normalizeGrantWorkflowMode,
+} from '@/lib/grants/workflowMode'
+import {
   buildGrantPrepModeWarning,
   inflateGrantPrepSessionContext,
   loadGrantPrepSession,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
+import type { GuidelinePackDocument } from '@/lib/fundingGuidelines/types'
+import { normalizeGuidelinePack } from '@/lib/fundingGuidelines/utils'
 import type { GrantTemplateDocument, FundingTemplateItem } from '@/lib/fundingTemplates/types'
 import { normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
+import type { TenantContext } from '@/lib/metering'
 import { blueprintService, type BlueprintFreezeReadiness } from '@/lib/services/blueprint-service'
 import type {
   CompiledGrantTemplate,
   CompiledGrantTemplateSection,
   CompiledGrantTemplateSectionType,
+  GrantBlueprintPlanSection,
+  GrantThematicBlueprint,
+  GrantWorkflowMode,
 } from '@/types/grant'
 
 type JsonObject = Record<string, unknown>
-
-export interface GrantBlueprintPlanSection {
-  sectionKey: string
-  label: string
-  order: number
-  sectionType: CompiledGrantTemplateSectionType
-  required: boolean
-  wordBudget: number | null
-  characterLimit: number | null
-  purpose: string
-  reviewerIntent: string | null
-  dependencies: string[]
-  sourceTemplatePointer: string | null
-  mustCover: string[]
-  mustAvoid: string[]
-  seededContext: string
-}
 
 export interface LocalGrantLaunchPreview {
   blockers: Array<{ stageKey: string; pointKey: string; message: string }>
@@ -45,6 +52,7 @@ export interface LocalGrantLaunchPreview {
     sectionKey: string
     label: string
     sectionType: CompiledGrantTemplateSectionType
+    workflowMode: GrantWorkflowMode
     required: boolean
   }>
   canLaunch: boolean
@@ -74,6 +82,26 @@ function asStringArray(value: unknown): string[] {
     : []
 }
 
+function normalizeDraftTextMap(value: unknown): Record<string, string> {
+  if (!value) return {}
+
+  const record = typeof value === 'string'
+    ? (() => {
+        try {
+          return JSON.parse(value) as Record<string, unknown>
+        } catch {
+          return {}
+        }
+      })()
+    : asObject(value)
+
+  return Object.fromEntries(
+    Object.entries(record)
+      .map(([key, item]) => [String(key || '').trim(), String(item || '').trim()] as const)
+      .filter(([key, item]) => Boolean(key) && item.length > 0)
+  )
+}
+
 function slugify(value: string) {
   return value
     .trim()
@@ -87,11 +115,24 @@ function isCompiledGrantTemplate(value: unknown): value is CompiledGrantTemplate
   return Array.isArray(record.sections) && typeof record.version === 'string'
 }
 
+function looksNarrativeField(item: FundingTemplateItem): boolean {
+  const text = `${item.label || ''} ${item.guidance || ''}`.toLowerCase()
+  const narrativeSignals = /(summary|synopsis|description|detailed|methodology|approach|technical plan|project plan|work ?plan|implementation|background|need statement|justification|impact|outcome|functioning|innovation|proposal)/.test(text)
+  const conciseSignals = /(title|name|objective|aim|scope|keyword|identifier|code|category|city|state|country|institution|contact|email|phone)/.test(text)
+  return narrativeSignals && !conciseSignals
+}
+
 function resolveSectionType(item: FundingTemplateItem): CompiledGrantTemplateSectionType {
   if (item.type === 'table') return 'table'
   if (item.type === 'budget') return 'budget_rows'
   if (item.type === 'checklist' || item.type === 'attachment') return 'checklist'
-  if (item.type === 'field') return 'short_answer'
+  if (looksNarrativeField(item)) return 'narrative'
+  if (item.type === 'field') {
+    if ((item.wordLimit || 0) > 350 || (item.charLimit || 0) > 2500) {
+      return 'narrative'
+    }
+    return 'short_answer'
+  }
   if ((item.wordLimit || 0) <= 350 && (item.charLimit || 0) <= 2500) {
     return 'short_answer'
   }
@@ -102,11 +143,30 @@ function normalizeCompiledSection(
   section: Partial<CompiledGrantTemplateSection>,
   index: number
 ): CompiledGrantTemplateSection {
+  const mustCover = Array.isArray(section.mustCover) ? section.mustCover : []
+  const mustAvoid = Array.isArray(section.mustAvoid) ? section.mustAvoid : []
+  const mustCoverTyping = normalizeGrantMustCoverTyping(mustCover, section.mustCoverTyping)
+  const suggestedCitationCount = normalizeGrantSuggestedCitationCount(section.suggestedCitationCount)
+  const thematicBlueprint = section.thematicBlueprint
+    ? buildGrantThematicBlueprint({
+        mustCover,
+        mustAvoid,
+        mustCoverTyping,
+        suggestedCitationCount,
+      })
+    : undefined
+
   return {
     sectionKey: String(section.sectionKey || `section_${index + 1}`),
     label: String(section.label || section.sectionKey || `Section ${index + 1}`),
     order: Number.isFinite(section.order) ? Number(section.order) : index + 1,
     sectionType: (section.sectionType || 'narrative') as CompiledGrantTemplateSectionType,
+    workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+    citationMode: normalizeGrantCitationMode(section.citationMode, {
+      sectionType: section.sectionType,
+      workflowMode: section.workflowMode,
+      suggestedCitationCount,
+    }),
     required: section.required !== false,
     wordBudget: section.wordBudget ?? null,
     characterLimit: section.characterLimit ?? null,
@@ -114,9 +174,23 @@ function normalizeCompiledSection(
     reviewerIntent: section.reviewerIntent ?? null,
     dependencies: Array.isArray(section.dependencies) ? section.dependencies : [],
     sourceTemplatePointer: section.sourceTemplatePointer ?? null,
-    mustCover: Array.isArray(section.mustCover) ? section.mustCover : [],
-    mustAvoid: Array.isArray(section.mustAvoid) ? section.mustAvoid : [],
+    mustCover,
+    mustAvoid,
+    ...(mustCoverTyping ? { mustCoverTyping } : {}),
+    ...(typeof suggestedCitationCount === 'number' ? { suggestedCitationCount } : {}),
+    ...(thematicBlueprint ? { thematicBlueprint } : {}),
+    ...(section.grantSemantic ? { grantSemantic: section.grantSemantic } : {}),
+    ...(section.prepContextBlock ? { prepContextBlock: section.prepContextBlock } : {}),
+    ...(section.grantRuleProfile ? { grantRuleProfile: section.grantRuleProfile } : {}),
   }
+}
+
+function compiledTemplateHasWorkflowModes(value: CompiledGrantTemplate | null | undefined) {
+  return Boolean(
+    value
+    && Array.isArray(value.sections)
+    && value.sections.every((section) => normalizeGrantWorkflowMode((section as CompiledGrantTemplateSection).workflowMode) === (section as CompiledGrantTemplateSection).workflowMode)
+  )
 }
 
 function compileGrantTemplateDocument(input: {
@@ -145,6 +219,11 @@ function compileGrantTemplateDocument(input: {
       label,
       order,
       sectionType: forcedType || resolveSectionType(item),
+      workflowMode: normalizeGrantWorkflowMode(item.workflowMode),
+      citationMode: normalizeGrantCitationMode(null, {
+        sectionType: forcedType || resolveSectionType(item),
+        workflowMode: normalizeGrantWorkflowMode(item.workflowMode),
+      }),
       required: item.required !== false,
       wordBudget: item.wordLimit ?? null,
       characterLimit: item.charLimit ?? null,
@@ -172,6 +251,8 @@ function compileGrantTemplateDocument(input: {
       label: 'Budget',
       order,
       sectionType: 'budget_rows',
+      workflowMode: normalizeGrantWorkflowMode(input.document.budget.workflowMode, 'app_support'),
+      citationMode: 'no_citations',
       required: input.document.budget.required,
       wordBudget: null,
       characterLimit: null,
@@ -191,6 +272,8 @@ function compileGrantTemplateDocument(input: {
       label: 'Attachments Checklist',
       order,
       sectionType: 'checklist',
+      workflowMode: 'team_manual',
+      citationMode: 'no_citations',
       required: true,
       wordBudget: null,
       characterLimit: null,
@@ -209,6 +292,8 @@ function compileGrantTemplateDocument(input: {
       label: 'Proposal Narrative',
       order: 1,
       sectionType: 'narrative',
+      workflowMode: 'app_draft',
+      citationMode: 'mapped_evidence',
       required: true,
       wordBudget: null,
       characterLimit: null,
@@ -246,6 +331,7 @@ async function resolveApprovedTemplateForSession(input: {
     })
     if (revision) {
       const compiled = isCompiledGrantTemplate(revision.compiledGrantTemplateJson)
+        && compiledTemplateHasWorkflowModes(revision.compiledGrantTemplateJson)
         ? revision.compiledGrantTemplateJson
         : compileGrantTemplateDocument({
             fundingCallId: input.fundingCallId,
@@ -284,6 +370,7 @@ async function resolveApprovedTemplateForSession(input: {
 
   const templateRevisionId = `${template.id}:current:${template.current_revision_no}`
   const compiled = isCompiledGrantTemplate(template.compiledGrantTemplateJson)
+    && compiledTemplateHasWorkflowModes(template.compiledGrantTemplateJson)
     ? template.compiledGrantTemplateJson
     : compileGrantTemplateDocument({
         fundingCallId: input.fundingCallId,
@@ -301,6 +388,66 @@ async function resolveApprovedTemplateForSession(input: {
       templateRevisionId,
       guidelineRevisionId: input.guidelineRevisionId,
     } satisfies CompiledGrantTemplate,
+  }
+}
+
+async function resolveGuidelinePackForRevision(
+  guidelineRevisionId: string | null | undefined
+): Promise<GuidelinePackDocument | null> {
+  const revisionId = String(guidelineRevisionId || '').trim()
+  if (!revisionId) return null
+
+  const revision = await prisma.fundingCallGuidelineRevision.findUnique({
+    where: { id: revisionId },
+    select: {
+      guideline_pack_json: true,
+      extractedPayload: true,
+    },
+  })
+
+  if (!revision) {
+    return null
+  }
+
+  return normalizeGuidelinePack(revision.guideline_pack_json ?? revision.extractedPayload)
+}
+
+async function resolveCompiledTemplateForGrantBlueprint(input: {
+  blueprint: {
+    compiledTemplateJson: unknown
+    fundingCallId: string
+    sourceTemplateRevisionId: string | null
+    sourceGuidelineRevisionId: string | null
+  }
+}) {
+  const storedCompiled = isCompiledGrantTemplate(input.blueprint.compiledTemplateJson)
+    ? {
+        ...input.blueprint.compiledTemplateJson,
+        sections: input.blueprint.compiledTemplateJson.sections.map(normalizeCompiledSection),
+      }
+    : null
+
+  if (storedCompiled && compiledTemplateHasWorkflowModes(storedCompiled)) {
+    return storedCompiled
+  }
+
+  try {
+    const resolved = await resolveApprovedTemplateForSession({
+      fundingCallId: input.blueprint.fundingCallId,
+      templateRevisionId: null,
+      guidelineRevisionId: input.blueprint.sourceGuidelineRevisionId,
+    })
+    return resolved.compiledTemplate
+  } catch {
+    return storedCompiled
+      ? {
+          ...storedCompiled,
+          sections: storedCompiled.sections.map((section) => ({
+            ...section,
+            workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+          })),
+        }
+      : null
   }
 }
 
@@ -352,6 +499,12 @@ export function buildBlueprintPlanFromCompiledTemplate(
       label: section.label,
       order: section.order,
       sectionType: section.sectionType,
+      workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+      citationMode: normalizeGrantCitationMode(section.citationMode, {
+        sectionType: section.sectionType,
+        workflowMode: section.workflowMode,
+        suggestedCitationCount: section.suggestedCitationCount,
+      }),
       required: section.required,
       wordBudget: section.wordBudget ?? null,
       characterLimit: section.characterLimit ?? null,
@@ -361,8 +514,37 @@ export function buildBlueprintPlanFromCompiledTemplate(
       sourceTemplatePointer: section.sourceTemplatePointer ?? null,
       mustCover: section.mustCover || [],
       mustAvoid: section.mustAvoid || [],
+      ...(section.mustCoverTyping ? { mustCoverTyping: section.mustCoverTyping } : {}),
+      ...(typeof section.suggestedCitationCount === 'number'
+        ? { suggestedCitationCount: section.suggestedCitationCount }
+        : {}),
+      ...(section.thematicBlueprint ? { thematicBlueprint: section.thematicBlueprint } : {}),
+      ...(section.grantSemantic ? { grantSemantic: section.grantSemantic } : {}),
+      ...(section.prepContextBlock ? { prepContextBlock: section.prepContextBlock } : {}),
+      ...(section.grantRuleProfile ? { grantRuleProfile: section.grantRuleProfile } : {}),
       seededContext: buildSeededContext(section, payload),
     })) satisfies GrantBlueprintPlanSection[]
+}
+
+function buildGrantBlueprintEnrichmentContext(input: {
+  payload: ReturnType<typeof buildGrantPrepFreezePayload>['payload']
+  projectTitle?: string | null
+  projectDescription?: string | null
+  fundingCallTitle?: string | null
+  agencyName?: string | null
+  guidelinePack?: GuidelinePackDocument | null
+}): GrantBlueprintEnrichmentContext {
+  return {
+    projectTitle: input.projectTitle || input.payload.project.title,
+    projectDescription: input.projectDescription || input.payload.project.description || null,
+    fundingCallTitle: input.fundingCallTitle || input.payload.fundingCall.title || null,
+    agencyName: input.agencyName || input.payload.fundingCall.agencyName || null,
+    globalKeywords: input.payload.globalKeywords,
+    focusAreas: input.payload.fundingCall.focusAreas,
+    capturedKeywords: collectGrantCapturedKeywords(input.payload.stageStates),
+    stageStates: input.payload.stageStates,
+    guidelinePack: input.guidelinePack || null,
+  }
 }
 
 function buildStructuredScaffold(
@@ -402,9 +584,70 @@ function buildStructuredScaffold(
 }
 
 function isDraftableGrantSection(
-  sectionType: CompiledGrantTemplateSectionType | string
+  input: {
+    sectionType: CompiledGrantTemplateSectionType | string
+    workflowMode: unknown
+  }
 ): boolean {
-  return sectionType === 'narrative' || sectionType === 'short_answer'
+  return isGrantSectionAutoDraftable(input)
+}
+
+function enrichGrantSectionPlan(
+  sectionPlan: GrantBlueprintPlanSection[],
+  compiledSections: CompiledGrantTemplateSection[]
+) {
+  const compiledByKey = new Map(
+    compiledSections.map((section) => [
+      section.sectionKey,
+      {
+        workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+        citationMode: normalizeGrantCitationMode(section.citationMode, {
+          sectionType: section.sectionType,
+          workflowMode: section.workflowMode,
+          suggestedCitationCount: section.suggestedCitationCount,
+        }),
+      },
+    ] as const)
+  )
+
+  return sectionPlan.map((section) => ({
+    ...section,
+    workflowMode: compiledByKey.get(section.sectionKey)?.workflowMode
+      || normalizeGrantWorkflowMode((section as Partial<GrantBlueprintPlanSection>).workflowMode),
+    citationMode: normalizeGrantCitationMode(
+      section.citationMode ?? compiledByKey.get(section.sectionKey)?.citationMode,
+      {
+        sectionType: section.sectionType,
+        workflowMode: compiledByKey.get(section.sectionKey)?.workflowMode || section.workflowMode,
+        suggestedCitationCount: section.suggestedCitationCount,
+      }
+    ),
+  }))
+}
+
+function enrichGrantSectionDrafts<T extends { sectionKey: string }>(
+  drafts: T[],
+  sectionPlan: GrantBlueprintPlanSection[]
+) {
+  const sectionMetaByKey = new Map(
+    sectionPlan.map((section) => [
+      section.sectionKey,
+      {
+        workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+        citationMode: normalizeGrantCitationMode(section.citationMode, {
+          sectionType: section.sectionType,
+          workflowMode: section.workflowMode,
+          suggestedCitationCount: section.suggestedCitationCount,
+        }),
+      },
+    ] as const)
+  )
+
+  return drafts.map((draft) => ({
+    ...draft,
+    workflowMode: sectionMetaByKey.get(draft.sectionKey)?.workflowMode || 'team_manual',
+    citationMode: sectionMetaByKey.get(draft.sectionKey)?.citationMode || 'direct_draft',
+  }))
 }
 
 function buildGrantPaperTypeCode(templateRevisionId: string | null | undefined) {
@@ -427,7 +670,12 @@ function buildShadowResearchTopic(input: {
   globalKeywords: string[]
 }) {
   const title = input.projectName.trim() || input.fundingCallTitle?.trim() || 'Grant proposal'
-  const firstNarrative = input.sectionPlan.find((section) => isDraftableGrantSection(section.sectionType))
+  const firstNarrative = input.sectionPlan.find((section) =>
+    isDraftableGrantSection({
+      sectionType: section.sectionType,
+      workflowMode: section.workflowMode,
+    })
+  )
 
   return {
     title,
@@ -446,7 +694,38 @@ function buildShadowResearchTopic(input: {
   }
 }
 
-function buildPaperSectionPlanFromGrantSections(
+async function resolveGrantTenantContext(
+  tenantId: string,
+  userId: string
+): Promise<TenantContext | null> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    include: {
+      tenantPlans: {
+        where: {
+          status: 'ACTIVE',
+          effectiveFrom: { lte: new Date() },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+        orderBy: { effectiveFrom: 'desc' },
+        take: 1,
+      },
+    },
+  })
+
+  if (!tenant || tenant.status !== 'ACTIVE' || !tenant.tenantPlans[0]) {
+    return null
+  }
+
+  return {
+    tenantId: tenant.id,
+    planId: tenant.tenantPlans[0].planId,
+    tenantStatus: tenant.status,
+    userId,
+  }
+}
+
+export function buildPaperSectionPlanFromGrantSections(
   sectionPlan: GrantBlueprintPlanSection[],
   existingSectionPlan: unknown
 ) {
@@ -459,41 +738,63 @@ function buildPaperSectionPlanFromGrantSections(
   )
 
   return [...sectionPlan]
-    .filter((section) => isDraftableGrantSection(section.sectionType))
+    .filter((section) =>
+      isDraftableGrantSection({
+        sectionType: section.sectionType,
+        workflowMode: section.workflowMode,
+      })
+    )
     .sort((left, right) => left.order - right.order)
     .map((section) => {
       const existing = existingByKey.get(section.sectionKey) || {}
       const existingThematic = asObject(existing.thematicBlueprint)
       const mustCoverTyping =
-        Object.keys(asObject(existing.mustCoverTyping)).length > 0
-          ? asObject(existing.mustCoverTyping)
-          : asObject(existingThematic.mustCoverTyping)
+        normalizeGrantMustCoverTyping(section.mustCover, section.mustCoverTyping)
+        || normalizeGrantMustCoverTyping(section.mustCover, section.thematicBlueprint?.mustCoverTyping)
+        || normalizeGrantMustCoverTyping(section.mustCover, existing.mustCoverTyping)
+        || normalizeGrantMustCoverTyping(section.mustCover, existingThematic.mustCoverTyping)
       const suggestedCitationCountRaw =
-        existing.suggestedCitationCount ?? existingThematic.suggestedCitationCount
-      const suggestedCitationCount = Number.isFinite(Number(suggestedCitationCountRaw))
-        ? Number(suggestedCitationCountRaw)
-        : undefined
-
-      const thematicBlueprint = {
+        section.suggestedCitationCount
+        ?? section.thematicBlueprint?.suggestedCitationCount
+        ?? existing.suggestedCitationCount
+        ?? existingThematic.suggestedCitationCount
+      const suggestedCitationCount = normalizeGrantSuggestedCitationCount(suggestedCitationCountRaw)
+      const citationMode = normalizeGrantCitationMode(
+        section.citationMode ?? existing.citationMode,
+        {
+          sectionType: section.sectionType,
+          workflowMode: section.workflowMode,
+          suggestedCitationCount,
+        }
+      )
+      const thematicBlueprint: GrantThematicBlueprint = buildGrantThematicBlueprint({
         mustCover: [...section.mustCover],
         mustAvoid: [...section.mustAvoid],
-        ...(Object.keys(mustCoverTyping).length > 0 ? { mustCoverTyping } : {}),
-        ...(typeof suggestedCitationCount === 'number'
-          ? { suggestedCitationCount }
-          : {}),
-      }
+        mustCoverTyping,
+        suggestedCitationCount,
+      })
 
       return {
         sectionKey: section.sectionKey,
+        displayLabel: section.label,
+        required: section.required,
         purpose: section.purpose,
         mustCover: [...section.mustCover],
         mustAvoid: [...section.mustAvoid],
+        sectionType: section.sectionType,
+        reviewerIntent: section.reviewerIntent,
+        characterLimit: section.characterLimit,
+        grantSemantic: section.grantSemantic || null,
+        prepContextBlock: section.prepContextBlock || null,
+        grantRuleProfile: section.grantRuleProfile || null,
+        workflowMode: section.workflowMode,
+        citationMode,
         ...(typeof section.wordBudget === 'number'
           ? { wordBudget: section.wordBudget }
           : {}),
         dependencies: [...section.dependencies],
         outputsPromised: asStringArray(existing.outputsPromised),
-        ...(Object.keys(mustCoverTyping).length > 0 ? { mustCoverTyping } : {}),
+        ...(mustCoverTyping ? { mustCoverTyping } : {}),
         ...(typeof suggestedCitationCount === 'number'
           ? { suggestedCitationCount }
           : {}),
@@ -591,13 +892,22 @@ async function ensureGrantShadowWorkspaceTx(
   }
 
   const currentBlueprint = draftingSession.paperBlueprint
-  const foundation = sanitizeFoundation(
-    input.foundation || {
-      thesisStatement: currentBlueprint?.thesisStatement || '',
-      centralObjective: currentBlueprint?.centralObjective || '',
-      keyContributions: currentBlueprint?.keyContributions || [],
-    }
-  )
+  const fallbackFoundation = buildGeneratedGrantProposalFoundation(input.sectionPlan, {
+    projectTitle: input.projectName,
+    fundingCallTitle: input.fundingCallTitle,
+    globalKeywords: input.globalKeywords,
+  })
+  const currentFoundation = {
+    thesisStatement: currentBlueprint?.thesisStatement || '',
+    centralObjective: currentBlueprint?.centralObjective || '',
+    keyContributions: currentBlueprint?.keyContributions || [],
+  }
+  const foundationSource = input.foundation
+    ? input.foundation
+    : shouldBackfillProposalFoundation(currentFoundation)
+      ? fallbackFoundation
+      : currentFoundation
+  const foundation = sanitizeFoundation(foundationSource)
   const paperTypeCode = buildGrantPaperTypeCode(input.templateRevisionId)
   const nextSectionPlan = buildPaperSectionPlanFromGrantSections(
     input.sectionPlan,
@@ -715,9 +1025,32 @@ async function ensureGrantShadowWorkspace(input: {
   }
   const blueprint = grantSession.blueprint
 
-  const sectionPlan = Array.isArray(blueprint.sectionPlanJson)
+  const rawSectionPlan = Array.isArray(blueprint.sectionPlanJson)
     ? (blueprint.sectionPlanJson as unknown as GrantBlueprintPlanSection[])
     : []
+  const compiledTemplate = await resolveCompiledTemplateForGrantBlueprint({ blueprint })
+  const baseSectionPlan = compiledTemplate
+    ? enrichGrantSectionPlan(rawSectionPlan, compiledTemplate.sections)
+    : rawSectionPlan.map((section) => ({
+        ...section,
+        workflowMode: normalizeGrantWorkflowMode((section as Partial<GrantBlueprintPlanSection>).workflowMode),
+        citationMode: normalizeGrantCitationMode((section as Partial<GrantBlueprintPlanSection>).citationMode, {
+          sectionType: (section as Partial<GrantBlueprintPlanSection>).sectionType,
+          workflowMode: (section as Partial<GrantBlueprintPlanSection>).workflowMode,
+          suggestedCitationCount: (section as Partial<GrantBlueprintPlanSection>).suggestedCitationCount,
+        }),
+      }))
+  const sectionPlan = enrichGrantBlueprintSections(
+    baseSectionPlan,
+    {
+      projectTitle: grantSession.project.name,
+      fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
+      globalKeywords: asStringArray(blueprint.globalKeywordsJson),
+      stageStates: asObject(blueprint.freezePayloadJson).stageStates as never,
+      guidelinePack: await resolveGuidelinePackForRevision(blueprint.sourceGuidelineRevisionId || null),
+    },
+    'hydrate'
+  )
 
   return prisma.$transaction((tx) =>
     ensureGrantShadowWorkspaceTx(tx, {
@@ -778,6 +1111,19 @@ async function loadGrantWorkspaceRecord(input: {
       draftingSession: {
         include: {
           paperBlueprint: true,
+          paperSections: {
+            orderBy: {
+              updatedAt: 'desc',
+            },
+          },
+          annexureDrafts: {
+            where: {
+              jurisdiction: 'PAPER',
+            },
+            orderBy: {
+              version: 'desc',
+            },
+          },
         },
       },
       blueprint: {
@@ -887,8 +1233,20 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
     templateRevisionId: prepSession.template_revision_id || serverContext.templateRevisionId,
     guidelineRevisionId: prepSession.guideline_revision_id || serverContext.guidelineRevisionId,
   })
+  const guidelinePack = normalizeGuidelinePack(
+    serverContext.draftingContext?.approvedGuidelineRevision?.guideline_pack_json || null
+  )
 
-  const sectionPlan = buildBlueprintPlanFromCompiledTemplate(templateState.compiledTemplate, freeze.payload)
+  const baseSectionPlan = buildBlueprintPlanFromCompiledTemplate(templateState.compiledTemplate, freeze.payload)
+  const enrichmentContext = buildGrantBlueprintEnrichmentContext({
+    payload: freeze.payload,
+    projectTitle: prepSession.project.name,
+    fundingCallTitle: serverContext.fundingContext.title || null,
+    agencyName: serverContext.fundingContext.agencyName || null,
+    guidelinePack,
+  })
+  const sectionPlan = enrichGrantBlueprintSections(baseSectionPlan, enrichmentContext, 'generate')
+  const proposalFoundation = buildGeneratedGrantProposalFoundation(sectionPlan, enrichmentContext)
   const grantSessionId = prepSession.grant_session_id || null
 
   return {
@@ -897,7 +1255,10 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
     prepContext,
     freeze,
     templateState,
+    baseSectionPlan,
+    enrichmentContext,
     sectionPlan,
+    proposalFoundation,
     grantSessionId,
   }
 }
@@ -905,7 +1266,7 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
 export async function buildGrantPrepLocalLaunchPreview(sessionId: string, actor: GrantPrepActor): Promise<LocalGrantLaunchPreview> {
   const state = await buildLaunchState(sessionId, actor)
   const launchUrl = state.grantSessionId
-    ? `/projects/${state.prepSession.project_id}/grants/${state.grantSessionId}/blueprint`
+    ? `/projects/${state.prepSession.project_id}/grants/${state.grantSessionId}/workspace`
     : null
 
   return {
@@ -916,6 +1277,7 @@ export async function buildGrantPrepLocalLaunchPreview(sessionId: string, actor:
       sectionKey: section.sectionKey,
       label: section.label,
       sectionType: section.sectionType,
+      workflowMode: section.workflowMode,
       required: section.required,
     })),
     canLaunch: state.freeze.blockers.length === 0,
@@ -938,6 +1300,15 @@ export async function launchGrantPrepToLocalWorkspace(input: {
     ...state.freeze.payload,
     overrideReason: input.overrideReason?.trim() || null,
   }
+  const tenantContext = await resolveGrantTenantContext(input.actor.tenantId, input.actor.id)
+  const generatedBlueprint = await generateGrantBlueprintWithLlm({
+    baseSectionPlan: state.baseSectionPlan,
+    context: state.enrichmentContext,
+    proposalFoundationHint: state.proposalFoundation,
+    tenantContext,
+    sessionId: input.sessionId,
+    overrideReason: input.overrideReason?.trim() || undefined,
+  })
 
   return prisma.$transaction(async (tx) => {
     const grantSession = await ensureGrantSessionAnchor(tx, {
@@ -964,7 +1335,7 @@ export async function launchGrantPrepToLocalWorkspace(input: {
             status: 'DRAFT',
             version: { increment: 1 },
             compiledTemplateJson: asJson(state.templateState.compiledTemplate),
-            sectionPlanJson: asJson(state.sectionPlan),
+            sectionPlanJson: asJson(generatedBlueprint.sectionPlan),
             freezePayloadJson: asJson(frozenPayload),
             globalKeywordsJson: asJson(state.freeze.payload.globalKeywords),
             updatedByUserId: input.actor.id,
@@ -982,7 +1353,7 @@ export async function launchGrantPrepToLocalWorkspace(input: {
             sourceGuidelineRevisionId: state.prepSession.guideline_revision_id,
             status: 'DRAFT',
             compiledTemplateJson: asJson(state.templateState.compiledTemplate),
-            sectionPlanJson: asJson(state.sectionPlan),
+            sectionPlanJson: asJson(generatedBlueprint.sectionPlan),
             freezePayloadJson: asJson(frozenPayload),
             globalKeywordsJson: asJson(state.freeze.payload.globalKeywords),
             createdByUserId: input.actor.id,
@@ -995,7 +1366,7 @@ export async function launchGrantPrepToLocalWorkspace(input: {
     })
     const draftByKey = new Map(existingDrafts.map((draft) => [draft.sectionKey, draft]))
 
-    for (const section of state.sectionPlan) {
+    for (const section of generatedBlueprint.sectionPlan) {
       const existingDraft = draftByKey.get(section.sectionKey)
       if (existingDraft) {
         await tx.grantSectionDraft.update({
@@ -1070,12 +1441,13 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       fundingCallTitle: state.serverContext.fundingContext.title || null,
       templateRevisionId: state.templateState.templateRevisionId,
       userId: input.actor.id,
-      sectionPlan: state.sectionPlan,
+      sectionPlan: generatedBlueprint.sectionPlan,
       globalKeywords: state.freeze.payload.globalKeywords,
       blueprintStatus: 'DRAFT',
+      foundation: generatedBlueprint.proposalFoundation,
     })
 
-    const launchUrl = `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/blueprint`
+    const launchUrl = `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/workspace`
     await tx.grantPrepSession.update({
       where: { id: state.prepSession.id },
       data: {
@@ -1129,13 +1501,68 @@ export async function getGrantWorkspace(input: {
     }
   }
 
-  const sectionPlan = Array.isArray(grantSession.blueprint?.sectionPlanJson)
+  const rawSectionPlan = Array.isArray(grantSession.blueprint?.sectionPlanJson)
     ? (grantSession.blueprint?.sectionPlanJson as unknown as GrantBlueprintPlanSection[])
     : []
+  const compiledTemplate = grantSession.blueprint
+    ? await resolveCompiledTemplateForGrantBlueprint({ blueprint: grantSession.blueprint })
+    : null
+  const baseSectionPlan = compiledTemplate
+    ? enrichGrantSectionPlan(rawSectionPlan, compiledTemplate.sections)
+    : rawSectionPlan.map((section) => ({
+        ...section,
+        workflowMode: normalizeGrantWorkflowMode((section as Partial<GrantBlueprintPlanSection>).workflowMode),
+        citationMode: normalizeGrantCitationMode((section as Partial<GrantBlueprintPlanSection>).citationMode, {
+          sectionType: (section as Partial<GrantBlueprintPlanSection>).sectionType,
+          workflowMode: (section as Partial<GrantBlueprintPlanSection>).workflowMode,
+          suggestedCitationCount: (section as Partial<GrantBlueprintPlanSection>).suggestedCitationCount,
+        }),
+      }))
+  const sectionPlan = grantSession.blueprint
+    ? enrichGrantBlueprintSections(
+        baseSectionPlan,
+        {
+          projectTitle: grantSession.project.name,
+          fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
+          globalKeywords: asStringArray(grantSession.blueprint.globalKeywordsJson),
+          stageStates: asObject(grantSession.blueprint.freezePayloadJson).stageStates as never,
+          guidelinePack: await resolveGuidelinePackForRevision(grantSession.blueprint.sourceGuidelineRevisionId || null),
+        },
+        'hydrate'
+      )
+    : baseSectionPlan
   const activeSectionKeys = new Set(sectionPlan.map((section) => section.sectionKey))
-  const sectionDrafts = (grantSession.blueprint?.sectionDrafts || []).filter((draft) =>
-    activeSectionKeys.size === 0 ? true : activeSectionKeys.has(draft.sectionKey)
+  const baseSectionDrafts = enrichGrantSectionDrafts(
+    (grantSession.blueprint?.sectionDrafts || []).filter((draft) =>
+      activeSectionKeys.size === 0 ? true : activeSectionKeys.has(draft.sectionKey)
+    ),
+    sectionPlan
   )
+  const latestPaperDraft = grantSession.draftingSession?.annexureDrafts?.[0] || null
+  const paperDraftSections = normalizeDraftTextMap(latestPaperDraft?.extraSections)
+  const paperSectionsByKey = new Map<string, any>()
+  for (const section of grantSession.draftingSession?.paperSections || []) {
+    const key = String(section.sectionKey || '').trim()
+    if (key && !paperSectionsByKey.has(key)) {
+      paperSectionsByKey.set(key, section)
+    }
+  }
+  const sectionDrafts = baseSectionDrafts.map((draft) => {
+    if (draft.workflowMode !== 'app_draft') {
+      return draft
+    }
+
+    const paperSection = paperSectionsByKey.get(draft.sectionKey)
+    const shadowContent = typeof paperSection?.content === 'string' && paperSection.content.trim().length > 0
+      ? paperSection.content
+      : paperDraftSections[draft.sectionKey] || ''
+
+    return {
+      ...draft,
+      content: shadowContent || null,
+      status: String(paperSection?.status || draft.status || 'NOT_STARTED'),
+    }
+  })
   const proposalFoundation = grantSession.draftingSession?.paperBlueprint
     ? {
         thesisStatement: grantSession.draftingSession.paperBlueprint.thesisStatement,
@@ -1197,11 +1624,13 @@ export async function updateBlueprintPlan(input: {
   }
 
   const existingPlan = workspace.blueprint.sectionPlan
+  const existingPlanByKey = new Map(existingPlan.map((section) => [section.sectionKey, section]))
   const lockedSectionMeta = new Map(
     existingPlan.map((section) => [
       section.sectionKey,
       {
         sectionType: section.sectionType,
+        workflowMode: section.workflowMode,
         required: section.required,
         dependencies: [...section.dependencies].sort().join('|'),
       },
@@ -1215,6 +1644,7 @@ export async function updateBlueprintPlan(input: {
     }
     if (
       locked.sectionType !== section.sectionType ||
+      locked.workflowMode !== section.workflowMode ||
       locked.required !== section.required ||
       locked.dependencies !== [...section.dependencies].sort().join('|')
     ) {
@@ -1222,7 +1652,46 @@ export async function updateBlueprintPlan(input: {
     }
   }
 
-  const orderedSections = [...nextSections]
+  const normalizedSections = nextSections.map((section) => {
+    const existing = existingPlanByKey.get(section.sectionKey)
+    const mustCoverTyping = normalizeGrantMustCoverTyping(
+      section.mustCover,
+      section.mustCoverTyping
+        || section.thematicBlueprint?.mustCoverTyping
+        || existing?.mustCoverTyping
+        || existing?.thematicBlueprint?.mustCoverTyping
+    )
+    const suggestedCitationCount = normalizeGrantSuggestedCitationCount(
+      section.suggestedCitationCount
+        ?? section.thematicBlueprint?.suggestedCitationCount
+        ?? existing?.suggestedCitationCount
+        ?? existing?.thematicBlueprint?.suggestedCitationCount
+    )
+    const thematicBlueprint = buildGrantThematicBlueprint({
+      mustCover: section.mustCover,
+      mustAvoid: section.mustAvoid,
+      mustCoverTyping,
+      suggestedCitationCount,
+    })
+    const citationMode = normalizeGrantCitationMode(
+      section.citationMode ?? existing?.citationMode,
+      {
+        sectionType: section.sectionType,
+        workflowMode: section.workflowMode,
+        suggestedCitationCount,
+      }
+    )
+
+    return {
+      ...section,
+      citationMode,
+      ...(mustCoverTyping ? { mustCoverTyping } : { mustCoverTyping: undefined }),
+      suggestedCitationCount: suggestedCitationCount ?? null,
+      thematicBlueprint,
+    }
+  })
+
+  const orderedSections = [...normalizedSections]
     .sort((left, right) => left.order - right.order)
     .map((section, index) => ({ ...section, order: index + 1 }))
 

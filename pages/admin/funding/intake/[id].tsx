@@ -871,12 +871,14 @@ export default function FundingIntakeJobPage() {
       const activeCallId = await ensureDraftExists();
       const response = await fetch(`/api/admin/funding/calls/${activeCallId}/template/runs/${runId}/apply`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'replace' }),
       });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || 'Failed to apply template extraction run');
       }
-      toast.success('Template extraction run applied.');
+      toast.success('Latest extraction is now the current template.');
       setTemplateJsonText(JSON.stringify(data.template?.grant_template_json || createEmptyGrantTemplate(), null, 2));
       await loadDetails(false);
     } catch (error) {
@@ -1869,7 +1871,7 @@ export default function FundingIntakeJobPage() {
                                   disabled={templateBusy !== null}
                                   className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                  Apply
+                                  Use Extraction
                                 </button>
                               )}
                             </div>

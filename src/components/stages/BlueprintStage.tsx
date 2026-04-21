@@ -86,14 +86,22 @@ interface ThematicBlueprint {
 
 interface SectionPlanItem {
   sectionKey: string;
+  label?: string;
+  order?: number;
+  required?: boolean;
+  sectionType?: 'narrative' | 'short_answer' | 'checklist' | 'table' | 'budget_rows';
+  workflowMode?: 'app_draft' | 'app_support' | 'team_manual';
   purpose: string;
   mustCover: string[];
   mustCoverTyping?: Record<string, string>;
   mustAvoid: string[];
   wordBudget?: number;
+  characterLimit?: number | null;
+  reviewerIntent?: string | null;
   dependencies: string[];
   outputsPromised: string[];
   suggestedCitationCount?: number;
+  citationMode?: 'mapped_evidence' | 'direct_draft' | 'no_citations';
   thematicBlueprint?: ThematicBlueprint;
   rhetoricalBlueprint?: RhetoricalBlueprint;
 }
@@ -110,6 +118,7 @@ interface Blueprint {
   status: 'DRAFT' | 'FROZEN' | 'REVISION_PENDING';
   version: number;
   blueprintSchemaVersion?: number;
+  paperTypeCode?: string | null;
 }
 
 interface BlueprintStageProps {
@@ -117,6 +126,11 @@ interface BlueprintStageProps {
   authToken: string | null;
   onSessionUpdated?: (session: any) => void;
   onNavigateToStage?: (stage: string) => void;
+  grantContext?: {
+    grantSessionId: string;
+    projectId: string;
+    isGrantWorkspace: boolean;
+  };
 }
 
 // ============================================================================
@@ -140,6 +154,12 @@ const SECTION_ICONS: Record<string, any> = {
   conclusion: Zap,
   default: BookOpen
 };
+
+const CITATION_MODE_OPTIONS = [
+  { value: 'mapped_evidence', label: 'Mapped Evidence' },
+  { value: 'direct_draft', label: 'Direct Draft' },
+  { value: 'no_citations', label: 'No Citations' },
+] as const;
 
 const ALL_SECTIONS_FILTER = '__all_sections__';
 const RHETORICAL_PLACEMENTS = ['start', 'middle', 'end', 'final'] as const;
@@ -398,6 +418,37 @@ function syncThematicBlueprint(section: SectionPlanItem): SectionPlanItem {
       ...(mustCoverTyping ? { mustCoverTyping } : {}),
       ...(typeof suggestedCitationCount === 'number' ? { suggestedCitationCount } : {})
     }
+  };
+}
+
+function buildGrantBlueprintState(input: {
+  sessionId: string;
+  blueprint: any;
+  proposalFoundation?: {
+    thesisStatement?: string;
+    centralObjective?: string;
+    keyContributions?: string[];
+  } | null;
+}): Blueprint | null {
+  if (!input.blueprint) return null;
+
+  return {
+    id: String(input.blueprint.id || ''),
+    sessionId: input.sessionId,
+    thesisStatement: String(input.proposalFoundation?.thesisStatement || ''),
+    centralObjective: String(input.proposalFoundation?.centralObjective || ''),
+    keyContributions: Array.isArray(input.proposalFoundation?.keyContributions)
+      ? input.proposalFoundation?.keyContributions || []
+      : [],
+    sectionPlan: Array.isArray(input.blueprint.sectionPlan)
+      ? input.blueprint.sectionPlan
+      : [],
+    preferredTerms: null,
+    narrativeArc: undefined,
+    status: input.blueprint.status || 'DRAFT',
+    version: Number(input.blueprint.version || 1),
+    blueprintSchemaVersion: Number(input.blueprint.blueprintSchemaVersion || 2),
+    paperTypeCode: input.blueprint.paperTypeCode || null,
   };
 }
 
@@ -838,6 +889,7 @@ function SectionNode({ section, isFrozen, isFocused = false, onUpdateSection }: 
   const outputsCount = section.outputsPromised?.length || 0;
   const rhetoricalSlotCount = rhetoricalBlueprint.slots.length;
   const requiredRhetoricalSlots = rhetoricalBlueprint.slots.filter(slot => slot.required).length;
+  const supportsCitationMode = typeof section.citationMode === 'string' || typeof section.workflowMode === 'string';
 
   const pushSectionUpdate = (updated: SectionPlanItem) => {
     onUpdateSection(syncThematicBlueprint(updated));
@@ -1032,16 +1084,45 @@ function SectionNode({ section, isFrozen, isFocused = false, onUpdateSection }: 
 
                   {activeTab === 'thematic' ? (
                     <>
+                      {supportsCitationMode ? (
+                        <div className="rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50/70 dark:bg-sky-950/20 p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+                                Citation Mode
+                              </div>
+                              <p className="mt-1 text-xs text-sky-700/80 dark:text-sky-300/80">
+                                Controls whether this section must use mapped evidence during drafting.
+                              </p>
+                            </div>
+                            <select
+                              value={section.citationMode || 'mapped_evidence'}
+                              onChange={(event) => pushSectionUpdate({ ...section, citationMode: event.target.value as SectionPlanItem['citationMode'] })}
+                              disabled={isFrozen}
+                              className="rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-60 dark:border-sky-800 dark:bg-slate-900 dark:text-slate-200"
+                            >
+                              {CITATION_MODE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      ) : null}
+
                       <div className="rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/20 p-3">
                         <div className="flex items-center justify-between gap-2 mb-3">
                           <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
                             Must Have ({dimensionCount})
                           </div>
-                          {section.suggestedCitationCount && (
+                          {typeof section.suggestedCitationCount === 'number' ? (
                             <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300">
-                              ~{section.suggestedCitationCount} citations
+                              {section.suggestedCitationCount > 0
+                                ? `~${section.suggestedCitationCount} citations`
+                                : 'No citations planned'}
                             </Badge>
-                          )}
+                          ) : null}
                         </div>
 
                         <div className="space-y-2 ml-2 border-l-2 border-emerald-200/80 dark:border-emerald-900/70 pl-4">
@@ -1313,7 +1394,8 @@ export default function BlueprintStage({
   sessionId,
   authToken,
   onSessionUpdated,
-  onNavigateToStage
+  onNavigateToStage,
+  grantContext
 }: BlueprintStageProps) {
   // Debug: Log props on every render - this should appear in browser console
   console.log('[BlueprintStage] RENDER - sessionId:', sessionId, 'authToken:', authToken ? 'present' : 'null');
@@ -1324,6 +1406,7 @@ export default function BlueprintStage({
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [grantManaged, setGrantManaged] = useState(false);
   
   // Editing states
   const [editingThesis, setEditingThesis] = useState(false);
@@ -1331,6 +1414,26 @@ export default function BlueprintStage({
   const [thesisValue, setThesisValue] = useState('');
   const [objectiveValue, setObjectiveValue] = useState('');
   const [sectionFilter, setSectionFilter] = useState<string>(ALL_SECTIONS_FILTER);
+  const isGrantWorkspace = grantContext?.isGrantWorkspace === true;
+  const blueprintApiUrl = isGrantWorkspace
+    ? `/api/projects/${grantContext.projectId}/grants/${grantContext.grantSessionId}/blueprint`
+    : `/api/papers/${sessionId}/blueprint`;
+
+  const refreshShadowSession = useCallback(async () => {
+    if (!authToken || !onSessionUpdated || !sessionId) return;
+    try {
+      const sessionRes = await fetch(`/api/papers/${sessionId}`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (!sessionRes.ok) return;
+      const sessionData = await sessionRes.json();
+      if (sessionData.session) {
+        onSessionUpdated(sessionData.session);
+      }
+    } catch {
+      // Best-effort refresh for the surrounding workspace shell.
+    }
+  }, [authToken, onSessionUpdated, sessionId]);
 
   // Load blueprint
   const loadBlueprint = useCallback(async () => {
@@ -1346,7 +1449,7 @@ export default function BlueprintStage({
     try {
       setLoading(true);
       console.log('[BlueprintStage] Fetching blueprint from API...');
-      const res = await fetch(`/api/papers/${sessionId}/blueprint`, {
+      const res = await fetch(blueprintApiUrl, {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       
@@ -1355,10 +1458,19 @@ export default function BlueprintStage({
       
       if (!res.ok) throw new Error(data.error || 'Failed to load blueprint');
       
-      setBlueprint(data.blueprint);
-      if (data.blueprint) {
-        setThesisValue(data.blueprint.thesisStatement || '');
-        setObjectiveValue(data.blueprint.centralObjective || '');
+      const nextBlueprint = isGrantWorkspace
+        ? buildGrantBlueprintState({
+            sessionId,
+            blueprint: data.blueprint,
+            proposalFoundation: data.proposalFoundation,
+          })
+        : data.blueprint;
+
+      setBlueprint(nextBlueprint);
+      setGrantManaged(isGrantWorkspace ? false : Boolean(data.grantManaged));
+      if (nextBlueprint) {
+        setThesisValue(nextBlueprint.thesisStatement || '');
+        setObjectiveValue(nextBlueprint.centralObjective || '');
       }
       setError(null);
     } catch (err) {
@@ -1367,7 +1479,7 @@ export default function BlueprintStage({
     } finally {
       setLoading(false);
     }
-  }, [sessionId, authToken]);
+  }, [sessionId, authToken, blueprintApiUrl, isGrantWorkspace]);
 
   useEffect(() => {
     loadBlueprint();
@@ -1376,24 +1488,37 @@ export default function BlueprintStage({
   // Generate blueprint
   const handleGenerate = async () => {
     if (!authToken) return;
+    if (grantManaged && !isGrantWorkspace) {
+      showToast({ type: 'error', title: 'Managed from grant', message: 'Use the grant blueprint to manage this blueprint.' });
+      return;
+    }
     
     try {
       setGenerating(true);
-      const res = await fetch(`/api/papers/${sessionId}/blueprint`, {
+      const res = await fetch(blueprintApiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${authToken}`
         },
-        body: JSON.stringify({ action: 'generate' })
+        body: JSON.stringify({ action: isGrantWorkspace ? 'regenerate' : 'generate' })
       });
       
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to generate blueprint');
       
-      setBlueprint(data.blueprint);
-      setThesisValue(data.blueprint.thesisStatement || '');
-      setObjectiveValue(data.blueprint.centralObjective || '');
+      const nextBlueprint = isGrantWorkspace
+        ? buildGrantBlueprintState({
+            sessionId,
+            blueprint: data.blueprint,
+            proposalFoundation: data.proposalFoundation,
+          })
+        : data.blueprint;
+
+      setBlueprint(nextBlueprint);
+      setThesisValue(nextBlueprint?.thesisStatement || '');
+      setObjectiveValue(nextBlueprint?.centralObjective || '');
+      await refreshShadowSession();
       showToast({ type: 'success', title: 'Blueprint generated!', message: 'Review and customize your paper structure.' });
     } catch (err) {
       showToast({ 
@@ -1409,22 +1534,46 @@ export default function BlueprintStage({
   // Save blueprint updates
   const handleSave = async (updates: Partial<Blueprint>) => {
     if (!authToken || !blueprint) return;
+    if (grantManaged && !isGrantWorkspace) {
+      showToast({ type: 'error', title: 'Managed from grant', message: 'Use the grant blueprint to manage this blueprint.' });
+      return;
+    }
     
     try {
       setSaving(true);
-      const res = await fetch(`/api/papers/${sessionId}/blueprint`, {
-        method: 'PUT',
+      const res = await fetch(blueprintApiUrl, {
+        method: isGrantWorkspace ? 'PATCH' : 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${authToken}`
         },
-        body: JSON.stringify({ action: 'update', ...updates })
+        body: JSON.stringify(
+          isGrantWorkspace
+            ? {
+                sections: updates.sectionPlan || blueprint.sectionPlan,
+                foundation: {
+                  thesisStatement: updates.thesisStatement ?? blueprint.thesisStatement,
+                  centralObjective: updates.centralObjective ?? blueprint.centralObjective,
+                  keyContributions: updates.keyContributions ?? blueprint.keyContributions,
+                },
+              }
+            : { action: 'update', ...updates }
+        )
       });
       
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save');
       
-      setBlueprint(data.blueprint);
+      const nextBlueprint = isGrantWorkspace
+        ? buildGrantBlueprintState({
+            sessionId,
+            blueprint: data.blueprint,
+            proposalFoundation: data.proposalFoundation,
+          })
+        : data.blueprint;
+
+      setBlueprint(nextBlueprint);
+      await refreshShadowSession();
       showToast({ type: 'success', title: 'Saved', message: 'Blueprint updated successfully.' });
     } catch (err) {
       showToast({
@@ -1440,12 +1589,16 @@ export default function BlueprintStage({
   // Freeze/unfreeze blueprint
   const handleToggleFreeze = async () => {
     if (!authToken || !blueprint) return;
+    if (grantManaged && !isGrantWorkspace) {
+      showToast({ type: 'error', title: 'Managed from grant', message: 'Freeze and unfreeze this blueprint from the grant workspace.' });
+      return;
+    }
     
     const action = blueprint.status === 'FROZEN' ? 'unfreeze' : 'freeze';
     
     try {
       setSaving(true);
-      const res = await fetch(`/api/papers/${sessionId}/blueprint`, {
+      const res = await fetch(blueprintApiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1457,7 +1610,16 @@ export default function BlueprintStage({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Failed to ${action}`);
       
-      setBlueprint(data.blueprint);
+      const nextBlueprint = isGrantWorkspace
+        ? buildGrantBlueprintState({
+            sessionId,
+            blueprint: data.blueprint,
+            proposalFoundation: data.proposalFoundation,
+          })
+        : data.blueprint;
+
+      setBlueprint(nextBlueprint);
+      await refreshShadowSession();
       showToast({
         type: 'success',
         title: action === 'freeze' ? 'Blueprint Frozen' : 'Blueprint Unlocked',
@@ -1493,6 +1655,7 @@ export default function BlueprintStage({
   };
 
   const isFrozen = blueprint?.status === 'FROZEN';
+  const isLocked = Boolean(isFrozen || grantManaged);
   const sections = useMemo(() => blueprint?.sectionPlan ?? [], [blueprint?.sectionPlan]);
 
   useEffect(() => {
@@ -1601,7 +1764,7 @@ export default function BlueprintStage({
           </div>
 
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-3">
-            Create Your Paper Blueprint
+            {isGrantWorkspace ? 'Create Your Grant Blueprint' : 'Create Your Paper Blueprint'}
           </h2>
           <p className="text-slate-600 dark:text-slate-400 mb-8 max-w-md mx-auto">
             Generate an intelligent blueprint that defines the structure and key dimensions 
@@ -1660,10 +1823,10 @@ export default function BlueprintStage({
               <Target className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 dark:text-white">Paper Blueprint</h1>
+              <h1 className="text-lg font-bold text-slate-900 dark:text-white">{isGrantWorkspace ? 'Grant Blueprint' : 'Paper Blueprint'}</h1>
               <div className="flex items-center gap-2">
-                <Badge variant={isFrozen ? 'default' : 'secondary'} className="text-xs">
-                  {isFrozen ? (
+                <Badge variant={isLocked ? 'default' : 'secondary'} className="text-xs">
+                  {isLocked ? (
                     <><Lock className="w-3 h-3 mr-1" /> Frozen</>
                   ) : (
                     <><Unlock className="w-3 h-3 mr-1" /> Draft</>
@@ -1681,12 +1844,14 @@ export default function BlueprintStage({
               </span>
             )}
             <Button
-              variant={isFrozen ? 'outline' : 'default'}
+              variant={isLocked ? 'outline' : 'default'}
               onClick={handleToggleFreeze}
-              disabled={saving}
-              className={!isFrozen ? 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white' : ''}
+              disabled={saving || (grantManaged && !isGrantWorkspace)}
+              className={!isLocked ? 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white' : ''}
             >
-              {isFrozen ? (
+              {grantManaged && !isGrantWorkspace ? (
+                <><Lock className="w-4 h-4 mr-2" /> Managed from Grant</>
+              ) : isFrozen ? (
                 <><Unlock className="w-4 h-4 mr-2" /> Unlock for Editing</>
               ) : (
                 <><Lock className="w-4 h-4 mr-2" /> Freeze & Continue</>
@@ -1697,7 +1862,14 @@ export default function BlueprintStage({
       </div>
 
       {/* Frozen Warning Banner */}
-      {isFrozen && (
+      {grantManaged ? (
+        <div className="bg-violet-50 dark:bg-violet-900/20 border-b border-violet-200 dark:border-violet-800 px-6 py-3">
+          <div className="max-w-6xl mx-auto flex items-center gap-2 text-violet-700 dark:text-violet-300">
+            <AlertCircle className="w-4 h-4" />
+            <span className="text-sm">Blueprint is managed from the linked grant workspace. Review it here, but edit and freeze it from the grant blueprint.</span>
+          </div>
+        </div>
+      ) : isFrozen && (
         <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-6 py-3">
           <div className="max-w-6xl mx-auto flex items-center gap-2 text-amber-700 dark:text-amber-400">
             <AlertCircle className="w-4 h-4" />
@@ -1729,7 +1901,7 @@ export default function BlueprintStage({
                   <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide">
                     Thesis Statement
                   </span>
-                  {!isFrozen && !editingThesis && (
+                  {!isLocked && !editingThesis && (
                     <button
                       onClick={() => setEditingThesis(true)}
                       className="ml-auto p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-500"
@@ -1774,7 +1946,7 @@ export default function BlueprintStage({
                   <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wide">
                     Central Objective
                   </span>
-                  {!isFrozen && !editingObjective && (
+                  {!isLocked && !editingObjective && (
                     <button
                       onClick={() => setEditingObjective(true)}
                       className="ml-auto p-1 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900 text-indigo-500"
@@ -1956,7 +2128,7 @@ export default function BlueprintStage({
             <SectionNode
               key={section.sectionKey}
               section={section}
-              isFrozen={isFrozen}
+              isFrozen={isLocked}
               isFocused={sectionFilter !== ALL_SECTIONS_FILTER}
               onUpdateSection={(updated) => handleUpdateSection(section.sectionKey, updated)}
             />

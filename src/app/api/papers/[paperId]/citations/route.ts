@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { citationService } from '@/lib/services/citation-service';
 import { citationStyleService, type CitationData } from '@/lib/services/citation-style-service';
 import { citationMappingService, type CitationMetaSnapshot, type PaperBlueprintMapping } from '@/lib/services/citation-mapping-service';
@@ -86,13 +87,12 @@ const createCitationSchema = z.object({
   citationMeta: citationMetaSchema // AI-generated metadata for section generation
 });
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
     include: {
       citationStyle: true,
       paperType: true
@@ -667,7 +667,7 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'read');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -712,7 +712,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }

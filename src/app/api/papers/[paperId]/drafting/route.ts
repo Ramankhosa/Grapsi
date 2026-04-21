@@ -43,6 +43,26 @@ import {
   resolveCitationKeyFromLookup,
   splitCitationKeyList
 } from '@/lib/utils/citation-key-normalization';
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
+import { requiresMappedGrantEvidence } from '@/lib/grants/citationMode'
+import {
+  getGrantBackedSectionPlanEntry,
+  isGrantBackedPass1BypassedSection,
+  isGrantBackedSinglePassSection,
+} from '@/lib/grants/paperSectionConfig'
+import {
+  buildGrantBackedBasePrompt,
+  buildGrantPromptOverlay,
+  formatGrantMustCoverItems,
+  summarizeGrantFreezePayload,
+} from '@/lib/grants/promptOverlay'
+import type {
+  GrantCitationMode,
+  GrantPrepContextBlock,
+  GrantRuleProfile,
+  GrantSectionSemantic,
+} from '@/types/grant'
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -216,16 +236,16 @@ const validateHumanizedCitationsSchema = z.object({
   validateAll: z.boolean().optional()
 });
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
     include: {
       paperType: true,
-      citationStyle: true
+      citationStyle: true,
+      paperBlueprint: true
     }
   });
 }
@@ -347,18 +367,32 @@ const normalizeSectionKey = (value: string) => value.trim().toLowerCase().replac
 const SINGLE_PASS_SECTION_KEYS = new Set(['abstract', 'conclusion']);
 const PASS1_BYPASS_SECTION_KEYS = new Set(['references', 'reference', 'bibliography']);
 
-function isSinglePassSection(sectionKey: string): boolean {
+function isSinglePassSection(
+  sectionKey: string,
+  paperTypeCode?: string | null,
+  sectionPlan?: unknown
+): boolean {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return isGrantBackedSinglePassSection(paperTypeCode, sectionPlan, sectionKey)
+  }
   return SINGLE_PASS_SECTION_KEYS.has(normalizeSectionKey(sectionKey));
 }
 
-function isPass1BypassedSection(sectionKey: string): boolean {
+function isPass1BypassedSection(
+  sectionKey: string,
+  paperTypeCode?: string | null,
+  sectionPlan?: unknown
+): boolean {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return isGrantBackedPass1BypassedSection(sectionKey)
+  }
   return PASS1_BYPASS_SECTION_KEYS.has(normalizeSectionKey(sectionKey));
 }
 
 function buildSinglePassSectionError(sectionKey: string) {
   return {
     error: `Structured dimension flow is disabled for "${sectionKey}"`,
-    hint: 'Use generate_section or regenerate_section. Abstract and conclusion are generated in a single pass.'
+    hint: 'Use generate_section or regenerate_section. This section is configured for a single-pass drafting path.'
   };
 }
 
@@ -1649,6 +1683,21 @@ interface BlueprintPromptContext {
     mustCoverTyping?: Record<string, string>;
     suggestedCitationCount?: number;
   };
+  displayLabel?: string;
+  required?: boolean;
+  sectionType?: string | null;
+  reviewerIntent?: string | null;
+  characterLimit?: number | null;
+  citationMode?: GrantCitationMode | null;
+  grantSemantic?: GrantSectionSemantic | null;
+  prepContextBlock?: GrantPrepContextBlock | null;
+  grantRuleProfile?: GrantRuleProfile | null;
+  grantContextSummary?: {
+    projectTitle?: string | null;
+    fundingCallTitle?: string | null;
+    agencyName?: string | null;
+    freezeSummary?: string[];
+  } | null;
   rhetoricalBlueprint?: RhetoricalBlueprint;
   researchIntentLock?: ResearchIntentLock | null;
 }
@@ -3406,6 +3455,27 @@ MAPPED CITATION HINTS BY DIMENSION:
 ${citationGuide}`;
 }
 
+function resolveSectionContextPolicyForDrafting(params: {
+  sectionKey: string
+  paperTypeCode: string
+  sectionPlan?: unknown
+}) {
+  if (isGrantBackedPaperTypeCode(params.paperTypeCode)) {
+    const entry = getGrantBackedSectionPlanEntry(
+      params.paperTypeCode,
+      params.sectionPlan,
+      params.sectionKey
+    )
+    return {
+      requiresBlueprint: true,
+      requiresPreviousSections: true,
+      requiresCitations: requiresMappedGrantEvidence(entry?.citationMode),
+    }
+  }
+
+  return sectionTemplateService.getSectionContextPolicy(params.sectionKey, params.paperTypeCode)
+}
+
 async function buildPrompt(
   sectionKey: string,
   paperTypeCode: string,
@@ -3419,7 +3489,13 @@ async function buildPrompt(
   outputMode: SectionPromptOutputMode = 'markdown',
   previousSectionMemories?: PreviousSectionMemoryEntry[]
 ): Promise<string> {
-  let basePrompt = await sectionTemplateService.getPromptForSection(sectionKey, paperTypeCode, context);
+  const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode)
+  let basePrompt = '';
+  if (grantBacked) {
+    basePrompt = buildGrantBackedBasePrompt(sectionKey, blueprintContext);
+  } else {
+    basePrompt = await sectionTemplateService.getPromptForSection(sectionKey, paperTypeCode, context);
+  }
   const citationBudgetValidatorEnabled = isFeatureEnabled('ENABLE_CITATION_BUDGET_VALIDATOR');
   const hasCitationModePlaceholders = /\{\{AUTO_CITATION_MODE\}\}|\{\{ALLOWED_CITATION_KEYS\}\}/.test(basePrompt);
   const hasEvidencePlaceholders = /\{\{DIMENSION_EVIDENCE_NOTES\}\}|\{\{RELEVANCE_NOTES\}\}|\{\{EVIDENCE_GAPS\}\}|\{\{EVIDENCE_DIGEST\}\}/.test(basePrompt);
@@ -3450,6 +3526,10 @@ async function buildPrompt(
     ? String(archetype.archetypeRationale)
     : '';
 
+  const grantOverlay = grantBacked
+    ? buildGrantPromptOverlay(blueprintContext)
+    : '';
+
   // ============================================================================
   // CITATION MODE PLACEHOLDERS
   // ============================================================================
@@ -3476,7 +3556,10 @@ async function buildPrompt(
     ? blueprintContext.sectionPlan.map(s => s.sectionKey.replace(/_/g, ' ')).join(' → ')
     : '(not available)';
   const mustCoverDimensions = blueprintContext?.mustCover?.length
-    ? blueprintContext.mustCover.map(d => `- ${d}`).join('\n')
+    ? formatGrantMustCoverItems(
+        blueprintContext.mustCover,
+        blueprintContext.thematicBlueprint?.mustCoverTyping
+      ).map(d => `- ${d}`).join('\n')
     : '(none specified)';
   const rhetoricalBlock = isFeatureEnabled('ENABLE_RHETORICAL_BLUEPRINT')
     ? buildRhetoricalPromptBlock({
@@ -3614,7 +3697,7 @@ async function buildPrompt(
 - Preserve citation placeholders exactly in [CITE:key] format.
 - Do not use HTML tags.`;
 
-  return `${basePrompt}${topicBlock}${archetypeBlock}${crossSectionBlock}${rhetoricalBlock ? `\n\n${rhetoricalBlock}` : ''}${evidenceBlock}${coverageBlock}${figureBlock}${citationsBlock}${styleBlock}${userBlock}
+  return `${basePrompt}${grantOverlay}${topicBlock}${archetypeBlock}${crossSectionBlock}${rhetoricalBlock ? `\n\n${rhetoricalBlock}` : ''}${evidenceBlock}${coverageBlock}${figureBlock}${citationsBlock}${styleBlock}${userBlock}
 
 ${outputInstructions}`;
 }
@@ -3859,7 +3942,11 @@ async function generateSection(
   const { sessionId, session, user, paperTypeCode, payload, requestHeaders, tenantContext } = params;
   const sectionKey = normalizeSectionKey(payload.sectionKey);
   const requestedMappedEvidence = payload.useMappedEvidence !== false;
-  const sectionContextPolicy = await sectionTemplateService.getSectionContextPolicy(sectionKey, paperTypeCode);
+  const sectionContextPolicy = await resolveSectionContextPolicyForDrafting({
+    sectionKey,
+    paperTypeCode,
+    sectionPlan: session.paperBlueprint?.sectionPlan,
+  });
 
   await emitStatus?.(
     'load_context',
@@ -3944,7 +4031,7 @@ async function generateSection(
   let mergedValidationReport: unknown;
   let pass2CompletedAt: Date | undefined;
   const requestedGenerationMode =
-    payload.generationMode === 'two_pass' && !isPass1BypassedSection(sectionKey)
+    payload.generationMode === 'two_pass' && !isPass1BypassedSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)
       ? 'two_pass'
       : 'topup_final';
   const twoPassEnabled = isFeatureEnabled('ENABLE_TWO_PASS_GENERATION');
@@ -4406,8 +4493,13 @@ async function buildSectionPromptRuntimeBundle(params: {
   const { sessionId, session, paperTypeCode, sectionKey, tenantContext } = params;
   const normalizedSectionKey = normalizeSectionKey(sectionKey);
   const requestedMappedEvidence = params.useMappedEvidence !== false;
-  const sectionContextPolicy = await sectionTemplateService.getSectionContextPolicy(normalizedSectionKey, paperTypeCode);
-  const useMappedEvidence = sectionContextPolicy.requiresCitations ? requestedMappedEvidence : false;
+  const sectionContextPolicy = await resolveSectionContextPolicyForDrafting({
+    sectionKey: normalizedSectionKey,
+    paperTypeCode,
+    sectionPlan: session.paperBlueprint?.sectionPlan,
+  });
+  const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
+  let useMappedEvidence = sectionContextPolicy.requiresCitations ? requestedMappedEvidence : false;
 
   const [
     researchTopic,
@@ -4415,7 +4507,8 @@ async function buildSectionPromptRuntimeBundle(params: {
     evidencePack,
     draft,
     figurePromptContext,
-    blueprint
+    blueprint,
+    grantSession
   ] = await Promise.all([
     prisma.researchTopic.findUnique({
       where: { sessionId }
@@ -4432,6 +4525,28 @@ async function buildSectionPromptRuntimeBundle(params: {
       selectedFigureIds: params.selectedFigureIds
     }),
     blueprintService.getBlueprint(sessionId)
+    ,
+    grantBacked
+      ? prisma.grantSession.findFirst({
+          where: { draftingSessionId: sessionId },
+          include: {
+            project: {
+              select: { name: true }
+            },
+            fundingCall: {
+              select: {
+                scheme_title: true,
+                agency_name: true
+              }
+            },
+            blueprint: {
+              select: {
+                freezePayloadJson: true
+              }
+            }
+          }
+        })
+      : Promise.resolve(null)
   ]);
   const citationContext = await DraftingService.buildCitationContext(sessionId, normalizedSectionKey, {
     useMappedEvidence,
@@ -4480,6 +4595,31 @@ async function buildSectionPromptRuntimeBundle(params: {
       mustAvoid: thematicBlueprint.mustAvoid || [],
       wordBudget: blueprintWordBudget,
       thematicBlueprint,
+      displayLabel: typeof currentSectionPlan?.displayLabel === 'string' ? currentSectionPlan.displayLabel : undefined,
+      required: typeof currentSectionPlan?.required === 'boolean' ? currentSectionPlan.required : undefined,
+      sectionType: typeof currentSectionPlan?.sectionType === 'string' ? currentSectionPlan.sectionType : undefined,
+      reviewerIntent: typeof currentSectionPlan?.reviewerIntent === 'string' ? currentSectionPlan.reviewerIntent : undefined,
+      characterLimit: typeof currentSectionPlan?.characterLimit === 'number' ? currentSectionPlan.characterLimit : undefined,
+      citationMode: typeof currentSectionPlan?.citationMode === 'string'
+        ? currentSectionPlan.citationMode as GrantCitationMode
+        : undefined,
+      grantSemantic: typeof currentSectionPlan?.grantSemantic === 'string'
+        ? currentSectionPlan.grantSemantic as GrantSectionSemantic
+        : undefined,
+      prepContextBlock: currentSectionPlan?.prepContextBlock && typeof currentSectionPlan.prepContextBlock === 'object'
+        ? currentSectionPlan.prepContextBlock as GrantPrepContextBlock
+        : undefined,
+      grantRuleProfile: currentSectionPlan?.grantRuleProfile && typeof currentSectionPlan.grantRuleProfile === 'object'
+        ? currentSectionPlan.grantRuleProfile as GrantRuleProfile
+        : undefined,
+      grantContextSummary: grantSession
+        ? {
+            projectTitle: grantSession.project?.name || null,
+            fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
+            agencyName: grantSession.fundingCall?.agency_name || null,
+            freezeSummary: summarizeGrantFreezePayload(grantSession.blueprint?.freezePayloadJson),
+          }
+        : null,
       rhetoricalBlueprint: currentSectionPlan?.rhetoricalBlueprint,
       researchIntentLock
     };
@@ -4515,18 +4655,32 @@ async function buildSectionPromptRuntimeBundle(params: {
         || (evidencePack.coverageAssignments?.length || 0) > 0
       )
     ) {
-      throw new DraftingRequestError(
-        'No mapped evidence is available for this section',
-        409,
-        {
-          error: 'No mapped evidence is available for this section',
-          hint: 'Run AI Relevance & Blueprint Mapping (or re-import citations) so citations can be mapped to this section.',
-          evidence: {
-            sectionKey: normalizedSectionKey,
-            gaps: evidencePack?.gaps || []
+      // Grant-backed drafting should not hard-fail when mapped evidence is missing.
+      // Fall back to direct drafting (AUTO_CITATION_MODE=OFF) so users can proceed.
+      if (grantBacked) {
+        useMappedEvidence = false;
+        evidencePromptContext = {
+          useMappedEvidence: false,
+          allowedCitationKeys: [],
+          dimensionEvidence: [],
+          gaps: [],
+          coverageAssignments: [],
+          evidenceDigest: { digests: [], mustCiteKeys: [], optionalCiteKeys: [] }
+        };
+      } else {
+        throw new DraftingRequestError(
+          'No mapped evidence is available for this section',
+          409,
+          {
+            error: 'No mapped evidence is available for this section',
+            hint: 'Run AI Relevance & Blueprint Mapping (or re-import citations) so citations can be mapped to this section.',
+            evidence: {
+              sectionKey: normalizedSectionKey,
+              gaps: evidencePack?.gaps || []
+            }
           }
-        }
-      );
+        );
+      }
     }
   } else {
     evidencePromptContext = {
@@ -6767,7 +6921,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
@@ -6777,6 +6931,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     const actionData = actionSchema.parse(body);
 
     const paperTypeCode = session.paperType?.code
+      || session.paperBlueprint?.paperTypeCode
       || process.env.DEFAULT_PAPER_TYPE
       || 'JOURNAL_ARTICLE';
     const requestHeaders = Object.fromEntries(request.headers.entries());
@@ -6835,7 +6990,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       case 'start_dimension_flow': {
         const payload = startDimensionFlowSchema.parse(body);
         const sectionKey = normalizeSectionKey(payload.sectionKey);
-        if (isSinglePassSection(sectionKey)) {
+        if (isSinglePassSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)) {
           return NextResponse.json(
             {
               sectionKey,
@@ -6925,7 +7080,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       case 'generate_dimension': {
         const payload = generateDimensionSchema.parse(body);
         const sectionKey = normalizeSectionKey(payload.sectionKey);
-        if (isSinglePassSection(sectionKey)) {
+        if (isSinglePassSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)) {
           return NextResponse.json(
             {
               sectionKey,
@@ -7097,7 +7252,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       case 'accept_dimension': {
         const payload = acceptDimensionSchema.parse(body);
         const sectionKey = normalizeSectionKey(payload.sectionKey);
-        if (isSinglePassSection(sectionKey)) {
+        if (isSinglePassSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)) {
           return NextResponse.json(
             {
               sectionKey,
@@ -7426,7 +7581,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       case 'reject_dimension': {
         const payload = rejectDimensionSchema.parse(body);
         const sectionKey = normalizeSectionKey(payload.sectionKey);
-        if (isSinglePassSection(sectionKey)) {
+        if (isSinglePassSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)) {
           return NextResponse.json(
             {
               sectionKey,
@@ -7514,7 +7669,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       case 'get_dimension_flow': {
         const payload = getDimensionFlowSchema.parse(body);
         const sectionKey = normalizeSectionKey(payload.sectionKey);
-        if (isSinglePassSection(sectionKey)) {
+        if (isSinglePassSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)) {
           return NextResponse.json({
             sectionKey,
             started: false,
@@ -7578,7 +7733,11 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         const citations = await citationService.getCitationsForSession(sessionId);
         const knownSessionKeys = new Set(citations.map(c => c.citationKey));
 
-        const sectionContextPolicy = await sectionTemplateService.getSectionContextPolicy(sectionKey, paperTypeCode);
+        const sectionContextPolicy = await resolveSectionContextPolicyForDrafting({
+          sectionKey,
+          paperTypeCode,
+          sectionPlan: session.paperBlueprint?.sectionPlan,
+        });
         if (sectionContextPolicy.requiresCitations) {
           const citationContext = await DraftingService.buildCitationContext(sessionId, sectionKey, {
             useMappedEvidence: true

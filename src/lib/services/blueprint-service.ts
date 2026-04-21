@@ -17,6 +17,12 @@ import {
   normalizeRhetoricalBlueprint,
   type RhetoricalBlueprint
 } from './rhetorical-blueprint-service';
+import type {
+  GrantCitationMode,
+  GrantPrepContextBlock,
+  GrantRuleProfile,
+  GrantSectionSemantic,
+} from '@/types/grant'
 import type { 
   PaperBlueprint, 
   ResearchTopic, 
@@ -48,10 +54,20 @@ export interface ThematicBlueprint {
 
 export interface SectionPlanItem {
   sectionKey: string;
+  displayLabel?: string;
+  required?: boolean;
   purpose: string;
   mustCover: string[];
   mustAvoid: string[];
   wordBudget?: number;
+  characterLimit?: number;
+  sectionType?: 'narrative' | 'short_answer' | 'checklist' | 'table' | 'budget_rows';
+  reviewerIntent?: string | null;
+  workflowMode?: string | null;
+  citationMode?: GrantCitationMode | null;
+  grantSemantic?: GrantSectionSemantic | null;
+  prepContextBlock?: GrantPrepContextBlock | null;
+  grantRuleProfile?: GrantRuleProfile | null;
   dependencies: string[]; // Which sections must come before
   outputsPromised: string[]; // What this section will provide for later sections
   
@@ -88,8 +104,14 @@ export interface SectionContext {
   dependencies: string[];
   mustCoverTyping?: Record<string, DimensionType>;
   suggestedCitationCount?: number;
+  citationMode?: GrantCitationMode | null;
   thematicBlueprint?: ThematicBlueprint;
   rhetoricalBlueprint?: RhetoricalBlueprint;
+  reviewerIntent?: string | null;
+  sectionType?: 'narrative' | 'short_answer' | 'checklist' | 'table' | 'budget_rows';
+  grantSemantic?: GrantSectionSemantic | null;
+  prepContextBlock?: GrantPrepContextBlock | null;
+  grantRuleProfile?: GrantRuleProfile | null;
 }
 
 export interface BlueprintContext {
@@ -484,8 +506,14 @@ class BlueprintService {
         dependencies: sectionPlan.dependencies,
         mustCoverTyping: sectionPlan.mustCoverTyping,
         suggestedCitationCount: sectionPlan.suggestedCitationCount,
+        citationMode: sectionPlan.citationMode,
         thematicBlueprint: sectionPlan.thematicBlueprint,
-        rhetoricalBlueprint: sectionPlan.rhetoricalBlueprint
+        rhetoricalBlueprint: sectionPlan.rhetoricalBlueprint,
+        reviewerIntent: sectionPlan.reviewerIntent,
+        sectionType: sectionPlan.sectionType,
+        grantSemantic: sectionPlan.grantSemantic,
+        prepContextBlock: sectionPlan.prepContextBlock,
+        grantRuleProfile: sectionPlan.grantRuleProfile,
       },
       preferredTerms: blueprint.preferredTerms || {}
     };
@@ -751,10 +779,23 @@ CRITICAL RULES:
         
         return {
           sectionKey: item.sectionKey || 'unknown',
+          displayLabel: typeof item.displayLabel === 'string' ? item.displayLabel : undefined,
+          required: typeof item.required === 'boolean' ? item.required : undefined,
           purpose: item.purpose || '',
           mustCover,
           mustAvoid: Array.isArray(item.mustAvoid) ? item.mustAvoid : [],
           wordBudget: typeof item.wordBudget === 'number' ? item.wordBudget : undefined,
+          characterLimit: typeof item.characterLimit === 'number' ? item.characterLimit : undefined,
+          sectionType: typeof item.sectionType === 'string' ? item.sectionType as SectionPlanItem['sectionType'] : undefined,
+          reviewerIntent: typeof item.reviewerIntent === 'string' ? item.reviewerIntent : undefined,
+          workflowMode: typeof item.workflowMode === 'string' ? item.workflowMode : undefined,
+          grantSemantic: typeof item.grantSemantic === 'string' ? item.grantSemantic as GrantSectionSemantic : undefined,
+          prepContextBlock: item.prepContextBlock && typeof item.prepContextBlock === 'object'
+            ? item.prepContextBlock as GrantPrepContextBlock
+            : undefined,
+          grantRuleProfile: item.grantRuleProfile && typeof item.grantRuleProfile === 'object'
+            ? item.grantRuleProfile as GrantRuleProfile
+            : undefined,
           dependencies: Array.isArray(item.dependencies) ? item.dependencies : [],
           outputsPromised: Array.isArray(item.outputsPromised) ? item.outputsPromised : [],
           mustCoverTyping,
@@ -963,10 +1004,32 @@ CRITICAL RULES:
 
       const normalizedSection: SectionPlanItem = {
         sectionKey,
+        displayLabel: typeof raw.displayLabel === 'string' ? raw.displayLabel.trim() || undefined : undefined,
+        required: typeof raw.required === 'boolean' ? raw.required : undefined,
         purpose: String(raw.purpose || '').trim(),
         mustCover,
         mustAvoid,
         ...(typeof wordBudget === 'number' ? { wordBudget } : {}),
+        ...(typeof raw.characterLimit === 'number' ? { characterLimit: Number(raw.characterLimit) } : {}),
+        ...(typeof raw.sectionType === 'string'
+          ? { sectionType: raw.sectionType as SectionPlanItem['sectionType'] }
+          : {}),
+        ...(typeof raw.reviewerIntent === 'string'
+          ? { reviewerIntent: raw.reviewerIntent.trim() || null }
+          : {}),
+        ...(typeof raw.workflowMode === 'string' ? { workflowMode: raw.workflowMode } : {}),
+        ...(typeof raw.citationMode === 'string'
+          ? { citationMode: raw.citationMode as GrantCitationMode }
+          : {}),
+        ...(typeof raw.grantSemantic === 'string'
+          ? { grantSemantic: raw.grantSemantic as GrantSectionSemantic }
+          : {}),
+        ...(raw.prepContextBlock && typeof raw.prepContextBlock === 'object'
+          ? { prepContextBlock: raw.prepContextBlock as GrantPrepContextBlock }
+          : {}),
+        ...(raw.grantRuleProfile && typeof raw.grantRuleProfile === 'object'
+          ? { grantRuleProfile: raw.grantRuleProfile as GrantRuleProfile }
+          : {}),
         dependencies: Array.isArray(raw.dependencies)
           ? raw.dependencies.map(item => String(item || '').trim()).filter(Boolean)
           : [],

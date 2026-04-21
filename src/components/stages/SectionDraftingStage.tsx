@@ -32,6 +32,14 @@ import PaperSectionInstructionPopover from './PaperSectionInstructionPopover';
 import FloatingWritingPanel from '@/components/paper/FloatingWritingPanel';
 import { getPaperFigureCaptionSeed } from '@/lib/figure-generation/paper-figure-record';
 import { extractFigureSuggestionMeta } from '@/lib/figure-generation/suggestion-meta';
+import {
+  buildGrantBackedCitationEligibility,
+  buildGrantBackedSectionConfigs,
+  isGrantBackedPass1BypassedSection,
+  isGrantBackedSinglePassSection,
+  supportsGrantBackedDimensionFlow,
+} from '@/lib/grants/paperSectionConfig'
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata'
 import { polishDraftMarkdown } from '@/lib/markdown-draft-formatter';
 import InlineDimensionProposal from '@/components/paper/InlineDimensionProposal';
 import DimensionPlanPills from '@/components/paper/DimensionPlanPills';
@@ -589,16 +597,26 @@ function normalizeSectionKey(sectionKey: string): string {
 const SINGLE_PASS_SECTION_KEYS = new Set(['abstract', 'conclusion']);
 const PASS1_EXCLUDED_SECTION_KEYS = new Set(['references', 'reference', 'bibliography']);
 
-function supportsDimensionFlow(sectionKey: string): boolean {
+function supportsDimensionFlow(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return supportsGrantBackedDimensionFlow(paperTypeCode, sectionPlan, sectionKey);
+  }
   const normalized = normalizeSectionKey(sectionKey);
   return !SINGLE_PASS_SECTION_KEYS.has(normalized) && !PASS1_EXCLUDED_SECTION_KEYS.has(normalized);
 }
 
-function isPass1ExcludedSection(sectionKey: string): boolean {
+function isPass1ExcludedSection(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return isGrantBackedPass1BypassedSection(sectionKey);
+  }
   return PASS1_EXCLUDED_SECTION_KEYS.has(normalizeSectionKey(sectionKey));
 }
 
-function supportsPass1FigureInjection(sectionKey: string): boolean {
+function supportsPass1FigureInjection(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return !isGrantBackedSinglePassSection(paperTypeCode, sectionPlan, sectionKey)
+      && !isGrantBackedPass1BypassedSection(sectionKey);
+  }
   const normalized = normalizeSectionKey(sectionKey);
   return normalized !== 'abstract' && !isPass1ExcludedSection(normalized);
 }
@@ -881,6 +899,20 @@ export default function SectionDraftingStage({
     setTimeout(() => setMessage(null), 4000);
   };
 
+  const runtimeBlueprintSectionPlan = session?.paperBlueprint?.sectionPlan;
+  const supportsDimensionFlowForSection = useCallback(
+    (sectionKey: string) => supportsDimensionFlow(sectionKey, paperTypeCode, runtimeBlueprintSectionPlan),
+    [paperTypeCode, runtimeBlueprintSectionPlan]
+  );
+  const isPass1ExcludedForSection = useCallback(
+    (sectionKey: string) => isPass1ExcludedSection(sectionKey, paperTypeCode, runtimeBlueprintSectionPlan),
+    [paperTypeCode, runtimeBlueprintSectionPlan]
+  );
+  const supportsPass1FigureInjectionForSection = useCallback(
+    (sectionKey: string) => supportsPass1FigureInjection(sectionKey, paperTypeCode, runtimeBlueprintSectionPlan),
+    [paperTypeCode, runtimeBlueprintSectionPlan]
+  );
+
   const getDimensionState = useCallback((sectionKey: string): DimensionDraftUIState => {
     const normalized = normalizeSectionKey(sectionKey);
     return dimensionBySection[normalized] || createInitialDimensionUIState();
@@ -1039,7 +1071,7 @@ export default function SectionDraftingStage({
   }, [setFigureInjectionState]);
 
   const buildFigureInjectionPayload = useCallback((sectionKey: string) => {
-    if (!supportsPass1FigureInjection(sectionKey)) {
+    if (!supportsPass1FigureInjectionForSection(sectionKey)) {
       return {
         useFigures: false,
         selectedFigureIds: []
@@ -1142,7 +1174,7 @@ export default function SectionDraftingStage({
           setBibliographySortOrder('order_of_appearance');
         }
       }
-      const code = sess?.paperType?.code || 'JOURNAL_ARTICLE';
+      const code = sess?.paperType?.code || sess?.paperBlueprint?.paperTypeCode || 'JOURNAL_ARTICLE';
       setPaperTypeCode(code);
 
       // Load draft content
@@ -1151,40 +1183,48 @@ export default function SectionDraftingStage({
         .sort((a: any, b: any) => b.version - a.version)[0];
       if (paperDraft) setContent(parseExtraSections(paperDraft.extraSections));
 
-      // Load paper type sections
-      const typeRes = await fetch(`/api/paper-types/${code}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (typeRes.ok) {
-        const typeData = await typeRes.json();
-        const pt = typeData.paperType;
-        if (pt) {
-          const sectionOrder = Array.isArray(pt.sectionOrder) ? pt.sectionOrder : [];
-          const requiredSections = Array.isArray(pt.requiredSections) ? pt.requiredSections : [];
-          const wordLimits = pt.defaultWordLimits || {};
-          const configs: SectionConfig[] = sectionOrder.map((key: string) => ({
-            keys: [key], label: displayName[key] || formatSectionLabel(key),
-            required: requiredSections.includes(key), wordLimit: wordLimits[key] || undefined
-          }));
-          setSectionConfigs(configs.length > 0 ? configs : fallbackSections);
+      // Load section config from grant-backed blueprint or standard paper type.
+      if (isGrantBackedPaperTypeCode(code)) {
+        const configs = buildGrantBackedSectionConfigs(code, sess?.paperBlueprint?.sectionPlan);
+        setSectionConfigs(configs.length > 0 ? configs : fallbackSections);
+        setCitationEligibleBySection(
+          buildGrantBackedCitationEligibility(code, sess?.paperBlueprint?.sectionPlan)
+        );
+      } else {
+        const typeRes = await fetch(`/api/paper-types/${code}`, { headers: { Authorization: `Bearer ${authToken}` } });
+        if (typeRes.ok) {
+          const typeData = await typeRes.json();
+          const pt = typeData.paperType;
+          if (pt) {
+            const sectionOrder = Array.isArray(pt.sectionOrder) ? pt.sectionOrder : [];
+            const requiredSections = Array.isArray(pt.requiredSections) ? pt.requiredSections : [];
+            const wordLimits = pt.defaultWordLimits || {};
+            const configs: SectionConfig[] = sectionOrder.map((key: string) => ({
+              keys: [key], label: displayName[key] || formatSectionLabel(key),
+              required: requiredSections.includes(key), wordLimit: wordLimits[key] || undefined
+            }));
+            setSectionConfigs(configs.length > 0 ? configs : fallbackSections);
 
-          const policies = pt.sectionContextPolicies && typeof pt.sectionContextPolicies === 'object'
-            ? pt.sectionContextPolicies as Record<string, { requiresCitations?: boolean }>
-            : {};
-          const eligibility: Record<string, boolean> = {};
-          for (const key of sectionOrder) {
-            const normalized = normalizeSectionKey(key);
-            const policy = policies[key] || policies[normalized];
-            eligibility[normalized] = typeof policy?.requiresCitations === 'boolean'
-              ? policy.requiresCitations
-              : DEFAULT_CITATION_ELIGIBLE_SECTIONS.has(normalized);
+            const policies = pt.sectionContextPolicies && typeof pt.sectionContextPolicies === 'object'
+              ? pt.sectionContextPolicies as Record<string, { requiresCitations?: boolean }>
+              : {};
+            const eligibility: Record<string, boolean> = {};
+            for (const key of sectionOrder) {
+              const normalized = normalizeSectionKey(key);
+              const policy = policies[key] || policies[normalized];
+              eligibility[normalized] = typeof policy?.requiresCitations === 'boolean'
+                ? policy.requiresCitations
+                : DEFAULT_CITATION_ELIGIBLE_SECTIONS.has(normalized);
+            }
+            setCitationEligibleBySection(eligibility);
+          } else {
+            setSectionConfigs(fallbackSections);
+            setCitationEligibleBySection({});
           }
-          setCitationEligibleBySection(eligibility);
         } else {
           setSectionConfigs(fallbackSections);
           setCitationEligibleBySection({});
         }
-      } else {
-        setSectionConfigs(fallbackSections);
-        setCitationEligibleBySection({});
       }
 
       // Check persona availability
@@ -1305,9 +1345,9 @@ export default function SectionDraftingStage({
         : (sectionConfigs || fallbackSections)
             .flatMap(section => section.keys || [])
             .map(key => normalizeSectionKey(String(key || '')))
-            .filter((key, index, list) => key && !isPass1ExcludedSection(key) && list.indexOf(key) === index);
+            .filter((key, index, list) => key && !isPass1ExcludedForSection(key) && list.indexOf(key) === index);
     const figureSelections = figureTargetKeys.reduce<Record<string, { useFigures: boolean; selectedFigureIds: string[] }>>((acc, key) => {
-      if (!supportsPass1FigureInjection(key)) return acc;
+      if (!supportsPass1FigureInjectionForSection(key)) return acc;
       acc[normalizeSectionKey(key)] = buildFigureInjectionPayload(key);
       return acc;
     }, {});
@@ -1408,7 +1448,7 @@ export default function SectionDraftingStage({
                 }
               : null
           } as ReferenceDraftSectionView))
-          .filter((section: ReferenceDraftSectionView) => !isPass1ExcludedSection(section.sectionKey))
+          .filter((section: ReferenceDraftSectionView) => !isPass1ExcludedForSection(section.sectionKey))
         : [];
 
       setReferenceDraftSections(sections);
@@ -1471,7 +1511,7 @@ export default function SectionDraftingStage({
     for (const section of source) {
       for (const rawKey of section.keys || []) {
         const key = normalizeSectionKey(String(rawKey || ''));
-        if (!key || seen.has(key) || isPass1ExcludedSection(key)) continue;
+        if (!key || seen.has(key) || isPass1ExcludedForSection(key)) continue;
         seen.add(key);
         sectionsForSelection.push({
           key,
@@ -2031,7 +2071,7 @@ export default function SectionDraftingStage({
   }, [applyDimensionResponse, buildFigureInjectionPayload, getDimensionState, isMappedEvidenceEnabled, requestDraftingAction, setDimensionState, showMsg]);
 
   const beginStructuredDraft = useCallback(async (sectionKey: string) => {
-    if (!supportsDimensionFlow(sectionKey)) {
+    if (!supportsDimensionFlowForSection(sectionKey)) {
       showMsg('Abstract and conclusion are generated as single-pass sections', 'warning');
       return;
     }
@@ -2353,7 +2393,7 @@ export default function SectionDraftingStage({
     const normalizedKey = normalizeSectionKey(sectionKey);
     const useMappedEvidence = isMappedEvidenceEnabled(sectionKey);
     const figureInjection = buildFigureInjectionPayload(sectionKey);
-    const generationMode = isPass1ExcludedSection(sectionKey) ? 'topup_final' : 'two_pass';
+    const generationMode = isPass1ExcludedForSection(sectionKey) ? 'topup_final' : 'two_pass';
 
     setShowActivity(true);
     setDebugSteps([]);
@@ -2900,7 +2940,7 @@ export default function SectionDraftingStage({
     const storedFigureIds = grounding.effectiveFigureIds.length > 0
       ? grounding.effectiveFigureIds
       : grounding.selectedFigureIds;
-    const currentPayload = supportsPass1FigureInjection(section.sectionKey)
+    const currentPayload = supportsPass1FigureInjectionForSection(section.sectionKey)
       ? buildFigureInjectionPayload(section.sectionKey)
       : { useFigures: false, selectedFigureIds: [] as string[] };
     const currentFigureIds = currentPayload.useFigures
@@ -2956,7 +2996,7 @@ export default function SectionDraftingStage({
   }, [buildFigureInjectionPayload, figures, formatFigureLabelById]);
 
   const renderPass1FigureConfigurator = (sectionKey: string) => {
-    if (!supportsPass1FigureInjection(sectionKey)) return null;
+    if (!supportsPass1FigureInjectionForSection(sectionKey)) return null;
 
     const normalizedKey = normalizeSectionKey(sectionKey);
     const figureInjectionState = getFigureInjectionState(sectionKey);
@@ -3126,7 +3166,7 @@ export default function SectionDraftingStage({
   };
 
   const renderBgSectionSelector = (headingClassName: string, dividerClassName: string) => {
-    const selectedFigureSections = bgSelectedSectionKeys.filter((sectionKey) => supportsPass1FigureInjection(sectionKey));
+    const selectedFigureSections = bgSelectedSectionKeys.filter((sectionKey) => supportsPass1FigureInjectionForSection(sectionKey));
 
     return (
       <div className={`mt-3 ${dividerClassName} pt-3`}>
@@ -3694,7 +3734,7 @@ export default function SectionDraftingStage({
               : '';
             const primarySectionKey = section.keys[0] || '';
             const primaryDimensionState = primarySectionKey ? getDimensionState(primarySectionKey) : createInitialDimensionUIState();
-            const primarySupportsDimensionFlow = primarySectionKey ? supportsDimensionFlow(primarySectionKey) : false;
+            const primarySupportsDimensionFlow = primarySectionKey ? supportsDimensionFlowForSection(primarySectionKey) : false;
             const sectionWordCount = section.keys.reduce((acc, key) => acc + computeWordCount(content[key] || ''), 0);
 
             const sectionCitationIssue = (() => {
@@ -3792,7 +3832,7 @@ export default function SectionDraftingStage({
                 <div className="text-gray-800" style={{ textAlign: 'justify', lineHeight: '1.8' }}>
                   {section.keys.map(keyName => {
                     const normalizedKey = normalizeSectionKey(keyName);
-                    const sectionSupportsDimensionFlow = supportsDimensionFlow(keyName);
+                    const sectionSupportsDimensionFlow = supportsDimensionFlowForSection(keyName);
                     const dimensionState = getDimensionState(keyName);
                     const dimensionBusy = dimensionState.loading || dimensionState.accepting || dimensionState.rejecting;
                     const showInlineDimension = sectionSupportsDimensionFlow && Boolean(
@@ -3806,7 +3846,7 @@ export default function SectionDraftingStage({
                     const autoCitationEnabled = autoCitationAvailable ? isMappedEvidenceEnabled(keyName) : false;
                     const instruction = userInstructions[keyName];
                     const instructionActive = Boolean(instruction?.instruction) && instruction?.isActive !== false;
-                    const sectionSupportsFigureGrounding = supportsPass1FigureInjection(keyName);
+                    const sectionSupportsFigureGrounding = supportsPass1FigureInjectionForSection(keyName);
                     const figureInjectionState = getFigureInjectionState(keyName);
                     const sortedFigures = getSortedFiguresForSection(keyName);
                     const selectedFigureSet = new Set(figureInjectionState.selectedFigureIds);

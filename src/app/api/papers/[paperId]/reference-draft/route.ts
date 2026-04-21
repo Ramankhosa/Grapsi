@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 
 export const runtime = 'nodejs';
 
-type SessionUser = { id: string; roles?: string[] };
+type SessionUser = { id: string; roles?: string[]; tenantId?: string | null };
 
 function normalizeSectionKey(value: string): string {
   return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -117,12 +118,7 @@ function parsePass1Artifact(value: unknown): Pass1Artifact | null {
 }
 
 async function getSessionForUser(sessionId: string, user: SessionUser) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+  return getDraftingSessionForUser(sessionId, user, 'read', {
     select: {
       id: true,
       bgGenStatus: true,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,6 +17,16 @@ function invalidateSessionInstructionCache(sessionId: string) {
 
 function invalidateUserInstructionCache(userId: string) {
   userInstructionCache.delete(userId);
+}
+
+async function getAccessibleSession(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
+    include: { paperType: true }
+  });
 }
 
 // Get user-level persistent instructions (for papers, uses jurisdiction='PAPER')
@@ -145,10 +156,10 @@ export async function GET(
     const userId = authResult.user.id;
 
     // Get session to find paper type
-    const session = await prisma.draftingSession.findFirst({
-      where: { id: sessionId },
-      include: { paperType: true }
-    });
+    const session = await getAccessibleSession(sessionId, authResult.user, 'read');
+    if (!session) {
+      return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
+    }
 
     const paperTypeCode = session?.paperType?.code || null;
 
@@ -250,6 +261,13 @@ export async function POST(
     }
 
     const userId = authResult.user.id;
+    const effectiveSessionId = isPersistent ? null : (sessionId || params.paperId);
+    if (effectiveSessionId) {
+      const session = await getAccessibleSession(effectiveSessionId, authResult.user, 'editContent');
+      if (!session) {
+        return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
+      }
+    }
 
     // Word limit validation (50 words max)
     const MAX_WORDS = 50;
@@ -260,9 +278,6 @@ export async function POST(
       }, { status: 400 });
     }
 
-    // Determine the effective sessionId
-    const effectiveSessionId = isPersistent ? null : (sessionId || params.paperId);
-    
     // For papers, use 'PAPER' as jurisdiction
     const jurisdiction = 'PAPER';
 
@@ -354,6 +369,13 @@ export async function DELETE(
     const isPersistent = url.searchParams.get('isPersistent') === 'true';
 
     const userId = authResult.user.id;
+    const effectiveSessionId = isPersistent ? null : (sessionId || params.paperId);
+    if (effectiveSessionId) {
+      const session = await getAccessibleSession(effectiveSessionId, authResult.user, 'editContent');
+      if (!session) {
+        return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
+      }
+    }
 
     // Delete by ID
     if (id) {
@@ -386,15 +408,15 @@ export async function DELETE(
 
       if (isPersistent) {
         where.sessionId = null;
-      } else if (sessionId) {
-        where.sessionId = sessionId;
+      } else if (effectiveSessionId) {
+        where.sessionId = effectiveSessionId;
       }
 
       const deleted = await prisma.userSectionInstruction.deleteMany({ where });
 
       // Invalidate caches
-      if (sessionId) {
-        invalidateSessionInstructionCache(sessionId);
+      if (effectiveSessionId) {
+        invalidateSessionInstructionCache(effectiveSessionId);
       }
       invalidateUserInstructionCache(userId);
 

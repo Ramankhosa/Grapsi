@@ -3,6 +3,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { llmGateway } from '@/lib/metering/gateway';
 import { citationService } from '@/lib/services/citation-service';
 import { featureFlags } from '@/lib/feature-flags';
@@ -15,19 +16,11 @@ const gapSchema = z.object({
   limit: z.number().int().positive().max(50).optional()
 });
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  if (user.roles?.includes('SUPER_ADMIN')) {
-    return prisma.draftingSession.findUnique({
-      where: { id: sessionId },
-      include: { paperType: true }
-    });
-  }
-
-  return prisma.draftingSession.findFirst({
-    where: {
-      id: sessionId,
-      userId: user.id
-    },
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null }
+) {
+  return getDraftingSessionForUser(sessionId, user, 'editContent', {
     include: { paperType: true }
   });
 }

@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { paperSectionService } from '@/lib/services/paper-section-service';
 import { blueprintService } from '@/lib/services/blueprint-service';
 import { extractTenantContextFromRequest } from '@/lib/metering/auth-bridge';
@@ -94,13 +95,12 @@ const generateAllSchema = z.object({
 // Helper Functions
 // ============================================================================
 
-async function getSessionForUser(sessionId: string, user: { id: string; roles?: string[] }) {
-  const where = user.roles?.includes('SUPER_ADMIN')
-    ? { id: sessionId }
-    : { id: sessionId, userId: user.id };
-
-  return prisma.draftingSession.findFirst({
-    where,
+async function getSessionForUser(
+  sessionId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(sessionId, user, capability, {
     include: {
       researchTopic: true,
       paperType: true,
@@ -172,7 +172,7 @@ export async function GET(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'read');
 
     if (!session) {
       return NextResponse.json(
@@ -243,7 +243,7 @@ export async function POST(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
 
     if (!session) {
       return NextResponse.json(
@@ -418,7 +418,7 @@ export async function PUT(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
 
     if (!session) {
       return NextResponse.json(
@@ -496,7 +496,7 @@ export async function PATCH(
     }
 
     const sessionId = context.params.paperId;
-    const session = await getSessionForUser(sessionId, user);
+    const session = await getSessionForUser(sessionId, user, 'editContent');
 
     if (!session) {
       return NextResponse.json(

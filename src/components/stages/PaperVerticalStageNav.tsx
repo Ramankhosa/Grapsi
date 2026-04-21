@@ -23,6 +23,8 @@ import {
   BookOpen,
   Target
 } from 'lucide-react'
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata'
+import { getGrantBackedSectionPlan } from '@/lib/grants/paperSectionConfig'
 import { countPendingRewriteIssues, getLatestPaperReview } from '@/lib/paper-review-utils'
 
 // ============================================================================
@@ -34,6 +36,16 @@ interface PaperVerticalStageNavProps {
   currentStage: string
   paperId: string
   onNavigateToStage: (stage: string) => Promise<void> | void
+  workspaceTitle?: string
+  visibleStageKeys?: string[]
+  stageMetaOverrides?: Record<string, Partial<Pick<StageDefinition, 'label' | 'description' | 'groupLabel'>>>
+  draftingSections?: Array<{
+    key: string
+    label: string
+    description?: string
+    required?: boolean
+    status: SubStageStatus
+  }>
   // For Section Drafting - allows selecting specific sections
   selectedSection?: string
   onSectionSelect?: (sectionKey: string) => void
@@ -186,6 +198,19 @@ function getPaperTypeSectionConfig(session: any): {
   optionalSections: string[]
   sectionOrder: string[]
 } {
+  const grantPaperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+  if (isGrantBackedPaperTypeCode(grantPaperTypeCode)) {
+    const sections = getGrantBackedSectionPlan(grantPaperTypeCode, session?.paperBlueprint?.sectionPlan)
+    const sectionOrder = sections.map((section) => section.sectionKey)
+    const requiredSections = sections
+      .filter((section) => section.required === true)
+      .map((section) => section.sectionKey)
+    const optionalSections = sections
+      .filter((section) => section.required !== true)
+      .map((section) => section.sectionKey)
+    return { requiredSections, optionalSections, sectionOrder }
+  }
+
   const paperType = session?.paperType
   const requiredSections = normalizeStringArray(paperType?.requiredSections)
   const optionalSections = normalizeStringArray(paperType?.optionalSections)
@@ -201,6 +226,19 @@ function getPaperTypeSectionConfig(session: any): {
 }
 
 function getDraftSectionSubStages(session: any): SubStageDefinition[] {
+  const grantPaperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+  if (isGrantBackedPaperTypeCode(grantPaperTypeCode)) {
+    const sections = getGrantBackedSectionPlan(grantPaperTypeCode, session?.paperBlueprint?.sectionPlan)
+    return sections.map((section) => ({
+      key: section.sectionKey,
+      label: section.displayLabel || formatSectionLabel(section.sectionKey),
+      icon: FileText,
+      description: section.required ? 'Required section' : 'Optional section',
+      required: section.required === true,
+      getStatus: (currentSession: any) => getPaperSectionStatus(currentSession, section.sectionKey).status
+    }))
+  }
+
   const { requiredSections, sectionOrder } = getPaperTypeSectionConfig(session)
   if (sectionOrder.length === 0) return []
 
@@ -247,6 +285,19 @@ function getHumanizationSectionStatus(session: any, sectionKey: string): SubStag
 }
 
 function getHumanizationSubStages(session: any): SubStageDefinition[] {
+  const grantPaperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+  if (isGrantBackedPaperTypeCode(grantPaperTypeCode)) {
+    const sections = getGrantBackedSectionPlan(grantPaperTypeCode, session?.paperBlueprint?.sectionPlan)
+    return sections.map((section) => ({
+      key: section.sectionKey,
+      label: section.displayLabel || formatSectionLabel(section.sectionKey),
+      icon: FileText,
+      description: section.required ? 'Required section' : 'Optional section',
+      required: section.required === true,
+      getStatus: (currentSession: any) => getHumanizationSectionStatus(currentSession, section.sectionKey)
+    }))
+  }
+
   const { requiredSections, sectionOrder } = getPaperTypeSectionConfig(session)
   if (sectionOrder.length === 0) return []
 
@@ -383,6 +434,26 @@ function getManualFollowUpStatus(session: any): SubStageStatus {
 
 const STAGE_DEFINITIONS: StageDefinition[] = [
   {
+    key: 'GRANTMENTOR',
+    label: 'GrantMentor',
+    icon: Sparkles,
+    description: 'Grant prep and mentoring',
+    weight: 14,
+    subStages: [
+      {
+        key: 'prep_session',
+        label: 'Grant Prep Session',
+        icon: FileText,
+        description: 'Collect call context and draft foundations',
+        required: true,
+        getStatus: (session) => {
+          const hasBlueprint = Boolean(session?.paperBlueprint?.id)
+          return hasBlueprint ? 'completed' : 'in_progress'
+        }
+      }
+    ]
+  },
+  {
     key: 'OUTLINE_PLANNING',
     label: 'Paper Foundation',
     icon: ListOrdered,
@@ -396,7 +467,8 @@ const STAGE_DEFINITIONS: StageDefinition[] = [
         description: 'Select a paper type',
         required: true,
         getStatus: (session) => {
-          return session?.paperType?.code || session?.paperTypeId ? 'completed' : 'pending'
+          const paperTypeCode = session?.paperBlueprint?.paperTypeCode || session?.paperType?.code
+          return paperTypeCode || session?.paperTypeId ? 'completed' : 'pending'
         }
       },
       {
@@ -715,14 +787,11 @@ const STAGE_DEFINITIONS: StageDefinition[] = [
 ]
 
 const HIDDEN_STAGE_KEYS = new Set([
+  'GRANTMENTOR',
   'MANUSCRIPT_REVIEW',
   'MANUSCRIPT_IMPROVE',
   'HUMANIZATION'
 ])
-
-const VISIBLE_STAGE_DEFINITIONS = STAGE_DEFINITIONS.filter(
-  stage => !HIDDEN_STAGE_KEYS.has(stage.key)
-)
 
 // ============================================================================
 // Calculation Functions
@@ -769,14 +838,14 @@ function calculateStageCompletion(
   }
 }
 
-function calculateOverallProgress(session: any, currentStage: string): number {
-  const currentIndex = VISIBLE_STAGE_DEFINITIONS.findIndex(s => s.key === currentStage)
+function calculateOverallProgress(session: any, currentStage: string, stageDefinitions: StageDefinition[]): number {
+  const currentIndex = stageDefinitions.findIndex(s => s.key === currentStage)
   const resolvedIndex = currentIndex === -1 ? 0 : currentIndex
 
   let totalWeight = 0
   let completedWeight = 0
 
-  VISIBLE_STAGE_DEFINITIONS.forEach((stage, index) => {
+  stageDefinitions.forEach((stage, index) => {
     totalWeight += stage.weight
 
     if (index < resolvedIndex) {
@@ -823,16 +892,59 @@ export default function PaperVerticalStageNav({
   currentStage,
   paperId: _paperId,
   onNavigateToStage,
+  workspaceTitle = 'Research Paper',
+  visibleStageKeys,
+  stageMetaOverrides,
+  draftingSections,
   selectedSection,
   onSectionSelect
 }: PaperVerticalStageNavProps) {
   const [theme, setTheme] = useState<NavTheme>('light')
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
 
+  const visibleStageDefinitions = useMemo(() => {
+    const customDraftSubStages = Array.isArray(draftingSections)
+      ? draftingSections.map((section) => ({
+          key: section.key,
+          label: section.label,
+          icon: FileText,
+          description: section.description || (section.required ? 'Required section' : 'Optional section'),
+          required: section.required === true,
+          getStatus: () => section.status,
+        }))
+      : null
+
+    return STAGE_DEFINITIONS
+      .map((stage) => {
+        const overrides = stageMetaOverrides?.[stage.key] || {}
+        const nextStage = {
+          ...stage,
+          ...overrides,
+        }
+
+        if (stage.key === 'SECTION_DRAFTING' && customDraftSubStages) {
+          return {
+            ...nextStage,
+            getSubStages: () => customDraftSubStages,
+          }
+        }
+
+        return nextStage
+      })
+      .filter((stage) => {
+        // If the caller explicitly provides a stage list (grant workspace),
+        // it fully controls what is visible (even for normally-hidden stages).
+        if (visibleStageKeys) {
+          return visibleStageKeys.includes(stage.key)
+        }
+        return !HIDDEN_STAGE_KEYS.has(stage.key)
+      })
+  }, [draftingSections, stageMetaOverrides, visibleStageKeys])
+
   const resolvedCurrentStage = useMemo(() => {
-    const keys = VISIBLE_STAGE_DEFINITIONS.map(stage => stage.key)
+    const keys = visibleStageDefinitions.map(stage => stage.key)
     return keys.includes(currentStage) ? currentStage : keys[0]
-  }, [currentStage])
+  }, [currentStage, visibleStageDefinitions])
 
   // ============================================================================
   // Initialize from localStorage
@@ -882,8 +994,8 @@ export default function PaperVerticalStageNav({
   // ============================================================================
 
   const overallProgress = useMemo(
-    () => calculateOverallProgress(session, resolvedCurrentStage || ''),
-    [session, resolvedCurrentStage]
+    () => calculateOverallProgress(session, resolvedCurrentStage || '', visibleStageDefinitions),
+    [session, resolvedCurrentStage, visibleStageDefinitions]
   )
 
   const themeClasses = useMemo(() => ({
@@ -958,7 +1070,7 @@ export default function PaperVerticalStageNav({
             </div>
             <div>
               <div className={`text-sm font-semibold ${themeClasses.text}`}>
-                Research Paper
+                {workspaceTitle}
               </div>
               <div className={`text-xs ${themeClasses.textMuted}`}>
                 {overallProgress}% complete
@@ -992,13 +1104,13 @@ export default function PaperVerticalStageNav({
 
       {/* Stage List */}
       <nav className={`flex-1 overflow-y-auto py-3 px-2 ${theme === 'dark' ? 'dark-scrollbar' : 'light-scrollbar'}`}>
-        {VISIBLE_STAGE_DEFINITIONS.map((stage, stageIndex) => {
+        {visibleStageDefinitions.map((stage, stageIndex) => {
           const StageIcon = stage.icon
-          const previousGroup = stageIndex > 0 ? VISIBLE_STAGE_DEFINITIONS[stageIndex - 1]?.groupLabel : undefined
+          const previousGroup = stageIndex > 0 ? visibleStageDefinitions[stageIndex - 1]?.groupLabel : undefined
           const showGroupLabel = Boolean(stage.groupLabel && stage.groupLabel !== previousGroup)
           const isExpanded = expandedStages.has(stage.key)
           const completion = calculateStageCompletion(stage, session)
-          const currentIndex = Math.max(0, VISIBLE_STAGE_DEFINITIONS.findIndex(s => s.key === resolvedCurrentStage))
+          const currentIndex = Math.max(0, visibleStageDefinitions.findIndex(s => s.key === resolvedCurrentStage))
           const isCurrent = stage.key === resolvedCurrentStage
           const isPast = stageIndex < currentIndex
           const isFullyComplete = completion.requiredTotal > 0 && completion.requiredCompleted === completion.requiredTotal
@@ -1155,7 +1267,7 @@ export default function PaperVerticalStageNav({
       <div className={`p-3 border-t ${themeClasses.border}`}>
         <div className="flex items-center justify-between">
           <span className={`text-xs ${themeClasses.textSubtle}`}>
-            Stage {Math.max(1, VISIBLE_STAGE_DEFINITIONS.findIndex(s => s.key === resolvedCurrentStage) + 1)} of {VISIBLE_STAGE_DEFINITIONS.length}
+            Stage {Math.max(1, visibleStageDefinitions.findIndex(s => s.key === resolvedCurrentStage) + 1)} of {visibleStageDefinitions.length}
           </span>
           <button
             onClick={() => resolvedCurrentStage && handleStageClick(resolvedCurrentStage)}

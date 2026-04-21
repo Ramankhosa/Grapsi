@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { grantTemplateSchema } from './schemas';
+import { normalizeGrantWorkflowMode } from '@/lib/grants/workflowMode';
 import type {
   FundingTemplateCompatibilitySummary,
   FundingTemplateItem,
@@ -53,6 +54,7 @@ function normalizeItem(item: any): FundingTemplateItem {
     ...item,
     key: String(item.key || '').trim(),
     label: String(item.label || '').trim(),
+    workflowMode: normalizeGrantWorkflowMode(item.workflowMode),
     required: Boolean(item.required),
     repeatable: Boolean(item.repeatable),
     visibleWhen: item.visibleWhen || null,
@@ -106,6 +108,7 @@ export function normalizeGrantTemplate(input?: unknown): GrantTemplateDocument {
       ? {
           required: Boolean(parsed.budget.required),
           yearWise: Boolean(parsed.budget.yearWise),
+          workflowMode: normalizeGrantWorkflowMode(parsed.budget.workflowMode, 'app_support'),
           categories: parsed.budget.categories.map((category: any) => ({
             key: String(category.key || '').trim(),
             label: String(category.label || '').trim(),
@@ -283,6 +286,7 @@ function toConflictComparableItem(item: FundingTemplateItem) {
     options: item.options || [],
     schema: item.schema ?? null,
     guidance: item.guidance || null,
+    workflowMode: item.workflowMode,
     supportLevel: item.supportLevel,
   };
 }

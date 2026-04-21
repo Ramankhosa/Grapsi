@@ -12,6 +12,7 @@ import type {
   GrantTemplateDocument,
 } from '@/lib/fundingTemplates/types';
 import { createEmptyGrantTemplate, normalizeGrantTemplate } from '@/lib/fundingTemplates/utils';
+import type { GrantWorkflowMode } from '@/types/grant';
 
 export async function getServerSideProps() {
   return {
@@ -78,6 +79,7 @@ type Bundle = {
 
 const ITEM_TYPES: FundingTemplateItemType[] = ['field', 'section', 'table', 'budget', 'attachment', 'checklist', 'rule', 'rubric'];
 const SUPPORT_LEVELS: FundingTemplateSupportLevel[] = ['full', 'partial', 'manual', 'unsupported'];
+const WORKFLOW_MODES: GrantWorkflowMode[] = ['app_draft', 'app_support', 'team_manual'];
 
 type TemplateCounts = {
   questions: number;
@@ -94,6 +96,7 @@ function createItem(type: FundingTemplateItemType): FundingTemplateItem {
     key: `${type}_${Date.now()}`,
     label: 'New Item',
     type,
+    workflowMode: type === 'section' ? 'app_draft' : type === 'budget' || type === 'table' ? 'app_support' : 'team_manual',
     required: false,
     repeatable: false,
     visibleWhen: null,
@@ -214,6 +217,43 @@ function getItemMeta(item: FundingTemplateItem): string[] {
   return values;
 }
 
+function workflowTone(workflowMode: GrantWorkflowMode) {
+  switch (workflowMode) {
+    case 'app_draft':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'app_support':
+      return 'bg-sky-100 text-sky-800';
+    case 'team_manual':
+      return 'bg-amber-100 text-amber-900';
+    default:
+      return 'bg-slate-100 text-slate-700';
+  }
+}
+
+function workflowLabel(workflowMode: GrantWorkflowMode) {
+  switch (workflowMode) {
+    case 'app_draft':
+      return 'App Draft';
+    case 'app_support':
+      return 'Manual Drafting';
+    case 'team_manual':
+      return 'Manual Drafting';
+    default:
+      return workflowMode;
+  }
+}
+
+function workflowDetail(workflowMode: GrantWorkflowMode) {
+  switch (workflowMode) {
+    case 'app_support':
+      return 'Support section';
+    case 'team_manual':
+      return 'Team-owned section';
+    default:
+      return null;
+  }
+}
+
 function TemplatePreviewItem({
   item,
   index,
@@ -233,6 +273,14 @@ function TemplatePreviewItem({
           <div className="mt-1 text-xs text-slate-500">{item.key}</div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] ${workflowTone(item.workflowMode)}`}>
+            {workflowLabel(item.workflowMode)}
+          </span>
+          {workflowDetail(item.workflowMode) && (
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-700">
+              {workflowDetail(item.workflowMode)}
+            </span>
+          )}
           {meta.map((value) => (
             <span key={value} className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-700">
               {value}
@@ -270,6 +318,20 @@ function TemplatePreviewCard({
   emptyMessage: string;
 }) {
   const counts = getTemplateCounts(template);
+  const workflowCounts = useMemo(() => {
+    const items = [
+      ...(template?.sections || []),
+      ...(template?.questions || []),
+      ...(template?.attachments || []),
+      ...(template?.evaluationCriteria || []),
+      ...(template?.submissionRules.items || []),
+    ];
+    const appDraft = items.filter((item) => item.workflowMode === 'app_draft').length;
+    const appSupport = items.filter((item) => item.workflowMode === 'app_support').length + (template?.budget?.workflowMode === 'app_support' ? 1 : 0);
+    const teamManual = items.filter((item) => item.workflowMode === 'team_manual').length;
+    const manualDrafting = appSupport + teamManual;
+    return { appDraft, manualDrafting };
+  }, [template]);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -277,6 +339,9 @@ function TemplatePreviewCard({
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+          <p className="mt-2 text-sm text-slate-500">
+            {workflowCounts.appDraft} app draft, {workflowCounts.manualDrafting} manual drafting
+          </p>
         </div>
         <div className="grid min-w-[16rem] grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-xl bg-slate-50 p-3">
@@ -371,6 +436,14 @@ function TemplatePreviewCard({
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-700">
                     {template.budget.supportLevel}
                   </span>
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] ${workflowTone(template.budget.workflowMode)}`}>
+                    {workflowLabel(template.budget.workflowMode)}
+                  </span>
+                  {workflowDetail(template.budget.workflowMode) && (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-700">
+                      {workflowDetail(template.budget.workflowMode)}
+                    </span>
+                  )}
                 </div>
                 {template.budget.justificationNotes && (
                   <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
@@ -448,11 +521,16 @@ function BlockEditor({
         {items.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No items yet.</div>}
         {items.map((item, index) => (
           <div key={`${item.key}-${index}`} className="rounded-2xl border border-slate-200 p-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <input value={item.key} onChange={(event) => update(index, { key: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Key" />
               <input value={item.label} onChange={(event) => update(index, { label: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Label" />
               <select value={item.type} onChange={(event) => update(index, { type: event.target.value as FundingTemplateItemType })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 {ITEM_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+              <select value={item.workflowMode} onChange={(event) => update(index, { workflowMode: event.target.value as GrantWorkflowMode })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                {WORKFLOW_MODES.map((mode) => (
+                  <option key={mode} value={mode}>{mode}</option>
+                ))}
               </select>
               <select value={item.supportLevel} onChange={(event) => update(index, { supportLevel: event.target.value as FundingTemplateSupportLevel })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 {SUPPORT_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
@@ -494,7 +572,7 @@ export default function FundingTemplatePage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [editorSource, setEditorSource] = useState<'template' | 'run'>('template');
   const [loading, setLoading] = useState(true);
-  const [busyState, setBusyState] = useState<'idle' | 'create' | 'save' | 'approve' | 'asset' | 'extract'>('idle');
+  const [busyState, setBusyState] = useState<'idle' | 'create' | 'save' | 'approve' | 'asset' | 'extract' | 'apply'>('idle');
 
   const userRoles = user?.roles || [];
   const isFundingOperator = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
@@ -516,6 +594,7 @@ export default function FundingTemplatePage() {
   );
   const latestRunHasContent = latestExtractionCounts.total > 0;
   const currentTemplateIsEmpty = currentTemplateCounts.total === 0;
+  const latestRunNeedsApply = latestExtractionRun?.status === 'needs_review';
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -763,7 +842,7 @@ export default function FundingTemplatePage() {
       const data = await postJson(`/api/admin/funding/calls/${id}/template/extract`, { assetIds });
       await loadBundle(false);
       setSelectedRunId(data.run?.id || null);
-      toast.success('Extraction completed. Review the run below and click Apply Merge to move it into the template workspace.');
+      toast.success('Extraction completed. Review the preview below and use the latest extraction button to make it the current template.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to extract template');
     } finally {
@@ -773,8 +852,9 @@ export default function FundingTemplatePage() {
 
   async function applyRun(runId: string) {
     if (!id) return;
+    setBusyState('apply');
     try {
-      const data = await postJson(`/api/admin/funding/calls/${id}/template/runs/${runId}/apply`);
+      const data = await postJson(`/api/admin/funding/calls/${id}/template/runs/${runId}/apply`, { mode: 'replace' });
       setBundle(data);
       if (data?.template?.grant_template_json) {
         const nextTemplate = normalizeGrantTemplate(data.template.grant_template_json);
@@ -783,9 +863,11 @@ export default function FundingTemplatePage() {
         setEditorSource('template');
       }
       setSelectedRunId(runId);
-      toast.success('Extraction run merged into the editable template');
+      toast.success('Latest extraction is now the current template.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to apply extraction run');
+    } finally {
+      setBusyState('idle');
     }
   }
 
@@ -862,20 +944,20 @@ export default function FundingTemplatePage() {
               </div>
               {latestExtractionRun && latestRunHasContent && currentTemplateIsEmpty && (
                 <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  {latestExtractionRun.status === 'needs_review'
-                    ? 'The stored template is currently empty, so the editor is showing the latest extracted run instead. Click `Apply Merge` to preserve it as an extraction revision, or `Save Template` to store the loaded content directly.'
-                    : 'The stored template is currently empty, but an extracted run already exists and is loaded into the editor preview. Use `Save Template` to persist what you see, or revert to the earlier extraction revision from the revision list.'}
+                  {latestRunNeedsApply
+                    ? 'The latest extraction preview is ready, but it is not the active template yet. Use `Use Latest Extraction as Current Template` to promote it.'
+                    : 'The current active template was loaded from the latest extraction run.'}
                 </div>
               )}
               <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
-                Editor source: <span className="font-semibold text-slate-900">{editorSource === 'template' ? 'stored template' : 'latest extracted run preview'}</span>
+                Editor source: <span className="font-semibold text-slate-900">{editorSource === 'template' ? 'current active template' : 'latest extraction preview'}</span>
               </div>
               <input value={changeNotes} onChange={(event) => setChangeNotes(event.target.value)} className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm" placeholder="Optional note for the next manual edit revision" />
             </section>
 
             <TemplatePreviewCard
-              title="Preview Stored Template"
-              subtitle="This preview is reconstructed from the stored template JSON currently attached to this funding call."
+              title="Current Active Template"
+              subtitle="This is the template currently attached to the funding call and used by downstream grant workflows."
               template={storedTemplatePreview}
               emptyMessage="The stored template is currently empty. If extraction found content, use the extraction panel to preview it and then save or apply it."
             />
@@ -982,21 +1064,30 @@ export default function FundingTemplatePage() {
                 <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <h3 className="text-sm font-semibold text-emerald-950">Latest Extraction Result</h3>
+                      <h3 className="text-sm font-semibold text-emerald-950">Latest Extraction Ready</h3>
                       <p className="mt-1 text-sm text-emerald-900">
                         Status: {latestExtractionRun.status.replace('_', ' ')}
                         {latestExtractionRun.extractor_model ? ` • Model: ${latestExtractionRun.extractor_model}` : ''}
                       </p>
                       <p className="mt-2 text-xs text-emerald-800">
-                        Extraction results stay in the run preview until you apply them into the template workspace.
+                        The preview below shows the extracted template. Use the primary action here to make it the current active template.
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => setSelectedRunId(latestExtractionRun.id)} className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-sm text-emerald-900">Preview Result</button>
-                      {latestExtractionRun.status === 'needs_review' && (
-                        <button type="button" onClick={() => applyRun(latestExtractionRun.id)} className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white">
-                          Apply Merge
+                      <button type="button" onClick={() => setSelectedRunId(latestExtractionRun.id)} className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-sm text-emerald-900">Open Preview</button>
+                      {latestRunNeedsApply ? (
+                        <button
+                          type="button"
+                          onClick={() => applyRun(latestExtractionRun.id)}
+                          disabled={busyState !== 'idle'}
+                          className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                        >
+                          {busyState === 'apply' ? 'Applying...' : 'Use Latest Extraction as Current Template'}
                         </button>
+                      ) : (
+                        <span className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-emerald-900">
+                          Already current
+                        </span>
                       )}
                     </div>
                   </div>
@@ -1022,7 +1113,16 @@ export default function FundingTemplatePage() {
                     {run.error_message && <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800">{run.error_message}</div>}
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button type="button" onClick={() => setSelectedRunId((current) => current === run.id ? null : run.id)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700">{selectedRunId === run.id ? 'Hide Preview' : 'Preview'}</button>
-                      {run.status === 'needs_review' && <button type="button" onClick={() => applyRun(run.id)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">Apply Merge</button>}
+                      {run.status === 'needs_review' && (
+                        <button
+                          type="button"
+                          onClick={() => applyRun(run.id)}
+                          disabled={busyState !== 'idle'}
+                          className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                        >
+                          {busyState === 'apply' ? 'Applying...' : 'Use This Extraction'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1032,8 +1132,12 @@ export default function FundingTemplatePage() {
               {selectedRun && (
                 <>
                   <TemplatePreviewCard
-                    title="Preview Selected Extraction Run"
-                    subtitle="This is reconstructed from the extracted template variables stored on the selected run."
+                    title={selectedRun.status === 'needs_review' ? 'Latest Extraction Preview' : 'Applied Extraction Preview'}
+                    subtitle={
+                      selectedRun.status === 'needs_review'
+                        ? 'This preview is not active yet. Use the action above to make it the current template.'
+                        : 'This extraction run has already been applied.'
+                    }
                     template={selectedRunPreview}
                     emptyMessage="This extraction run does not contain any normalized template content."
                   />

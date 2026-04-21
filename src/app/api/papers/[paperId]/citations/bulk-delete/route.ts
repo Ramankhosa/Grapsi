@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
+import { canAccessDraftingSession } from '@/lib/grants/shadowSessionAccess';
 
 const bulkDeleteSchema = z.object({
   citationIds: z.array(z.string()).min(1, 'At least one citation ID required'),
@@ -22,11 +23,8 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     const sessionId = context.params.paperId;
 
     // Verify session ownership
-    const session = await prisma.draftingSession.findFirst({
-      where: { id: sessionId, userId: user.id },
-    });
-
-    if (!session) {
+    const hasAccess = await canAccessDraftingSession(sessionId, user, 'editContent');
+    if (!hasAccess) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
 

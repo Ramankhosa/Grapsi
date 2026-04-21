@@ -10,6 +10,7 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
+import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { z } from 'zod';
 
 // ============================================================================
@@ -33,6 +34,20 @@ const deleteInstructionSchema = z.object({
   scope: z.enum(['session', 'user']).default('session')
 });
 
+async function getAccessibleDraftingSession(
+  paperId: string,
+  user: { id: string; roles?: string[]; tenantId?: string | null },
+  capability: 'read' | 'editContent' = 'read'
+) {
+  return getDraftingSessionForUser(paperId, user, capability, {
+    select: {
+      userId: true,
+      paperTypeId: true,
+      paperType: { select: { code: true } }
+    }
+  })
+}
+
 // ============================================================================
 // GET - Fetch all section instructions for this session/user
 // ============================================================================
@@ -49,12 +64,8 @@ export async function GET(
 
     const { paperId } = await params;
 
-    const draftingSession = await prisma.draftingSession.findUnique({
-      where: { id: paperId },
-      select: { userId: true }
-    });
-
-    if (!draftingSession || draftingSession.userId !== user.id) {
+    const draftingSession = await getAccessibleDraftingSession(paperId, user, 'read');
+    if (!draftingSession) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
@@ -138,16 +149,8 @@ export async function POST(
 
     const { sectionKey, paperTypeCode, instruction, emphasis, avoid, style, wordCount, scope } = validation.data;
 
-    const draftingSession = await prisma.draftingSession.findUnique({
-      where: { id: paperId },
-      select: { 
-        userId: true, 
-        paperTypeId: true,
-        paperType: { select: { code: true } }
-      }
-    });
-
-    if (!draftingSession || draftingSession.userId !== user.id) {
+    const draftingSession = await getAccessibleDraftingSession(paperId, user, 'editContent');
+    if (!draftingSession) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
@@ -266,12 +269,8 @@ export async function DELETE(
 
     const { sectionKey, scope } = validation.data;
 
-    const draftingSession = await prisma.draftingSession.findUnique({
-      where: { id: paperId },
-      select: { userId: true }
-    });
-
-    if (!draftingSession || draftingSession.userId !== user.id) {
+    const draftingSession = await getAccessibleDraftingSession(paperId, user, 'editContent');
+    if (!draftingSession) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 

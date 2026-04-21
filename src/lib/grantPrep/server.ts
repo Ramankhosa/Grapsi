@@ -556,16 +556,22 @@ export async function createOrReuseGrantPrepSession(input: {
   disabledStageKeys?: GrantPrepStageKey[];
   restart?: boolean;
 }) {
-  if (input.fundingCallId) {
-    await ensureGrantSessionAnchor({
+  const linkedGrantSession = input.fundingCallId
+    ? await ensureGrantSessionAnchor({
       projectId: input.projectId,
       tenantId: input.tenantId,
       userId: input.user.id,
       fundingCallId: input.fundingCallId,
-    });
-  }
+    })
+    : null;
 
   const context = await resolveGrantPrepContext(input.projectId, input.user);
+  const resolveWorkspaceLaunchUrl = (grantSessionId: string | null) =>
+    grantSessionId ? `/projects/${input.projectId}/grants/${grantSessionId}/workspace?stage=GRANTMENTOR` : null;
+  const resolvePrepUrl = (grantSessionId: string | null, sessionId: string) =>
+    grantSessionId
+      ? `/projects/${input.projectId}/grants/${grantSessionId}/prep`
+      : `/projects/${input.projectId}/grants/${sessionId}/prep`;
   const existingSession = await prisma.grantPrepSession.findFirst({
     where: {
       project_id: input.projectId,
@@ -581,15 +587,51 @@ export async function createOrReuseGrantPrepSession(input: {
   });
 
   if (existingSession && !input.restart) {
-    const hydrated = await loadGrantPrepSession({
-      sessionId: existingSession.id,
-      userId: input.user.id,
-      tenantId: input.tenantId,
-    });
+    const effectiveGrantSessionId = linkedGrantSession?.id || existingSession.grant_session_id || null;
+    const launchUrl = resolveWorkspaceLaunchUrl(effectiveGrantSessionId);
+    let hydrated = null;
+
+    if (
+      (effectiveGrantSessionId && existingSession.grant_session_id !== effectiveGrantSessionId) ||
+      existingSession.papsi_launch_url !== launchUrl
+    ) {
+      hydrated = await prisma.grantPrepSession.update({
+        where: { id: existingSession.id },
+        data: {
+          grant_session_id: effectiveGrantSessionId,
+          papsi_launch_url: launchUrl,
+          ...(input.fundingCallId ? { funding_call_id: input.fundingCallId } : {}),
+        },
+        include: {
+          messages: {
+            orderBy: {
+              created_at: 'asc',
+            },
+          },
+          project: {
+            select: {
+              id: true,
+              name: true,
+              tenantId: true,
+            },
+          },
+        },
+      });
+    } else {
+      hydrated = await loadGrantPrepSession({
+        sessionId: existingSession.id,
+        userId: input.user.id,
+        tenantId: input.tenantId,
+      });
+    }
+
     return {
       session: hydrated,
       reused: true,
       context,
+      grantSessionId: effectiveGrantSessionId,
+      launchUrl,
+      prepUrl: resolvePrepUrl(effectiveGrantSessionId, existingSession.id),
     };
   }
 
@@ -631,8 +673,10 @@ export async function createOrReuseGrantPrepSession(input: {
       project_id: input.projectId,
       user_id: input.user.id,
       funding_call_id: context.fundingCallId,
+      grant_session_id: linkedGrantSession?.id || null,
       template_revision_id: context.templateRevisionId,
       guideline_revision_id: context.guidelineRevisionId,
+      papsi_launch_url: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null),
       ...persistence,
       status: 'active',
     },
@@ -652,6 +696,9 @@ export async function createOrReuseGrantPrepSession(input: {
     session: createdSession,
     reused: false,
     context,
+    grantSessionId: linkedGrantSession?.id || null,
+    launchUrl: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null),
+    prepUrl: resolvePrepUrl(linkedGrantSession?.id || null, createdSession.id),
   };
 }
 

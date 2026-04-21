@@ -12,6 +12,13 @@
  */
 
 import { prisma } from '../prisma';
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import {
+  buildGrantBackedBasePrompt,
+  buildGrantPromptOverlay,
+  formatGrantMustCoverItems,
+  summarizeGrantFreezePayload,
+} from '@/lib/grants/promptOverlay';
 import { llmGateway, type TenantContext } from '../metering';
 import { blueprintService, type BlueprintContext, type SectionPlanItem } from './blueprint-service';
 import { sectionTemplateService } from './section-template-service';
@@ -1540,6 +1547,36 @@ class PaperSectionService {
     figurePromptContext?: FigurePromptContext | null
   ): Promise<{ prompt: string; debugInfo: PromptDebugInfo | null }> {
     const { thesisStatement, centralObjective, keyContributions, currentSection, preferredTerms } = blueprintContext;
+    const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
+    const grantSession = grantBacked && sessionId
+      ? await prisma.grantSession.findFirst({
+          where: { draftingSessionId: sessionId },
+          select: {
+            blueprint: { select: { freezePayloadJson: true } },
+            project: { select: { name: true } },
+            fundingCall: { select: { scheme_title: true, agency_name: true } },
+          },
+        })
+      : null;
+    const grantPromptContext = grantBacked
+      ? {
+          displayLabel: currentSection.sectionKey.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
+          reviewerIntent: currentSection.reviewerIntent,
+          sectionType: currentSection.sectionType,
+          citationMode: currentSection.citationMode,
+          grantSemantic: currentSection.grantSemantic,
+          prepContextBlock: currentSection.prepContextBlock,
+          grantRuleProfile: currentSection.grantRuleProfile,
+          grantContextSummary: grantSession
+            ? {
+                projectTitle: grantSession.project?.name || null,
+                fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
+                agencyName: grantSession.fundingCall?.agency_name || null,
+                freezeSummary: summarizeGrantFreezePayload(grantSession.blueprint?.freezePayloadJson),
+              }
+            : null,
+        }
+      : undefined;
 
     // Track components for debug
     const debugComponents: {
@@ -1561,13 +1598,17 @@ class PaperSectionService {
     // deferred to Pass 2 (the polish pipeline reads it from the database).
     let basePrompt = '';
     try {
-      basePrompt = await sectionTemplateService.getPass1PromptForSection(
-        currentSection.sectionKey,
-        { researchTopic }
-      );
+      basePrompt = grantBacked
+        ? buildGrantBackedBasePrompt(currentSection.sectionKey, grantPromptContext)
+        : await sectionTemplateService.getPass1PromptForSection(
+            currentSection.sectionKey,
+            { researchTopic }
+          );
       debugComponents.basePrompt = basePrompt;
     } catch (e) {
-      basePrompt = `Write the ${currentSection.sectionKey} section for an academic paper.`;
+      basePrompt = grantBacked
+        ? buildGrantBackedBasePrompt(currentSection.sectionKey, grantPromptContext)
+        : `Write the ${currentSection.sectionKey} section for an academic paper.`;
       debugComponents.basePrompt = basePrompt;
     }
 
@@ -1598,6 +1639,13 @@ class PaperSectionService {
     const citationBudgetBlock = evidenceContext.evidenceDigest.digests.length > 0
       ? formatCitationBudgetRules(evidenceContext.evidenceDigest)
       : '(no citation budget rules)';
+    const grantOverlayBlock = grantBacked
+      ? buildGrantPromptOverlay(grantPromptContext)
+      : '';
+    const formattedMustCover = formatGrantMustCoverItems(
+      currentSection.mustCover,
+      currentSection.mustCoverTyping
+    );
 
     // Replace both new and legacy placeholders for backward compatibility
     basePrompt = basePrompt.replace(/\{\{AUTO_CITATION_MODE\}\}/g, autoCitationMode);
@@ -1746,7 +1794,7 @@ ${pm.memory.forwardReferences.length > 0 ? `- Promises: ${pm.memory.forwardRefer
     }
 
     // Build blueprint context for debug
-    debugComponents.blueprintContext = `Thesis: ${thesisStatement}\nObjective: ${centralObjective}\nContributions: ${keyContributions.join('; ')}\nSection Purpose: ${currentSection.purpose}\nEvidence: mode=${autoCitationMode}, allowedKeys=${evidenceContext.allowedCitationKeys.length}, dimensions=${evidenceContext.dimensionEvidence.length}, coverageAssignments=${evidenceContext.coverageAssignments.length}, gaps=${evidenceContext.gaps.length}`;
+    debugComponents.blueprintContext = `Thesis: ${thesisStatement}\nObjective: ${centralObjective}\nContributions: ${keyContributions.join('; ')}\nSection Purpose: ${currentSection.purpose}\nMustCover: ${formattedMustCover.join('; ')}\nEvidence: mode=${autoCitationMode}, allowedKeys=${evidenceContext.allowedCitationKeys.length}, dimensions=${evidenceContext.dimensionEvidence.length}, coverageAssignments=${evidenceContext.coverageAssignments.length}, gaps=${evidenceContext.gaps.length}`;
 
     // Track writing style and user instructions for debug
     if (writingStyleBlock) {
@@ -1849,14 +1897,19 @@ Section: ${currentSection.sectionKey}
 Purpose: ${currentSection.purpose}
 
 MUST COVER (Required):
-${currentSection.mustCover.map(c => `✓ ${c}`).join('\n')}
+${formattedMustCover.map((item) => `- ${item}`).join('\n')}
 
 MUST AVOID (Prevent duplication):
-${currentSection.mustAvoid.map(c => `✗ ${c}`).join('\n')}
+${currentSection.mustAvoid.map((item) => `- ${item}`).join('\n')}
 
 ${controlledWordBudget
   ? `Word Budget: ~${controlledWordBudget} words`
   : ''}
+
+${grantOverlayBlock ? `
+[PRIORITY 2.3 - GRANT OVERLAY] GRANT PREP, REVIEWER, AND FUNDING CONTEXT
+${grantOverlayBlock.trim()}
+` : ''}
 
 ${citationModeFallbackBlock ? `
 [PRIORITY 2.5 - CITATION MODE] SECTION CITATION CONTROL

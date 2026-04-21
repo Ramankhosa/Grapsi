@@ -8,6 +8,7 @@
  */
 
 import { prisma } from '../prisma';
+import { buildGrantBackedSearchStrategy } from '@/lib/grants/searchStrategy';
 import { llmGateway, type TenantContext } from '../metering';
 import { blueprintService, type BlueprintWithSectionPlan, type SectionPlanItem } from './blueprint-service';
 import { paperTypeService } from './paper-type-service';
@@ -49,6 +50,7 @@ export interface GeneratedQuery {
   suggestedSources: string[];
   suggestedYearFrom?: number;
   suggestedYearTo?: number;
+  dimensionTargets?: Array<{ sectionKey: string; dimension: string; dimensionType?: string }>;
 }
 
 /**
@@ -207,6 +209,38 @@ class SearchStrategyService {
     let blueprint = input.blueprint;
     if (!blueprint) {
       blueprint = await blueprintService.getBlueprint(sessionId) || undefined;
+    }
+
+    const grantBackedStrategy = blueprint
+      ? buildGrantBackedSearchStrategy({
+          researchTopic,
+          blueprint: {
+            paperTypeCode: blueprint.paperTypeCode,
+            sectionPlan: blueprint.sectionPlan,
+          },
+        })
+      : null;
+
+    if (grantBackedStrategy) {
+      const searchPlan = this.applyPaperTypeAdjustments({
+        ...DEFAULT_SEARCH_PLAN,
+        reasoning: grantBackedStrategy.summary,
+      }, paperType?.code);
+
+      const strategy = await this.persistStrategy(
+        sessionId,
+        researchTopic,
+        searchPlan,
+        grantBackedStrategy.queries
+      );
+
+      const coverage = this.calculateCoverage(strategy.queries);
+      return {
+        strategy,
+        queries: strategy.queries,
+        searchPlan,
+        coverage,
+      };
     }
 
     // Phase A1: Generate Search Plan
@@ -748,7 +782,10 @@ Return ONLY the JSON array.`;
             suggestedSources: q.suggestedSources,
             suggestedYearFrom: q.suggestedYearFrom,
             suggestedYearTo: q.suggestedYearTo,
-            suggestedFilters: { searchIntent: q.searchIntent },
+            suggestedFilters: {
+              searchIntent: q.searchIntent,
+              ...(q.dimensionTargets ? { dimensionTargets: q.dimensionTargets } : {}),
+            },
             status: 'PENDING'
           }))
         }

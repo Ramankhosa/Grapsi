@@ -1,13 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import { toast, Toaster } from 'react-hot-toast';
 import { HiExclamationTriangle } from 'react-icons/hi2';
 import GrantPrepChatPane from '@/components/grantPrep/GrantPrepChatPane';
 import GrantPrepContextPanel from '@/components/grantPrep/GrantPrepContextPanel';
+import { useGrantPrepEmbeddedMode } from '@/components/grantPrep/GrantPrepEmbedModeContext';
 import GrantPrepHandoffModal from '@/components/grantPrep/GrantPrepHandoffModal';
 import GrantPrepStageEditorModal from '@/components/grantPrep/GrantPrepStageEditorModal';
 import GrantPrepStageNavigator from '@/components/grantPrep/GrantPrepStageNavigator';
@@ -52,9 +53,12 @@ function safeLocalStorageSet(key: string, value: string): void {
 export default function GrantPrepPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const forcedEmbedded = useGrantPrepEmbeddedMode();
   const { user, isLoading: authLoading } = useAuth();
   const projectId = params?.projectId as string | null;
   const grantId = params?.grantId as string | null;
+  const isEmbeddedGrantMentor = forcedEmbedded || searchParams?.get('embed') === 'grantmentor';
 
   const [sessionData, setSessionData] = useState<PrepSession | null>(null);
   const [prepContext, setPrepContext] = useState<PrepContext | null>(null);
@@ -124,6 +128,10 @@ export default function GrantPrepPage() {
   }, []);
 
   useEffect(() => {
+    if (isEmbeddedGrantMentor) {
+      setHeaderHeight(0);
+      return;
+    }
     if (!headerRef.current || typeof window === 'undefined') return;
 
     const updateHeaderHeight = () => {
@@ -143,7 +151,7 @@ export default function GrantPrepPage() {
       window.removeEventListener('resize', updateHeaderHeight);
       observer?.disconnect();
     };
-  }, [prepContext?.warning, sessionData?.last_handoff_error, viewportWidth]);
+  }, [isEmbeddedGrantMentor, prepContext?.warning, sessionData?.last_handoff_error, viewportWidth]);
 
   useEffect(() => {
     if (authLoading || !user || !projectId || !grantId) return;
@@ -667,33 +675,57 @@ export default function GrantPrepPage() {
     <>
       <Toaster position="top-right" />
       {/* flex col fills the parent <main> which is flex-1 overflow-auto inside a h-screen flex */}
-      <div className="flex h-full flex-col bg-prep-surface">
+      <div className={clsx('flex flex-col bg-prep-surface', isEmbeddedGrantMentor ? 'h-screen' : 'h-full')}>
         {/* z-40 for header (EC-4) — not sticky since parent scrolls, this is a fixed header row */}
-        <div ref={headerRef} className="z-40 flex-shrink-0 bg-white/95 backdrop-blur-sm">
-          <GrantPrepTopBar
-            session={sessionData}
-            prepContext={prepContext}
-            overallReadiness={overallReadiness}
-            sessionLocked={sessionLocked}
-            layoutMode={layoutMode}
-            isContextOpen={isContextOpen}
-            actioning={actioning}
-            warning={prepContext.warning}
-            handoffError={sessionData.last_handoff_error}
-            pendingReviewCount={pendingReviewCount}
-            activeStageTitle={activeStage.title}
-            stageEditorDisabled={sessionLocked || sending || actioning !== null || stageActioningKey !== null}
-            onRefreshMapping={refreshMapping}
-            onRestartPrep={restartPrep}
-            onArchivePrep={archivePrep}
-            onOpenStageEditor={() => setStageEditorOpen(true)}
-            onEngagementModeChange={handleEngagementModeChange}
-            onToggleContext={toggleContext}
-          />
-        </div>
+        {!isEmbeddedGrantMentor ? (
+          <div ref={headerRef} className="z-40 flex-shrink-0 bg-white/95 backdrop-blur-sm">
+            <GrantPrepTopBar
+              session={sessionData}
+              prepContext={prepContext}
+              overallReadiness={overallReadiness}
+              sessionLocked={sessionLocked}
+              layoutMode={layoutMode}
+              isContextOpen={isContextOpen}
+              actioning={actioning}
+              warning={prepContext.warning}
+              handoffError={sessionData.last_handoff_error}
+              pendingReviewCount={pendingReviewCount}
+              activeStageTitle={activeStage.title}
+              stageEditorDisabled={sessionLocked || sending || actioning !== null || stageActioningKey !== null}
+              onRefreshMapping={refreshMapping}
+              onRestartPrep={restartPrep}
+              onArchivePrep={archivePrep}
+              onOpenStageEditor={() => setStageEditorOpen(true)}
+              onEngagementModeChange={handleEngagementModeChange}
+              onToggleContext={toggleContext}
+            />
+          </div>
+        ) : null}
 
         {/* This flex-1 + min-h-0 ensures the content area fills remaining height and doesn't overflow */}
-        <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-4 sm:px-6 lg:px-8" style={{ minHeight: 0 }}>
+        <div
+          className={clsx(
+            'flex w-full flex-1 flex-col',
+            isEmbeddedGrantMentor
+              ? 'px-4 py-4 sm:px-5 lg:px-6'
+              : 'mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8'
+          )}
+          style={{ minHeight: 0 }}
+        >
+          {isEmbeddedGrantMentor && (prepContext.warning || sessionData.last_handoff_error) ? (
+            <div className="mb-4 space-y-2">
+              {prepContext.warning ? (
+                <div className="rounded-2xl border border-amber-100 bg-amber-50/80 px-4 py-3 text-sm text-amber-800">
+                  {prepContext.warning}
+                </div>
+              ) : null}
+              {sessionData.last_handoff_error ? (
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/80 px-4 py-3 text-sm text-rose-800">
+                  Last launch issue: {sessionData.last_handoff_error}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {/* EC-3: disable nav while sending */}
           <GrantPrepStageNavigator
             prepContext={prepContext}
