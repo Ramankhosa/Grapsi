@@ -12,11 +12,12 @@ import {
 } from '@/lib/grantPrep/server'
 import {
   addGrantPrepSteeringEvent,
+  canAutoAdvanceGrantPrepStage,
   collectGlobalKeywords,
   computeOverallReadiness,
   getGrantPrepPointStatus,
   hasStageContentChanged,
-  normalizeGrantPrepCaptureBasis,
+  isGrantPrepSessionReady,
   normalizeGrantPrepKeywords,
   normalizeGrantPrepStringArray,
   propagateDependentNeedsReview,
@@ -45,10 +46,6 @@ const requestSchema = z.discriminatedUnion('action', [
     action: z.literal('unskip'),
   }),
 ])
-
-function isSessionReady(stageStates: ReturnType<typeof inflateGrantPrepSessionContext>['stageStates']) {
-  return Object.values(stageStates).every((stage) => !stage.enabled || !stage.pickable || stage.readiness >= 0.65)
-}
 
 export async function PATCH(
   request: NextRequest,
@@ -131,7 +128,7 @@ export async function PATCH(
         factBullets: normalizeGrantPrepStringArray(point.capture?.factBullets),
         ruleNotes: normalizeGrantPrepStringArray(point.capture?.ruleNotes),
         confidence: Number.isFinite(Number(point.capture?.confidence)) ? Number(point.capture?.confidence) : 0.7,
-        captureBasis: normalizeGrantPrepCaptureBasis(point.capture?.captureBasis),
+        captureBasis: ['user_confirmed'],
         sourceTemplatePointer: point.capture?.sourceTemplatePointer || point.sourceTemplatePointer || null,
         ruleCompliance: point.capture?.ruleCompliance || {
           status: 'ok',
@@ -149,6 +146,8 @@ export async function PATCH(
           selectedThrustAreaRuleKeys: prepContext.selectedThrustAreaRuleKeys,
           availableFocusAreas: serverContext.fundingContext.focusAreas || [],
         }),
+        engagementMode: prepContext.engagementMode,
+        pointPriority: point.priority,
         budgetLimits: serverContext.fundingContext.budgetLimits || null,
         projectDuration: serverContext.fundingContext.projectDuration || null,
       })
@@ -178,7 +177,9 @@ export async function PATCH(
     recomputeStageState(stageState)
 
     const stageChanged = hasStageContentChanged(stageBeforeUpdate, stageState)
-    const stageJustCompleted = stageBeforeUpdate.readiness < 0.65 && stageState.readiness >= 0.65
+    const stageJustCompleted =
+      !canAutoAdvanceGrantPrepStage(stageBeforeUpdate, prepContext.engagementMode) &&
+      canAutoAdvanceGrantPrepStage(stageState, prepContext.engagementMode)
     if (stageJustCompleted) {
       nextStageStates = {
         ...nextStageStates,
@@ -203,7 +204,7 @@ export async function PATCH(
       globalKeywords: collectGlobalKeywords(nextStageStates),
       warning,
     }
-    const nextStatus = isSessionReady(nextStageStates) ? 'ready' : 'active'
+    const nextStatus = isGrantPrepSessionReady(nextStageStates, prepContext.engagementMode) ? 'ready' : 'active'
 
     await prisma.grantPrepSession.update({
       where: { id: grantPrepSession.id },

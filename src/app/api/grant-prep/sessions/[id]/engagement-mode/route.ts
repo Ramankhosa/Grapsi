@@ -10,9 +10,15 @@ import {
   normalizeGrantPrepForPersistence,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
+import { normalizeGrantPrepEngagementMode } from '@/lib/grantPrep/types'
+import {
+  collectGlobalKeywords,
+  isGrantPrepSessionReady,
+  reassessGrantPrepStageStates,
+} from '@/lib/grantPrep/sessionState'
 
 const requestSchema = z.object({
-  engagementMode: z.enum(['expert', 'express']),
+  engagementMode: z.preprocess(normalizeGrantPrepEngagementMode, z.enum(['expert', 'express'])),
 })
 
 export async function PUT(
@@ -60,20 +66,34 @@ export async function PUT(
     const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
     const warning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
     const prepContext = inflateGrantPrepSessionContext(grantPrepSession, { warning })
+    const nextStageStates = reassessGrantPrepStageStates(prepContext.stageStates, {
+      engagementMode: payload.engagementMode,
+      selectedThrustAreaRuleKeys: prepContext.selectedThrustAreaRuleKeys,
+      availableFocusAreas: serverContext.fundingContext.focusAreas || [],
+      budgetLimits: serverContext.fundingContext.budgetLimits || null,
+      projectDuration: serverContext.fundingContext.projectDuration || null,
+    })
     const nextContext = {
       ...prepContext,
+      stageStates: nextStageStates,
+      globalKeywords: collectGlobalKeywords(nextStageStates),
       engagementMode: payload.engagementMode,
       warning,
     }
+    const nextStatus = isGrantPrepSessionReady(nextContext.stageStates, nextContext.engagementMode) ? 'ready' : 'active'
 
     await prisma.grantPrepSession.update({
       where: { id: grantPrepSession.id },
-      data: normalizeGrantPrepForPersistence(nextContext),
+      data: {
+        ...normalizeGrantPrepForPersistence(nextContext),
+        status: nextStatus,
+      },
     })
 
     return NextResponse.json({
       engagementMode: nextContext.engagementMode,
       prepContext: nextContext,
+      sessionStatus: nextStatus,
     })
   } catch (error) {
     console.error('[Grant Prep Sessions] engagement-mode error:', error)

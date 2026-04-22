@@ -60,6 +60,22 @@ export interface GrantPrepDiscussionPointDefinition {
   templateKeywords: string[];
 }
 
+export function isGrantPrepEngagementMode(value: unknown): value is GrantPrepEngagementMode {
+  return value === 'expert' || value === 'express';
+}
+
+export function normalizeGrantPrepEngagementMode(value: unknown): GrantPrepEngagementMode {
+  if (value === 'express') {
+    return 'express';
+  }
+
+  if (value === 'expert' || value === 'guided' || value === 'hybrid') {
+    return 'expert';
+  }
+
+  return 'expert';
+}
+
 export interface GrantPrepReviewerRubric {
   strong: string;
   adequate: string;

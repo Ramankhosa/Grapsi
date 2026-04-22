@@ -20,10 +20,12 @@ import {
 } from '@/lib/grantPrep/marker'
 import {
   applyMarkerToStageStates,
+  canAutoAdvanceGrantPrepStage,
   collectGlobalKeywords,
   computeOverallReadiness,
   getNextPickableStageKey,
   hasStageContentChanged,
+  isGrantPrepSessionReady,
   propagateDependentNeedsReview,
 } from '@/lib/grantPrep/sessionState'
 import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary'
@@ -82,6 +84,7 @@ async function inferMarkerFromTurn(input: {
     `  "stageKey": "${input.stageKey}",`,
     '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": [], "factBullets": ["specific drafting fact"], "ruleNotes": ["rule caveat"], "confidence": 0.8, "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
     '  "currentPoint": "..." | null,',
+    '  "qualityAssessment": "strong" | "adequate" | "weak" | null,',
     '  "steeringEvents": []',
     '}',
     '',
@@ -131,10 +134,6 @@ async function compactAssistantMessage(message: string, hasAnswerOptions: boolea
   } catch {
     return message
   }
-}
-
-function isSessionReady(stageStates: ReturnType<typeof inflateGrantPrepSessionContext>['stageStates']) {
-  return Object.values(stageStates).every((stage) => !stage.enabled || !stage.pickable || stage.readiness >= 0.65)
 }
 
 export async function POST(
@@ -269,6 +268,7 @@ export async function POST(
     if (inferredMarker && inferredMarker.stageKey === stageKey) {
       const stageBeforeUpdate = prepContext.stageStates[stageKey]
       let nextStageStates = applyMarkerToStageStates(prepContext.stageStates, stageKey, inferredMarker, {
+        engagementMode: prepContext.engagementMode,
         selectedThrustAreaRuleKeys: prepContext.selectedThrustAreaRuleKeys,
         availableFocusAreas: serverContext.fundingContext.focusAreas || [],
         budgetLimits: serverContext.fundingContext.budgetLimits || null,
@@ -276,7 +276,9 @@ export async function POST(
       })
       const stageAfterMarker = nextStageStates[stageKey]
       const stageChanged = hasStageContentChanged(stageBeforeUpdate, stageAfterMarker)
-      const stageJustCompleted = stageBeforeUpdate.readiness < 0.65 && stageAfterMarker.readiness >= 0.65
+      const stageJustCompleted =
+        !canAutoAdvanceGrantPrepStage(stageBeforeUpdate, prepContext.engagementMode) &&
+        canAutoAdvanceGrantPrepStage(stageAfterMarker, prepContext.engagementMode)
 
       if (stageJustCompleted) {
         nextStageStates = {
@@ -297,7 +299,7 @@ export async function POST(
       }
 
       const candidateActiveStage =
-        nextStageStates[stageKey].readiness >= 0.65
+        canAutoAdvanceGrantPrepStage(nextStageStates[stageKey], prepContext.engagementMode)
           ? getNextPickableStageKey(nextStageStates, stageKey)
           : stageKey
 
@@ -309,7 +311,7 @@ export async function POST(
         warning: prepWarning,
       }
 
-      nextStatus = isSessionReady(nextStageStates) ? 'ready' : 'active'
+      nextStatus = isGrantPrepSessionReady(nextStageStates, prepContext.engagementMode) ? 'ready' : 'active'
       const persistence = normalizeGrantPrepForPersistence(nextContext)
       await prisma.grantPrepSession.update({
         where: { id: grantPrepSession.id },

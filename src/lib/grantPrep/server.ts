@@ -33,6 +33,7 @@ import type {
   GrantPrepStageMapping,
   GrantPrepStageStates,
 } from './types';
+import { normalizeGrantPrepEngagementMode } from './types';
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
@@ -439,7 +440,7 @@ export function inflateGrantPrepSessionContext(session: Pick<
 
   return {
     mode: session.mode as GrantPrepSessionContext['mode'],
-    engagementMode: session.engagement_mode as GrantPrepSessionContext['engagementMode'],
+    engagementMode: normalizeGrantPrepEngagementMode(session.engagement_mode),
     stageSelectionVersion: (session.stage_selection_version as GrantPrepSessionContext['stageSelectionVersion']) || 'v1',
     activeStageKey: session.active_stage_key as GrantPrepStageKey,
     selectedThrustAreaRuleKeys: session.selected_thrust_area_rule_keys || [],
@@ -462,7 +463,7 @@ export function normalizeGrantPrepForPersistence(context: GrantPrepSessionContex
 
   return {
     mode: context.mode,
-    engagement_mode: context.engagementMode,
+    engagement_mode: normalizeGrantPrepEngagementMode(context.engagementMode),
     stage_selection_version: context.stageSelectionVersion,
     auto_enabled_stage_keys: context.autoEnabledStageKeys,
     manual_enabled_stage_keys: context.manualEnabledStageKeys,
@@ -556,6 +557,7 @@ export async function createOrReuseGrantPrepSession(input: {
   disabledStageKeys?: GrantPrepStageKey[];
   restart?: boolean;
 }) {
+  const normalizedEngagementMode = normalizeGrantPrepEngagementMode(input.engagementMode);
   const linkedGrantSession = input.fundingCallId
     ? await ensureGrantSessionAnchor({
       projectId: input.projectId,
@@ -598,6 +600,7 @@ export async function createOrReuseGrantPrepSession(input: {
       hydrated = await prisma.grantPrepSession.update({
         where: { id: existingSession.id },
         data: {
+          engagement_mode: normalizedEngagementMode,
           grant_session_id: effectiveGrantSessionId,
           papsi_launch_url: launchUrl,
           ...(input.fundingCallId ? { funding_call_id: input.fundingCallId } : {}),
@@ -651,10 +654,10 @@ export async function createOrReuseGrantPrepSession(input: {
     });
   }
 
-  const warning = buildGrantPrepModeWarning(context.mode, context.fundingContext.warning);
+    const warning = buildGrantPrepModeWarning(context.mode, context.fundingContext.warning);
   const grantPrepContext = buildDefaultGrantPrepContext({
     mode: context.mode,
-    engagementMode: input.engagementMode,
+    engagementMode: normalizedEngagementMode,
     templateJson: context.draftingContext?.approvedTemplate?.grant_template_json || null,
     guidelinePack:
       ((context.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as unknown) as GuidelinePackDocument | null) ||

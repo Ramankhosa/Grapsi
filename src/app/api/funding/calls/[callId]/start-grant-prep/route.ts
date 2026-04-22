@@ -4,11 +4,12 @@ import { z } from 'zod'
 import { requireFundingActor } from '@/lib/funding/access'
 import { buildFundingCallAccessWhere } from '@/lib/fundingIntake/routeAuth'
 import { createOrReuseGrantPrepSession } from '@/lib/grantPrep/server'
+import { normalizeGrantPrepEngagementMode } from '@/lib/grantPrep/types'
 import { prisma } from '@/lib/prisma'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
 
 const startGrantPrepSchema = z.object({
-  engagementMode: z.enum(['expert', 'express']).default('expert'),
+  engagementMode: z.preprocess(normalizeGrantPrepEngagementMode, z.enum(['expert', 'express'])).default('expert'),
   projectName: z.string().trim().min(1).max(200).optional(),
 })
 

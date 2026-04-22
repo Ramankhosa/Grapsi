@@ -24,7 +24,7 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     defaultEnabled: true,
     pickable: true,
     guidelineBlocks: ['priorities', 'mustAddress', 'evaluationCriteria'],
-    steeringRule: 'Do not accept a vague problem statement without a target population or urgency signal.',
+    steeringRule: 'Do not accept a vague problem statement without a target population or urgency signal. Do not accept a textbook framing of a well-known issue without a sharper angle, gap, or timely reason this proposal stands out now.',
     dependencies: [],
     defaultPoints: points([
       ['problem_core', 'Core problem statement', 'P1', 'One sentence on the real problem being solved.', ['problem', 'challenge', 'need']],
@@ -32,9 +32,9 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
       ['evidence_gap', 'Evidence or practice gap', 'P2', 'What is currently missing or insufficient.', ['gap', 'baseline', 'evidence']],
     ]),
     reviewerRubric: {
-      strong: 'Specific problem with quantified scale, a clear urgency driver or time pressure, an identified evidence or practice gap, and target population defined with operational criteria.',
-      adequate: 'Problem stated with some scale but urgency is implied not proven, target population named but not operationally defined.',
-      weak: 'Generic problem statement with no quantification, no urgency signal, no gap identification.',
+      strong: 'Specific problem with quantified scale, a clear urgency driver or time pressure, an identified evidence or practice gap, a target population defined with operational criteria, and a framing that does not read like a standard textbook version of the topic.',
+      adequate: 'Problem stated with some scale but urgency is implied not proven, target population named but not operationally defined, and the framing could still describe many similar proposals.',
+      weak: 'Generic or textbook problem statement with no quantification, no urgency signal, no gap identification, or no angle that would distinguish the proposal from common submissions on the topic.',
     },
   },
   {
@@ -46,16 +46,16 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     defaultEnabled: true,
     pickable: true,
     guidelineBlocks: ['mustAddress', 'reviewerSignals'],
-    steeringRule: 'Avoid restating the problem as its own cause.',
+    steeringRule: 'Avoid restating the problem as its own cause. Push for the specific mechanism, system failure, or institutional constraint that reviewers can connect to the intervention logic.',
     dependencies: ['problem_definition'],
     defaultPoints: points([
       ['root_drivers', 'Underlying drivers', 'P1', 'Primary structural or operational causes.', ['driver', 'cause', 'constraint']],
       ['current_failure', 'Why current approaches fall short', 'P2', 'Explain why the status quo is not enough.', ['current', 'failure', 'limitation']],
     ]),
     reviewerRubric: {
-      strong: 'Identifies structural or systemic drivers distinct from the problem itself, explains why existing approaches fail, and connects causes to the proposed intervention logic.',
-      adequate: 'Names one or two causes but does not distinguish them from symptoms, limited analysis of current approach failures.',
-      weak: 'Restates the problem as its own cause, no analysis of why current approaches fail.',
+      strong: 'Identifies structural or systemic drivers distinct from the problem itself, explains why existing approaches fail, and connects those mechanisms to the proposed intervention logic.',
+      adequate: 'Names one or two causes but does not clearly distinguish them from symptoms, with limited analysis of current approach failures.',
+      weak: 'Restates the problem as its own cause, names only surface symptoms, or offers no analysis of why current approaches fail.',
     },
   },
   {
@@ -67,7 +67,7 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     defaultEnabled: true,
     pickable: true,
     guidelineBlocks: ['priorities', 'mustAddress'],
-    steeringRule: 'Do not allow a beneficiary group with no operational definition.',
+    steeringRule: 'Do not allow a beneficiary group with no operational definition, no access path, or no context explaining why this population matters for this call.',
     dependencies: ['problem_definition'],
     defaultPoints: points([
       ['direct_beneficiaries', 'Direct beneficiaries', 'P1', 'Who directly receives value from the project.', ['beneficiary', 'target group', 'end user']],
@@ -75,9 +75,9 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
       ['geography_context', 'Geographic or institutional context', 'P2', 'Where the work happens or who hosts it.', ['site', 'region', 'institution']],
     ]),
     reviewerRubric: {
-      strong: 'Direct beneficiaries operationally defined with size estimate, indirect beneficiaries identified, geographic or institutional context specified with access path.',
-      adequate: 'Beneficiaries named but not operationally defined, no size estimate, geographic context vague.',
-      weak: 'Generic beneficiary group like "the community" with no operational definition or context.',
+      strong: 'Direct beneficiaries are operationally defined with a size estimate or inclusion criteria, indirect beneficiaries are identified, and the geographic or institutional context makes clear why this population is the right focus.',
+      adequate: 'Beneficiaries are named but not operationally defined, no size estimate is given, and the geographic or institutional context is still vague.',
+      weak: 'Uses generic groups like "the community" or "students" with no operational definition, no access path, or no explanation of why this population is the right focus for the call.',
     },
   },
   {
@@ -195,16 +195,16 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     defaultEnabled: true,
     pickable: true,
     guidelineBlocks: ['evaluationCriteria', 'reviewerSignals'],
-    steeringRule: 'Innovation claims must say compared to what.',
+    steeringRule: 'Innovation claims must say compared to what and why a reviewer would notice the difference.',
     dependencies: ['methodology'],
     defaultPoints: points([
       ['novelty_claim', 'What is different', 'P1', 'The novelty or meaningful advantage.', ['innovation', 'novel', 'advance']],
       ['comparative_value', 'Compared with current practice', 'P2', 'Why this is better than existing options.', ['compare', 'advantage', 'improvement']],
     ]),
     reviewerRubric: {
-      strong: 'Innovation claim is specific, comparative against named current practice, and connected to a meaningful outcome advantage.',
-      adequate: 'Claims novelty but comparison is generic or against unstated baselines.',
-      weak: 'Uses words like "innovative" or "novel" without any comparison or specificity.',
+      strong: 'Innovation claim is specific, comparative against named current practice, and connected to a meaningful reviewer-visible advantage in outcomes, feasibility, or relevance.',
+      adequate: 'Claims novelty but comparison is generic, against an unstated baseline, or not clearly tied to why the difference matters.',
+      weak: 'Uses words like "innovative" or "novel" without any comparison, specificity, or reviewer-visible advantage.',
     },
   },
   {

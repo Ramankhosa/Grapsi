@@ -11,10 +11,7 @@ import {
   refreshGrantPrepSessionContext,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
-
-function isSessionReady(stageStates: ReturnType<typeof inflateGrantPrepSessionContext>['stageStates']) {
-  return Object.values(stageStates).every((stage) => !stage.enabled || !stage.pickable || stage.readiness >= 0.65)
-}
+import { isGrantPrepSessionReady } from '@/lib/grantPrep/sessionState'
 
 export async function POST(
   request: NextRequest,
@@ -67,7 +64,7 @@ export async function POST(
       fundingContext: serverContext.fundingContext,
       warning,
     })
-    const nextStatus = isSessionReady(nextContext.stageStates) ? 'ready' : 'active'
+    const nextStatus = isGrantPrepSessionReady(nextContext.stageStates, nextContext.engagementMode) ? 'ready' : 'active'
 
     await prisma.grantPrepSession.update({
       where: { id: grantPrepSession.id },

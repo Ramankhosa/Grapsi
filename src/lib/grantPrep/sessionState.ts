@@ -10,6 +10,7 @@ import type {
   GrantPrepStageSelectionSource,
   GrantPrepStageStates,
   GrantPrepSteeringEvent,
+  PointPriority,
 } from './types';
 
 function nowIso() {
@@ -284,10 +285,17 @@ export function requiresGrantPrepThrustLinkage(options: {
   return options.selectedThrustAreaRuleKeys.length > 0 || options.availableFocusAreas.length > 0;
 }
 
+export function isExpertGrantPrepMode(engagementMode: GrantPrepSessionContext['engagementMode']) {
+  return engagementMode === 'expert';
+}
+
 export function getGrantPrepPointStatus(input: {
   stageKey: GrantPrepStageKey;
   capture: GrantPrepPointCapture;
   requiresThrustLinkage: boolean;
+  engagementMode: GrantPrepSessionContext['engagementMode'];
+  pointPriority?: PointPriority;
+  qualityAssessment?: GrantPrepMarkerPayload['qualityAssessment'];
   budgetLimits?: string | null;
   projectDuration?: string | null;
 }) {
@@ -296,6 +304,14 @@ export function getGrantPrepPointStatus(input: {
       status: 'needs_review' as const,
       steeringLevel: 'gentle_redirect' as const,
       steeringMessage: 'A discussion point was left without usable facts or keywords.',
+    };
+  }
+
+  if (isExpertGrantPrepMode(input.engagementMode) && input.capture.captureBasis.includes('generic_placeholder')) {
+    return {
+      status: 'needs_review' as const,
+      steeringLevel: 'gentle_redirect' as const,
+      steeringMessage: 'This point contains placeholder content that needs to be made more specific and competitive.',
     };
   }
 
@@ -354,6 +370,18 @@ export function getGrantPrepPointStatus(input: {
     };
   }
 
+  if (
+    isExpertGrantPrepMode(input.engagementMode) &&
+    input.qualityAssessment === 'weak' &&
+    input.pointPriority !== 'P3'
+  ) {
+    return {
+      status: 'needs_review' as const,
+      steeringLevel: 'gentle_redirect' as const,
+      steeringMessage: 'Expert mode keeps weak priority captures in review until the answer is concrete enough for downstream drafting.',
+    };
+  }
+
   return {
     status: input.capture.ruleCompliance.status === 'needs_review' ? ('needs_review' as const) : ('covered' as const),
     steeringLevel: null,
@@ -397,11 +425,31 @@ export function recomputeStageState(stageState: GrantPrepStageStates[GrantPrepSt
   return stageState;
 }
 
+export function canAutoAdvanceGrantPrepStage(
+  stageState: GrantPrepStageStates[GrantPrepStageKey],
+  engagementMode: GrantPrepSessionContext['engagementMode']
+) {
+  return stageState.readiness >= 0.65 && (!isExpertGrantPrepMode(engagementMode) || stageState.status !== 'needs_review');
+}
+
+export function isGrantPrepSessionReady(
+  stageStates: GrantPrepStageStates,
+  engagementMode: GrantPrepSessionContext['engagementMode']
+) {
+  return Object.values(stageStates).every(
+    (stage) =>
+      !stage.enabled ||
+      !stage.pickable ||
+      (stage.readiness >= 0.65 && (!isExpertGrantPrepMode(engagementMode) || stage.status !== 'needs_review'))
+  );
+}
+
 export function applyMarkerToStageStates(
   stageStates: GrantPrepStageStates,
   stageKey: GrantPrepStageKey,
   marker: GrantPrepMarkerPayload,
   options: {
+    engagementMode: GrantPrepSessionContext['engagementMode'];
     selectedThrustAreaRuleKeys: string[];
     availableFocusAreas: string[];
     budgetLimits?: string | null;
@@ -411,6 +459,7 @@ export function applyMarkerToStageStates(
   const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(stageStates));
   const stageState = nextStates[stageKey];
   const requiresThrustLinkage = requiresGrantPrepThrustLinkage(options);
+  let weakPriorityCaptureFlagged = false;
 
   if (Array.isArray(marker.pointsCovered)) {
     for (const pointUpdate of marker.pointsCovered) {
@@ -426,10 +475,20 @@ export function applyMarkerToStageStates(
         stageKey,
         capture,
         requiresThrustLinkage,
+        engagementMode: options.engagementMode,
+        pointPriority: point.priority,
+        qualityAssessment: marker.qualityAssessment || null,
         budgetLimits: options.budgetLimits,
         projectDuration: options.projectDuration,
       });
       point.status = statusResult.status;
+      if (
+        isExpertGrantPrepMode(options.engagementMode) &&
+        marker.qualityAssessment === 'weak' &&
+        point.priority !== 'P3'
+      ) {
+        weakPriorityCaptureFlagged = true;
+      }
       if (statusResult.steeringMessage && statusResult.steeringLevel) {
         addGrantPrepSteeringEvent(stageState, statusResult.steeringMessage, statusResult.steeringLevel, point.key);
       }
@@ -442,7 +501,73 @@ export function applyMarkerToStageStates(
     });
   }
 
+  if (weakPriorityCaptureFlagged) {
+    addGrantPrepSteeringEvent(
+      stageState,
+      'Expert mode kept newly updated priority points in review because this stage is still weak against the reviewer rubric.',
+      'gentle_redirect',
+      null
+    );
+  }
+
   recomputeStageState(stageState);
+
+  return nextStates;
+}
+
+export function reassessGrantPrepStageStates(
+  stageStates: GrantPrepStageStates,
+  options: {
+    engagementMode: GrantPrepSessionContext['engagementMode'];
+    selectedThrustAreaRuleKeys: string[];
+    availableFocusAreas: string[];
+    budgetLimits?: string | null;
+    projectDuration?: string | null;
+  }
+) {
+  const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(stageStates));
+  const requiresThrustLinkage = requiresGrantPrepThrustLinkage(options);
+
+  Object.values(nextStates).forEach((stageState) => {
+    if (!stageState.enabled) {
+      stageState.status = 'disabled';
+      return;
+    }
+
+    if (!stageState.pickable) {
+      return;
+    }
+
+    stageState.points = stageState.points.map((point) => {
+      if (point.status === 'skipped') {
+        return point;
+      }
+
+      if (!point.capture) {
+        return {
+          ...point,
+          status: 'pending',
+        };
+      }
+
+      const statusResult = getGrantPrepPointStatus({
+        stageKey: stageState.stageKey,
+        capture: point.capture,
+        requiresThrustLinkage,
+        engagementMode: options.engagementMode,
+        pointPriority: point.priority,
+        budgetLimits: options.budgetLimits,
+        projectDuration: options.projectDuration,
+      });
+
+      return {
+        ...point,
+        status: statusResult.status,
+      };
+    });
+
+    recomputeStageState(stageState);
+  });
 
   return nextStates;
 }

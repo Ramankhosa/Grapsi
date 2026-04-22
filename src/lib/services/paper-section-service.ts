@@ -11,6 +11,7 @@
  * formatting (DraftingService.formatContent) converts them to styled citations.
  */
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
 import { buildGrantDraftingPrompt } from '@/lib/grants/draftingPromptComposer';
@@ -724,7 +725,7 @@ class PaperSectionService {
           llmResponse: result.response.output,
           tokensUsed: result.response.outputTokens,
           generationMode: 'single_pass',
-          validationReport: null,
+          validationReport: Prisma.JsonNull,
           status: 'DRAFT' as PaperSectionStatus,
           isStale: false,
           generatedAt: new Date()
@@ -762,7 +763,7 @@ class PaperSectionService {
         status: 'BASE_READY' as PaperSectionStatus,
         isStale: false,
         generatedAt: pass1CompletedAt,
-        validationReport: null,
+        validationReport: Prisma.JsonNull,
       };
 
       const pass1Section = await this.upsertSection(sessionId, sectionKey, pass1Data, existingSection);
@@ -1141,7 +1142,7 @@ class PaperSectionService {
                 pass1TokensUsed: result.response.outputTokens,
                 pass1CompletedAt,
                 isStale: false,
-                validationReport: null,
+                validationReport: Prisma.JsonNull,
               }
               : {
                 baseContentInternal: parsed.content,
@@ -1157,7 +1158,7 @@ class PaperSectionService {
                 pass1CompletedAt,
                 status: 'BASE_READY' as PaperSectionStatus,
                 generatedAt: pass1CompletedAt,
-                validationReport: null,
+                validationReport: Prisma.JsonNull,
               }
           });
 

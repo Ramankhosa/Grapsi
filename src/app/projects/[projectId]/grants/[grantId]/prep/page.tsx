@@ -31,9 +31,21 @@ import { useAuth } from '@/lib/auth-context';
 const DESKTOP_SPLIT_KEY = 'grant-prep-desktop-split';
 const TABLET_CONTEXT_KEY = 'grant-prep-tablet-context-open';
 const MOBILE_CONTEXT_KEY = 'grant-prep-mobile-context-open';
+const ENGAGEMENT_MODE_OPTIONS: Array<{
+  key: PrepEngagementMode;
+  label: string;
+  description: string;
+}> = [
+  { key: 'expert', label: 'Expert', description: 'Reviewer-rigorous discussion with stricter progression.' },
+  { key: 'express', label: 'Express', description: 'Faster capture from a short pitch or pasted draft.' },
+];
 
 function clsx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
+}
+
+function formatEngagementModeLabel(mode: PrepEngagementMode) {
+  return ENGAGEMENT_MODE_OPTIONS.find((option) => option.key === mode)?.label || 'Expert';
 }
 
 // EC-14: safe localStorage helpers
@@ -309,7 +321,10 @@ export default function GrantPrepPage() {
           axiosConfig()
         );
         setPrepContext(response.data.prepContext);
-        toast.success(`Engagement mode set to ${engagementMode.replace(/_/g, ' ')}`);
+        setSessionData((current) =>
+          current ? { ...current, status: response.data.sessionStatus || current.status } : current
+        );
+        toast.success(`Engagement mode set to ${formatEngagementModeLabel(engagementMode)}`);
       } catch (error) {
         toast.error(
           axios.isAxiosError(error) && error.response?.data?.message
@@ -724,6 +739,38 @@ export default function GrantPrepPage() {
                   Last launch issue: {sessionData.last_handoff_error}
                 </div>
               ) : null}
+            </div>
+          ) : null}
+          {isEmbeddedGrantMentor ? (
+            <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-prep-card sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Engagement mode</div>
+                <div className="mt-1 text-sm text-slate-600">
+                  {
+                    ENGAGEMENT_MODE_OPTIONS.find((option) => option.key === prepContext.engagementMode)?.description
+                  }
+                </div>
+              </div>
+              <div className="inline-flex w-full items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5 sm:w-auto">
+                {ENGAGEMENT_MODE_OPTIONS.map((mode) => (
+                  <button
+                    key={mode.key}
+                    type="button"
+                    onClick={() => handleEngagementModeChange(mode.key)}
+                    disabled={sessionLocked}
+                    title={mode.description}
+                    className={clsx(
+                      'flex-1 rounded-md px-3 py-2 text-sm font-medium transition-all sm:flex-none',
+                      prepContext.engagementMode === mode.key
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700',
+                      sessionLocked && 'cursor-not-allowed opacity-60'
+                    )}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
           {/* EC-3: disable nav while sending */}
