@@ -44,6 +44,7 @@ export async function POST(
     if (!decoded) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
+    const authorization = authHeader || `Bearer ${token}`;
 
     const userId = decoded.sub;
     const { paperId } = await params;
@@ -108,6 +109,7 @@ export async function POST(
       userId,
       action,
       selectedText,
+      requestHeaders: { authorization },
       context: context || undefined,
       sectionKey: sectionKey || undefined,
       customInstructions: customInstructions || undefined

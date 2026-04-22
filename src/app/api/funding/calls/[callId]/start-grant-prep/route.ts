@@ -8,7 +8,7 @@ import { prisma } from '@/lib/prisma'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
 
 const startGrantPrepSchema = z.object({
-  engagementMode: z.enum(['guided', 'hybrid', 'express']).default('guided'),
+  engagementMode: z.enum(['expert', 'express']).default('expert'),
   projectName: z.string().trim().min(1).max(200).optional(),
 })
 

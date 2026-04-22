@@ -37,7 +37,7 @@ describe('grant prep freeze payload', () => {
   it('preserves prep evidence by section and builds a global capture summary', () => {
     const session = {
       mode: 'template_driven',
-      engagementMode: 'guided',
+      engagementMode: 'expert',
       selectedThrustAreaRuleKeys: [],
       stageMapping: {},
       globalKeywords: ['cyber resilience'],

@@ -204,8 +204,7 @@ enum GrantPrepMode {
 }
 
 enum GrantPrepEngagementMode {
-  guided
-  hybrid
+  expert
   express
 }
 
@@ -1188,7 +1187,7 @@ model GrantPrepSession {
   guideline_revision_id          String?
   selected_thrust_area_rule_keys String[]                @default([])
   mode                           GrantPrepMode
-  engagement_mode                GrantPrepEngagementMode @default(guided)
+  engagement_mode                GrantPrepEngagementMode @default(expert)
   stage_selection_version        String                  @default("v1")
   auto_enabled_stage_keys        String[]                @default([])
   manual_enabled_stage_keys      String[]                @default([])

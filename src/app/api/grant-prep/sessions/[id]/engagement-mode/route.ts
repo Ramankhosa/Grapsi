@@ -12,7 +12,7 @@ import {
 } from '@/lib/grantPrep/server'
 
 const requestSchema = z.object({
-  engagementMode: z.enum(['guided', 'hybrid', 'express']),
+  engagementMode: z.enum(['expert', 'express']),
 })
 
 export async function PUT(

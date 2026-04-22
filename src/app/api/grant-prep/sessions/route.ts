@@ -9,7 +9,7 @@ import type { GrantPrepStageKey } from '@/lib/grantPrep/types'
 const createSessionSchema = z.object({
   projectId: z.string().min(1),
   fundingCallId: z.string().min(1).optional().nullable(),
-  engagementMode: z.enum(['guided', 'hybrid', 'express']).default('guided'),
+  engagementMode: z.enum(['expert', 'express']).default('expert'),
   selectedThrustAreaRuleKeys: z.array(z.string()).default([]),
   enabledStageKeys: z.array(z.string()).optional(),
   disabledStageKeys: z.array(z.string()).optional(),

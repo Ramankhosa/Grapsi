@@ -42,7 +42,6 @@ export async function createPapsiGrantSession(input: {
       },
       guideline_snapshot: {
         mode: input.payload.guidance.mode,
-        engagementMode: input.payload.guidance.engagementMode,
         guidelineRevisionId: input.payload.guidance.guidelineRevisionId,
         templateRevisionId: input.payload.guidance.templateRevisionId,
         selectedThrustAreaRuleKeys: input.payload.guidance.selectedThrustAreaRuleKeys,

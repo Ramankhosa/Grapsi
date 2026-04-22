@@ -24,6 +24,12 @@ type GrantSession = {
   updatedAt: string
 }
 
+function formatEngagementModeLabel(value: string) {
+  if (value === 'expert') return 'Expert'
+  if (value === 'express') return 'Express'
+  return value
+}
+
 export default function ProjectGrantsPage() {
   const { user, isLoading: authLoading } = useAuth()
   const params = useParams()
@@ -81,7 +87,7 @@ export default function ProjectGrantsPage() {
           Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
         },
         body: JSON.stringify({
-          engagementMode: 'guided',
+          engagementMode: 'expert',
           fundingCallId: selectedFundingCallId || fundingCallId || null,
         }),
       })
@@ -114,7 +120,7 @@ export default function ProjectGrantsPage() {
           Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
         },
         body: JSON.stringify({
-          engagementMode: 'guided',
+          engagementMode: 'expert',
           fundingCallId: selectedFundingCallId || fundingCallId || null,
         }),
       })
@@ -198,7 +204,7 @@ export default function ProjectGrantsPage() {
                           <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
                             <span className="rounded-full bg-slate-100 px-2 py-1 uppercase">{session.status}</span>
                             <span className="rounded-full bg-slate-100 px-2 py-1">{session.mode}</span>
-                            <span className="rounded-full bg-slate-100 px-2 py-1">{session.engagement_mode}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-1">{formatEngagementModeLabel(session.engagement_mode)}</span>
                           </div>
                         </Link>
                         <div className="text-right text-sm text-slate-500">

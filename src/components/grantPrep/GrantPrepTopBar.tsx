@@ -40,9 +40,8 @@ type Props = {
 };
 
 const engagementModes: Array<{ key: PrepEngagementMode; label: string; description: string }> = [
-  { key: 'guided', label: 'Guided', description: 'One focused question at a time.' },
-  { key: 'hybrid', label: 'Hybrid', description: 'Alternate between discussion and quick drafting.' },
-  { key: 'express', label: 'Express', description: 'Review faster from a short pitch.' },
+  { key: 'expert', label: 'Expert', description: 'Reviewer-rigorous discussion with stricter progression.' },
+  { key: 'express', label: 'Express', description: 'Faster capture from a short pitch or pasted draft.' },
 ];
 
 export default function GrantPrepTopBar({

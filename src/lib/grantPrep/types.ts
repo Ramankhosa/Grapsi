@@ -8,7 +8,7 @@ export const GRANT_PREP_MODES = [
   'standalone',
 ] as const;
 
-export const GRANT_PREP_ENGAGEMENT_MODES = ['guided', 'hybrid', 'express'] as const;
+export const GRANT_PREP_ENGAGEMENT_MODES = ['expert', 'express'] as const;
 export const GRANT_PREP_STAGE_SELECTION_VERSIONS = ['v1', 'v2'] as const;
 
 export const GRANT_PREP_STATUSES = [

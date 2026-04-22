@@ -3,7 +3,8 @@
  * Handles AI-powered text transformations: rewrite, expand, condense, formalize, simplify, create sections
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import crypto from 'crypto';
+import { llmGateway } from '@/lib/metering';
 import { prisma } from '@/lib/prisma';
 import { polishDraftMarkdown } from '@/lib/markdown-draft-formatter';
 import { systemPromptTemplateService, TEMPLATE_KEYS } from '@/lib/services/system-prompt-template-service';
@@ -19,6 +20,7 @@ export interface TextActionRequest {
   userId: string;
   action: TextActionType;
   selectedText: string;
+  requestHeaders: Record<string, string>;
   context?: string; // Surrounding text for better understanding
   sectionKey?: string;
   customInstructions?: string;
@@ -294,84 +296,17 @@ function getStageCodeForTextAction(action: TextActionType): string {
 // Helper Functions
 // ============================================================================
 
-/**
- * Get the appropriate LLM model for text actions
- */
-async function getTextActionModel(userId: string, action: TextActionType): Promise<{ modelCode: string; apiKey: string } | null> {
-  try {
-    const preferredStageCode = getStageCodeForTextAction(action);
-    const stageCodes =
-      preferredStageCode === 'PAPER_TEXT_ACTION'
-        ? ['PAPER_TEXT_ACTION']
-        : [preferredStageCode, 'PAPER_TEXT_ACTION'];
+function buildGatewayPrompt(systemPrompt: string, userPrompt: string): string {
+  return `${systemPrompt}\n\nUSER REQUEST:\n${userPrompt}`;
+}
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { tenantId: true }
-    });
+function readTokenValue(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
+}
 
-    if (!user?.tenantId) {
-      return {
-        modelCode: 'gemini-2.0-flash',
-        apiKey: process.env.GOOGLE_AI_API_KEY || ''
-      };
-    }
-
-    const now = new Date();
-    const tenantPlan = await prisma.tenantPlan.findFirst({
-      where: {
-        tenantId: user.tenantId,
-        status: 'ACTIVE',
-        effectiveFrom: { lte: now },
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
-      },
-      orderBy: { effectiveFrom: 'desc' },
-      include: {
-        plan: {
-          include: {
-            stageModelConfigs: {
-              where: {
-                isActive: true,
-                stage: { code: { in: stageCodes } }
-              },
-              orderBy: { priority: 'desc' },
-              include: {
-                model: true,
-                stage: {
-                  select: { code: true }
-                }
-              }
-            }
-          }
-        }
-      }
-    });
-
-    const stageConfigs = tenantPlan?.plan?.stageModelConfigs || [];
-    const selectedConfig =
-      stageConfigs.find((cfg) => cfg.stage?.code === preferredStageCode)
-      || stageConfigs.find((cfg) => cfg.stage?.code === 'PAPER_TEXT_ACTION')
-      || null;
-
-    if (selectedConfig?.model?.code) {
-      const modelCode = selectedConfig.model.code;
-      return {
-        modelCode,
-        apiKey: process.env.GOOGLE_AI_API_KEY || ''
-      };
-    }
-
-    // Fallback to default model
-    return {
-      modelCode: 'gemini-2.0-flash',
-      apiKey: process.env.GOOGLE_AI_API_KEY || ''
-    };
-  } catch {
-    return {
-      modelCode: 'gemini-2.0-flash',
-      apiKey: process.env.GOOGLE_AI_API_KEY || ''
-    };
-  }
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 /**
@@ -435,7 +370,7 @@ async function resolveSystemPrompt(request: TextActionRequest): Promise<string> 
  * Perform a text action using LLM
  */
 export async function performTextAction(request: TextActionRequest): Promise<TextActionResponse> {
-  const { action, selectedText, userId, sessionId } = request;
+  const { action, selectedText, userId, sessionId, requestHeaders } = request;
 
   // Validate input
   if (!selectedText?.trim()) {
@@ -459,35 +394,35 @@ export async function performTextAction(request: TextActionRequest): Promise<Tex
   }
 
   try {
-    // Get the appropriate model
-    const modelConfig = await getTextActionModel(userId, action);
-    if (!modelConfig?.apiKey) {
-      throw new Error('No API key configured for text actions');
-    }
-
-    // Initialize Gemini
-    const genAI = new GoogleGenerativeAI(modelConfig.apiKey);
-    const model = genAI.getGenerativeModel({ 
-      model: modelConfig.modelCode,
-      generationConfig: {
-        temperature: 0.4, // Lower temperature for more consistent output
-        maxOutputTokens: 8192,
-        topP: 0.95,
-      }
-    });
-
     // Build prompts
     const systemPrompt = await resolveSystemPrompt(request);
     const userPrompt = buildUserPrompt(request);
+    const prompt = buildGatewayPrompt(systemPrompt, userPrompt);
 
-    // Generate response
-    const result = await model.generateContent([
-      { text: systemPrompt },
-      { text: userPrompt }
-    ]);
+    const result = await llmGateway.executeLLMOperation(
+      { headers: requestHeaders },
+      {
+        taskCode: 'LLM2_DRAFT',
+        stageCode: getStageCodeForTextAction(action),
+        prompt,
+        parameters: {
+          temperature: 0.4,
+        },
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          sessionId,
+          sectionKey: request.sectionKey,
+          purpose: `paper_text_action_${action}`,
+        }
+      }
+    );
+
+    if (!result.success || !result.response) {
+      throw new Error(result.error?.message || 'LLM gateway text action failed');
+    }
 
     const response = result.response;
-    let transformedText = response.text()?.trim();
+    let transformedText = String(response.output || '').trim();
 
     if (!transformedText) {
       throw new Error('No response generated');
@@ -516,11 +451,19 @@ export async function performTextAction(request: TextActionRequest): Promise<Tex
       transformedText = ensureCitationsPreserved(selectedText, transformedText);
     }
 
-    // Get token usage if available
-    const tokenUsage = response.usageMetadata ? {
-      input: response.usageMetadata.promptTokenCount || 0,
-      output: response.usageMetadata.candidatesTokenCount || 0
-    } : undefined;
+    const metadata = response.metadata && typeof response.metadata === 'object'
+      ? response.metadata as Record<string, unknown>
+      : {};
+    const usageMetadata = metadata.tokenUsage && typeof metadata.tokenUsage === 'object'
+      ? metadata.tokenUsage as Record<string, unknown>
+      : {};
+    const tokenUsage = {
+      input: readTokenValue(usageMetadata.inputTokens ?? metadata.inputTokens) || 0,
+      output: readTokenValue(usageMetadata.outputTokens ?? metadata.outputTokens ?? response.outputTokens) || 0
+    };
+    const modelUsed =
+      readStringValue(metadata.resolvedModelCode ?? metadata.providerModel ?? metadata.modelCode)
+      || response.modelClass;
 
     // Log the action for analytics when legacy delegate is available.
     try {
@@ -539,8 +482,8 @@ export async function performTextAction(request: TextActionRequest): Promise<Tex
             reportType: `text_action_${action}`,
             inputSize: selectedText.length,
             outputSize: transformedText.length,
-            modelUsed: modelConfig.modelCode,
-            tokensUsed: tokenUsage?.input ? tokenUsage.input + tokenUsage.output : null,
+            modelUsed,
+            tokensUsed: tokenUsage.input + tokenUsage.output,
             status: 'SUCCESS',
             createdAt: new Date()
           }

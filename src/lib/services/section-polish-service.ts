@@ -19,11 +19,7 @@ import { applyLengthControlToWordBudget } from '../paper-length-control';
 import crypto from 'crypto';
 import { buildGrantDraftingPrompt, type GrantPromptSummary, type GrantPass1MemoryContext } from '@/lib/grants/draftingPromptComposer';
 import {
-  buildGrantComplianceReport,
-  buildReviewerReadinessReport,
-  dedupeGrantStrings,
   formatGrantComplianceContractForPrompt,
-  normalizeGrantGenerationTrace,
 } from '@/lib/grants/compliance';
 import {
   buildGrantPromptProfile,
@@ -148,20 +144,6 @@ function countWords(text: string): number {
     return 0;
   }
   return normalized.split(/\s+/).filter(Boolean).length;
-}
-
-function normalizeComparableText(value: string): string {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function comparableListHasMatch(list: string[], candidate: string): boolean {
-  const normalizedCandidate = normalizeComparableText(candidate);
-  if (!normalizedCandidate) return false;
-  return list.some((item) => normalizeComparableText(item) === normalizedCandidate);
 }
 
 function collectRequiredCitationKeys(
@@ -618,49 +600,6 @@ no code fences, no preamble. Start directly with the content.
 ${requiredCitationOutputInstruction}`;
 }
 
-function applyGrantPass2RegressionGuards(
-  report: GrantComplianceReport,
-  baseTrace: ReturnType<typeof normalizeGrantGenerationTrace>
-): GrantComplianceReport {
-  const hardFailures = [...report.hardFailures];
-  const unmetRequiredPoints = [...report.unmetRequiredPoints];
-  const missingEvidence = [...report.missingEvidence];
-
-  const regressedRequiredPoints = baseTrace.coveredRequiredPoints.filter(
-    (item) => !comparableListHasMatch(report.coveredRequiredPoints, item)
-  );
-  for (const item of regressedRequiredPoints) {
-    hardFailures.push({
-      key: `pass2_required_regression_${normalizeComparableText(item).slice(0, 24)}`,
-      message: `Pass 2 removed a required point that Pass 1 had covered: ${item}`,
-      source: 'system',
-      ruleText: item,
-    });
-    unmetRequiredPoints.push(item);
-  }
-
-  const regressedPrepEvidence = baseTrace.usedPrepEvidence.filter(
-    (item) => !report.usedPrepEvidence.includes(item)
-  );
-  if (regressedPrepEvidence.length > 0) {
-    hardFailures.push({
-      key: 'pass2_prep_evidence_regression',
-      message: `Pass 2 dropped preserved Grant Prep evidence references: ${regressedPrepEvidence.join(', ')}`,
-      source: 'prep',
-      ruleText: regressedPrepEvidence.join(', '),
-    });
-    missingEvidence.push('Pass 2 dropped Grant Prep-derived facts that were present in Pass 1.');
-  }
-
-  return {
-    ...report,
-    passed: hardFailures.length === 0,
-    unmetRequiredPoints: dedupeGrantStrings(unmetRequiredPoints, 32),
-    missingEvidence: dedupeGrantStrings(missingEvidence, 24),
-    hardFailures: Array.from(new Map(hardFailures.map((item) => [`${item.key}:${item.message}`, item])).values()),
-  };
-}
-
 // ============================================================================
 // Service
 // ============================================================================
@@ -682,7 +621,6 @@ class SectionPolishService {
     if (
       firstAttempt.success
       && firstAttempt.driftReport?.passed
-      && (firstAttempt.grantComplianceReport ? firstAttempt.grantComplianceReport.passed : true)
     ) {
       return firstAttempt;
     }
@@ -698,13 +636,11 @@ class SectionPolishService {
 
     await options?.onRetry?.({
       reason: 'drift_validation',
-      message: firstAttempt.grantComplianceReport && !firstAttempt.grantComplianceReport.passed
-        ? 'Retrying grant polish to restore dropped required points or prep-derived evidence.'
-        : (
-            input.grantSectionComplianceContract || input.grantSemantic || input.templateIntent
-              ? 'Retrying reviewer polish to restore required citation coverage.'
-              : 'Retrying publication polish to restore required citation coverage.'
-          ),
+      message: (
+        input.grantSectionComplianceContract || input.grantSemantic || input.templateIntent
+          ? 'Retrying reviewer polish to restore required citation coverage.'
+          : 'Retrying publication polish to restore required citation coverage.'
+      ),
       driftReport: firstAttempt.driftReport
     });
 
@@ -713,7 +649,6 @@ class SectionPolishService {
     if (
       retryResult.success
       && retryResult.driftReport?.passed
-      && (retryResult.grantComplianceReport ? retryResult.grantComplianceReport.passed : true)
     ) {
       return retryResult;
     }
@@ -725,11 +660,7 @@ class SectionPolishService {
       grantComplianceReport: retryResult.grantComplianceReport || firstAttempt.grantComplianceReport,
       reviewerReadinessReport: retryResult.reviewerReadinessReport || firstAttempt.reviewerReadinessReport,
       error: `Polish validation failed after retry. `
-        + (
-          retryResult.grantComplianceReport && !retryResult.grantComplianceReport.passed
-            ? `${retryResult.grantComplianceReport.hardFailures[0]?.message || 'Grant compliance regression detected.'}`
-            : `Missing required citation coverage for: ${retryResult.driftReport?.dimensionCoverage?.uncoveredDimensions.join(', ') || 'unknown dimensions'}.`
-        ),
+        + `Missing required citation coverage for: ${retryResult.driftReport?.dimensionCoverage?.uncoveredDimensions.join(', ') || 'unknown dimensions'}.`,
     };
   }
 
@@ -780,32 +711,11 @@ class SectionPolishService {
       polished = stripInlineMarkdownStyling(polishDraftMarkdown(polished));
 
       const driftReport = buildDriftReport(input.baseContent, polished, input.dimensionCitations);
-      const baseGrantTrace = normalizeGrantGenerationTrace(input.baseGrantGenerationTrace);
-      const rawGrantComplianceReport = input.grantSectionComplianceContract
-        ? buildGrantComplianceReport({
-            stage: 'pass2',
-            content: polished,
-            contract: input.grantSectionComplianceContract,
-            wordBudget: input.wordBudget ?? input.targetWordCount,
-            characterLimit: input.characterLimit,
-          })
-        : undefined;
-      const grantComplianceReport = rawGrantComplianceReport
-        ? applyGrantPass2RegressionGuards(rawGrantComplianceReport, baseGrantTrace)
-        : undefined;
-      const reviewerReadinessReport = grantComplianceReport
-        ? buildReviewerReadinessReport({
-            contract: input.grantSectionComplianceContract,
-            report: grantComplianceReport,
-          })
-        : undefined;
 
       return {
         success: true,
         polishedContent: polished,
         driftReport,
-        grantComplianceReport,
-        reviewerReadinessReport,
         promptUsed: prompt,
         tokensUsed: result.response.outputTokens,
       };

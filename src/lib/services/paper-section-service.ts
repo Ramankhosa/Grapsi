@@ -23,8 +23,6 @@ import {
   summarizeGrantFreezePayload,
 } from '@/lib/grants/promptOverlay';
 import {
-  buildGrantComplianceReport,
-  buildReviewerReadinessReport,
   normalizeGrantGenerationTrace,
 } from '@/lib/grants/compliance';
 import { llmGateway, type TenantContext } from '../metering';
@@ -253,8 +251,8 @@ function buildStoredPass1Artifact(params: {
     tokensUsed: Number(params.tokensUsed) > 0 ? Number(params.tokensUsed) : undefined,
     figureGrounding: params.figureGrounding || null,
     grantGenerationTrace: params.grantGenerationTrace || null,
-    grantComplianceReport: params.grantComplianceReport || null,
-    reviewerReadinessReport: params.reviewerReadinessReport || null,
+    ...(params.grantComplianceReport ? { grantComplianceReport: params.grantComplianceReport } : {}),
+    ...(params.reviewerReadinessReport ? { reviewerReadinessReport: params.reviewerReadinessReport } : {}),
   };
 }
 
@@ -711,29 +709,7 @@ class PaperSectionService {
       const pass1GrantTrace = grantContract
         ? (parsed.grantGenerationTrace || normalizeGrantGenerationTrace({}))
         : null;
-      const pass1GrantCompliance = grantContract
-        ? buildGrantComplianceReport({
-            stage: 'pass1',
-            content: parsed.content,
-            contract: grantContract,
-            trace: pass1GrantTrace,
-            wordBudget: blueprintContext.currentSection.wordBudget,
-            characterLimit: blueprintContext.currentSection.characterLimit,
-          })
-        : null;
-      const pass1ReviewerReadiness = grantContract && pass1GrantCompliance
-        ? buildReviewerReadinessReport({
-            contract: grantContract,
-            report: pass1GrantCompliance,
-          })
-        : null;
 
-      if (effectiveTwoPass && grantContract && pass1GrantCompliance && !pass1GrantCompliance.passed) {
-        return {
-          success: false,
-          error: `Grant Pass 1 failed compliance validation for "${sectionKey}": ${pass1GrantCompliance.hardFailures[0]?.message || 'missing required grant constraints'}`,
-        };
-      }
 
       // ── Single-pass path ──
       if (!effectiveTwoPass) {
@@ -748,6 +724,7 @@ class PaperSectionService {
           llmResponse: result.response.output,
           tokensUsed: result.response.outputTokens,
           generationMode: 'single_pass',
+          validationReport: null,
           status: 'DRAFT' as PaperSectionStatus,
           isStale: false,
           generatedAt: new Date()
@@ -766,8 +743,6 @@ class PaperSectionService {
         promptUsed: prompt,
         tokensUsed: result.response.outputTokens,
         grantGenerationTrace: pass1GrantTrace,
-        grantComplianceReport: pass1GrantCompliance,
-        reviewerReadinessReport: pass1ReviewerReadiness,
       });
       const pass1Data = {
         sectionKey,
@@ -787,12 +762,7 @@ class PaperSectionService {
         status: 'BASE_READY' as PaperSectionStatus,
         isStale: false,
         generatedAt: pass1CompletedAt,
-        validationReport: pass1GrantCompliance
-          ? {
-              grantComplianceReport: pass1GrantCompliance,
-              reviewerReadinessReport: pass1ReviewerReadiness,
-            } as any
-          : undefined,
+        validationReport: null,
       };
 
       const pass1Section = await this.upsertSection(sessionId, sectionKey, pass1Data, existingSection);
@@ -927,16 +897,6 @@ class PaperSectionService {
     )
       ? { ...(polishResult.driftReport as unknown as Record<string, unknown>) }
       : {};
-    if (polishResult.grantComplianceReport) {
-      validationReport.grantComplianceReport = polishResult.grantComplianceReport;
-    } else if (pass1ArtifactRecord.grantComplianceReport) {
-      validationReport.grantComplianceReport = pass1ArtifactRecord.grantComplianceReport;
-    }
-    if (polishResult.reviewerReadinessReport) {
-      validationReport.reviewerReadinessReport = polishResult.reviewerReadinessReport;
-    } else if (pass1ArtifactRecord.reviewerReadinessReport) {
-      validationReport.reviewerReadinessReport = pass1ArtifactRecord.reviewerReadinessReport;
-    }
 
     const updated = await prisma.paperSection.update({
       where: { id: section.id },
@@ -1156,25 +1116,6 @@ class PaperSectionService {
           const pass1GrantTrace = grantContract
             ? (parsed.grantGenerationTrace || normalizeGrantGenerationTrace({}))
             : null;
-          const pass1GrantCompliance = grantContract
-            ? buildGrantComplianceReport({
-                stage: 'pass1',
-                content: parsed.content,
-                contract: grantContract,
-                trace: pass1GrantTrace,
-                wordBudget: blueprintContext.currentSection.wordBudget,
-                characterLimit: blueprintContext.currentSection.characterLimit,
-              })
-            : null;
-          const pass1ReviewerReadiness = grantContract && pass1GrantCompliance
-            ? buildReviewerReadinessReport({
-                contract: grantContract,
-                report: pass1GrantCompliance,
-              })
-            : null;
-          if (grantContract && pass1GrantCompliance && !pass1GrantCompliance.passed) {
-            throw new Error(pass1GrantCompliance.hardFailures[0]?.message || 'Grant Pass 1 failed compliance validation');
-          }
           const pass1CompletedAt = new Date();
           const pass1Artifact = buildStoredPass1Artifact({
             content: parsed.content,
@@ -1184,8 +1125,6 @@ class PaperSectionService {
             tokensUsed: result.response.outputTokens,
             figureGrounding: buildPass1FigureGroundingSnapshot(figurePromptContext),
             grantGenerationTrace: pass1GrantTrace,
-            grantComplianceReport: pass1GrantCompliance,
-            reviewerReadinessReport: pass1ReviewerReadiness,
           });
 
           await prisma.paperSection.update({
@@ -1202,12 +1141,7 @@ class PaperSectionService {
                 pass1TokensUsed: result.response.outputTokens,
                 pass1CompletedAt,
                 isStale: false,
-                validationReport: pass1GrantCompliance
-                  ? {
-                      grantComplianceReport: pass1GrantCompliance,
-                      reviewerReadinessReport: pass1ReviewerReadiness,
-                    } as any
-                  : undefined,
+                validationReport: null,
               }
               : {
                 baseContentInternal: parsed.content,
@@ -1223,12 +1157,7 @@ class PaperSectionService {
                 pass1CompletedAt,
                 status: 'BASE_READY' as PaperSectionStatus,
                 generatedAt: pass1CompletedAt,
-                validationReport: pass1GrantCompliance
-                  ? {
-                      grantComplianceReport: pass1GrantCompliance,
-                      reviewerReadinessReport: pass1ReviewerReadiness,
-                    } as any
-                  : undefined,
+                validationReport: null,
               }
           });
 

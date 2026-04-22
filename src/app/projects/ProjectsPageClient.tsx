@@ -90,7 +90,7 @@ export default function ProjectsPage() {
         },
         body: JSON.stringify({
           fundingCallId,
-          engagementMode: 'guided',
+          engagementMode: 'expert',
         }),
       })
 
