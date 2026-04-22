@@ -11,15 +11,20 @@ describe('funding template extractor coercion', () => {
           label: 'Technical Proposal',
           type: 'section',
           workflowMode: 'app_draft',
+          templateIntent: 'methodology',
+          templateIntentAlternates: ['workplan'],
+          templateIntentConfidence: 0.92,
           subsections: [
             {
               heading: 'Objectives of Proposed CoE',
               workflowMode: 'app_draft',
+              templateIntent: 'objectives',
               questions: [
                 {
                   label: 'Summary of the Proposal',
                   type: 'section',
                   workflowMode: 'app_draft',
+                  templateIntent: 'summary',
                 },
               ],
             },
@@ -52,5 +57,9 @@ describe('funding template extractor coercion', () => {
       'Principal Investigator Details',
       'Category Selection',
     ]))
+    expect(normalized.sections.find((item) => item.label === 'Technical Proposal')?.templateIntent).toBe('methodology')
+    expect(normalized.sections.find((item) => item.label === 'Technical Proposal')?.templateIntentAlternates).toEqual(['workplan'])
+    expect(normalized.sections.find((item) => item.label === 'Objectives of Proposed CoE')?.templateIntent).toBe('objectives')
+    expect(normalized.sections.find((item) => item.label === 'Summary of the Proposal')?.templateIntent).toBe('summary')
   })
 })

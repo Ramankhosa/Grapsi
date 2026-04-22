@@ -17,10 +17,18 @@ import {
   normalizeGrantMustCoverTyping,
   normalizeGrantSuggestedCitationCount,
 } from '@/lib/grants/blueprintMetadata'
+import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType'
 import {
   isGrantSectionAutoDraftable,
   normalizeGrantWorkflowMode,
 } from '@/lib/grants/workflowMode'
+import {
+  normalizeGrantTemplateIntent,
+  normalizeGrantTemplateIntentConfidence,
+  normalizeGrantTemplateIntentList,
+  shouldTrustTemplateIntent,
+  templateIntentToGrantSemantic,
+} from '@/lib/grants/templateIntent'
 import {
   buildProposalGrantComplianceReport,
   buildProposalReviewerReadinessReport,
@@ -145,30 +153,6 @@ function isCompiledGrantTemplate(value: unknown): value is CompiledGrantTemplate
   return Array.isArray(record.sections) && typeof record.version === 'string'
 }
 
-function looksNarrativeField(item: FundingTemplateItem): boolean {
-  const text = `${item.label || ''} ${item.guidance || ''}`.toLowerCase()
-  const narrativeSignals = /(summary|synopsis|description|detailed|methodology|approach|technical plan|project plan|work ?plan|implementation|background|need statement|justification|impact|outcome|functioning|innovation|proposal)/.test(text)
-  const conciseSignals = /(title|name|objective|aim|scope|keyword|identifier|code|category|city|state|country|institution|contact|email|phone)/.test(text)
-  return narrativeSignals && !conciseSignals
-}
-
-function resolveSectionType(item: FundingTemplateItem): CompiledGrantTemplateSectionType {
-  if (item.type === 'table') return 'table'
-  if (item.type === 'budget') return 'budget_rows'
-  if (item.type === 'checklist' || item.type === 'attachment') return 'checklist'
-  if (looksNarrativeField(item)) return 'narrative'
-  if (item.type === 'field') {
-    if ((item.wordLimit || 0) > 350 || (item.charLimit || 0) > 2500) {
-      return 'narrative'
-    }
-    return 'short_answer'
-  }
-  if ((item.wordLimit || 0) <= 350 && (item.charLimit || 0) <= 2500) {
-    return 'short_answer'
-  }
-  return 'narrative'
-}
-
 function normalizeCompiledSection(
   section: Partial<CompiledGrantTemplateSection>,
   index: number
@@ -185,6 +169,10 @@ function normalizeCompiledSection(
         suggestedCitationCount,
       })
     : undefined
+  const templateIntent = normalizeGrantTemplateIntent(section.templateIntent) || 'default'
+  const templateIntentAlternates = normalizeGrantTemplateIntentList(section.templateIntentAlternates, 2)
+    .filter((intent) => intent !== templateIntent)
+  const templateIntentConfidence = normalizeGrantTemplateIntentConfidence(section.templateIntentConfidence)
 
   return {
     sectionKey: String(section.sectionKey || `section_${index + 1}`),
@@ -204,6 +192,9 @@ function normalizeCompiledSection(
     reviewerIntent: section.reviewerIntent ?? null,
     dependencies: Array.isArray(section.dependencies) ? section.dependencies : [],
     sourceTemplatePointer: section.sourceTemplatePointer ?? null,
+    templateIntent,
+    templateIntentAlternates,
+    templateIntentConfidence,
     mustCover,
     mustAvoid,
     ...(mustCoverTyping ? { mustCoverTyping } : {}),
@@ -247,6 +238,21 @@ function compileGrantTemplateDocument(input: {
     seenKeys.add(rawKey)
     order += 1
     const label = item.label || fallbackLabel || rawKey
+    const sectionType = forcedType || resolveGrantTemplateSectionType(item)
+    const workflowMode = normalizeGrantWorkflowMode(item.workflowMode)
+    const templateIntent = normalizeGrantTemplateIntent(item.templateIntent) || 'default'
+    const templateIntentAlternates = normalizeGrantTemplateIntentList(item.templateIntentAlternates, 2)
+      .filter((intent) => intent !== templateIntent)
+    const templateIntentConfidence = normalizeGrantTemplateIntentConfidence(item.templateIntentConfidence)
+    const trustedGrantSemantic = shouldTrustTemplateIntent({
+      intent: templateIntent,
+      confidence: templateIntentConfidence,
+      alternates: templateIntentAlternates,
+      workflowMode,
+      sectionType,
+    })
+      ? templateIntentToGrantSemantic(templateIntent)
+      : null
     const guidance = (item.guidanceText || item.guidance || '').trim()
     const requiredFacts = dedupeStringList(item.requiredFacts || [])
     const forbiddenMoves = dedupeStringList(item.forbiddenMoves || [])
@@ -262,11 +268,11 @@ function compileGrantTemplateDocument(input: {
       sectionKey: rawKey,
       label,
       order,
-      sectionType: forcedType || resolveSectionType(item),
-      workflowMode: normalizeGrantWorkflowMode(item.workflowMode),
+      sectionType,
+      workflowMode,
       citationMode: normalizeGrantCitationMode(null, {
-        sectionType: forcedType || resolveSectionType(item),
-        workflowMode: normalizeGrantWorkflowMode(item.workflowMode),
+        sectionType,
+        workflowMode,
       }),
       required: item.required !== false,
       wordBudget: item.wordLimit ?? null,
@@ -275,8 +281,12 @@ function compileGrantTemplateDocument(input: {
       reviewerIntent: item.reviewerGoal || guidance || null,
       dependencies: [],
       sourceTemplatePointer: rawKey,
+      templateIntent,
+      templateIntentAlternates,
+      templateIntentConfidence,
       mustCover: requiredFacts.length > 0 ? requiredFacts : (guidance ? [guidance] : []),
       mustAvoid: forbiddenMoves,
+      ...(trustedGrantSemantic ? { grantSemantic: trustedGrantSemantic } : {}),
       grantTemplateGuidance: templateGuidance,
     })
   }
@@ -305,6 +315,9 @@ function compileGrantTemplateDocument(input: {
       reviewerIntent: input.document.budget.justificationNotes || null,
       dependencies: [],
       sourceTemplatePointer: 'budget',
+      templateIntent: 'budget',
+      templateIntentAlternates: [],
+      templateIntentConfidence: 1,
       mustCover: input.document.budget.categories.map((category) => category.label),
       mustAvoid: [],
       grantTemplateGuidance: {
@@ -334,6 +347,9 @@ function compileGrantTemplateDocument(input: {
       reviewerIntent: null,
       dependencies: [],
       sourceTemplatePointer: 'attachments',
+      templateIntent: 'attachments',
+      templateIntentAlternates: [],
+      templateIntentConfidence: 1,
       mustCover: input.document.attachments.map((item) => item.label),
       mustAvoid: [],
       grantTemplateGuidance: {
@@ -362,6 +378,9 @@ function compileGrantTemplateDocument(input: {
       reviewerIntent: null,
       dependencies: [],
       sourceTemplatePointer: 'proposal_narrative',
+      templateIntent: 'default',
+      templateIntentAlternates: [],
+      templateIntentConfidence: null,
       mustCover: [],
       mustAvoid: [],
       grantTemplateGuidance: {
@@ -581,6 +600,9 @@ export function buildBlueprintPlanFromCompiledTemplate(
       reviewerIntent: section.reviewerIntent ?? null,
       dependencies: section.dependencies || [],
       sourceTemplatePointer: section.sourceTemplatePointer ?? null,
+      templateIntent: section.templateIntent || null,
+      templateIntentAlternates: section.templateIntentAlternates || [],
+      templateIntentConfidence: section.templateIntentConfidence ?? null,
       mustCover: section.mustCover || [],
       mustAvoid: section.mustAvoid || [],
       ...(section.mustCoverTyping ? { mustCoverTyping: section.mustCoverTyping } : {}),
@@ -859,6 +881,9 @@ export function buildPaperSectionPlanFromGrantSections(
         sectionType: section.sectionType,
         reviewerIntent: section.reviewerIntent,
         characterLimit: section.characterLimit,
+        templateIntent: section.templateIntent || null,
+        templateIntentAlternates: section.templateIntentAlternates || [],
+        templateIntentConfidence: section.templateIntentConfidence ?? null,
         grantSemantic: section.grantSemantic || null,
         prepContextBlock: section.prepContextBlock || null,
         grantRuleProfile: section.grantRuleProfile || null,

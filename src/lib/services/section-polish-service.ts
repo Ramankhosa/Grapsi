@@ -24,9 +24,15 @@ import {
   formatGrantComplianceContractForPrompt,
   normalizeGrantGenerationTrace,
 } from '@/lib/grants/compliance';
+import {
+  buildGrantPromptProfile,
+  formatGrantPromptProfileForPrompt,
+} from '@/lib/grants/promptProfile';
 import type {
   GrantComplianceReport,
+  GrantSectionSemantic,
   GrantSectionComplianceContract,
+  GrantTemplateIntent,
   ReviewerReadinessReport,
 } from '@/types/grant';
 
@@ -48,6 +54,9 @@ export interface PolishInput {
   paperTypeCode: string;
   targetWordCount?: number;
   tenantContext?: TenantContext | null;
+  sectionType?: string | null;
+  grantSemantic?: GrantSectionSemantic | null;
+  templateIntent?: GrantTemplateIntent | null;
   dimensionCitations?: DimensionCitationExpectation[];
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
   baseGrantGenerationTrace?: unknown;
@@ -340,6 +349,11 @@ async function buildPolishPrompt(
   previousReport?: DriftReport
 ): Promise<string> {
   const grantContractBlock = formatGrantComplianceContractForPrompt(input.grantSectionComplianceContract);
+  const grantPromptProfileBlock = formatGrantPromptProfileForPrompt(buildGrantPromptProfile({
+    sectionType: input.sectionType,
+    grantSemantic: input.grantSemantic,
+    templateIntent: input.templateIntent,
+  }));
   const requiredCitationKeys = collectRequiredCitationKeys(input.dimensionCitations);
   const requiredCitationOutputInstruction = requiredCitationKeys.length > 0
     ? 'Every REQUIRED [CITE:key] listed above MUST appear in your output. Optional source citations may be omitted if they are no longer needed after compression. Do not invent new [CITE:key].'
@@ -550,6 +564,7 @@ ${hedgingRules}
 ${rhythmRules}
 ${budgetPriorityOverride}
 ${wordLimitBlock}
+${grantPromptProfileBlock}
 ${publicationTypeBlock}
 ═══════════════════════════════════════════════════════════════════════════════
 DRAFT TO POLISH

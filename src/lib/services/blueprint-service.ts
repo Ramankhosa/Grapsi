@@ -13,6 +13,11 @@ import { prisma } from '../prisma';
 import { llmGateway, type TenantContext } from '../metering';
 import { paperTypeService } from './paper-type-service';
 import {
+  normalizeGrantTemplateIntent,
+  normalizeGrantTemplateIntentConfidence,
+  normalizeGrantTemplateIntentList,
+} from '@/lib/grants/templateIntent'
+import {
   getDefaultRhetoricalBlueprint,
   normalizeRhetoricalBlueprint,
   type RhetoricalBlueprint
@@ -24,6 +29,7 @@ import type {
   GrantSectionComplianceContract,
   GrantRuleProfile,
   GrantSectionSemantic,
+  GrantTemplateIntent,
   GrantTemplateGuidanceProfile,
   ReviewerReadinessReport,
 } from '@/types/grant'
@@ -69,6 +75,9 @@ export interface SectionPlanItem {
   reviewerIntent?: string | null;
   workflowMode?: string | null;
   citationMode?: GrantCitationMode | null;
+  templateIntent?: GrantTemplateIntent | null;
+  templateIntentAlternates?: GrantTemplateIntent[];
+  templateIntentConfidence?: number | null;
   grantSemantic?: GrantSectionSemantic | null;
   prepContextBlock?: GrantPrepContextBlock | null;
   grantRuleProfile?: GrantRuleProfile | null;
@@ -118,6 +127,9 @@ export interface SectionContext {
   rhetoricalBlueprint?: RhetoricalBlueprint;
   reviewerIntent?: string | null;
   sectionType?: 'narrative' | 'short_answer' | 'checklist' | 'table' | 'budget_rows';
+  templateIntent?: GrantTemplateIntent | null;
+  templateIntentAlternates?: GrantTemplateIntent[];
+  templateIntentConfidence?: number | null;
   grantSemantic?: GrantSectionSemantic | null;
   prepContextBlock?: GrantPrepContextBlock | null;
   grantRuleProfile?: GrantRuleProfile | null;
@@ -525,6 +537,9 @@ class BlueprintService {
         rhetoricalBlueprint: sectionPlan.rhetoricalBlueprint,
         reviewerIntent: sectionPlan.reviewerIntent,
         sectionType: sectionPlan.sectionType,
+        templateIntent: sectionPlan.templateIntent,
+        templateIntentAlternates: sectionPlan.templateIntentAlternates,
+        templateIntentConfidence: sectionPlan.templateIntentConfidence,
         grantSemantic: sectionPlan.grantSemantic,
         prepContextBlock: sectionPlan.prepContextBlock,
         grantRuleProfile: sectionPlan.grantRuleProfile,
@@ -1078,6 +1093,15 @@ CRITICAL RULES:
         ...(typeof raw.workflowMode === 'string' ? { workflowMode: raw.workflowMode } : {}),
         ...(typeof raw.citationMode === 'string'
           ? { citationMode: raw.citationMode as GrantCitationMode }
+          : {}),
+        ...(normalizeGrantTemplateIntent(raw.templateIntent)
+          ? { templateIntent: normalizeGrantTemplateIntent(raw.templateIntent) }
+          : {}),
+        ...(normalizeGrantTemplateIntentList(raw.templateIntentAlternates, 2).length > 0
+          ? { templateIntentAlternates: normalizeGrantTemplateIntentList(raw.templateIntentAlternates, 2) }
+          : {}),
+        ...(typeof normalizeGrantTemplateIntentConfidence(raw.templateIntentConfidence) === 'number'
+          ? { templateIntentConfidence: normalizeGrantTemplateIntentConfidence(raw.templateIntentConfidence) }
           : {}),
         ...(typeof raw.grantSemantic === 'string'
           ? { grantSemantic: raw.grantSemantic as GrantSectionSemantic }

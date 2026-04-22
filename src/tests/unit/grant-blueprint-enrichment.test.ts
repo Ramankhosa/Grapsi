@@ -548,6 +548,49 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[1].suggestedCitationCount).toBe(0);
   });
 
+  it('uses trusted template intent as the semantic prior and falls back when alternates signal ambiguity', () => {
+    const sections: GrantBlueprintPlanSection[] = [
+      makeSection({
+        sectionKey: 'weak_method_section',
+        label: 'Section 2',
+        purpose: 'Provide the requested response.',
+        templateIntent: 'methodology',
+        templateIntentConfidence: 0.94,
+      }),
+      makeSection({
+        sectionKey: 'ambiguous_summary',
+        label: 'Summary',
+        purpose: 'Summarize the proposal, its need, and expected outcomes.',
+        templateIntent: 'methodology',
+        templateIntentAlternates: ['workplan', 'evaluation'],
+        templateIntentConfidence: 0.95,
+      }),
+    ];
+
+    const enriched = enrichGrantBlueprintSections(sections, {
+      projectTitle: 'Cyber Centre of Excellence',
+      fundingCallTitle: 'MeitY Cyber CoE Call',
+      globalKeywords: ['cybersecurity', 'capacity building'],
+      stageStates: makeStageStates(),
+    });
+
+    expect(enriched[0].grantSemantic).toBe('methodology');
+    expect(enriched[0].prepContextBlock?.stageKeys).toEqual([
+      'methodology',
+      'innovation',
+      'evaluation',
+      'risk_and_ethics',
+    ]);
+
+    expect(enriched[1].grantSemantic).toBe('summary');
+    expect(enriched[1].prepContextBlock?.stageKeys).toEqual([
+      'final_pitch',
+      'thrust_alignment',
+      'fit_and_scope',
+      'outcomes',
+    ]);
+  });
+
   it('builds a usable proposal foundation from enriched sections', () => {
     const sections = enrichGrantBlueprintSections([
       makeSection({

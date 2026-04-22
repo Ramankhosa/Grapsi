@@ -41,6 +41,29 @@ export const GRANT_SECTION_SEMANTICS = [
 
 export type GrantSectionSemantic = typeof GRANT_SECTION_SEMANTICS[number]
 
+export const GRANT_TEMPLATE_INTENTS = [
+  'summary',
+  'problem_need',
+  'objectives',
+  'methodology',
+  'workplan',
+  'innovation',
+  'evaluation',
+  'impact_outcomes',
+  'alignment',
+  'sustainability',
+  'risk',
+  'team',
+  'budget',
+  'eligibility',
+  'submission',
+  'attachments',
+  'institutional',
+  'default',
+] as const
+
+export type GrantTemplateIntent = typeof GRANT_TEMPLATE_INTENTS[number]
+
 export const GRANT_RULE_CLASSES = [
   'priority',
   'must_address',
@@ -231,6 +254,9 @@ export interface CompiledGrantTemplateSection {
   reviewerIntent?: string | null
   dependencies: string[]
   sourceTemplatePointer?: string | null
+  templateIntent?: GrantTemplateIntent | null
+  templateIntentAlternates?: GrantTemplateIntent[]
+  templateIntentConfidence?: number | null
   mustCover: string[]
   mustAvoid: string[]
   mustCoverTyping?: Record<string, GrantBlueprintDimensionType>
@@ -267,6 +293,9 @@ export interface GrantBlueprintPlanSection {
   reviewerIntent: string | null
   dependencies: string[]
   sourceTemplatePointer: string | null
+  templateIntent?: GrantTemplateIntent | null
+  templateIntentAlternates?: GrantTemplateIntent[]
+  templateIntentConfidence?: number | null
   mustCover: string[]
   mustAvoid: string[]
   mustCoverTyping?: Record<string, GrantBlueprintDimensionType>

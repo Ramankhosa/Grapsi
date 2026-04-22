@@ -10,6 +10,11 @@ import { buildGrantThematicBlueprint } from '@/lib/grants/blueprintMetadata'
 import {
   buildReviewerReadinessReport,
 } from '@/lib/grants/compliance'
+import {
+  getPrepStageKeysForGrantSemantic,
+  shouldTrustTemplateIntent,
+  templateIntentToGrantSemantic,
+} from '@/lib/grants/templateIntent'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import type {
   GrantComplianceReport,
@@ -71,21 +76,6 @@ const SEMANTIC_HINTS: Record<GrantSectionSemantic, string[]> = {
   sustainability: ['sustainability', 'scale', 'scale-up', 'continuity', 'translation', 'commercialization'],
   risk: ['risk', 'mitigation', 'challenge', 'ethics', 'contingency'],
   default: [],
-}
-
-const PREP_STAGE_KEYS_BY_SEMANTIC: Record<GrantSectionSemantic, GrantPrepStageKey[]> = {
-  summary: ['final_pitch', 'thrust_alignment', 'fit_and_scope', 'outcomes'],
-  problem_need: ['problem_definition', 'root_cause', 'beneficiaries', 'fit_and_scope'],
-  objectives: ['problem_definition', 'fit_and_scope', 'thrust_alignment', 'outcomes'],
-  methodology: ['methodology', 'innovation', 'evaluation', 'risk_and_ethics'],
-  workplan: ['workplan', 'methodology', 'budget_strategy', 'risk_and_ethics'],
-  innovation: ['innovation', 'methodology', 'thrust_alignment'],
-  evaluation: ['evaluation', 'methodology', 'outcomes'],
-  impact_outcomes: ['outcomes', 'evaluation', 'sustainability_and_scale', 'beneficiaries'],
-  alignment: ['fit_and_scope', 'thrust_alignment', 'final_pitch'],
-  sustainability: ['sustainability_and_scale', 'outcomes', 'budget_strategy'],
-  risk: ['risk_and_ethics', 'methodology', 'workplan'],
-  default: ['problem_definition', 'methodology', 'outcomes'],
 }
 
 function dedupeStrings(items: string[]): string[] {
@@ -306,6 +296,20 @@ function classifyGrantSectionSemantic(section: GrantBlueprintPlanSection): Grant
   }
 
   return 'default'
+}
+
+function resolveGrantSectionSemantic(section: GrantBlueprintPlanSection): GrantSectionSemantic {
+  const trustedTemplateSemantic = shouldTrustTemplateIntent({
+    intent: section.templateIntent,
+    confidence: section.templateIntentConfidence,
+    alternates: section.templateIntentAlternates,
+    workflowMode: section.workflowMode,
+    sectionType: section.sectionType,
+  })
+    ? templateIntentToGrantSemantic(section.templateIntent)
+    : null
+
+  return trustedTemplateSemantic || section.grantSemantic || classifyGrantSectionSemantic(section)
 }
 
 function buildTopicAnchor(context: GrantBlueprintEnrichmentContext): string {
@@ -545,7 +549,7 @@ function buildPrepContextBlock(
   const stageStates = context.stageStates
   if (!stageStates) return null
 
-  const stageKeys = PREP_STAGE_KEYS_BY_SEMANTIC[semantic] || PREP_STAGE_KEYS_BY_SEMANTIC.default
+  const stageKeys = getPrepStageKeysForGrantSemantic(semantic)
   const bullets: string[] = []
   const keywords: string[] = []
 
@@ -748,7 +752,7 @@ function buildSectionPrepEvidence(
   const stageStates = context.stageStates
   if (!stageStates) return []
 
-  const stageKeys = PREP_STAGE_KEYS_BY_SEMANTIC[semantic] || PREP_STAGE_KEYS_BY_SEMANTIC.default
+  const stageKeys = getPrepStageKeysForGrantSemantic(semantic)
   return dedupePrepEvidence(
     stageKeys.flatMap((stageKey) =>
       collectCoveredPoints(stageStates, stageKey).map((point) => ({
@@ -1063,7 +1067,7 @@ function enrichOneSection(
     }
   }
 
-  const semantic = classifyGrantSectionSemantic(section)
+  const semantic = resolveGrantSectionSemantic(section)
   const grantRuleProfile = buildGrantRuleProfile(section, context, semantic)
   const prepEvidence = buildSectionPrepEvidence(section, context, semantic)
   const prepContextBlock = buildPrepContextBlock(section, context, semantic)
@@ -1147,9 +1151,9 @@ export function buildGeneratedGrantProposalFoundation(
   const topicAnchor = buildTopicAnchor(context)
   const callAnchor = buildCallAnchor(context)
 
-  const summarySection = draftableSections.find((section) => classifyGrantSectionSemantic(section) === 'summary') || draftableSections[0]
+  const summarySection = draftableSections.find((section) => resolveGrantSectionSemantic(section) === 'summary') || draftableSections[0]
   const objectiveSection = draftableSections.find((section) =>
-    ['objectives', 'problem_need', 'alignment'].includes(classifyGrantSectionSemantic(section))
+    ['objectives', 'problem_need', 'alignment'].includes(resolveGrantSectionSemantic(section))
   ) || summarySection || draftableSections[0]
 
   const contributionSeeds = dedupeStrings(

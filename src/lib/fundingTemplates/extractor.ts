@@ -3,6 +3,11 @@ import path from 'path';
 import { generateFromGemini } from '../geminiService';
 import { generateFromOpenAI } from '../openaiService';
 import { parseJsonResponse } from '../fundingIntake/utils';
+import {
+  normalizeGrantTemplateIntent,
+  normalizeGrantTemplateIntentConfidence,
+  normalizeGrantTemplateIntentList,
+} from '../grants/templateIntent';
 import { normalizeGrantWorkflowMode } from '../grants/workflowMode';
 import { buildAssetSequenceMap, buildCompatibilitySummary, normalizeGrantTemplate, sortAndDeduplicateGrantTemplate } from './utils';
 import type { FundingTemplateCompatibilitySummary, GrantTemplateDocument } from './types';
@@ -34,6 +39,10 @@ Every extracted response-bearing item MUST include workflowMode:
 Classify app_draft for objectives, problem statement, summary, aim/scope, detailed proposal, methodology/workplan narrative, impact, outcomes, sustainability, risks/mitigation, and justification text.
 Classify app_support for budget overview, budget categories, structured implementation matrices, and other structured support blocks.
 Classify team_manual for personnel details, institution metadata, category selectors, declarations, proofs, certificates, letters, annexures, attachments, signatures, and uploads.
+For each response-bearing item, also classify templateIntent using only: summary, problem_need, objectives, methodology, workplan, innovation, evaluation, impact_outcomes, alignment, sustainability, risk, team, budget, eligibility, submission, attachments, institutional, default.
+Use templateIntent="default" when the intent is unclear.
+Return at most 2 templateIntentAlternates for ambiguity/audit context and a numeric templateIntentConfidence between 0 and 1.
+If you see more than 1 plausible alternate, that means the item is ambiguous and downstream routing will fall back to heuristics instead of trusting templateIntent.
 Preserve section-specific instructions, reviewer-facing guidance, explicit required inclusions, and exact word/character limits on the extracted item they belong to.
 When a heading or prompt includes both the section label and embedded drafting instructions, keep the label concise in "label" and place the drafting instructions in "guidance" without dropping any concrete requirements.
 `;
@@ -67,6 +76,10 @@ function coerceWorkflowMode(value: unknown, fallback: 'app_draft' | 'app_support
   return normalizeGrantWorkflowMode(value, fallback);
 }
 
+function coerceTemplateIntent(value: unknown) {
+  return normalizeGrantTemplateIntent(value) || 'default';
+}
+
 function buildPromptPreamble(): string {
   return `
 ${SYSTEM_INSTRUCTIONS}
@@ -88,6 +101,9 @@ Return JSON in this exact shape:
         "options": ["string"],
         "schema": {},
         "guidance": "string|null",
+        "templateIntent": "summary|problem_need|objectives|methodology|workplan|innovation|evaluation|impact_outcomes|alignment|sustainability|risk|team|budget|eligibility|submission|attachments|institutional|default",
+        "templateIntentAlternates": ["string"],
+        "templateIntentConfidence": 0.0,
         "supportLevel": "full|partial|manual|unsupported",
         "confidence": 0.0,
         "sourceAnchors": [
@@ -117,6 +133,9 @@ Return JSON in this exact shape:
         "options": ["string"],
         "schema": {},
         "guidance": "string|null",
+        "templateIntent": "summary|problem_need|objectives|methodology|workplan|innovation|evaluation|impact_outcomes|alignment|sustainability|risk|team|budget|eligibility|submission|attachments|institutional|default",
+        "templateIntentAlternates": ["string"],
+        "templateIntentConfidence": 0.0,
         "supportLevel": "full|partial|manual|unsupported",
         "confidence": 0.0,
         "sourceAnchors": []
@@ -537,6 +556,14 @@ function coerceTemplateItem(
       item?.instructions,
       item?.notes,
       parentLabel ? `Parent section: ${parentLabel}` : null
+    ),
+    templateIntent: coerceTemplateIntent(item?.templateIntent || item?.intent || item?.sectionIntent),
+    templateIntentAlternates: normalizeGrantTemplateIntentList(
+      item?.templateIntentAlternates || item?.intentAlternates || item?.alternateIntents,
+      2
+    ).filter((intent) => intent !== coerceTemplateIntent(item?.templateIntent || item?.intent || item?.sectionIntent)),
+    templateIntentConfidence: normalizeGrantTemplateIntentConfidence(
+      item?.templateIntentConfidence || item?.intentConfidence
     ),
     supportLevel: coerceSupportLevel(item?.supportLevel || item?.support || item?.compatibility, 'partial'),
     confidence: coerceConfidence(item?.confidence),

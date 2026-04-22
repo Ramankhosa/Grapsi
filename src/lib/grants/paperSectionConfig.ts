@@ -3,7 +3,7 @@ import {
   normalizeGrantCitationMode,
   requiresMappedGrantEvidence,
 } from '@/lib/grants/citationMode'
-import type { GrantSectionSemantic } from '@/types/grant'
+import type { GrantSectionSemantic, GrantTemplateIntent } from '@/types/grant'
 
 export type GrantBackedSectionType =
   | 'narrative'
@@ -24,6 +24,7 @@ export interface GrantBackedPaperSectionPlanItem {
   sectionType?: GrantBackedSectionType | null
   reviewerIntent?: string | null
   grantSemantic?: GrantSectionSemantic | string | null
+  templateIntent?: GrantTemplateIntent | string | null
 }
 
 export type GrantBackedDraftingMode = 'one_pass' | 'two_pass'
@@ -83,6 +84,7 @@ export function normalizeGrantBackedSectionPlanItem(
       : null,
     reviewerIntent: String(record.reviewerIntent || '').trim() || null,
     grantSemantic: String(record.grantSemantic || '').trim() || null,
+    templateIntent: String(record.templateIntent || '').trim() || null,
   }
 }
 

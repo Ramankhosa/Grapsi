@@ -2,7 +2,15 @@ import { normalizeGrantTemplate } from '../fundingTemplates/utils';
 import type { FundingTemplateItem, GrantTemplateDocument } from '../fundingTemplates/types';
 import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY } from './stageLibrary';
 import type { GrantPrepStageKey, GrantPrepStageMapping, GrantPrepStageMappingEntry } from './types';
-import type { GrantWorkflowMode } from '@/types/grant';
+import {
+  getPrepStageKeysForTemplateIntent,
+  normalizeGrantTemplateIntent,
+  normalizeGrantTemplateIntentConfidence,
+  normalizeGrantTemplateIntentList,
+  shouldTrustTemplateIntent,
+} from '@/lib/grants/templateIntent';
+import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType';
+import type { CompiledGrantTemplateSectionType, GrantTemplateIntent, GrantWorkflowMode } from '@/types/grant';
 
 type TemplateBlock = 'sections' | 'questions' | 'evaluationCriteria' | 'submissionRules' | 'budget';
 
@@ -12,6 +20,10 @@ type TemplateLikeItem = {
   guidance?: string | null;
   block: TemplateBlock;
   workflowMode?: GrantWorkflowMode;
+  sectionType?: CompiledGrantTemplateSectionType | null;
+  templateIntent?: GrantTemplateIntent | null;
+  templateIntentAlternates?: GrantTemplateIntent[];
+  templateIntentConfidence?: number | null;
 };
 
 function slug(value: string) {
@@ -54,6 +66,10 @@ function getTemplateItems(templateInput: unknown): TemplateLikeItem[] {
         ].filter(Boolean).join(' | '),
         block,
         workflowMode: item.workflowMode,
+        sectionType: resolveGrantTemplateSectionType(item),
+        templateIntent: normalizeGrantTemplateIntent(item.templateIntent),
+        templateIntentAlternates: normalizeGrantTemplateIntentList(item.templateIntentAlternates, 2),
+        templateIntentConfidence: normalizeGrantTemplateIntentConfidence(item.templateIntentConfidence),
       });
     }
   };
@@ -69,6 +85,10 @@ function getTemplateItems(templateInput: unknown): TemplateLikeItem[] {
       label: 'Budget overview',
       guidance: template.budget.justificationNotes || 'Budget categories and justification requirements',
       block: 'budget',
+      sectionType: 'budget_rows',
+      templateIntent: 'budget',
+      templateIntentAlternates: [],
+      templateIntentConfidence: 1,
     });
     for (const category of template.budget.categories) {
       items.push({
@@ -76,6 +96,10 @@ function getTemplateItems(templateInput: unknown): TemplateLikeItem[] {
         label: category.label,
         guidance: category.notes,
         block: 'budget',
+        sectionType: 'budget_rows',
+        templateIntent: 'budget',
+        templateIntentAlternates: [],
+        templateIntentConfidence: 1,
       });
     }
   }
@@ -121,6 +145,28 @@ function getMatchedStages(item: TemplateLikeItem): GrantPrepStageKey[] {
     .filter((stage) => stage.pickable)
     .map((stage) => ({ key: stage.key, score: scoreItemForStage(item, stage.key) }))
     .sort((a, b) => b.score - a.score);
+  const trustedIntentMatches = shouldTrustTemplateIntent({
+    intent: item.templateIntent,
+    confidence: item.templateIntentConfidence,
+    alternates: item.templateIntentAlternates,
+    workflowMode: item.workflowMode,
+    sectionType: item.sectionType,
+  })
+    ? getPrepStageKeysForTemplateIntent(item.templateIntent)
+    : [];
+
+  if (trustedIntentMatches.length > 0) {
+    const matches = [...trustedIntentMatches];
+    const heuristicPrimary = scored[0];
+    if (
+      heuristicPrimary
+      && heuristicPrimary.score >= 4
+      && !matches.includes(heuristicPrimary.key)
+    ) {
+      matches.push(heuristicPrimary.key);
+    }
+    return matches;
+  }
 
   const primary = scored[0];
   if (!primary || primary.score <= 0) {

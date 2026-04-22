@@ -3,6 +3,7 @@ import {
   FUNDING_TEMPLATE_ITEM_TYPES,
   FUNDING_TEMPLATE_SUPPORT_LEVELS,
 } from './types';
+import { GRANT_TEMPLATE_INTENTS } from '@/types/grant';
 
 const jsonSchema: z.ZodType<any> = z.lazy(() =>
   z.union([
@@ -38,6 +39,9 @@ export const templateItemSchema = z.object({
   options: z.array(z.string()).optional().default([]),
   schema: jsonSchema.nullable().optional(),
   guidance: z.string().nullable().optional(),
+  templateIntent: z.enum(GRANT_TEMPLATE_INTENTS).nullable().optional(),
+  templateIntentAlternates: z.array(z.enum(GRANT_TEMPLATE_INTENTS)).optional().default([]),
+  templateIntentConfidence: z.number().min(0).max(1).nullable().optional(),
   supportLevel: z.enum(FUNDING_TEMPLATE_SUPPORT_LEVELS).optional().default('full'),
   confidence: z.number().min(0).max(1).optional().default(1),
   sourceAnchors: z.array(sourceAnchorSchema).optional().default([]),

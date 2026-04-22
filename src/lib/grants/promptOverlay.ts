@@ -4,8 +4,13 @@ import type {
   GrantPrepContextBlock,
   GrantRuleProfile,
   GrantSectionSemantic,
+  GrantTemplateIntent,
 } from '@/types/grant'
 import { formatGrantComplianceContractForPrompt } from '@/lib/grants/compliance'
+import {
+  buildGrantPromptProfile,
+  formatGrantPromptProfileForPrompt,
+} from '@/lib/grants/promptProfile'
 
 export interface GrantPromptSummary {
   projectTitle?: string | null
@@ -19,6 +24,7 @@ export interface SharedGrantPromptContext {
   reviewerIntent?: string | null
   sectionType?: string | null
   grantSemantic?: GrantSectionSemantic | null
+  templateIntent?: GrantTemplateIntent | null
   prepContextBlock?: GrantPrepContextBlock | null
   grantRuleProfile?: GrantRuleProfile | null
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
@@ -49,32 +55,7 @@ export function summarizeGrantFreezePayload(value: unknown): string[] {
 }
 
 export function buildGrantPromptTask(semantic: GrantSectionSemantic | null | undefined): string {
-  switch (semantic) {
-    case 'summary':
-      return 'Write a concise proposal summary that integrates need, approach, outcomes, and funding-call fit.'
-    case 'problem_need':
-      return 'Establish the problem, urgency, beneficiary need, and why the proposed intervention is justified now.'
-    case 'objectives':
-      return 'State precise objectives, scope boundaries, and measurable success targets.'
-    case 'methodology':
-      return 'Explain the technical or programmatic approach, why it is credible, and how it will be executed.'
-    case 'workplan':
-      return 'Describe the work packages, milestones, dependencies, governance, and delivery sequencing.'
-    case 'innovation':
-      return 'Explain the novelty, differentiation, and why the innovation matters for the call.'
-    case 'evaluation':
-      return 'Describe how success will be measured, validated, and monitored.'
-    case 'impact_outcomes':
-      return 'Explain expected outcomes, beneficiaries, adoption, and measurable impact pathways.'
-    case 'alignment':
-      return 'Show explicit alignment with the funder priorities, call themes, and reviewer expectations.'
-    case 'sustainability':
-      return 'Explain continuity, scale-up, and sustainability beyond the grant period.'
-    case 'risk':
-      return 'Identify material risks and explain mitigation and contingency measures.'
-    default:
-      return 'Write a grant proposal section that is reviewer-oriented, concrete, and evidence grounded.'
-  }
+  return buildGrantPromptProfile({ grantSemantic: semantic }).task
 }
 
 export function buildGrantBackedBasePrompt(
@@ -82,7 +63,13 @@ export function buildGrantBackedBasePrompt(
   context?: SharedGrantPromptContext
 ): string {
   const sectionTitle = context?.displayLabel || formatSectionLabel(sectionKey)
-  const semantic = context?.grantSemantic || 'default'
+  const profile = buildGrantPromptProfile({
+    sectionType: context?.sectionType,
+    reviewerIntent: context?.reviewerIntent,
+    citationMode: context?.citationMode,
+    grantSemantic: context?.grantSemantic,
+    templateIntent: context?.templateIntent,
+  })
 
   return [
     'You are writing a grant proposal section inside Grapsi.',
@@ -90,8 +77,9 @@ export function buildGrantBackedBasePrompt(
     'Use the grant section contract and mapped evidence below as the governing source of truth.',
     `Section key: ${sectionKey}`,
     `Section title: ${sectionTitle}`,
-    `Section task: ${buildGrantPromptTask(semantic)}`,
+    `Section task: ${profile.task}`,
     context?.sectionType ? `Section type: ${context.sectionType}` : '',
+    context?.templateIntent ? `Template intent: ${context.templateIntent}` : '',
     context?.reviewerIntent ? `Reviewer intent: ${context.reviewerIntent}` : '',
     context?.citationMode ? `Citation mode: ${context.citationMode}` : '',
   ]
@@ -107,17 +95,19 @@ export function buildGrantPromptOverlay(context?: SharedGrantPromptContext): str
   const prepKeywords = context.prepContextBlock?.keywords || []
   const grantRules = context.grantRuleProfile
   const grantContractBlock = formatGrantComplianceContractForPrompt(context.grantSectionComplianceContract)
+  const grantProfileBlock = formatGrantPromptProfileForPrompt(buildGrantPromptProfile({
+    sectionType: context.sectionType,
+    reviewerIntent: context.reviewerIntent,
+    citationMode: context.citationMode,
+    grantSemantic: context.grantSemantic,
+    templateIntent: context.templateIntent,
+  }))
 
   const blocks = [
     grantSummaryLines.length > 0
       ? `GRANT CONTEXT:\n${grantSummaryLines.map((line) => `- ${line}`).join('\n')}`
       : '',
-    context.grantSemantic
-      ? `GRANT SEMANTIC PROFILE:\n- ${context.grantSemantic.replace(/_/g, ' ')}`
-      : '',
-    context.citationMode
-      ? `SECTION CITATION MODE:\n- ${context.citationMode.replace(/_/g, ' ')}`
-      : '',
+    grantProfileBlock,
     grantContractBlock,
     grantRules && (
       grantRules.requiredPoints.length > 0

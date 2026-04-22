@@ -4,6 +4,7 @@ import {
   GRANT_BLUEPRINT_DIMENSION_TYPES,
   GRANT_CITATION_MODES,
   GRANT_SECTION_SEMANTICS,
+  GRANT_TEMPLATE_INTENTS,
   GRANT_WORKFLOW_MODES,
 } from '@/types/grant'
 
@@ -30,6 +31,9 @@ const planSectionSchema = z.object({
   reviewerIntent: z.string().nullable().optional(),
   dependencies: z.array(z.string()).default([]),
   sourceTemplatePointer: z.string().nullable().optional(),
+  templateIntent: z.enum(GRANT_TEMPLATE_INTENTS).nullable().optional(),
+  templateIntentAlternates: z.array(z.enum(GRANT_TEMPLATE_INTENTS)).default([]),
+  templateIntentConfidence: z.number().min(0).max(1).nullable().optional(),
   mustCover: z.array(z.string()).default([]),
   mustAvoid: z.array(z.string()).default([]),
   mustCoverTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
@@ -131,6 +135,9 @@ export async function PATCH(
       characterLimit: section.characterLimit ?? null,
       reviewerIntent: section.reviewerIntent ?? null,
       sourceTemplatePointer: section.sourceTemplatePointer ?? null,
+      templateIntent: section.templateIntent ?? null,
+      templateIntentAlternates: section.templateIntentAlternates ?? [],
+      templateIntentConfidence: section.templateIntentConfidence ?? null,
     }))
     await updateBlueprintPlan({
       grantSessionId: grantId,

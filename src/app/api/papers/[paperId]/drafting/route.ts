@@ -72,6 +72,7 @@ import type {
   GrantRuleProfile,
   GrantSectionComplianceContract,
   GrantSectionSemantic,
+  GrantTemplateIntent,
   ReviewerReadinessReport,
 } from '@/types/grant'
 
@@ -1701,6 +1702,7 @@ interface BlueprintPromptContext {
   characterLimit?: number | null;
   citationMode?: GrantCitationMode | null;
   grantSemantic?: GrantSectionSemantic | null;
+  templateIntent?: GrantTemplateIntent | null;
   prepContextBlock?: GrantPrepContextBlock | null;
   grantRuleProfile?: GrantRuleProfile | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
@@ -4114,6 +4116,9 @@ async function generateSection(
         paperTypeCode,
         targetWordCount: sectionWordBudget,
         tenantContext: tenantContext || null,
+        sectionType: blueprintPromptContext?.sectionType,
+        grantSemantic: blueprintPromptContext?.grantSemantic,
+        templateIntent: blueprintPromptContext?.templateIntent,
         dimensionCitations: dimensionCitations.length > 0 ? dimensionCitations : undefined,
         grantSectionComplianceContract: blueprintPromptContext?.grantSectionComplianceContract || null,
         baseGrantGenerationTrace: storedPass1.artifact?.grantGenerationTrace,
@@ -4656,6 +4661,9 @@ async function buildSectionPromptRuntimeBundle(params: {
         : undefined,
       grantSemantic: typeof currentSectionPlan?.grantSemantic === 'string'
         ? currentSectionPlan.grantSemantic as GrantSectionSemantic
+        : undefined,
+      templateIntent: typeof currentSectionPlan?.templateIntent === 'string'
+        ? currentSectionPlan.templateIntent as GrantTemplateIntent
         : undefined,
       prepContextBlock: currentSectionPlan?.prepContextBlock && typeof currentSectionPlan.prepContextBlock === 'object'
         ? currentSectionPlan.prepContextBlock as GrantPrepContextBlock

@@ -81,6 +81,14 @@ function clampBgPass1Concurrency(value?: number): number {
   return Math.max(1, Math.min(20, parsed || DEFAULT_BG_PASS1_CONCURRENCY || 10));
 }
 
+function normalizeDimensionKey(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
 async function runWithConcurrency<T>(
   items: T[],
   limit: number,
@@ -809,6 +817,7 @@ class PaperSectionService {
     });
 
     const blueprintContext = await blueprintService.getSectionContext(section.sessionId, section.sectionKey);
+    const evidencePromptContext = await this.getPass1EvidencePromptContext(section.sessionId, section.sectionKey);
     const pass1ArtifactRecord = (
       section.pass1Artifact
       && typeof section.pass1Artifact === 'object'
@@ -817,6 +826,11 @@ class PaperSectionService {
       ? section.pass1Artifact as Record<string, unknown>
       : {};
     const grantContract = blueprintContext?.currentSection.grantSectionComplianceContract || null;
+    const dimensionCitations = (evidencePromptContext.dimensionEvidence || []).map(dim => ({
+      dimensionKey: normalizeDimensionKey(dim.dimension),
+      dimensionLabel: dim.dimension,
+      expectedCitationKeys: (dim.citations || []).map(c => String(c.citationKey || '').trim()).filter(Boolean),
+    }));
 
     const polishResult = await sectionPolishService.polishWithRetry({
       sectionKey: section.sectionKey,
@@ -829,6 +843,10 @@ class PaperSectionService {
         blueprintContext?.currentSection.wordBudget
       ),
       tenantContext: tenantContext || null,
+      sectionType: blueprintContext?.currentSection.sectionType,
+      grantSemantic: blueprintContext?.currentSection.grantSemantic,
+      templateIntent: blueprintContext?.currentSection.templateIntent,
+      dimensionCitations: dimensionCitations.length > 0 ? dimensionCitations : undefined,
       grantSectionComplianceContract: grantContract,
       baseGrantGenerationTrace: pass1ArtifactRecord.grantGenerationTrace,
       wordBudget: blueprintContext?.currentSection.wordBudget,
@@ -1681,6 +1699,7 @@ class PaperSectionService {
           sectionType: currentSection.sectionType,
           citationMode: currentSection.citationMode,
           grantSemantic: currentSection.grantSemantic,
+          templateIntent: currentSection.templateIntent,
           prepContextBlock: currentSection.prepContextBlock,
           grantRuleProfile: currentSection.grantRuleProfile,
           grantSectionComplianceContract: currentSection.grantSectionComplianceContract,

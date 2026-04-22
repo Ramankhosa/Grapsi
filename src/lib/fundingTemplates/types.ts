@@ -1,5 +1,6 @@
 import type {
   GrantDraftingSubmissionMode,
+  GrantTemplateIntent,
   GrantWorkflowMode,
 } from '@/types/grant';
 
@@ -51,6 +52,9 @@ export interface FundingTemplateItem {
   schema?: JsonValue | null;
   guidance?: string | null;
   guidanceText?: string | null;
+  templateIntent?: GrantTemplateIntent | null;
+  templateIntentAlternates?: GrantTemplateIntent[];
+  templateIntentConfidence?: number | null;
   requiredFacts?: string[];
   reviewerGoal?: string | null;
   forbiddenMoves?: string[];

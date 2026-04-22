@@ -1,6 +1,11 @@
 // @ts-nocheck
 import { grantTemplateSchema } from './schemas';
 import { normalizeGrantWorkflowMode } from '@/lib/grants/workflowMode';
+import {
+  normalizeGrantTemplateIntent,
+  normalizeGrantTemplateIntentConfidence,
+  normalizeGrantTemplateIntentList,
+} from '@/lib/grants/templateIntent';
 import type {
   FundingTemplateCompatibilitySummary,
   FundingTemplateItem,
@@ -144,6 +149,7 @@ function inferReviewerGoal(item: any, guidanceText: string | null): string | nul
 
 function normalizeItem(item: any): FundingTemplateItem {
   const guidanceText = String(item.guidanceText || item.guidance || '').trim() || null;
+  const templateIntent = normalizeGrantTemplateIntent(item.templateIntent) || 'default';
   return {
     ...item,
     key: String(item.key || '').trim(),
@@ -160,6 +166,10 @@ function normalizeItem(item: any): FundingTemplateItem {
     schema: item.schema ?? null,
     guidance: item.guidance || guidanceText,
     guidanceText,
+    templateIntent,
+    templateIntentAlternates: normalizeGrantTemplateIntentList(item.templateIntentAlternates, 2)
+      .filter((intent) => intent !== templateIntent),
+    templateIntentConfidence: normalizeGrantTemplateIntentConfidence(item.templateIntentConfidence),
     requiredFacts: inferRequiredFacts(item, guidanceText),
     reviewerGoal: inferReviewerGoal(item, guidanceText),
     forbiddenMoves: inferForbiddenMoves(item, guidanceText),
@@ -388,6 +398,9 @@ function toConflictComparableItem(item: FundingTemplateItem) {
     schema: item.schema ?? null,
     guidance: item.guidance || null,
     workflowMode: item.workflowMode,
+    templateIntent: item.templateIntent || null,
+    templateIntentAlternates: item.templateIntentAlternates || [],
+    templateIntentConfidence: item.templateIntentConfidence ?? null,
     supportLevel: item.supportLevel,
   };
 }

@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildGrantPrepStageMapping } from '@/lib/grantPrep/templateMapper'
+import {
+  MAX_TRUSTED_TEMPLATE_INTENT_ALTERNATES,
+  shouldTrustTemplateIntent,
+} from '@/lib/grants/templateIntent'
+import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType'
 import { buildPaperSectionPlanFromGrantSections } from '@/lib/grants/workspace'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
-import { generateDiffSummary, normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
+import { generateDiffSummary, mergeGrantTemplates, normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
 import type { GrantBlueprintPlanSection } from '@/types/grant'
 
 describe('grant workflow mode extraction and runtime', () => {
@@ -85,6 +90,129 @@ describe('grant workflow mode extraction and runtime', () => {
     expect(generateDiffSummary(previous, next)).toContain('Sections: +0 / ~1 / -0')
   })
 
+  it('normalizes template intent metadata and treats intent changes as material diffs', () => {
+    const previous = normalizeGrantTemplate({
+      sections: [
+        {
+          key: 'technical_section',
+          label: 'Technical Section',
+          type: 'section',
+          workflowMode: 'app_draft',
+          templateIntent: 'methodology',
+          templateIntentAlternates: ['workplan'],
+          templateIntentConfidence: 0.91,
+          required: true,
+          repeatable: false,
+          supportLevel: 'full',
+          confidence: 1,
+          sourceAnchors: [],
+        },
+      ],
+    })
+
+    const next = normalizeGrantTemplate({
+      sections: [
+        {
+          key: 'technical_section',
+          label: 'Technical Section',
+          type: 'section',
+          workflowMode: 'app_draft',
+          templateIntent: 'innovation',
+          templateIntentAlternates: ['methodology'],
+          templateIntentConfidence: 0.88,
+          required: true,
+          repeatable: false,
+          supportLevel: 'full',
+          confidence: 1,
+          sourceAnchors: [],
+        },
+      ],
+    })
+
+    expect(previous.sections[0].templateIntent).toBe('methodology')
+    expect(previous.sections[0].templateIntentAlternates).toEqual(['workplan'])
+    expect(previous.sections[0].templateIntentConfidence).toBe(0.91)
+    expect(generateDiffSummary(previous, next)).toContain('Sections: +0 / ~1 / -0')
+  })
+
+  it('surfaces merge conflicts when re-extraction changes template intent metadata', () => {
+    const current = normalizeGrantTemplate({
+      sections: [
+        {
+          key: 'technical_section',
+          label: 'Technical Section',
+          type: 'section',
+          workflowMode: 'app_draft',
+          templateIntent: 'methodology',
+          templateIntentConfidence: 0.9,
+          required: true,
+          repeatable: false,
+          supportLevel: 'full',
+          confidence: 1,
+          sourceAnchors: [],
+        },
+      ],
+    })
+    const incoming = normalizeGrantTemplate({
+      sections: [
+        {
+          key: 'technical_section',
+          label: 'Technical Section',
+          type: 'section',
+          workflowMode: 'app_draft',
+          templateIntent: 'innovation',
+          templateIntentConfidence: 0.9,
+          required: true,
+          repeatable: false,
+          supportLevel: 'full',
+          confidence: 1,
+          sourceAnchors: [],
+        },
+      ],
+    })
+
+    const merged = mergeGrantTemplates(current, incoming, '11111111-1111-1111-1111-111111111111')
+
+    expect(merged.conflicts).toHaveLength(1)
+    expect(merged.mergedTemplate.sections[0].templateIntent).toBe('methodology')
+    expect(merged.mergedTemplate.mergeConflicts[0]?.block).toBe('sections')
+  })
+
+  it('treats more than one alternate as ambiguous and does not trust template intent', () => {
+    expect(MAX_TRUSTED_TEMPLATE_INTENT_ALTERNATES).toBe(1)
+    expect(shouldTrustTemplateIntent({
+      intent: 'methodology',
+      confidence: 0.96,
+      alternates: ['workplan'],
+      workflowMode: 'app_draft',
+      sectionType: 'narrative',
+    })).toBe(true)
+    expect(shouldTrustTemplateIntent({
+      intent: 'methodology',
+      confidence: 0.96,
+      alternates: ['workplan', 'evaluation'],
+      workflowMode: 'app_draft',
+      sectionType: 'narrative',
+    })).toBe(false)
+  })
+
+  it('uses one shared template section type resolver for concise sections', () => {
+    expect(resolveGrantTemplateSectionType({
+      key: 'capacity_statement',
+      label: 'Capacity Statement',
+      type: 'section',
+      workflowMode: 'app_draft',
+      required: true,
+      repeatable: false,
+      wordLimit: 120,
+      charLimit: 900,
+      guidance: 'State the institutional capacity in a concise response.',
+      supportLevel: 'full',
+      confidence: 1,
+      sourceAnchors: [],
+    })).toBe('short_answer')
+  })
+
   it('filters team-owned response items out of grant prep mapping while keeping budget guidance', () => {
     const mapping = buildGrantPrepStageMapping({
       sections: [
@@ -105,6 +233,8 @@ describe('grant workflow mode extraction and runtime', () => {
           label: 'Principal Investigator Details',
           type: 'field',
           workflowMode: 'team_manual',
+          templateIntent: 'team',
+          templateIntentConfidence: 0.95,
           guidance: 'Enter PI details.',
           required: true,
           repeatable: false,
@@ -141,6 +271,32 @@ describe('grant workflow mode extraction and runtime', () => {
     expect(budgetPointers).toContain('budget.budget_overview')
   })
 
+  it('uses trusted template intent before keyword fallback for weak app_draft labels', () => {
+    const mapping = buildGrantPrepStageMapping({
+      sections: [
+        {
+          key: 'section_2',
+          label: 'Section 2',
+          type: 'section',
+          workflowMode: 'app_draft',
+          guidance: 'Provide the requested response.',
+          templateIntent: 'methodology',
+          templateIntentConfidence: 0.93,
+          required: true,
+          repeatable: false,
+          supportLevel: 'full',
+          confidence: 1,
+          sourceAnchors: [],
+        },
+      ],
+    })
+
+    expect(mapping.methodology.templatePointers).toContain('sections.section_2')
+    expect(mapping.innovation.secondaryPointers).toContain('sections.section_2')
+    expect(mapping.evaluation.secondaryPointers).toContain('sections.section_2')
+    expect(mapping.risk_and_ethics.secondaryPointers).toContain('sections.section_2')
+  })
+
   it('keeps only app_draft narrative sections in the shadow paper blueprint', () => {
     const sectionPlan: GrantBlueprintPlanSection[] = [
       {
@@ -156,6 +312,9 @@ describe('grant workflow mode extraction and runtime', () => {
         reviewerIntent: null,
         dependencies: [],
         sourceTemplatePointer: 'objectives',
+        templateIntent: 'objectives',
+        templateIntentAlternates: ['alignment'],
+        templateIntentConfidence: 0.92,
         mustCover: ['Problem statement', 'Expected outcomes'],
         mustAvoid: [],
         grantSemantic: 'objectives',
@@ -229,6 +388,9 @@ describe('grant workflow mode extraction and runtime', () => {
     expect(shadowPlan[0].sectionType).toBe('short_answer')
     expect(shadowPlan[0].workflowMode).toBe('app_draft')
     expect(shadowPlan[0].grantSemantic).toBe('objectives')
+    expect(shadowPlan[0].templateIntent).toBe('objectives')
+    expect(shadowPlan[0].templateIntentAlternates).toEqual(['alignment'])
+    expect(shadowPlan[0].templateIntentConfidence).toBe(0.92)
     expect(shadowPlan[0].prepContextBlock?.stageKeys).toEqual([
       'problem_definition',
       'fit_and_scope',
