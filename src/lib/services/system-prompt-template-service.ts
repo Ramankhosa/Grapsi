@@ -188,6 +188,14 @@ export const TEMPLATE_KEYS = {
   PAPER_MANUSCRIPT_REVIEW_AGGREGATION: 'paper_manuscript_review_aggregation',
   PAPER_MANUSCRIPT_IMPROVE_REWRITE: 'paper_manuscript_improve_rewrite',
   PAPER_EXPORT_EXTRACTION: 'paper_export_extraction',
+  GRANT_PASS1_PERSONA: 'grant_pass1_persona',
+  GRANT_PASS1_SECTION_PLAYBOOK: 'grant_pass1_section_playbook',
+  GRANT_PASS1_PREP_USAGE_RULES: 'grant_pass1_prep_usage_rules',
+  GRANT_PASS1_CONSISTENCY_RULES: 'grant_pass1_consistency_rules',
+  GRANT_PASS1_OUTPUT_FORMAT: 'grant_pass1_output_format',
+  GRANT_PASS2_PERSONA: 'grant_pass2_persona',
+  GRANT_PASS2_REVIEWER_POLISH_RULES: 'grant_pass2_reviewer_polish_rules',
+  GRANT_PASS2_OUTPUT_FORMAT: 'grant_pass2_output_format',
 } as const;
 
 export const systemPromptTemplateService = new SystemPromptTemplateService();

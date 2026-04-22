@@ -13,9 +13,12 @@
 
 import { prisma } from '../prisma';
 import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import { buildGrantDraftingPrompt } from '@/lib/grants/draftingPromptComposer';
 import {
-  buildGrantBackedBasePrompt,
-  buildGrantPromptOverlay,
+  buildGrantDraftingStrategyInput,
+  resolveGrantDraftingStrategy,
+} from '@/lib/grants/draftingStrategy';
+import {
   formatGrantMustCoverItems,
   summarizeGrantFreezePayload,
 } from '@/lib/grants/promptOverlay';
@@ -67,7 +70,12 @@ import { polishDraftMarkdown } from '../markdown-draft-formatter';
 import type {
   GrantComplianceReport,
   GrantGenerationTrace,
+  GrantPrepContextBlock,
+  GrantPrepPromptBundle,
+  GrantRuleProfile,
   GrantSectionComplianceContract,
+  GrantSectionSemantic,
+  GrantTemplateIntent,
   ReviewerReadinessReport,
 } from '@/types/grant';
 
@@ -474,7 +482,6 @@ class PaperSectionService {
     } = input;
 
     const twoPassEnabled = isFeatureEnabled('ENABLE_TWO_PASS_GENERATION');
-    const effectiveTwoPass = twoPassEnabled && !isPass1ExcludedSection(sectionKey);
 
     try {
       // Check if blueprint is ready
@@ -486,6 +493,15 @@ class PaperSectionService {
         };
       }
 
+      // Get blueprint context for this section
+      const blueprintContext = await blueprintService.getSectionContext(sessionId, sectionKey);
+      if (!blueprintContext) {
+        return {
+          success: false,
+          error: `Section ${sectionKey} not found in blueprint`
+        };
+      }
+
       // Check for existing section
       const existingSection = await prisma.paperSection.findUnique({
         where: { sessionId_sectionKey: { sessionId, sectionKey } }
@@ -493,6 +509,43 @@ class PaperSectionService {
 
       const storedPass1Content = readStoredPass1Content(existingSection);
       const reuseStatuses = ['DRAFT', 'REVIEWED', 'APPROVED'];
+
+      // Get the session to fetch paper type and research topic
+      const session = await prisma.draftingSession.findUnique({
+        where: { id: sessionId },
+        include: {
+          researchTopic: true,
+          paperType: true
+        }
+      });
+
+      if (!session || !session.researchTopic) {
+        return {
+          success: false,
+          error: 'Session or research topic not found'
+        };
+      }
+
+      const paperTypeCode = session.paperType?.code || 'JOURNAL_ARTICLE';
+      const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
+      const grantStrategy = grantBacked
+        ? resolveGrantDraftingStrategy(buildGrantDraftingStrategyInput({
+            sectionKey,
+            sectionType: blueprintContext.currentSection.sectionType,
+            grantSemantic: blueprintContext.currentSection.grantSemantic,
+            templateIntent: blueprintContext.currentSection.templateIntent,
+            characterLimit: blueprintContext.currentSection.characterLimit,
+            wordBudget: blueprintContext.currentSection.wordBudget,
+            mustCover: blueprintContext.currentSection.mustCover,
+            authoritativePrepBundle: blueprintContext.currentSection.authoritativePrepBundle,
+            prepContextBlock: blueprintContext.currentSection.prepContextBlock,
+            suggestedCitationCount: blueprintContext.currentSection.suggestedCitationCount,
+          }))
+        : null;
+      const effectiveTwoPass = twoPassEnabled
+        && !isPass1ExcludedSection(sectionKey)
+        && (!grantBacked || grantStrategy?.mode === 'two_pass');
+
       if (effectiveTwoPass) {
         if (!existingSection || !storedPass1Content) {
           return {
@@ -518,35 +571,8 @@ class PaperSectionService {
         };
       }
 
-      // Get blueprint context for this section
-      const blueprintContext = await blueprintService.getSectionContext(sessionId, sectionKey);
-      if (!blueprintContext) {
-        return {
-          success: false,
-          error: `Section ${sectionKey} not found in blueprint`
-        };
-      }
-
       // Get previous sections' memories
       const previousMemories = await this.getPreviousSectionMemories(sessionId, sectionKey);
-
-      // Get the session to fetch paper type and research topic
-      const session = await prisma.draftingSession.findUnique({
-        where: { id: sessionId },
-        include: {
-          researchTopic: true,
-          paperType: true
-        }
-      });
-
-      if (!session || !session.researchTopic) {
-        return {
-          success: false,
-          error: 'Session or research topic not found'
-        };
-      }
-
-      const paperTypeCode = session.paperType?.code || 'JOURNAL_ARTICLE';
 
       // Get methodology type from blueprint
       const blueprint = await blueprintService.getBlueprint(sessionId);
@@ -818,6 +844,16 @@ class PaperSectionService {
 
     const blueprintContext = await blueprintService.getSectionContext(section.sessionId, section.sectionKey);
     const evidencePromptContext = await this.getPass1EvidencePromptContext(section.sessionId, section.sectionKey);
+    const grantSession = isGrantBackedPaperTypeCode(paperTypeCode)
+      ? await prisma.grantSession.findFirst({
+          where: { draftingSessionId: section.sessionId },
+          select: {
+            blueprint: { select: { freezePayloadJson: true } },
+            project: { select: { name: true } },
+            fundingCall: { select: { scheme_title: true, agency_name: true } },
+          },
+        })
+      : null;
     const pass1ArtifactRecord = (
       section.pass1Artifact
       && typeof section.pass1Artifact === 'object'
@@ -844,9 +880,22 @@ class PaperSectionService {
       ),
       tenantContext: tenantContext || null,
       sectionType: blueprintContext?.currentSection.sectionType,
+      reviewerIntent: blueprintContext?.currentSection.reviewerIntent || null,
       grantSemantic: blueprintContext?.currentSection.grantSemantic,
       templateIntent: blueprintContext?.currentSection.templateIntent,
       dimensionCitations: dimensionCitations.length > 0 ? dimensionCitations : undefined,
+      authoritativePrepBundle: blueprintContext?.currentSection.authoritativePrepBundle || blueprintContext?.currentSection.prepContextBlock || null,
+      relatedPrepAwareness: blueprintContext?.currentSection.relatedPrepAwareness || null,
+      grantRuleProfile: blueprintContext?.currentSection.grantRuleProfile || null,
+      grantContextSummary: grantSession
+        ? {
+            projectTitle: grantSession.project?.name || null,
+            fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
+            agencyName: grantSession.fundingCall?.agency_name || null,
+            freezeSummary: summarizeGrantFreezePayload(grantSession.blueprint?.freezePayloadJson),
+          }
+        : null,
+      baseSectionMemory: pass1ArtifactRecord.memory || section.baseMemory || null,
       grantSectionComplianceContract: grantContract,
       baseGrantGenerationTrace: pass1ArtifactRecord.grantGenerationTrace,
       wordBudget: blueprintContext?.currentSection.wordBudget,
@@ -1735,7 +1784,7 @@ class PaperSectionService {
     let basePrompt = '';
     try {
       basePrompt = grantBacked
-        ? buildGrantBackedBasePrompt(currentSection.sectionKey, grantPromptContext)
+        ? ''
         : await sectionTemplateService.getPass1PromptForSection(
             currentSection.sectionKey,
             { researchTopic }
@@ -1743,7 +1792,7 @@ class PaperSectionService {
       debugComponents.basePrompt = basePrompt;
     } catch (e) {
       basePrompt = grantBacked
-        ? buildGrantBackedBasePrompt(currentSection.sectionKey, grantPromptContext)
+        ? ''
         : `Write the ${currentSection.sectionKey} section for an academic paper.`;
       debugComponents.basePrompt = basePrompt;
     }
@@ -1775,9 +1824,6 @@ class PaperSectionService {
     const citationBudgetBlock = evidenceContext.evidenceDigest.digests.length > 0
       ? formatCitationBudgetRules(evidenceContext.evidenceDigest)
       : '(no citation budget rules)';
-    const grantOverlayBlock = grantBacked
-      ? buildGrantPromptOverlay(grantPromptContext)
-      : '';
     const formattedMustCover = formatGrantMustCoverItems(
       currentSection.mustCover,
       currentSection.mustCoverTyping
@@ -1940,6 +1986,81 @@ ${pm.memory.forwardReferences.length > 0 ? `- Promises: ${pm.memory.forwardRefer
       debugComponents.userInstructions = userInstructions;
     }
 
+    if (grantBacked) {
+      const topicContextBlock = researchTopic
+        ? `PROJECT / TECHNICAL CONTEXT:
+Title: ${researchTopic.title}
+Research Question: ${researchTopic.researchQuestion}
+Methodology: ${Array.isArray(researchTopic.methodology) ? researchTopic.methodology.join(', ') : (researchTopic.methodology || '(not specified)')}
+Contribution: ${Array.isArray(researchTopic.contributionType) ? researchTopic.contributionType.join(', ') : (researchTopic.contributionType || '(not specified)')}
+Keywords: ${Array.isArray(researchTopic.keywords) ? researchTopic.keywords.join(', ') : ''}`
+        : '';
+      const previousSectionContextBlock = previousSectionsSummary
+        ? `PREVIOUS SECTION MEMORY:\n${previousSectionsSummary}`
+        : '';
+      const figureBlock = figureContextBlockText
+        ? `${figureGroundingBlock}\n\n${figureContextBlockText}`
+        : '';
+      const dimensionCitationHints = evidenceContext.dimensionEvidence.map((entry) => ({
+        dimension: entry.dimension,
+        citationKeys: Array.from(new Set(
+          (entry.citations || [])
+            .map((citation) => String(citation.citationKey || '').trim())
+            .filter(Boolean)
+        )).slice(0, 6),
+      }));
+
+      const prompt = await buildGrantDraftingPrompt({
+        pass: 'pass1',
+        outputMode: 'pass1_json',
+        sectionKey: currentSection.sectionKey,
+        displayLabel: grantPromptContext?.displayLabel || currentSection.sectionKey,
+        sectionType: currentSection.sectionType,
+        reviewerIntent: currentSection.reviewerIntent,
+        citationMode: currentSection.citationMode || null,
+        grantSemantic: currentSection.grantSemantic as GrantSectionSemantic | null,
+        templateIntent: currentSection.templateIntent as GrantTemplateIntent | null,
+        grantContextSummary: grantPromptContext?.grantContextSummary || null,
+        grantRuleProfile: currentSection.grantRuleProfile as GrantRuleProfile | null,
+        grantSectionComplianceContract: currentSection.grantSectionComplianceContract as GrantSectionComplianceContract | null,
+        authoritativePrepBundle: currentSection.authoritativePrepBundle || currentSection.prepContextBlock || null,
+        relatedPrepAwareness: currentSection.relatedPrepAwareness || null,
+        thesisStatement,
+        centralObjective,
+        keyContributions,
+        purpose: currentSection.purpose,
+        mustCover: currentSection.mustCover,
+        mustAvoid: currentSection.mustAvoid,
+        wordBudget: currentSection.wordBudget,
+        characterLimit: currentSection.characterLimit,
+        topicContextBlock,
+        evidenceBlock: evidenceFallbackBlock,
+        coverageBlock: coverageFallbackBlock,
+        figureBlock,
+        previousSectionContextBlock,
+        styleBlock: writingStyleBlock,
+        userInstructions,
+        dimensionCitationHints,
+      });
+
+      let debugInfo: PromptDebugInfo | null = null;
+      if (isDebugEnabled() && sessionId && sectionKey) {
+        debugInfo = buildPromptDebugInfo(
+          sessionId,
+          sectionKey,
+          paperTypeCode,
+          methodologyType,
+          {
+            ...debugComponents,
+            basePrompt: prompt,
+          },
+          prompt
+        );
+      }
+
+      return { prompt, debugInfo };
+    }
+
     // Resolve intellectual rigor block from DB (falls back to hardcoded default)
     const FALLBACK_RIGOR = `═══════════════════════════════════════════════════════════════════════════════
 INTELLECTUAL RIGOR & ANALYTICAL DEPTH
@@ -2041,11 +2162,6 @@ ${currentSection.mustAvoid.map((item) => `- ${item}`).join('\n')}
 ${controlledWordBudget
   ? `Word Budget: ~${controlledWordBudget} words`
   : ''}
-
-${grantOverlayBlock ? `
-[PRIORITY 2.3 - GRANT OVERLAY] GRANT PREP, REVIEWER, AND FUNDING CONTEXT
-${grantOverlayBlock.trim()}
-` : ''}
 
 ${citationModeFallbackBlock ? `
 [PRIORITY 2.5 - CITATION MODE] SECTION CITATION CONTROL

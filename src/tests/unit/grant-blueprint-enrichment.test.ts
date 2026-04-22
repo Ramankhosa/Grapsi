@@ -425,6 +425,79 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[3].grantSemantic).toBeNull();
   });
 
+  it('uses covered direct prep as authoritative and keeps cross-section prep as awareness only', () => {
+    const sections: GrantBlueprintPlanSection[] = [
+      makeSection({
+        sectionKey: 'technical_plan',
+        label: 'Technical Plan',
+        purpose: 'Explain the execution methodology, validation approach, milestones, and delivery readiness.',
+        reviewerIntent: 'Show implementation feasibility.',
+      }),
+    ];
+
+    const enriched = enrichGrantBlueprintSections(sections, {
+      projectTitle: 'Cyber Centre of Excellence',
+      fundingCallTitle: 'MeitY Cyber CoE Call',
+      prepEvidenceBySection: {
+        technical_plan: [
+          {
+            stageKey: 'methodology',
+            pointKey: 'technical_approach',
+            label: 'Technical approach',
+            sourceTemplatePointer: 'technical_plan',
+            sectionKeys: ['technical_plan'],
+            keywords: ['federated cyber range'],
+            thrustLinkage: ['capacity building'],
+            factBullets: ['Federated cyber range network with threat emulation labs'],
+            ruleNotes: [],
+            confidence: 0.9,
+            captureBasis: ['user_confirmed'],
+            status: 'covered',
+          },
+          {
+            stageKey: 'methodology',
+            pointKey: 'draft_placeholder',
+            label: 'Unverified note',
+            sourceTemplatePointer: 'technical_plan',
+            sectionKeys: ['technical_plan'],
+            keywords: ['needs review only'],
+            thrustLinkage: [],
+            factBullets: ['Do not use this yet'],
+            ruleNotes: ['Needs review before drafting'],
+            confidence: 0.3,
+            captureBasis: ['assistant_guess'],
+            status: 'needs_review',
+          },
+        ],
+        evaluation_notes: [
+          {
+            stageKey: 'evaluation',
+            pointKey: 'validation_metrics',
+            label: 'Validation metrics',
+            sourceTemplatePointer: 'evaluation',
+            sectionKeys: ['evaluation_plan'],
+            keywords: ['benchmark exercises'],
+            thrustLinkage: ['evidence-based evaluation'],
+            factBullets: ['Validation will use benchmark exercises and deployment readiness checks'],
+            ruleNotes: [],
+            confidence: 0.88,
+            captureBasis: ['user_confirmed'],
+            status: 'covered',
+          },
+        ],
+      },
+    });
+
+    expect(enriched[0].grantSemantic).toBe('methodology');
+    expect(enriched[0].prepContextBlock?.stageKeys).toEqual(['methodology']);
+    expect(enriched[0].authoritativePrepBundle?.keywords).toContain('federated cyber range');
+    expect(enriched[0].authoritativePrepBundle?.bullets.join(' ')).not.toContain('Do not use this yet');
+    expect(enriched[0].relatedPrepAwareness?.stageKeys).toEqual(['evaluation']);
+    expect(enriched[0].relatedPrepAwareness?.keywords).toContain('benchmark exercises');
+    expect(enriched[0].grantSectionComplianceContract?.prepEvidence).toHaveLength(1);
+    expect(enriched[0].grantSectionComplianceContract?.prepEvidence[0]?.status).toBe('covered');
+  });
+
   it('classifies ambiguous headings by meaning and carries prep and rule context into app_draft sections', () => {
     const sections: GrantBlueprintPlanSection[] = [
       makeSection({
@@ -459,24 +532,14 @@ describe('grant blueprint enrichment', () => {
     });
 
     expect(enriched[0].grantSemantic).toBe('summary');
-    expect(enriched[0].prepContextBlock?.stageKeys).toEqual([
-      'final_pitch',
-      'thrust_alignment',
-      'fit_and_scope',
-      'outcomes',
-    ]);
-    expect(enriched[0].prepContextBlock?.keywords).toContain('digital sovereignty');
-    expect(enriched[0].prepContextBlock?.bullets.length).toBeGreaterThan(0);
+    expect(enriched[0].prepContextBlock).toBeNull();
+    expect(enriched[0].authoritativePrepBundle).toBeNull();
+    expect(enriched[0].relatedPrepAwareness).toBeNull();
     expect(enriched[0].grantRuleProfile?.formatConstraints).toContain('Target approximately 600 words.');
 
     expect(enriched[1].grantSemantic).toBe('problem_need');
-    expect(enriched[1].prepContextBlock?.stageKeys).toEqual([
-      'problem_definition',
-      'root_cause',
-      'beneficiaries',
-      'fit_and_scope',
-    ]);
-    expect(enriched[1].prepContextBlock?.bullets.join(' ')).toContain('Rule note: Tie the gap to measurable outcomes.');
+    expect(enriched[1].prepContextBlock).toBeNull();
+    expect(enriched[1].authoritativePrepBundle).toBeNull();
     expect(enriched[1].grantRuleProfile?.requiredPoints).toContain(
       'Clearly articulate the capability gap addressed by the proposal.'
     );
@@ -488,7 +551,7 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[1].grantSectionComplianceContract?.requiredPoints).toContain(
       'Clearly articulate the capability gap addressed by the proposal.'
     );
-    expect(enriched[1].grantSectionComplianceContract?.prepEvidence.length).toBeGreaterThan(0);
+    expect(enriched[1].grantSectionComplianceContract?.prepEvidence).toHaveLength(0);
     expect(enriched[1].grantSectionComplianceContract?.submissionChecklist).toContain(
       'Submit the application through the portal before the deadline.'
     );
@@ -497,13 +560,8 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[1].reviewerReadinessReport?.score).toBeGreaterThan(0);
 
     expect(enriched[2].grantSemantic).toBe('methodology');
-    expect(enriched[2].prepContextBlock?.stageKeys).toEqual([
-      'methodology',
-      'innovation',
-      'evaluation',
-      'risk_and_ethics',
-    ]);
-    expect(enriched[2].prepContextBlock?.keywords).toContain('federated cyber range');
+    expect(enriched[2].prepContextBlock).toBeNull();
+    expect(enriched[2].authoritativePrepBundle).toBeNull();
     expect(enriched[2].grantRuleProfile?.requiredPoints).toContain(
       'Explain the execution methodology and validation plan.'
     );
@@ -575,20 +633,12 @@ describe('grant blueprint enrichment', () => {
     });
 
     expect(enriched[0].grantSemantic).toBe('methodology');
-    expect(enriched[0].prepContextBlock?.stageKeys).toEqual([
-      'methodology',
-      'innovation',
-      'evaluation',
-      'risk_and_ethics',
-    ]);
+    expect(enriched[0].prepContextBlock).toBeNull();
+    expect(enriched[0].authoritativePrepBundle).toBeNull();
 
     expect(enriched[1].grantSemantic).toBe('summary');
-    expect(enriched[1].prepContextBlock?.stageKeys).toEqual([
-      'final_pitch',
-      'thrust_alignment',
-      'fit_and_scope',
-      'outcomes',
-    ]);
+    expect(enriched[1].prepContextBlock).toBeNull();
+    expect(enriched[1].authoritativePrepBundle).toBeNull();
   });
 
   it('builds a usable proposal foundation from enriched sections', () => {

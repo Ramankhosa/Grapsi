@@ -2,6 +2,7 @@ import type {
   GrantCitationMode,
   GrantSectionComplianceContract,
   GrantPrepContextBlock,
+  GrantPrepPromptBundle,
   GrantRuleProfile,
   GrantSectionSemantic,
   GrantTemplateIntent,
@@ -26,6 +27,8 @@ export interface SharedGrantPromptContext {
   grantSemantic?: GrantSectionSemantic | null
   templateIntent?: GrantTemplateIntent | null
   prepContextBlock?: GrantPrepContextBlock | null
+  authoritativePrepBundle?: GrantPrepPromptBundle | null
+  relatedPrepAwareness?: GrantPrepPromptBundle | null
   grantRuleProfile?: GrantRuleProfile | null
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
   grantContextSummary?: GrantPromptSummary | null
@@ -91,8 +94,8 @@ export function buildGrantPromptOverlay(context?: SharedGrantPromptContext): str
   if (!context) return ''
 
   const grantSummaryLines = context.grantContextSummary?.freezeSummary || []
-  const prepBullets = context.prepContextBlock?.bullets || []
-  const prepKeywords = context.prepContextBlock?.keywords || []
+  const authoritativePrepBundle = context.authoritativePrepBundle || context.prepContextBlock || null
+  const awarenessBundle = context.relatedPrepAwareness || null
   const grantRules = context.grantRuleProfile
   const grantContractBlock = formatGrantComplianceContractForPrompt(context.grantSectionComplianceContract)
   const grantProfileBlock = formatGrantPromptProfileForPrompt(buildGrantPromptProfile({
@@ -139,11 +142,35 @@ export function buildGrantPromptOverlay(context?: SharedGrantPromptContext): str
             : '',
         ].filter(Boolean).join('\n\n')
       : '',
-    prepBullets.length > 0
-      ? `GRANT PREP SIGNALS:\n${prepBullets.map((item) => `- ${item}`).join('\n')}`
+    authoritativePrepBundle && (
+      authoritativePrepBundle.bullets.length > 0
+      || authoritativePrepBundle.keywords.length > 0
+    )
+      ? [
+          'AUTHORITATIVE SECTION PREP POINTS:',
+          '- Treat these as the factual backbone for this section.',
+          authoritativePrepBundle.bullets.length > 0
+            ? authoritativePrepBundle.bullets.map((item) => `- ${item}`).join('\n')
+            : '',
+          authoritativePrepBundle.keywords.length > 0
+            ? `Keywords: ${authoritativePrepBundle.keywords.join(', ')}`
+            : '',
+        ].filter(Boolean).join('\n')
       : '',
-    prepKeywords.length > 0
-      ? `SECTION-SCOPED PREP KEYWORDS: ${prepKeywords.join(', ')}`
+    awarenessBundle && (
+      awarenessBundle.bullets.length > 0
+      || awarenessBundle.keywords.length > 0
+    )
+      ? [
+          'RELATED SECTION AWARENESS:',
+          '- Awareness only; do not turn these into new required claims.',
+          awarenessBundle.bullets.length > 0
+            ? awarenessBundle.bullets.map((item) => `- ${item}`).join('\n')
+            : '',
+          awarenessBundle.keywords.length > 0
+            ? `Keywords: ${awarenessBundle.keywords.join(', ')}`
+            : '',
+        ].filter(Boolean).join('\n')
       : '',
   ].filter(Boolean)
 

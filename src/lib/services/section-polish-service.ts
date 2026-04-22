@@ -17,6 +17,7 @@ import { sectionTemplateService } from './section-template-service';
 import { systemPromptTemplateService, TEMPLATE_KEYS } from './system-prompt-template-service';
 import { applyLengthControlToWordBudget } from '../paper-length-control';
 import crypto from 'crypto';
+import { buildGrantDraftingPrompt, type GrantPromptSummary, type GrantPass1MemoryContext } from '@/lib/grants/draftingPromptComposer';
 import {
   buildGrantComplianceReport,
   buildReviewerReadinessReport,
@@ -30,6 +31,8 @@ import {
 } from '@/lib/grants/promptProfile';
 import type {
   GrantComplianceReport,
+  GrantPrepPromptBundle,
+  GrantRuleProfile,
   GrantSectionSemantic,
   GrantSectionComplianceContract,
   GrantTemplateIntent,
@@ -55,10 +58,16 @@ export interface PolishInput {
   targetWordCount?: number;
   tenantContext?: TenantContext | null;
   sectionType?: string | null;
+  reviewerIntent?: string | null;
   grantSemantic?: GrantSectionSemantic | null;
   templateIntent?: GrantTemplateIntent | null;
   dimensionCitations?: DimensionCitationExpectation[];
+  authoritativePrepBundle?: GrantPrepPromptBundle | null;
+  relatedPrepAwareness?: GrantPrepPromptBundle | null;
+  grantRuleProfile?: GrantRuleProfile | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
+  grantContextSummary?: GrantPromptSummary | null;
+  baseSectionMemory?: GrantPass1MemoryContext | null;
   baseGrantGenerationTrace?: unknown;
   wordBudget?: number | null;
   characterLimit?: number | null;
@@ -384,6 +393,36 @@ ${previousReport.dimensionCoverage.dimensions
 Restore the required mapped-evidence citations for every uncovered dimension.
 `
     : retryBlock;
+  const grantBacked = Boolean(
+    input.grantSectionComplianceContract
+    || input.grantSemantic
+    || input.templateIntent
+    || input.authoritativePrepBundle
+    || input.relatedPrepAwareness
+  );
+
+  if (grantBacked) {
+    return buildGrantDraftingPrompt({
+      pass: 'pass2',
+      sectionKey: input.sectionKey,
+      displayLabel: input.displayName,
+      sectionType: input.sectionType || null,
+      reviewerIntent: input.reviewerIntent || null,
+      grantSemantic: input.grantSemantic || null,
+      templateIntent: input.templateIntent || null,
+      authoritativePrepBundle: input.authoritativePrepBundle || null,
+      relatedPrepAwareness: input.relatedPrepAwareness || null,
+      grantRuleProfile: input.grantRuleProfile || null,
+      grantSectionComplianceContract: input.grantSectionComplianceContract || null,
+      grantContextSummary: input.grantContextSummary || null,
+      wordBudget: input.wordBudget ?? input.targetWordCount,
+      characterLimit: input.characterLimit,
+      baseContent: input.baseContent,
+      pass1Memory: input.baseSectionMemory || null,
+      retryNoticeBlock: effectiveRetryBlock,
+      requiredCitationKeys,
+    });
+  }
 
   // Fetch paper-type-specific guidance from the database
   let publicationTypeBlock = '';
@@ -661,7 +700,11 @@ class SectionPolishService {
       reason: 'drift_validation',
       message: firstAttempt.grantComplianceReport && !firstAttempt.grantComplianceReport.passed
         ? 'Retrying grant polish to restore dropped required points or prep-derived evidence.'
-        : 'Retrying publication polish to restore required citation coverage.',
+        : (
+            input.grantSectionComplianceContract || input.grantSemantic || input.templateIntent
+              ? 'Retrying reviewer polish to restore required citation coverage.'
+              : 'Retrying publication polish to restore required citation coverage.'
+          ),
       driftReport: firstAttempt.driftReport
     });
 

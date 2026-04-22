@@ -3,6 +3,11 @@ import {
   normalizeGrantCitationMode,
   requiresMappedGrantEvidence,
 } from '@/lib/grants/citationMode'
+import {
+  buildGrantDraftingStrategyInput,
+  resolveGrantDraftingStrategy,
+} from '@/lib/grants/draftingStrategy'
+import { isFeatureEnabled } from '@/lib/feature-flags'
 import type { GrantSectionSemantic, GrantTemplateIntent } from '@/types/grant'
 
 export type GrantBackedSectionType =
@@ -25,6 +30,8 @@ export interface GrantBackedPaperSectionPlanItem {
   reviewerIntent?: string | null
   grantSemantic?: GrantSectionSemantic | string | null
   templateIntent?: GrantTemplateIntent | string | null
+  suggestedCitationCount?: number | null
+  authoritativePrepPointCount?: number | null
 }
 
 export type GrantBackedDraftingMode = 'one_pass' | 'two_pass'
@@ -85,6 +92,8 @@ export function normalizeGrantBackedSectionPlanItem(
     reviewerIntent: String(record.reviewerIntent || '').trim() || null,
     grantSemantic: String(record.grantSemantic || '').trim() || null,
     templateIntent: String(record.templateIntent || '').trim() || null,
+    suggestedCitationCount: normalizeNullableNumber(record.suggestedCitationCount),
+    authoritativePrepPointCount: normalizeNullableNumber(record.authoritativePrepPointCount),
   }
 }
 
@@ -118,24 +127,18 @@ export function resolveGrantBackedDraftingMode(
   section: GrantBackedPaperSectionPlanItem | null | undefined
 ): GrantBackedDraftingMode {
   if (!section) return 'two_pass'
-
-  const dimensionCount = Array.isArray(section.mustCover) ? section.mustCover.length : 0
-  if (section.sectionType === 'short_answer') return 'one_pass'
-  if (section.grantSemantic === 'summary') return 'one_pass'
-  if (typeof section.characterLimit === 'number' && section.characterLimit > 0 && section.characterLimit <= 1500) {
-    return 'one_pass'
-  }
-  if (typeof section.wordBudget === 'number' && section.wordBudget > 0 && section.wordBudget <= 250) {
-    return 'one_pass'
-  }
-  if (
-    section.sectionType === 'narrative'
-    || dimensionCount >= 3
-    || (typeof section.wordBudget === 'number' && section.wordBudget >= 350)
-  ) {
-    return 'two_pass'
-  }
-  return 'one_pass'
+  if (!isFeatureEnabled('ENABLE_TWO_PASS_GENERATION')) return 'one_pass'
+  return resolveGrantDraftingStrategy(buildGrantDraftingStrategyInput({
+    sectionKey: section.sectionKey,
+    sectionType: section.sectionType,
+    grantSemantic: section.grantSemantic,
+    templateIntent: section.templateIntent,
+    characterLimit: section.characterLimit,
+    wordBudget: section.wordBudget,
+    mustCover: section.mustCover,
+    authoritativePrepPointCount: section.authoritativePrepPointCount,
+    suggestedCitationCount: section.suggestedCitationCount,
+  })).mode
 }
 
 export function buildGrantBackedSectionConfigs(

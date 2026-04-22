@@ -14,6 +14,11 @@ export interface GrantPromptProfileInput {
 
 export interface GrantPromptProfile {
   task: string
+  reviewerQuestion: string
+  openingMove: string
+  recommendedFlow: string[]
+  evidenceUseRules: string[]
+  antiPatterns: string[]
   sectionTypeRules: string[]
   grantSemantic: GrantSectionSemantic | null
   templateIntent: GrantTemplateIntent | null
@@ -63,6 +68,163 @@ function buildTask(input: GrantPromptProfileInput): string {
   }
 }
 
+function buildReviewerQuestion(input: GrantPromptProfileInput): string {
+  switch (input.grantSemantic) {
+    case 'summary':
+      return 'Why should this proposal be funded now, for whom, and with what expected payoff?'
+    case 'problem_need':
+      return 'What concrete need exists, who is affected, and why is action justified now?'
+    case 'objectives':
+      return 'What exactly will this proposal achieve, and how will success be recognized?'
+    case 'methodology':
+      return 'What will be done, why is it credible, and how will execution risk be controlled?'
+    case 'workplan':
+      return 'What happens when, by whom, and with which milestones and dependencies?'
+    case 'innovation':
+      return 'What is genuinely differentiated here, and why does that difference matter for the call?'
+    case 'evaluation':
+      return 'How will success be measured, validated, and used for course correction?'
+    case 'impact_outcomes':
+      return 'What changes for beneficiaries, on what timeline, and with what evidence of impact?'
+    case 'alignment':
+      return 'How does this section satisfy the call priorities and reviewer scoring logic?'
+    case 'sustainability':
+      return 'How will value continue, scale, or institutionalize beyond the grant period?'
+    case 'risk':
+      return 'What can fail, how likely is it, and what is the mitigation plan?'
+    default:
+      break
+  }
+
+  switch (input.templateIntent) {
+    case 'team':
+      return 'Why is this team structurally capable of delivering the proposal?'
+    case 'eligibility':
+      return 'How does the applicant clearly satisfy fit and eligibility constraints?'
+    default:
+      return 'What does the reviewer need to believe after reading this section?'
+  }
+}
+
+function buildOpeningMove(input: GrantPromptProfileInput): string {
+  switch (input.grantSemantic) {
+    case 'summary':
+      return 'Open with the need, the intervention, and the expected outcome in one reviewer-facing move.'
+    case 'problem_need':
+      return 'Open with the concrete problem signal, the affected beneficiaries, and the cost of inaction.'
+    case 'objectives':
+      return 'Open with the proposal objective set in precise, measurable language.'
+    case 'methodology':
+      return 'Open with the proposed delivery model and why it is fit for purpose.'
+    case 'workplan':
+      return 'Open with the execution frame: phases, milestones, and ownership.'
+    case 'innovation':
+      return 'Open with the differentiating move, not generic importance language.'
+    case 'evaluation':
+      return 'Open with the evaluation logic and what will count as success.'
+    case 'impact_outcomes':
+      return 'Open with the intended beneficiary change and the mechanism that produces it.'
+    case 'alignment':
+      return 'Open with the call-fit statement using the funder’s priorities explicitly.'
+    case 'sustainability':
+      return 'Open with the continuity model beyond the funded period.'
+    case 'risk':
+      return 'Open with the material risk posture and the mitigation stance.'
+    default:
+      break
+  }
+
+  switch (input.templateIntent) {
+    case 'team':
+      return 'Open with the delivery capability of the team rather than biography-style detail.'
+    case 'eligibility':
+      return 'Open with the fit claim and the specific constraint the applicant satisfies.'
+    default:
+      return 'Open with the reviewer-facing claim this section must establish.'
+  }
+}
+
+function buildRecommendedFlow(input: GrantPromptProfileInput): string[] {
+  switch (input.grantSemantic) {
+    case 'summary':
+      return ['Need and urgency', 'Intervention and delivery model', 'Expected outcomes and call fit']
+    case 'problem_need':
+      return ['Problem signal and stakes', 'Beneficiaries and unmet need', 'Why existing responses are insufficient', 'Why this proposal is justified now']
+    case 'objectives':
+      return ['Primary objective', 'Operational scope boundaries', 'Success criteria and measurable outcomes']
+    case 'methodology':
+      return ['Approach overview', 'Execution steps and work components', 'Validation or evaluation method', 'Risk controls and feasibility']
+    case 'workplan':
+      return ['Phases and milestones', 'Dependencies and sequencing', 'Ownership and governance', 'Monitoring checkpoints']
+    case 'innovation':
+      return ['What is differentiated', 'Why that difference matters', 'Why it is credible in this context']
+    case 'evaluation':
+      return ['Evaluation questions', 'Metrics and thresholds', 'Data sources and cadence', 'How learning will inform execution']
+    case 'impact_outcomes':
+      return ['Immediate outputs', 'Beneficiary outcomes', 'Adoption or deployment path', 'Longer-term value or scale']
+    case 'alignment':
+      return ['Relevant call priority', 'How the proposal directly addresses it', 'Why the fit is distinctive and credible']
+    case 'sustainability':
+      return ['Post-grant continuity model', 'Operational or financial support', 'Scale or institutionalization path']
+    case 'risk':
+      return ['Primary risks', 'Mitigation and contingency', 'Residual exposure and controls']
+    default:
+      break
+  }
+
+  switch (input.templateIntent) {
+    case 'team':
+      return ['Roles and ownership', 'Relevant expertise', 'Governance or coordination', 'Partnership contribution']
+    case 'eligibility':
+      return ['Applicable eligibility requirement', 'Applicant fit evidence', 'Institutional or scope fit', 'Any constraints or boundary notes']
+    default:
+      return ['Reviewer-facing claim', 'Supporting evidence or logic', 'Execution or fit implication']
+  }
+}
+
+function buildEvidenceUseRules(input: GrantPromptProfileInput): string[] {
+  const rules = [
+    'Use authoritative section-mapped Grant Prep points as the factual backbone when they are provided.',
+    'Use related-section awareness only to preserve coherence; do not turn it into new required claims.',
+    'Prefer specific facts, beneficiaries, milestones, metrics, and feasibility signals over generic prose.',
+  ]
+
+  if (input.citationMode === 'mapped_evidence') {
+    rules.push('When mapped evidence is required, use only the allowed citation anchors and keep them attached to the claims they support.')
+  } else if (input.citationMode === 'direct_draft') {
+    rules.push('Draft directly from the section contract and prep evidence without inventing unsupported citation placeholders.')
+  }
+
+  return rules
+}
+
+function buildAntiPatterns(input: GrantPromptProfileInput): string[] {
+  const base = [
+    'Do not slip into journal-manuscript framing or literature-review throat clearing.',
+    'Do not invent compliance, eligibility, evidence, or implementation detail that is not supported.',
+    'Do not dump checklist items without narrative logic unless the section type explicitly requires it.',
+  ]
+
+  switch (input.grantSemantic) {
+    case 'summary':
+      return [...base, 'Do not turn the summary into a method dump or background essay.']
+    case 'problem_need':
+      return [...base, 'Do not use vague “important issue” language without stakes or affected beneficiaries.']
+    case 'methodology':
+      return [...base, 'Do not describe the approach abstractly without execution detail or credibility signals.']
+    case 'alignment':
+      return [...base, 'Do not rely on generic mission statements instead of explicit call-fit language.']
+    default:
+      break
+  }
+
+  if (input.templateIntent === 'eligibility') {
+    return [...base, 'Do not overstate compliance or claim eligibility that is not evidenced.']
+  }
+
+  return base
+}
+
 function buildSectionTypeRules(sectionType: string | null | undefined): string[] {
   switch (sectionType) {
     case 'narrative':
@@ -94,6 +256,11 @@ export function buildGrantPromptProfile(input?: GrantPromptProfileInput | null):
   const sectionType = String(input?.sectionType || '').trim() || null
   return {
     task: buildTask(input || {}),
+    reviewerQuestion: buildReviewerQuestion(input || {}),
+    openingMove: buildOpeningMove(input || {}),
+    recommendedFlow: buildRecommendedFlow(input || {}),
+    evidenceUseRules: buildEvidenceUseRules(input || {}),
+    antiPatterns: buildAntiPatterns(input || {}),
     sectionTypeRules: buildSectionTypeRules(sectionType),
     grantSemantic: input?.grantSemantic || null,
     templateIntent: input?.templateIntent || null,
@@ -111,9 +278,23 @@ export function formatGrantPromptProfileForPrompt(profile: GrantPromptProfile): 
   const rulesBlock = profile.sectionTypeRules.length > 0
     ? `SECTION-TYPE RULES:\n${profile.sectionTypeRules.map((rule) => `- ${rule}`).join('\n')}`
     : ''
+  const flowBlock = profile.recommendedFlow.length > 0
+    ? `RECOMMENDED FLOW:\n${profile.recommendedFlow.map((step) => `- ${step}`).join('\n')}`
+    : ''
+  const evidenceBlock = profile.evidenceUseRules.length > 0
+    ? `EVIDENCE USE RULES:\n${profile.evidenceUseRules.map((rule) => `- ${rule}`).join('\n')}`
+    : ''
+  const antiPatternBlock = profile.antiPatterns.length > 0
+    ? `ANTI-PATTERNS:\n${profile.antiPatterns.map((rule) => `- ${rule}`).join('\n')}`
+    : ''
 
   return [
     lines.length > 0 ? `GRANT SECTION PROFILE:\n${lines.map((line) => `- ${line}`).join('\n')}` : '',
+    profile.reviewerQuestion ? `REVIEWER QUESTION:\n- ${profile.reviewerQuestion}` : '',
+    profile.openingMove ? `OPENING MOVE:\n- ${profile.openingMove}` : '',
+    flowBlock,
+    evidenceBlock,
+    antiPatternBlock,
     rulesBlock,
   ].filter(Boolean).join('\n\n')
 }

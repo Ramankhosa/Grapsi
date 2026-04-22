@@ -3,7 +3,6 @@ import type {
   GuidelinePackDocument,
 } from '@/lib/fundingGuidelines/types'
 import type {
-  GrantPrepStageKey,
   GrantPrepStageStates,
 } from '@/lib/grantPrep/types'
 import { buildGrantThematicBlueprint } from '@/lib/grants/blueprintMetadata'
@@ -12,6 +11,7 @@ import {
 } from '@/lib/grants/compliance'
 import {
   getPrepStageKeysForGrantSemantic,
+  getPrepStageKeysForTemplateIntent,
   shouldTrustTemplateIntent,
   templateIntentToGrantSemantic,
 } from '@/lib/grants/templateIntent'
@@ -22,6 +22,7 @@ import type {
   GrantBlueprintPlanSection,
   GrantPrepEvidenceItem,
   GrantPrepContextBlock,
+  GrantPrepPromptBundle,
   GrantRuleProfile,
   GrantSectionComplianceCheck,
   GrantSectionComplianceContract,
@@ -506,89 +507,95 @@ function shouldRegenerateDimensions(section: GrantBlueprintPlanSection): boolean
   return true
 }
 
-function collectCoveredPoints(
-  stageStates: GrantPrepStageStates | null | undefined,
-  stageKey: GrantPrepStageKey
-) {
-  const stage = stageStates?.[stageKey]
-  if (!stage?.enabled) return []
-  return stage.points.filter((point) => point.status === 'covered' && point.capture)
+function filterPromptablePrepEvidence(items: GrantPrepEvidenceItem[]): GrantPrepEvidenceItem[] {
+  return items.filter((item) => item.status === 'covered')
+}
+
+function collectMappedPrepEvidence(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext
+): GrantPrepEvidenceItem[] {
+  return dedupePrepEvidence(filterPromptablePrepEvidence([
+    ...(context.prepEvidenceBySection?.[section.sectionKey] || []),
+    ...(section.sourceTemplatePointer ? context.prepEvidenceBySection?.[section.sourceTemplatePointer] || [] : []),
+  ]))
+}
+
+function formatPrepEvidenceBundle(
+  evidence: GrantPrepEvidenceItem[],
+  options?: {
+    bulletLimit?: number
+    keywordLimit?: number
+  }
+): GrantPrepPromptBundle | null {
+  if (evidence.length === 0) return null
+
+  const bullets = dedupeStrings(
+    evidence.map((item) => {
+      const facts = item.factBullets.length > 0
+        ? item.factBullets.slice(0, 2).join(' ; ')
+        : item.keywords.slice(0, 6).join(', ')
+      const thrust = item.thrustLinkage.length > 0 ? `Thrust linkage: ${item.thrustLinkage.join(', ')}` : null
+      const notes = item.ruleNotes.length > 0 ? `Rule note: ${item.ruleNotes.join(' ; ')}` : null
+      return [item.label, facts || 'covered in prep', thrust, notes].filter(Boolean).join(' | ')
+    })
+  )
+    .filter((item) => !OPERATIONAL_RULE_PATTERN.test(item))
+    .slice(0, options?.bulletLimit || 6)
+
+  const keywords = dedupeStrings(
+    evidence.flatMap((item) => [...item.keywords, ...item.thrustLinkage])
+  ).slice(0, options?.keywordLimit || 12)
+
+  if (bullets.length === 0 && keywords.length === 0) return null
+
+  return {
+    stageKeys: dedupeStrings(evidence.map((item) => item.stageKey)),
+    bullets,
+    keywords,
+  }
+}
+
+function resolveRelevantPrepStageKeys(
+  section: GrantBlueprintPlanSection,
+  semantic: GrantSectionSemantic
+): string[] {
+  return dedupeStrings([
+    ...getPrepStageKeysForGrantSemantic(semantic),
+    ...getPrepStageKeysForTemplateIntent(section.templateIntent),
+  ])
+}
+
+function buildRelatedPrepAwareness(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext,
+  semantic: GrantSectionSemantic
+): GrantPrepPromptBundle | null {
+  const prepEvidenceBySection = context.prepEvidenceBySection || {}
+  const excludedKeys = new Set(
+    dedupeStrings([section.sectionKey, section.sourceTemplatePointer || '']).map((key) => key.toLowerCase())
+  )
+  const relevantStageKeys = new Set(resolveRelevantPrepStageKeys(section, semantic))
+
+  if (relevantStageKeys.size === 0) return null
+
+  const relatedEvidence = dedupePrepEvidence(
+    filterPromptablePrepEvidence(
+      Object.entries(prepEvidenceBySection).flatMap(([key, items]) => {
+        if (excludedKeys.has(String(key || '').trim().toLowerCase())) return []
+        return items.filter((item) => relevantStageKeys.has(item.stageKey))
+      })
+    )
+  )
+
+  return formatPrepEvidenceBundle(relatedEvidence, { bulletLimit: 4, keywordLimit: 8 })
 }
 
 function buildPrepContextBlock(
   section: GrantBlueprintPlanSection,
-  context: GrantBlueprintEnrichmentContext,
-  semantic: GrantSectionSemantic
+  context: GrantBlueprintEnrichmentContext
 ): GrantPrepContextBlock | null {
-  const mappedEvidence = dedupePrepEvidence([
-    ...(context.prepEvidenceBySection?.[section.sectionKey] || []),
-    ...(section.sourceTemplatePointer ? context.prepEvidenceBySection?.[section.sourceTemplatePointer] || [] : []),
-  ])
-  if (mappedEvidence.length > 0) {
-    const bullets = dedupeStrings(
-      mappedEvidence.map((item) => {
-        const facts = item.factBullets.length > 0
-          ? item.factBullets.slice(0, 2).join(' ; ')
-          : item.keywords.slice(0, 6).join(', ')
-        const thrust = item.thrustLinkage.length > 0 ? `Thrust linkage: ${item.thrustLinkage.join(', ')}` : null
-        const notes = item.ruleNotes.length > 0 ? `Rule note: ${item.ruleNotes.join(' ; ')}` : null
-        return [item.label, facts || 'covered in prep', thrust, notes].filter(Boolean).join(' | ')
-      })
-    ).slice(0, 6)
-    const keywords = dedupeStrings(
-      mappedEvidence.flatMap((item) => [...item.keywords, ...item.thrustLinkage])
-    ).slice(0, 12)
-
-    return {
-      stageKeys: dedupeStrings(mappedEvidence.map((item) => item.stageKey)),
-      bullets,
-      keywords,
-    }
-  }
-
-  const stageStates = context.stageStates
-  if (!stageStates) return null
-
-  const stageKeys = getPrepStageKeysForGrantSemantic(semantic)
-  const bullets: string[] = []
-  const keywords: string[] = []
-
-  for (const stageKey of stageKeys) {
-    const coveredPoints = collectCoveredPoints(stageStates, stageKey)
-    for (const point of coveredPoints) {
-      const capture = point.capture
-      if (!capture) continue
-
-      const pointKeywords = dedupeStrings(capture.keywords || [])
-      const thrustLinkage = dedupeStrings(capture.thrustLinkage || [])
-      keywords.push(...pointKeywords, ...thrustLinkage)
-
-      const parts = [
-        `${point.label}: ${pointKeywords.length > 0 ? pointKeywords.join(', ') : 'covered in prep'}`,
-        thrustLinkage.length > 0 ? `Thrust linkage: ${thrustLinkage.join(', ')}` : null,
-        capture.ruleCompliance.status !== 'ok'
-          ? `Rule note: ${capture.ruleCompliance.reason || 'review before final drafting'}`
-          : null,
-      ].filter(Boolean)
-
-      bullets.push(parts.join(' | '))
-    }
-  }
-
-  const normalizedBullets = dedupeStrings(bullets)
-    .filter((item) => !OPERATIONAL_RULE_PATTERN.test(item))
-    .slice(0, 6)
-  const normalizedKeywords = dedupeStrings(keywords).slice(0, 12)
-
-  if (normalizedBullets.length === 0 && normalizedKeywords.length === 0) {
-    return null
-  }
-
-  return {
-    stageKeys,
-    bullets: normalizedBullets,
-    keywords: normalizedKeywords,
-  }
+  return formatPrepEvidenceBundle(collectMappedPrepEvidence(section, context))
 }
 
 function scoreRuleForSection(
@@ -737,45 +744,9 @@ function buildTemplateGuidanceProfile(section: GrantBlueprintPlanSection): Grant
 function buildSectionPrepEvidence(
   section: GrantBlueprintPlanSection,
   context: GrantBlueprintEnrichmentContext,
-  semantic: GrantSectionSemantic
+  _semantic: GrantSectionSemantic
 ): GrantPrepEvidenceItem[] {
-  const directEvidence = dedupePrepEvidence(
-    [
-      ...(context.prepEvidenceBySection?.[section.sectionKey] || []),
-      ...(section.sourceTemplatePointer ? context.prepEvidenceBySection?.[section.sourceTemplatePointer] || [] : []),
-    ]
-  )
-  if (directEvidence.length > 0) {
-    return directEvidence
-  }
-
-  const stageStates = context.stageStates
-  if (!stageStates) return []
-
-  const stageKeys = getPrepStageKeysForGrantSemantic(semantic)
-  return dedupePrepEvidence(
-    stageKeys.flatMap((stageKey) =>
-      collectCoveredPoints(stageStates, stageKey).map((point) => ({
-        stageKey,
-        pointKey: point.key,
-        label: point.label,
-        sourceTemplatePointer: point.capture?.sourceTemplatePointer || point.sourceTemplatePointer || null,
-        sectionKeys: [section.sectionKey],
-        keywords: dedupeStrings(point.capture?.keywords || []),
-        thrustLinkage: dedupeStrings(point.capture?.thrustLinkage || []),
-        factBullets: dedupeStrings(point.capture?.factBullets || []),
-        ruleNotes: dedupeStrings([
-          ...(point.capture?.ruleNotes || []),
-          point.capture?.ruleCompliance.status !== 'ok'
-            ? point.capture?.ruleCompliance.reason || ''
-            : '',
-        ]),
-        confidence: Number(point.capture?.confidence || 0.7),
-        captureBasis: dedupeStrings(point.capture?.captureBasis || []),
-        status: point.status === 'needs_review' ? 'needs_review' : 'covered',
-      }))
-    )
-  )
+  return collectMappedPrepEvidence(section, context)
 }
 
 function toComplianceCheck(input: {
@@ -1056,6 +1027,8 @@ function enrichOneSection(
       ...section,
       grantSemantic: null,
       prepContextBlock: null,
+      authoritativePrepBundle: null,
+      relatedPrepAwareness: null,
       grantRuleProfile: null,
       grantTemplateGuidance: null,
       grantSectionComplianceContract: null,
@@ -1070,7 +1043,9 @@ function enrichOneSection(
   const semantic = resolveGrantSectionSemantic(section)
   const grantRuleProfile = buildGrantRuleProfile(section, context, semantic)
   const prepEvidence = buildSectionPrepEvidence(section, context, semantic)
-  const prepContextBlock = buildPrepContextBlock(section, context, semantic)
+  const authoritativePrepBundle = buildPrepContextBlock(section, context)
+  const relatedPrepAwareness = buildRelatedPrepAwareness(section, context, semantic)
+  const prepContextBlock = authoritativePrepBundle
   const grantSectionComplianceContract = buildGrantSectionComplianceContract(
     section,
     context,
@@ -1120,6 +1095,8 @@ function enrichOneSection(
     thematicBlueprint,
     grantSemantic: semantic,
     prepContextBlock,
+    authoritativePrepBundle,
+    relatedPrepAwareness,
     grantRuleProfile,
     grantTemplateGuidance: grantSectionComplianceContract.templateGuidance,
     grantSectionComplianceContract,

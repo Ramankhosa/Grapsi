@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildGrantPrepStageMapping } from '@/lib/grantPrep/templateMapper'
+import { resolveGrantBackedDraftingMode } from '@/lib/grants/paperSectionConfig'
 import {
   MAX_TRUSTED_TEMPLATE_INTENT_ALTERNATES,
   shouldTrustTemplateIntent,
@@ -211,6 +212,30 @@ describe('grant workflow mode extraction and runtime', () => {
       confidence: 1,
       sourceAnchors: [],
     })).toBe('short_answer')
+  })
+
+  it('routes dense narrative grant sections to two_pass and compact team sections to one_pass', () => {
+    expect(resolveGrantBackedDraftingMode({
+      sectionKey: 'methodology',
+      mustCover: ['Execution model', 'Validation plan', 'Risk controls'],
+      sectionType: 'narrative',
+      grantSemantic: 'methodology',
+      templateIntent: 'methodology',
+      wordBudget: 600,
+      suggestedCitationCount: 5,
+      authoritativePrepPointCount: 3,
+    })).toBe('two_pass')
+
+    expect(resolveGrantBackedDraftingMode({
+      sectionKey: 'team_plan',
+      mustCover: ['Key personnel'],
+      sectionType: 'short_answer',
+      grantSemantic: null,
+      templateIntent: 'team',
+      wordBudget: 180,
+      suggestedCitationCount: 0,
+      authoritativePrepPointCount: 1,
+    })).toBe('one_pass')
   })
 
   it('filters team-owned response items out of grant prep mapping while keeping budget guidance', () => {

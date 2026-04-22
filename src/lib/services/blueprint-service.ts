@@ -26,6 +26,7 @@ import type {
   GrantComplianceReport,
   GrantCitationMode,
   GrantPrepContextBlock,
+  GrantPrepPromptBundle,
   GrantSectionComplianceContract,
   GrantRuleProfile,
   GrantSectionSemantic,
@@ -80,6 +81,8 @@ export interface SectionPlanItem {
   templateIntentConfidence?: number | null;
   grantSemantic?: GrantSectionSemantic | null;
   prepContextBlock?: GrantPrepContextBlock | null;
+  authoritativePrepBundle?: GrantPrepPromptBundle | null;
+  relatedPrepAwareness?: GrantPrepPromptBundle | null;
   grantRuleProfile?: GrantRuleProfile | null;
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
@@ -132,6 +135,8 @@ export interface SectionContext {
   templateIntentConfidence?: number | null;
   grantSemantic?: GrantSectionSemantic | null;
   prepContextBlock?: GrantPrepContextBlock | null;
+  authoritativePrepBundle?: GrantPrepPromptBundle | null;
+  relatedPrepAwareness?: GrantPrepPromptBundle | null;
   grantRuleProfile?: GrantRuleProfile | null;
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
@@ -542,6 +547,8 @@ class BlueprintService {
         templateIntentConfidence: sectionPlan.templateIntentConfidence,
         grantSemantic: sectionPlan.grantSemantic,
         prepContextBlock: sectionPlan.prepContextBlock,
+        authoritativePrepBundle: sectionPlan.authoritativePrepBundle,
+        relatedPrepAwareness: sectionPlan.relatedPrepAwareness,
         grantRuleProfile: sectionPlan.grantRuleProfile,
         grantTemplateGuidance: sectionPlan.grantTemplateGuidance,
         grantSectionComplianceContract: sectionPlan.grantSectionComplianceContract,
@@ -826,6 +833,12 @@ CRITICAL RULES:
           prepContextBlock: item.prepContextBlock && typeof item.prepContextBlock === 'object'
             ? item.prepContextBlock as GrantPrepContextBlock
             : undefined,
+          authoritativePrepBundle: item.authoritativePrepBundle && typeof item.authoritativePrepBundle === 'object'
+            ? item.authoritativePrepBundle as GrantPrepPromptBundle
+            : undefined,
+          relatedPrepAwareness: item.relatedPrepAwareness && typeof item.relatedPrepAwareness === 'object'
+            ? item.relatedPrepAwareness as GrantPrepPromptBundle
+            : undefined,
           grantRuleProfile: item.grantRuleProfile && typeof item.grantRuleProfile === 'object'
             ? item.grantRuleProfile as GrantRuleProfile
             : undefined,
@@ -1108,6 +1121,12 @@ CRITICAL RULES:
           : {}),
         ...(raw.prepContextBlock && typeof raw.prepContextBlock === 'object'
           ? { prepContextBlock: raw.prepContextBlock as GrantPrepContextBlock }
+          : {}),
+        ...(raw.authoritativePrepBundle && typeof raw.authoritativePrepBundle === 'object'
+          ? { authoritativePrepBundle: raw.authoritativePrepBundle as GrantPrepPromptBundle }
+          : {}),
+        ...(raw.relatedPrepAwareness && typeof raw.relatedPrepAwareness === 'object'
+          ? { relatedPrepAwareness: raw.relatedPrepAwareness as GrantPrepPromptBundle }
           : {}),
         ...(raw.grantRuleProfile && typeof raw.grantRuleProfile === 'object'
           ? { grantRuleProfile: raw.grantRuleProfile as GrantRuleProfile }

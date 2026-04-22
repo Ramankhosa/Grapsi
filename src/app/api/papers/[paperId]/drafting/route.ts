@@ -52,8 +52,11 @@ import {
   isGrantBackedSinglePassSection,
 } from '@/lib/grants/paperSectionConfig'
 import {
-  buildGrantBackedBasePrompt,
-  buildGrantPromptOverlay,
+  buildGrantDraftingStrategyInput,
+  resolveGrantDraftingStrategy,
+} from '@/lib/grants/draftingStrategy'
+import { buildGrantDraftingPrompt } from '@/lib/grants/draftingPromptComposer'
+import {
   formatGrantMustCoverItems,
   summarizeGrantFreezePayload,
 } from '@/lib/grants/promptOverlay'
@@ -69,6 +72,7 @@ import type {
   GrantCitationMode,
   GrantGenerationTrace,
   GrantPrepContextBlock,
+  GrantPrepPromptBundle,
   GrantRuleProfile,
   GrantSectionComplianceContract,
   GrantSectionSemantic,
@@ -1704,6 +1708,8 @@ interface BlueprintPromptContext {
   grantSemantic?: GrantSectionSemantic | null;
   templateIntent?: GrantTemplateIntent | null;
   prepContextBlock?: GrantPrepContextBlock | null;
+  authoritativePrepBundle?: GrantPrepPromptBundle | null;
+  relatedPrepAwareness?: GrantPrepPromptBundle | null;
   grantRuleProfile?: GrantRuleProfile | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
   grantContextSummary?: {
@@ -3533,17 +3539,7 @@ async function buildPrompt(
   previousSectionMemories?: PreviousSectionMemoryEntry[]
 ): Promise<string> {
   const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode)
-  let basePrompt = '';
-  if (grantBacked) {
-    basePrompt = buildGrantBackedBasePrompt(sectionKey, blueprintContext);
-  } else {
-    basePrompt = await sectionTemplateService.getPromptForSection(sectionKey, paperTypeCode, context);
-  }
   const citationBudgetValidatorEnabled = isFeatureEnabled('ENABLE_CITATION_BUDGET_VALIDATOR');
-  const hasCitationModePlaceholders = /\{\{AUTO_CITATION_MODE\}\}|\{\{ALLOWED_CITATION_KEYS\}\}/.test(basePrompt);
-  const hasEvidencePlaceholders = /\{\{DIMENSION_EVIDENCE_NOTES\}\}|\{\{RELEVANCE_NOTES\}\}|\{\{EVIDENCE_GAPS\}\}|\{\{EVIDENCE_DIGEST\}\}/.test(basePrompt);
-  const hasDigestPlaceholders = /\{\{RELEVANCE_NOTES\}\}|\{\{EVIDENCE_DIGEST\}\}/.test(basePrompt);
-  const hasCoveragePlaceholders = /\{\{CITATION_COVERAGE_ASSIGNMENTS\}\}|\{\{CITATION_BUDGET_RULES\}\}/.test(basePrompt);
   const topic = context?.researchTopic;
   const sectionTitle = sectionKey
     .replace(/[_-]+/g, ' ')
@@ -3568,10 +3564,128 @@ async function buildPrompt(
   const archetypeRationale = archetype?.archetypeRationale
     ? String(archetype.archetypeRationale)
     : '';
-
-  const grantOverlay = grantBacked
-    ? buildGrantPromptOverlay(blueprintContext)
+  const topicBlock = topic
+    ? `PROJECT / TECHNICAL CONTEXT:
+Title: ${topic.title}
+Research Question: ${topic.researchQuestion}
+Methodology: ${methodology || '(not specified)'}
+Contribution: ${contribution || '(not specified)'}
+Keywords: ${(topic.keywords || []).join(', ')}`
     : '';
+  const archetypeBlock = archetypeId !== '(not detected)'
+    ? `RESEARCH ROUTING CONTEXT:
+Archetype: ${archetypeId} (${Math.round(archetypeConfidence * 100)}% confidence)
+Routing Tags: ${archetypeTags || '(none)'}
+Rationale: ${archetypeRationale || '(not provided)'}`
+    : '';
+  const topicContextBlock = [topicBlock, archetypeBlock].filter(Boolean).join('\n\n');
+  const crossSectionBlock = formatPreviousSectionMemoriesBlock(previousSectionMemories || []);
+
+  const dimensionEvidenceNotes = citationBudgetValidatorEnabled
+    ? ''
+    : (
+      evidenceContext?.dimensionEvidence
+        ? formatDimensionEvidence(evidenceContext.dimensionEvidence)
+        : '(no evidence pack available)'
+    );
+  const evidenceDigest = evidenceContext?.evidenceDigest;
+  const evidenceDigestBlock = evidenceDigest?.digests?.length
+    ? formatEvidenceDigest(evidenceDigest)
+    : '(no evidence digest available)';
+  const evidenceGaps = evidenceContext?.gaps?.length
+    ? evidenceContext.gaps.join(', ')
+    : '(none detected)';
+  const coverageAssignments = Array.isArray(evidenceContext?.coverageAssignments)
+    ? evidenceContext.coverageAssignments
+    : [];
+  const coverageNotes = coverageAssignments.length > 0
+    ? formatCoverageAssignments(coverageAssignments, citationBudgetValidatorEnabled)
+    : '(no mandatory coverage citations for this section)';
+  const evidenceFallbackBody = citationBudgetValidatorEnabled
+    ? evidenceDigestBlock
+    : (dimensionEvidenceNotes || evidenceDigestBlock);
+  const hasEvidenceForFallback = citationBudgetValidatorEnabled
+    ? Boolean(evidenceContext?.evidenceDigest?.digests?.length)
+    : Boolean(evidenceContext?.dimensionEvidence?.length);
+  const evidenceBlock = evidenceContext?.useMappedEvidence && hasEvidenceForFallback
+    ? `${evidenceFallbackBody}\n\nEVIDENCE GAPS:\n${evidenceGaps}`
+    : '';
+  const coverageBlock = evidenceContext?.useMappedEvidence && coverageAssignments.length > 0
+    ? coverageNotes
+    : '';
+  const figureGroundingFallback = `FIGURE GROUNDING RULES:
+- Use only the figure metadata supplied below; do not infer visual details beyond it.
+- Mention figures only when they materially support the section's claims.
+- Refer to them as [Figure N].
+- In Methodology, use only setup/process details from the figure metadata.
+- In Results, prioritize numeric highlights, observed patterns, compared groups, visible signals, and results-ready details.
+- In Discussion, interpret only patterns already grounded in results/figures and treat discussion cues conservatively.
+- Treat claimsToAvoid as hard exclusions.`;
+  const figureContextBlockText = formatSelectedFigureContext(figureContext || { useFigures: false, selectedFigureIds: [], figures: [] }, sectionKey);
+  const figureGroundingBlock = figureContextBlockText
+    ? await systemPromptTemplateService.resolveWithFallback(
+        {
+          templateKey: TEMPLATE_KEYS.FIGURE_GROUNDING_BLOCK,
+          applicationMode: 'paper',
+          sectionScope: sectionKey,
+          paperTypeScope: paperTypeCode
+        },
+        figureGroundingFallback
+      )
+    : '';
+  const figureBlock = figureContextBlockText
+    ? `${figureGroundingBlock}\n\n${figureContextBlockText}`
+    : '';
+  const dimensionCitationHints = (evidenceContext?.dimensionEvidence || []).map((entry) => ({
+    dimension: entry.dimension,
+    citationKeys: Array.from(new Set(
+      (entry.citations || [])
+        .map((citation) => String(citation.citationKey || '').trim())
+        .filter(Boolean)
+    )).slice(0, MAX_CITATIONS_PER_DIMENSION),
+  }));
+
+  if (grantBacked) {
+    return buildGrantDraftingPrompt({
+      pass: 'pass1',
+      outputMode,
+      sectionKey,
+      displayLabel: blueprintContext?.displayLabel || sectionTitle,
+      sectionType: blueprintContext?.sectionType || null,
+      reviewerIntent: blueprintContext?.reviewerIntent || null,
+      citationMode: blueprintContext?.citationMode || null,
+      grantSemantic: blueprintContext?.grantSemantic || null,
+      templateIntent: blueprintContext?.templateIntent || null,
+      grantContextSummary: blueprintContext?.grantContextSummary || null,
+      grantRuleProfile: blueprintContext?.grantRuleProfile || null,
+      grantSectionComplianceContract: blueprintContext?.grantSectionComplianceContract || null,
+      authoritativePrepBundle: blueprintContext?.authoritativePrepBundle || blueprintContext?.prepContextBlock || null,
+      relatedPrepAwareness: blueprintContext?.relatedPrepAwareness || null,
+      thesisStatement: blueprintContext?.thesisStatement,
+      centralObjective: blueprintContext?.centralObjective,
+      keyContributions: blueprintContext?.keyContributions || [],
+      purpose: blueprintContext?.sectionPlan?.find((entry) => normalizeSectionKey(entry.sectionKey) === normalizeSectionKey(sectionKey))?.purpose
+        || '',
+      mustCover: blueprintContext?.mustCover || [],
+      mustAvoid: blueprintContext?.mustAvoid || [],
+      wordBudget: blueprintContext?.wordBudget,
+      characterLimit: blueprintContext?.characterLimit,
+      topicContextBlock,
+      evidenceBlock,
+      coverageBlock,
+      figureBlock,
+      previousSectionContextBlock: crossSectionBlock,
+      styleBlock: writingSampleBlock,
+      userInstructions,
+      dimensionCitationHints,
+    });
+  }
+
+  let basePrompt = await sectionTemplateService.getPromptForSection(sectionKey, paperTypeCode, context);
+  const hasCitationModePlaceholders = /\{\{AUTO_CITATION_MODE\}\}|\{\{ALLOWED_CITATION_KEYS\}\}/.test(basePrompt);
+  const hasEvidencePlaceholders = /\{\{DIMENSION_EVIDENCE_NOTES\}\}|\{\{RELEVANCE_NOTES\}\}|\{\{EVIDENCE_GAPS\}\}|\{\{EVIDENCE_DIGEST\}\}/.test(basePrompt);
+  const hasDigestPlaceholders = /\{\{RELEVANCE_NOTES\}\}|\{\{EVIDENCE_DIGEST\}\}/.test(basePrompt);
+  const hasCoveragePlaceholders = /\{\{CITATION_COVERAGE_ASSIGNMENTS\}\}|\{\{CITATION_BUDGET_RULES\}\}/.test(basePrompt);
 
   // ============================================================================
   // CITATION MODE PLACEHOLDERS
@@ -3631,17 +3745,6 @@ async function buildPrompt(
   // ============================================================================
   // EVIDENCE PACK PLACEHOLDERS
   // ============================================================================
-  const dimensionEvidenceNotes = citationBudgetValidatorEnabled
-    ? ''
-    : (
-      evidenceContext?.dimensionEvidence
-        ? formatDimensionEvidence(evidenceContext.dimensionEvidence)
-        : '(no evidence pack available)'
-    );
-  const evidenceDigest = evidenceContext?.evidenceDigest;
-  const evidenceDigestBlock = evidenceDigest?.digests?.length
-    ? formatEvidenceDigest(evidenceDigest)
-    : '(no evidence digest available)';
   const relevanceNotes = citationBudgetValidatorEnabled
     ? evidenceDigestBlock
     : (
@@ -3649,15 +3752,6 @@ async function buildPrompt(
         ? formatRelevanceNotes(evidenceContext.dimensionEvidence)
         : '(no relevance notes available)'
     );
-  const evidenceGaps = evidenceContext?.gaps?.length
-    ? evidenceContext.gaps.join(', ')
-    : '(none detected)';
-  const coverageAssignments = Array.isArray(evidenceContext?.coverageAssignments)
-    ? evidenceContext.coverageAssignments
-    : [];
-  const coverageNotes = coverageAssignments.length > 0
-    ? formatCoverageAssignments(coverageAssignments, citationBudgetValidatorEnabled)
-    : '(no mandatory coverage citations for this section)';
 
   basePrompt = basePrompt.replace(/\{\{DIMENSION_EVIDENCE_NOTES\}\}/g, dimensionEvidenceNotes);
   basePrompt = basePrompt.replace(/\{\{RELEVANCE_NOTES\}\}/g, relevanceNotes);
@@ -3672,11 +3766,10 @@ async function buildPrompt(
   const hasPlaceholdersForCitations = hasCitationModePlaceholders
     || basePrompt.includes('CITATION MODE')
     || basePrompt.includes('AUTO_CITATION_MODE');
-
-  const topicBlock = topic && !basePrompt.includes('RESEARCH TOPIC CONTEXT')
+  const legacyTopicBlock = topic && !basePrompt.includes('RESEARCH TOPIC CONTEXT')
     ? `\n\nRESEARCH TOPIC CONTEXT:\nTitle: ${topic.title}\nResearch Question: ${topic.researchQuestion}\nMethodology: ${methodology}\nContribution: ${contribution}\nKeywords: ${(topic.keywords || []).join(', ')}`
     : '';
-  const archetypeBlock = archetypeId !== '(not detected)' && !basePrompt.includes('RESEARCH ARCHETYPE CONTEXT')
+  const legacyArchetypeBlock = archetypeId !== '(not detected)' && !basePrompt.includes('RESEARCH ARCHETYPE CONTEXT')
     ? `\n\nRESEARCH ARCHETYPE CONTEXT:\nArchetype: ${archetypeId} (${Math.round(archetypeConfidence * 100)}% confidence)\nRouting Tags: ${archetypeTags || '(none)'}\nRationale: ${archetypeRationale || '(not provided)'}\nConstraint: Keep claims aligned with this archetype and avoid methodological overreach.`
     : '';
 
@@ -3687,47 +3780,19 @@ async function buildPrompt(
 
   // Always inject evidence block when mapped evidence is enabled, even if prompt templates
   // do not have dedicated placeholders.
-  const evidenceFallbackBody = citationBudgetValidatorEnabled
-    ? evidenceDigestBlock
-    : (dimensionEvidenceNotes || evidenceDigestBlock);
-  const hasEvidenceForFallback = citationBudgetValidatorEnabled
-    ? Boolean(evidenceContext?.evidenceDigest?.digests?.length)
-    : Boolean(evidenceContext?.dimensionEvidence?.length);
-  const evidenceBlock = evidenceContext?.useMappedEvidence
+  const legacyEvidenceBlock = evidenceContext?.useMappedEvidence
     && hasEvidenceForFallback
     && (citationBudgetValidatorEnabled ? !hasDigestPlaceholders : !hasEvidencePlaceholders)
     ? `\n\n${evidenceFallbackBody}\n\n[EVIDENCE GAPS]\n${evidenceGaps}`
     : '';
-  const coverageBlock = evidenceContext?.useMappedEvidence
+  const legacyCoverageBlock = evidenceContext?.useMappedEvidence
     && coverageAssignments.length > 0
     && !hasCoveragePlaceholders
     ? `\n\n${coverageNotes}`
     : '';
-  const figureGroundingFallback = `FIGURE GROUNDING RULES:
-- Use only the figure metadata supplied below; do not infer visual details beyond it.
-- Mention figures only when they materially support the section's claims.
-- Refer to them as [Figure N].
-- In Methodology, use only setup/process details from the figure metadata.
-- In Results, prioritize numeric highlights, observed patterns, compared groups, visible signals, and results-ready details.
-- In Discussion, interpret only patterns already grounded in results/figures and treat discussion cues conservatively.
-- Treat claimsToAvoid as hard exclusions.`;
-  const figureContextBlockText = formatSelectedFigureContext(figureContext || { useFigures: false, selectedFigureIds: [], figures: [] }, sectionKey);
-  const figureGroundingBlock = figureContextBlockText
-    ? await systemPromptTemplateService.resolveWithFallback(
-        {
-          templateKey: TEMPLATE_KEYS.FIGURE_GROUNDING_BLOCK,
-          applicationMode: 'paper',
-          sectionScope: sectionKey,
-          paperTypeScope: paperTypeCode
-        },
-        figureGroundingFallback
-      )
-    : '';
-
   const userBlock = userInstructions ? `\n\nUSER INSTRUCTIONS:\n${userInstructions}` : '';
   const styleBlock = writingSampleBlock ? `\n\n${writingSampleBlock}` : '';
-  const crossSectionBlock = formatPreviousSectionMemoriesBlock(previousSectionMemories || []);
-  const figureBlock = figureContextBlockText
+  const legacyFigureBlock = figureContextBlockText
     ? `\n\n${figureGroundingBlock}\n\n${figureContextBlockText}`
     : '';
   const outputInstructions = outputMode === 'pass1_json'
@@ -3740,7 +3805,7 @@ async function buildPrompt(
 - Preserve citation placeholders exactly in [CITE:key] format.
 - Do not use HTML tags.`;
 
-  return `${basePrompt}${grantOverlay}${topicBlock}${archetypeBlock}${crossSectionBlock}${rhetoricalBlock ? `\n\n${rhetoricalBlock}` : ''}${evidenceBlock}${coverageBlock}${figureBlock}${citationsBlock}${styleBlock}${userBlock}
+  return `${basePrompt}${legacyTopicBlock}${legacyArchetypeBlock}${crossSectionBlock}${rhetoricalBlock ? `\n\n${rhetoricalBlock}` : ''}${legacyEvidenceBlock}${legacyCoverageBlock}${legacyFigureBlock}${citationsBlock}${styleBlock}${userBlock}
 
 ${outputInstructions}`;
 }
@@ -4018,7 +4083,12 @@ async function generateSection(
     }
   }
 
-  await emitStatus?.('build_prompt', 'Building section prompt from super-admin publication rules');
+  await emitStatus?.(
+    'build_prompt',
+    isGrantBackedPaperTypeCode(paperTypeCode)
+      ? 'Building grant-native reviewer prompt'
+      : 'Building section prompt from super-admin publication rules'
+  );
 
   const bundle = await buildSectionPromptRuntimeBundle({
     sessionId,
@@ -4073,10 +4143,35 @@ async function generateSection(
   let pass2ValidationReport: unknown;
   let mergedValidationReport: unknown;
   let pass2CompletedAt: Date | undefined;
-  const requestedGenerationMode =
-    payload.generationMode === 'two_pass' && !isPass1BypassedSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)
-      ? 'two_pass'
-      : 'topup_final';
+  const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
+  const grantStrategy = grantBacked
+    ? resolveGrantDraftingStrategy(buildGrantDraftingStrategyInput({
+        sectionKey,
+        sectionType: blueprintPromptContext?.sectionType,
+        grantSemantic: blueprintPromptContext?.grantSemantic,
+        templateIntent: blueprintPromptContext?.templateIntent,
+        characterLimit: blueprintPromptContext?.characterLimit,
+        wordBudget: blueprintPromptContext?.wordBudget,
+        mustCover: blueprintPromptContext?.mustCover,
+        authoritativePrepBundle: blueprintPromptContext?.authoritativePrepBundle,
+        prepContextBlock: blueprintPromptContext?.prepContextBlock,
+        suggestedCitationCount: blueprintPromptContext?.thematicBlueprint?.suggestedCitationCount,
+        observedEvidenceCount: evidencePromptContext?.dimensionEvidence?.length,
+      }))
+    : null;
+  const requestedGenerationMode = grantBacked
+    ? (
+        grantStrategy?.mode === 'two_pass'
+        && !isPass1BypassedSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)
+      )
+        ? 'two_pass'
+        : 'topup_final'
+    : (
+        payload.generationMode === 'two_pass'
+        && !isPass1BypassedSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)
+      )
+        ? 'two_pass'
+        : 'topup_final';
   const twoPassEnabled = isFeatureEnabled('ENABLE_TWO_PASS_GENERATION');
   const useTwoPassPipeline = twoPassEnabled && requestedGenerationMode === 'two_pass';
   const autoCitationRepair = payload.autoCitationRepair === true;
@@ -4101,7 +4196,10 @@ async function generateSection(
       );
     }
 
-    await emitStatus?.('llm_generation', 'Polishing evidence draft for publication');
+    await emitStatus?.(
+      'llm_generation',
+      grantBacked ? 'Polishing reviewer-ready grant draft' : 'Polishing evidence draft for publication'
+    );
     const dimensionCitations = (evidencePromptContext.dimensionEvidence || []).map(dim => ({
       dimensionKey: normalizeDimensionKey(dim.dimension),
       dimensionLabel: dim.dimension,
@@ -4117,10 +4215,16 @@ async function generateSection(
         targetWordCount: sectionWordBudget,
         tenantContext: tenantContext || null,
         sectionType: blueprintPromptContext?.sectionType,
+        reviewerIntent: blueprintPromptContext?.reviewerIntent || null,
         grantSemantic: blueprintPromptContext?.grantSemantic,
         templateIntent: blueprintPromptContext?.templateIntent,
         dimensionCitations: dimensionCitations.length > 0 ? dimensionCitations : undefined,
+        authoritativePrepBundle: blueprintPromptContext?.authoritativePrepBundle || blueprintPromptContext?.prepContextBlock || null,
+        relatedPrepAwareness: blueprintPromptContext?.relatedPrepAwareness || null,
+        grantRuleProfile: blueprintPromptContext?.grantRuleProfile || null,
         grantSectionComplianceContract: blueprintPromptContext?.grantSectionComplianceContract || null,
+        grantContextSummary: blueprintPromptContext?.grantContextSummary || null,
+        baseSectionMemory: storedPass1.memory || null,
         baseGrantGenerationTrace: storedPass1.artifact?.grantGenerationTrace,
         wordBudget: blueprintPromptContext?.wordBudget,
         characterLimit: blueprintPromptContext?.characterLimit,
@@ -4138,7 +4242,12 @@ async function generateSection(
         sectionKey,
         error: polishResult.error
       });
-      await emitStatus?.('llm_retry', 'Retrying publication polish after an unsuccessful attempt.');
+      await emitStatus?.(
+        'llm_retry',
+        grantBacked
+          ? 'Retrying reviewer polish after an unsuccessful attempt.'
+          : 'Retrying publication polish after an unsuccessful attempt.'
+      );
       await sleep(800);
       polishResult = await runPolish();
     }
@@ -4667,6 +4776,12 @@ async function buildSectionPromptRuntimeBundle(params: {
         : undefined,
       prepContextBlock: currentSectionPlan?.prepContextBlock && typeof currentSectionPlan.prepContextBlock === 'object'
         ? currentSectionPlan.prepContextBlock as GrantPrepContextBlock
+        : undefined,
+      authoritativePrepBundle: currentSectionPlan?.authoritativePrepBundle && typeof currentSectionPlan.authoritativePrepBundle === 'object'
+        ? currentSectionPlan.authoritativePrepBundle as GrantPrepPromptBundle
+        : undefined,
+      relatedPrepAwareness: currentSectionPlan?.relatedPrepAwareness && typeof currentSectionPlan.relatedPrepAwareness === 'object'
+        ? currentSectionPlan.relatedPrepAwareness as GrantPrepPromptBundle
         : undefined,
       grantRuleProfile: currentSectionPlan?.grantRuleProfile && typeof currentSectionPlan.grantRuleProfile === 'object'
         ? currentSectionPlan.grantRuleProfile as GrantRuleProfile

@@ -113,6 +113,12 @@ export interface GrantPrepContextBlock {
   keywords: string[]
 }
 
+export interface GrantPrepPromptBundle {
+  stageKeys: string[]
+  bullets: string[]
+  keywords: string[]
+}
+
 export interface GrantRuleProfile {
   requiredPoints: string[]
   evaluationFocus: string[]
@@ -264,6 +270,8 @@ export interface CompiledGrantTemplateSection {
   thematicBlueprint?: GrantThematicBlueprint | null
   grantSemantic?: GrantSectionSemantic | null
   prepContextBlock?: GrantPrepContextBlock | null
+  authoritativePrepBundle?: GrantPrepPromptBundle | null
+  relatedPrepAwareness?: GrantPrepPromptBundle | null
   grantRuleProfile?: GrantRuleProfile | null
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
@@ -304,6 +312,8 @@ export interface GrantBlueprintPlanSection {
   seededContext: string
   grantSemantic?: GrantSectionSemantic | null
   prepContextBlock?: GrantPrepContextBlock | null
+  authoritativePrepBundle?: GrantPrepPromptBundle | null
+  relatedPrepAwareness?: GrantPrepPromptBundle | null
   grantRuleProfile?: GrantRuleProfile | null
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
