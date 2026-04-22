@@ -57,11 +57,22 @@ import {
   formatGrantMustCoverItems,
   summarizeGrantFreezePayload,
 } from '@/lib/grants/promptOverlay'
+import {
+  buildGrantComplianceReport,
+  buildReviewerReadinessReport,
+  dedupeGrantStrings,
+  formatGrantComplianceContractForPrompt,
+  normalizeGrantGenerationTrace,
+} from '@/lib/grants/compliance'
 import type {
+  GrantComplianceReport,
   GrantCitationMode,
+  GrantGenerationTrace,
   GrantPrepContextBlock,
   GrantRuleProfile,
+  GrantSectionComplianceContract,
   GrantSectionSemantic,
+  ReviewerReadinessReport,
 } from '@/types/grant'
 
 export const runtime = 'nodejs';
@@ -1692,6 +1703,7 @@ interface BlueprintPromptContext {
   grantSemantic?: GrantSectionSemantic | null;
   prepContextBlock?: GrantPrepContextBlock | null;
   grantRuleProfile?: GrantRuleProfile | null;
+  grantSectionComplianceContract?: GrantSectionComplianceContract | null;
   grantContextSummary?: {
     projectTitle?: string | null;
     fundingCallTitle?: string | null;
@@ -1806,6 +1818,9 @@ interface PersistedPass1Artifact {
   generatedAt?: string;
   promptUsed?: string;
   tokensUsed?: number;
+  grantGenerationTrace?: GrantGenerationTrace | null;
+  grantComplianceReport?: GrantComplianceReport | null;
+  reviewerReadinessReport?: ReviewerReadinessReport | null;
 }
 
 interface Pass1MemorySnapshot {
@@ -2007,6 +2022,13 @@ function readPersistedPass1Artifact(value: unknown): PersistedPass1Artifact | nu
     generatedAt: String(record.generatedAt || '').trim() || undefined,
     promptUsed: String(record.promptUsed || '').trim() || undefined,
     tokensUsed: Number(record.tokensUsed) > 0 ? Number(record.tokensUsed) : undefined,
+    grantGenerationTrace: normalizeGrantGenerationTrace(record),
+    grantComplianceReport: record.grantComplianceReport && typeof record.grantComplianceReport === 'object'
+      ? record.grantComplianceReport as GrantComplianceReport
+      : null,
+    reviewerReadinessReport: record.reviewerReadinessReport && typeof record.reviewerReadinessReport === 'object'
+      ? record.reviewerReadinessReport as ReviewerReadinessReport
+      : null,
   };
 }
 
@@ -2016,6 +2038,9 @@ function buildPersistedPass1Artifact(params: {
   generatedAt?: string | Date | null;
   promptUsed?: string;
   tokensUsed?: number | null;
+  grantGenerationTrace?: GrantGenerationTrace | null;
+  grantComplianceReport?: GrantComplianceReport | null;
+  reviewerReadinessReport?: ReviewerReadinessReport | null;
 }): PersistedPass1Artifact | null {
   const content = String(params.content || '').trim();
   if (!content) return null;
@@ -2032,6 +2057,10 @@ function buildPersistedPass1Artifact(params: {
     generatedAt,
     promptUsed: String(params.promptUsed || '').trim() || undefined,
     tokensUsed: Number(params.tokensUsed) > 0 ? Number(params.tokensUsed) : undefined
+    ,
+    grantGenerationTrace: params.grantGenerationTrace || null,
+    grantComplianceReport: params.grantComplianceReport || null,
+    reviewerReadinessReport: params.reviewerReadinessReport || null
   };
 }
 
@@ -2738,9 +2767,14 @@ function formatSelectedFigureContext(figureContext: FigurePromptContext, section
 
 function extractSectionOutput(
   rawOutput: string
-): { content: string; memory: Record<string, unknown> | null } {
+): {
+  content: string;
+  memory: Record<string, unknown> | null;
+  grantGenerationTrace: GrantGenerationTrace | null;
+} {
   let extracted = rawOutput;
   let extractedMemory: Record<string, unknown> | null = null;
+  let grantGenerationTrace: GrantGenerationTrace | null = null;
 
   try {
     const parsed = extractJsonObjectFromOutput(rawOutput);
@@ -2751,6 +2785,7 @@ function extractSectionOutput(
       if (parsed.memory && typeof parsed.memory === 'object' && !Array.isArray(parsed.memory)) {
         extractedMemory = parsed.memory as Record<string, unknown>;
       }
+      grantGenerationTrace = normalizeGrantGenerationTrace(parsed);
       console.log(
         `[PaperDrafting] Extracted JSON section payload (${extracted.length} chars${extractedMemory ? ', memory preserved' : ''})`
       );
@@ -2759,7 +2794,7 @@ function extractSectionOutput(
     console.warn('[PaperDrafting] Could not parse JSON output, using raw:', parseErr);
   }
 
-  return { content: polishDraftMarkdown(extracted), memory: extractedMemory };
+  return { content: polishDraftMarkdown(extracted), memory: extractedMemory, grantGenerationTrace };
 }
 
 function stripDimensionFlowFromValidationReport(existing: unknown): Record<string, unknown> | null {
@@ -3436,7 +3471,12 @@ Return ONLY raw JSON. No markdown code fences. Start with { and end with }.
         "bridgeToNext": "Short note on how this dimension should connect to the next one."
       }
     ]
-  }
+  },
+  "usedPrepEvidence": ["stageKey:pointKey"],
+  "coveredRequiredPoints": ["required point covered in the content"],
+  "unmetRequiredPoints": ["required point still missing"],
+  "violatedAvoidRules": ["avoid rule violated by the draft"],
+  "openQuestions": ["factual ambiguity or reviewer risk that still needs resolution"]
 }
 
 PASS 1 MEMORY RULES:
@@ -3447,6 +3487,7 @@ PASS 1 MEMORY RULES:
 - "openingStrategy" should help the first dimension introduce the section.
 - "closingStrategy" should help the last dimension conclude the section.
 - If no blueprint dimensions exist, return "dimensionBriefs": [].
+- For grant-backed sections, the top-level compliance arrays must reflect the section contract accurately.
 
 BLUEPRINT DIMENSION ORDER / ROLE HINTS:
 ${roleGuide}
@@ -4074,6 +4115,10 @@ async function generateSection(
         targetWordCount: sectionWordBudget,
         tenantContext: tenantContext || null,
         dimensionCitations: dimensionCitations.length > 0 ? dimensionCitations : undefined,
+        grantSectionComplianceContract: blueprintPromptContext?.grantSectionComplianceContract || null,
+        baseGrantGenerationTrace: storedPass1.artifact?.grantGenerationTrace,
+        wordBudget: blueprintPromptContext?.wordBudget,
+        characterLimit: blueprintPromptContext?.characterLimit,
       },
       {
         onRetry: async (notice) => {
@@ -4131,7 +4176,13 @@ async function generateSection(
     pass2PromptUsed = polishResult.promptUsed;
     pass2TokensUsed = polishResult.tokensUsed ?? undefined;
     pass2ValidationReport = polishResult.driftReport;
-    mergedValidationReport = pass2ValidationReport;
+    mergedValidationReport = {
+      ...(pass2ValidationReport && typeof pass2ValidationReport === 'object' && !Array.isArray(pass2ValidationReport)
+        ? pass2ValidationReport as Record<string, unknown>
+        : {}),
+      ...(polishResult.grantComplianceReport ? { grantComplianceReport: polishResult.grantComplianceReport } : {}),
+      ...(polishResult.reviewerReadinessReport ? { reviewerReadinessReport: polishResult.reviewerReadinessReport } : {}),
+    };
     pass2CompletedAt = new Date();
     llmTokensUsed = (llmTokensUsed || 0) + (polishResult.tokensUsed || 0);
     if (llmTokensUsed === 0) llmTokensUsed = undefined;
@@ -4612,6 +4663,9 @@ async function buildSectionPromptRuntimeBundle(params: {
       grantRuleProfile: currentSectionPlan?.grantRuleProfile && typeof currentSectionPlan.grantRuleProfile === 'object'
         ? currentSectionPlan.grantRuleProfile as GrantRuleProfile
         : undefined,
+      grantSectionComplianceContract: currentSectionPlan?.grantSectionComplianceContract && typeof currentSectionPlan.grantSectionComplianceContract === 'object'
+        ? currentSectionPlan.grantSectionComplianceContract as GrantSectionComplianceContract
+        : undefined,
       grantContextSummary: grantSession
         ? {
             projectTitle: grantSession.project?.name || null,
@@ -4765,7 +4819,10 @@ async function buildSectionPromptRuntimeBundle(params: {
 function buildBlueprintDimensionPlan(
   bundle: SectionPromptRuntimeBundle
 ): DimensionPlanEntry[] | null {
-  const mustCover = (bundle.blueprintPromptContext?.mustCover || [])
+  const contract = bundle.blueprintPromptContext?.grantSectionComplianceContract
+  const mustCover = (contract?.requiredPoints?.length
+    ? contract.requiredPoints
+    : (bundle.blueprintPromptContext?.mustCover || []))
     .map((dimensionLabel) => String(dimensionLabel || '').trim())
     .filter(Boolean);
 
@@ -4783,7 +4840,11 @@ function buildBlueprintDimensionPlan(
     evidenceByDimension.set(dimensionKey, keys);
   }
 
-  const sectionAvoidClaims = (bundle.blueprintPromptContext?.mustAvoid || [])
+  const sectionAvoidClaims = dedupeGrantStrings([
+    ...(bundle.blueprintPromptContext?.mustAvoid || []),
+    ...(contract?.avoidRules || []),
+    ...(contract?.templateGuidance?.forbiddenMoves || []),
+  ], 24)
     .map((claim) => String(claim || '').trim())
     .filter(Boolean);
 
@@ -5129,6 +5190,9 @@ async function generateDimensionProposal(params: {
     .filter(Boolean)
     .join(', ') || '(none)';
   const roleLabel = budget.role.replace(/_/g, ' ').toUpperCase();
+  const grantContractBlock = formatGrantComplianceContractForPrompt(
+    params.bundle.blueprintPromptContext?.grantSectionComplianceContract
+  );
   const budgetLines = [
     `DIMENSION ROLE: ${roleLabel}`,
     budget.sectionWordBudget
@@ -5292,6 +5356,9 @@ ${formatPass1DimensionBriefForPrompt(targetPass1Brief)}
 
 TARGET DIMENSION EVIDENCE PACK:
 ${targetEvidenceNotes}
+
+SECTION CONTRACT (DO NOT DROP THESE REQUIREMENTS):
+${grantContractBlock || '(No explicit grant contract attached)'}
 
 ROLE-SPECIFIC PASS 1 GUIDANCE:
 ${roleSpecificPass1Guidance || '(No extra opening/closing guidance)'}

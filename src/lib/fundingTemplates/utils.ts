@@ -9,8 +9,13 @@ import type {
   FundingTemplateSupportLevel,
   GrantTemplateDocument,
 } from './types';
+import type { GrantDraftingSubmissionMode } from '@/types/grant';
 
 const ARRAY_BLOCKS = ['questions', 'sections', 'attachments', 'evaluationCriteria'] as const;
+const SUBMISSION_PATTERN = /\b(submit|submission|upload|attachment|annexure|signature|deadline|portal|certificate|proof|appendix)\b/i;
+const FORBIDDEN_PATTERN = /\b(avoid|do not|don't|never|without|exclude|omit)\b/i;
+const REQUIRED_PATTERN = /\b(must|should|include|describe|explain|state|detail|provide|identify|outline|summarize)\b/i;
+const REVIEWER_PATTERN = /\b(reviewer|convince|demonstrate|show|highlight|signal|emphasize|position)\b/i;
 
 function clampConfidence(value: unknown, fallback = 1): number {
   const numeric = Number(value);
@@ -49,7 +54,96 @@ function dedupeAnchors(anchors: Array<Partial<FundingTemplateSourceAnchor>>): Fu
   return next;
 }
 
+function normalizeStringArray(value: unknown, limit = 10): string[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? [value]
+      : [];
+
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const item of source) {
+    const normalized = String(item || '').trim().replace(/\s+/g, ' ');
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(normalized);
+    if (next.length >= limit) break;
+  }
+  return next;
+}
+
+function splitGuidanceText(value: unknown): string[] {
+  return normalizeStringArray(
+    String(value || '')
+      .split(/\n+|[;•]/g)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    12
+  );
+}
+
+function normalizeDraftingSubmissionMode(value: unknown): GrantDraftingSubmissionMode | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'drafting' || normalized === 'submission' || normalized === 'both'
+    ? normalized as GrantDraftingSubmissionMode
+    : null;
+}
+
+function inferDraftingSubmissionMode(item: any): GrantDraftingSubmissionMode {
+  const text = `${item.label || ''} ${item.guidanceText || item.guidance || ''}`.trim();
+  if (item.type === 'attachment') return 'submission';
+  if (item.workflowMode === 'team_manual' && SUBMISSION_PATTERN.test(text)) return 'submission';
+  if (item.type === 'checklist' || item.type === 'rule') {
+    return SUBMISSION_PATTERN.test(text) ? 'submission' : 'both';
+  }
+  if (item.type === 'budget' || /budget/i.test(text)) return 'both';
+  return 'drafting';
+}
+
+function inferRequiredFacts(item: any, guidanceText: string | null): string[] {
+  const explicit = normalizeStringArray(item.requiredFacts, 8);
+  if (explicit.length > 0) return explicit;
+
+  const guidanceLines = splitGuidanceText(guidanceText || item.guidance || '');
+  const inferred = guidanceLines.filter((line) =>
+    REQUIRED_PATTERN.test(line) && !FORBIDDEN_PATTERN.test(line)
+  );
+
+  if (inferred.length > 0) return inferred;
+  if (item.required === true && item.label) {
+    return [`Directly answer "${String(item.label).trim()}".`];
+  }
+  return [];
+}
+
+function inferForbiddenMoves(item: any, guidanceText: string | null): string[] {
+  const explicit = normalizeStringArray(item.forbiddenMoves, 8);
+  if (explicit.length > 0) return explicit;
+
+  const guidanceLines = splitGuidanceText(guidanceText || item.guidance || '');
+  return guidanceLines.filter((line) => FORBIDDEN_PATTERN.test(line));
+}
+
+function inferReviewerGoal(item: any, guidanceText: string | null): string | null {
+  const explicit = String(item.reviewerGoal || '').trim();
+  if (explicit) return explicit;
+
+  const guidanceLines = splitGuidanceText(guidanceText || item.guidance || '');
+  const reviewerLine = guidanceLines.find((line) => REVIEWER_PATTERN.test(line));
+  if (reviewerLine) return reviewerLine;
+
+  if (guidanceText) {
+    return guidanceText;
+  }
+
+  return null;
+}
+
 function normalizeItem(item: any): FundingTemplateItem {
+  const guidanceText = String(item.guidanceText || item.guidance || '').trim() || null;
   return {
     ...item,
     key: String(item.key || '').trim(),
@@ -64,7 +158,14 @@ function normalizeItem(item: any): FundingTemplateItem {
       ? item.options.map((option) => String(option).trim()).filter(Boolean)
       : [],
     schema: item.schema ?? null,
-    guidance: item.guidance || null,
+    guidance: item.guidance || guidanceText,
+    guidanceText,
+    requiredFacts: inferRequiredFacts(item, guidanceText),
+    reviewerGoal: inferReviewerGoal(item, guidanceText),
+    forbiddenMoves: inferForbiddenMoves(item, guidanceText),
+    draftingVsSubmission:
+      normalizeDraftingSubmissionMode(item.draftingVsSubmission)
+      || inferDraftingSubmissionMode(item),
     supportLevel: item.supportLevel,
     confidence: clampConfidence(item.confidence, 1),
     sourceAnchors: dedupeAnchors(Array.isArray(item.sourceAnchors) ? item.sourceAnchors : []),

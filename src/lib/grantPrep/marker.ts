@@ -143,6 +143,11 @@ function sanitizeMarkerPayload(value: unknown): GrantPrepMarkerPayload | null {
         pointKey,
         keywords: asStringArray(point.keywords, 12),
         thrustLinkage: asStringArray(point.thrustLinkage, 6),
+        factBullets: asStringArray(point.factBullets, 8),
+        ruleNotes: asStringArray(point.ruleNotes, 6),
+        ...(typeof point.confidence === 'number' && Number.isFinite(point.confidence)
+          ? { confidence: Math.max(0, Math.min(1, point.confidence)) }
+          : {}),
         captureBasis: sanitizeCaptureBasis(point.captureBasis),
         ruleCompliance:
           normalizedStatus || ruleCompliance?.reason !== undefined || ruleCompliance?.rescopeNeeded !== undefined

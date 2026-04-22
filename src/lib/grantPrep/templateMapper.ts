@@ -42,7 +42,16 @@ function getTemplateItems(templateInput: unknown): TemplateLikeItem[] {
       items.push({
         key: item.key,
         label: item.label,
-        guidance: item.guidance,
+        guidance: [
+          item.guidanceText || item.guidance,
+          item.reviewerGoal ? `Reviewer goal: ${item.reviewerGoal}` : '',
+          Array.isArray(item.requiredFacts) && item.requiredFacts.length > 0
+            ? `Required facts: ${item.requiredFacts.join('; ')}`
+            : '',
+          Array.isArray(item.forbiddenMoves) && item.forbiddenMoves.length > 0
+            ? `Forbidden moves: ${item.forbiddenMoves.join('; ')}`
+            : '',
+        ].filter(Boolean).join(' | '),
         block,
         workflowMode: item.workflowMode,
       });

@@ -12,7 +12,7 @@ import type {
   GrantTemplateDocument,
 } from '@/lib/fundingTemplates/types';
 import { createEmptyGrantTemplate, normalizeGrantTemplate } from '@/lib/fundingTemplates/utils';
-import type { GrantWorkflowMode } from '@/types/grant';
+import type { GrantDraftingSubmissionMode, GrantWorkflowMode } from '@/types/grant';
 
 export async function getServerSideProps() {
   return {
@@ -80,6 +80,7 @@ type Bundle = {
 const ITEM_TYPES: FundingTemplateItemType[] = ['field', 'section', 'table', 'budget', 'attachment', 'checklist', 'rule', 'rubric'];
 const SUPPORT_LEVELS: FundingTemplateSupportLevel[] = ['full', 'partial', 'manual', 'unsupported'];
 const WORKFLOW_MODES: GrantWorkflowMode[] = ['app_draft', 'app_support', 'team_manual'];
+const DRAFTING_SUBMISSION_MODES: GrantDraftingSubmissionMode[] = ['drafting', 'submission', 'both'];
 
 type TemplateCounts = {
   questions: number;
@@ -105,6 +106,16 @@ function createItem(type: FundingTemplateItemType): FundingTemplateItem {
     options: [],
     schema: null,
     guidance: null,
+    guidanceText: null,
+    requiredFacts: [],
+    reviewerGoal: null,
+    forbiddenMoves: [],
+    draftingVsSubmission:
+      type === 'attachment'
+        ? 'submission'
+        : type === 'budget' || type === 'checklist' || type === 'rule'
+          ? 'both'
+          : 'drafting',
     supportLevel: 'full',
     confidence: 1,
     sourceAnchors: [],
@@ -543,6 +554,47 @@ function BlockEditor({
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <textarea value={item.guidance || ''} onChange={(event) => update(index, { guidance: event.target.value || null })} rows={3} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Guidance" />
               <textarea value={item.visibleWhen || ''} onChange={(event) => update(index, { visibleWhen: event.target.value || null })} rows={3} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Visible when" />
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <textarea
+                value={item.guidanceText || ''}
+                onChange={(event) => update(index, { guidanceText: event.target.value || null })}
+                rows={3}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Expanded guidance text"
+              />
+              <textarea
+                value={item.reviewerGoal || ''}
+                onChange={(event) => update(index, { reviewerGoal: event.target.value || null })}
+                rows={3}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Reviewer goal"
+              />
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <input
+                value={(item.requiredFacts || []).join(', ')}
+                onChange={(event) => update(index, { requiredFacts: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Required facts"
+              />
+              <input
+                value={(item.forbiddenMoves || []).join(', ')}
+                onChange={(event) => update(index, { forbiddenMoves: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Forbidden moves"
+              />
+              <select
+                value={item.draftingVsSubmission || 'drafting'}
+                onChange={(event) => update(index, { draftingVsSubmission: event.target.value as GrantDraftingSubmissionMode })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                {DRAFTING_SUBMISSION_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-4">
               <label className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={item.required} onChange={(event) => update(index, { required: event.target.checked })} /> Required</label>

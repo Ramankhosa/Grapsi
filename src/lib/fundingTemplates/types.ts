@@ -1,4 +1,7 @@
-import type { GrantWorkflowMode } from '@/types/grant';
+import type {
+  GrantDraftingSubmissionMode,
+  GrantWorkflowMode,
+} from '@/types/grant';
 
 export const FUNDING_TEMPLATE_ITEM_TYPES = [
   'field',
@@ -47,6 +50,11 @@ export interface FundingTemplateItem {
   options?: string[];
   schema?: JsonValue | null;
   guidance?: string | null;
+  guidanceText?: string | null;
+  requiredFacts?: string[];
+  reviewerGoal?: string | null;
+  forbiddenMoves?: string[];
+  draftingVsSubmission?: GrantDraftingSubmissionMode;
   supportLevel: FundingTemplateSupportLevel;
   confidence: number;
   sourceAnchors: FundingTemplateSourceAnchor[];

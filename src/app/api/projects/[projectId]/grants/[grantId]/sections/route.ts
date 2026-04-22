@@ -31,6 +31,8 @@ export async function GET(
     grantSession: workspace.grantSession,
     blueprint: workspace.blueprint,
     sections: workspace.blueprint?.sectionDrafts || [],
+    proposalComplianceReport: workspace.proposalComplianceReport,
+    proposalReviewerReadinessReport: workspace.proposalReviewerReadinessReport,
   })
 }
 

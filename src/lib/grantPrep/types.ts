@@ -1,3 +1,5 @@
+import type { GrantPrepEvidenceItem } from '@/types/grant';
+
 export const GRANT_PREP_MODES = [
   'template_driven',
   'guided_fallback',
@@ -101,6 +103,9 @@ export type GrantPrepStageMapping = Record<GrantPrepStageKey, GrantPrepStageMapp
 export interface GrantPrepPointCapture {
   keywords: string[];
   thrustLinkage: string[];
+  factBullets?: string[];
+  ruleNotes?: string[];
+  confidence?: number;
   ruleCompliance: {
     status: 'ok' | 'warning' | 'needs_review';
     reason?: string | null;
@@ -147,6 +152,9 @@ export interface GrantPrepMarkerPoint {
   pointKey: string;
   keywords: string[];
   thrustLinkage?: string[];
+  factBullets?: string[];
+  ruleNotes?: string[];
+  confidence?: number;
   captureBasis?: CaptureBasis[];
   ruleCompliance?: {
     status?: 'ok' | 'warning' | 'needs_review';
@@ -233,6 +241,9 @@ export interface GrantPrepFreezePayload {
   stageMapping: GrantPrepStageMapping;
   stageStates: GrantPrepStageStates;
   globalKeywords: string[];
+  globalCaptureSummary: string[];
+  prepEvidence: GrantPrepEvidenceItem[];
+  prepEvidenceBySection: Record<string, GrantPrepEvidenceItem[]>;
   blockers: Array<{
     stageKey: GrantPrepStageKey;
     pointKey: string;

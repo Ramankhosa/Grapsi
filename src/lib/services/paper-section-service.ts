@@ -19,6 +19,11 @@ import {
   formatGrantMustCoverItems,
   summarizeGrantFreezePayload,
 } from '@/lib/grants/promptOverlay';
+import {
+  buildGrantComplianceReport,
+  buildReviewerReadinessReport,
+  normalizeGrantGenerationTrace,
+} from '@/lib/grants/compliance';
 import { llmGateway, type TenantContext } from '../metering';
 import { blueprintService, type BlueprintContext, type SectionPlanItem } from './blueprint-service';
 import { sectionTemplateService } from './section-template-service';
@@ -59,6 +64,12 @@ import {
 import type { PaperSection, PaperSectionStatus } from '@prisma/client';
 import crypto from 'crypto';
 import { polishDraftMarkdown } from '../markdown-draft-formatter';
+import type {
+  GrantComplianceReport,
+  GrantGenerationTrace,
+  GrantSectionComplianceContract,
+  ReviewerReadinessReport,
+} from '@/types/grant';
 
 const DEFAULT_BG_PASS1_CONCURRENCY = Number.parseInt(
   process.env.BG_PASS1_CONCURRENCY || '10',
@@ -178,6 +189,9 @@ interface StoredPass1Artifact {
   promptUsed?: string;
   tokensUsed?: number;
   figureGrounding?: Pass1FigureGroundingSnapshot | null;
+  grantGenerationTrace?: GrantGenerationTrace | null;
+  grantComplianceReport?: GrantComplianceReport | null;
+  reviewerReadinessReport?: ReviewerReadinessReport | null;
 }
 
 interface BackgroundPass1FigureSelection {
@@ -202,6 +216,9 @@ function buildStoredPass1Artifact(params: {
   promptUsed?: string;
   tokensUsed?: number | null;
   figureGrounding?: Pass1FigureGroundingSnapshot | null;
+  grantGenerationTrace?: GrantGenerationTrace | null;
+  grantComplianceReport?: GrantComplianceReport | null;
+  reviewerReadinessReport?: ReviewerReadinessReport | null;
 }): StoredPass1Artifact | null {
   const content = String(params.content || '').trim();
   if (!content) return null;
@@ -218,7 +235,10 @@ function buildStoredPass1Artifact(params: {
     generatedAt,
     promptUsed: String(params.promptUsed || '').trim() || undefined,
     tokensUsed: Number(params.tokensUsed) > 0 ? Number(params.tokensUsed) : undefined,
-    figureGrounding: params.figureGrounding || null
+    figureGrounding: params.figureGrounding || null,
+    grantGenerationTrace: params.grantGenerationTrace || null,
+    grantComplianceReport: params.grantComplianceReport || null,
+    reviewerReadinessReport: params.reviewerReadinessReport || null,
   };
 }
 
@@ -653,6 +673,33 @@ class PaperSectionService {
         };
       }
       const blueprintVersion = blueprint?.version || 1;
+      const grantContract = blueprintContext.currentSection.grantSectionComplianceContract || null;
+      const pass1GrantTrace = grantContract
+        ? (parsed.grantGenerationTrace || normalizeGrantGenerationTrace({}))
+        : null;
+      const pass1GrantCompliance = grantContract
+        ? buildGrantComplianceReport({
+            stage: 'pass1',
+            content: parsed.content,
+            contract: grantContract,
+            trace: pass1GrantTrace,
+            wordBudget: blueprintContext.currentSection.wordBudget,
+            characterLimit: blueprintContext.currentSection.characterLimit,
+          })
+        : null;
+      const pass1ReviewerReadiness = grantContract && pass1GrantCompliance
+        ? buildReviewerReadinessReport({
+            contract: grantContract,
+            report: pass1GrantCompliance,
+          })
+        : null;
+
+      if (effectiveTwoPass && grantContract && pass1GrantCompliance && !pass1GrantCompliance.passed) {
+        return {
+          success: false,
+          error: `Grant Pass 1 failed compliance validation for "${sectionKey}": ${pass1GrantCompliance.hardFailures[0]?.message || 'missing required grant constraints'}`,
+        };
+      }
 
       // ── Single-pass path ──
       if (!effectiveTwoPass) {
@@ -683,7 +730,10 @@ class PaperSectionService {
         memory: parsed.memory,
         generatedAt: pass1CompletedAt,
         promptUsed: prompt,
-        tokensUsed: result.response.outputTokens
+        tokensUsed: result.response.outputTokens,
+        grantGenerationTrace: pass1GrantTrace,
+        grantComplianceReport: pass1GrantCompliance,
+        reviewerReadinessReport: pass1ReviewerReadiness,
       });
       const pass1Data = {
         sectionKey,
@@ -702,7 +752,13 @@ class PaperSectionService {
         generationMode: 'two_pass',
         status: 'BASE_READY' as PaperSectionStatus,
         isStale: false,
-        generatedAt: pass1CompletedAt
+        generatedAt: pass1CompletedAt,
+        validationReport: pass1GrantCompliance
+          ? {
+              grantComplianceReport: pass1GrantCompliance,
+              reviewerReadinessReport: pass1ReviewerReadiness,
+            } as any
+          : undefined,
       };
 
       const pass1Section = await this.upsertSection(sessionId, sectionKey, pass1Data, existingSection);
@@ -753,6 +809,14 @@ class PaperSectionService {
     });
 
     const blueprintContext = await blueprintService.getSectionContext(section.sessionId, section.sectionKey);
+    const pass1ArtifactRecord = (
+      section.pass1Artifact
+      && typeof section.pass1Artifact === 'object'
+      && !Array.isArray(section.pass1Artifact)
+    )
+      ? section.pass1Artifact as Record<string, unknown>
+      : {};
+    const grantContract = blueprintContext?.currentSection.grantSectionComplianceContract || null;
 
     const polishResult = await sectionPolishService.polishWithRetry({
       sectionKey: section.sectionKey,
@@ -765,6 +829,10 @@ class PaperSectionService {
         blueprintContext?.currentSection.wordBudget
       ),
       tenantContext: tenantContext || null,
+      grantSectionComplianceContract: grantContract,
+      baseGrantGenerationTrace: pass1ArtifactRecord.grantGenerationTrace,
+      wordBudget: blueprintContext?.currentSection.wordBudget,
+      characterLimit: blueprintContext?.currentSection.characterLimit,
     });
 
     if (!polishResult.success || !polishResult.polishedContent) {
@@ -792,6 +860,16 @@ class PaperSectionService {
     )
       ? { ...(polishResult.driftReport as unknown as Record<string, unknown>) }
       : {};
+    if (polishResult.grantComplianceReport) {
+      validationReport.grantComplianceReport = polishResult.grantComplianceReport;
+    } else if (pass1ArtifactRecord.grantComplianceReport) {
+      validationReport.grantComplianceReport = pass1ArtifactRecord.grantComplianceReport;
+    }
+    if (polishResult.reviewerReadinessReport) {
+      validationReport.reviewerReadinessReport = polishResult.reviewerReadinessReport;
+    } else if (pass1ArtifactRecord.reviewerReadinessReport) {
+      validationReport.reviewerReadinessReport = pass1ArtifactRecord.reviewerReadinessReport;
+    }
 
     const updated = await prisma.paperSection.update({
       where: { id: section.id },
@@ -1007,6 +1085,29 @@ class PaperSectionService {
               purpose: 'paper_section_pass1_bg_citation_budget_rewrite'
             })
           };
+          const grantContract = blueprintContext.currentSection.grantSectionComplianceContract || null;
+          const pass1GrantTrace = grantContract
+            ? (parsed.grantGenerationTrace || normalizeGrantGenerationTrace({}))
+            : null;
+          const pass1GrantCompliance = grantContract
+            ? buildGrantComplianceReport({
+                stage: 'pass1',
+                content: parsed.content,
+                contract: grantContract,
+                trace: pass1GrantTrace,
+                wordBudget: blueprintContext.currentSection.wordBudget,
+                characterLimit: blueprintContext.currentSection.characterLimit,
+              })
+            : null;
+          const pass1ReviewerReadiness = grantContract && pass1GrantCompliance
+            ? buildReviewerReadinessReport({
+                contract: grantContract,
+                report: pass1GrantCompliance,
+              })
+            : null;
+          if (grantContract && pass1GrantCompliance && !pass1GrantCompliance.passed) {
+            throw new Error(pass1GrantCompliance.hardFailures[0]?.message || 'Grant Pass 1 failed compliance validation');
+          }
           const pass1CompletedAt = new Date();
           const pass1Artifact = buildStoredPass1Artifact({
             content: parsed.content,
@@ -1014,7 +1115,10 @@ class PaperSectionService {
             generatedAt: pass1CompletedAt,
             promptUsed: prompt,
             tokensUsed: result.response.outputTokens,
-            figureGrounding: buildPass1FigureGroundingSnapshot(figurePromptContext)
+            figureGrounding: buildPass1FigureGroundingSnapshot(figurePromptContext),
+            grantGenerationTrace: pass1GrantTrace,
+            grantComplianceReport: pass1GrantCompliance,
+            reviewerReadinessReport: pass1ReviewerReadiness,
           });
 
           await prisma.paperSection.update({
@@ -1031,6 +1135,12 @@ class PaperSectionService {
                 pass1TokensUsed: result.response.outputTokens,
                 pass1CompletedAt,
                 isStale: false,
+                validationReport: pass1GrantCompliance
+                  ? {
+                      grantComplianceReport: pass1GrantCompliance,
+                      reviewerReadinessReport: pass1ReviewerReadiness,
+                    } as any
+                  : undefined,
               }
               : {
                 baseContentInternal: parsed.content,
@@ -1046,6 +1156,12 @@ class PaperSectionService {
                 pass1CompletedAt,
                 status: 'BASE_READY' as PaperSectionStatus,
                 generatedAt: pass1CompletedAt,
+                validationReport: pass1GrantCompliance
+                  ? {
+                      grantComplianceReport: pass1GrantCompliance,
+                      reviewerReadinessReport: pass1ReviewerReadiness,
+                    } as any
+                  : undefined,
               }
           });
 
@@ -1567,6 +1683,7 @@ class PaperSectionService {
           grantSemantic: currentSection.grantSemantic,
           prepContextBlock: currentSection.prepContextBlock,
           grantRuleProfile: currentSection.grantRuleProfile,
+          grantSectionComplianceContract: currentSection.grantSectionComplianceContract,
           grantContextSummary: grantSession
             ? {
                 projectTitle: grantSession.project?.name || null,
@@ -2041,7 +2158,12 @@ OUTPUT FORMAT (Return ONLY valid JSON)
         "bridgeToNext": "How this dimension should connect to the next one"
       }
     ]
-  }
+  },
+  "usedPrepEvidence": ["stageKey:pointKey"],
+  "coveredRequiredPoints": ["required point covered in the content"],
+  "unmetRequiredPoints": ["required point still missing"],
+  "violatedAvoidRules": ["avoid rule that the draft violated"],
+  "openQuestions": ["factual ambiguity or reviewer risk that still needs resolution"]
 }
 
 CONTENT FIELD RULES:
@@ -2061,6 +2183,7 @@ MEMORY FIELD RULES:
 - sectionIntent/openingStrategy/closingStrategy: concise downstream guidance for Pass 2 refinement
 - sectionOutline: planned subsection flow for the section draft
 - dimensionBriefs: align to blueprint mustCover order when available and summarize only that dimension's portion of the draft
+- For grant-backed sections, the top-level compliance arrays are mandatory and must reflect the section contract accurately.
 
 ⚠️ CRITICAL: Output ONLY raw JSON. No markdown code fences. Start with { and end with }`;
 
@@ -2172,7 +2295,11 @@ FIELD DEFINITIONS:
 ⚠️ Output ONLY raw JSON. No markdown. Start with { end with }`;
   }
 
-  private parseSectionResponse(output: string): { content: string; memory: SectionMemory } {
+  private parseSectionResponse(output: string): {
+    content: string;
+    memory: SectionMemory;
+    grantGenerationTrace?: GrantGenerationTrace | null;
+  } {
     let text = (output || '').trim();
 
     // Remove code fences if present
@@ -2195,7 +2322,8 @@ FIELD DEFINITIONS:
           termsIntroduced: [],
           mainClaims: [],
           forwardReferences: []
-        }
+        },
+        grantGenerationTrace: null,
       };
     }
 
@@ -2229,8 +2357,9 @@ FIELD DEFINITIONS:
         sectionOutline: Array.isArray(parsed.memory?.sectionOutline) ? parsed.memory.sectionOutline : [],
         dimensionBriefs
       };
+      const grantGenerationTrace = normalizeGrantGenerationTrace(parsed);
 
-      return { content, memory };
+      return { content, memory, grantGenerationTrace };
     } catch (error) {
       console.error('Section parse error:', error);
       console.error('Raw output:', output.substring(0, 500));
@@ -2245,7 +2374,8 @@ FIELD DEFINITIONS:
             termsIntroduced: [],
             mainClaims: [],
             forwardReferences: []
-          }
+          },
+          grantGenerationTrace: null,
         };
       }
 

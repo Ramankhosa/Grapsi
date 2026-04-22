@@ -18,10 +18,14 @@ import {
   type RhetoricalBlueprint
 } from './rhetorical-blueprint-service';
 import type {
+  GrantComplianceReport,
   GrantCitationMode,
   GrantPrepContextBlock,
+  GrantSectionComplianceContract,
   GrantRuleProfile,
   GrantSectionSemantic,
+  GrantTemplateGuidanceProfile,
+  ReviewerReadinessReport,
 } from '@/types/grant'
 import type { 
   PaperBlueprint, 
@@ -68,6 +72,10 @@ export interface SectionPlanItem {
   grantSemantic?: GrantSectionSemantic | null;
   prepContextBlock?: GrantPrepContextBlock | null;
   grantRuleProfile?: GrantRuleProfile | null;
+  grantTemplateGuidance?: GrantTemplateGuidanceProfile | null;
+  grantSectionComplianceContract?: GrantSectionComplianceContract | null;
+  grantComplianceReport?: GrantComplianceReport | null;
+  reviewerReadinessReport?: ReviewerReadinessReport | null;
   dependencies: string[]; // Which sections must come before
   outputsPromised: string[]; // What this section will provide for later sections
   
@@ -101,6 +109,7 @@ export interface SectionContext {
   mustCover: string[];
   mustAvoid: string[];
   wordBudget?: number;
+  characterLimit?: number;
   dependencies: string[];
   mustCoverTyping?: Record<string, DimensionType>;
   suggestedCitationCount?: number;
@@ -112,6 +121,10 @@ export interface SectionContext {
   grantSemantic?: GrantSectionSemantic | null;
   prepContextBlock?: GrantPrepContextBlock | null;
   grantRuleProfile?: GrantRuleProfile | null;
+  grantTemplateGuidance?: GrantTemplateGuidanceProfile | null;
+  grantSectionComplianceContract?: GrantSectionComplianceContract | null;
+  grantComplianceReport?: GrantComplianceReport | null;
+  reviewerReadinessReport?: ReviewerReadinessReport | null;
 }
 
 export interface BlueprintContext {
@@ -503,6 +516,7 @@ class BlueprintService {
         mustCover: sectionPlan.mustCover,
         mustAvoid: sectionPlan.mustAvoid,
         wordBudget: sectionPlan.wordBudget,
+        characterLimit: sectionPlan.characterLimit,
         dependencies: sectionPlan.dependencies,
         mustCoverTyping: sectionPlan.mustCoverTyping,
         suggestedCitationCount: sectionPlan.suggestedCitationCount,
@@ -514,6 +528,10 @@ class BlueprintService {
         grantSemantic: sectionPlan.grantSemantic,
         prepContextBlock: sectionPlan.prepContextBlock,
         grantRuleProfile: sectionPlan.grantRuleProfile,
+        grantTemplateGuidance: sectionPlan.grantTemplateGuidance,
+        grantSectionComplianceContract: sectionPlan.grantSectionComplianceContract,
+        grantComplianceReport: sectionPlan.grantComplianceReport,
+        reviewerReadinessReport: sectionPlan.reviewerReadinessReport,
       },
       preferredTerms: blueprint.preferredTerms || {}
     };
@@ -796,6 +814,18 @@ CRITICAL RULES:
           grantRuleProfile: item.grantRuleProfile && typeof item.grantRuleProfile === 'object'
             ? item.grantRuleProfile as GrantRuleProfile
             : undefined,
+          grantTemplateGuidance: item.grantTemplateGuidance && typeof item.grantTemplateGuidance === 'object'
+            ? item.grantTemplateGuidance as GrantTemplateGuidanceProfile
+            : undefined,
+          grantSectionComplianceContract: item.grantSectionComplianceContract && typeof item.grantSectionComplianceContract === 'object'
+            ? item.grantSectionComplianceContract as GrantSectionComplianceContract
+            : undefined,
+          grantComplianceReport: item.grantComplianceReport && typeof item.grantComplianceReport === 'object'
+            ? item.grantComplianceReport as GrantComplianceReport
+            : undefined,
+          reviewerReadinessReport: item.reviewerReadinessReport && typeof item.reviewerReadinessReport === 'object'
+            ? item.reviewerReadinessReport as ReviewerReadinessReport
+            : undefined,
           dependencies: Array.isArray(item.dependencies) ? item.dependencies : [],
           outputsPromised: Array.isArray(item.outputsPromised) ? item.outputsPromised : [],
           mustCoverTyping,
@@ -857,6 +887,34 @@ CRITICAL RULES:
       this.validateNoHeavyOverlap(sectionPlan);
     } catch (error) {
       issues.push(error instanceof Error ? error.message : 'Section plan has overlapping dimensions');
+    }
+
+    for (const section of sectionPlan) {
+      if (!section.grantSemantic && !section.grantRuleProfile && !section.grantTemplateGuidance) {
+        continue;
+      }
+
+      const contract = section.grantSectionComplianceContract;
+      if (!contract) {
+        issues.push(`Grant-backed section "${section.sectionKey}" is missing a compliance contract`);
+        continue;
+      }
+
+      if (contract.requiredPoints.length === 0) {
+        issues.push(`Grant-backed section "${section.sectionKey}" has no mapped required points`);
+      }
+
+      if (
+        contract.reviewerSignals.length === 0
+        && contract.evaluationFocus.length === 0
+        && contract.narrativeConstraints.length === 0
+      ) {
+        issues.push(`Grant-backed section "${section.sectionKey}" has no persuasive or reviewer guidance`);
+      }
+
+      if (contract.hardChecks.length === 0) {
+        issues.push(`Grant-backed section "${section.sectionKey}" has no hard compliance checks`);
+      }
     }
 
     return {
@@ -1029,6 +1087,18 @@ CRITICAL RULES:
           : {}),
         ...(raw.grantRuleProfile && typeof raw.grantRuleProfile === 'object'
           ? { grantRuleProfile: raw.grantRuleProfile as GrantRuleProfile }
+          : {}),
+        ...(raw.grantTemplateGuidance && typeof raw.grantTemplateGuidance === 'object'
+          ? { grantTemplateGuidance: raw.grantTemplateGuidance as GrantTemplateGuidanceProfile }
+          : {}),
+        ...(raw.grantSectionComplianceContract && typeof raw.grantSectionComplianceContract === 'object'
+          ? { grantSectionComplianceContract: raw.grantSectionComplianceContract as GrantSectionComplianceContract }
+          : {}),
+        ...(raw.grantComplianceReport && typeof raw.grantComplianceReport === 'object'
+          ? { grantComplianceReport: raw.grantComplianceReport as GrantComplianceReport }
+          : {}),
+        ...(raw.reviewerReadinessReport && typeof raw.reviewerReadinessReport === 'object'
+          ? { reviewerReadinessReport: raw.reviewerReadinessReport as ReviewerReadinessReport }
           : {}),
         dependencies: Array.isArray(raw.dependencies)
           ? raw.dependencies.map(item => String(item || '').trim()).filter(Boolean)

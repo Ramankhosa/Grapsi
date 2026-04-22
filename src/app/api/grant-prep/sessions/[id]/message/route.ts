@@ -80,7 +80,7 @@ async function inferMarkerFromTurn(input: {
     '{',
     '  "version": "brainstorm_marker_v1",',
     `  "stageKey": "${input.stageKey}",`,
-    '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": [], "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
+    '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": [], "factBullets": ["specific drafting fact"], "ruleNotes": ["rule caveat"], "confidence": 0.8, "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
     '  "currentPoint": "..." | null,',
     '  "steeringEvents": []',
     '}',
@@ -271,6 +271,8 @@ export async function POST(
       let nextStageStates = applyMarkerToStageStates(prepContext.stageStates, stageKey, inferredMarker, {
         selectedThrustAreaRuleKeys: prepContext.selectedThrustAreaRuleKeys,
         availableFocusAreas: serverContext.fundingContext.focusAreas || [],
+        budgetLimits: serverContext.fundingContext.budgetLimits || null,
+        projectDuration: serverContext.fundingContext.projectDuration || null,
       })
       const stageAfterMarker = nextStageStates[stageKey]
       const stageChanged = hasStageContentChanged(stageBeforeUpdate, stageAfterMarker)

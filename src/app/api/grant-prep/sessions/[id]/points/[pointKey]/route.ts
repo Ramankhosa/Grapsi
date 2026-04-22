@@ -128,6 +128,9 @@ export async function PATCH(
       const nextCapture: GrantPrepPointCapture = {
         keywords: nextKeywords,
         thrustLinkage: normalizeGrantPrepStringArray(point.capture?.thrustLinkage),
+        factBullets: normalizeGrantPrepStringArray(point.capture?.factBullets),
+        ruleNotes: normalizeGrantPrepStringArray(point.capture?.ruleNotes),
+        confidence: Number.isFinite(Number(point.capture?.confidence)) ? Number(point.capture?.confidence) : 0.7,
         captureBasis: normalizeGrantPrepCaptureBasis(point.capture?.captureBasis),
         sourceTemplatePointer: point.capture?.sourceTemplatePointer || point.sourceTemplatePointer || null,
         ruleCompliance: point.capture?.ruleCompliance || {
@@ -146,6 +149,8 @@ export async function PATCH(
           selectedThrustAreaRuleKeys: prepContext.selectedThrustAreaRuleKeys,
           availableFocusAreas: serverContext.fundingContext.focusAreas || [],
         }),
+        budgetLimits: serverContext.fundingContext.budgetLimits || null,
+        projectDuration: serverContext.fundingContext.projectDuration || null,
       })
 
       point.status = statusResult.status

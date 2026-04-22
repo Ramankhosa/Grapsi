@@ -1,9 +1,11 @@
 import type {
   GrantCitationMode,
+  GrantSectionComplianceContract,
   GrantPrepContextBlock,
   GrantRuleProfile,
   GrantSectionSemantic,
 } from '@/types/grant'
+import { formatGrantComplianceContractForPrompt } from '@/lib/grants/compliance'
 
 export interface GrantPromptSummary {
   projectTitle?: string | null
@@ -19,6 +21,7 @@ export interface SharedGrantPromptContext {
   grantSemantic?: GrantSectionSemantic | null
   prepContextBlock?: GrantPrepContextBlock | null
   grantRuleProfile?: GrantRuleProfile | null
+  grantSectionComplianceContract?: GrantSectionComplianceContract | null
   grantContextSummary?: GrantPromptSummary | null
   citationMode?: GrantCitationMode | null
 }
@@ -103,6 +106,7 @@ export function buildGrantPromptOverlay(context?: SharedGrantPromptContext): str
   const prepBullets = context.prepContextBlock?.bullets || []
   const prepKeywords = context.prepContextBlock?.keywords || []
   const grantRules = context.grantRuleProfile
+  const grantContractBlock = formatGrantComplianceContractForPrompt(context.grantSectionComplianceContract)
 
   const blocks = [
     grantSummaryLines.length > 0
@@ -114,6 +118,7 @@ export function buildGrantPromptOverlay(context?: SharedGrantPromptContext): str
     context.citationMode
       ? `SECTION CITATION MODE:\n- ${context.citationMode.replace(/_/g, ' ')}`
       : '',
+    grantContractBlock,
     grantRules && (
       grantRules.requiredPoints.length > 0
       || grantRules.evaluationFocus.length > 0

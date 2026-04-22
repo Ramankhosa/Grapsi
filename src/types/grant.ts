@@ -41,6 +41,42 @@ export const GRANT_SECTION_SEMANTICS = [
 
 export type GrantSectionSemantic = typeof GRANT_SECTION_SEMANTICS[number]
 
+export const GRANT_RULE_CLASSES = [
+  'priority',
+  'must_address',
+  'avoid',
+  'evaluation',
+  'budget',
+  'duration',
+  'format',
+  'submission',
+  'deliverable',
+  'reviewer_signal',
+  'template_guidance',
+  'template_required_fact',
+  'template_forbidden_move',
+  'prep_evidence',
+  'other',
+] as const
+
+export type GrantRuleClass = typeof GRANT_RULE_CLASSES[number]
+
+export const GRANT_ENFORCEMENT_LEVELS = [
+  'hard',
+  'soft',
+  'info',
+] as const
+
+export type GrantEnforcementLevel = typeof GRANT_ENFORCEMENT_LEVELS[number]
+
+export const GRANT_DRAFTING_SUBMISSION_MODES = [
+  'drafting',
+  'submission',
+  'both',
+] as const
+
+export type GrantDraftingSubmissionMode = typeof GRANT_DRAFTING_SUBMISSION_MODES[number]
+
 export interface GrantThematicBlueprint {
   mustCover: string[]
   mustAvoid: string[]
@@ -61,6 +97,93 @@ export interface GrantRuleProfile {
   avoidRules: string[]
   formatConstraints: string[]
   narrativeConstraints: string[]
+}
+
+export interface GrantPrepEvidenceItem {
+  stageKey: string
+  pointKey: string
+  label: string
+  sourceTemplatePointer?: string | null
+  sectionKeys?: string[]
+  keywords: string[]
+  thrustLinkage: string[]
+  factBullets: string[]
+  ruleNotes: string[]
+  confidence: number
+  captureBasis: string[]
+  status: 'covered' | 'needs_review'
+}
+
+export interface GrantTemplateGuidanceProfile {
+  pointer?: string | null
+  guidanceText: string[]
+  requiredFacts: string[]
+  reviewerGoal?: string | null
+  forbiddenMoves: string[]
+  draftingVsSubmission: GrantDraftingSubmissionMode
+}
+
+export interface GrantSectionComplianceCheck {
+  key: string
+  label: string
+  ruleText: string
+  ruleClass: GrantRuleClass
+  enforcementLevel: GrantEnforcementLevel
+  draftingVsSubmission: GrantDraftingSubmissionMode
+  detectorHints: string[]
+  source: 'guideline' | 'template' | 'prep' | 'system'
+}
+
+export interface GrantSectionComplianceContract {
+  requiredPoints: string[]
+  evaluationFocus: string[]
+  reviewerSignals: string[]
+  avoidRules: string[]
+  formatConstraints: string[]
+  narrativeConstraints: string[]
+  prepEvidence: GrantPrepEvidenceItem[]
+  templateGuidance: GrantTemplateGuidanceProfile | null
+  fundingCallSummary: string[]
+  submissionChecklist: string[]
+  hardChecks: GrantSectionComplianceCheck[]
+  softChecks: GrantSectionComplianceCheck[]
+}
+
+export interface GrantGenerationTrace {
+  usedPrepEvidence: string[]
+  coveredRequiredPoints: string[]
+  unmetRequiredPoints: string[]
+  violatedAvoidRules: string[]
+  openQuestions: string[]
+}
+
+export interface GrantComplianceFinding {
+  key: string
+  message: string
+  ruleText?: string | null
+  source: 'guideline' | 'template' | 'prep' | 'system'
+}
+
+export interface GrantComplianceReport {
+  stage: 'blueprint' | 'pass1' | 'pass2' | 'proposal'
+  passed: boolean
+  coveredRequiredPoints: string[]
+  unmetRequiredPoints: string[]
+  violatedAvoidRules: string[]
+  missingEvidence: string[]
+  hardFailures: GrantComplianceFinding[]
+  softWarnings: GrantComplianceFinding[]
+  usedPrepEvidence: string[]
+  generatedAt: string
+}
+
+export interface ReviewerReadinessReport {
+  score: number
+  strengths: string[]
+  risks: string[]
+  missingSignals: string[]
+  recommendedActions: string[]
+  generatedAt: string
 }
 
 export interface GrantBlueprintDimensionTarget {
@@ -116,6 +239,10 @@ export interface CompiledGrantTemplateSection {
   grantSemantic?: GrantSectionSemantic | null
   prepContextBlock?: GrantPrepContextBlock | null
   grantRuleProfile?: GrantRuleProfile | null
+  grantTemplateGuidance?: GrantTemplateGuidanceProfile | null
+  grantSectionComplianceContract?: GrantSectionComplianceContract | null
+  grantComplianceReport?: GrantComplianceReport | null
+  reviewerReadinessReport?: ReviewerReadinessReport | null
 }
 
 export interface CompiledGrantTemplate {
@@ -149,4 +276,8 @@ export interface GrantBlueprintPlanSection {
   grantSemantic?: GrantSectionSemantic | null
   prepContextBlock?: GrantPrepContextBlock | null
   grantRuleProfile?: GrantRuleProfile | null
+  grantTemplateGuidance?: GrantTemplateGuidanceProfile | null
+  grantSectionComplianceContract?: GrantSectionComplianceContract | null
+  grantComplianceReport?: GrantComplianceReport | null
+  reviewerReadinessReport?: ReviewerReadinessReport | null
 }

@@ -7,14 +7,23 @@ import type {
   GrantPrepStageStates,
 } from '@/lib/grantPrep/types'
 import { buildGrantThematicBlueprint } from '@/lib/grants/blueprintMetadata'
+import {
+  buildReviewerReadinessReport,
+} from '@/lib/grants/compliance'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import type {
+  GrantComplianceReport,
   GrantBlueprintDimensionType,
   GrantBlueprintPlanSection,
+  GrantPrepEvidenceItem,
   GrantPrepContextBlock,
   GrantRuleProfile,
+  GrantSectionComplianceCheck,
+  GrantSectionComplianceContract,
   GrantSectionSemantic,
+  GrantTemplateGuidanceProfile,
   GrantThematicBlueprint,
+  ReviewerReadinessReport,
 } from '@/types/grant'
 
 export interface GeneratedGrantProposalFoundation {
@@ -29,8 +38,10 @@ export interface GrantBlueprintEnrichmentContext {
   fundingCallTitle?: string | null
   agencyName?: string | null
   globalKeywords?: string[]
+  globalCaptureSummary?: string[]
   focusAreas?: string[]
   capturedKeywords?: string[]
+  prepEvidenceBySection?: Record<string, GrantPrepEvidenceItem[]>
   stageStates?: GrantPrepStageStates | null
   guidelinePack?: GuidelinePackDocument | null
 }
@@ -505,6 +516,32 @@ function buildPrepContextBlock(
   context: GrantBlueprintEnrichmentContext,
   semantic: GrantSectionSemantic
 ): GrantPrepContextBlock | null {
+  const mappedEvidence = dedupePrepEvidence([
+    ...(context.prepEvidenceBySection?.[section.sectionKey] || []),
+    ...(section.sourceTemplatePointer ? context.prepEvidenceBySection?.[section.sourceTemplatePointer] || [] : []),
+  ])
+  if (mappedEvidence.length > 0) {
+    const bullets = dedupeStrings(
+      mappedEvidence.map((item) => {
+        const facts = item.factBullets.length > 0
+          ? item.factBullets.slice(0, 2).join(' ; ')
+          : item.keywords.slice(0, 6).join(', ')
+        const thrust = item.thrustLinkage.length > 0 ? `Thrust linkage: ${item.thrustLinkage.join(', ')}` : null
+        const notes = item.ruleNotes.length > 0 ? `Rule note: ${item.ruleNotes.join(' ; ')}` : null
+        return [item.label, facts || 'covered in prep', thrust, notes].filter(Boolean).join(' | ')
+      })
+    ).slice(0, 6)
+    const keywords = dedupeStrings(
+      mappedEvidence.flatMap((item) => [...item.keywords, ...item.thrustLinkage])
+    ).slice(0, 12)
+
+    return {
+      stageKeys: dedupeStrings(mappedEvidence.map((item) => item.stageKey)),
+      bullets,
+      keywords,
+    }
+  }
+
   const stageStates = context.stageStates
   if (!stageStates) return null
 
@@ -580,10 +617,11 @@ function pickTopRuleTexts(
   rules: FundingGuidelineRuleItem[],
   section: GrantBlueprintPlanSection,
   semantic: GrantSectionSemantic,
-  limit: number
+  limit: number,
+  options?: { includeOperational?: boolean }
 ) {
   return rules
-    .filter((rule) => !OPERATIONAL_RULE_PATTERN.test(rule.text))
+    .filter((rule) => options?.includeOperational ? true : !OPERATIONAL_RULE_PATTERN.test(rule.text))
     .map((rule) => ({
       text: sentenceCase(rule.text.replace(/\s+/g, ' ').trim()),
       score: scoreRuleForSection(rule, section, semantic),
@@ -663,6 +701,347 @@ function buildGrantRuleProfile(
   }
 }
 
+function dedupePrepEvidence(items: GrantPrepEvidenceItem[]): GrantPrepEvidenceItem[] {
+  const seen = new Set<string>()
+  const next: GrantPrepEvidenceItem[] = []
+  for (const item of items) {
+    const key = `${item.stageKey}:${item.pointKey}`.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(item)
+  }
+  return next
+}
+
+function buildTemplateGuidanceProfile(section: GrantBlueprintPlanSection): GrantTemplateGuidanceProfile {
+  if (section.grantTemplateGuidance) {
+    return section.grantTemplateGuidance
+  }
+
+  return {
+    pointer: section.sourceTemplatePointer || null,
+    guidanceText: dedupeStrings([section.purpose, section.reviewerIntent || ''].filter(Boolean)),
+    requiredFacts: dedupeStrings(section.mustCover),
+    reviewerGoal: section.reviewerIntent || null,
+    forbiddenMoves: dedupeStrings(section.mustAvoid),
+    draftingVsSubmission: section.sectionType === 'checklist' || section.sectionType === 'budget_rows'
+      ? 'both'
+      : 'drafting',
+  }
+}
+
+function buildSectionPrepEvidence(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext,
+  semantic: GrantSectionSemantic
+): GrantPrepEvidenceItem[] {
+  const directEvidence = dedupePrepEvidence(
+    [
+      ...(context.prepEvidenceBySection?.[section.sectionKey] || []),
+      ...(section.sourceTemplatePointer ? context.prepEvidenceBySection?.[section.sourceTemplatePointer] || [] : []),
+    ]
+  )
+  if (directEvidence.length > 0) {
+    return directEvidence
+  }
+
+  const stageStates = context.stageStates
+  if (!stageStates) return []
+
+  const stageKeys = PREP_STAGE_KEYS_BY_SEMANTIC[semantic] || PREP_STAGE_KEYS_BY_SEMANTIC.default
+  return dedupePrepEvidence(
+    stageKeys.flatMap((stageKey) =>
+      collectCoveredPoints(stageStates, stageKey).map((point) => ({
+        stageKey,
+        pointKey: point.key,
+        label: point.label,
+        sourceTemplatePointer: point.capture?.sourceTemplatePointer || point.sourceTemplatePointer || null,
+        sectionKeys: [section.sectionKey],
+        keywords: dedupeStrings(point.capture?.keywords || []),
+        thrustLinkage: dedupeStrings(point.capture?.thrustLinkage || []),
+        factBullets: dedupeStrings(point.capture?.factBullets || []),
+        ruleNotes: dedupeStrings([
+          ...(point.capture?.ruleNotes || []),
+          point.capture?.ruleCompliance.status !== 'ok'
+            ? point.capture?.ruleCompliance.reason || ''
+            : '',
+        ]),
+        confidence: Number(point.capture?.confidence || 0.7),
+        captureBasis: dedupeStrings(point.capture?.captureBasis || []),
+        status: point.status === 'needs_review' ? 'needs_review' : 'covered',
+      }))
+    )
+  )
+}
+
+function toComplianceCheck(input: {
+  key: string
+  label: string
+  ruleText: string
+  ruleClass: GrantSectionComplianceCheck['ruleClass']
+  enforcementLevel: GrantSectionComplianceCheck['enforcementLevel']
+  draftingVsSubmission: GrantSectionComplianceCheck['draftingVsSubmission']
+  detectorHints?: string[]
+  source: GrantSectionComplianceCheck['source']
+}): GrantSectionComplianceCheck {
+  return {
+    key: input.key,
+    label: input.label,
+    ruleText: input.ruleText,
+    ruleClass: input.ruleClass,
+    enforcementLevel: input.enforcementLevel,
+    draftingVsSubmission: input.draftingVsSubmission,
+    detectorHints: dedupeStrings(input.detectorHints || []),
+    source: input.source,
+  }
+}
+
+function buildGrantSectionComplianceContract(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext,
+  semantic: GrantSectionSemantic,
+  grantRuleProfile: GrantRuleProfile | null,
+  prepEvidence: GrantPrepEvidenceItem[]
+): GrantSectionComplianceContract {
+  const templateGuidance = buildTemplateGuidanceProfile(section)
+  const guidelinePack = context.guidelinePack
+  const fundingCallSummary = dedupeStrings([
+    context.projectTitle ? `Project: ${context.projectTitle}` : '',
+    context.fundingCallTitle ? `Funding call: ${context.fundingCallTitle}` : '',
+    context.agencyName ? `Agency: ${context.agencyName}` : '',
+    ...(context.globalCaptureSummary || []).slice(0, 4),
+    ...(context.focusAreas || []).slice(0, 4).map((item) => `Focus area: ${item}`),
+  ].filter(Boolean))
+
+  const requiredPoints = dedupeStrings([
+    ...templateGuidance.requiredFacts,
+    ...(grantRuleProfile?.requiredPoints || []),
+    ...section.mustCover,
+  ])
+
+  const evaluationFocus = dedupeStrings([
+    ...(grantRuleProfile?.evaluationFocus || []),
+  ])
+
+  const reviewerSignals = dedupeStrings([
+    ...(templateGuidance.reviewerGoal ? [templateGuidance.reviewerGoal] : []),
+    ...(grantRuleProfile?.reviewerSignals || []),
+  ])
+
+  const avoidRules = dedupeStrings([
+    ...templateGuidance.forbiddenMoves,
+    ...(grantRuleProfile?.avoidRules || []),
+    ...section.mustAvoid,
+  ])
+
+  const formatConstraints = dedupeStrings([
+    ...(grantRuleProfile?.formatConstraints || []),
+  ])
+
+  const narrativeConstraints = dedupeStrings([
+    ...templateGuidance.guidanceText,
+    ...(templateGuidance.reviewerGoal ? [templateGuidance.reviewerGoal] : []),
+    ...(grantRuleProfile?.narrativeConstraints || []),
+  ])
+
+  const submissionChecklist = dedupeStrings([
+    ...pickTopRuleTexts(guidelinePack?.submissionRules || [], section, semantic, 6, { includeOperational: true }),
+    ...(templateGuidance.draftingVsSubmission !== 'drafting'
+      ? [...templateGuidance.requiredFacts, ...templateGuidance.guidanceText]
+      : []),
+  ])
+
+  const hardGuidelineChecks = dedupeStrings(
+    [
+      ...(guidelinePack?.mustAddress || [])
+        .filter((rule) =>
+          rule.enforcementLevel === 'hard'
+          && rule.draftingVsSubmission !== 'submission'
+          && (
+            (rule.appliesTo || []).includes('all')
+            || (rule.appliesTo || []).includes(semantic)
+          )
+        )
+        .map((rule) => rule.text),
+      ...(guidelinePack?.formatRules || [])
+        .filter((rule) => rule.enforcementLevel === 'hard')
+        .map((rule) => rule.text),
+      ...(guidelinePack?.durationRules || [])
+        .filter((rule) => rule.enforcementLevel === 'hard')
+        .map((rule) => rule.text),
+      ...(guidelinePack?.deliverableRules || [])
+        .filter((rule) => rule.enforcementLevel === 'hard')
+        .map((rule) => rule.text),
+    ]
+  )
+
+  const hardChecks: GrantSectionComplianceCheck[] = [
+    ...hardGuidelineChecks.map((ruleText, index) =>
+      toComplianceCheck({
+        key: `hard_guideline_${index + 1}`,
+        label: `Guideline hard rule ${index + 1}`,
+        ruleText,
+        ruleClass: 'must_address',
+        enforcementLevel: 'hard',
+        draftingVsSubmission: 'drafting',
+        source: 'guideline',
+      })
+    ),
+    ...templateGuidance.requiredFacts.map((ruleText, index) =>
+      toComplianceCheck({
+        key: `template_required_fact_${index + 1}`,
+        label: `Template required fact ${index + 1}`,
+        ruleText,
+        ruleClass: 'template_required_fact',
+        enforcementLevel: 'hard',
+        draftingVsSubmission: templateGuidance.draftingVsSubmission === 'submission' ? 'both' : templateGuidance.draftingVsSubmission,
+        source: 'template',
+      })
+    ),
+    ...templateGuidance.forbiddenMoves.map((ruleText, index) =>
+      toComplianceCheck({
+        key: `template_forbidden_move_${index + 1}`,
+        label: `Template forbidden move ${index + 1}`,
+        ruleText,
+        ruleClass: 'template_forbidden_move',
+        enforcementLevel: 'hard',
+        draftingVsSubmission: 'drafting',
+        source: 'template',
+      })
+    ),
+    ...(typeof section.wordBudget === 'number' && section.wordBudget > 0
+      ? [
+          toComplianceCheck({
+            key: 'word_budget',
+            label: 'Section word budget',
+            ruleText: `Do not exceed ${section.wordBudget} words.`,
+            ruleClass: 'format',
+            enforcementLevel: 'hard',
+            draftingVsSubmission: 'drafting',
+            detectorHints: ['word_limit'],
+            source: 'system',
+          }),
+        ]
+      : []),
+    ...(typeof section.characterLimit === 'number' && section.characterLimit > 0
+      ? [
+          toComplianceCheck({
+            key: 'character_limit',
+            label: 'Section character limit',
+            ruleText: `Do not exceed ${section.characterLimit} characters.`,
+            ruleClass: 'format',
+            enforcementLevel: 'hard',
+            draftingVsSubmission: 'drafting',
+            detectorHints: ['character_limit'],
+            source: 'system',
+          }),
+        ]
+      : []),
+  ]
+
+  const softChecks: GrantSectionComplianceCheck[] = [
+    ...evaluationFocus.map((ruleText, index) =>
+      toComplianceCheck({
+        key: `evaluation_focus_${index + 1}`,
+        label: `Evaluation focus ${index + 1}`,
+        ruleText,
+        ruleClass: 'evaluation',
+        enforcementLevel: 'soft',
+        draftingVsSubmission: 'drafting',
+        source: 'guideline',
+      })
+    ),
+    ...reviewerSignals.map((ruleText, index) =>
+      toComplianceCheck({
+        key: `reviewer_signal_${index + 1}`,
+        label: `Reviewer signal ${index + 1}`,
+        ruleText,
+        ruleClass: 'reviewer_signal',
+        enforcementLevel: 'soft',
+        draftingVsSubmission: 'drafting',
+        source: 'guideline',
+      })
+    ),
+    ...narrativeConstraints.map((ruleText, index) =>
+      toComplianceCheck({
+        key: `narrative_constraint_${index + 1}`,
+        label: `Narrative constraint ${index + 1}`,
+        ruleText,
+        ruleClass: 'template_guidance',
+        enforcementLevel: 'soft',
+        draftingVsSubmission: 'drafting',
+        source: 'template',
+      })
+    ),
+  ]
+
+  return {
+    requiredPoints,
+    evaluationFocus,
+    reviewerSignals,
+    avoidRules,
+    formatConstraints,
+    narrativeConstraints,
+    prepEvidence,
+    templateGuidance,
+    fundingCallSummary,
+    submissionChecklist,
+    hardChecks,
+    softChecks,
+  }
+}
+
+function buildBlueprintGrantComplianceReport(
+  contract: GrantSectionComplianceContract
+): GrantComplianceReport {
+  const hardFailures: GrantComplianceReport['hardFailures'] = []
+  const softWarnings: GrantComplianceReport['softWarnings'] = []
+
+  if (contract.requiredPoints.length === 0) {
+    hardFailures.push({
+      key: 'missing_required_points',
+      message: 'No section-level required points were mapped into the compliance contract.',
+      source: 'system',
+      ruleText: null,
+    })
+  }
+
+  if (
+    contract.reviewerSignals.length === 0
+    && contract.evaluationFocus.length === 0
+    && contract.narrativeConstraints.length === 0
+  ) {
+    hardFailures.push({
+      key: 'missing_reviewer_guidance',
+      message: 'No reviewer-facing guidance was mapped into the compliance contract.',
+      source: 'system',
+      ruleText: null,
+    })
+  }
+
+  if (contract.prepEvidence.length === 0) {
+    softWarnings.push({
+      key: 'missing_prep_evidence',
+      message: 'No section-scoped Grant Prep evidence was mapped into the compliance contract.',
+      source: 'prep',
+      ruleText: null,
+    })
+  }
+
+  return {
+    stage: 'blueprint',
+    passed: hardFailures.length === 0,
+    coveredRequiredPoints: [],
+    unmetRequiredPoints: contract.requiredPoints.length === 0 ? ['Section-level required points were not mapped.'] : [],
+    violatedAvoidRules: [],
+    missingEvidence: contract.prepEvidence.length === 0 ? ['Section has no preserved Grant Prep evidence.'] : [],
+    hardFailures,
+    softWarnings,
+    usedPrepEvidence: [],
+    generatedAt: new Date().toISOString(),
+  }
+}
+
 function enrichOneSection(
   section: GrantBlueprintPlanSection,
   context: GrantBlueprintEnrichmentContext,
@@ -674,6 +1053,10 @@ function enrichOneSection(
       grantSemantic: null,
       prepContextBlock: null,
       grantRuleProfile: null,
+      grantTemplateGuidance: null,
+      grantSectionComplianceContract: null,
+      grantComplianceReport: null,
+      reviewerReadinessReport: null,
       mustCoverTyping: undefined,
       suggestedCitationCount: null,
       thematicBlueprint: null,
@@ -681,13 +1064,31 @@ function enrichOneSection(
   }
 
   const semantic = classifyGrantSectionSemantic(section)
-  const prepContextBlock = buildPrepContextBlock(section, context, semantic)
   const grantRuleProfile = buildGrantRuleProfile(section, context, semantic)
+  const prepEvidence = buildSectionPrepEvidence(section, context, semantic)
+  const prepContextBlock = buildPrepContextBlock(section, context, semantic)
+  const grantSectionComplianceContract = buildGrantSectionComplianceContract(
+    section,
+    context,
+    semantic,
+    grantRuleProfile,
+    prepEvidence
+  )
+  const grantComplianceReport = buildBlueprintGrantComplianceReport(grantSectionComplianceContract)
+  const reviewerReadinessReport: ReviewerReadinessReport = buildReviewerReadinessReport({
+    contract: grantSectionComplianceContract,
+    report: grantComplianceReport,
+  })
   const regenerate = mode === 'generate' || shouldRegenerateDimensions(section)
   const evidenceNeed = inferCitationEvidenceNeed(section, semantic)
   const generated = evidenceNeed === 'none'
     ? []
-    : buildSeedDimensions(section, context, semantic).slice(0, targetDimensionCount(section, evidenceNeed))
+    : buildSeedDimensions({
+        ...section,
+        mustCover: grantSectionComplianceContract.requiredPoints.length > 0
+          ? grantSectionComplianceContract.requiredPoints
+          : section.mustCover,
+      }, context, semantic).slice(0, targetDimensionCount(section, evidenceNeed))
 
   const mustCover = regenerate
     ? generated.map((item) => item.dimension)
@@ -716,6 +1117,10 @@ function enrichOneSection(
     grantSemantic: semantic,
     prepContextBlock,
     grantRuleProfile,
+    grantTemplateGuidance: grantSectionComplianceContract.templateGuidance,
+    grantSectionComplianceContract,
+    grantComplianceReport,
+    reviewerReadinessReport,
   }
 }
 

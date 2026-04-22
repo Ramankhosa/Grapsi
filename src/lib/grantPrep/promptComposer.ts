@@ -45,25 +45,47 @@ function buildCrossStageContext(
         .map((point) => ({
           label: point.label,
           keywords: asStringArray(point.capture?.keywords),
+          factBullets: asStringArray(point.capture?.factBullets),
+          ruleNotes: asStringArray(point.capture?.ruleNotes),
         }))
-        .filter((point) => point.keywords.length > 0)
-        .map((point) => `  - ${point.label}: ${point.keywords.slice(0, 6).join(', ')}`)
+        .filter((point) => point.keywords.length > 0 || point.factBullets.length > 0)
+        .map((point) => {
+          const facts = point.factBullets.length > 0
+            ? `Facts: ${point.factBullets.slice(0, 3).join(' ; ')}`
+            : null
+          const keywords = point.keywords.length > 0
+            ? `Keywords: ${point.keywords.slice(0, 6).join(', ')}`
+            : null
+          const ruleNotes = point.ruleNotes.length > 0
+            ? `Rule notes: ${point.ruleNotes.slice(0, 2).join(' ; ')}`
+            : null
+          return `  - ${point.label}: ${[facts, keywords, ruleNotes].filter(Boolean).join(' | ')}`
+        })
         .join('\n');
       return `${stage.title} (${Math.round(state.readiness * 100)}% ready):\n${coveredPoints}`;
     })
     .join('\n\n');
 }
 
-function compactList(label: string, items: Array<{ text?: string | null }> | undefined, limit = 4) {
+function formatGuidelineRule(item: { text?: string | null; enforcementLevel?: string | null; draftingVsSubmission?: string | null; rationale?: string | null }) {
+  const flags = [
+    String(item.enforcementLevel || '').trim(),
+    String(item.draftingVsSubmission || '').trim(),
+  ].filter(Boolean).join('/')
+  const rationale = String(item.rationale || '').trim()
+  return `${flags ? `[${flags}] ` : ''}${String(item.text || '').trim()}${rationale ? ` | Why: ${rationale}` : ''}`
+}
+
+function compactList(label: string, items: Array<{ text?: string | null; enforcementLevel?: string | null; draftingVsSubmission?: string | null; rationale?: string | null }> | undefined, limit = 4) {
   if (!Array.isArray(items) || items.length === 0) {
     return `${label}: none`;
   }
 
-  return `${label}: ${items
-    .map((item) => String(item?.text || '').trim())
+  const formatted = items
+    .map((item) => formatGuidelineRule(item))
     .filter(Boolean)
     .slice(0, limit)
-    .join(' | ')}`;
+  return `${label}:\n${formatted.map((item) => `- ${item}`).join('\n')}`;
 }
 
 function buildGuidelineBlock(guidelinePack: GuidelinePackDocument | null | undefined, stageKey: GrantPrepStageKey) {
@@ -136,7 +158,10 @@ export function buildGrantPrepPrompt(input: {
   const pendingPoints = stageState.points
     .filter((point) => point.status !== 'covered')
     .slice(0, pointLimit)
-    .map((point) => `- pointKey=${point.key} | label=${point.label}${point.sourceTemplatePointer ? ` | pointer=${point.sourceTemplatePointer}` : ''}`);
+    .map((point) => {
+      const mappedPoint = mapping.discussionPoints.find((entry) => entry.key === point.key)
+      return `- pointKey=${point.key} | label=${point.label}${point.sourceTemplatePointer ? ` | pointer=${point.sourceTemplatePointer}` : ''}${mappedPoint?.helpText ? ` | help=${mappedPoint.helpText}` : ''}`
+    });
   const allowedPointKeys = stageState.points.map((point) => point.key);
 
   const currentConversation = input.conversation
@@ -211,6 +236,11 @@ export function buildGrantPrepPrompt(input: {
         ]
       : []),
     `Mapped template pointers: ${mapping.templatePointers.join(', ') || 'None'}`,
+    'Mapped template guidance for this stage:',
+    mapping.discussionPoints
+      .slice(0, pointLimit)
+      .map((point) => `- ${point.label}${point.sourceTemplatePointer ? ` (${point.sourceTemplatePointer})` : ''}: ${point.helpText}`)
+      .join('\n') || '- None',
     'Pending discussion points:',
     pendingPoints.join('\n') || '- None',
     `Allowed point keys for this stage: ${allowedPointKeys.join(', ') || 'none'}`,
@@ -230,7 +260,7 @@ export function buildGrantPrepPrompt(input: {
     '{',
     '  "version": "brainstorm_marker_v1",',
     `  "stageKey": "${input.stageKey}",`,
-    '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": ["..."], "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
+    '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": ["..."], "factBullets": ["specific factual capture"], "ruleNotes": ["rule or reviewer caveat"], "confidence": 0.85, "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
     '  "currentPoint": "pointKey of the discussion point the next question targets" | null,',
     '  "suggestedFollowUps": ["short follow-up prompt 1", "short follow-up prompt 2"] | null,',
     '  "suggestedAnswers": [{ "label": "A", "text": "concrete answer option", "rationale": "optional strength note" }] | null,',
@@ -247,5 +277,6 @@ export function buildGrantPrepPrompt(input: {
     'Do not include markdown code fences around the marker.',
     'Never include more than 32 KB of JSON in the marker.',
     'Use only the allowed point keys listed above. Do not invent new point keys.',
+    'For each covered point, prefer 1-3 factBullets that capture usable section-drafting facts. Use ruleNotes for reviewer or guideline caveats.',
   ].join('\n');
 }

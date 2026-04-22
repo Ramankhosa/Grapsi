@@ -1,3 +1,9 @@
+import type {
+  GrantDraftingSubmissionMode,
+  GrantEnforcementLevel,
+  GrantRuleClass,
+} from '@/types/grant'
+
 export const FUNDING_GUIDELINE_BLOCK_KEYS = [
   'priorities',
   'mustAddress',
@@ -42,6 +48,13 @@ export interface FundingGuidelineRuleItem {
   key: string;
   text: string;
   importance: FundingGuidelineRuleImportance;
+  ruleClass?: GrantRuleClass;
+  enforcementLevel?: GrantEnforcementLevel;
+  appliesTo?: string[];
+  draftingStage?: string[];
+  draftingVsSubmission?: GrantDraftingSubmissionMode;
+  detectorHints?: string[];
+  sourceBlock?: FundingGuidelineBlockKey;
   rationale?: string | null;
   confidence: number;
   sourceAnchors: FundingGuidelineSourceAnchor[];
@@ -66,4 +79,3 @@ export interface FundingGuidelineSummary {
   totalRules: number;
   updatedAt: string;
 }
-

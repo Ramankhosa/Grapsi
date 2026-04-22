@@ -55,7 +55,7 @@ const planSectionSchema = z.object({
     narrativeConstraints: z.array(z.string()).default([]),
   }).nullable().optional(),
   seededContext: z.string().default(''),
-})
+}).passthrough()
 
 const proposalFoundationSchema = z.object({
   thesisStatement: z.string().default(''),
@@ -100,6 +100,8 @@ export async function GET(
     grantSession: workspace.grantSession,
     blueprint: workspace.blueprint,
     proposalFoundation: workspace.proposalFoundation,
+    proposalComplianceReport: workspace.proposalComplianceReport,
+    proposalReviewerReadinessReport: workspace.proposalReviewerReadinessReport,
     freezeReadiness: workspace.freezeReadiness,
     launchPreview: preview,
   })
@@ -146,6 +148,8 @@ export async function PATCH(
     return NextResponse.json({
       blueprint: workspace?.blueprint || null,
       proposalFoundation: workspace?.proposalFoundation || null,
+      proposalComplianceReport: workspace?.proposalComplianceReport || null,
+      proposalReviewerReadinessReport: workspace?.proposalReviewerReadinessReport || null,
       freezeReadiness: workspace?.freezeReadiness || null,
     })
   } catch (error) {
@@ -208,6 +212,8 @@ export async function POST(
       grantSession: workspace?.grantSession || null,
       blueprint: workspace?.blueprint || null,
       proposalFoundation: workspace?.proposalFoundation || null,
+      proposalComplianceReport: workspace?.proposalComplianceReport || null,
+      proposalReviewerReadinessReport: workspace?.proposalReviewerReadinessReport || null,
       freezeReadiness: workspace?.freezeReadiness || null,
     })
   } catch (error) {

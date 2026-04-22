@@ -13,6 +13,28 @@ import type {
 } from '@/lib/fundingGuidelines/types';
 import { createEmptyGuidelinePack, normalizeGuidelinePack } from '@/lib/fundingGuidelines/utils';
 import { FUNDING_GUIDELINE_BLOCK_KEYS } from '@/lib/fundingGuidelines/types';
+import type {
+  GrantDraftingSubmissionMode,
+  GrantEnforcementLevel,
+  GrantRuleClass,
+} from '@/types/grant';
+
+const RULE_CLASSES: GrantRuleClass[] = [
+  'priority',
+  'must_address',
+  'avoid',
+  'evaluation',
+  'budget',
+  'duration',
+  'format',
+  'submission',
+  'deliverable',
+  'reviewer_signal',
+  'other',
+];
+
+const ENFORCEMENT_LEVELS: GrantEnforcementLevel[] = ['hard', 'soft', 'info'];
+const DRAFTING_SUBMISSION_MODES: GrantDraftingSubmissionMode[] = ['drafting', 'submission', 'both'];
 
 export async function getServerSideProps() {
   return {
@@ -82,6 +104,41 @@ function createRule(block: FundingGuidelineBlockKey): FundingGuidelineRuleItem {
     key: `${block}_${Date.now()}`,
     text: 'New rule',
     importance: 'medium',
+    ruleClass:
+      block === 'priorities'
+        ? 'priority'
+        : block === 'mustAddress'
+          ? 'must_address'
+          : block === 'avoid'
+            ? 'avoid'
+            : block === 'evaluationCriteria'
+              ? 'evaluation'
+              : block === 'budgetRules'
+                ? 'budget'
+                : block === 'durationRules'
+                  ? 'duration'
+                  : block === 'formatRules'
+                    ? 'format'
+                    : block === 'submissionRules'
+                      ? 'submission'
+                      : block === 'deliverableRules'
+                        ? 'deliverable'
+                        : block === 'reviewerSignals'
+                          ? 'reviewer_signal'
+                          : 'other',
+    enforcementLevel:
+      block === 'submissionRules'
+        || block === 'budgetRules'
+        || block === 'durationRules'
+        || block === 'formatRules'
+        ? 'hard'
+        : block === 'reviewerSignals' || block === 'priorities'
+          ? 'soft'
+          : 'soft',
+    appliesTo: ['all'],
+    draftingStage: [],
+    draftingVsSubmission: block === 'submissionRules' ? 'submission' : 'drafting',
+    detectorHints: [],
     rationale: null,
     confidence: 1,
     sourceAnchors: [],
@@ -311,6 +368,61 @@ function GuidelineBlockEditor({
                 onChange={(event) => update(index, { confidence: Number(event.target.value || 0) })}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 placeholder="Confidence"
+              />
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <select
+                value={rule.ruleClass || 'other'}
+                onChange={(event) => update(index, { ruleClass: event.target.value as GrantRuleClass })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                {RULE_CLASSES.map((ruleClass) => (
+                  <option key={ruleClass} value={ruleClass}>
+                    {ruleClass}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={rule.enforcementLevel || 'soft'}
+                onChange={(event) => update(index, { enforcementLevel: event.target.value as GrantEnforcementLevel })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                {ENFORCEMENT_LEVELS.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={rule.draftingVsSubmission || 'drafting'}
+                onChange={(event) => update(index, { draftingVsSubmission: event.target.value as GrantDraftingSubmissionMode })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                {DRAFTING_SUBMISSION_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <input
+                value={(rule.appliesTo || []).join(', ')}
+                onChange={(event) => update(index, { appliesTo: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Applies to sections"
+              />
+              <input
+                value={(rule.draftingStage || []).join(', ')}
+                onChange={(event) => update(index, { draftingStage: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Drafting stages"
+              />
+              <input
+                value={(rule.detectorHints || []).join(', ')}
+                onChange={(event) => update(index, { detectorHints: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Detector hints"
               />
             </div>
             <textarea

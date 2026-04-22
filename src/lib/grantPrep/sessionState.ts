@@ -16,6 +16,14 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function clampConfidence(value: unknown, fallback = 0.7) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  return Math.max(0, Math.min(1, numeric))
+}
+
 const CAPTURE_BASIS_VALUES = new Set<GrantPrepPointCapture['captureBasis'][number]>([
   'from_pitch',
   'inferred_from_call',
@@ -67,6 +75,55 @@ function uniqKeywords(values: unknown) {
   }
 
   return result;
+}
+
+function extractNumericCandidates(text: string) {
+  return Array.from(
+    text.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(crore|cr|lakh|lac|million|mn|m|billion|bn|b)?/gi)
+  ).map((match) => ({
+    value: Number(String(match[1] || '').replace(/,/g, '')),
+    unit: String(match[2] || '').toLowerCase(),
+  }))
+}
+
+function normalizeBudgetValueToLakhs(value: number, unit: string) {
+  if (!Number.isFinite(value)) return null
+  if (unit === 'crore' || unit === 'cr') return value * 100
+  if (unit === 'million' || unit === 'mn' || unit === 'm') return value * 10
+  if (unit === 'billion' || unit === 'bn' || unit === 'b') return value * 10000
+  return value
+}
+
+function extractBudgetUpperBound(text?: string | null): number | null {
+  const normalized = String(text || '')
+  if (!normalized.trim()) return null
+  const candidates = extractNumericCandidates(normalized)
+    .map((candidate) => normalizeBudgetValueToLakhs(candidate.value, candidate.unit))
+    .filter((value): value is number => Number.isFinite(value))
+  if (candidates.length === 0) return null
+  return Math.max(...candidates)
+}
+
+function extractDurationUpperBoundInMonths(text?: string | null): number | null {
+  const normalized = String(text || '')
+  if (!normalized.trim()) return null
+  const monthMatches = Array.from(normalized.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(month|months|mo)\b/gi))
+    .map((match) => Number(String(match[1] || '').replace(/,/g, '')))
+  const yearMatches = Array.from(normalized.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(year|years|yr)\b/gi))
+    .map((match) => Number(String(match[1] || '').replace(/,/g, '')) * 12)
+  const all = [...monthMatches, ...yearMatches].filter((value) => Number.isFinite(value))
+  if (all.length === 0) return null
+  return Math.max(...all)
+}
+
+function buildCaptureText(capture: GrantPrepPointCapture) {
+  return [
+    ...(capture.keywords || []),
+    ...(capture.factBullets || []),
+    ...(capture.ruleNotes || []),
+    ...(capture.thrustLinkage || []),
+    capture.ruleCompliance.reason || '',
+  ].join(' ')
 }
 
 export function normalizeGrantPrepStringArray(values: unknown) {
@@ -199,11 +256,16 @@ function normalizeCapture(
 ): GrantPrepPointCapture {
   const thrustLinkage = normalizeGrantPrepStringArray(next.thrustLinkage ?? current?.thrustLinkage ?? []);
   const keywords = normalizeGrantPrepKeywords(next.keywords ?? current?.keywords ?? []);
+  const factBullets = normalizeGrantPrepStringArray(next.factBullets ?? current?.factBullets ?? []);
+  const ruleNotes = normalizeGrantPrepStringArray(next.ruleNotes ?? current?.ruleNotes ?? []);
   const captureBasis = normalizeGrantPrepCaptureBasis(next.captureBasis ?? current?.captureBasis ?? ['user_confirmed']);
 
   return {
     keywords,
     thrustLinkage,
+    factBullets,
+    ruleNotes,
+    confidence: clampConfidence(next.confidence ?? current?.confidence, current?.confidence ?? 0.7),
     captureBasis,
     sourceTemplatePointer: current?.sourceTemplatePointer || null,
     ruleCompliance: {
@@ -226,12 +288,14 @@ export function getGrantPrepPointStatus(input: {
   stageKey: GrantPrepStageKey;
   capture: GrantPrepPointCapture;
   requiresThrustLinkage: boolean;
+  budgetLimits?: string | null;
+  projectDuration?: string | null;
 }) {
-  if (input.capture.keywords.length === 0) {
+  if (input.capture.keywords.length === 0 && (input.capture.factBullets || []).length === 0) {
     return {
       status: 'needs_review' as const,
       steeringLevel: 'gentle_redirect' as const,
-      steeringMessage: 'A discussion point was left without usable keywords.',
+      steeringMessage: 'A discussion point was left without usable facts or keywords.',
     };
   }
 
@@ -240,6 +304,45 @@ export function getGrantPrepPointStatus(input: {
       status: 'needs_review' as const,
       steeringLevel: 'hard_block' as const,
       steeringMessage: 'Priority alignment needs an explicit thrust or priority linkage.',
+    };
+  }
+
+  const captureText = buildCaptureText(input.capture)
+  const projectDurationUpperBound = extractDurationUpperBoundInMonths(input.projectDuration)
+  const capturedDuration = extractDurationUpperBoundInMonths(captureText)
+  if (
+    input.stageKey === 'workplan'
+    && projectDurationUpperBound
+    && capturedDuration
+    && capturedDuration > projectDurationUpperBound
+  ) {
+    return {
+      status: 'needs_review' as const,
+      steeringLevel: 'hard_block' as const,
+      steeringMessage: `Captured workplan exceeds the funding-call duration limit of ${projectDurationUpperBound} months.`,
+    };
+  }
+
+  const budgetUpperBound = extractBudgetUpperBound(input.budgetLimits)
+  const capturedBudget = extractBudgetUpperBound(captureText)
+  if (
+    input.stageKey === 'budget_strategy'
+    && budgetUpperBound
+    && capturedBudget
+    && capturedBudget > budgetUpperBound
+  ) {
+    return {
+      status: 'needs_review' as const,
+      steeringLevel: 'hard_block' as const,
+      steeringMessage: 'Captured budget strategy appears to exceed the call budget ceiling.',
+    };
+  }
+
+  if (/\b(out of scope|ineligible|forbidden|not allowed)\b/i.test(captureText)) {
+    return {
+      status: 'needs_review' as const,
+      steeringLevel: 'hard_block' as const,
+      steeringMessage: 'Captured content appears to conflict with scope or eligibility rules.',
     };
   }
 
@@ -301,6 +404,8 @@ export function applyMarkerToStageStates(
   options: {
     selectedThrustAreaRuleKeys: string[];
     availableFocusAreas: string[];
+    budgetLimits?: string | null;
+    projectDuration?: string | null;
   }
 ) {
   const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(stageStates));
@@ -321,6 +426,8 @@ export function applyMarkerToStageStates(
         stageKey,
         capture,
         requiresThrustLinkage,
+        budgetLimits: options.budgetLimits,
+        projectDuration: options.projectDuration,
       });
       point.status = statusResult.status;
       if (statusResult.steeringMessage && statusResult.steeringLevel) {
@@ -361,6 +468,9 @@ export function normalizeGrantPrepStageStates(stageStates: GrantPrepStageStates)
           ...point.capture,
           keywords: normalizeGrantPrepKeywords(point.capture.keywords),
           thrustLinkage: normalizeGrantPrepStringArray(point.capture.thrustLinkage),
+          factBullets: normalizeGrantPrepStringArray(point.capture.factBullets),
+          ruleNotes: normalizeGrantPrepStringArray(point.capture.ruleNotes),
+          confidence: clampConfidence(point.capture.confidence, 0.7),
           captureBasis: normalizeGrantPrepCaptureBasis(point.capture.captureBasis),
           sourceTemplatePointer: point.capture.sourceTemplatePointer || point.sourceTemplatePointer || null,
           ruleCompliance: {

@@ -485,6 +485,16 @@ describe('grant blueprint enrichment', () => {
     );
     expect(enriched[1].grantRuleProfile?.avoidRules).toContain('Avoid generic claims without evidence.');
     expect(enriched[1].grantRuleProfile?.avoidRules).not.toContain('Upload signed letters before submission.');
+    expect(enriched[1].grantSectionComplianceContract?.requiredPoints).toContain(
+      'Clearly articulate the capability gap addressed by the proposal.'
+    );
+    expect(enriched[1].grantSectionComplianceContract?.prepEvidence.length).toBeGreaterThan(0);
+    expect(enriched[1].grantSectionComplianceContract?.submissionChecklist).toContain(
+      'Submit the application through the portal before the deadline.'
+    );
+    expect(enriched[1].grantComplianceReport?.stage).toBe('blueprint');
+    expect(enriched[1].grantComplianceReport?.passed).toBe(true);
+    expect(enriched[1].reviewerReadinessReport?.score).toBeGreaterThan(0);
 
     expect(enriched[2].grantSemantic).toBe('methodology');
     expect(enriched[2].prepContextBlock?.stageKeys).toEqual([

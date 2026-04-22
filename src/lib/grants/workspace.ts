@@ -22,6 +22,10 @@ import {
   normalizeGrantWorkflowMode,
 } from '@/lib/grants/workflowMode'
 import {
+  buildProposalGrantComplianceReport,
+  buildProposalReviewerReadinessReport,
+} from '@/lib/grants/compliance'
+import {
   buildGrantPrepModeWarning,
   inflateGrantPrepSessionContext,
   loadGrantPrepSession,
@@ -38,8 +42,10 @@ import type {
   CompiledGrantTemplateSection,
   CompiledGrantTemplateSectionType,
   GrantBlueprintPlanSection,
+  GrantComplianceReport,
   GrantThematicBlueprint,
   GrantWorkflowMode,
+  ReviewerReadinessReport,
 } from '@/types/grant'
 
 type JsonObject = Record<string, unknown>
@@ -76,10 +82,34 @@ function asObject(value: unknown): JsonObject {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : {}
 }
 
+function asGrantComplianceReport(value: unknown): GrantComplianceReport | null {
+  const record = asObject(value)
+  return Object.keys(record).length > 0 ? (record as unknown as GrantComplianceReport) : null
+}
+
+function asReviewerReadinessReport(value: unknown): ReviewerReadinessReport | null {
+  const record = asObject(value)
+  return Object.keys(record).length > 0 ? (record as unknown as ReviewerReadinessReport) : null
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
     : []
+}
+
+function dedupeStringList(values: unknown): string[] {
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const item of Array.isArray(values) ? values : []) {
+    const normalized = String(item || '').trim().replace(/\s+/g, ' ')
+    if (!normalized) continue
+    const key = normalized.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(normalized)
+  }
+  return next
 }
 
 function normalizeDraftTextMap(value: unknown): Record<string, string> {
@@ -182,6 +212,10 @@ function normalizeCompiledSection(
     ...(section.grantSemantic ? { grantSemantic: section.grantSemantic } : {}),
     ...(section.prepContextBlock ? { prepContextBlock: section.prepContextBlock } : {}),
     ...(section.grantRuleProfile ? { grantRuleProfile: section.grantRuleProfile } : {}),
+    ...(section.grantTemplateGuidance ? { grantTemplateGuidance: section.grantTemplateGuidance } : {}),
+    ...(section.grantSectionComplianceContract ? { grantSectionComplianceContract: section.grantSectionComplianceContract } : {}),
+    ...(section.grantComplianceReport ? { grantComplianceReport: section.grantComplianceReport } : {}),
+    ...(section.reviewerReadinessReport ? { reviewerReadinessReport: section.reviewerReadinessReport } : {}),
   }
 }
 
@@ -213,7 +247,17 @@ function compileGrantTemplateDocument(input: {
     seenKeys.add(rawKey)
     order += 1
     const label = item.label || fallbackLabel || rawKey
-    const guidance = item.guidance?.trim() || ''
+    const guidance = (item.guidanceText || item.guidance || '').trim()
+    const requiredFacts = dedupeStringList(item.requiredFacts || [])
+    const forbiddenMoves = dedupeStringList(item.forbiddenMoves || [])
+    const templateGuidance = {
+      pointer: `${forcedType === 'short_answer' ? 'questions' : 'sections'}.${rawKey}`,
+      guidanceText: guidance ? [guidance] : [],
+      requiredFacts,
+      reviewerGoal: item.reviewerGoal || guidance || null,
+      forbiddenMoves,
+      draftingVsSubmission: item.draftingVsSubmission || 'drafting',
+    } as const
     sections.push({
       sectionKey: rawKey,
       label,
@@ -228,11 +272,12 @@ function compileGrantTemplateDocument(input: {
       wordBudget: item.wordLimit ?? null,
       characterLimit: item.charLimit ?? null,
       purpose: guidance || `Prepare ${label}.`,
-      reviewerIntent: guidance || null,
+      reviewerIntent: item.reviewerGoal || guidance || null,
       dependencies: [],
       sourceTemplatePointer: rawKey,
-      mustCover: guidance ? [guidance] : [],
-      mustAvoid: [],
+      mustCover: requiredFacts.length > 0 ? requiredFacts : (guidance ? [guidance] : []),
+      mustAvoid: forbiddenMoves,
+      grantTemplateGuidance: templateGuidance,
     })
   }
 
@@ -262,6 +307,14 @@ function compileGrantTemplateDocument(input: {
       sourceTemplatePointer: 'budget',
       mustCover: input.document.budget.categories.map((category) => category.label),
       mustAvoid: [],
+      grantTemplateGuidance: {
+        pointer: 'budget',
+        guidanceText: input.document.budget.justificationNotes ? [input.document.budget.justificationNotes] : [],
+        requiredFacts: input.document.budget.categories.map((category) => category.label),
+        reviewerGoal: input.document.budget.justificationNotes || null,
+        forbiddenMoves: [],
+        draftingVsSubmission: 'both',
+      },
     })
   }
 
@@ -283,6 +336,14 @@ function compileGrantTemplateDocument(input: {
       sourceTemplatePointer: 'attachments',
       mustCover: input.document.attachments.map((item) => item.label),
       mustAvoid: [],
+      grantTemplateGuidance: {
+        pointer: 'attachments',
+        guidanceText: [],
+        requiredFacts: input.document.attachments.map((item) => item.label),
+        reviewerGoal: 'Track the required attachments before submission.',
+        forbiddenMoves: [],
+        draftingVsSubmission: 'submission',
+      },
     })
   }
 
@@ -303,6 +364,14 @@ function compileGrantTemplateDocument(input: {
       sourceTemplatePointer: 'proposal_narrative',
       mustCover: [],
       mustAvoid: [],
+      grantTemplateGuidance: {
+        pointer: 'proposal_narrative',
+        guidanceText: ['Draft the core proposal narrative.'],
+        requiredFacts: [],
+        reviewerGoal: 'Present a reviewer-ready proposal narrative.',
+        forbiddenMoves: [],
+        draftingVsSubmission: 'drafting',
+      },
     })
   }
 
@@ -522,6 +591,10 @@ export function buildBlueprintPlanFromCompiledTemplate(
       ...(section.grantSemantic ? { grantSemantic: section.grantSemantic } : {}),
       ...(section.prepContextBlock ? { prepContextBlock: section.prepContextBlock } : {}),
       ...(section.grantRuleProfile ? { grantRuleProfile: section.grantRuleProfile } : {}),
+      ...(section.grantTemplateGuidance ? { grantTemplateGuidance: section.grantTemplateGuidance } : {}),
+      ...(section.grantSectionComplianceContract ? { grantSectionComplianceContract: section.grantSectionComplianceContract } : {}),
+      ...(section.grantComplianceReport ? { grantComplianceReport: section.grantComplianceReport } : {}),
+      ...(section.reviewerReadinessReport ? { reviewerReadinessReport: section.reviewerReadinessReport } : {}),
       seededContext: buildSeededContext(section, payload),
     })) satisfies GrantBlueprintPlanSection[]
 }
@@ -542,6 +615,8 @@ function buildGrantBlueprintEnrichmentContext(input: {
     globalKeywords: input.payload.globalKeywords,
     focusAreas: input.payload.fundingCall.focusAreas,
     capturedKeywords: collectGrantCapturedKeywords(input.payload.stageStates),
+    prepEvidenceBySection: input.payload.prepEvidenceBySection || {},
+    globalCaptureSummary: input.payload.globalCaptureSummary || [],
     stageStates: input.payload.stageStates,
     guidelinePack: input.guidelinePack || null,
   }
@@ -787,6 +862,10 @@ export function buildPaperSectionPlanFromGrantSections(
         grantSemantic: section.grantSemantic || null,
         prepContextBlock: section.prepContextBlock || null,
         grantRuleProfile: section.grantRuleProfile || null,
+        grantTemplateGuidance: section.grantTemplateGuidance || null,
+        grantSectionComplianceContract: section.grantSectionComplianceContract || null,
+        grantComplianceReport: section.grantComplianceReport || null,
+        reviewerReadinessReport: section.reviewerReadinessReport || null,
         workflowMode: section.workflowMode,
         citationMode,
         ...(typeof section.wordBudget === 'number'
@@ -1216,6 +1295,11 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
     warning: buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning),
   })
 
+  const templateState = await resolveApprovedTemplateForSession({
+    fundingCallId: serverContext.fundingCallId,
+    templateRevisionId: prepSession.template_revision_id || serverContext.templateRevisionId,
+    guidelineRevisionId: prepSession.guideline_revision_id || serverContext.guidelineRevisionId,
+  })
   const freeze = buildGrantPrepFreezePayload({
     project: {
       id: prepSession.project.id,
@@ -1226,12 +1310,10 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
     session: prepContext,
     guidelineRevisionId: prepSession.guideline_revision_id,
     templateRevisionId: prepSession.template_revision_id,
-  })
-
-  const templateState = await resolveApprovedTemplateForSession({
-    fundingCallId: serverContext.fundingCallId,
-    templateRevisionId: prepSession.template_revision_id || serverContext.templateRevisionId,
-    guidelineRevisionId: prepSession.guideline_revision_id || serverContext.guidelineRevisionId,
+    compiledSections: templateState.compiledTemplate.sections.map((section) => ({
+      sectionKey: section.sectionKey,
+      sourceTemplatePointer: section.sourceTemplatePointer,
+    })),
   })
   const guidelinePack = normalizeGuidelinePack(
     serverContext.draftingContext?.approvedGuidelineRevision?.guideline_pack_json || null
@@ -1553,6 +1635,8 @@ export async function getGrantWorkspace(input: {
     }
 
     const paperSection = paperSectionsByKey.get(draft.sectionKey)
+    const paperValidationReport = asObject(paperSection?.validationReport)
+    const draftRecord = asObject(draft)
     const shadowContent = typeof paperSection?.content === 'string' && paperSection.content.trim().length > 0
       ? paperSection.content
       : paperDraftSections[draft.sectionKey] || ''
@@ -1561,6 +1645,14 @@ export async function getGrantWorkspace(input: {
       ...draft,
       content: shadowContent || null,
       status: String(paperSection?.status || draft.status || 'NOT_STARTED'),
+      grantComplianceReport:
+        asGrantComplianceReport(paperValidationReport.grantComplianceReport)
+        || asGrantComplianceReport(draftRecord.grantComplianceReport)
+        || null,
+      reviewerReadinessReport:
+        asReviewerReadinessReport(paperValidationReport.reviewerReadinessReport)
+        || asReviewerReadinessReport(draftRecord.reviewerReadinessReport)
+        || null,
     }
   })
   const proposalFoundation = grantSession.draftingSession?.paperBlueprint
@@ -1584,6 +1676,40 @@ export async function getGrantWorkspace(input: {
         ok: false,
         issues: ['Proposal foundation is not ready yet'],
       }
+  const proposalComplianceReport = buildProposalGrantComplianceReport({
+    sections: sectionPlan.map((section) => {
+      const draft = sectionDrafts.find((entry) => entry.sectionKey === section.sectionKey)
+      return {
+        sectionKey: section.sectionKey,
+        label: section.label,
+        required: section.required,
+        workflowMode: section.workflowMode,
+        grantSemantic: section.grantSemantic,
+        grantComplianceReport: asGrantComplianceReport((draft as JsonObject)?.grantComplianceReport) || section.grantComplianceReport || null,
+        reviewerReadinessReport: asReviewerReadinessReport((draft as JsonObject)?.reviewerReadinessReport) || section.reviewerReadinessReport || null,
+        content: typeof (draft as JsonObject)?.content === 'string' ? String((draft as JsonObject).content) : null,
+        status: typeof (draft as JsonObject)?.status === 'string' ? String((draft as JsonObject).status) : null,
+      }
+    }),
+    foundation: proposalFoundation,
+  })
+  const proposalReviewerReadinessReport = buildProposalReviewerReadinessReport({
+    report: proposalComplianceReport,
+    sections: sectionPlan.map((section) => {
+      const draft = sectionDrafts.find((entry) => entry.sectionKey === section.sectionKey)
+      return {
+        sectionKey: section.sectionKey,
+        label: section.label,
+        required: section.required,
+        workflowMode: section.workflowMode,
+        grantSemantic: section.grantSemantic,
+        grantComplianceReport: asGrantComplianceReport((draft as JsonObject)?.grantComplianceReport) || section.grantComplianceReport || null,
+        reviewerReadinessReport: asReviewerReadinessReport((draft as JsonObject)?.reviewerReadinessReport) || section.reviewerReadinessReport || null,
+        content: typeof (draft as JsonObject)?.content === 'string' ? String((draft as JsonObject).content) : null,
+        status: typeof (draft as JsonObject)?.status === 'string' ? String((draft as JsonObject).status) : null,
+      }
+    }),
+  })
 
   return {
     grantSession,
@@ -1595,6 +1721,8 @@ export async function getGrantWorkspace(input: {
         }
       : null,
     proposalFoundation,
+    proposalComplianceReport,
+    proposalReviewerReadinessReport,
     freezeReadiness,
   }
 }

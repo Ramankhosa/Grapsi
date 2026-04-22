@@ -17,6 +17,18 @@ import { sectionTemplateService } from './section-template-service';
 import { systemPromptTemplateService, TEMPLATE_KEYS } from './system-prompt-template-service';
 import { applyLengthControlToWordBudget } from '../paper-length-control';
 import crypto from 'crypto';
+import {
+  buildGrantComplianceReport,
+  buildReviewerReadinessReport,
+  dedupeGrantStrings,
+  formatGrantComplianceContractForPrompt,
+  normalizeGrantGenerationTrace,
+} from '@/lib/grants/compliance';
+import type {
+  GrantComplianceReport,
+  GrantSectionComplianceContract,
+  ReviewerReadinessReport,
+} from '@/types/grant';
 
 // ============================================================================
 // Types
@@ -37,6 +49,10 @@ export interface PolishInput {
   targetWordCount?: number;
   tenantContext?: TenantContext | null;
   dimensionCitations?: DimensionCitationExpectation[];
+  grantSectionComplianceContract?: GrantSectionComplianceContract | null;
+  baseGrantGenerationTrace?: unknown;
+  wordBudget?: number | null;
+  characterLimit?: number | null;
 }
 
 export interface DimensionCoverageEntry {
@@ -75,6 +91,8 @@ export interface PolishResult {
   success: boolean;
   polishedContent?: string;
   driftReport?: DriftReport;
+  grantComplianceReport?: GrantComplianceReport;
+  reviewerReadinessReport?: ReviewerReadinessReport;
   promptUsed?: string;
   tokensUsed?: number;
   error?: string;
@@ -112,6 +130,20 @@ function countWords(text: string): number {
     return 0;
   }
   return normalized.split(/\s+/).filter(Boolean).length;
+}
+
+function normalizeComparableText(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function comparableListHasMatch(list: string[], candidate: string): boolean {
+  const normalizedCandidate = normalizeComparableText(candidate);
+  if (!normalizedCandidate) return false;
+  return list.some((item) => normalizeComparableText(item) === normalizedCandidate);
 }
 
 function collectRequiredCitationKeys(
@@ -307,6 +339,7 @@ async function buildPolishPrompt(
   isRetry: boolean,
   previousReport?: DriftReport
 ): Promise<string> {
+  const grantContractBlock = formatGrantComplianceContractForPrompt(input.grantSectionComplianceContract);
   const requiredCitationKeys = collectRequiredCitationKeys(input.dimensionCitations);
   const requiredCitationOutputInstruction = requiredCitationKeys.length > 0
     ? 'Every REQUIRED [CITE:key] listed above MUST appear in your output. Optional source citations may be omitted if they are no longer needed after compression. Do not invent new [CITE:key].'
@@ -449,13 +482,24 @@ Your job is to elevate the prose to publication quality:
    • Vary sentence lengths deliberately — monotonous cadence signals shallow writing.
    • Strengthen, don't flatten, argumentative tension between competing perspectives.`;
 
+  const effectiveFallbackPersona = input.grantSectionComplianceContract
+    ? `You are a senior grant-writing editor polishing a reviewer-ready grant proposal section.
+The draft below already contains the core facts and evidence.
+Increase persuasive force, reviewer fit, clarity, and rhetorical precision without dropping any required points, reviewer signals, template-required facts, or preserved Grant Prep evidence.`
+    : FALLBACK_PERSONA;
+
+  const effectiveFallbackImprovement = input.grantSectionComplianceContract
+    ? `${FALLBACK_IMPROVEMENT}
+   â€¢ For grant-backed sections, strengthen funder alignment, feasibility confidence, and reviewer trust without inventing unsupported claims.`
+    : FALLBACK_IMPROVEMENT;
+
   const [persona, citationRules, factualFidelity, structuralRule, improvementDirectives, hedgingRules, rhythmRules] =
     await Promise.all([
-      systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_PERSONA, ...scopeLookup }, FALLBACK_PERSONA),
+      systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_PERSONA, ...scopeLookup }, effectiveFallbackPersona),
       systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_CITATION_RULES, ...scopeLookup }, FALLBACK_CITATION_RULES),
       systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_FACTUAL_FIDELITY, ...scopeLookup }, FALLBACK_FACTUAL),
       systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_STRUCTURAL_RULES, ...scopeLookup }, FALLBACK_STRUCTURAL),
-      systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_IMPROVEMENT_DIRECTIVES, ...scopeLookup }, FALLBACK_IMPROVEMENT),
+      systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_IMPROVEMENT_DIRECTIVES, ...scopeLookup }, effectiveFallbackImprovement),
       systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_HEDGING_RULES, ...scopeLookup }, FALLBACK_HEDGING),
       systemPromptTemplateService.resolveWithFallback({ templateKey: TEMPLATE_KEYS.POLISH_RHYTHM_RULES, ...scopeLookup }, FALLBACK_RHYTHM),
     ]);
@@ -465,6 +509,9 @@ Your job is to elevate the prose to publication quality:
     effectiveWordLimit,
     requiredCitationKeys
   );
+  if (grantContractBlock) {
+    publicationTypeBlock = `${grantContractBlock}\n\n${publicationTypeBlock}`.trim();
+  }
 
   const wordLimitBlock = effectiveWordLimit
     ? (() => {
@@ -517,6 +564,49 @@ no code fences, no preamble. Start directly with the content.
 ${requiredCitationOutputInstruction}`;
 }
 
+function applyGrantPass2RegressionGuards(
+  report: GrantComplianceReport,
+  baseTrace: ReturnType<typeof normalizeGrantGenerationTrace>
+): GrantComplianceReport {
+  const hardFailures = [...report.hardFailures];
+  const unmetRequiredPoints = [...report.unmetRequiredPoints];
+  const missingEvidence = [...report.missingEvidence];
+
+  const regressedRequiredPoints = baseTrace.coveredRequiredPoints.filter(
+    (item) => !comparableListHasMatch(report.coveredRequiredPoints, item)
+  );
+  for (const item of regressedRequiredPoints) {
+    hardFailures.push({
+      key: `pass2_required_regression_${normalizeComparableText(item).slice(0, 24)}`,
+      message: `Pass 2 removed a required point that Pass 1 had covered: ${item}`,
+      source: 'system',
+      ruleText: item,
+    });
+    unmetRequiredPoints.push(item);
+  }
+
+  const regressedPrepEvidence = baseTrace.usedPrepEvidence.filter(
+    (item) => !report.usedPrepEvidence.includes(item)
+  );
+  if (regressedPrepEvidence.length > 0) {
+    hardFailures.push({
+      key: 'pass2_prep_evidence_regression',
+      message: `Pass 2 dropped preserved Grant Prep evidence references: ${regressedPrepEvidence.join(', ')}`,
+      source: 'prep',
+      ruleText: regressedPrepEvidence.join(', '),
+    });
+    missingEvidence.push('Pass 2 dropped Grant Prep-derived facts that were present in Pass 1.');
+  }
+
+  return {
+    ...report,
+    passed: hardFailures.length === 0,
+    unmetRequiredPoints: dedupeGrantStrings(unmetRequiredPoints, 32),
+    missingEvidence: dedupeGrantStrings(missingEvidence, 24),
+    hardFailures: Array.from(new Map(hardFailures.map((item) => [`${item.key}:${item.message}`, item])).values()),
+  };
+}
+
 // ============================================================================
 // Service
 // ============================================================================
@@ -535,7 +625,11 @@ class SectionPolishService {
   ): Promise<PolishResult> {
     const firstAttempt = await this.runPolishPass(input, false);
 
-    if (firstAttempt.success && firstAttempt.driftReport?.passed) {
+    if (
+      firstAttempt.success
+      && firstAttempt.driftReport?.passed
+      && (firstAttempt.grantComplianceReport ? firstAttempt.grantComplianceReport.passed : true)
+    ) {
       return firstAttempt;
     }
 
@@ -550,13 +644,19 @@ class SectionPolishService {
 
     await options?.onRetry?.({
       reason: 'drift_validation',
-      message: 'Retrying publication polish to restore required citation coverage.',
+      message: firstAttempt.grantComplianceReport && !firstAttempt.grantComplianceReport.passed
+        ? 'Retrying grant polish to restore dropped required points or prep-derived evidence.'
+        : 'Retrying publication polish to restore required citation coverage.',
       driftReport: firstAttempt.driftReport
     });
 
     const retryResult = await this.runPolishPass(input, true, firstAttempt.driftReport);
 
-    if (retryResult.success && retryResult.driftReport?.passed) {
+    if (
+      retryResult.success
+      && retryResult.driftReport?.passed
+      && (retryResult.grantComplianceReport ? retryResult.grantComplianceReport.passed : true)
+    ) {
       return retryResult;
     }
 
@@ -564,8 +664,14 @@ class SectionPolishService {
     return {
       success: false,
       driftReport: retryResult.driftReport || firstAttempt.driftReport,
+      grantComplianceReport: retryResult.grantComplianceReport || firstAttempt.grantComplianceReport,
+      reviewerReadinessReport: retryResult.reviewerReadinessReport || firstAttempt.reviewerReadinessReport,
       error: `Polish validation failed after retry. `
-        + `Missing required citation coverage for: ${retryResult.driftReport?.dimensionCoverage?.uncoveredDimensions.join(', ') || 'unknown dimensions'}.`,
+        + (
+          retryResult.grantComplianceReport && !retryResult.grantComplianceReport.passed
+            ? `${retryResult.grantComplianceReport.hardFailures[0]?.message || 'Grant compliance regression detected.'}`
+            : `Missing required citation coverage for: ${retryResult.driftReport?.dimensionCoverage?.uncoveredDimensions.join(', ') || 'unknown dimensions'}.`
+        ),
     };
   }
 
@@ -616,11 +722,32 @@ class SectionPolishService {
       polished = stripInlineMarkdownStyling(polishDraftMarkdown(polished));
 
       const driftReport = buildDriftReport(input.baseContent, polished, input.dimensionCitations);
+      const baseGrantTrace = normalizeGrantGenerationTrace(input.baseGrantGenerationTrace);
+      const rawGrantComplianceReport = input.grantSectionComplianceContract
+        ? buildGrantComplianceReport({
+            stage: 'pass2',
+            content: polished,
+            contract: input.grantSectionComplianceContract,
+            wordBudget: input.wordBudget ?? input.targetWordCount,
+            characterLimit: input.characterLimit,
+          })
+        : undefined;
+      const grantComplianceReport = rawGrantComplianceReport
+        ? applyGrantPass2RegressionGuards(rawGrantComplianceReport, baseGrantTrace)
+        : undefined;
+      const reviewerReadinessReport = grantComplianceReport
+        ? buildReviewerReadinessReport({
+            contract: input.grantSectionComplianceContract,
+            report: grantComplianceReport,
+          })
+        : undefined;
 
       return {
         success: true,
         polishedContent: polished,
         driftReport,
+        grantComplianceReport,
+        reviewerReadinessReport,
         promptUsed: prompt,
         tokensUsed: result.response.outputTokens,
       };
