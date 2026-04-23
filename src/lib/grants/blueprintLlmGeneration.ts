@@ -49,12 +49,26 @@ function buildPrompt(input: {
     suggestedCitationCount: section.suggestedCitationCount,
     citationMode: section.citationMode,
     grantSemantic: section.grantSemantic,
+    seededContext: section.seededContext,
     prepContextBlock: section.prepContextBlock,
     grantRuleProfile: section.grantRuleProfile,
+    grantSectionComplianceContract: section.grantSectionComplianceContract,
   }))
+
+  const evaluationCriteria = input.context.guidelinePack?.evaluationCriteria?.map((item) => item.text).slice(0, 8) || []
+  const prepFacts = Object.values(input.context.prepEvidenceBySection || {})
+    .flatMap((items) => items)
+    .filter((item) => item.status === 'covered')
+    .slice(0, 12)
+    .map((item) => [
+      item.label,
+      item.factBullets.slice(0, 2).join(' ; '),
+      item.keywords.slice(0, 5).join(', '),
+    ].filter(Boolean).join(' | '))
 
   return [
     'You are rewriting a grant blueprint for a proposal writing workspace.',
+    'Think like a grant strategist preparing sections for reviewers, not like an academic outlining a paper.',
     'Return JSON only. Do not include prose before or after the JSON.',
     'Preserve section keys and section ordering.',
     'Improve section-specific mustCover, mustAvoid, citationMode, and proposal foundation quality.',
@@ -62,11 +76,25 @@ function buildPrompt(input: {
     'For structured sections like checklist/table/budget_rows, prefer citationMode=no_citations.',
     'For narrative sections that need literature grounding, prefer citationMode=mapped_evidence.',
     'For direct-writing narrative/support sections that should not require mapped evidence, use citationMode=direct_draft.',
+    'Every mustCover item for a grant-backed narrative section must be a reviewer-convincing evidence claim: a specific assertion that should be proven with external evidence.',
+    'Do not write generic dimensions such as "Evidence for the problem", "Methodology overview", or "Background".',
+    'Prefer specific grant-native dimensions such as burden statistics, policy gap evidence, feasibility precedent, validation evidence, comparative advantage, outcome precedent, or continuation model precedent.',
+    'Use prep-captured facts as anchors. Dimensions should help prove the user\'s committed claims rather than drifting into generic topic coverage.',
+    'Use evaluation criteria and reviewer intent to shape the mustCover list toward scoring logic.',
+    'Section semantic guidance:',
+    '- problem_need: burden statistics, prevalence data, policy gap evidence, target population baseline',
+    '- methodology: feasibility precedent from analogous implementations, validation evidence, methodological benchmarks',
+    '- innovation: comparative advantage against current practice, novelty substantiation, precedent for adoption',
+    '- impact_outcomes: quantified outcomes from related interventions, adoption/scaling precedent',
+    '- evaluation: measurement validation evidence, indicator reliability precedent',
+    '- sustainability: continuation model evidence, institutionalization or scale-up precedent',
     input.overrideReason ? `Override reason from user: ${input.overrideReason}` : '',
     `Project title: ${input.context.projectTitle || ''}`,
     `Funding call title: ${input.context.fundingCallTitle || ''}`,
     `Agency name: ${input.context.agencyName || ''}`,
     `Global keywords: ${(input.context.globalKeywords || []).join(', ')}`,
+    evaluationCriteria.length > 0 ? `Evaluation criteria:\n${evaluationCriteria.map((item) => `- ${item}`).join('\n')}` : '',
+    prepFacts.length > 0 ? `Prep-captured facts already committed in the workspace:\n${prepFacts.map((item) => `- ${item}`).join('\n')}` : '',
     '',
     'JSON schema:',
     '{"proposalFoundation":{"thesisStatement":"","centralObjective":"","keyContributions":[]},"sections":[{"sectionKey":"","purpose":"","mustCover":[],"mustAvoid":[],"suggestedCitationCount":0,"citationMode":"mapped_evidence|direct_draft|no_citations"}]}',

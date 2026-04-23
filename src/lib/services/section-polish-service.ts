@@ -60,6 +60,7 @@ export interface PolishInput {
   dimensionCitations?: DimensionCitationExpectation[];
   authoritativePrepBundle?: GrantPrepPromptBundle | null;
   relatedPrepAwareness?: GrantPrepPromptBundle | null;
+  seededContext?: string | null;
   grantRuleProfile?: GrantRuleProfile | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
   grantContextSummary?: GrantPromptSummary | null;
@@ -394,6 +395,7 @@ Restore the required mapped-evidence citations for every uncovered dimension.
       templateIntent: input.templateIntent || null,
       authoritativePrepBundle: input.authoritativePrepBundle || null,
       relatedPrepAwareness: input.relatedPrepAwareness || null,
+      seededContext: input.seededContext || null,
       grantRuleProfile: input.grantRuleProfile || null,
       grantSectionComplianceContract: input.grantSectionComplianceContract || null,
       grantContextSummary: input.grantContextSummary || null,

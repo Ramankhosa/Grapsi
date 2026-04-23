@@ -517,6 +517,12 @@ Rules:
 - A paper may map to 0-3 dimensions.
 - Choose the best sectionKey or null if nothing fits.
 - Remarks must be 1 sentence, grounded in the abstract only.
+- Evaluate persuasion value for a reviewer, not just thematic similarity.
+- For burden/need dimensions, prioritize papers with statistics, prevalence, incidence, costs, or baseline facts.
+- For gap dimensions, prioritize papers that explicitly describe limitations, barriers, or insufficiency of current approaches.
+- For feasibility/method dimensions, prioritize analogous implementations, pilot results, delivery precedent, validation studies, or benchmark evidence.
+- For impact dimensions, prioritize measurable outcome metrics, effect sizes, or adoption results.
+- In each remark, state the specific fact that makes the paper useful for this grant section.
 - Return valid JSON only.
 
 SECTIONS

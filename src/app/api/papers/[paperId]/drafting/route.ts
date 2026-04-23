@@ -1692,6 +1692,7 @@ interface BlueprintPromptContext {
   sectionPlan?: Array<{ sectionKey: string; purpose?: string }>;
   mustCover?: string[];
   mustAvoid?: string[];
+  seededContext?: string | null;
   wordBudget?: number;
   thematicBlueprint?: {
     mustCover: string[];
@@ -3376,9 +3377,11 @@ function formatEvidenceDigest(digest: EvidencePromptContext['evidenceDigest']): 
   for (const entry of digest.digests) {
     const mustTag = entry.mustCite ? ' [MUST-CITE]' : '';
     const methodTag = entry.method ? ` | method: ${entry.method.slice(0, 80)}` : '';
+    const grantRoleTag = entry.grantRoleTag ? ` | role: ${entry.grantRoleTag}` : '';
+    const grantHintTag = entry.grantUsageHint ? ` | use: ${entry.grantUsageHint.slice(0, 120)}` : '';
     lines.push(
       `- [${entry.citationKey}]${mustTag}: ${entry.claimType} | ${entry.claim.slice(0, 200)} | ` +
-      `strength: ${entry.evidenceStrength} | stance: ${entry.stance || 'neutral'}${methodTag}`
+      `strength: ${entry.evidenceStrength} | stance: ${entry.stance || 'neutral'}${grantRoleTag}${methodTag}${grantHintTag}`
     );
   }
 
@@ -3661,6 +3664,7 @@ Rationale: ${archetypeRationale || '(not provided)'}`
       grantSectionComplianceContract: blueprintContext?.grantSectionComplianceContract || null,
       authoritativePrepBundle: blueprintContext?.authoritativePrepBundle || blueprintContext?.prepContextBlock || null,
       relatedPrepAwareness: blueprintContext?.relatedPrepAwareness || null,
+      seededContext: blueprintContext?.seededContext || null,
       thesisStatement: blueprintContext?.thesisStatement,
       centralObjective: blueprintContext?.centralObjective,
       keyContributions: blueprintContext?.keyContributions || [],
@@ -4221,6 +4225,7 @@ async function generateSection(
         dimensionCitations: dimensionCitations.length > 0 ? dimensionCitations : undefined,
         authoritativePrepBundle: blueprintPromptContext?.authoritativePrepBundle || blueprintPromptContext?.prepContextBlock || null,
         relatedPrepAwareness: blueprintPromptContext?.relatedPrepAwareness || null,
+        seededContext: blueprintPromptContext?.seededContext || null,
         grantRuleProfile: blueprintPromptContext?.grantRuleProfile || null,
         grantSectionComplianceContract: blueprintPromptContext?.grantSectionComplianceContract || null,
         grantContextSummary: blueprintPromptContext?.grantContextSummary || null,
@@ -4764,6 +4769,7 @@ async function buildSectionPromptRuntimeBundle(params: {
       required: typeof currentSectionPlan?.required === 'boolean' ? currentSectionPlan.required : undefined,
       sectionType: typeof currentSectionPlan?.sectionType === 'string' ? currentSectionPlan.sectionType : undefined,
       reviewerIntent: typeof currentSectionPlan?.reviewerIntent === 'string' ? currentSectionPlan.reviewerIntent : undefined,
+      seededContext: typeof currentSectionPlan?.seededContext === 'string' ? currentSectionPlan.seededContext : undefined,
       characterLimit: typeof currentSectionPlan?.characterLimit === 'number' ? currentSectionPlan.characterLimit : undefined,
       citationMode: typeof currentSectionPlan?.citationMode === 'string'
         ? currentSectionPlan.citationMode as GrantCitationMode

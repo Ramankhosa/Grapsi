@@ -73,7 +73,7 @@ function buildReviewerQuestion(input: GrantPromptProfileInput): string {
     case 'summary':
       return 'Why should this proposal be funded now, for whom, and with what expected payoff?'
     case 'problem_need':
-      return 'What concrete need exists, who is affected, and why is action justified now?'
+      return 'Is this a real, specific, urgent problem that has not been adequately addressed, and is the applicant\'s angle meaningfully different from the other proposals the reviewer has seen today?'
     case 'objectives':
       return 'What exactly will this proposal achieve, and how will success be recognized?'
     case 'methodology':
@@ -125,7 +125,7 @@ function buildOpeningMove(input: GrantPromptProfileInput): string {
     case 'impact_outcomes':
       return 'Open with the intended beneficiary change and the mechanism that produces it.'
     case 'alignment':
-      return 'Open with the call-fit statement using the funder’s priorities explicitly.'
+      return 'Open with the call-fit statement using the funder\'s priorities explicitly.'
     case 'sustainability':
       return 'Open with the continuity model beyond the funded period.'
     case 'risk':
@@ -187,6 +187,7 @@ function buildEvidenceUseRules(input: GrantPromptProfileInput): string[] {
     'Use authoritative section-mapped Grant Prep points as the factual backbone when they are provided.',
     'Use related-section awareness only to preserve coherence; do not turn it into new required claims.',
     'Prefer specific facts, beneficiaries, milestones, metrics, and feasibility signals over generic prose.',
+    'Prefer one concrete statistic, comparison, or precedent over several vague background sentences.',
   ]
 
   if (input.citationMode === 'mapped_evidence') {
@@ -203,15 +204,28 @@ function buildAntiPatterns(input: GrantPromptProfileInput): string[] {
     'Do not slip into journal-manuscript framing or literature-review throat clearing.',
     'Do not invent compliance, eligibility, evidence, or implementation detail that is not supported.',
     'Do not dump checklist items without narrative logic unless the section type explicitly requires it.',
+    'Do not open with "X is a growing global challenge" or equivalent filler.',
+    'Do not list broad impact areas when one measurable outcome would be stronger.',
+    'Do not claim innovation without naming the comparison point or current practice.',
   ]
 
   switch (input.grantSemantic) {
     case 'summary':
       return [...base, 'Do not turn the summary into a method dump or background essay.']
     case 'problem_need':
-      return [...base, 'Do not use vague “important issue” language without stakes or affected beneficiaries.']
+      return [
+        ...base,
+        'Do not use vague importance language without stakes, affected beneficiaries, or concrete urgency signals.',
+        'Do not spend the opening paragraph on generic textbook background.',
+      ]
     case 'methodology':
-      return [...base, 'Do not describe the approach abstractly without execution detail or credibility signals.']
+      return [
+        ...base,
+        'Do not describe the approach abstractly without execution detail or credibility signals.',
+        'Do not claim feasibility solely through confidence language such as "we are well positioned".',
+      ]
+    case 'impact_outcomes':
+      return [...base, 'Do not list multiple high-level impacts without naming the lead measurable outcome.']
     case 'alignment':
       return [...base, 'Do not rely on generic mission statements instead of explicit call-fit language.']
     default:

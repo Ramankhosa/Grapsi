@@ -106,4 +106,24 @@ describe('grant prompt profile', () => {
     expect(prompt).not.toContain('PUBLICATION TYPE GUIDANCE')
     expect(prompt).not.toContain('Q1 journal')
   })
+
+  it('injects seeded context and competitive evidence deployment guidance for reviewer-sensitive sections', async () => {
+    const prompt = await buildGrantDraftingPrompt({
+      pass: 'pass1',
+      sectionKey: 'problem_need',
+      displayLabel: 'Problem Need',
+      sectionType: 'narrative',
+      citationMode: 'mapped_evidence',
+      grantSemantic: 'problem_need',
+      seededContext: 'Project: Mobile Adherence Network\nFunding call: Digital Health Mission',
+      mustCover: ['Scale, burden, or urgency of medication non-adherence among older adults'],
+      mustAvoid: [],
+      purpose: 'Establish the unmet need and why current responses remain insufficient.',
+    })
+
+    expect(prompt).toContain('SEEDED CONTEXT:')
+    expect(prompt).toContain('COMPETITIVE POSITIONING:')
+    expect(prompt).toContain('EVIDENCE DEPLOYMENT:')
+    expect(prompt).toContain('Project: Mobile Adherence Network')
+  })
 })

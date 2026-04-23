@@ -19,6 +19,14 @@ import { evidenceExtractionService } from './evidence-extraction-service';
 import { quoteVerificationService } from './quote-verification-service';
 import { evidenceMappingService, type CardDimensionMapping } from './evidence-mapping-service';
 import type { TenantContext } from '../metering';
+import { inferGrantPersuasionRole, type GrantPersuasionRole } from '@/lib/grants/persuasionRoles';
+
+interface GrantDimensionHint {
+  sectionKey: string;
+  dimension: string;
+  grantSemantic?: string | null;
+  persuasionRole?: GrantPersuasionRole;
+}
 
 interface StartBatchOptions {
   concurrency?: number;
@@ -404,10 +412,14 @@ class DeepAnalysisService {
     }
   }
 
-  private async getBlueprintContext(sessionId: string): Promise<{ blueprint: BlueprintWithSectionPlan | null; dimensions: string[] }> {
+  private async getBlueprintContext(sessionId: string): Promise<{
+    blueprint: BlueprintWithSectionPlan | null;
+    dimensions: string[];
+    dimensionHints: GrantDimensionHint[];
+  }> {
     const blueprint = await blueprintService.getBlueprint(sessionId);
     if (!blueprint?.sectionPlan?.length) {
-      return { blueprint: null, dimensions: [] };
+      return { blueprint: null, dimensions: [], dimensionHints: [] };
     }
 
     const dimensions = Array.from(
@@ -415,8 +427,20 @@ class DeepAnalysisService {
         blueprint.sectionPlan.flatMap(section => Array.isArray(section.mustCover) ? section.mustCover : [])
       )
     );
+    const dimensionHints = blueprint.sectionPlan.flatMap((section) =>
+      (Array.isArray(section.mustCover) ? section.mustCover : []).map((dimension) => ({
+        sectionKey: section.sectionKey,
+        dimension,
+        grantSemantic: section.grantSemantic || null,
+        persuasionRole: inferGrantPersuasionRole({
+          dimension,
+          semantic: section.grantSemantic || null,
+          dimensionType: section.mustCoverTyping?.[dimension],
+        }),
+      }))
+    );
 
-    return { blueprint, dimensions };
+    return { blueprint, dimensions, dimensionHints };
   }
 
   private async ensureNoActiveRun(sessionId: string): Promise<void> {
@@ -735,7 +759,7 @@ class DeepAnalysisService {
       orderBy: { createdAt: 'asc' },
     });
 
-    const { blueprint, dimensions } = await this.getBlueprintContext(sessionId);
+    const { blueprint, dimensions, dimensionHints } = await this.getBlueprintContext(sessionId);
 
     let extractionDone = false;
     let mappingLoopPromise: Promise<void> | null = null;
@@ -756,6 +780,7 @@ class DeepAnalysisService {
       await this.processJob(job, {
         batchId,
         dimensions,
+        dimensionHints,
         blueprint,
         sessionUserId,
         tenantContext: options.tenantContext || null,
@@ -973,6 +998,7 @@ class DeepAnalysisService {
     context: {
       batchId: string;
       dimensions: string[];
+      dimensionHints: GrantDimensionHint[];
       blueprint: BlueprintWithSectionPlan | null;
       sessionUserId: string;
       tenantContext?: TenantContext | null;
@@ -1048,6 +1074,8 @@ class DeepAnalysisService {
         pdfAttachment: prepared.pdfAttachment,
         allowTextFallback: context.allowTextFallback === true,
         blueprintDimensions: context.dimensions,
+        grantBacked: Boolean(context.blueprint && String(context.blueprint.paperTypeCode || '').startsWith('GRANT_TEMPLATE::')),
+        grantDimensionHints: context.dimensionHints,
         tenantContext: context.tenantContext || null,
       });
 

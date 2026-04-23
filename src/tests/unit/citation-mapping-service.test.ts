@@ -432,6 +432,38 @@ describe('CitationMappingService', () => {
       expect(prompt).toContain('Paper Without Abstract');
       expect(prompt).toContain('No abstract available');
     });
+
+    it('should add grant persuasion guidance for grant-backed blueprints', () => {
+      const papers = [
+        {
+          id: 'p1',
+          citationKey: 'Grant2024',
+          title: 'Implementation outcomes for mobile adherence support',
+          abstract: 'A pilot implementation improved adherence by 24% and documented delivery barriers.',
+          year: 2024,
+          venue: 'Implementation Science',
+          authors: ['A. Grant']
+        }
+      ];
+
+      const blueprint = {
+        paperTypeCode: 'GRANT_TEMPLATE::call-1',
+        sectionPlan: [
+          {
+            sectionKey: 'problem_need',
+            purpose: 'Establish need',
+            mustCover: ['Scale, burden, or urgency of medication non-adherence among older adults'],
+            mustAvoid: []
+          }
+        ]
+      };
+
+      const prompt = (service as any).buildBlueprintMappingPrompt(papers, blueprint);
+
+      expect(prompt).toContain('Evaluate persuasion value for a reviewer');
+      expect(prompt).toContain('specific fact');
+      expect(prompt).toContain('statistics, prevalence, incidence, costs, or baseline facts');
+    });
   });
 
   describe('Confidence Validation', () => {

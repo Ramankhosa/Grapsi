@@ -1,6 +1,7 @@
 import fs from 'fs';
 import { z } from 'zod';
 import { llmGateway, type TenantContext } from '../metering';
+import type { GrantPersuasionRole } from '@/lib/grants/persuasionRoles';
 import {
   extractionCardSchema,
   EVIDENCE_CLAIM_TYPES,
@@ -107,25 +108,68 @@ interface ExtractionPrompt {
   user: string;
 }
 
+interface GrantDimensionHint {
+  sectionKey: string;
+  dimension: string;
+  grantSemantic?: string | null;
+  persuasionRole?: GrantPersuasionRole;
+}
+
+const GRANT_EXTRACTION_INSTRUCTIONS = `For grant proposals, prioritize extracting:
+- STATISTICS: exact numbers, percentages, prevalence rates, costs, or population counts
+- PRECEDENT RESULTS: outcome metrics from similar interventions or implementations
+- METHODOLOGY VALIDATION: evidence that the method or indicator works in comparable settings
+- GAP STATEMENTS: explicit limitations, barriers, or insufficiencies stated by the authors
+- POLICY OR FRAMEWORK REFERENCES: named strategies, priorities, or implementation frameworks
+Each card should preserve the specific fact a reviewer could cite, not just the paper's general contribution.`;
+
+function formatGrantDimensionContext(
+  blueprintDimensions: string[],
+  grantDimensionHints?: GrantDimensionHint[] | null
+): string {
+  const hints = Array.isArray(grantDimensionHints)
+    ? grantDimensionHints.filter((item) => item?.dimension)
+    : [];
+  if (hints.length === 0) {
+    return blueprintDimensions.length > 0
+      ? `Blueprint context dimensions (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
+      : '';
+  }
+
+  return [
+    'Grant blueprint dimensions (prioritize evidence that can prove these reviewer-facing claims):',
+    ...hints.map((item) =>
+      `- ${item.sectionKey} | ${item.dimension}${item.persuasionRole ? ` | role=${item.persuasionRole}` : ''}${item.grantSemantic ? ` | semantic=${item.grantSemantic}` : ''}`
+    ),
+  ].join('\n');
+}
+
 function buildExtractionPrompt(
   archetype: ReferenceArchetype,
   depthLabel: Exclude<DeepAnalysisLabel, 'LIT_ONLY'>,
   preparedText: PreparedPaperText,
-  blueprintDimensions: string[]
+  blueprintDimensions: string[],
+  grantBacked = false,
+  grantDimensionHints?: GrantDimensionHint[] | null
 ): ExtractionPrompt {
   const system = [
     SYSTEM_PROMPT_BASE,
     ARCHETYPE_INSTRUCTIONS[archetype],
     DEPTH_INSTRUCTIONS[depthLabel],
+    ...(grantBacked ? [GRANT_EXTRACTION_INSTRUCTIONS] : []),
     `Output format: JSON array of cards with fields:
 claim, claimType, quantitativeDetail, conditions, comparableMetrics,
 doesNotSupport, scopeCondition, boundaryNote, tradeOff, competingExplanation, studyDesign, rigorIndicators,
 sourceFragment, pageHint, confidence, sourceSection`,
   ].join('\n\n');
 
-  const dimensionContext = blueprintDimensions.length > 0
-    ? `Blueprint context dimensions (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
-    : '';
+  const dimensionContext = grantBacked
+    ? formatGrantDimensionContext(blueprintDimensions, grantDimensionHints)
+    : (
+      blueprintDimensions.length > 0
+        ? `Blueprint context dimensions (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
+        : ''
+    );
 
   const user = [
     '=== PAPER TEXT ===',
@@ -139,12 +183,15 @@ sourceFragment, pageHint, confidence, sourceSection`,
 function buildNativePdfPrompt(
   archetype: ReferenceArchetype,
   depthLabel: Exclude<DeepAnalysisLabel, 'LIT_ONLY'>,
-  blueprintDimensions: string[]
+  blueprintDimensions: string[],
+  grantBacked = false,
+  grantDimensionHints?: GrantDimensionHint[] | null
 ): ExtractionPrompt {
   const system = [
     SYSTEM_PROMPT_BASE.replace('Read the paper text', 'Read the attached paper PDF'),
     ARCHETYPE_INSTRUCTIONS[archetype],
     DEPTH_INSTRUCTIONS[depthLabel],
+    ...(grantBacked ? [GRANT_EXTRACTION_INSTRUCTIONS] : []),
     'The full paper is attached as a PDF file in the same message.',
     'Do not request extra files. Use only evidence from the attached PDF.',
     `Output format: JSON array of cards with fields:
@@ -153,9 +200,13 @@ doesNotSupport, scopeCondition, boundaryNote, tradeOff, competingExplanation, st
 sourceFragment, pageHint, confidence, sourceSection`,
   ].join('\n\n');
 
-  const dimensionContext = blueprintDimensions.length > 0
-    ? `Blueprint context dimensions (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
-    : '';
+  const dimensionContext = grantBacked
+    ? formatGrantDimensionContext(blueprintDimensions, grantDimensionHints)
+    : (
+      blueprintDimensions.length > 0
+        ? `Blueprint context dimensions (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
+        : ''
+    );
 
   const user = [
     'Extract evidence cards directly from the attached PDF.',
@@ -633,6 +684,8 @@ export interface ExtractEvidenceCardsInput {
     mimeType: string;
   } | null;
   blueprintDimensions: string[];
+  grantBacked?: boolean;
+  grantDimensionHints?: GrantDimensionHint[] | null;
   tenantContext?: TenantContext | null;
 }
 
@@ -804,13 +857,17 @@ class EvidenceExtractionService {
         archetype,
         depthLabel,
         preparedText,
-        input.blueprintDimensions
+        input.blueprintDimensions,
+        input.grantBacked === true,
+        input.grantDimensionHints
       )
       : null;
     const nativePdfPrompt = buildNativePdfPrompt(
       archetype,
       depthLabel,
-      input.blueprintDimensions
+      input.blueprintDimensions,
+      input.grantBacked === true,
+      input.grantDimensionHints
     );
     const nativePdfPayload = this.resolveNativePdfPayload(input, nativePdfPrompt);
     const hasNativePayload = Boolean(nativePdfPayload?.content && nativePdfPayload.content.parts.length > 0);

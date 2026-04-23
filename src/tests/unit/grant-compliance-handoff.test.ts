@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildGrantPrepFreezePayload } from '@/lib/grantPrep/handoff/handoffBuilder'
-import { buildProposalGrantComplianceReport, buildProposalReviewerReadinessReport } from '@/lib/grants/compliance'
+import {
+  buildProposalGrantComplianceReport,
+  buildProposalReviewerReadinessReport,
+  buildReviewerReadinessReport,
+} from '@/lib/grants/compliance'
 import type { GrantPrepSessionContext } from '@/lib/grantPrep/types'
 import type { GrantComplianceReport, ReviewerReadinessReport } from '@/types/grant'
 
@@ -243,5 +247,31 @@ describe('proposal-level grant compliance', () => {
     expect(report.passed).toBe(true)
     expect(report.usedPrepEvidence.length).toBeGreaterThan(0)
     expect(report.hardFailures).toEqual([])
+  })
+
+  it('flags missing statistics, comparisons, and feasibility evidence in reviewer readiness heuristics', () => {
+    const readiness = buildReviewerReadinessReport({
+      contract: {
+        requiredPoints: ['State the burden clearly.'],
+        evaluationFocus: [],
+        reviewerSignals: ['Use concrete evidence.'],
+        avoidRules: [],
+        formatConstraints: [],
+        narrativeConstraints: [],
+        prepEvidence: [],
+        templateGuidance: null,
+        fundingCallSummary: [],
+        submissionChecklist: [],
+        hardChecks: [],
+        softChecks: [],
+      },
+      report: makeSectionReport(),
+      content: 'The issue is important and our team is well positioned to address it.',
+    })
+
+    expect(readiness.missingSignals).toContain('Specific statistics are missing.')
+    expect(readiness.missingSignals).toContain('Named comparisons are missing.')
+    expect(readiness.missingSignals).toContain('Feasibility evidence is missing.')
+    expect(readiness.recommendedActions).toContain('Add at least one concrete burden, prevalence, cost, or baseline statistic.')
   })
 })

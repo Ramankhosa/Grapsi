@@ -333,15 +333,28 @@ function dedupeFindings(findings: GrantComplianceFinding[]) {
 export function buildReviewerReadinessReport(input: {
   contract?: GrantSectionComplianceContract | null
   report: GrantComplianceReport
+  content?: string | null
 }): ReviewerReadinessReport {
   const contract = input.contract || null
   const report = input.report
+  const content = String(input.content || '')
   const missingSignals = dedupeGrantStrings(
     contract
       ? contract.reviewerSignals.filter((signal) => !report.coveredRequiredPoints.some((item) => isPhraseCovered(item, signal)))
       : [],
     12
   )
+  const competitiveSignals = content
+    ? {
+        missingStatistics: !/\b\d[\d,]*(?:\.\d+)?\s*(%|percent|million|billion|thousand|participants|patients|schools|states|years)?\b/i.test(content),
+        missingComparison: !/\b(compared with|versus|relative to|unlike|current practice|standard of care|benchmark|existing (approach|program|method)|alternative)\b/i.test(content),
+        missingFeasibility: !/\b(feasib|pilot|implemented|deployment|achieved|validated|prototype|delivery readiness|operational readiness)\b/i.test(content),
+      }
+    : {
+        missingStatistics: false,
+        missingComparison: false,
+        missingFeasibility: false,
+      }
 
   const score = Math.max(
     0,
@@ -350,16 +363,25 @@ export function buildReviewerReadinessReport(input: {
     - report.softWarnings.length * 7
     - report.missingEvidence.length * 8
     - missingSignals.length * 5
+    - (competitiveSignals.missingStatistics ? 6 : 0)
+    - (competitiveSignals.missingComparison ? 6 : 0)
+    - (competitiveSignals.missingFeasibility ? 6 : 0)
   )
 
   const strengths = dedupeGrantStrings([
     ...report.coveredRequiredPoints.slice(0, 4),
     ...(report.usedPrepEvidence.length > 0 ? ['Structured Grant Prep evidence is reflected in the draft.'] : []),
+    ...(!competitiveSignals.missingStatistics ? ['Draft contains concrete statistics rather than generic burden language.'] : []),
+    ...(!competitiveSignals.missingComparison ? ['Draft names a comparison point or current-practice contrast.'] : []),
+    ...(!competitiveSignals.missingFeasibility ? ['Draft includes explicit feasibility evidence or implementation precedent.'] : []),
   ], 6)
 
   const risks = dedupeGrantStrings([
     ...report.hardFailures.map((item) => item.message),
     ...report.softWarnings.map((item) => item.message),
+    ...(competitiveSignals.missingStatistics ? ['Reviewer-facing statistics are missing or too vague.'] : []),
+    ...(competitiveSignals.missingComparison ? ['The draft does not name a concrete comparison point or current-practice contrast.'] : []),
+    ...(competitiveSignals.missingFeasibility ? ['Feasibility is asserted without explicit precedent or validation language.'] : []),
   ], 8)
 
   const recommendedActions = dedupeGrantStrings([
@@ -367,13 +389,21 @@ export function buildReviewerReadinessReport(input: {
     ...report.missingEvidence.map((item) => `Restore required drafting evidence: ${item}`),
     ...missingSignals.map((item) => `Strengthen the reviewer signal around: ${item}`),
     ...report.violatedAvoidRules.map((item) => `Remove or reframe content that violates: ${item}`),
+    ...(competitiveSignals.missingStatistics ? ['Add at least one concrete burden, prevalence, cost, or baseline statistic.'] : []),
+    ...(competitiveSignals.missingComparison ? ['Name the current practice, comparator, or benchmark the proposal is differentiating from.'] : []),
+    ...(competitiveSignals.missingFeasibility ? ['Add explicit feasibility evidence, pilot precedent, or validation language.'] : []),
   ], 8)
 
   return {
     score,
     strengths,
     risks,
-    missingSignals,
+    missingSignals: dedupeGrantStrings([
+      ...missingSignals,
+      ...(competitiveSignals.missingStatistics ? ['Specific statistics are missing.'] : []),
+      ...(competitiveSignals.missingComparison ? ['Named comparisons are missing.'] : []),
+      ...(competitiveSignals.missingFeasibility ? ['Feasibility evidence is missing.'] : []),
+    ], 12),
     recommendedActions,
     generatedAt: new Date().toISOString(),
   }

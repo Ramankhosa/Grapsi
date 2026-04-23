@@ -4,6 +4,12 @@ import {
   extractGrantDimensionTargets,
   isGrantBackedPaperTypeCode,
 } from '@/lib/grants/blueprintMetadata'
+import {
+  getGrantPersuasionSearchTerms,
+  getGrantPersuasionYearWindow,
+  inferGrantPersuasionRole,
+  type GrantPersuasionRole,
+} from '@/lib/grants/persuasionRoles'
 import type { GrantBlueprintDimensionTarget } from '@/types/grant'
 
 type ResearchTopicLike = {
@@ -19,6 +25,7 @@ type BlueprintLike = {
     mustCover?: string[] | null
     mustCoverTyping?: Record<string, unknown> | null
     suggestedCitationCount?: number | null
+    grantSemantic?: string | null
     thematicBlueprint?: unknown
   }> | null
 }
@@ -68,7 +75,7 @@ function tokenize(value: string): string[] {
 }
 
 function deriveQueryTerms(
-  bundle: GrantBlueprintDimensionTarget[],
+  bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>,
   researchTopic: ResearchTopicLike
 ): string[] {
   const researchTerms = dedupeStrings(
@@ -80,10 +87,14 @@ function deriveQueryTerms(
   ).slice(0, 3)
 
   const dimensionTerms = dedupeStrings(
-    bundle.flatMap((target) => tokenize(target.dimension).slice(0, 3))
+    bundle.flatMap((target) => tokenize(target.dimension).slice(0, target.persuasionRole === 'proves_need' ? 4 : 3))
+  ).slice(0, 6)
+
+  const persuasionTerms = dedupeStrings(
+    bundle.flatMap((target) => getGrantPersuasionSearchTerms(target.persuasionRole))
   ).slice(0, 5)
 
-  return dedupeStrings([...researchTerms, ...dimensionTerms]).slice(0, 7)
+  return dedupeStrings([...researchTerms, ...dimensionTerms, ...persuasionTerms]).slice(0, 11)
 }
 
 function dominantCategory(bundle: GrantBlueprintDimensionTarget[]): SearchQueryCategory {
@@ -108,56 +119,57 @@ function dominantCategory(bundle: GrantBlueprintDimensionTarget[]): SearchQueryC
   }
 }
 
-function dominantIntent(bundle: GrantBlueprintDimensionTarget[]): string {
-  const category = dominantCategory(bundle)
-  switch (category) {
-    case 'THEORETICAL_FOUNDATION':
-      return 'historical_foundational'
-    case 'METHODOLOGY':
-      return 'methodological'
-    case 'COMPETING_APPROACHES':
-      return 'comparison_baseline'
-    case 'GAP_IDENTIFICATION':
+function dominantRole(
+  bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>
+): GrantPersuasionRole {
+  const counts = bundle.reduce<Record<string, number>>((acc, item) => {
+    acc[item.persuasionRole] = (acc[item.persuasionRole] || 0) + 1
+    return acc
+  }, {})
+
+  return (
+    Object.entries(counts).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0]
+    || 'supports_feasibility'
+  ) as GrantPersuasionRole
+}
+
+function dominantIntent(bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>): string {
+  switch (dominantRole(bundle)) {
+    case 'proves_need':
+      return 'burden_statistics'
+    case 'shows_gap':
       return 'limitations_gaps'
+    case 'validates_approach':
+      return 'method_validation'
+    case 'supports_feasibility':
+      return 'implementation_feasibility'
+    case 'quantifies_impact':
+      return 'outcome_metrics'
+    case 'establishes_precedent':
+      return 'comparison_baseline'
+    case 'policy_alignment':
+      return 'policy_alignment'
     default:
       return 'topic_coverage'
   }
 }
 
-function yearWindow(bundle: GrantBlueprintDimensionTarget[]) {
-  const dominantIntent = bundle.some((item) => item.dimensionType === 'foundational')
-    ? 'foundational'
-    : bundle.some((item) => item.dimensionType === 'gap' || item.dimensionType === 'comparative')
-      ? 'recent'
-      : bundle.some((item) => item.dimensionType === 'methodological')
-        ? 'methods'
-        : 'default'
-
-  const currentYear = new Date().getUTCFullYear()
-
-  switch (dominantIntent) {
-    case 'foundational':
-      return {}
-    case 'recent':
-      return { suggestedYearFrom: currentYear - 6, suggestedYearTo: currentYear }
-    case 'methods':
-      return { suggestedYearFrom: currentYear - 8, suggestedYearTo: currentYear }
-    default:
-      return { suggestedYearFrom: currentYear - 10, suggestedYearTo: currentYear }
-  }
+function yearWindow(bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>) {
+  return getGrantPersuasionYearWindow(dominantRole(bundle))
 }
 
-function describeBundle(bundle: GrantBlueprintDimensionTarget[]): string {
+function describeBundle(bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>): string {
   const sectionKeys = dedupeStrings(bundle.map((item) => item.sectionKey)).slice(0, 3)
   const dimensions = bundle.map((item) => item.dimension).slice(0, 2)
-  return `Targets ${sectionKeys.join(', ')} through evidence on ${dimensions.join(' and ')}.`
+  const roles = dedupeStrings(bundle.map((item) => dominantIntent([item]))).slice(0, 2)
+  return `Targets ${sectionKeys.join(', ')} through ${roles.join(' and ')} evidence on ${dimensions.join(' and ')}.`
 }
 
-function bundleDimensions(targets: GrantBlueprintDimensionTarget[]): GrantBlueprintDimensionTarget[][] {
+function bundleDimensions<T extends GrantBlueprintDimensionTarget>(targets: T[]): T[][] {
   if (targets.length === 0) return []
   const targetQueryCount = clamp(Math.ceil(targets.length / 4.5), 4, 12)
   const bundleSize = clamp(Math.ceil(targets.length / targetQueryCount), 3, 6)
-  const bundles: GrantBlueprintDimensionTarget[][] = []
+  const bundles: T[][] = []
 
   for (let index = 0; index < targets.length; index += bundleSize) {
     bundles.push(targets.slice(index, index + bundleSize))
@@ -174,7 +186,18 @@ export function buildGrantBackedSearchStrategy(input: {
     return null
   }
 
+  const sectionSemanticByKey = new Map(
+    (input.blueprint.sectionPlan || []).map((section) => [section.sectionKey, section.grantSemantic || null] as const)
+  )
   const targets = extractGrantDimensionTargets(input.blueprint.sectionPlan || [])
+    .map((target) => ({
+      ...target,
+      persuasionRole: inferGrantPersuasionRole({
+        dimension: target.dimension,
+        dimensionType: target.dimensionType,
+        semantic: (sectionSemanticByKey.get(target.sectionKey) || null) as any,
+      }),
+    }))
   if (targets.length === 0) {
     return null
   }

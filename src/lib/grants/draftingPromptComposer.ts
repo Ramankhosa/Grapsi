@@ -47,6 +47,7 @@ export interface GrantPromptComposerInput {
   thesisStatement?: string | null
   centralObjective?: string | null
   keyContributions?: string[]
+  seededContext?: string | null
   purpose?: string | null
   mustCover?: string[]
   mustAvoid?: string[]
@@ -180,6 +181,44 @@ function buildGrantContextBlock(summary?: GrantPromptSummary | null): string {
   return lines.length > 0
     ? `GRANT CONTEXT:\n${lines.map((line) => `- ${line}`).join('\n')}`
     : ''
+}
+
+function buildSeededContextBlock(seededContext?: string | null): string {
+  const lines = dedupeStrings(String(seededContext || '').split('\n'), 10)
+  if (lines.length === 0) return ''
+  return [
+    'SEEDED CONTEXT:',
+    '- Treat this frozen workspace context as grounding. Reuse it where relevant; do not contradict it.',
+    ...lines.map((line) => `- ${line}`),
+  ].join('\n')
+}
+
+function buildCompetitivePositioningBlock(semantic?: GrantSectionSemantic | null): string {
+  if (semantic !== 'problem_need' && semantic !== 'innovation') {
+    return ''
+  }
+
+  return [
+    'COMPETITIVE POSITIONING:',
+    '- Do not write a textbook description of the topic. The reviewer has read many proposals like this already.',
+    '- Lead with what makes this framing distinctive: the population, mechanism, implementation setting, or timing.',
+    '- One concrete statistic or comparison is worth more than several generic background sentences.',
+    '- Name what current approaches get wrong or leave unresolved, not just what they fail to mention.',
+  ].join('\n')
+}
+
+function buildEvidenceDeploymentBlock(input: GrantPromptComposerInput): string {
+  if (input.citationMode !== 'mapped_evidence') return ''
+
+  return [
+    'EVIDENCE DEPLOYMENT:',
+    '- If the evidence digest labels a citation as "prove burden", pair it with the exact burden statistic or urgency fact.',
+    '- If the evidence digest labels a citation as "show gap", use it to name the limitation, barrier, or unmet need.',
+    '- If the evidence digest labels a citation as "validate approach", use it to justify the method, metric, or evaluation design.',
+    '- If the evidence digest labels a citation as "prove feasibility", use it to show comparable implementation success.',
+    '- If the evidence digest labels a citation as "quantify impact", attach it to the concrete outcome metric or effect size.',
+    '- If the evidence digest labels a citation as "establish precedent" or "show policy fit", make the comparison or framework explicit in the sentence.',
+  ].join('\n')
 }
 
 function buildPass1PlaybookFallback(input: GrantPromptComposerInput): string {
@@ -416,8 +455,11 @@ export async function buildGrantDraftingPrompt(input: GrantPromptComposerInput):
       persona,
       input.retryNoticeBlock || '',
       buildGrantContextBlock(input.grantContextSummary),
+      buildSeededContextBlock(input.seededContext),
       buildBlueprintContextBlock(input),
       formatGrantPromptProfileForPrompt(profile),
+      buildCompetitivePositioningBlock(input.grantSemantic),
+      buildEvidenceDeploymentBlock(input),
       formatGrantRulesBlock(input.grantRuleProfile),
       formatGrantComplianceContractForPrompt(input.grantSectionComplianceContract),
       formatPromptBundle('AUTHORITATIVE SECTION PREP POINTS', input.authoritativePrepBundle),
@@ -450,9 +492,12 @@ export async function buildGrantDraftingPrompt(input: GrantPromptComposerInput):
     `TASK: GRANT SECTION DRAFT - ${(input.displayLabel || formatSectionLabel(input.sectionKey)).toUpperCase()}`,
     persona,
     buildGrantContextBlock(input.grantContextSummary),
+    buildSeededContextBlock(input.seededContext),
     buildBlueprintContextBlock(input),
     formatGrantPromptProfileForPrompt(profile),
     playbook,
+    buildCompetitivePositioningBlock(input.grantSemantic),
+    buildEvidenceDeploymentBlock(input),
     prepUsageRules,
     consistencyRules,
     formatGrantRulesBlock(input.grantRuleProfile),

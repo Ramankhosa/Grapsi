@@ -1,5 +1,11 @@
 import { prisma } from '../prisma';
 import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import {
+  getGrantEvidenceDigestTag,
+  getGrantEvidenceUsageHint,
+  inferGrantPersuasionRole,
+  type GrantPersuasionRole,
+} from '@/lib/grants/persuasionRoles';
 import { blueprintService } from './blueprint-service';
 import { citationMappingService, type CitationMetaSnapshot, type PaperBlueprintMapping } from './citation-mapping-service';
 import { citationCoverageDistributor, type AssignedCitation } from './citation-coverage-distributor';
@@ -61,6 +67,8 @@ export interface EvidenceCitation {
 export interface DimensionEvidence {
   dimension: string;
   citations: EvidenceCitation[];
+  grantSemantic?: string | null;
+  grantPersuasionRole?: GrantPersuasionRole;
 }
 
 export interface SectionEvidencePack {
@@ -86,6 +94,8 @@ export interface EvidenceDigestEntry {
   confidence: number;  // 0.0–1.0
   stance?: 'supports' | 'contradicts' | 'extends' | 'neutral';
   mustCite: boolean;
+  grantRoleTag?: string;
+  grantUsageHint?: string;
 }
 
 export interface EvidenceDigest {
@@ -134,6 +144,71 @@ const normalizeAuthor = (value?: string | null) =>
   typeof value === 'string'
     ? value.trim().toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
     : '';
+
+function buildGrantEvidenceCorpus(citation: EvidenceCitation): string {
+  return [
+    citation.remark,
+    citation.keyContribution,
+    citation.keyFindings,
+    citation.methodologicalApproach,
+    citation.relevanceToResearch,
+    citation.limitationsOrGaps,
+    citation.evidenceBoundary,
+    ...(citation.evidenceCards || []).flatMap((card) => [
+      card.claim,
+      card.quantitativeDetail,
+      card.conditions,
+      card.doesNotSupport,
+      card.studyDesign,
+      card.sourceSection,
+    ]),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function computeGrantPersuasionWeight(
+  citation: EvidenceCitation,
+  role: GrantPersuasionRole
+): number {
+  const corpus = buildGrantEvidenceCorpus(citation);
+  const hasNumber = /\b\d[\d,.]*\s*(%|percent|million|billion|thousand|participants|patients|schools|states|years)?\b/.test(corpus);
+
+  let score = 0;
+  if (citation.hasDeepAnalysis) score += 120;
+  if (citation.evidenceCards?.length) score += citation.evidenceCards.length * 18;
+
+  switch (role) {
+    case 'proves_need':
+      if (hasNumber) score += 90;
+      if (/(prevalence|incidence|burden|cost|baseline|affected|population|risk|mortality|need|urgency)/.test(corpus)) score += 85;
+      break;
+    case 'shows_gap':
+      if (/(gap|limitation|barrier|challenge|insufficient|unmet|shortfall|fails|constraint)/.test(corpus)) score += 95;
+      break;
+    case 'validates_approach':
+      if (/(validation|validated|reliability|metric|indicator|protocol|benchmark|evaluation)/.test(corpus)) score += 90;
+      break;
+    case 'supports_feasibility':
+      if (/(feasib|implementation|pilot|deploy|delivery|readiness|adoption|uptake|operational)/.test(corpus)) score += 95;
+      break;
+    case 'quantifies_impact':
+      if (hasNumber) score += 80;
+      if (/(impact|outcome|improvement|effect|increase|reduction|success|benefit)/.test(corpus)) score += 95;
+      break;
+    case 'establishes_precedent':
+      if (/(precedent|compar|benchmark|baseline|current practice|alternative|standard of care|implemented)/.test(corpus)) score += 90;
+      break;
+    case 'policy_alignment':
+      if (/(policy|strategy|framework|priority|roadmap|guideline|mission|scheme)/.test(corpus)) score += 95;
+      break;
+    default:
+      break;
+  }
+
+  return score;
+}
 
 type EvidencePackSelectionLimits = {
   perDimensionTopK: number;
@@ -735,19 +810,43 @@ class EvidencePackService {
    */
   buildEvidenceDigest(
     dimensionEvidence: DimensionEvidence[],
-    allowedCitationKeys: string[]
+    allowedCitationKeys: string[],
+    options?: { grantBacked?: boolean }
   ): EvidenceDigest {
     const seenKeys = new Set<string>();
     const entries: EvidenceDigestEntry[] = [];
     const relevanceScores = new Map<string, number>();
+    const grantUsageByCitation = new Map<string, { weight: number; roleTag: string; usageHint: string }>();
 
     // Collect all citations across dimensions
     for (const dim of dimensionEvidence) {
+      const grantRole = options?.grantBacked
+        ? (
+          dim.grantPersuasionRole
+          || inferGrantPersuasionRole({
+            dimension: dim.dimension,
+            semantic: (dim.grantSemantic || null) as any,
+          })
+        )
+        : null;
+
       for (const citation of dim.citations) {
         // Track best relevance score per key
         const prev = relevanceScores.get(citation.citationKey) || 0;
         if (citation.relevanceScore > prev) {
           relevanceScores.set(citation.citationKey, citation.relevanceScore);
+        }
+
+        if (grantRole) {
+          const weight = computeGrantPersuasionWeight(citation, grantRole);
+          const current = grantUsageByCitation.get(citation.citationKey);
+          if (!current || weight > current.weight) {
+            grantUsageByCitation.set(citation.citationKey, {
+              weight,
+              roleTag: getGrantEvidenceDigestTag(grantRole),
+              usageHint: getGrantEvidenceUsageHint(grantRole),
+            });
+          }
         }
 
         if (seenKeys.has(citation.citationKey)) continue;
@@ -782,6 +881,9 @@ class EvidencePackService {
         const stance = citation.positionalRelation?.relation
           ? stanceMap[citation.positionalRelation.relation] || 'neutral'
           : 'neutral';
+        const grantUsage = options?.grantBacked
+          ? grantUsageByCitation.get(citation.citationKey)
+          : null;
 
         entries.push({
           citationKey: citation.citationKey,
@@ -792,6 +894,8 @@ class EvidencePackService {
           confidence: CONFIDENCE_WEIGHT[citation.confidence] / 3, // normalize to 0–1
           stance,
           mustCite: false, // assigned below
+          grantRoleTag: grantUsage?.roleTag,
+          grantUsageHint: grantUsage?.usageHint,
         });
       }
     }
@@ -861,6 +965,7 @@ class EvidencePackService {
 
     const perDimension = new Map<string, EvidenceCitation[]>();
     const sectionKeyNormalized = normalizeSectionKey(section.sectionKey);
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     const selectionLimits = getEvidencePackSelectionLimits(sectionKeyNormalized, {
       paperTypeCode: blueprint.paperTypeCode,
       mustCoverCount: mustCover.length,
@@ -1007,32 +1112,32 @@ class EvidencePackService {
     const allowedScore = new Map<string, number>();
     const candidateScore = new Map<string, number>();
 
-    const scoreCitation = (citation: EvidenceCitation): number =>
+    const scoreCitation = (citation: EvidenceCitation, role?: GrantPersuasionRole | null): number =>
       (citation.hasDeepAnalysis ? 1_000_000 : 0)
       + (citation.evidenceCards?.length || 0) * 50_000
       + CONFIDENCE_WEIGHT[citation.confidence] * 10_000
       + citation.relevanceScore * 100
+      + (grantBacked && role ? computeGrantPersuasionWeight(citation, role) * 100 : 0)
       + (citation.year || 0);
 
     for (const dim of mustCover) {
       const normalized = normalizeDimension(dim);
+      const grantPersuasionRole = grantBacked
+        ? inferGrantPersuasionRole({
+          dimension: dim,
+          semantic: section.grantSemantic || null,
+          dimensionType: section.mustCoverTyping?.[dim],
+        })
+        : undefined;
       const rows = (perDimension.get(normalized) || [])
         .sort((a, b) => {
-          const deep = Number(Boolean(b.hasDeepAnalysis)) - Number(Boolean(a.hasDeepAnalysis));
-          if (deep !== 0) return deep;
-          const cards = (b.evidenceCards?.length || 0) - (a.evidenceCards?.length || 0);
-          if (cards !== 0) return cards;
-          const c = CONFIDENCE_WEIGHT[b.confidence] - CONFIDENCE_WEIGHT[a.confidence];
-          if (c !== 0) return c;
-          const r = b.relevanceScore - a.relevanceScore;
-          if (r !== 0) return r;
-          const y = (b.year || 0) - (a.year || 0);
-          if (y !== 0) return y;
+          const scoreDiff = scoreCitation(b, grantPersuasionRole) - scoreCitation(a, grantPersuasionRole);
+          if (scoreDiff !== 0) return scoreDiff;
           return a.citationKey.localeCompare(b.citationKey);
         });
 
       for (const citation of rows) {
-        const score = scoreCitation(citation);
+        const score = scoreCitation(citation, grantPersuasionRole);
         const prev = candidateScore.get(citation.citationKey) || 0;
         if (score > prev) {
           candidateScore.set(citation.citationKey, score);
@@ -1046,11 +1151,13 @@ class EvidencePackService {
 
       dimensionEvidence.push({
         dimension: dim,
-        citations: top
+        citations: top,
+        grantSemantic: section.grantSemantic || null,
+        grantPersuasionRole,
       });
 
       for (const citation of top) {
-        const score = scoreCitation(citation);
+        const score = scoreCitation(citation, grantPersuasionRole);
         const prev = allowedScore.get(citation.citationKey) || 0;
         if (score > prev) {
           allowedScore.set(citation.citationKey, score);
@@ -1079,7 +1186,9 @@ class EvidencePackService {
       .slice(0, selectionLimits.maxAllowedCitationKeys)
       .map(([key]) => key);
 
-    const evidenceDigest = this.buildEvidenceDigest(dimensionEvidence, allowedCitationKeys);
+    const evidenceDigest = this.buildEvidenceDigest(dimensionEvidence, allowedCitationKeys, {
+      grantBacked,
+    });
 
     return {
       sectionKey: resolvedSectionKey,

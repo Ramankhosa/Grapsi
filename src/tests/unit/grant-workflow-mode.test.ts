@@ -428,6 +428,7 @@ describe('grant workflow mode extraction and runtime', () => {
       'Problem statement': 'foundational',
       'Expected outcomes': 'empirical',
     })
+    expect(shadowPlan[0].seededContext).toBe('')
     expect(isGrantSectionAutoDraftable({ sectionType: 'short_answer', workflowMode: 'app_draft' })).toBe(true)
     expect(isGrantSectionAutoDraftable({ sectionType: 'short_answer', workflowMode: 'team_manual' })).toBe(false)
   })

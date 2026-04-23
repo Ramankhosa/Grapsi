@@ -70,6 +70,7 @@ export interface SectionPlanItem {
   purpose: string;
   mustCover: string[];
   mustAvoid: string[];
+  seededContext?: string | null;
   wordBudget?: number;
   characterLimit?: number;
   sectionType?: 'narrative' | 'short_answer' | 'checklist' | 'table' | 'budget_rows';
@@ -120,6 +121,7 @@ export interface SectionContext {
   purpose: string;
   mustCover: string[];
   mustAvoid: string[];
+  seededContext?: string | null;
   wordBudget?: number;
   characterLimit?: number;
   dependencies: string[];
@@ -532,6 +534,7 @@ class BlueprintService {
         purpose: sectionPlan.purpose,
         mustCover: sectionPlan.mustCover,
         mustAvoid: sectionPlan.mustAvoid,
+        seededContext: sectionPlan.seededContext || null,
         wordBudget: sectionPlan.wordBudget,
         characterLimit: sectionPlan.characterLimit,
         dependencies: sectionPlan.dependencies,
@@ -824,6 +827,7 @@ CRITICAL RULES:
           purpose: item.purpose || '',
           mustCover,
           mustAvoid: Array.isArray(item.mustAvoid) ? item.mustAvoid : [],
+          seededContext: typeof item.seededContext === 'string' ? item.seededContext : undefined,
           wordBudget: typeof item.wordBudget === 'number' ? item.wordBudget : undefined,
           characterLimit: typeof item.characterLimit === 'number' ? item.characterLimit : undefined,
           sectionType: typeof item.sectionType === 'string' ? item.sectionType as SectionPlanItem['sectionType'] : undefined,
@@ -1095,6 +1099,7 @@ CRITICAL RULES:
         purpose: String(raw.purpose || '').trim(),
         mustCover,
         mustAvoid,
+        ...(typeof raw.seededContext === 'string' ? { seededContext: raw.seededContext.trim() } : {}),
         ...(typeof wordBudget === 'number' ? { wordBudget } : {}),
         ...(typeof raw.characterLimit === 'number' ? { characterLimit: Number(raw.characterLimit) } : {}),
         ...(typeof raw.sectionType === 'string'

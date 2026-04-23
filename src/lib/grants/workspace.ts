@@ -882,6 +882,7 @@ export function buildPaperSectionPlanFromGrantSections(
         purpose: section.purpose,
         mustCover: [...section.mustCover],
         mustAvoid: [...section.mustAvoid],
+        seededContext: section.seededContext,
         sectionType: section.sectionType,
         reviewerIntent: section.reviewerIntent,
         characterLimit: section.characterLimit,

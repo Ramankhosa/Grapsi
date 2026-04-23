@@ -433,9 +433,11 @@ function formatEvidenceDigest(digest: EvidenceDigest): string {
   for (const entry of digest.digests) {
     const mustTag = entry.mustCite ? ' [MUST-CITE]' : '';
     const methodTag = entry.method ? ` | method: ${entry.method.slice(0, 80)}` : '';
+    const grantRoleTag = entry.grantRoleTag ? ` | role: ${entry.grantRoleTag}` : '';
+    const grantHintTag = entry.grantUsageHint ? ` | use: ${entry.grantUsageHint.slice(0, 120)}` : '';
     lines.push(
       `- [${entry.citationKey}]${mustTag}: ${entry.claimType} | ${entry.claim.slice(0, 200)} | ` +
-      `strength: ${entry.evidenceStrength} | stance: ${entry.stance || 'neutral'}${methodTag}`
+      `strength: ${entry.evidenceStrength} | stance: ${entry.stance || 'neutral'}${grantRoleTag}${methodTag}${grantHintTag}`
     );
   }
 
@@ -857,6 +859,7 @@ class PaperSectionService {
       dimensionCitations: dimensionCitations.length > 0 ? dimensionCitations : undefined,
       authoritativePrepBundle: blueprintContext?.currentSection.authoritativePrepBundle || blueprintContext?.currentSection.prepContextBlock || null,
       relatedPrepAwareness: blueprintContext?.currentSection.relatedPrepAwareness || null,
+      seededContext: blueprintContext?.currentSection.seededContext || null,
       grantRuleProfile: blueprintContext?.currentSection.grantRuleProfile || null,
       grantContextSummary: grantSession
         ? {
@@ -1955,6 +1958,7 @@ Keywords: ${Array.isArray(researchTopic.keywords) ? researchTopic.keywords.join(
         grantSectionComplianceContract: currentSection.grantSectionComplianceContract as GrantSectionComplianceContract | null,
         authoritativePrepBundle: currentSection.authoritativePrepBundle || currentSection.prepContextBlock || null,
         relatedPrepAwareness: currentSection.relatedPrepAwareness || null,
+        seededContext: currentSection.seededContext || null,
         thesisStatement,
         centralObjective,
         keyContributions,

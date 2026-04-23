@@ -56,4 +56,38 @@ describe('grant-backed search strategy', () => {
 
     expect(strategy).toBeNull();
   });
+
+  it('adds persuasion-aware query terms and recent windows for feasibility-heavy methodology searches', () => {
+    const strategy = buildGrantBackedSearchStrategy({
+      researchTopic: {
+        title: 'Digital Health Delivery Network',
+        researchQuestion: 'How should the implementation model be validated and justified?',
+        keywords: ['digital health', 'implementation'],
+      },
+      blueprint: {
+        paperTypeCode: 'GRANT_TEMPLATE::test-template',
+        sectionPlan: [
+          {
+            sectionKey: 'methodology',
+            grantSemantic: 'methodology',
+            mustCover: [
+              'Feasibility of community health worker mobile adherence support in comparable settings',
+              'Validation evidence for the proposed adherence monitoring workflow',
+              'Comparative advantage or precedent for the implementation model',
+            ],
+            mustCoverTyping: {
+              'Feasibility of community health worker mobile adherence support in comparable settings': 'empirical',
+              'Validation evidence for the proposed adherence monitoring workflow': 'methodological',
+              'Comparative advantage or precedent for the implementation model': 'comparative',
+            },
+          },
+        ],
+      },
+    });
+
+    expect(strategy).toBeTruthy();
+    expect(strategy!.queries[0]?.queryText).toMatch(/implementation|feasibility|validation/i);
+    expect(strategy!.queries[0]?.searchIntent).toBe('implementation_feasibility');
+    expect(strategy!.queries[0]?.suggestedYearFrom).toBeGreaterThanOrEqual(new Date().getUTCFullYear() - 6);
+  });
 });

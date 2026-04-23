@@ -15,6 +15,12 @@ import {
   shouldTrustTemplateIntent,
   templateIntentToGrantSemantic,
 } from '@/lib/grants/templateIntent'
+import {
+  getGrantSemanticRoleOrder,
+  inferGrantPersuasionRole,
+  persuasionRoleToDimensionType,
+  type GrantPersuasionRole,
+} from '@/lib/grants/persuasionRoles'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import type {
   GrantComplianceReport,
@@ -106,44 +112,157 @@ function sentenceCase(value: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
-function normalizeDimensionPhrase(value: string): string | null {
+function cleanGrantClaimAnchor(value: string): string | null {
   const cleaned = value
     .trim()
     .replace(/[.:;]+$/g, '')
     .replace(LEADING_IMPERATIVES, '')
-    .replace(/\b(this section|the proposal|the project)\b/gi, '')
+    .replace(/\b(this section|the proposal|the project|this proposal|our project|our proposal)\b/gi, '')
+    .replace(/\b(clearly|explicitly|directly|carefully|strongly)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim()
   if (!cleaned) return null
 
   const lowered = cleaned.toLowerCase()
   if (EDITORIAL_WORDS.has(lowered)) return null
-  if (lowered.length < 12) return null
+  if (lowered.length < 10) return null
+  if (/^(section|proposal|project|grant|response)$/i.test(cleaned)) return null
 
-  if (
-    !/(evidence|need|gap|method|approach|feasibility|impact|outcome|alignment|risk|deliverable|milestone|evaluation|validation|capacity|adoption|readiness|beneficiar|sustainab|scalab|benchmark|baseline|justification|governance|ecosystem|translation|innovation)/i.test(lowered)
-  ) {
-    return sentenceCase(`evidence for ${lowered}`)
-  }
-
-  return sentenceCase(lowered)
+  return cleaned
 }
 
-function inferDimensionType(value: string): GrantBlueprintDimensionType {
-  const lowered = value.toLowerCase()
-  if (/(risk|gap|limitation|barrier|challenge|constraint|unmet|bottleneck)/.test(lowered)) {
-    return 'gap'
+function collectClaimAnchorsFromText(value: string): string[] {
+  return dedupeStrings(
+    String(value || '')
+      .split(SECTION_LABEL_SPLIT)
+      .map((item) => cleanGrantClaimAnchor(item))
+      .filter(Boolean) as string[]
+  )
+}
+
+function collectPrepClaimAnchors(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext
+): string[] {
+  const prepEvidence = collectMappedPrepEvidence(section, context)
+  const factAnchors = prepEvidence.flatMap((item) => [
+    item.label,
+    ...item.factBullets,
+    ...item.keywords.map((keyword) => `${item.label}: ${keyword}`),
+    ...item.thrustLinkage.map((keyword) => `${item.label}: ${keyword}`),
+  ])
+
+  return dedupeStrings(
+    factAnchors
+      .map((item) => cleanGrantClaimAnchor(item))
+      .filter(Boolean) as string[]
+  )
+}
+
+function scoreAnchorForRole(anchor: string, role: GrantPersuasionRole): number {
+  const lowered = anchor.toLowerCase()
+  const specificityBonus = Math.min(18, Math.floor(anchor.length / 8))
+  const numericBonus = /\b\d/.test(lowered) ? 12 : 0
+  const keywordBonus = (() => {
+    switch (role) {
+      case 'proves_need':
+        return /(prevalence|incidence|burden|cost|baseline|urgency|affected|population|demand|need)/.test(lowered) ? 16 : 0
+      case 'shows_gap':
+        return /(gap|limitation|barrier|challenge|insufficient|constraint|unmet|shortfall)/.test(lowered) ? 18 : 0
+      case 'validates_approach':
+        return /(validation|validated|evaluation|measure|metric|indicator|protocol|benchmark|reliability)/.test(lowered) ? 18 : 0
+      case 'supports_feasibility':
+        return /(feasib|implementation|pilot|deployment|operational|delivery|readiness|adoption)/.test(lowered) ? 18 : 0
+      case 'quantifies_impact':
+        return /(impact|outcome|improvement|effect|reduction|increase|benefit|result)/.test(lowered) ? 18 : 0
+      case 'establishes_precedent':
+        return /(compar|precedent|baseline|current practice|alternative|benchmark|advantage)/.test(lowered) ? 18 : 0
+      case 'policy_alignment':
+        return /(policy|strategy|framework|priority|roadmap|mission|scheme|alignment)/.test(lowered) ? 18 : 0
+      default:
+        return 0
+    }
+  })()
+  const genericPenalty = /(important|relevant|overview|discussion|description|details?)$/.test(lowered) ? 10 : 0
+  return specificityBonus + numericBonus + keywordBonus - genericPenalty
+}
+
+function buildSemanticFallbackAnchor(
+  role: GrantPersuasionRole,
+  semantic: GrantSectionSemantic,
+  topicAnchor: string,
+  callAnchor: string
+): string {
+  switch (role) {
+    case 'proves_need':
+      return semantic === 'problem_need'
+        ? `the unmet burden affecting the target population in ${topicAnchor}`
+        : `the reviewer-visible need addressed by ${topicAnchor}`
+    case 'shows_gap':
+      return `current responses addressing ${topicAnchor}`
+    case 'validates_approach':
+      return semantic === 'evaluation'
+        ? `the proposed measurement and validation plan for ${topicAnchor}`
+        : `the proposed approach for ${topicAnchor}`
+    case 'supports_feasibility':
+      return `the planned implementation model for ${topicAnchor}`
+    case 'quantifies_impact':
+      return `the expected outcomes of ${topicAnchor}`
+    case 'establishes_precedent':
+      return semantic === 'innovation'
+        ? `the proposed innovation relative to current practice in ${topicAnchor}`
+        : `related interventions relevant to ${topicAnchor}`
+    case 'policy_alignment':
+      return `${topicAnchor} and ${callAnchor}`
+    default:
+      return topicAnchor
   }
-  if (/(method|approach|protocol|evaluation|validation|work package|milestone|implementation|execution|deliverable|timeline|governance|operations)/.test(lowered)) {
-    return 'methodological'
+}
+
+function buildGrantDimensionClaim(input: {
+  role: GrantPersuasionRole
+  anchor: string
+  topicAnchor: string
+  callAnchor: string
+  semantic: GrantSectionSemantic
+}): string {
+  const anchor = input.anchor.replace(/\s+/g, ' ').trim()
+  switch (input.role) {
+    case 'proves_need':
+      return sentenceCase(`Scale, burden, or urgency of ${anchor}`)
+    case 'shows_gap':
+      return sentenceCase(`Limitations of current responses for ${anchor}`)
+    case 'validates_approach':
+      return sentenceCase(`Validation evidence for ${anchor}`)
+    case 'supports_feasibility':
+      return sentenceCase(`Feasibility of ${anchor} in comparable settings`)
+    case 'quantifies_impact':
+      return sentenceCase(`Outcome metrics achieved by related interventions for ${anchor}`)
+    case 'establishes_precedent':
+      return sentenceCase(`Comparative advantage or precedent for ${anchor}`)
+    case 'policy_alignment':
+      return sentenceCase(
+        input.semantic === 'alignment'
+          ? `Alignment of ${anchor} with ${input.callAnchor}`
+          : `Policy or strategic alignment evidence connecting ${anchor} to ${input.callAnchor}`
+      )
+    default:
+      return sentenceCase(anchor)
   }
-  if (/(comparison|baseline|alternative|benchmark|alignment|positioning|fit with)/.test(lowered)) {
-    return 'comparative'
-  }
-  if (/(impact|outcome|demand|beneficiar|feasibility|performance|adoption|readiness|evidence|capacity|translation|sustainab|scale|innovation)/.test(lowered)) {
-    return 'empirical'
-  }
-  return 'foundational'
+}
+
+function inferDimensionType(
+  value: string,
+  semantic?: GrantSectionSemantic | null,
+  fallback?: GrantBlueprintDimensionType | null
+): GrantBlueprintDimensionType {
+  return fallback
+    || persuasionRoleToDimensionType(
+      inferGrantPersuasionRole({
+        dimension: value,
+        semantic,
+      })
+    )
 }
 
 function buildSectionText(section: GrantBlueprintPlanSection): string {
@@ -343,110 +462,76 @@ function buildCallAnchor(context: GrantBlueprintEnrichmentContext): string {
 function buildSeedDimensions(
   section: GrantBlueprintPlanSection,
   context: GrantBlueprintEnrichmentContext,
-  semantic: GrantSectionSemantic
+  semantic: GrantSectionSemantic,
+  evaluationCriteria: string[] = []
 ): Array<{ dimension: string; type: GrantBlueprintDimensionType }> {
   const topicAnchor = buildTopicAnchor(context)
   const callAnchor = buildCallAnchor(context)
+  const rolePlan = getGrantSemanticRoleOrder(semantic)
+  const anchorCandidates = dedupeStrings([
+    ...collectPrepClaimAnchors(section, context),
+    ...section.mustCover.flatMap((item) => collectClaimAnchorsFromText(item)),
+    ...collectClaimAnchorsFromText(section.label),
+    ...collectClaimAnchorsFromText(section.purpose),
+    ...collectClaimAnchorsFromText(section.reviewerIntent || ''),
+    ...evaluationCriteria.flatMap((item) => collectClaimAnchorsFromText(item)),
+  ])
+
+  const usedAnchors = new Set<string>()
   const candidates: Array<{ dimension: string; type: GrantBlueprintDimensionType }> = []
 
-  const seedPhrases = dedupeStrings(
-    [
-      ...section.mustCover,
-      ...section.label.split(SECTION_LABEL_SPLIT).map((item) => item.trim()),
-      ...section.purpose.split(SECTION_LABEL_SPLIT).map((item) => item.trim()),
-      ...String(section.reviewerIntent || '').split(SECTION_LABEL_SPLIT).map((item) => item.trim()),
-    ].filter(Boolean)
-  )
+  for (const role of rolePlan) {
+    const anchor = anchorCandidates
+      .filter((candidate) => !usedAnchors.has(candidate.toLowerCase()))
+      .sort((left, right) =>
+        scoreAnchorForRole(right, role) - scoreAnchorForRole(left, role)
+        || right.length - left.length
+        || left.localeCompare(right)
+      )[0]
+      || buildSemanticFallbackAnchor(role, semantic, topicAnchor, callAnchor)
 
-  for (const seed of seedPhrases) {
-    const normalized = normalizeDimensionPhrase(seed)
-    if (!normalized) continue
+    usedAnchors.add(anchor.toLowerCase())
+    const dimension = buildGrantDimensionClaim({
+      role,
+      anchor,
+      topicAnchor,
+      callAnchor,
+      semantic,
+    })
     candidates.push({
-      dimension: normalized,
-      type: inferDimensionType(normalized),
+      dimension,
+      type: persuasionRoleToDimensionType(role),
     })
   }
 
-  const defaultsBySemantic: Record<GrantSectionSemantic, Array<{ dimension: string; type: GrantBlueprintDimensionType }>> = {
-    summary: [
-      { dimension: `Problem landscape and strategic need for ${topicAnchor}`, type: 'foundational' },
-      { dimension: `Evidence base supporting the proposed intervention model for ${topicAnchor}`, type: 'empirical' },
-      { dimension: 'Execution readiness and delivery feasibility of the proposed program', type: 'methodological' },
-      { dimension: 'Expected outcomes, beneficiaries, and measurable impact pathways', type: 'empirical' },
-      { dimension: `Fit of the proposed program with ${callAnchor}`, type: 'comparative' },
-    ],
-    problem_need: [
-      { dimension: `Problem severity, demand, or opportunity landscape for ${topicAnchor}`, type: 'foundational' },
-      { dimension: 'Evidence that the proposed beneficiaries face a material unmet need', type: 'empirical' },
-      { dimension: 'Baseline or gap showing why current efforts remain insufficient', type: 'gap' },
-      { dimension: `Alignment of the identified need with ${callAnchor}`, type: 'comparative' },
-    ],
-    objectives: [
-      { dimension: `Unmet need or opportunity the proposal addresses in ${topicAnchor}`, type: 'gap' },
-      { dimension: 'Measurable objectives and success indicators for the proposed program', type: 'empirical' },
-      { dimension: 'Scope boundaries and prioritization choices for the proposed program', type: 'comparative' },
-      { dimension: 'Ecosystem demand and stakeholder relevance for the proposed program', type: 'empirical' },
-    ],
-    methodology: [
-      { dimension: 'Rationale for the proposed methodology and execution model', type: 'methodological' },
-      { dimension: 'Validation and evaluation strategy for proposed outputs', type: 'methodological' },
-      { dimension: 'Infrastructure, data, or partnership readiness required for execution', type: 'empirical' },
-      { dimension: 'Comparative justification for the chosen technical approach', type: 'comparative' },
-      { dimension: 'Delivery risks and mitigation pathways for implementation', type: 'gap' },
-    ],
-    workplan: [
-      { dimension: 'Work package sequencing, milestones, and delivery dependencies', type: 'methodological' },
-      { dimension: 'Feasibility of timelines, staffing, and resource allocation', type: 'empirical' },
-      { dimension: 'Monitoring, evaluation, and governance checkpoints across execution', type: 'methodological' },
-      { dimension: 'Critical risks, contingencies, and fallback pathways', type: 'gap' },
-    ],
-    innovation: [
-      { dimension: `Distinctive innovation value relative to current practice in ${topicAnchor}`, type: 'comparative' },
-      { dimension: 'Evidence that the proposed novelty is technically and operationally credible', type: 'empirical' },
-      { dimension: `Strategic relevance of the innovation for ${callAnchor}`, type: 'comparative' },
-    ],
-    evaluation: [
-      { dimension: 'Evaluation metrics and success thresholds for the proposed program', type: 'methodological' },
-      { dimension: 'Evidence that the evaluation design can verify meaningful outcomes', type: 'empirical' },
-      { dimension: 'Baseline or benchmark needed to interpret performance', type: 'comparative' },
-    ],
-    impact_outcomes: [
-      { dimension: 'Expected technical, economic, or societal impact of the proposed program', type: 'empirical' },
-      { dimension: 'Adoption, translation, or deployment pathway for the proposed outputs', type: 'empirical' },
-      { dimension: `Contribution of the proposal to ${callAnchor}`, type: 'comparative' },
-      { dimension: 'Measurable outcomes and long-term value creation', type: 'empirical' },
-    ],
-    alignment: [
-      { dimension: `Strategic alignment of the proposal with ${callAnchor}`, type: 'comparative' },
-      { dimension: 'Evidence that the proposed program addresses identified ecosystem needs', type: 'empirical' },
-      { dimension: 'Distinctive positioning of the proposal relative to existing initiatives', type: 'comparative' },
-    ],
-    sustainability: [
-      { dimension: 'Operational and financial sustainability model beyond the grant period', type: 'empirical' },
-      { dimension: 'Scale-up, replication, or institutionalization pathway for proposed outputs', type: 'empirical' },
-      { dimension: 'Partnership and governance structures supporting continuity', type: 'methodological' },
-    ],
-    risk: [
-      { dimension: 'Principal technical, operational, and partnership risks', type: 'gap' },
-      { dimension: 'Mitigation, contingency, and recovery pathways for critical risks', type: 'methodological' },
-      { dimension: 'Evidence supporting feasibility under anticipated constraints', type: 'empirical' },
-    ],
-    default: [
-      { dimension: `Problem context and urgency for ${topicAnchor}`, type: 'foundational' },
-      { dimension: 'Evidence supporting the proposed approach and delivery model', type: 'empirical' },
-      { dimension: 'Execution feasibility, dependencies, and operational readiness', type: 'methodological' },
-      { dimension: 'Expected outcomes and impact measurement strategy', type: 'empirical' },
-    ],
+  for (const anchor of anchorCandidates) {
+    if (candidates.length >= 6) break
+    const role = inferGrantPersuasionRole({
+      dimension: anchor,
+      semantic,
+    })
+    const dimension = buildGrantDimensionClaim({
+      role,
+      anchor,
+      topicAnchor,
+      callAnchor,
+      semantic,
+    })
+    if (candidates.some((candidate) => candidate.dimension.toLowerCase() === dimension.toLowerCase())) {
+      continue
+    }
+    candidates.push({
+      dimension,
+      type: inferDimensionType(dimension, semantic, persuasionRoleToDimensionType(role)),
+    })
   }
-
-  candidates.push(...defaultsBySemantic[semantic])
 
   return dedupeStrings(candidates.map((candidate) => candidate.dimension))
     .map((dimension) => ({
       dimension,
       type:
         candidates.find((candidate) => candidate.dimension.toLowerCase() === dimension.toLowerCase())?.type
-        || inferDimensionType(dimension),
+        || inferDimensionType(dimension, semantic),
     }))
 }
 
@@ -1067,7 +1152,7 @@ function enrichOneSection(
         mustCover: grantSectionComplianceContract.requiredPoints.length > 0
           ? grantSectionComplianceContract.requiredPoints
           : section.mustCover,
-      }, context, semantic).slice(0, targetDimensionCount(section, evidenceNeed))
+      }, context, semantic, grantRuleProfile?.evaluationFocus || []).slice(0, targetDimensionCount(section, evidenceNeed))
 
   const mustCover = regenerate
     ? generated.map((item) => item.dimension)
@@ -1137,7 +1222,7 @@ export function buildGeneratedGrantProposalFoundation(
     draftableSections
       .flatMap((section) => section.mustCover.slice(0, 2))
       .slice(0, 6)
-      .map((dimension) => normalizeDimensionPhrase(dimension) || dimension)
+      .map((dimension) => cleanGrantClaimAnchor(dimension) || dimension)
       .filter(Boolean) as string[]
   )
 

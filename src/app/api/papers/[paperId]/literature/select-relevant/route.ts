@@ -1037,6 +1037,7 @@ function buildPrompt(
   blueprint?: BlueprintWithSectionPlan | null,
   preferredDimensionTargets?: Array<{ sectionKey: string; dimension: string; dimensionType?: string }>
 ): string {
+  const grantBacked = Boolean(blueprint && isGrantBackedPaperTypeCode(blueprint.paperTypeCode));
   const paperList = papers.map((p, idx) => {
     const authorStr = p.authors?.slice(0, 3).join(', ') || 'Unknown';
     const yearStr = p.year ? ` (${p.year})` : '';
@@ -1125,7 +1126,45 @@ Use these as a relevance prior, but you may still map a paper to any stronger bl
 `
     : '';
 
-  const baseTasks = `
+  const baseTasks = grantBacked ? `
+For each paper, determine:
+1. Key contribution (1 sentence - what concrete reviewer-facing evidence asset does this paper offer?)
+2. Key findings (1 sentence - include the most grant-useful statistic, limitation, outcome, or validation signal)
+3. Methodological approach (if it helps validate feasibility, measurement, or implementation)
+4. Persuasion value for the grant (1-2 sentences, concrete and specific)
+5. Limitations or gaps (what this paper says current approaches still fail to address)
+6. Claim types this paper can support (choose up to 3): BACKGROUND, GAP, METHOD, LIMITATION, DATASET, IMPLEMENTATION_CONSTRAINT
+7. Evidence boundary (1 sentence: what NOT to claim from this paper)
+8. GRANT UTILITY:
+   Assess which reviewer-facing job the paper helps with:
+   - PROVES_NEED: statistics, prevalence, burden, costs, or baseline facts
+   - SHOWS_GAP: explicit limitations, barriers, unmet need, or insufficiency of current responses
+   - VALIDATES_APPROACH: method or measurement validation relevant to the proposal
+   - QUANTIFIES_IMPACT: outcomes, effect sizes, or measurable results from related work
+   - SUPPORTS_FEASIBILITY: analogous implementation success, pilot evidence, or delivery precedent
+   - ESTABLISHES_PRECEDENT: comparative baseline, precedent, or policy/implementation case
+   Mention the strongest utility directly in your reasoning and dimension remarks.
+9. POSITIONAL RELATION to the research question:
+   Assign exactly one: REINFORCES | CONTRADICTS | EXTENDS | QUALIFIES | TENSION
+   - REINFORCES: Directly supports the proposal logic or evidence need
+   - CONTRADICTS: Conflicting finding or opposing evidence signal
+   - EXTENDS: Related but in a different setting, population, or scale
+   - QUALIFIES: Introduces limits, boundary conditions, or scope constraints
+   - TENSION: Reveals unresolved trade-offs or competing interpretations
+   Write 1 sentence explaining why.
+10. DEEP ANALYSIS RECOMMENDATION (WORTHINESS ONLY):
+   - Assign exactly one: DEEP_ANCHOR, DEEP_SUPPORT, DEEP_STRESS_TEST, LIT_ONLY
+   - Use only title/abstract/mapping signals for this decision
+   - Do NOT use PDF/Open Access status for this decision
+11. REFERENCE ARCHETYPE (classify the paper's own research type):
+   - SYSTEM_ALGO_EVALUATION: proposes/evaluates a model, algorithm, pipeline, or system with quantitative metrics
+   - CONTROLLED_EXPERIMENTAL_STUDY: tests a hypothesis with intervention/control design, statistical tests, effect sizes
+   - EMPIRICAL_OBSERVATIONAL_STUDY: analyzes existing data without intervention
+   - MIXED_METHODS_APPLIED_STUDY: combines quantitative evaluation with qualitative methods
+   - SYNTHESIS_REVIEW: systematic review, meta-analysis, survey paper, or scoping review
+   - POSITION_CONCEPTUAL: position paper, commentary, or conceptual/theoretical framework proposal
+   Classify based on the paper's OWN methodology, not its relevance to your research.`
+    : `
 For each paper, determine:
 1. Key contribution (1 sentence - what's new/important about this paper)
 2. Key findings (1 sentence - main results or conclusions)
@@ -1240,7 +1279,9 @@ For each paper, determine:
   "summary": "<1-2 sentence summary of the selected papers>"
 }`;
 
-  return `You are a research assistant helping identify relevant papers for academic writing.${blueprint ? ' You will map papers to a structured blueprint with specific dimensions to cover.' : ''}
+  return `${grantBacked
+    ? 'You are a grant strategy analyst evaluating literature for a funding proposal.'
+    : 'You are a research assistant helping identify relevant papers for academic writing.'}${blueprint ? ' You will map papers to a structured blueprint with specific dimensions to cover.' : ''}
 
 RESEARCH QUESTION:
 ${researchQuestion}
@@ -1262,7 +1303,11 @@ IMPORTANT CRITERIA:
 - Consider methodological relevance${blueprint ? `
 - Prioritize papers that cover uncovered dimensions
 - A paper covering multiple dimensions is more valuable
-- Be precise with dimension mapping - only map if abstract provides evidence` : ''}
+- Be precise with dimension mapping - only map if abstract provides evidence` : ''}${grantBacked ? `
+- Score papers by persuasion value for the proposal, not just topic similarity
+- In reasoning and dimension remarks, state the specific fact, statistic, limitation, outcome, or precedent that helps convince a reviewer
+- For burden and gap dimensions, one concrete fact beats broad thematic similarity
+- For feasibility and method dimensions, recent analogous implementation evidence is especially valuable` : ''}
 
 Respond in the following JSON format ONLY (no markdown, no explanation outside JSON):
 ${jsonSchema}
