@@ -520,6 +520,10 @@ describe('Funding ingestion real DB integration', () => {
     )
     expect(publishResponse.status).toBe(200)
 
+    const published = await prisma.fundingCall.findUnique({ where: { id: call.id } })
+    expect(published?.status).toBe('PUBLISHED')
+    expect(published?.catalog_status).toBe('PUBLISHED')
+
     const archiveResponse = await archiveFundingCallRoute(
       createJsonRequest(`/api/super-admin/funding/calls/${call.id}/archive`, tokenFor(superAdmin), 'POST'),
       { params: { callId: call.id } }

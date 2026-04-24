@@ -1049,6 +1049,8 @@ export async function publishGlobalFundingCall(callId: string, actor: FundingAct
     where: { id: callId },
     data: {
       status: 'PUBLISHED',
+      catalog_status: 'PUBLISHED',
+      is_active: true,
       publishedAt: fundingCall.publishedAt || new Date(),
       archivedAt: null,
       updatedByUserId: actor.id,
@@ -1072,6 +1074,8 @@ export async function archiveFundingCall(callId: string, actor: FundingActor) {
     where: { id: callId },
     data: {
       status: 'ARCHIVED',
+      catalog_status: 'ARCHIVED',
+      is_active: false,
       archivedAt: new Date(),
       updatedByUserId: actor.id,
     },

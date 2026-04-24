@@ -12,6 +12,9 @@ Only capture facts explicitly supported by the source.
 If a field is unsupported, set value to null and is_missing to true.
 Do not infer missing grant types, deadlines, geography, countries, or eligibility.
 If explicit phrases like "fellowship", "research grant", "travel grant", or "infrastructure" appear, preserve them in funding_kinds.
+Scalar fields must be plain strings, numbers, booleans, or null. Never return nested objects for scalar fields.
+Array fields must be plain arrays of strings, never arrays of objects.
+If the title or description explicitly names the research theme or problem area, include those topical phrases in disciplines.
 Return strict JSON only.
 `;
 

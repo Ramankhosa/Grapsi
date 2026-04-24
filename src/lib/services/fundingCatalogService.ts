@@ -218,12 +218,33 @@ function getEmbeddingStatus(call: { metadata: Prisma.JsonValue | null; id: strin
   return hasEmbedding ? 'generated' : 'not_generated';
 }
 
+function mapCatalogStatusToFundingStatus(
+  status: PrismaFundingCall['catalog_status'] | null | undefined
+): PrismaFundingCall['status'] {
+  switch (status) {
+    case 'PUBLISHED':
+      return 'PUBLISHED';
+    case 'ARCHIVED':
+      return 'ARCHIVED';
+    case 'REJECTED':
+      return 'FAILED';
+    default:
+      return 'READY_FOR_REVIEW';
+  }
+}
+
 function buildCallWriteData(
   current: PrismaFundingCall,
   values: FundingDraftValues,
   metadataPatch: CatalogMetadata,
-  overrides: Partial<Pick<PrismaFundingCall, 'catalog_status' | 'is_active' | 'expiration_date'>> = {}
+  overrides: Partial<
+    Pick<
+      PrismaFundingCall,
+      'catalog_status' | 'status' | 'is_active' | 'expiration_date' | 'publishedAt' | 'archivedAt'
+    >
+  > = {}
 ) {
+  const nextCatalogStatus = overrides.catalog_status ?? current.catalog_status;
   const metadata = buildCatalogMetadata(current.metadata, {
     ...metadataPatch,
     international_facets: {
@@ -236,9 +257,10 @@ function buildCallWriteData(
     },
   });
 
-    return {
-      catalog_status: overrides.catalog_status ?? current.catalog_status,
-      agency_name: values.agency_name,
+  return {
+    catalog_status: nextCatalogStatus,
+    status: overrides.status ?? mapCatalogStatusToFundingStatus(nextCatalogStatus),
+    agency_name: values.agency_name,
     scheme_title: values.scheme_title,
     description: values.description,
     open_date: values.open_date ? new Date(values.open_date) : null,
@@ -269,6 +291,8 @@ function buildCallWriteData(
     contact_info: values.contact_info || null,
     expiration_date: overrides.expiration_date ?? (values.close_date ? new Date(values.close_date) : current.expiration_date),
     is_active: overrides.is_active ?? current.is_active,
+    publishedAt: overrides.publishedAt ?? current.publishedAt,
+    archivedAt: overrides.archivedAt ?? current.archivedAt,
     metadata: metadata as any,
   };
 }
@@ -632,6 +656,8 @@ export class FundingCatalogService {
         catalog_status: 'PUBLISHED',
         is_active: true,
         expiration_date: draftValues.close_date ? new Date(draftValues.close_date) : current.expiration_date,
+        publishedAt: current.publishedAt || new Date(),
+        archivedAt: null,
       }
     );
 
@@ -676,6 +702,7 @@ export class FundingCatalogService {
         {
           catalog_status: 'ARCHIVED',
           is_active: false,
+          archivedAt: new Date(),
         }
       ),
     });
@@ -707,6 +734,7 @@ export class FundingCatalogService {
         {
           catalog_status: 'REJECTED',
           is_active: false,
+          archivedAt: current.archivedAt,
         }
       ),
     });

@@ -1,5 +1,5 @@
-export const FUNDING_INTAKE_PROMPT_VERSION = 'funding-intake-v2';
-export const FUNDING_INTAKE_EXTRACTOR_VERSION = '1.1.0';
+export const FUNDING_INTAKE_PROMPT_VERSION = 'funding-intake-v3';
+export const FUNDING_INTAKE_EXTRACTOR_VERSION = '1.2.0';
 export const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 export const FETCH_TIMEOUT_MS = 15_000;
 export const ACTIVE_IDEMPOTENT_STATUSES = ['queued', 'fetching', 'extracting', 'needs_review', 'draft_created'] as const;

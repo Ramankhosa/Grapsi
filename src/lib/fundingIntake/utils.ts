@@ -141,21 +141,114 @@ export function createEmptyStructuredField<T>(value: T | null = null): Structure
   };
 }
 
-function coerceStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => String(item || '').trim())
-      .filter(Boolean);
+const INVALID_TEXT_VALUES = new Set(['[object Object]', 'null', 'undefined', 'nan']);
+const OBJECT_VALUE_PRIORITY_KEYS = [
+  'value',
+  'label',
+  'name',
+  'title',
+  'text',
+  'summary',
+  'description',
+  'country',
+  'region',
+  'type',
+  'kind',
+  'url',
+  'href',
+  'email',
+  'note',
+] as const;
+const OBJECT_VALUE_IGNORED_KEYS = new Set([
+  'confidence',
+  'is_missing',
+  'is_uncertain',
+  'evidence',
+  'id',
+  'key',
+  'code',
+  'createdAt',
+  'updatedAt',
+  'created_at',
+  'updated_at',
+]);
+
+function sanitizeTextValue(value: string): string | null {
+  const trimmed = normalizeWhitespace(value);
+  if (!trimmed) {
+    return null;
+  }
+
+  if (INVALID_TEXT_VALUES.has(trimmed.toLowerCase())) {
+    return null;
+  }
+
+  return trimmed;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function collectStringCandidates(value: unknown, depth = 0, seen = new Set<unknown>()): string[] {
+  if (value === null || value === undefined || depth > 4 || seen.has(value)) {
+    return [];
   }
 
   if (typeof value === 'string') {
-    return value
-      .split(/[\n,;]+/)
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const sanitized = sanitizeTextValue(value);
+    return sanitized ? [sanitized] : [];
   }
 
-  return [];
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return [String(value)];
+  }
+
+  if (Array.isArray(value)) {
+    seen.add(value);
+    return uniqueStrings(value.flatMap((item) => collectStringCandidates(item, depth + 1, seen)));
+  }
+
+  if (typeof value !== 'object') {
+    return [];
+  }
+
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  const prioritized = OBJECT_VALUE_PRIORITY_KEYS.flatMap((key) =>
+    collectStringCandidates(record[key], depth + 1, seen)
+  );
+
+  if (prioritized.length > 0) {
+    return uniqueStrings(prioritized);
+  }
+
+  return uniqueStrings(
+    Object.entries(record)
+      .filter(([key]) => !OBJECT_VALUE_IGNORED_KEYS.has(key))
+      .flatMap(([, nestedValue]) => collectStringCandidates(nestedValue, depth + 1, seen))
+  );
+}
+
+function coerceStringArray(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return uniqueStrings(
+      value
+        .split(/[\n,;]+/)
+        .map((item) => sanitizeTextValue(item))
+        .filter((item): item is string => Boolean(item))
+    );
+  }
+
+  return uniqueStrings(collectStringCandidates(value));
+}
+
+function coerceText(value: unknown): string {
+  return collectStringCandidates(value)[0] || '';
+}
+
+function coerceTextareaText(value: unknown): string {
+  return collectStringCandidates(value).join('\n');
 }
 
 function coerceNumber(value: unknown): number | null {
@@ -209,7 +302,8 @@ export function normalizeFieldValue(key: FundingFieldKey, value: unknown): unkno
     return '';
   }
 
-  return String(value).trim();
+  const fieldDefinition = FUNDING_FIELD_DEFINITIONS.find((definition) => definition.key === key);
+  return fieldDefinition?.type === 'textarea' ? coerceTextareaText(value) : coerceText(value);
 }
 
 export function normalizeExtractionPayload(raw: any): FundingExtractionPayload {
@@ -222,7 +316,7 @@ export function normalizeExtractionPayload(raw: any): FundingExtractionPayload {
     fields[definition.key] = {
       value,
       confidence: Math.max(0, Math.min(1, Number(rawField?.confidence ?? 0))),
-      evidence: rawField?.evidence ? String(rawField.evidence).trim() : null,
+      evidence: sanitizeTextValue(coerceTextareaText(rawField?.evidence)) || null,
       is_missing: Boolean(rawField?.is_missing) || value === null || value === '' || (Array.isArray(value) && value.length === 0),
       is_uncertain: rawField?.is_uncertain === undefined ? true : Boolean(rawField.is_uncertain),
     };
@@ -237,18 +331,18 @@ export function normalizeExtractionPayload(raw: any): FundingExtractionPayload {
 export function buildDraftValuesFromExtraction(payload?: FundingExtractionPayload | null): FundingDraftValues {
   const getField = (key: FundingFieldKey) => payload?.fields?.[key]?.value;
 
-  return {
-    agency_name: String(getField('agency_name') || ''),
-    scheme_title: String(getField('scheme_title') || ''),
-    description: String(getField('description') || ''),
+  const draftValues: FundingDraftValues = {
+    agency_name: coerceText(getField('agency_name')),
+    scheme_title: coerceText(getField('scheme_title')),
+    description: coerceTextareaText(getField('description')),
     open_date: coerceDateString(getField('open_date')),
     close_date: coerceDateString(getField('close_date')),
     is_rolling: coerceBoolean(getField('is_rolling')),
-    geography_scope: String(getField('geography_scope') || ''),
+    geography_scope: coerceText(getField('geography_scope')),
     eligible_countries: coerceStringArray(getField('eligible_countries')),
     eligible_regions: coerceStringArray(getField('eligible_regions')),
     host_countries: coerceStringArray(getField('host_countries')),
-    funder_country: String(getField('funder_country') || ''),
+    funder_country: coerceText(getField('funder_country')),
     funding_kinds: coerceStringArray(getField('funding_kinds')),
     institution_types: coerceStringArray(getField('institution_types')),
     career_stages: coerceStringArray(getField('career_stages')),
@@ -258,16 +352,22 @@ export function buildDraftValuesFromExtraction(payload?: FundingExtractionPayloa
     disciplines: coerceStringArray(getField('disciplines')),
     amount_min: coerceNumber(getField('amount_min')),
     amount_max: coerceNumber(getField('amount_max')),
-    currency: String(getField('currency') || ''),
+    currency: coerceText(getField('currency')),
     project_duration_min_months: coerceNumber(getField('project_duration_min_months')),
     project_duration_max_months: coerceNumber(getField('project_duration_max_months')),
-    project_duration_text: String(getField('project_duration_text') || ''),
-    eligibility_text: String(getField('eligibility_text') || ''),
-    expected_deliverables_text: String(getField('expected_deliverables_text') || ''),
+    project_duration_text: coerceTextareaText(getField('project_duration_text')),
+    eligibility_text: coerceTextareaText(getField('eligibility_text')),
+    expected_deliverables_text: coerceTextareaText(getField('expected_deliverables_text')),
     official_urls: coerceStringArray(getField('official_urls')),
-    contact_info: String(getField('contact_info') || ''),
-    sponsor_type: String(getField('sponsor_type') || ''),
+    contact_info: coerceTextareaText(getField('contact_info')),
+    sponsor_type: coerceText(getField('sponsor_type')),
   };
+
+  if (draftValues.disciplines.length === 0) {
+    draftValues.disciplines = inferDisciplinesFromDraft(draftValues);
+  }
+
+  return draftValues;
 }
 
 export function extractConfidenceMap(payload: FundingExtractionPayload): Record<string, number> {
@@ -324,7 +424,50 @@ export function normalizeDraftInput(input: Partial<FundingDraftValues>): Funding
     (payload as any)[definition.key] = normalizeFieldValue(definition.key, (input as any)?.[definition.key]);
   }
 
+  if (payload.disciplines.length === 0) {
+    payload.disciplines = inferDisciplinesFromDraft(payload);
+  }
+
   return payload;
+}
+
+const DISCIPLINE_FALLBACK_PATTERNS = [
+  { label: 'Antimicrobial Resistance', pattern: /\b(?:antimicrobial resistance|amr)\b/i },
+  { label: 'Infectious Disease', pattern: /\b(?:infectious disease|infections?|pathogens?)\b/i },
+  { label: 'Microbiology', pattern: /\b(?:microbiolog(?:y|ical)|bacterial|viral|fungal)\b/i },
+  { label: 'Public Health', pattern: /\b(?:public health|global health|population health|health systems)\b/i },
+  { label: 'Implementation Science', pattern: /\b(?:implementation science|implementation research)\b/i },
+  { label: 'Artificial Intelligence', pattern: /\b(?:artificial intelligence|machine learning|deep learning)\b/i },
+  { label: 'Data Science', pattern: /\bdata science\b/i },
+  { label: 'Computer Science', pattern: /\bcomputer science\b/i },
+  { label: 'Medical Imaging', pattern: /\bmedical imaging\b/i },
+  { label: 'Healthcare', pattern: /\b(?:healthcare|clinical care|patient care)\b/i },
+  { label: 'Climate Change', pattern: /\b(?:climate change|decarboni[sz]ation|net zero|greenhouse gas)\b/i },
+  { label: 'Sustainability', pattern: /\bsustainab(?:ility|le)\b/i },
+  { label: 'Agriculture', pattern: /\b(?:agricultur(?:e|al)|food systems|crop science)\b/i },
+  { label: 'Materials Science', pattern: /\bmaterials science\b/i },
+  { label: 'Education', pattern: /\b(?:education(?:al)?|pedagog(?:y|ical))\b/i },
+];
+
+function inferDisciplinesFromDraft(values: FundingDraftValues): string[] {
+  const sourceText = [
+    values.scheme_title,
+    values.description,
+    values.eligibility_text,
+    values.expected_deliverables_text,
+  ]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join('\n');
+
+  if (!sourceText) {
+    return [];
+  }
+
+  return DISCIPLINE_FALLBACK_PATTERNS
+    .filter(({ pattern }) => pattern.test(sourceText))
+    .map(({ label }) => label)
+    .slice(0, 6);
 }
 
 export function parseJsonResponse(rawText: string): any {
