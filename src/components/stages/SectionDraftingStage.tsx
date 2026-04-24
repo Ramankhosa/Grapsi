@@ -1,6 +1,9 @@
 ﻿'use client';
 
+
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+
+/* eslint-disable @next/next/no-img-element */
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Loader2, 
@@ -4645,5 +4648,3 @@ export default function SectionDraftingStage({
     </div>
   );
 }
-
-

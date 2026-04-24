@@ -4,60 +4,96 @@ import {
   buildDraftValuesFromExtraction,
   normalizeDraftInput,
   normalizeExtractionPayload,
+  validateFundingExtractionPayload,
 } from '@/lib/fundingIntake/utils'
 
 describe('funding intake normalization', () => {
-  it('sanitizes malformed scalar objects into usable draft values', () => {
-    const payload = normalizeExtractionPayload({
-      fields: {
-        agency_name: { value: 'Nordic Health Fund', confidence: 1 },
-        scheme_title: { value: 'Infection Prevention Grant', confidence: 1 },
-        description: { value: 'Supports infection prevention pilots.', confidence: 1 },
-        funder_country: { value: { country: 'Sweden', code: 'SE' }, confidence: 0.9 },
-        sponsor_type: { value: { label: 'Foundation' }, confidence: 0.8 },
-        expected_deliverables_text: {
-          value: { summary: 'Toolkit and final report', bullets: ['Toolkit', 'Report'] },
-          confidence: 0.7,
-        },
-        funding_kinds: { value: [{ label: 'Research Grant' }, 'Seed Grant'], confidence: 0.8 },
-        official_urls: {
-          value: [{ href: 'https://example.org/call' }, { url: 'https://example.org/faq' }],
-          confidence: 0.8,
+  it('builds description deterministically from evidence-backed segments', () => {
+    const payload = normalizeExtractionPayload(
+      {
+        fields: {
+          agency_name: {
+            value: 'Nordic Health Fund',
+            status: 'supported',
+            confidence: 0.95,
+            evidence: [{ sourceType: 'segment', segmentId: 'seg_001', quote: 'Nordic Health Fund' }],
+          },
+          scheme_title: {
+            value: 'Infection Prevention Grant',
+            status: 'supported',
+            confidence: 0.94,
+            evidence: [{ sourceType: 'segment', segmentId: 'seg_001', quote: 'Infection Prevention Grant' }],
+          },
+          description: {
+            value: 'hallucinated summary should be ignored',
+            status: 'supported',
+            confidence: 0.9,
+            evidence: [
+              {
+                sourceType: 'segment',
+                segmentId: 'seg_002',
+                quote: 'Supports infection prevention pilots in hospitals.',
+              },
+              {
+                sourceType: 'segment',
+                segmentId: 'seg_003',
+                quote: 'Projects must produce a final implementation report.',
+              },
+            ],
+          },
         },
       },
-    })
-
-    const draft = buildDraftValuesFromExtraction(payload)
-
-    expect(draft.funder_country).toBe('Sweden')
-    expect(draft.sponsor_type).toBe('Foundation')
-    expect(draft.expected_deliverables_text).toBe('Toolkit and final report')
-    expect(draft.funding_kinds).toEqual(['Research Grant', 'Seed Grant'])
-    expect(draft.official_urls).toEqual(['https://example.org/call', 'https://example.org/faq'])
-  })
-
-  it('derives research-area tags when disciplines are empty but the topic is explicit', () => {
-    const payload = normalizeExtractionPayload({
-      fields: {
-        agency_name: { value: 'PAR Foundation', confidence: 1 },
-        scheme_title: { value: 'Beyond Antibiotics 2026 Grant Call', confidence: 1 },
-        description: {
-          value:
-            'Supports preventive strategies that reduce antimicrobial resistance and prevent infections.',
-          confidence: 1,
-        },
-        disciplines: { value: null, confidence: 0, is_missing: true },
-      },
-    })
-
-    const draft = buildDraftValuesFromExtraction(payload)
-
-    expect(draft.disciplines).toEqual(
-      expect.arrayContaining(['Antimicrobial Resistance', 'Infectious Disease'])
+      {
+        segments: [
+          { id: 'seg_001', heading: 'Call Title', text: 'Nordic Health Fund Infection Prevention Grant' },
+          { id: 'seg_002', heading: 'Overview', text: 'Supports infection prevention pilots in hospitals.' },
+          { id: 'seg_003', heading: 'Outputs', text: 'Projects must produce a final implementation report.' },
+        ],
+      }
     )
+
+    expect(payload.fields.description.value).toBe(
+      'Supports infection prevention pilots in hospitals.\n\nProjects must produce a final implementation report.'
+    )
+    expect(payload.summarySegments).toEqual(['seg_002', 'seg_003'])
   })
 
-  it('applies the same fallback discipline enrichment during manual normalization', () => {
+  it('keeps unsupported fields empty and does not infer disciplines', () => {
+    const payload = normalizeExtractionPayload({
+      fields: {
+        agency_name: { value: 'PAR Foundation', status: 'supported', confidence: 1, evidence: [] },
+        scheme_title: { value: 'Beyond Antibiotics 2026 Grant Call', status: 'supported', confidence: 1, evidence: [] },
+        description: { value: null, status: 'unsupported', confidence: 0, evidence: [] },
+        disciplines: { value: null, status: 'unsupported', confidence: 0, evidence: [] },
+      },
+    })
+
+    const draft = buildDraftValuesFromExtraction(payload)
+
+    expect(draft.disciplines).toEqual([])
+  })
+
+  it('derives official urls deterministically from source preparation metadata', () => {
+    const payload = normalizeExtractionPayload({
+      fields: {
+        agency_name: { value: 'Agency', status: 'supported', confidence: 1, evidence: [] },
+        scheme_title: { value: 'Call', status: 'supported', confidence: 1, evidence: [] },
+        description: { value: null, status: 'unsupported', confidence: 0, evidence: [] },
+      },
+    })
+
+    const draft = buildDraftValuesFromExtraction(payload, {
+      sourceUrl: 'https://example.org/call',
+      fetchedUrl: 'https://example.org/final-call',
+    })
+
+    expect(draft.official_urls).toEqual([
+      'https://example.org/call',
+      'https://example.org/final-call',
+    ])
+  })
+
+  it('does not backfill disciplines during manual normalization', () => {
     const draft = normalizeDraftInput({
       agency_name: 'Clinical AI Foundation',
       scheme_title: 'Medical Imaging Acceleration Call',
@@ -65,8 +101,64 @@ describe('funding intake normalization', () => {
       disciplines: [],
     } as any)
 
-    expect(draft.disciplines).toEqual(
-      expect.arrayContaining(['Artificial Intelligence', 'Medical Imaging'])
+    expect(draft.disciplines).toEqual([])
+  })
+
+  it('flags supported values that are missing evidence and allows ambiguous null fields', () => {
+    const payload = normalizeExtractionPayload(
+      {
+        fields: {
+          agency_name: {
+            value: 'Agency',
+            status: 'supported',
+            confidence: 0.8,
+            evidence: [],
+          },
+          scheme_title: {
+            value: null,
+            status: 'ambiguous',
+            confidence: 0.7,
+            evidence: [
+              { sourceType: 'segment', segmentId: 'seg_001', quote: 'Call A' },
+              { sourceType: 'segment', segmentId: 'seg_002', quote: 'Call B' },
+            ],
+          },
+          description: {
+            value: null,
+            status: 'unsupported',
+            confidence: 0,
+            evidence: [],
+          },
+        },
+      },
+      {
+        segments: [
+          { id: 'seg_001', heading: null, text: 'Call A' },
+          { id: 'seg_002', heading: null, text: 'Call B' },
+        ],
+      }
+    )
+
+    const issues = validateFundingExtractionPayload(payload, [
+      { id: 'seg_001', heading: null, text: 'Call A' },
+      { id: 'seg_002', heading: null, text: 'Call B' },
+    ])
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'evidence_required',
+          fieldKey: 'agency_name',
+        }),
+      ])
+    )
+    expect(issues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'supported_field_missing_value',
+          fieldKey: 'scheme_title',
+        }),
+      ])
     )
   })
 })

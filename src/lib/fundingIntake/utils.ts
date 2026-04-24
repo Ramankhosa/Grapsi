@@ -12,8 +12,25 @@ import {
   NUMERIC_FIELD_KEYS,
   type FundingFieldKey,
 } from './constants';
-import type { FundingDraftValues, FundingExtractionPayload, StructuredFieldValue } from './types';
+import type {
+  FundingDraftValues,
+  FundingEvidenceAnchor,
+  FundingExtractionFieldStatus,
+  FundingExtractionPayload,
+  FundingExtractionValidationIssue,
+  FundingSourceSegment,
+  StructuredFieldValue,
+} from './types';
 import { FETCH_TIMEOUT_MS, MAX_FETCH_BYTES } from './constants';
+import {
+  normalizeApplicationLanguageList,
+  normalizeCareerStageList,
+  normalizeCountryInput,
+  normalizeFundingKindList,
+  normalizeGeographyScopeList,
+  normalizeInstitutionTypeList,
+  normalizeRegionList,
+} from '../recommendations/utils';
 
 export function normalizeWhitespace(input: string): string {
   return input.replace(/\u0000/g, ' ').replace(/\s+/g, ' ').trim();
@@ -134,10 +151,9 @@ export async function fetchReadableUrlContent(input: string): Promise<{
 export function createEmptyStructuredField<T>(value: T | null = null): StructuredFieldValue<T> {
   return {
     value,
+    status: value === null ? 'unsupported' : 'supported',
     confidence: 0,
-    evidence: null,
-    is_missing: value === null || value === '' || (Array.isArray(value) && value.length === 0),
-    is_uncertain: true,
+    evidence: [],
   };
 }
 
@@ -161,12 +177,14 @@ const OBJECT_VALUE_PRIORITY_KEYS = [
 ] as const;
 const OBJECT_VALUE_IGNORED_KEYS = new Set([
   'confidence',
-  'is_missing',
-  'is_uncertain',
   'evidence',
+  'status',
   'id',
   'key',
   'code',
+  'sourceType',
+  'segmentId',
+  'heading',
   'createdAt',
   'updatedAt',
   'created_at',
@@ -188,6 +206,18 @@ function sanitizeTextValue(value: string): string | null {
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values));
+}
+
+function uniqueAnchors(values: FundingEvidenceAnchor[]): FundingEvidenceAnchor[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = `${value.sourceType}:${value.segmentId}:${normalizeWhitespace(value.quote).toLowerCase()}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function collectStringCandidates(value: unknown, depth = 0, seen = new Set<unknown>()): string[] {
@@ -281,6 +311,56 @@ function coerceDateString(value: unknown): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
 
+function isMissingValue(value: unknown) {
+  return value === null || value === '' || (Array.isArray(value) && value.length === 0);
+}
+
+function coerceFieldStatus(rawStatus: unknown, value: unknown): FundingExtractionFieldStatus {
+  if (rawStatus === 'supported' || rawStatus === 'unsupported' || rawStatus === 'ambiguous') {
+    return rawStatus;
+  }
+
+  return isMissingValue(value) ? 'unsupported' : 'supported';
+}
+
+function segmentIncludesQuote(segmentText: string, quote: string) {
+  return normalizeWhitespace(segmentText).toLowerCase().includes(normalizeWhitespace(quote).toLowerCase());
+}
+
+function coerceEvidenceAnchors(
+  value: unknown,
+  segmentMap: Map<string, FundingSourceSegment>
+): FundingEvidenceAnchor[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const anchors: FundingEvidenceAnchor[] = [];
+
+  value.forEach((item) => {
+    if (!item || typeof item !== 'object') {
+      return;
+    }
+
+    const record = item as Record<string, unknown>;
+    const segmentId = sanitizeTextValue(String(record.segmentId || '')) || null;
+    const quote = sanitizeTextValue(coerceTextareaText(record.quote)) || null;
+    if (!segmentId || !quote) {
+      return;
+    }
+
+    const segment = segmentMap.get(segmentId);
+    anchors.push({
+      sourceType: 'segment',
+      segmentId,
+      quote,
+      heading: sanitizeTextValue(coerceText(record.heading)) || segment?.heading || null,
+    });
+  });
+
+  return uniqueAnchors(anchors);
+}
+
 export function normalizeFieldValue(key: FundingFieldKey, value: unknown): unknown {
   if (ARRAY_FIELD_KEYS.has(key)) {
     return coerceStringArray(value);
@@ -306,32 +386,240 @@ export function normalizeFieldValue(key: FundingFieldKey, value: unknown): unkno
   return fieldDefinition?.type === 'textarea' ? coerceTextareaText(value) : coerceText(value);
 }
 
-export function normalizeExtractionPayload(raw: any): FundingExtractionPayload {
+function normalizeCountryList(
+  values: string[],
+  fieldKey: FundingFieldKey
+): { value: string[]; warnings: string[] } {
+  const kept: string[] = [];
+  const dropped: string[] = [];
+
+  values.forEach((value) => {
+    const normalized = normalizeCountryInput(value, { allowIsoCodes: true });
+    if (normalized) {
+      kept.push(normalized);
+    } else if (sanitizeTextValue(value)) {
+      dropped.push(value);
+    }
+  });
+
+  return {
+    value: uniqueStrings(kept),
+    warnings: dropped.length > 0
+      ? [`${fieldKey}: dropped unsupported values ${dropped.join(', ')}`]
+      : [],
+  };
+}
+
+function normalizeControlledFieldValue(
+  key: FundingFieldKey,
+  value: unknown
+): { value: unknown; warnings: string[] } {
+  if (key === 'eligible_countries' || key === 'host_countries') {
+    return normalizeCountryList(coerceStringArray(value), key);
+  }
+
+  if (key === 'eligible_regions') {
+    const normalized = normalizeRegionList(coerceStringArray(value));
+    const warnings = normalized === null && coerceStringArray(value).length > 0
+      ? [`${key}: dropped unsupported region values`]
+      : [];
+    return { value: normalized || [], warnings };
+  }
+
+  if (key === 'geography_scope') {
+    const normalized = normalizeGeographyScopeList(coerceText(value) ? [coerceText(value)] : []);
+    const nextValue = normalized && normalized.length > 0 ? normalized[0] : '';
+    const warnings = !nextValue && coerceText(value)
+      ? [`${key}: dropped unsupported geography scope value`]
+      : [];
+    return { value: nextValue, warnings };
+  }
+
+  if (key === 'funding_kinds') {
+    const normalized = normalizeFundingKindList(coerceStringArray(value));
+    return {
+      value: normalized || [],
+      warnings: normalized === null && coerceStringArray(value).length > 0
+        ? [`${key}: dropped unsupported funding kind values`]
+        : [],
+    };
+  }
+
+  if (key === 'institution_types') {
+    const normalized = normalizeInstitutionTypeList(coerceStringArray(value));
+    return {
+      value: normalized || [],
+      warnings: normalized === null && coerceStringArray(value).length > 0
+        ? [`${key}: dropped unsupported institution type values`]
+        : [],
+    };
+  }
+
+  if (key === 'career_stages') {
+    const normalized = normalizeCareerStageList(coerceStringArray(value));
+    return {
+      value: normalized || [],
+      warnings: normalized === null && coerceStringArray(value).length > 0
+        ? [`${key}: dropped unsupported career stage values`]
+        : [],
+    };
+  }
+
+  if (key === 'application_languages') {
+    const normalized = normalizeApplicationLanguageList(coerceStringArray(value));
+    return {
+      value: normalized || [],
+      warnings: normalized === null && coerceStringArray(value).length > 0
+        ? [`${key}: dropped unsupported application language values`]
+        : [],
+    };
+  }
+
+  return { value: normalizeFieldValue(key, value), warnings: [] };
+}
+
+export function buildFundingSourceSegments(sourceText: string): FundingSourceSegment[] {
+  const normalized = normalizeMultilineText(sourceText);
+  if (!normalized) {
+    return [];
+  }
+
+  const blocks = normalized
+    .split(/\n{2,}/)
+    .map((block) => normalizeMultilineText(block))
+    .filter(Boolean);
+
+  let currentHeading: string | null = null;
+
+  return blocks.map((text, index) => {
+    const firstLine = text.split('\n')[0]?.trim() || '';
+    const looksLikeHeading =
+      firstLine.length > 0 &&
+      firstLine.length <= 120 &&
+      !/[.!?]$/.test(firstLine) &&
+      !/\d{4}-\d{2}-\d{2}/.test(firstLine);
+
+    if (looksLikeHeading) {
+      currentHeading = firstLine;
+    }
+
+    return {
+      id: `seg_${String(index + 1).padStart(3, '0')}`,
+      text,
+      heading: looksLikeHeading ? firstLine : currentHeading,
+    };
+  });
+}
+
+export function buildDescriptionFromEvidence(
+  evidence: FundingEvidenceAnchor[],
+  segmentMap: Map<string, FundingSourceSegment>
+): { description: string; segmentIds: string[] } {
+  const uniqueSegments: string[] = [];
+  const chunks: string[] = [];
+
+  evidence.forEach((anchor) => {
+    if (!uniqueSegments.includes(anchor.segmentId)) {
+      uniqueSegments.push(anchor.segmentId);
+    }
+
+    const segment = segmentMap.get(anchor.segmentId);
+    const candidate = sanitizeTextValue(anchor.quote) || sanitizeTextValue(segment?.text || '');
+    if (!candidate) {
+      return;
+    }
+
+    if (!chunks.includes(candidate)) {
+      chunks.push(candidate);
+    }
+  });
+
+  const description = chunks
+    .slice(0, 3)
+    .reduce<string[]>((acc, chunk) => {
+      const next = acc.concat(chunk);
+      return next.join(' ').length <= 900 ? next : acc;
+    }, [])
+    .join('\n\n');
+
+  return {
+    description,
+    segmentIds: uniqueSegments,
+  };
+}
+
+export function normalizeExtractionPayload(
+  raw: any,
+  options?: { segments?: FundingSourceSegment[] }
+): FundingExtractionPayload {
   const fields = {} as FundingExtractionPayload['fields'];
+  const warnings = Array.isArray(raw?.warnings) ? raw.warnings.map((item: unknown) => String(item)) : [];
+  const segments = options?.segments || [];
+  const segmentMap = new Map(segments.map((segment) => [segment.id, segment]));
+  let summarySegments: string[] = [];
 
   for (const definition of FUNDING_FIELD_DEFINITIONS) {
     const rawField = raw?.fields?.[definition.key] || raw?.[definition.key] || {};
     const rawValue = rawField?.value ?? rawField ?? null;
-    const value = normalizeFieldValue(definition.key, rawValue);
+    const normalized = normalizeControlledFieldValue(definition.key, rawValue);
+    let value = normalized.value;
+    const evidence = coerceEvidenceAnchors(rawField?.evidence, segmentMap);
+    const confidence = Math.max(0, Math.min(1, Number(rawField?.confidence ?? 0)));
+    let status = coerceFieldStatus(rawField?.status, value);
+
+    warnings.push(...normalized.warnings);
+
+    if (definition.key === 'description') {
+      const deterministic = buildDescriptionFromEvidence(evidence, segmentMap);
+      value = status === 'supported'
+        ? deterministic.description || coerceTextareaText(value)
+        : null;
+      summarySegments = deterministic.segmentIds;
+      status = deterministic.description ? status : 'unsupported';
+    }
+
+    if (ARRAY_FIELD_KEYS.has(definition.key) && Array.isArray(value) && value.length === 0) {
+      value = null;
+    }
+
+    if (status !== 'supported') {
+      value = null;
+    }
+
+    if (isMissingValue(value)) {
+      value = null;
+      if (status === 'supported') {
+        status = 'unsupported';
+      }
+    }
+
     fields[definition.key] = {
       value,
-      confidence: Math.max(0, Math.min(1, Number(rawField?.confidence ?? 0))),
-      evidence: sanitizeTextValue(coerceTextareaText(rawField?.evidence)) || null,
-      is_missing: Boolean(rawField?.is_missing) || value === null || value === '' || (Array.isArray(value) && value.length === 0),
-      is_uncertain: rawField?.is_uncertain === undefined ? true : Boolean(rawField.is_uncertain),
+      status,
+      confidence,
+      evidence,
     };
   }
 
   return {
     fields,
-    warnings: Array.isArray(raw?.warnings) ? raw.warnings.map((item: unknown) => String(item)) : [],
+    warnings: uniqueStrings(warnings.filter(Boolean)),
+    summarySegments,
   };
 }
 
-export function buildDraftValuesFromExtraction(payload?: FundingExtractionPayload | null): FundingDraftValues {
+export function buildDraftValuesFromExtraction(
+  payload?: FundingExtractionPayload | null,
+  options?: { sourceUrl?: string | null; fetchedUrl?: string | null }
+): FundingDraftValues {
   const getField = (key: FundingFieldKey) => payload?.fields?.[key]?.value;
 
-  const draftValues: FundingDraftValues = {
+  const deterministicOfficialUrls = [options?.sourceUrl, options?.fetchedUrl]
+    .map((value) => (typeof value === 'string' && value.trim() ? normalizeUrl(value) : null))
+    .filter((value): value is string => Boolean(value))
+    .filter((value, index, values) => values.indexOf(value) === index);
+
+  return {
     agency_name: coerceText(getField('agency_name')),
     scheme_title: coerceText(getField('scheme_title')),
     description: coerceTextareaText(getField('description')),
@@ -358,16 +646,10 @@ export function buildDraftValuesFromExtraction(payload?: FundingExtractionPayloa
     project_duration_text: coerceTextareaText(getField('project_duration_text')),
     eligibility_text: coerceTextareaText(getField('eligibility_text')),
     expected_deliverables_text: coerceTextareaText(getField('expected_deliverables_text')),
-    official_urls: coerceStringArray(getField('official_urls')),
+    official_urls: deterministicOfficialUrls,
     contact_info: coerceTextareaText(getField('contact_info')),
     sponsor_type: coerceText(getField('sponsor_type')),
   };
-
-  if (draftValues.disciplines.length === 0) {
-    draftValues.disciplines = inferDisciplinesFromDraft(draftValues);
-  }
-
-  return draftValues;
 }
 
 export function extractConfidenceMap(payload: FundingExtractionPayload): Record<string, number> {
@@ -376,16 +658,133 @@ export function extractConfidenceMap(payload: FundingExtractionPayload): Record<
   );
 }
 
-export function extractEvidenceMap(payload: FundingExtractionPayload): Record<string, string | null> {
+export function extractEvidenceMap(
+  payload: FundingExtractionPayload
+): Record<string, FundingEvidenceAnchor[]> {
   return Object.fromEntries(
-    Object.entries(payload.fields).map(([key, value]) => [key, value.evidence || null])
+    Object.entries(payload.fields).map(([key, value]) => [key, value.evidence || []])
   );
 }
 
 export function extractMissingFieldKeys(payload: FundingExtractionPayload): string[] {
   return Object.entries(payload.fields)
-    .filter(([, value]) => value.is_missing)
+    .filter(([, value]) => value.status === 'unsupported' || isMissingValue(value.value))
     .map(([key]) => key);
+}
+
+export function validateFundingExtractionPayload(
+  payload: FundingExtractionPayload,
+  segments: FundingSourceSegment[]
+): FundingExtractionValidationIssue[] {
+  const issues: FundingExtractionValidationIssue[] = [];
+  const segmentMap = new Map(segments.map((segment) => [segment.id, segment]));
+
+  Object.entries(payload.fields).forEach(([fieldKey, fieldValue]) => {
+    const hasValue = !isMissingValue(fieldValue.value);
+
+    if (hasValue && fieldValue.evidence.length === 0) {
+      issues.push({
+        code: 'evidence_required',
+        fieldKey,
+        message: `${fieldKey} has a value but no evidence anchors`,
+        retryable: true,
+      });
+    }
+
+    if (fieldValue.status === 'unsupported' && hasValue) {
+      issues.push({
+        code: 'unsupported_field_has_value',
+        fieldKey,
+        message: `${fieldKey} is marked unsupported but still has a value`,
+        retryable: true,
+      });
+    }
+
+    if (fieldValue.status === 'supported' && !hasValue) {
+      issues.push({
+        code: 'supported_field_missing_value',
+        fieldKey,
+        message: `${fieldKey} is marked ${fieldValue.status} but has no normalized value`,
+        retryable: true,
+      });
+    }
+
+    if (fieldValue.status === 'ambiguous' && hasValue) {
+      issues.push({
+        code: 'ambiguous_field_has_value',
+        fieldKey,
+        message: `${fieldKey} is ambiguous and must not store a resolved value`,
+        retryable: true,
+      });
+    }
+
+    fieldValue.evidence.forEach((anchor) => {
+      const segment = segmentMap.get(anchor.segmentId);
+      if (!segment) {
+        issues.push({
+          code: 'invalid_segment_reference',
+          fieldKey,
+          message: `${fieldKey} references missing segment ${anchor.segmentId}`,
+          retryable: true,
+        });
+        return;
+      }
+
+      if (!segmentIncludesQuote(segment.text, anchor.quote)) {
+        issues.push({
+          code: 'quote_not_in_segment',
+          fieldKey,
+          message: `${fieldKey} evidence quote does not match segment ${anchor.segmentId}`,
+          retryable: true,
+        });
+      }
+    });
+  });
+
+  const amountMin = payload.fields.amount_min?.value;
+  const amountMax = payload.fields.amount_max?.value;
+  const currency = payload.fields.currency?.value;
+
+  if (typeof amountMin === 'number' && amountMin < 0) {
+    issues.push({
+      code: 'negative_amount_min',
+      fieldKey: 'amount_min',
+      message: 'amount_min cannot be negative',
+    });
+  }
+
+  if (typeof amountMax === 'number' && amountMax < 0) {
+    issues.push({
+      code: 'negative_amount_max',
+      fieldKey: 'amount_max',
+      message: 'amount_max cannot be negative',
+    });
+  }
+
+  if (
+    typeof amountMin === 'number' &&
+    typeof amountMax === 'number' &&
+    amountMin > amountMax
+  ) {
+    issues.push({
+      code: 'amount_range_invalid',
+      fieldKey: 'amount_min',
+      message: 'amount_min cannot be greater than amount_max',
+    });
+  }
+
+  if (
+    (typeof amountMin === 'number' || typeof amountMax === 'number') &&
+    (!currency || typeof currency !== 'string' || currency.trim().length === 0)
+  ) {
+    issues.push({
+      code: 'currency_required_when_amount_present',
+      fieldKey: 'currency',
+      message: 'currency is required when a funding amount is present',
+    });
+  }
+
+  return issues;
 }
 
 export function normalizedTokenSet(input: string): Set<string> {
@@ -424,50 +823,7 @@ export function normalizeDraftInput(input: Partial<FundingDraftValues>): Funding
     (payload as any)[definition.key] = normalizeFieldValue(definition.key, (input as any)?.[definition.key]);
   }
 
-  if (payload.disciplines.length === 0) {
-    payload.disciplines = inferDisciplinesFromDraft(payload);
-  }
-
   return payload;
-}
-
-const DISCIPLINE_FALLBACK_PATTERNS = [
-  { label: 'Antimicrobial Resistance', pattern: /\b(?:antimicrobial resistance|amr)\b/i },
-  { label: 'Infectious Disease', pattern: /\b(?:infectious disease|infections?|pathogens?)\b/i },
-  { label: 'Microbiology', pattern: /\b(?:microbiolog(?:y|ical)|bacterial|viral|fungal)\b/i },
-  { label: 'Public Health', pattern: /\b(?:public health|global health|population health|health systems)\b/i },
-  { label: 'Implementation Science', pattern: /\b(?:implementation science|implementation research)\b/i },
-  { label: 'Artificial Intelligence', pattern: /\b(?:artificial intelligence|machine learning|deep learning)\b/i },
-  { label: 'Data Science', pattern: /\bdata science\b/i },
-  { label: 'Computer Science', pattern: /\bcomputer science\b/i },
-  { label: 'Medical Imaging', pattern: /\bmedical imaging\b/i },
-  { label: 'Healthcare', pattern: /\b(?:healthcare|clinical care|patient care)\b/i },
-  { label: 'Climate Change', pattern: /\b(?:climate change|decarboni[sz]ation|net zero|greenhouse gas)\b/i },
-  { label: 'Sustainability', pattern: /\bsustainab(?:ility|le)\b/i },
-  { label: 'Agriculture', pattern: /\b(?:agricultur(?:e|al)|food systems|crop science)\b/i },
-  { label: 'Materials Science', pattern: /\bmaterials science\b/i },
-  { label: 'Education', pattern: /\b(?:education(?:al)?|pedagog(?:y|ical))\b/i },
-];
-
-function inferDisciplinesFromDraft(values: FundingDraftValues): string[] {
-  const sourceText = [
-    values.scheme_title,
-    values.description,
-    values.eligibility_text,
-    values.expected_deliverables_text,
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .join('\n');
-
-  if (!sourceText) {
-    return [];
-  }
-
-  return DISCIPLINE_FALLBACK_PATTERNS
-    .filter(({ pattern }) => pattern.test(sourceText))
-    .map(({ label }) => label)
-    .slice(0, 6);
 }
 
 export function parseJsonResponse(rawText: string): any {

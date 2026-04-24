@@ -280,7 +280,7 @@ function buildLlmExtraction(
         : {},
     evidenceByField:
       extraction.evidence_json && typeof extraction.evidence_json === 'object' && !Array.isArray(extraction.evidence_json)
-        ? (extraction.evidence_json as Record<string, string | null>)
+        ? (extraction.evidence_json as FundingIntakeLlmExtraction['evidenceByField'])
         : {},
     missingFieldKeys: Array.isArray(extraction.missing_fields_json)
       ? extraction.missing_fields_json.map((value) => String(value || '')).filter(Boolean)

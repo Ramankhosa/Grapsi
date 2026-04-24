@@ -7,6 +7,8 @@ type FundingImportDetails = {
     id: string;
     status: string;
     duplicate_status: string;
+    error_code?: string | null;
+    error_message?: string | null;
   };
   draftValues?: Record<string, any>;
   duplicates?: Array<{
@@ -199,6 +201,10 @@ export default function FundingCallImportModal({
   };
 
   const importing = details && ['queued', 'fetching', 'extracting'].includes(details.job.status);
+  const failedImportMessage = details?.job.error_message
+    || (details?.job.error_code === 'LLM_RATE_LIMITED'
+      ? 'Gemini is rate limiting requests right now. Retry the import in about a minute.'
+      : 'Import failed. Try a different URL or paste the call text instead.');
   const canSubmit = mode === 'url' ? sourceUrl.trim().length > 0 : sourceText.trim().length >= 80;
 
   return (
@@ -311,7 +317,7 @@ export default function FundingCallImportModal({
 
               {details?.job.status === 'failed' ? (
                 <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                  Import failed. Try a different URL or paste the call text instead.
+                  {failedImportMessage}
                 </div>
               ) : null}
 

@@ -196,9 +196,12 @@ async function seedUserHierarchy() {
   const superAdmin = await prisma.user.upsert({
     where: { email: superAdminEmail },
     update: {
+      tenantId: platformTenant.id,
       passwordHash: superAdminPasswordHash,
       name: superAdminName,
-      status: 'ACTIVE'
+      roles: ['SUPER_ADMIN'],
+      status: 'ACTIVE',
+      signupAtiTokenId: platformToken.id
     },
     create: {
       tenantId: platformTenant.id,
@@ -263,10 +266,12 @@ async function seedUserHierarchy() {
   const tenantAdmin = await prisma.user.upsert({
     where: { email: tenantAdminEmail },
     update: {
+      tenantId: testTenant.id,
       passwordHash: tenantAdminPasswordHash,
       name: tenantAdminName,
       roles: ['ADMIN'],
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      signupAtiTokenId: tenantToken.id
     },
     create: {
       tenantId: testTenant.id,
@@ -316,10 +321,12 @@ async function seedUserHierarchy() {
   const analyst = await prisma.user.upsert({
     where: { email: analystEmail },
     update: {
+      tenantId: testTenant.id,
       passwordHash: analystPasswordHash,
       name: analystName,
       roles: ['ANALYST'],
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      signupAtiTokenId: analystToken.id
     },
     create: {
       tenantId: testTenant.id,
@@ -934,36 +941,50 @@ async function seedSampleData() {
   });
 
   if (analystUser) {
+    if (!analystUser.tenantId) {
+      console.log('⚠️  Analyst user has no tenant, skipping sample data creation');
+      console.log();
+      return;
+    }
+
     // Create sample project
-    const sampleProject = await prisma.project.upsert({
+    let sampleProject = await prisma.project.findFirst({
       where: {
-        userId_name: {
-          userId: analystUser.id,
-          name: 'Sample Innovation Project'
-        }
-      },
-      update: {},
-      create: {
+        userId: analystUser.id,
+        tenantId: analystUser.tenantId,
         name: 'Sample Innovation Project',
-        userId: analystUser.id
+        projectType: 'PATENT'
       }
     });
 
-    // Create sample patent
-    const samplePatent = await prisma.patent.upsert({
-      where: {
-        projectId_title: {
-          projectId: sampleProject.id,
-          title: 'AI-Powered Medical Diagnosis System'
+    if (!sampleProject) {
+      sampleProject = await prisma.project.create({
+        data: {
+          name: 'Sample Innovation Project',
+          userId: analystUser.id,
+          tenantId: analystUser.tenantId,
+          projectType: 'PATENT'
         }
-      },
-      update: {},
-      create: {
+      });
+    }
+
+    // Create sample patent
+    let samplePatent = await prisma.patent.findFirst({
+      where: {
         projectId: sampleProject.id,
-        title: 'AI-Powered Medical Diagnosis System',
-        createdBy: analystUser.id
+        title: 'AI-Powered Medical Diagnosis System'
       }
     });
+
+    if (!samplePatent) {
+      samplePatent = await prisma.patent.create({
+        data: {
+          projectId: sampleProject.id,
+          title: 'AI-Powered Medical Diagnosis System',
+          createdBy: analystUser.id
+        }
+      });
+    }
 
     console.log('✅ Created sample project and patent');
 
@@ -973,36 +994,53 @@ async function seedSampleData() {
         title: 'AI-Powered Medical Diagnosis System',
         description: 'A machine learning system that analyzes medical images and patient data to provide early disease detection with 95% accuracy.',
         domainTags: ['AI/ML', 'Medical Devices'],
+        technicalField: 'Artificial Intelligence',
+        keyFeatures: ['Medical image analysis', 'Patient data fusion', 'Early disease detection'],
+        potentialApplications: ['Clinical diagnostics', 'Radiology workflow support', 'Hospital triage'],
         status: 'PUBLIC',
-        createdBy: analystUser.id
+        createdBy: analystUser.id,
+        tenantId: analystUser.tenantId,
+        publishedAt: new Date()
       },
       {
         title: 'Smart Grid Energy Optimization',
         description: 'An intelligent energy management system for power grids using predictive analytics.',
         domainTags: ['Energy', 'IoT'],
+        technicalField: 'Energy Systems',
+        keyFeatures: ['Load forecasting', 'Grid balancing', 'Predictive maintenance alerts'],
+        potentialApplications: ['Utility optimization', 'Demand response', 'Grid resilience'],
         status: 'PUBLIC',
-        createdBy: analystUser.id
+        createdBy: analystUser.id,
+        tenantId: analystUser.tenantId,
+        publishedAt: new Date()
       },
       {
         title: 'Blockchain Supply Chain Tracking',
         description: 'A decentralized platform for transparent supply chain management.',
         domainTags: ['Blockchain', 'Supply Chain'],
+        technicalField: 'Distributed Systems',
+        keyFeatures: ['Immutable tracking ledger', 'Multi-party verification', 'Shipment provenance'],
+        potentialApplications: ['Supply chain transparency', 'Counterfeit prevention', 'Logistics auditing'],
         status: 'PUBLIC',
-        createdBy: analystUser.id
+        createdBy: analystUser.id,
+        tenantId: analystUser.tenantId,
+        publishedAt: new Date()
       }
     ];
 
     for (const idea of sampleIdeas) {
-      await prisma.ideaBankIdea.upsert({
+      const existingIdea = await prisma.ideaBankIdea.findFirst({
         where: {
-          title_createdBy: {
-            title: idea.title,
-            createdBy: idea.createdBy
-          }
-        },
-        update: {},
-        create: idea
+          title: idea.title,
+          createdBy: idea.createdBy
+        }
       });
+
+      if (!existingIdea) {
+        await prisma.ideaBankIdea.create({
+          data: idea
+        });
+      }
     }
     console.log('✅ Created sample idea bank ideas');
   } else {

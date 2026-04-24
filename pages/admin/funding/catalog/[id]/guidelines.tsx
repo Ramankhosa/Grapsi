@@ -482,6 +482,7 @@ export default function FundingGuidelineWorkspacePage() {
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [applyingRunId, setApplyingRunId] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [selectedRevisionNo, setSelectedRevisionNo] = useState<number | null>(null);
@@ -512,6 +513,9 @@ export default function FundingGuidelineWorkspacePage() {
   const latestRunPack = useMemo(() => {
     return bundle?.runs.find((run) => run.guideline_pack_json)?.guideline_pack_json || null;
   }, [bundle]);
+  const latestReviewableRun = useMemo(() => {
+    return bundle?.runs.find((run) => run.status === 'needs_review') || null;
+  }, [bundle]);
 
   async function loadBundle(showSpinner = true) {
     if (!id) {
@@ -529,8 +533,7 @@ export default function FundingGuidelineWorkspacePage() {
         throw new Error(data.message || 'Failed to load guideline workspace');
       }
       setBundle(data);
-      const latestRunPreview = data.runs?.find((run: Bundle['runs'][number]) => run.guideline_pack_json)?.guideline_pack_json;
-      const nextPack = normalizeGuidelinePack(data.guideline?.guideline_pack_json || latestRunPreview || createEmptyGuidelinePack());
+      const nextPack = normalizeGuidelinePack(data.guideline?.guideline_pack_json || createEmptyGuidelinePack());
       setGuidelinePack(nextPack);
       if (data.revisions?.length > 0) {
         setSelectedRevisionNo(data.revisions[0].revision_no);
@@ -607,11 +610,35 @@ export default function FundingGuidelineWorkspacePage() {
 
       await loadBundle(false);
       setSourcePdf(null);
-      toast.success('Guideline extraction completed and loaded into the workspace');
+      toast.success('Guideline extraction completed. Review the extracted run and apply it when ready.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to run guideline extraction');
     } finally {
       setExtracting(false);
+    }
+  }
+
+  async function handleApplyRun(runId: string) {
+    if (!id) {
+      return;
+    }
+
+    setApplyingRunId(runId);
+    try {
+      const response = await fetch(`/api/admin/funding/calls/${id}/guidelines/runs/${runId}/apply`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to apply guideline run');
+      }
+      setBundle(data);
+      setGuidelinePack(normalizeGuidelinePack(data.guideline?.guideline_pack_json || createEmptyGuidelinePack()));
+      toast.success('Guideline run applied to the live draft');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to apply guideline run');
+    } finally {
+      setApplyingRunId(null);
     }
   }
 
@@ -769,6 +796,16 @@ export default function FundingGuidelineWorkspacePage() {
             <button type="button" onClick={handleSave} disabled={saving} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
               {saving ? 'Saving...' : 'Save Guidelines'}
             </button>
+            {latestReviewableRun && (
+              <button
+                type="button"
+                onClick={() => void handleApplyRun(latestReviewableRun.id)}
+                disabled={applyingRunId !== null}
+                className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
+              >
+                {applyingRunId === latestReviewableRun.id ? 'Applying Run...' : 'Apply Latest Run'}
+              </button>
+            )}
             <button type="button" onClick={handleApprove} disabled={approving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
               {approving ? 'Approving...' : 'Approve'}
             </button>
@@ -890,9 +927,40 @@ export default function FundingGuidelineWorkspacePage() {
                 <div><span className="font-medium text-slate-900">Current revision:</span> {bundle.guideline?.current_revision_no || 0}</div>
                 <div><span className="font-medium text-slate-900">Total stored rules:</span> {bundle.guideline?.summary_json?.totalRules || 0}</div>
                 <div><span className="font-medium text-slate-900">Latest run:</span> {bundle.runs[0] ? `${bundle.runs[0].status} (${new Date(bundle.runs[0].created_at).toLocaleString()})` : 'None'}</div>
+                <div><span className="font-medium text-slate-900">Reviewable run:</span> {latestReviewableRun ? latestReviewableRun.id : 'None'}</div>
                 {bundle.guideline?.approved_at && (
                   <div><span className="font-medium text-slate-900">Approved at:</span> {new Date(bundle.guideline.approved_at).toLocaleString()}</div>
                 )}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">Extraction Runs</h2>
+              <div className="mt-4 space-y-3">
+                {bundle.runs.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No guideline extraction runs yet.</div>}
+                {bundle.runs.map((run) => (
+                  <div key={run.id} className="rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-slate-900">{run.id}</div>
+                        <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">{run.status}</div>
+                      </div>
+                      <div className="text-xs text-slate-500">{new Date(run.created_at).toLocaleString()}</div>
+                    </div>
+                    {run.extractor_model && <div className="mt-3 text-xs text-slate-500">Model: {run.extractor_model}</div>}
+                    {run.error_message && <div className="mt-3 text-sm text-rose-700">{run.error_message}</div>}
+                    {run.status === 'needs_review' && (
+                      <button
+                        type="button"
+                        onClick={() => void handleApplyRun(run.id)}
+                        disabled={applyingRunId !== null}
+                        className="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
+                      >
+                        {applyingRunId === run.id ? 'Applying...' : 'Apply This Run'}
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
             </section>
 

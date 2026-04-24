@@ -138,6 +138,8 @@ enum FundingCallGuidelineRunStatus {
   extracting
   needs_review
   failed
+  applied
+  rejected
 }
 
 enum FundingCallTemplateRevisionType {

@@ -5,7 +5,7 @@ from pathlib import Path
 import psycopg2
 
 CSV_PATH = Path(__file__).resolve().parent.parent / 'Countries' / 'patent_sections.csv'
-DB_URL = os.getenv('DATABASE_URL') or os.getenv('DATABASE_URL_WRITE') or 'postgresql://postgres:123@localhost:5432/spotipr'
+DB_URL = os.getenv('DATABASE_URL') or os.getenv('DATABASE_URL_WRITE') or 'postgresql://postgres:123@localhost:5432/grapsi'
 
 def load_rows(path: Path):
     rows = list(csv.reader(path.read_text(encoding='utf-8', errors='ignore').splitlines()))

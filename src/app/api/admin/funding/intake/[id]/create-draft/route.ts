@@ -61,7 +61,7 @@ export async function POST(
       payload,
       auth.operator,
       payload.duplicateResolutions ?? [],
-      payload.extractAll ?? true
+      payload.extractAll ?? false
     )
 
     if (!result.ok && result.reason === 'duplicate_resolution_required') {

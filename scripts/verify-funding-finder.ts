@@ -2,8 +2,7 @@ import dotenv from 'dotenv';
 import { pathToFileURL } from 'url';
 
 dotenv.config({ path: '.env', override: false });
-dotenv.config({ path: '.env.local', override: false });
-dotenv.config({ path: '.env.override', override: true });
+dotenv.config({ path: '.env.local', override: true });
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {

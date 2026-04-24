@@ -50,10 +50,14 @@ export interface NormalizedFundingFacts {
 
 export interface FundingIntakeStructuredFieldValue<T = unknown> {
   value: T | null
+  status: 'supported' | 'unsupported' | 'ambiguous'
   confidence: number
-  evidence: string | null
-  is_missing: boolean
-  is_uncertain: boolean
+  evidence: Array<{
+    sourceType: 'segment'
+    segmentId: string
+    quote: string
+    heading?: string | null
+  }>
 }
 
 export interface FundingIntakeExtractionPayload {
@@ -68,7 +72,15 @@ export interface FundingIntakeLlmExtraction {
   extractorVersion: string
   promptVersion: string
   confidenceByField: Record<string, number>
-  evidenceByField: Record<string, string | null>
+  evidenceByField: Record<
+    string,
+    Array<{
+      sourceType: 'segment'
+      segmentId: string
+      quote: string
+      heading?: string | null
+    }>
+  >
   missingFieldKeys: string[]
 }
 

@@ -213,6 +213,19 @@ function readCatalogMetadata(value: Prisma.JsonValue | null | undefined): Record
     : {};
 }
 
+function readFetchMetadata(value: Prisma.JsonValue | null | undefined): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+}
+
+function readFetchedUrl(value: Prisma.JsonValue | null | undefined): string | null {
+  const fetchMetadata = readFetchMetadata(value);
+  return typeof fetchMetadata.fetchedUrl === 'string' && fetchMetadata.fetchedUrl.trim().length > 0
+    ? fetchMetadata.fetchedUrl
+    : null;
+}
+
 function toTimestamp(value: unknown): number | null {
   if (!value) {
     return null;
@@ -480,9 +493,10 @@ async function computeDuplicateCandidates(
   jobId: string,
   payload: FundingExtractionPayload,
   sourceUrl: string | null | undefined,
+  fetchedUrl: string | null | undefined,
   operator: IntakeOperator
 ): Promise<FundingDuplicateStatus> {
-  const draftValues = buildDraftValuesFromExtraction(payload);
+  const draftValues = buildDraftValuesFromExtraction(payload, { sourceUrl, fetchedUrl });
   const schemeTitle = draftValues.scheme_title;
   const agencyName = draftValues.agency_name;
   const closeDate = draftValues.close_date;
@@ -640,11 +654,12 @@ async function computeDuplicateCandidates(
 async function computeDomainDuplicateCandidates(
   payload: FundingExtractionPayload | null | undefined,
   sourceUrl: string | null | undefined,
+  fetchedUrl: string | null | undefined,
   operator: IntakeOperator
 ): Promise<DomainDuplicateCandidateSummary[]> {
   if (!payload) return [];
 
-  const draftValues = buildDraftValuesFromExtraction(payload);
+  const draftValues = buildDraftValuesFromExtraction(payload, { sourceUrl, fetchedUrl });
   const submittedDomains = collectSourceDomains(sourceUrl, draftValues.official_urls);
   if (submittedDomains.length === 0) return [];
 
@@ -746,51 +761,58 @@ async function persistDraft(
   operator: IntakeOperator,
   latestExtraction: any
 ) {
+  const deterministicDraftValues = {
+    ...draftValues,
+    official_urls: buildDraftValuesFromExtraction(latestExtraction?.extracted_json as any, {
+      sourceUrl: job.source_url || null,
+      fetchedUrl: readFetchedUrl(job.fetch_metadata_json),
+    }).official_urls,
+  };
   const sharedData = {
     status: mapCatalogStatusToFundingStatus('DRAFT'),
     catalog_status: 'DRAFT' as FundingCallStatus,
     visibility: operator.role === 'USER' ? 'TENANT_PRIVATE' : 'GLOBAL_PUBLISHED',
     tenantId: operator.role === 'USER' ? operator.tenantId || null : null,
-    title: draftValues.scheme_title || draftValues.agency_name || job.source_url || 'Untitled funding call',
-    agencyName: draftValues.agency_name || null,
+    title: deterministicDraftValues.scheme_title || deterministicDraftValues.agency_name || job.source_url || 'Untitled funding call',
+    agencyName: deterministicDraftValues.agency_name || null,
     sourceUrl: job.source_url || null,
-    summary: draftValues.description || null,
+    summary: deterministicDraftValues.description || null,
     sourceType: job.input_type === 'pdf' ? 'FILE' : job.input_type.toUpperCase(),
-    deadlineAt: draftValues.close_date ? new Date(draftValues.close_date) : null,
+    deadlineAt: deterministicDraftValues.close_date ? new Date(deterministicDraftValues.close_date) : null,
     extractedFacts: latestExtraction?.extracted_json || null,
     normalizedMetadata: latestExtraction?.confidence_json || null,
     createdByUserId: operator.userId,
     updatedByUserId: operator.userId,
     input_type: job.input_type,
-    agency_name: draftValues.agency_name,
-    scheme_title: draftValues.scheme_title,
-    description: draftValues.description,
-    open_date: draftValues.open_date ? new Date(draftValues.open_date) : null,
-    close_date: draftValues.close_date ? new Date(draftValues.close_date) : null,
-    is_rolling: draftValues.is_rolling,
-    geography_scope: draftValues.geography_scope || null,
-    eligible_countries: draftValues.eligible_countries,
-    eligible_regions: draftValues.eligible_regions,
-    host_countries: draftValues.host_countries,
-    funder_country: draftValues.funder_country || null,
-    funding_kinds: draftValues.funding_kinds,
-    institution_types: draftValues.institution_types,
-    career_stages: draftValues.career_stages,
-    citizenship_requirements: draftValues.citizenship_requirements,
-    residency_requirements: draftValues.residency_requirements,
-    application_languages: draftValues.application_languages,
-    disciplines: draftValues.disciplines,
-    amount_min: draftValues.amount_min,
-    amount_max: draftValues.amount_max,
-    currency: draftValues.currency || null,
-    project_duration_min_months: draftValues.project_duration_min_months,
-    project_duration_max_months: draftValues.project_duration_max_months,
-    project_duration_text: draftValues.project_duration_text || null,
-    official_urls: draftValues.official_urls,
-    eligibility_text: draftValues.eligibility_text || null,
-    expected_deliverables_text: draftValues.expected_deliverables_text || null,
-    sponsor_type: draftValues.sponsor_type || null,
-    contact_info: draftValues.contact_info || null,
+    agency_name: deterministicDraftValues.agency_name,
+    scheme_title: deterministicDraftValues.scheme_title,
+    description: deterministicDraftValues.description,
+    open_date: deterministicDraftValues.open_date ? new Date(deterministicDraftValues.open_date) : null,
+    close_date: deterministicDraftValues.close_date ? new Date(deterministicDraftValues.close_date) : null,
+    is_rolling: deterministicDraftValues.is_rolling,
+    geography_scope: deterministicDraftValues.geography_scope || null,
+    eligible_countries: deterministicDraftValues.eligible_countries,
+    eligible_regions: deterministicDraftValues.eligible_regions,
+    host_countries: deterministicDraftValues.host_countries,
+    funder_country: deterministicDraftValues.funder_country || null,
+    funding_kinds: deterministicDraftValues.funding_kinds,
+    institution_types: deterministicDraftValues.institution_types,
+    career_stages: deterministicDraftValues.career_stages,
+    citizenship_requirements: deterministicDraftValues.citizenship_requirements,
+    residency_requirements: deterministicDraftValues.residency_requirements,
+    application_languages: deterministicDraftValues.application_languages,
+    disciplines: deterministicDraftValues.disciplines,
+    amount_min: deterministicDraftValues.amount_min,
+    amount_max: deterministicDraftValues.amount_max,
+    currency: deterministicDraftValues.currency || null,
+    project_duration_min_months: deterministicDraftValues.project_duration_min_months,
+    project_duration_max_months: deterministicDraftValues.project_duration_max_months,
+    project_duration_text: deterministicDraftValues.project_duration_text || null,
+    official_urls: deterministicDraftValues.official_urls,
+    eligibility_text: deterministicDraftValues.eligibility_text || null,
+    expected_deliverables_text: deterministicDraftValues.expected_deliverables_text || null,
+    sponsor_type: deterministicDraftValues.sponsor_type || null,
+    contact_info: deterministicDraftValues.contact_info || null,
     source: operator.role === 'USER' ? 'user-funding-intake' : 'funding-intake',
     source_url: job.source_url || null,
     source_text_hash: job.source_text_hash || null,
@@ -800,7 +822,7 @@ async function persistDraft(
     operator_notes: job.operator_notes || null,
     extracted_json: latestExtraction?.extracted_json || null,
     extraction_confidence_json: latestExtraction?.confidence_json || null,
-    expiration_date: draftValues.close_date ? new Date(draftValues.close_date) : null,
+    expiration_date: deterministicDraftValues.close_date ? new Date(deterministicDraftValues.close_date) : null,
     is_active: false,
     intake_job_id: job.id,
     metadata: {
@@ -822,12 +844,12 @@ async function persistDraft(
         : null,
       embedding_status: 'not_generated',
       international_facets: {
-        eligible_regions: draftValues.eligible_regions,
-        host_countries: draftValues.host_countries,
-        funder_country: draftValues.funder_country || null,
-        citizenship_requirements: draftValues.citizenship_requirements,
-        residency_requirements: draftValues.residency_requirements,
-        application_languages: draftValues.application_languages,
+        eligible_regions: deterministicDraftValues.eligible_regions,
+        host_countries: deterministicDraftValues.host_countries,
+        funder_country: deterministicDraftValues.funder_country || null,
+        citizenship_requirements: deterministicDraftValues.citizenship_requirements,
+        residency_requirements: deterministicDraftValues.residency_requirements,
+        application_languages: deterministicDraftValues.application_languages,
       },
     },
   };
@@ -1057,7 +1079,12 @@ class FundingIntakeService {
       ? { userId: submitter.id, email: submitter.email, role: 'USER' as const }
       : null);
     const domainDuplicates = duplicateOperator
-      ? await computeDomainDuplicateCandidates(latestExtraction?.extracted_json as any, job.source_url, duplicateOperator)
+      ? await computeDomainDuplicateCandidates(
+          latestExtraction?.extracted_json as any,
+          job.source_url,
+          readFetchedUrl(job.fetch_metadata_json),
+          duplicateOperator
+        )
       : [];
 
     const publishWarnings = buildPublishWarnings({
@@ -1072,7 +1099,10 @@ class FundingIntakeService {
       submitter,
       extraction: latestExtraction,
       draft: fundingCall,
-      draftValues: catalogDetails?.draftValues || buildDraftValuesFromExtraction(latestExtraction?.extracted_json as any),
+      draftValues: catalogDetails?.draftValues || buildDraftValuesFromExtraction(latestExtraction?.extracted_json as any, {
+        sourceUrl: job.source_url,
+        fetchedUrl: readFetchedUrl(job.fetch_metadata_json),
+      }),
       call: catalogDetails?.call || null,
       publishReadiness: catalogDetails?.publishReadiness || null,
       publishWarnings,
@@ -1302,7 +1332,7 @@ class FundingIntakeService {
     draftInput: Partial<FundingDraftValues>,
     operator: IntakeOperator,
     duplicateResolutions: IntakeDuplicateResolutionInput[] = [],
-    extractAll = true
+    extractAll = false
   ) {
     const details = await this.getJobDetails(jobId);
     if (!details) {
@@ -1501,6 +1531,7 @@ class FundingIntakeService {
         jobId,
         extractionResult.payload,
         job.source_url,
+        readFetchedUrl(fetchMetadata),
         {
           userId: submitter?.id || job.submitted_by_user_id,
           email: submitter?.email || '',
@@ -1514,10 +1545,29 @@ class FundingIntakeService {
         message: 'Extraction completed and awaiting curator review',
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      const retryAfterMs = Number((error as any)?.retryAfterMs);
+      const retryAfterText = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+        ? ` Retry after about ${Math.max(1, Math.ceil(retryAfterMs / 1000))} seconds.`
+        : ' Retry in about a minute.';
+      const isRateLimited = (
+        (error instanceof Error && error.name === 'GeminiRateLimitError')
+        || (typeof (error as any)?.code === 'string' && (error as any).code === 'GEMINI_RATE_LIMITED')
+        || (/429/.test(rawMessage) && /(resource exhausted|too many requests|rate limit|quota)/i.test(rawMessage))
+      );
+      const message = isRateLimited
+        ? `LLM rate limit reached while extracting this funding call.${retryAfterText}`
+        : rawMessage;
       const errorCode = error instanceof Error && error.name === 'pdf_intake_requires_gemini'
         ? 'pdf_intake_requires_gemini'
-        : 'PROCESSING_FAILED';
+        : isRateLimited
+          ? 'LLM_RATE_LIMITED'
+          : 'PROCESSING_FAILED';
+
+      if (isRateLimited) {
+        console.warn(`[Funding Intake] LLM rate limited for job ${jobId}: ${rawMessage}`);
+      }
+
       await transitionJobStatus(jobId, 'failed', {
         errorCode,
         errorMessage: message,

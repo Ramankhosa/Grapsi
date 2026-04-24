@@ -448,7 +448,7 @@ function ModeSelector({ onSelect, onFileExtracted, sessionId, authToken }: ModeS
                   Upload an Existing Document
                 </h3>
                 <p className="text-sm text-slate-600 mb-3 max-w-md">
-                  Have a research proposal, draft, or notes? Upload it and we'll automatically extract 
+                  Have a research proposal, draft, or notes? Upload it and we&apos;ll automatically extract 
                   the research topic, methodology, keywords, and more.
                 </p>
                 <div className="flex items-center gap-4 text-xs text-slate-500">
@@ -574,7 +574,7 @@ function ModeSelector({ onSelect, onFileExtracted, sessionId, authToken }: ModeS
           
           <p className="text-slate-600 mb-4">
             You have a topic idea but need help structuring your research. 
-            We'll guide you step by step with AI assistance.
+            We&apos;ll guide you step by step with AI assistance.
           </p>
           
           <ul className="space-y-2 text-sm text-slate-500">
@@ -1809,7 +1809,7 @@ export default function TopicEntryStage({ sessionId, authToken, onTopicSaved }: 
               </button>
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">Guided Research Setup</h1>
-                <p className="text-slate-500">Let's build your research topic step by step</p>
+                <p className="text-slate-500">Let&apos;s build your research topic step by step</p>
               </div>
             </div>
 
@@ -1831,7 +1831,7 @@ export default function TopicEntryStage({ sessionId, authToken, onTopicSaved }: 
                     <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-4">
                       <Lightbulb className="w-8 h-8 text-white" />
                     </div>
-                    <h2 className="text-xl font-bold text-slate-900 mb-2">Let's Start with the Basics</h2>
+                    <h2 className="text-xl font-bold text-slate-900 mb-2">Let&apos;s Start with the Basics</h2>
                     <p className="text-slate-500">Tell us about your research topic in simple terms</p>
                   </div>
 
@@ -1875,7 +1875,7 @@ export default function TopicEntryStage({ sessionId, authToken, onTopicSaved }: 
                         maxRows={12}
                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl resize-none"
                       />
-                      <p className="text-xs text-slate-400 mt-2">💡 Tip: Write as if you're explaining to a friend</p>
+                      <p className="text-xs text-slate-400 mt-2">💡 Tip: Write as if you&apos;re explaining to a friend</p>
                     </div>
                   </div>
                 </motion.div>
@@ -1905,7 +1905,7 @@ export default function TopicEntryStage({ sessionId, authToken, onTopicSaved }: 
                   <div className="space-y-6">
                     <div className="bg-blue-50 rounded-xl p-4 mb-6">
                       <p className="text-sm text-blue-800">
-                        <strong>Based on your topic:</strong> "{segments.basics.topicDescription || segments.basics.title || 'Your topic'}"
+                        <strong>Based on your topic:</strong> &quot;{segments.basics.topicDescription || segments.basics.title || 'Your topic'}&quot;
                       </p>
                     </div>
 
@@ -2106,7 +2106,7 @@ export default function TopicEntryStage({ sessionId, authToken, onTopicSaved }: 
                       <CheckCircle2 className="w-8 h-8 text-white" />
                     </div>
                     <h2 className="text-xl font-bold text-slate-900 mb-2">Review Your Research Topic</h2>
-                    <p className="text-slate-500">Let's add the finishing touches</p>
+                    <p className="text-slate-500">Let&apos;s add the finishing touches</p>
                   </div>
 
                   {/* Summary */}

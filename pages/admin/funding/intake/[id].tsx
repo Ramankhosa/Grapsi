@@ -11,6 +11,13 @@ import { createEmptyGrantTemplate, normalizeGrantTemplate } from '@/lib/fundingT
 import type { GrantTemplateDocument } from '@/lib/fundingTemplates/types';
 import { FUNDING_FIELD_DEFINITIONS, BOOLEAN_FIELD_KEYS, NUMERIC_FIELD_KEYS } from '@/lib/fundingIntake/constants';
 
+type EvidenceAnchor = {
+  sourceType: 'segment';
+  segmentId: string;
+  quote: string;
+  heading?: string | null;
+};
+
 type JobDetails = {
   job: {
     id: string;
@@ -34,7 +41,7 @@ type JobDetails = {
   } | null;
   extraction: {
     extracted_json: {
-      fields: Record<string, { value: any; confidence: number; evidence: string | null; is_missing: boolean; is_uncertain: boolean }>;
+      fields: Record<string, { value: any; status: 'supported' | 'unsupported' | 'ambiguous'; confidence: number; evidence: EvidenceAnchor[] }>;
       warnings?: string[];
     } | null;
     warnings_json?: string[] | null;
@@ -204,6 +211,32 @@ function formatDateTime(value: string | null | undefined) {
   }
 
   return new Date(value).toLocaleString();
+}
+
+function formatJobErrorCode(errorCode: string | null | undefined) {
+  switch (errorCode) {
+    case 'LLM_RATE_LIMITED':
+      return 'LLM rate limited';
+    case 'pdf_intake_requires_gemini':
+      return 'Gemini required for PDF intake';
+    default:
+      return errorCode || 'Processing failed';
+  }
+}
+
+function formatEvidenceAnchors(value: EvidenceAnchor[] | null | undefined) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return [];
+  }
+
+  return value.map((anchor) => {
+    const parts = [anchor.segmentId];
+    if (anchor.heading) {
+      parts.push(anchor.heading);
+    }
+    parts.push(anchor.quote);
+    return parts.join(': ');
+  });
 }
 
 function readAssetMetadata(value: Record<string, any> | null | undefined) {
@@ -1182,7 +1215,7 @@ export default function FundingIntakeJobPage() {
 
             {details.job.status === 'failed' && (
               <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                <div className="font-medium">{details.job.error_code || 'Processing failed'}</div>
+                <div className="font-medium">{formatJobErrorCode(details.job.error_code)}</div>
                 <div className="mt-2">{details.job.error_message || 'No extra error details were recorded.'}</div>
               </div>
             )}
@@ -1393,6 +1426,12 @@ export default function FundingIntakeJobPage() {
                 {FUNDING_FIELD_DEFINITIONS.map((field) => {
                   const extracted = extractedFields[field.key];
                   const currentValue = draftValues[field.key];
+                  const evidenceLines = formatEvidenceAnchors(extracted?.evidence);
+                  const statusTone = extracted?.status === 'supported'
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : extracted?.status === 'ambiguous'
+                      ? 'bg-amber-50 text-amber-700'
+                      : 'bg-slate-100 text-slate-600';
 
                   return (
                     <div key={field.key} className="rounded-2xl border border-slate-200 p-4">
@@ -1401,11 +1440,18 @@ export default function FundingIntakeJobPage() {
                           <h3 className="text-sm font-semibold text-slate-900">{field.label}</h3>
                           <p className="mt-1 text-xs text-slate-500">{field.description || field.key}</p>
                         </div>
-                        {typeof extracted?.confidence === 'number' && (
-                          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-wide text-slate-700">
-                            {Math.round(extracted.confidence * 100)}% confidence
-                          </span>
-                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {extracted?.status && (
+                            <span className={`rounded-full px-3 py-1 text-xs font-medium uppercase tracking-wide ${statusTone}`}>
+                              {extracted.status}
+                            </span>
+                          )}
+                          {typeof extracted?.confidence === 'number' && (
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-wide text-slate-700">
+                              {Math.round(extracted.confidence * 100)}% confidence
+                            </span>
+                          )}
+                        </div>
                       </div>
                       {field.type === 'textarea' ? (
                         <textarea
@@ -1476,9 +1522,9 @@ export default function FundingIntakeJobPage() {
                         />
                       )}
 
-                      {extracted?.evidence && (
+                      {evidenceLines.length > 0 && (
                         <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
-                          Evidence: {extracted.evidence}
+                          Evidence: {evidenceLines.join(' | ')}
                         </div>
                       )}
                     </div>

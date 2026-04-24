@@ -3,32 +3,32 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3008",
-    "build": "next build",
-    "start": "next start -p 3008",
+    "dev": "node scripts/run-local-command.js next dev -p 3008",
+    "build": "node scripts/run-local-command.js next build",
+    "start": "node scripts/run-local-command.js next start -p 3008",
     "lint": "next lint",
-    "seed:plans:prod": "node scripts/seed-production-plans.js",
-    "seed:llm-models": "node Seed/seed-llm-models.js",
-    "seed:llm-models:prod": "node Seed/seed-llm-models-modified.js",
-    "create-admin": "node scripts/create-super-admin.js",
-    "superadminbirth": "node scripts/create-super-admin.js ramankhosa@gmail.com",
-    "superadminviewerbirth": "node scripts/create-super-admin-viewer.js ramandeep.singh@lpu.co.in",
-    "db:migrate": "prisma migrate dev",
-    "db:seed": "node scripts/seed-plans-hierarchy.js",
-    "seed:super-admin:export": "node scripts/production-seed-script.js export",
-    "seed:super-admin:import": "node scripts/production-seed-script.js import",
-    "db:seed:comprehensive": "node scripts/comprehensive-seed.js",
-    "db:export": "node scripts/comprehensive-seed.js --export-only",
-    "import:local-patents": "node scripts/import-local-patents-from-csv.js patients11.csv",
-    "seed:adminplans": "node scripts/adminplans-seed.js",
-    "llm:add-thinking-models": "node ./node_modules/tsx/dist/cli.cjs scripts/add-thinking-models.ts",
+    "seed:plans:prod": "node scripts/run-local-command.js node scripts/seed-production-plans.js",
+    "seed:llm-models": "node scripts/run-local-command.js node Seed/seed-llm-models.js",
+    "seed:llm-models:prod": "node scripts/run-local-command.js node Seed/seed-llm-models-modified.js",
+    "create-admin": "node scripts/run-local-command.js node scripts/create-super-admin.js",
+    "superadminbirth": "node scripts/run-local-command.js node scripts/create-super-admin.js ramankhosa@gmail.com",
+    "superadminviewerbirth": "node scripts/run-local-command.js node scripts/create-super-admin-viewer.js ramandeep.singh@lpu.co.in",
+    "db:migrate": "node scripts/run-local-command.js prisma migrate dev",
+    "db:seed": "node scripts/run-local-command.js node scripts/seed-plans-hierarchy.js",
+    "seed:super-admin:export": "node scripts/run-local-command.js node scripts/production-seed-script.js export",
+    "seed:super-admin:import": "node scripts/run-local-command.js node scripts/production-seed-script.js import",
+    "db:seed:comprehensive": "node scripts/run-local-command.js node scripts/comprehensive-seed.js",
+    "db:export": "node scripts/run-local-command.js node scripts/comprehensive-seed.js --export-only",
+    "import:local-patents": "node scripts/run-local-command.js node scripts/import-local-patents-from-csv.js patients11.csv",
+    "seed:adminplans": "node scripts/run-local-command.js node scripts/adminplans-seed.js",
+    "llm:add-thinking-models": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/add-thinking-models.ts",
     "test": "vitest run",
     "test:phase1": "node ./node_modules/tsx/dist/cli.cjs scripts/run-phase1-tests.ts",
     "test:phase2": "node ./node_modules/tsx/dist/cli.cjs scripts/run-phase2-tests.ts",
-    "ops:funding-repair": "node ./node_modules/tsx/dist/cli.cjs scripts/run-funding-repair.ts",
-    "seed:funding-finder": "node ./node_modules/tsx/dist/cli.cjs scripts/seed-funding-finder-verification.ts",
-    "verify:funding-finder": "node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-finder.ts",
-    "verify:funding-grant-launch": "node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-grant-launch.ts"
+    "ops:funding-repair": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/run-funding-repair.ts",
+    "seed:funding-finder": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/seed-funding-finder-verification.ts",
+    "verify:funding-finder": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-finder.ts",
+    "verify:funding-grant-launch": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-grant-launch.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
@@ -138,6 +138,6 @@
     "vitest": "^2.1.9"
   },
   "prisma": {
-    "seed": "node scripts/production-seed-script.js import"
+    "seed": "node scripts/run-local-command.js node scripts/production-seed-script.js import"
   }
 }

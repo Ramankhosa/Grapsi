@@ -1,21 +1,34 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { generateFromGemini } from '../geminiService';
-import { generateFromOpenAI } from '../openaiService';
-import { FUNDING_INTAKE_EXTRACTOR_VERSION, FUNDING_INTAKE_PROMPT_VERSION } from './constants';
-import type { FundingExtractionPayload } from './types';
-import { normalizeExtractionPayload, normalizeMultilineText, parseJsonResponse } from './utils';
+import { parseStructuredFromOpenAI } from '../openaiService';
+import {
+  FUNDING_INTAKE_EXTRACTOR_VERSION,
+  FUNDING_INTAKE_PROMPT_VERSION,
+  LLM_EXTRACTABLE_FUNDING_FIELD_KEYS,
+} from './constants';
+import { fundingIntakeStructuredOutputSchema, type FundingIntakeStructuredOutput } from './schemas';
+import type {
+  FundingExtractionPayload,
+  FundingExtractionValidationIssue,
+  FundingSourceSegment,
+} from './types';
+import {
+  buildFundingSourceSegments,
+  normalizeExtractionPayload,
+  normalizeMultilineText,
+  parseJsonResponse,
+  validateFundingExtractionPayload,
+} from './utils';
 
 const SYSTEM_INSTRUCTIONS = `
-You extract funding opportunity details from source text.
-Only capture facts explicitly supported by the source.
-If a field is unsupported, set value to null and is_missing to true.
-Do not infer missing grant types, deadlines, geography, countries, or eligibility.
-If explicit phrases like "fellowship", "research grant", "travel grant", or "infrastructure" appear, preserve them in funding_kinds.
-Scalar fields must be plain strings, numbers, booleans, or null. Never return nested objects for scalar fields.
-Array fields must be plain arrays of strings, never arrays of objects.
-If the title or description explicitly names the research theme or problem area, include those topical phrases in disciplines.
-Return strict JSON only.
+You extract core funding opportunity facts from normalized source segments.
+Return only facts explicitly supported by the supplied segments.
+Every non-null value must include one or more evidence anchors that reference the segment id and quote exact text from that segment.
+If a field is unsupported, return value=null, status="unsupported", confidence=0, evidence=[].
+If the source contains conflicting values for the same field, do not choose one. Return value=null, status="ambiguous", and include evidence for the conflicting support.
+Do not invent URLs, contacts, sponsor type, funder country, open date, or duration month counts.
+Description is not a freeform summary. Return evidence-backed source snippets for description; downstream code will build the stored description deterministically from those snippets.
+Use short exact quotes copied from the supplied segments. Never cite a segment id that was not provided.
 `;
 
 const PDF_TRANSCRIPTION_SYSTEM_INSTRUCTIONS = `
@@ -26,73 +39,121 @@ Keep headings, bullet points, tables, deadlines, URLs, and eligibility text when
 Return strict JSON only.
 `;
 
-function buildPrompt(sourceText: string): string {
+function buildSegmentPrompt(segments: FundingSourceSegment[]): string {
+  const serializedSegments = segments
+    .map((segment) => {
+      const headingLine = segment.heading ? `Heading: ${segment.heading}\n` : '';
+      return `[${segment.id}]\n${headingLine}${segment.text}`;
+    })
+    .join('\n\n---\n\n');
+
   return `
-${SYSTEM_INSTRUCTIONS}
+Extract only these funding fields:
+${LLM_EXTRACTABLE_FUNDING_FIELD_KEYS.map((key) => `- ${key}`).join('\n')}
 
-Return JSON in this exact shape:
-{
-  "fields": {
-    "agency_name": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "scheme_title": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "description": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "open_date": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "close_date": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "is_rolling": { "value": boolean|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "geography_scope": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "eligible_countries": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "eligible_regions": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "host_countries": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "funder_country": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "funding_kinds": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "institution_types": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "career_stages": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "citizenship_requirements": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "residency_requirements": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "application_languages": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "disciplines": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "amount_min": { "value": number|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "amount_max": { "value": number|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "currency": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "project_duration_min_months": { "value": number|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "project_duration_max_months": { "value": number|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "project_duration_text": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "eligibility_text": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "expected_deliverables_text": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "official_urls": { "value": string[]|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "contact_info": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean },
-    "sponsor_type": { "value": string|null, "confidence": number, "evidence": string|null, "is_missing": boolean, "is_uncertain": boolean }
-  },
-  "warnings": string[]
-}
+Return an object with:
+- fields: every listed field must be present
+- warnings: array of extraction notes, or []
 
-Source text:
-${sourceText.slice(0, 60000)}
+Field rules:
+- status must be one of "supported", "unsupported", or "ambiguous"
+- confidence must be between 0 and 1
+- evidence must be an array of anchors with:
+  - sourceType: "segment"
+  - segmentId: one of the ids below
+  - quote: exact supporting text from that segment
+  - heading: optional heading copied from the segment context
+- For array fields, return a flat string array or null
+- For numeric fields, return a number or null
+- For boolean fields, return a boolean or null
+- For date fields, use YYYY-MM-DD when explicitly supported, otherwise null
+- For description, return short supported source snippets; do not synthesize a new narrative
+
+Source segments:
+${serializedSegments}
 `;
 }
 
-async function callExtractor(prompt: string): Promise<{ model: string; rawText: string }> {
-  if (process.env.GOOGLE_AI_API_KEY) {
-    const rawText = await generateFromGemini(prompt, process.env.FUNDING_INTAKE_GEMINI_MODEL || 'gemini-2.0-flash');
-    return {
-      model: process.env.FUNDING_INTAKE_GEMINI_MODEL || 'gemini-2.0-flash',
-      rawText,
-    };
+async function callCoreExtractor(
+  prompt: string
+): Promise<{ model: string; parsed: FundingIntakeStructuredOutput }> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('Core funding intake extraction requires OPENAI_API_KEY');
   }
 
-  if (process.env.OPENAI_API_KEY) {
-    const rawText = await generateFromOpenAI(
-      prompt,
-      process.env.FUNDING_INTAKE_OPENAI_MODEL || 'gpt-4o-mini',
-      SYSTEM_INSTRUCTIONS
+  const model = process.env.FUNDING_INTAKE_OPENAI_MODEL || 'gpt-5.4';
+  const response = await parseStructuredFromOpenAI<FundingIntakeStructuredOutput>({
+    prompt,
+    model,
+    systemPrompt: SYSTEM_INSTRUCTIONS,
+    schema: fundingIntakeStructuredOutputSchema,
+    schemaName: 'funding_intake_core_extraction',
+    maxOutputTokens: 6000,
+    temperature: 0,
+  });
+
+  if (!response.parsed) {
+    throw new Error('OpenAI returned no structured funding intake extraction payload');
+  }
+
+  return {
+    model,
+    parsed: response.parsed,
+  };
+}
+
+function buildRetryPrompt(
+  segments: FundingSourceSegment[],
+  validationIssues: FundingExtractionValidationIssue[]
+): string {
+  return `${buildSegmentPrompt(segments)}
+
+The previous extraction failed deterministic validation. Fix these issues exactly:
+${validationIssues
+  .map((issue, index) => `${index + 1}. ${issue.fieldKey ? `${issue.fieldKey}: ` : ''}${issue.message}`)
+  .join('\n')}
+
+Return a corrected payload that satisfies the schema and evidence requirements.`;
+}
+
+function assertRetryableValidationState(validationIssues: FundingExtractionValidationIssue[]) {
+  const blockingIssues = validationIssues.filter((issue) => issue.retryable);
+  if (blockingIssues.length > 0) {
+    const error = new Error(
+      `Funding extraction failed deterministic validation: ${blockingIssues
+        .map((issue) => issue.message)
+        .join('; ')}`
     );
-    return {
-      model: process.env.FUNDING_INTAKE_OPENAI_MODEL || 'gpt-4o-mini',
-      rawText,
-    };
+    error.name = 'FundingExtractionValidationError';
+    throw error;
+  }
+}
+
+async function runValidatedExtraction(
+  segments: FundingSourceSegment[]
+): Promise<{
+  payload: FundingExtractionPayload;
+  extractorModel: string;
+  validationErrors: FundingExtractionValidationIssue[];
+}> {
+  const prompt = buildSegmentPrompt(segments);
+  const firstPass = await callCoreExtractor(prompt);
+  let payload = normalizeExtractionPayload(firstPass.parsed, { segments });
+  let validationErrors = validateFundingExtractionPayload(payload, segments);
+
+  if (validationErrors.some((issue) => issue.retryable)) {
+    const retry = await callCoreExtractor(buildRetryPrompt(segments, validationErrors));
+    payload = normalizeExtractionPayload(retry.parsed, { segments });
+    validationErrors = validateFundingExtractionPayload(payload, segments);
   }
 
-  throw new Error('No LLM provider configured for funding intake extraction');
+  assertRetryableValidationState(validationErrors);
+
+  return {
+    payload,
+    extractorModel: firstPass.model,
+    validationErrors,
+  };
 }
 
 function buildPdfTextPrompt(): string {
@@ -204,16 +265,20 @@ export async function extractFundingOpportunity(sourceText: string): Promise<{
   extractorModel: string;
   extractorVersion: string;
   promptVersion: string;
+  validationErrors: FundingExtractionValidationIssue[];
 }> {
-  const prompt = buildPrompt(sourceText);
-  const { model, rawText } = await callExtractor(prompt);
-  const parsed = parseJsonResponse(rawText);
-  const payload = normalizeExtractionPayload(parsed);
+  const segments = buildFundingSourceSegments(sourceText);
+  if (segments.length === 0) {
+    throw new Error('Funding extraction requires normalized source text');
+  }
+
+  const extraction = await runValidatedExtraction(segments);
 
   return {
-    payload,
-    extractorModel: model,
+    payload: extraction.payload,
+    extractorModel: extraction.extractorModel,
     extractorVersion: FUNDING_INTAKE_EXTRACTOR_VERSION,
     promptVersion: FUNDING_INTAKE_PROMPT_VERSION,
+    validationErrors: extraction.validationErrors,
   };
 }

@@ -10,6 +10,8 @@ type JobSummary = {
   input_type: 'url' | 'text' | 'pdf';
   source_url: string | null;
   status: string;
+  error_code: string | null;
+  error_message: string | null;
   duplicate_status: string;
   linked_funding_call_id: string | null;
   linked_call_status: string | null;
@@ -34,6 +36,17 @@ function readApiErrorMessage(data: any, fallback: string) {
     }
   }
   return fallback;
+}
+
+function formatJobErrorCode(errorCode: string | null | undefined) {
+  switch (errorCode) {
+    case 'LLM_RATE_LIMITED':
+      return 'Gemini rate limited';
+    case 'pdf_intake_requires_gemini':
+      return 'Gemini required for PDF intake';
+    default:
+      return errorCode || 'Processing failed';
+  }
 }
 
 export default function FundingIntakeAdminPage() {
@@ -451,6 +464,12 @@ export default function FundingIntakeAdminPage() {
                         <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-wide text-slate-700">
                           {job.status.replace('_', ' ')}
                         </span>
+                        {job.status === 'failed' && job.error_message && (
+                          <div className="mt-2 max-w-sm rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                            <div className="font-medium text-rose-800">{formatJobErrorCode(job.error_code)}</div>
+                            <div className="mt-1">{job.error_message}</div>
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-4 align-top text-slate-600">{job.duplicate_status.replace('_', ' ')}</td>
                       <td className="px-4 py-4 align-top text-slate-600">{new Date(job.created_at).toLocaleString()}</td>

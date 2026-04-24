@@ -523,32 +523,9 @@ export class FundingGuidelineService {
         extractedJson: call.extracted_json,
       });
 
-      const previousPack = normalizeGuidelinePack(guideline.guideline_pack_json);
       const nextPack = normalizeGuidelinePack(extraction.guidelinePack);
 
       await prisma.$transaction(async (tx) => {
-        const revisionNo = await createRevision(tx, guideline, {
-          revisionType: 'auto_extract',
-          guidelinePack: nextPack,
-          editorUserId: operator.userId,
-          approvedState: 'draft',
-          changeNotes: guidelineSource.changeNote,
-          diffSummary: generateGuidelineDiffSummary(previousPack, nextPack),
-        });
-
-        await tx.fundingCallGuideline.update({
-          where: { id: guideline.id },
-          data: {
-            guideline_pack_json: asJson(nextPack),
-            status: 'draft',
-            current_revision_no: revisionNo,
-            last_edited_by: operator.email,
-            last_edited_at: new Date(),
-            approved_by: null,
-            approved_at: null,
-          },
-        });
-
         await tx.fundingCallGuidelineRun.update({
           where: { id: run.id },
           data: {
@@ -565,7 +542,6 @@ export class FundingGuidelineService {
           where: { id: fundingCallId },
           data: {
             guideline_status: 'needs_review',
-            active_guideline_id: guideline.id,
           },
         });
       });
@@ -583,6 +559,64 @@ export class FundingGuidelineService {
     }
 
     return this.getRun(fundingCallId, run.id);
+  }
+
+  async applyRun(fundingCallId: string, runId: string, operator: IntakeOperator) {
+    const { guideline } = await ensureGuidelineRecord(fundingCallId, operator);
+    const run = await this.getRun(fundingCallId, runId);
+
+    if (!run) {
+      throw new Error('Guideline extraction run not found');
+    }
+
+    if (run.status !== 'needs_review') {
+      throw new Error('Only extraction runs that need review can be applied');
+    }
+
+    const previousPack = normalizeGuidelinePack(guideline.guideline_pack_json);
+    const nextPack = normalizeGuidelinePack(run.guideline_pack_json);
+    const diffSummary = `Applied extraction run ${run.id}: ${generateGuidelineDiffSummary(previousPack, nextPack)}`;
+
+    await prisma.$transaction(async (tx) => {
+      const revisionNo = await createRevision(tx, guideline, {
+        revisionType: 'auto_extract',
+        guidelinePack: nextPack,
+        editorUserId: operator.userId,
+        approvedState: 'draft',
+        changeNotes: `Applied extraction run ${run.id}`,
+        diffSummary,
+      });
+
+      await tx.fundingCallGuideline.update({
+        where: { id: guideline.id },
+        data: {
+          guideline_pack_json: asJson(nextPack),
+          current_revision_no: revisionNo,
+          status: 'draft',
+          last_edited_by: operator.email,
+          last_edited_at: new Date(),
+          approved_by: null,
+          approved_at: null,
+        },
+      });
+
+      await tx.fundingCallGuidelineRun.update({
+        where: { id: run.id },
+        data: {
+          status: 'applied',
+        },
+      });
+
+      await tx.fundingCall.update({
+        where: { id: fundingCallId },
+        data: {
+          guideline_status: 'needs_review',
+          active_guideline_id: guideline.id,
+        },
+      });
+    });
+
+    return this.getGuidelineBundle(fundingCallId);
   }
 
   async listRuns(fundingCallId: string, limit = 20) {

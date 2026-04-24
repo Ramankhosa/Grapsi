@@ -26,19 +26,44 @@ export type FundingDuplicateStatus =
   | 'exact_match_found'
   | 'resolved';
 
+export type FundingExtractionFieldStatus =
+  | 'supported'
+  | 'unsupported'
+  | 'ambiguous';
+
+export interface FundingEvidenceAnchor {
+  sourceType: 'segment';
+  segmentId: string;
+  quote: string;
+  heading?: string | null;
+}
+
 export interface StructuredFieldValue<T = unknown> {
   value: T | null;
+  status: FundingExtractionFieldStatus;
   confidence: number;
-  evidence: string | null;
-  is_missing: boolean;
-  is_uncertain: boolean;
+  evidence: FundingEvidenceAnchor[];
 }
 
 export type ExtractionFieldMap = Record<FundingFieldKey, StructuredFieldValue>;
 
+export interface FundingExtractionValidationIssue {
+  code: string;
+  fieldKey?: FundingFieldKey | string | null;
+  message: string;
+  retryable?: boolean;
+}
+
+export interface FundingSourceSegment {
+  id: string;
+  text: string;
+  heading: string | null;
+}
+
 export interface FundingExtractionPayload {
   fields: ExtractionFieldMap;
   warnings: string[];
+  summarySegments?: string[];
 }
 
 export interface FundingDraftValues {
