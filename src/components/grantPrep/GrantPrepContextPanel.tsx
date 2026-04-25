@@ -129,6 +129,7 @@ type Props = {
   onJumpToKeyword: (keyword: string) => void;
   onPointAction: (action: PointAction) => Promise<void>;
   onOpenPreview: () => void;
+  topAccessory?: ReactNode;
 };
 
 export default function GrantPrepContextPanel({
@@ -143,6 +144,7 @@ export default function GrantPrepContextPanel({
   onJumpToKeyword,
   onPointAction,
   onOpenPreview,
+  topAccessory,
 }: Props) {
   const [expandedPointKey, setExpandedPointKey] = useState<string | null>(null);
   const [editingPointKey, setEditingPointKey] = useState<string | null>(null);
@@ -199,18 +201,21 @@ export default function GrantPrepContextPanel({
 
   const blockerSummary = useMemo(() => {
     const pendingP1: Array<{ stage: string; label: string }> = [];
-    const pendingP2: Array<{ stage: string; label: string }> = [];
     const reviewStages: string[] = [];
     const ruleViolations: string[] = [];
 
     Object.values(prepContext.stageStates).forEach((stage) => {
       if (!stage.enabled || !stage.pickable) return;
-      if (stage.status === 'needs_review') reviewStages.push(stage.title);
+      const hasHardReview = stage.points.some((point) =>
+        isUserFacingPoint(point) &&
+        point.status === 'needs_review' &&
+        (point.priority === 'P1' || Boolean(point.capture?.ruleCompliance?.rescopeNeeded))
+      );
+      if (hasHardReview) reviewStages.push(stage.title);
       stage.points.forEach((point) => {
-        if (point.priority === 'P1' && point.status !== 'covered')
+        if (!isUserFacingPoint(point) || point.status === 'covered') return;
+        if (point.priority === 'P1')
           pendingP1.push({ stage: stage.title, label: point.label });
-        if (point.priority === 'P2' && point.status !== 'covered')
-          pendingP2.push({ stage: stage.title, label: point.label });
         if (point.capture?.ruleCompliance?.rescopeNeeded && point.capture.ruleCompliance.reason)
           ruleViolations.push(point.capture.ruleCompliance.reason);
       });
@@ -218,7 +223,6 @@ export default function GrantPrepContextPanel({
 
     return {
       pendingP1,
-      pendingP2,
       reviewStages: Array.from(new Set(reviewStages)),
       ruleViolations: Array.from(new Set(ruleViolations)),
     };
@@ -226,7 +230,6 @@ export default function GrantPrepContextPanel({
 
   const totalBlockerCount =
     blockerSummary.pendingP1.length +
-    blockerSummary.pendingP2.length +
     blockerSummary.reviewStages.length +
     blockerSummary.ruleViolations.length;
 
@@ -265,6 +268,7 @@ export default function GrantPrepContextPanel({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      {topAccessory ? <div className="mb-2 flex justify-end">{topAccessory}</div> : null}
       {/* Scrollable sections */}
       <div className="prep-scrollbar flex-1 space-y-3 overflow-y-auto pb-3">
       {/* Section 1: Stage Progress */}

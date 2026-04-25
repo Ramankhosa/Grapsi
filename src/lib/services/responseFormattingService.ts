@@ -1,4 +1,5 @@
 import { FundingCall } from './fundingCallsService';
+import { sanitizeExternalUrl } from '../urlSafety';
 
 /**
  * Types of response formats
@@ -31,6 +32,19 @@ export interface FormattedResponse {
   metadata?: Record<string, any>;
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /**
  * Service for formatting chatbot responses consistently
  */
@@ -57,15 +71,20 @@ export class ResponseFormattingService {
       
       // Add emphasis to keywords if specified
       if (options.highlightKeywords && options.highlightKeywords.length > 0) {
-        const keywordsPattern = new RegExp(`\\b(${options.highlightKeywords.join('|')})\\b`, 'gi');
-        cleanedResponse = cleanedResponse.replace(keywordsPattern, '**$1**');
+        const escapedKeywords = options.highlightKeywords
+          .map((keyword) => escapeRegExp(keyword.trim()))
+          .filter(Boolean);
+        if (escapedKeywords.length > 0) {
+          const keywordsPattern = new RegExp(`\\b(${escapedKeywords.join('|')})\\b`, 'gi');
+          cleanedResponse = cleanedResponse.replace(keywordsPattern, '**$1**');
+        }
       }
     }
     
     // For HTML format, convert markdown to HTML
     if (format === ResponseFormatType.HTML) {
       // This is just a placeholder - in a real implementation we would use a markdown-to-html converter
-      cleanedResponse = `<div class="chatbot-response">${cleanedResponse.replace(/\n/g, '<br/>')}</div>`;
+      cleanedResponse = `<div class="chatbot-response">${escapeHtml(cleanedResponse).replace(/\n/g, '<br/>')}</div>`;
     }
     
     return {
@@ -100,8 +119,8 @@ export class ResponseFormattingService {
           description: call.description,
           deadline: call.deadline ? new Date(call.deadline).toISOString() : null,
           fundingAmount: call.fundingAmount,
-          url: call.urls[0] || null,
-          callUrl: call.callUrl || null,
+          url: sanitizeExternalUrl(call.urls[0]),
+          callUrl: sanitizeExternalUrl(call.callUrl),
           attachmentFile: call.attachmentFile || null
         };
         
@@ -157,8 +176,8 @@ export class ResponseFormattingService {
         description: fundingCall.description,
         deadline: fundingCall.deadline ? new Date(fundingCall.deadline).toISOString() : null,
         fundingAmount: fundingCall.fundingAmount,
-        url: fundingCall.urls[0] || null,
-        callUrl: fundingCall.callUrl || null,
+        url: sanitizeExternalUrl(fundingCall.urls[0]),
+        callUrl: sanitizeExternalUrl(fundingCall.callUrl),
         attachmentFile: fundingCall.attachmentFile || null,
         
         // Include more details for detailed analysis
@@ -205,4 +224,4 @@ export class ResponseFormattingService {
       }
     };
   }
-} 
+}

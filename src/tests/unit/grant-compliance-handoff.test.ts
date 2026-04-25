@@ -38,6 +38,35 @@ function makeReviewerReport(overrides?: Partial<ReviewerReadinessReport>): Revie
 }
 
 describe('grant prep freeze payload', () => {
+  const fundingContext = {
+    id: 'call_1',
+    source: 'linked_funding_call',
+    isLinkedCall: true,
+    isLegacyFallback: false,
+    isPrivateDraft: false,
+    verificationStatus: 'approved',
+    title: 'MeitY Cyber CoE Call',
+    agencyName: 'MeitY',
+    description: 'Cyber CoE funding call',
+    deadline: '2026-05-15',
+    funding: 'INR 500 lakh',
+    budgetLimits: 'Up to INR 500 lakh',
+    projectDuration: '36 months',
+    eligibility: 'Academic institutions',
+    deliverables: 'Milestones and training outputs',
+    focusAreas: ['cybersecurity'],
+    disciplines: [],
+    fundingKinds: [],
+    officialUrls: ['https://example.org/call'],
+    sourceUrl: null,
+    guidelineStatus: 'approved',
+    templateStatus: 'approved',
+    approvedGuidelineRevision: null,
+    approvedTemplate: null,
+    warning: null,
+    legacyCallAnalysis: null,
+  } as any
+
   it('preserves prep evidence by section and builds a global capture summary', () => {
     const session = {
       mode: 'template_driven',
@@ -85,34 +114,7 @@ describe('grant prep freeze payload', () => {
         title: 'Cyber Centre of Excellence',
         description: 'National cyber readiness infrastructure',
       },
-      fundingContext: {
-        id: 'call_1',
-        source: 'linked_funding_call',
-        isLinkedCall: true,
-        isLegacyFallback: false,
-        isPrivateDraft: false,
-        verificationStatus: 'approved',
-        title: 'MeitY Cyber CoE Call',
-        agencyName: 'MeitY',
-        description: 'Cyber CoE funding call',
-        deadline: '2026-05-15',
-        funding: 'INR 500 lakh',
-        budgetLimits: 'Up to INR 500 lakh',
-        projectDuration: '36 months',
-        eligibility: 'Academic institutions',
-        deliverables: 'Milestones and training outputs',
-        focusAreas: ['cybersecurity'],
-        disciplines: [],
-        fundingKinds: [],
-        officialUrls: ['https://example.org/call'],
-        sourceUrl: null,
-        guidelineStatus: 'approved',
-        templateStatus: 'approved',
-        approvedGuidelineRevision: null,
-        approvedTemplate: null,
-        warning: null,
-        legacyCallAnalysis: null,
-      },
+      fundingContext,
       session,
       guidelineRevisionId: 'guideline_rev_1',
       templateRevisionId: 'template_rev_1',
@@ -132,6 +134,117 @@ describe('grant prep freeze payload', () => {
     )
     expect(result.payload.globalCaptureSummary[0]).toContain('National capability gap')
     expect(result.payload.globalCaptureSummary[0]).toContain('Rule note')
+  })
+
+  it('allows launch when core P1 facts are covered even if P2 detail remains open', () => {
+    const session = {
+      mode: 'template_driven',
+      engagementMode: 'expert',
+      selectedThrustAreaRuleKeys: [],
+      stageMapping: {},
+      globalKeywords: [],
+      stageStates: {
+        methodology: {
+          stageKey: 'methodology',
+          title: 'Methodology',
+          enabled: true,
+          pickable: true,
+          readiness: 0.5,
+          status: 'in_progress',
+          steeringEvents: [],
+          lastUpdatedAt: '2026-04-21T00:00:00.000Z',
+          points: [
+            {
+              key: 'approach',
+              label: 'Core approach',
+              priority: 'P1',
+              status: 'covered',
+              sourceTemplatePointer: null,
+              conversationRole: 'user_required',
+              capture: {
+                keywords: ['phased pilot'],
+                thrustLinkage: [],
+                factBullets: ['The project will run as a phased pilot.'],
+                ruleNotes: [],
+                confidence: 0.9,
+                ruleCompliance: { status: 'ok' },
+                captureBasis: ['user_confirmed'],
+                sourceTemplatePointer: null,
+                updatedAt: '2026-04-21T00:00:00.000Z',
+              },
+            },
+            {
+              key: 'evidence_generation',
+              label: 'Data, validation, or evidence plan',
+              priority: 'P2',
+              status: 'pending',
+              sourceTemplatePointer: null,
+              conversationRole: 'user_required',
+              capture: null,
+            },
+          ],
+        },
+      },
+    } as unknown as GrantPrepSessionContext
+
+    const result = buildGrantPrepFreezePayload({
+      project: { id: 'project_1', title: 'Cyber Centre of Excellence', description: null },
+      fundingContext,
+      session,
+      guidelineRevisionId: null,
+      templateRevisionId: null,
+    })
+
+    expect(result.blockers).toEqual([])
+  })
+
+  it('still blocks launch when a core P1 fact is missing', () => {
+    const session = {
+      mode: 'template_driven',
+      engagementMode: 'expert',
+      selectedThrustAreaRuleKeys: [],
+      stageMapping: {},
+      globalKeywords: [],
+      stageStates: {
+        methodology: {
+          stageKey: 'methodology',
+          title: 'Methodology',
+          enabled: true,
+          pickable: true,
+          readiness: 0,
+          status: 'not_started',
+          steeringEvents: [],
+          lastUpdatedAt: null,
+          points: [
+            {
+              key: 'approach',
+              label: 'Core approach',
+              priority: 'P1',
+              status: 'pending',
+              sourceTemplatePointer: null,
+              conversationRole: 'user_required',
+              capture: null,
+            },
+          ],
+        },
+      },
+    } as unknown as GrantPrepSessionContext
+
+    const result = buildGrantPrepFreezePayload({
+      project: { id: 'project_1', title: 'Cyber Centre of Excellence', description: null },
+      fundingContext,
+      session,
+      guidelineRevisionId: null,
+      templateRevisionId: null,
+    })
+
+    expect(result.blockers).toEqual([
+      {
+        stageKey: 'methodology',
+        pointKey: 'approach',
+        message: 'Methodology: Core approach is still incomplete.',
+      },
+    ])
   })
 })
 

@@ -2,9 +2,7 @@
 
 import { requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
 
-const GRADIO_APP_URL =
-  process.env.FUNDING_CHATBOT_GRADIO_URL ||
-  'https://genai-app-fundingchatbot-1-1750422556520-434532774441.us-central1.run.app/'
+const GRADIO_APP_URL = process.env.FUNDING_CHATBOT_GRADIO_URL?.trim()
 
 export const runtime = 'nodejs'
 
@@ -15,6 +13,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    if (!GRADIO_APP_URL) {
+      return NextResponse.json(
+        {
+          error: 'Legacy chatbot proxy is disabled. Use the funding finder recommendation endpoints instead.',
+          code: 'LEGACY_CHATBOT_DISABLED',
+        },
+        { status: 410 }
+      )
+    }
+
     const body = await request.json()
     const { message } = body as { message?: string }
     if (!message || typeof message !== 'string') {

@@ -220,7 +220,7 @@ Format your response in a clear, conversational way that helps the user understa
   ): Promise<string> {
     try {
       // Format the funding call
-      const formattedCall = this.formatFundingCallsForLLM([fundingCall])[0];
+      const formattedCall = this.formatFundingCallsForLLM([fundingCall]);
       
       // Create context information about the user
       const userContext = [
@@ -266,4 +266,4 @@ Format your analysis with clear headings and bullet points where appropriate.
       return `I found the funding opportunity "${fundingCall.schemeTitle}" from ${fundingCall.agencyName}, but I'm having trouble analyzing it in detail.`;
     }
   }
-} 
+}

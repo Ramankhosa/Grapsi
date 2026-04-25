@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { HiExclamationTriangle, HiPaperAirplane, HiSparkles } from 'react-icons/hi2';
+import { HiArrowsPointingIn, HiArrowsPointingOut, HiExclamationTriangle, HiPaperAirplane, HiSparkles } from 'react-icons/hi2';
 import type { PrepMessage } from './types';
 
 function clsx(...values: Array<string | false | null | undefined>) {
@@ -23,6 +23,8 @@ type Props = {
   activeStageTitle?: string;
   activeStageDescription?: string;
   pendingPoints?: Array<{ key: string; label: string; helpText?: string }>;
+  onToggleFullscreen?: () => void;
+  isFullscreen?: boolean;
 };
 
 function SteeringBanner({ level, message }: { level: string; message: string }) {
@@ -152,6 +154,8 @@ export default function GrantPrepChatPane({
   activeStageTitle,
   activeStageDescription,
   pendingPoints,
+  onToggleFullscreen,
+  isFullscreen = false,
 }: Props) {
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -187,7 +191,7 @@ export default function GrantPrepChatPane({
     messages.length > 0 && messages[messages.length - 1].role === 'user' && !sending;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200/80 bg-white shadow-prep-card">
+    <div className="relative flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200/80 bg-white shadow-prep-card">
       {/* Messages area */}
       <div className="prep-scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
@@ -402,37 +406,49 @@ export default function GrantPrepChatPane({
           </div>
         ) : (
           <>
-            <div className="flex items-end gap-2 rounded-xl border border-slate-200 bg-prep-inputBg px-3 py-2 focus-within:border-prep-accent focus-within:ring-2 focus-within:ring-emerald-100">
-              <textarea
-                ref={chatInputRef}
-                value={input}
-                onChange={handleTextAreaChange}
-                onBlur={resetTextAreaHeight}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    handleSend();
-                  }
-                }}
-                rows={1}
-                disabled={isInputDisabled}
-                className="flex-1 resize-none bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none disabled:cursor-not-allowed"
-                style={{ minHeight: '44px', maxHeight: '200px' }}
-                placeholder={currentPointLabel ? `Tell me about ${currentPointLabel.toLowerCase()}...` : 'Type your response...'}
-              />
-              <button
-                type="button"
-                onClick={handleSend}
-                disabled={!canSend}
-                className={clsx(
-                  'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors',
-                  canSend
-                    ? 'bg-prep-accent text-white hover:bg-prep-accentDark'
-                    : 'bg-slate-100 text-slate-400'
-                )}
-              >
-                <HiPaperAirplane className="h-4 w-4" />
-              </button>
+            <div className="flex items-end gap-2">
+              <div className="flex flex-1 items-end gap-2 rounded-xl border border-slate-200 bg-prep-inputBg px-3 py-2 focus-within:border-prep-accent focus-within:ring-2 focus-within:ring-emerald-100">
+                <textarea
+                  ref={chatInputRef}
+                  value={input}
+                  onChange={handleTextAreaChange}
+                  onBlur={resetTextAreaHeight}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                  rows={1}
+                  disabled={isInputDisabled}
+                  className="flex-1 resize-none bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none disabled:cursor-not-allowed"
+                  style={{ minHeight: '44px', maxHeight: '200px' }}
+                  placeholder={currentPointLabel ? `Tell me about ${currentPointLabel.toLowerCase()}...` : 'Type your response...'}
+                />
+                <button
+                  type="button"
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  className={clsx(
+                    'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors',
+                    canSend
+                      ? 'bg-prep-accent text-white hover:bg-prep-accentDark'
+                      : 'bg-slate-100 text-slate-400'
+                  )}
+                >
+                  <HiPaperAirplane className="h-4 w-4" />
+                </button>
+              </div>
+              {onToggleFullscreen ? (
+                <button
+                  type="button"
+                  onClick={onToggleFullscreen}
+                  className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50"
+                  title={isFullscreen ? 'Exit full screen chat' : 'Full screen chat'}
+                >
+                  {isFullscreen ? <HiArrowsPointingIn className="h-4 w-4" /> : <HiArrowsPointingOut className="h-4 w-4" />}
+                </button>
+              ) : null}
             </div>
             {input.length > 3500 ? (
               <div className="mt-1 text-right text-xs text-slate-400">{input.length}/4000</div>

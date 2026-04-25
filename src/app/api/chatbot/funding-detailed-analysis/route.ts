@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
 
-import { requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
+import { prisma } from '@/lib/prisma'
+import { buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingCallsService } from '@/lib/services/fundingCallsService'
 import { ResponseFormattingService, ResponseFormatType } from '@/lib/services/responseFormattingService'
 import { SQLToLLMConnector } from '@/lib/services/sqlToLLMConnector'
@@ -34,6 +35,17 @@ export async function POST(request: NextRequest) {
 
     if (!fundingCallId) {
       return NextResponse.json({ error: 'Missing fundingCallId parameter' }, { status: 400 })
+    }
+
+    const accessibleCall = await prisma.fundingCall.findFirst({
+      where: {
+        id: fundingCallId,
+        ...buildFundingCallAccessWhere(auth.actor),
+      },
+      select: { id: true },
+    })
+    if (!accessibleCall) {
+      return NextResponse.json({ error: 'Funding call not found' }, { status: 404 })
     }
 
     const fundingCall = await fundingCallsService.getFundingCallById(fundingCallId)

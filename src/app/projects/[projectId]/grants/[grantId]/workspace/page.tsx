@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import {
   AlertCircle,
@@ -28,6 +28,8 @@ const STAGES = [
   { key: 'FIGURE_PLANNER', label: 'Figure Planning' },
   { key: 'SECTION_DRAFTING', label: 'Section Drafting' },
 ] as const
+
+const WORKSPACE_NAV_COLLAPSED_KEY_PREFIX = 'grant-workspace-nav-collapsed'
 
 type StageKey = typeof STAGES[number]['key']
 
@@ -66,6 +68,11 @@ type GrantWorkspaceResponse = {
     keyContributions: string[]
     status: string | null
     version: number | null
+  } | null
+  launchPreview?: {
+    blockers: Array<{ stageKey: string; pointKey: string; message: string }>
+    canLaunch?: boolean
+    launchUrl?: string | null
   } | null
 }
 
@@ -138,6 +145,9 @@ export default function GrantWorkspacePage() {
   const [hasHydratedStage, setHasHydratedStage] = useState(false)
   const [stageWarning, setStageWarning] = useState<string | null>(null)
   const [selectedSection, setSelectedSection] = useState<string>('')
+  const [navCollapsed, setNavCollapsed] = useState(false)
+  const [launchingBlueprint, setLaunchingBlueprint] = useState(false)
+  const autoLaunchAttemptedRef = useRef(false)
 
   const handleGrantSectionsUpdated = useCallback((sections: GrantSection[]) => {
     setWorkspace((current) => {
@@ -202,9 +212,18 @@ export default function GrantWorkspacePage() {
     }
   }, [authLoading, grantId, loadWorkspace, projectId, router, user])
 
+  useEffect(() => {
+    autoLaunchAttemptedRef.current = false
+  }, [grantId])
+
   const workspaceStorageKey = useMemo(() => {
     const workspaceId = workspace?.grantSession?.id || grantId
     return workspaceId ? `grant_stage_${workspaceId}` : null
+  }, [grantId, workspace?.grantSession?.id])
+
+  const navCollapsedStorageKey = useMemo(() => {
+    const workspaceId = workspace?.grantSession?.id || grantId
+    return workspaceId ? `${WORKSPACE_NAV_COLLAPSED_KEY_PREFIX}_${workspaceId}` : null
   }, [grantId, workspace?.grantSession?.id])
 
   useEffect(() => {
@@ -223,6 +242,16 @@ export default function GrantWorkspacePage() {
 
     setHasHydratedStage(true)
   }, [stageFromQuery, visibleStageKeys, workspaceStorageKey])
+
+  useEffect(() => {
+    if (!navCollapsedStorageKey || typeof window === 'undefined') return
+    setNavCollapsed(localStorage.getItem(navCollapsedStorageKey) === '1')
+  }, [navCollapsedStorageKey])
+
+  useEffect(() => {
+    if (!navCollapsedStorageKey || typeof window === 'undefined') return
+    localStorage.setItem(navCollapsedStorageKey, navCollapsed ? '1' : '0')
+  }, [navCollapsed, navCollapsedStorageKey])
 
   useEffect(() => {
     if (!workspaceStorageKey || !hasHydratedStage) return
@@ -337,12 +366,56 @@ export default function GrantWorkspacePage() {
   const draftingSessionId = workspace?.grantSession.draftingSessionId || null
   const hasFrozenBlueprint = workspace?.blueprint?.status === 'FROZEN'
 
+  const hydrateShadowSession = useCallback(async (sessionId: string) => {
+    const shadowResponse = await authFetch(`/api/papers/${sessionId}`)
+    const shadowPayload = await shadowResponse.json().catch(() => ({}))
+    if (!shadowResponse.ok) {
+      throw new Error(shadowPayload.error || 'Failed to load drafting engine session')
+    }
+    setShadowSession(shadowPayload.session || null)
+  }, [authFetch])
+
+  const launchBlueprintFromGrantMentor = useCallback(async () => {
+    if (!workspace?.launchPreview?.canLaunch || launchingBlueprint) {
+      return false
+    }
+
+    setLaunchingBlueprint(true)
+    setStageWarning('Preparing the grant blueprint from the GrantMentor handoff...')
+    try {
+      const response = await authFetch(`/api/projects/${projectId}/grants/${grantId}/blueprint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'regenerate' }),
+      })
+      const payload = await response.json().catch(() => ({})) as GrantWorkspaceResponse & { message?: string }
+      if (!response.ok) {
+        throw new Error(payload.message || 'Failed to prepare the grant blueprint')
+      }
+
+      setWorkspace(payload)
+      const nextDraftingSessionId = payload.grantSession?.draftingSessionId
+      if (nextDraftingSessionId) {
+        await hydrateShadowSession(nextDraftingSessionId)
+      }
+      setStageWarning(null)
+      return Boolean(nextDraftingSessionId)
+    } catch (nextError) {
+      setStageWarning(nextError instanceof Error ? nextError.message : 'Failed to prepare the grant blueprint')
+      return false
+    } finally {
+      setLaunchingBlueprint(false)
+    }
+  }, [authFetch, grantId, hydrateShadowSession, launchingBlueprint, projectId, workspace?.launchPreview?.canLaunch])
+
   const getStageLockReason = useCallback((stageKey: StageKey): string | null => {
     switch (stageKey) {
       case 'GRANTMENTOR':
         return null
       case 'BLUEPRINT':
-        if (!draftingSessionId) return 'Complete GrantMentor handoff before opening the blueprint.'
+        if (!draftingSessionId && !workspace?.launchPreview?.canLaunch) {
+          return 'Cover the core GrantMentor points, then open the blueprint.'
+        }
         return null
       case 'FIGURE_PLANNER':
         if (!hasFrozenBlueprint) return 'Freeze the grant blueprint before planning figures.'
@@ -364,7 +437,7 @@ export default function GrantWorkspacePage() {
       default:
         return null
     }
-  }, [citationsCount, deepCandidatesCount, draftingSessionId, hasFrozenBlueprint])
+  }, [citationsCount, deepCandidatesCount, draftingSessionId, hasFrozenBlueprint, workspace?.launchPreview?.canLaunch])
 
   const handleNavigateToStage = useCallback(async (stageKey: string) => {
     const nextStage = stageKey as StageKey
@@ -374,10 +447,32 @@ export default function GrantWorkspacePage() {
       return
     }
 
+    if (nextStage === 'BLUEPRINT' && !draftingSessionId) {
+      const launched = await launchBlueprintFromGrantMentor()
+      if (!launched) return
+    }
+
     setStageWarning(null)
     setCurrentStage(nextStage)
     router.replace(`/projects/${projectId}/grants/${grantId}/workspace?stage=${nextStage}`, { scroll: false })
-  }, [getStageLockReason, grantId, projectId, router])
+  }, [draftingSessionId, getStageLockReason, grantId, launchBlueprintFromGrantMentor, projectId, router])
+
+  useEffect(() => {
+    if (!hasHydratedStage || resolvedCurrentStage !== 'BLUEPRINT' || draftingSessionId) return
+    if (workspace?.launchPreview?.canLaunch && !launchingBlueprint && !autoLaunchAttemptedRef.current) {
+      autoLaunchAttemptedRef.current = true
+      void launchBlueprintFromGrantMentor()
+      return
+    }
+    setStageWarning('Cover the core GrantMentor points, then open the blueprint.')
+  }, [
+    draftingSessionId,
+    hasHydratedStage,
+    launchingBlueprint,
+    launchBlueprintFromGrantMentor,
+    resolvedCurrentStage,
+    workspace?.launchPreview?.canLaunch,
+  ])
 
   const { prev, next } = (() => {
     const index = visibleStageKeys.indexOf(resolvedCurrentStage)
@@ -432,9 +527,12 @@ export default function GrantWorkspacePage() {
         onNavigateToStage={handleNavigateToStage}
         selectedSection={selectedSection}
         onSectionSelect={setSelectedSection}
+        collapsed={navCollapsed}
+        onCollapsedChange={setNavCollapsed}
+        allowCollapse={true}
       />
 
-      <div className="flex min-h-screen flex-col pl-72">
+      <div className={`flex min-h-screen flex-col ${navCollapsed ? 'pl-20' : 'pl-72'}`}>
         <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
           <div className="mx-auto flex max-w-[98%] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
             <div className="min-w-0">

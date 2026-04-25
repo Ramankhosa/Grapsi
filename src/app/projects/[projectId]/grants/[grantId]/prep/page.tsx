@@ -28,6 +28,8 @@ import type {
 import { useAuth } from '@/lib/auth-context';
 
 const DESKTOP_SPLIT_KEY = 'grant-prep-desktop-split';
+const DESKTOP_CONTEXT_KEY = 'grant-prep-desktop-context-open';
+const CHAT_FULLSCREEN_KEY = 'grant-prep-chat-fullscreen';
 const TABLET_CONTEXT_KEY = 'grant-prep-tablet-context-open';
 const MOBILE_CONTEXT_KEY = 'grant-prep-mobile-context-open';
 const ENGAGEMENT_MODE_OPTIONS: Array<{
@@ -105,6 +107,8 @@ export default function GrantPrepPage() {
   const [confirmAction, setConfirmAction] = useState<null | 'restart' | 'archive'>(null);
   const [viewportWidth, setViewportWidth] = useState(1440);
   const [desktopChatWidth, setDesktopChatWidth] = useState(65);
+  const [desktopContextOpen, setDesktopContextOpen] = useState(true);
+  const [chatFullscreen, setChatFullscreen] = useState(false);
   const [tabletContextOpen, setTabletContextOpen] = useState(false);
   const [mobileContextOpen, setMobileContextOpen] = useState(false);
   const [draggingDivider, setDraggingDivider] = useState(false);
@@ -151,6 +155,8 @@ export default function GrantPrepPage() {
 
     setTabletContextOpen(safeLocalStorage(TABLET_CONTEXT_KEY, '0') === '1');
     setMobileContextOpen(safeLocalStorage(MOBILE_CONTEXT_KEY, '0') === '1');
+    setDesktopContextOpen(safeLocalStorage(DESKTOP_CONTEXT_KEY, '1') === '1');
+    setChatFullscreen(safeLocalStorage(CHAT_FULLSCREEN_KEY, '0') === '1');
 
     window.addEventListener('resize', updateWidth);
     return () => window.removeEventListener('resize', updateWidth);
@@ -242,8 +248,14 @@ export default function GrantPrepPage() {
 
   const layoutMode: GrantPrepLayoutMode =
     viewportWidth >= 1280 ? 'desktop' : viewportWidth >= 1024 ? 'tablet' : 'mobile';
-  const isContextOpen =
-    layoutMode === 'desktop' ? true : layoutMode === 'tablet' ? tabletContextOpen : mobileContextOpen;
+  const effectiveChatFullscreen = layoutMode === 'desktop' && chatFullscreen;
+  const isContextOpen = effectiveChatFullscreen
+    ? false
+    : layoutMode === 'desktop'
+      ? desktopContextOpen
+      : layoutMode === 'tablet'
+        ? tabletContextOpen
+        : mobileContextOpen;
 
   const activeStage = prepContext ? prepContext.stageStates[prepContext.activeStageKey] : null;
   const sessionLocked =
@@ -578,6 +590,12 @@ export default function GrantPrepPage() {
   );
 
   const toggleContext = useCallback(() => {
+    if (layoutMode === 'desktop') {
+      const next = !desktopContextOpen;
+      setDesktopContextOpen(next);
+      safeLocalStorageSet(DESKTOP_CONTEXT_KEY, next ? '1' : '0');
+      return;
+    }
     if (layoutMode === 'tablet') {
       const next = !tabletContextOpen;
       setTabletContextOpen(next);
@@ -589,7 +607,13 @@ export default function GrantPrepPage() {
       setMobileContextOpen(next);
       safeLocalStorageSet(MOBILE_CONTEXT_KEY, next ? '1' : '0');
     }
-  }, [layoutMode, mobileContextOpen, tabletContextOpen]);
+  }, [desktopContextOpen, layoutMode, mobileContextOpen, tabletContextOpen]);
+
+  const toggleChatFullscreen = useCallback(() => {
+    const next = !chatFullscreen;
+    setChatFullscreen(next);
+    safeLocalStorageSet(CHAT_FULLSCREEN_KEY, next ? '1' : '0');
+  }, [chatFullscreen]);
 
   const handleEnableStage = useCallback(
     async (stageKey: GrantPrepStageKey) => {
@@ -690,6 +714,17 @@ export default function GrantPrepPage() {
       onJumpToKeyword={handleJumpToKeyword}
       onPointAction={handlePointAction}
       onOpenPreview={openPreview}
+      topAccessory={
+        layoutMode === 'desktop' && !effectiveChatFullscreen ? (
+          <button
+            type="button"
+            onClick={toggleContext}
+            className="text-xs font-medium text-slate-500 transition hover:text-slate-800"
+          >
+            Hide full
+          </button>
+        ) : null
+      }
     />
   );
 
@@ -730,7 +765,9 @@ export default function GrantPrepPage() {
             'flex w-full flex-1 flex-col',
             isEmbeddedGrantMentor
               ? 'px-4 py-4 sm:px-5 lg:px-6'
-              : 'mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8'
+              : effectiveChatFullscreen
+                ? 'px-4 py-4 sm:px-6 lg:px-8'
+                : 'mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8'
           )}
           style={{ minHeight: 0 }}
         >
@@ -748,7 +785,7 @@ export default function GrantPrepPage() {
               ) : null}
             </div>
           ) : null}
-          {isEmbeddedGrantMentor ? (
+          {isEmbeddedGrantMentor && !effectiveChatFullscreen ? (
             <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-prep-card sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Engagement mode</div>
@@ -781,15 +818,28 @@ export default function GrantPrepPage() {
             </div>
           ) : null}
           {/* EC-3: disable nav while sending */}
-          <GrantPrepStageNavigator
-            prepContext={prepContext}
-            onStageChange={handleStageChange}
-            disabled={sending || sendCooldown}
-          />
+          {!effectiveChatFullscreen ? (
+            <GrantPrepStageNavigator
+              prepContext={prepContext}
+              onStageChange={handleStageChange}
+              disabled={sending || sendCooldown}
+            />
+          ) : null}
 
           {layoutMode === 'desktop' ? (
             <div ref={desktopShellRef} className="flex min-h-0 flex-1 items-stretch gap-0">
-              <div style={{ width: `${desktopChatWidth}%` }} className="flex min-w-0 flex-col pr-3">
+              <div style={{ width: `${isContextOpen ? desktopChatWidth : 100}%` }} className="relative flex min-w-0 flex-col pr-3">
+                {!isContextOpen && !effectiveChatFullscreen ? (
+                  <div className="absolute right-4 top-3 z-10">
+                    <button
+                      type="button"
+                      onClick={toggleContext}
+                      className="text-xs font-medium text-slate-500 transition hover:text-slate-800"
+                    >
+                      Show full
+                    </button>
+                  </div>
+                ) : null}
                 <GrantPrepChatPane
                   messages={sessionData.messages}
                   sending={sending}
@@ -803,15 +853,21 @@ export default function GrantPrepPage() {
                   activeStageTitle={activeStage.title}
                   activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
                   pendingPoints={pendingPoints}
+                  onToggleFullscreen={toggleChatFullscreen}
+                  isFullscreen={effectiveChatFullscreen}
                 />
               </div>
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                onMouseDown={() => setDraggingDivider(true)}
-                className="mx-1 hidden w-3 cursor-col-resize rounded-full bg-slate-200 transition hover:bg-slate-300 xl:block"
-              />
-              <div className="flex min-w-[320px] flex-1 flex-col pl-3">{contextPanel}</div>
+              {isContextOpen ? (
+                <>
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    onMouseDown={() => setDraggingDivider(true)}
+                    className="mx-1 hidden w-3 cursor-col-resize rounded-full bg-slate-200 transition hover:bg-slate-300 xl:block"
+                  />
+                  <div className="flex min-w-[320px] flex-1 flex-col pl-3">{contextPanel}</div>
+                </>
+              ) : null}
             </div>
           ) : (
             <div className="relative flex min-h-0 flex-1 flex-col">

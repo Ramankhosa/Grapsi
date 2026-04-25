@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Check,
+  ChevronLeft,
   ChevronRight,
   Circle,
   FileText,
@@ -49,6 +50,9 @@ interface PaperVerticalStageNavProps {
   // For Section Drafting - allows selecting specific sections
   selectedSection?: string
   onSectionSelect?: (sectionKey: string) => void
+  collapsed?: boolean
+  onCollapsedChange?: (collapsed: boolean) => void
+  allowCollapse?: boolean
 }
 
 type NavTheme = 'dark' | 'light'
@@ -897,7 +901,10 @@ export default function PaperVerticalStageNav({
   stageMetaOverrides,
   draftingSections,
   selectedSection,
-  onSectionSelect
+  onSectionSelect,
+  collapsed = false,
+  onCollapsedChange,
+  allowCollapse = false
 }: PaperVerticalStageNavProps) {
   const [theme, setTheme] = useState<NavTheme>('light')
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
@@ -1043,6 +1050,11 @@ export default function PaperVerticalStageNav({
     await onNavigateToStage(stageKey)
   }, [onNavigateToStage])
 
+  const toggleCollapsed = useCallback(() => {
+    if (!allowCollapse || !onCollapsedChange) return
+    onCollapsedChange(!collapsed)
+  }, [allowCollapse, collapsed, onCollapsedChange])
+
   // ============================================================================
   // Render
   // ============================================================================
@@ -1050,11 +1062,27 @@ export default function PaperVerticalStageNav({
   return (
     <aside
       className={`
-        fixed left-0 top-0 h-screen w-72 z-40 flex flex-col
+        fixed left-0 top-0 h-screen z-40 flex flex-col
         border-r transition-colors duration-300 shadow-sm
+        ${collapsed ? 'w-20' : 'w-72'}
         ${themeClasses.container}
       `}
     >
+      {allowCollapse ? (
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          className={`
+            absolute -right-3 top-28 z-10 flex h-6 w-6 items-center justify-center rounded-full border shadow-sm
+            ${theme === 'dark' ? 'border-slate-600 bg-slate-800 text-slate-300' : 'border-slate-200 bg-white text-slate-500'}
+          `}
+          title={collapsed ? 'Expand workspace rail' : 'Collapse workspace rail'}
+          aria-label={collapsed ? 'Expand workspace rail' : 'Collapse workspace rail'}
+        >
+          {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+        </button>
+      ) : null}
+
       {/* Header */}
       <div className={`p-4 border-b ${themeClasses.border}`}>
         <div className="flex items-center justify-between">
@@ -1068,38 +1096,74 @@ export default function PaperVerticalStageNav({
             `}>
               <FileText className="w-5 h-5 text-white" />
             </div>
-            <div>
-              <div className={`text-sm font-semibold ${themeClasses.text}`}>
-                {workspaceTitle}
+            {!collapsed ? (
+              <div>
+                <div className={`text-sm font-semibold ${themeClasses.text}`}>
+                  {workspaceTitle}
+                </div>
+                <div className={`text-xs ${themeClasses.textMuted}`}>
+                  {overallProgress}% complete
+                </div>
               </div>
-              <div className={`text-xs ${themeClasses.textMuted}`}>
-                {overallProgress}% complete
-              </div>
-            </div>
+            ) : null}
           </div>
 
-          <button
-            onClick={toggleTheme}
-            className={`
-              p-2 rounded-lg transition-colors
-              ${themeClasses.hover}
-            `}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          >
-            {theme === 'dark'
-              ? <Sun className={`w-4 h-4 ${themeClasses.textMuted}`} />
-              : <Moon className={`w-4 h-4 ${themeClasses.textMuted}`} />
-            }
-          </button>
+          {!collapsed ? (
+            <button
+              onClick={toggleTheme}
+              className={`
+                p-2 rounded-lg transition-colors
+                ${themeClasses.hover}
+              `}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            >
+              {theme === 'dark'
+                ? <Sun className={`w-4 h-4 ${themeClasses.textMuted}`} />
+                : <Moon className={`w-4 h-4 ${themeClasses.textMuted}`} />
+              }
+            </button>
+          ) : null}
         </div>
 
+        {collapsed ? (
+          <div className="mt-3 flex items-center justify-center">
+            <button
+              onClick={toggleTheme}
+              className={`
+                p-2 rounded-lg transition-colors
+                ${themeClasses.hover}
+              `}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            >
+              {theme === 'dark'
+                ? <Sun className={`w-4 h-4 ${themeClasses.textMuted}`} />
+                : <Moon className={`w-4 h-4 ${themeClasses.textMuted}`} />
+              }
+            </button>
+          </div>
+        ) : null}
+
         {/* Progress bar */}
-        <div className={`mt-3 h-1.5 rounded-full ${themeClasses.progressBg}`}>
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
-            style={{ width: `${overallProgress}%` }}
-          />
-        </div>
+        {!collapsed ? (
+          <div className={`mt-3 h-1.5 rounded-full ${themeClasses.progressBg}`}>
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
+              style={{ width: `${overallProgress}%` }}
+            />
+          </div>
+        ) : (
+          <div className="mt-3 flex justify-center">
+            <div className={`h-10 w-1.5 overflow-hidden rounded-full ${themeClasses.progressBg}`}>
+              <div
+                className={`w-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
+                style={{
+                  height: `${Math.max(10, overallProgress)}%`,
+                  marginTop: `${100 - Math.max(10, overallProgress)}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Stage List */}
@@ -1107,7 +1171,7 @@ export default function PaperVerticalStageNav({
         {visibleStageDefinitions.map((stage, stageIndex) => {
           const StageIcon = stage.icon
           const previousGroup = stageIndex > 0 ? visibleStageDefinitions[stageIndex - 1]?.groupLabel : undefined
-          const showGroupLabel = Boolean(stage.groupLabel && stage.groupLabel !== previousGroup)
+          const showGroupLabel = !collapsed && Boolean(stage.groupLabel && stage.groupLabel !== previousGroup)
           const isExpanded = expandedStages.has(stage.key)
           const completion = calculateStageCompletion(stage, session)
           const currentIndex = Math.max(0, visibleStageDefinitions.findIndex(s => s.key === resolvedCurrentStage))
@@ -1116,6 +1180,31 @@ export default function PaperVerticalStageNav({
           const isFullyComplete = completion.requiredTotal > 0 && completion.requiredCompleted === completion.requiredTotal
           const isCompleted = isPast && isFullyComplete
           const subStages = getStageSubStages(stage, session)
+
+          if (collapsed) {
+            return (
+              <div key={stage.key} className="mb-2 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => handleStageClick(stage.key)}
+                  title={`${stage.label}: ${stage.description}`}
+                  className={`
+                    relative flex h-12 w-12 items-center justify-center rounded-2xl border transition-all duration-200
+                    ${isCurrent ? themeClasses.activeStage : `${themeClasses.hover} border-transparent`}
+                  `}
+                >
+                  <StageIcon className={`h-5 w-5 ${isCompleted ? themeClasses.completedText : isCurrent ? themeClasses.activeText : themeClasses.textMuted}`} />
+                  <span
+                    className={`
+                      absolute bottom-1.5 right-1.5 h-2.5 w-2.5 rounded-full border-2
+                      ${theme === 'dark' ? 'border-slate-900' : 'border-white'}
+                      ${isCompleted ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : completion.completedCount > 0 ? 'bg-amber-500' : 'bg-slate-300'}
+                    `}
+                  />
+                </button>
+              </div>
+            )
+          }
 
           return (
             <div key={stage.key} className="mb-1">
@@ -1265,24 +1354,32 @@ export default function PaperVerticalStageNav({
 
       {/* Footer */}
       <div className={`p-3 border-t ${themeClasses.border}`}>
-        <div className="flex items-center justify-between">
-          <span className={`text-xs ${themeClasses.textSubtle}`}>
-            Stage {Math.max(1, visibleStageDefinitions.findIndex(s => s.key === resolvedCurrentStage) + 1)} of {visibleStageDefinitions.length}
-          </span>
-          <button
-            onClick={() => resolvedCurrentStage && handleStageClick(resolvedCurrentStage)}
-            className={`
-              text-xs px-2 py-1 rounded
-              ${theme === 'dark'
-                ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
-                : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-              }
-              transition-colors
-            `}
-          >
-            Current Stage
-          </button>
-        </div>
+        {collapsed ? (
+          <div className="flex justify-center">
+            <span className={`text-[10px] ${themeClasses.textSubtle}`}>
+              {Math.max(1, visibleStageDefinitions.findIndex(s => s.key === resolvedCurrentStage) + 1)}/{visibleStageDefinitions.length}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <span className={`text-xs ${themeClasses.textSubtle}`}>
+              Stage {Math.max(1, visibleStageDefinitions.findIndex(s => s.key === resolvedCurrentStage) + 1)} of {visibleStageDefinitions.length}
+            </span>
+            <button
+              onClick={() => resolvedCurrentStage && handleStageClick(resolvedCurrentStage)}
+              className={`
+                text-xs px-2 py-1 rounded
+                ${theme === 'dark'
+                  ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
+                  : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                }
+                transition-colors
+              `}
+            >
+              Current Stage
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   )

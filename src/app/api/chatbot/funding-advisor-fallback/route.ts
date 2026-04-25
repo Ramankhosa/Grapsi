@@ -1,7 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
-import fallbackSearchService from '@/lib/services/fallbackSearchService'
+import { toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
 import { ResponseFormattingService } from '@/lib/services/responseFormattingService'
 
@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
         inputMode: 'research_area',
         query: { researchArea: lastSearchQuery },
         filters: { limit: 5, includeExpired: false },
+        access: toRecommendationAccessScope(auth.actor),
       })
 
       results = searchResult.rawResults.map((call) => ({
@@ -106,8 +107,27 @@ export async function POST(request: NextRequest) {
             .join('\n\n')
         : 'I could not match that follow-up to a current published funding result. Please run a new funding search.'
     } else if (isFundingQuery) {
-      const searchResult = await fallbackSearchService.searchFundingCalls(query)
-      results = searchResult.results || []
+      const searchResult = await recommendationSearchService.search({
+        inputMode: 'research_area',
+        query: { researchArea: query },
+        filters: { limit: 5, includeExpired: false },
+        access: toRecommendationAccessScope(auth.actor),
+      })
+      results = searchResult.rawResults.map((call) => ({
+        id: call.id,
+        agencyName: call.agencyName,
+        schemeTitle: call.schemeTitle,
+        description: call.fullDescription || call.shortDescription || call.description,
+        deadline: call.closeDate,
+        fundingAmount:
+          call.amountMin !== null || call.amountMax !== null
+            ? `${call.currency || ''} ${call.amountMin ?? ''}${call.amountMax !== null ? ` - ${call.amountMax}` : ''}`.trim()
+            : null,
+        eligibility: call.eligibilityText || call.eligibilitySummary,
+        researchAreas: call.disciplines,
+        urls: call.officialUrls,
+        score: call.score,
+      }))
       response = results.length
         ? `I found ${results.length} potential funding opportunities for "${query}":\n\n` +
           results

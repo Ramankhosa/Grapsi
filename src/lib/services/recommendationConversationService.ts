@@ -39,6 +39,7 @@ import {
 } from '../recommendations/conversationUtils';
 import type {
   InternalRecommendationSearchResponse,
+  RecommendationAccessScope,
   RecommendationInputMode,
   RecommendationRawResultItem,
   RecommendationSearchDiagnostics,
@@ -1210,9 +1211,9 @@ USER MESSAGE:
 ${params.message}
 
 INSTRUCTIONS:
-Think step by step about what the user wants, then return a JSON object with this schema:
+Return a JSON object with this schema:
 {
-  "reasoning": "Your chain-of-thought analysis of the user's message given the full context above. Explain what the user wants and why you chose this action. 2-4 sentences.",
+  "reasoning": "A brief decision rationale. Explain what the user wants and why you chose this action. 1-2 concise sentences.",
   "intent": "new_search" | "refine_filters" | "clear_filters" | "compare_results" | "explain_result" | "browse_more" | "clarification_needed" | "general_help",
   "confidence": 0.0 to 1.0,
   "requiresConfirmation": false,
@@ -1248,7 +1249,7 @@ Think step by step about what the user wants, then return a JSON object with thi
 }
 
 RULES:
-1. REASONING FIRST: Always fill the "reasoning" field before deciding on intent. Think about what the user literally said, what they might mean given the conversation history, and what their researcher profile implies.
+1. DECISION RATIONALE: Fill the "reasoning" field with a concise summary of the decision. Do not include hidden chain-of-thought.
 2. INDIRECT LANGUAGE: If the user says "I'm presenting at a conference in Berlin next month", you may infer: intent=new_search, fundingKinds=["Travel Grant","Conference Grant"], hostCountries=["Germany"], deadlineFrom/To for next month. Explain this in reasoning and set requiresConfirmation=true before rerunning the search.
 3. PROFILE INFERENCE: When the user says something vague like "find grants for me" or "any funding I'm eligible for", use their researcher profile to fill in the research area, career stage, country, and institution type. List what you inferred in "inferredFromProfile".
 4. CONVERSATION CONTEXT: Use the conversation history to resolve references like "those", "similar", "the second one", "go back to the earlier search". If the user says "something similar but in Europe", keep the current query but change geography.
@@ -1559,8 +1560,11 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     inputMode: RecommendationInputMode;
     query: RecommendationConversationQueryState['query'];
     filters: Required<RecommendationSearchFilters>;
-  }) {
-    return recommendationSearchService.search(buildSearchRequestFromConversationState(state.inputMode, state.query, state.filters));
+  }, access?: RecommendationAccessScope) {
+    return recommendationSearchService.search({
+      ...buildSearchRequestFromConversationState(state.inputMode, state.query, state.filters),
+      access,
+    });
   }
 
   private buildPendingPatch(turnIndex: number, state: ConversationState, parsed: ParsedTurn): RecommendationConversationPendingPatch {
@@ -1584,6 +1588,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     turnIndex: number;
     conversationDetail: RecommendationConversationDetail;
     researcherContext?: ResearcherFinderContext | null;
+    access?: RecommendationAccessScope;
   }): Promise<TurnOutcome> {
     const manualMessage = normalizeWhitespace(params.input.message || '');
 
@@ -1612,7 +1617,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
         };
       }
 
-      const searchResult = await this.runGroundedSearch(nextState);
+      const searchResult = await this.runGroundedSearch(nextState, params.access);
       return {
         intent: 'refine_filters',
         messageType: 'assistant_response',
@@ -1725,7 +1730,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
         );
 
         if (isConversationStateSearchable(fallbackState.inputMode, fallbackState.query, fallbackState.filters)) {
-          const searchResult = await this.runGroundedSearch(fallbackState);
+          const searchResult = await this.runGroundedSearch(fallbackState, params.access);
           return {
             intent: parsed.intent,
             messageType: 'assistant_response',
@@ -1754,7 +1759,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
       };
     }
 
-    const searchResult = await this.runGroundedSearch(parsed.nextState);
+    const searchResult = await this.runGroundedSearch(parsed.nextState, params.access);
     return {
       intent: parsed.intent,
       messageType: 'assistant_response',
@@ -1865,7 +1870,8 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     userId: string,
     tenantId: string,
     conversationId: string,
-    input: RecommendationConversationMessageRequest
+    input: RecommendationConversationMessageRequest,
+    access?: RecommendationAccessScope
   ): Promise<RecommendationConversationMutationResponse> {
     const reserved = await this.reserveTurn(userId, tenantId, conversationId, input);
     const conversation = await this.getConversation(userId, tenantId, conversationId);
@@ -1892,6 +1898,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
       turnIndex: reserved.turnIndex,
       conversationDetail: conversation,
       researcherContext,
+      access,
     });
 
     return this.persistOutcome({
@@ -1909,7 +1916,8 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     userId: string,
     tenantId: string,
     conversationId: string,
-    options: { confirm?: boolean; editedQueryPatch?: RecommendationConversationQueryState['query']; editedFilterPatch?: RecommendationSearchFilters }
+    options: { confirm?: boolean; editedQueryPatch?: RecommendationConversationQueryState['query']; editedFilterPatch?: RecommendationSearchFilters },
+    access?: RecommendationAccessScope
   ): Promise<RecommendationConversationMutationResponse> {
     const conversation = await this.getConversationRecord(userId, tenantId, conversationId);
     const state = buildConversationState(conversation);
@@ -1938,7 +1946,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
 
     const run = options.confirm === false || !isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)
       ? undefined
-      : await this.runGroundedSearch(nextState);
+      : await this.runGroundedSearch(nextState, access);
 
     return this.persistOutcome({
       userId,
@@ -1962,7 +1970,12 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
     });
   }
 
-  async resetFilters(userId: string, tenantId: string, conversationId: string): Promise<RecommendationConversationMutationResponse> {
+  async resetFilters(
+    userId: string,
+    tenantId: string,
+    conversationId: string,
+    access?: RecommendationAccessScope
+  ): Promise<RecommendationConversationMutationResponse> {
     const conversation = await this.getConversationRecord(userId, tenantId, conversationId);
     const state = buildConversationState(conversation);
     const turnIndex = state.lastTurnIndex + 1;
@@ -1970,7 +1983,7 @@ Return ONLY the JSON object, no markdown fences, no extra text.`;
 
     const nextState = applyStateNormalization(state.inputMode, state.query, createDefaultFilters());
     const run = isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)
-      ? await this.runGroundedSearch(nextState)
+      ? await this.runGroundedSearch(nextState, access)
       : undefined;
 
     return this.persistOutcome({

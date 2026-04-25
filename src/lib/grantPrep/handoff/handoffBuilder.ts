@@ -1,6 +1,12 @@
 import crypto from 'crypto';
 import type { FundingCallContext } from '../../fundingContext';
-import type { GrantPrepFreezePayload, GrantPrepSessionContext, GrantPrepStageKey } from '../types';
+import type {
+  GrantPrepFreezePayload,
+  GrantPrepPointState,
+  GrantPrepSessionContext,
+  GrantPrepStageKey,
+  GrantPrepStageState,
+} from '../types';
 import { isGrantPrepUserFacingPoint } from '../sessionState';
 import type { GrantPrepEvidenceItem } from '@/types/grant';
 
@@ -115,7 +121,7 @@ export function buildGrantPrepFreezePayload(input: {
 
   const blockers = Object.values(input.session.stageStates).flatMap((stage) =>
     stage.points
-      .filter((point) => point.priority !== 'P3' && isGrantPrepUserFacingPoint(point) && point.status !== 'covered' && stage.enabled)
+      .filter((point) => isGrantPrepLaunchBlocker(stage, point))
       .map((point) => ({
         stageKey: stage.stageKey,
         pointKey: point.key,
@@ -173,6 +179,22 @@ export function buildGrantPrepFreezePayload(input: {
     payloadHash,
     blockers,
   };
+}
+
+function isGrantPrepLaunchBlocker(stage: GrantPrepStageState, point: GrantPrepPointState) {
+  if (!stage.enabled || !stage.pickable) {
+    return false;
+  }
+
+  if (!isGrantPrepUserFacingPoint(point) || point.status === 'covered') {
+    return false;
+  }
+
+  if (point.capture?.ruleCompliance?.rescopeNeeded) {
+    return true;
+  }
+
+  return point.priority === 'P1';
 }
 
 export function getBlockingStageKeys(payload: GrantPrepFreezePayload): GrantPrepStageKey[] {

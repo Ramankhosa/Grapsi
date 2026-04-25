@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { RECOMMENDATION_SORT_OPTIONS } from '@/lib/recommendations/constants'
-import { requireRecommendationUser } from '@/lib/recommendations/request-auth'
+import { requireRecommendationUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
+import { validateNormalizedControlledFilters } from '@/lib/recommendations/utils'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
 
 export const runtime = 'nodejs'
@@ -43,9 +44,15 @@ export async function POST(request: NextRequest) {
 
   try {
     const parsed = requestSchema.parse(await request.json())
+    const validationError = validateNormalizedControlledFilters(parsed.filters || {})
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 })
+    }
+
     const result = await recommendationSearchService.getDirectoryFacets({
       query: parsed.query,
       filters: parsed.filters,
+      access: toRecommendationAccessScope(auth.actor),
     })
     return NextResponse.json(result)
   } catch (error) {

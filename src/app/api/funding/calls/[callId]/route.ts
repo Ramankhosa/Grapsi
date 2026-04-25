@@ -6,6 +6,7 @@ import { buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/li
 import { fundingGuidelineService } from '@/lib/fundingGuidelines/service'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
 import { fundingTemplateService } from '@/lib/fundingTemplates/service'
+import { sanitizeExternalUrl, sanitizeExternalUrls } from '@/lib/urlSafety'
 
 export const runtime = 'nodejs'
 
@@ -185,6 +186,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         agencyName: sanitizeText(call.agency_name) || detail.agencyName || null,
         description: sanitizeText(call.description) || detail.description || null,
         summary: sanitizeText(call.summary) || detail.summary || null,
+        sourceUrl: sanitizeExternalUrl(call.source_url || call.sourceUrl),
         sponsorType: sanitizeText(call.sponsor_type),
         geographyScope,
         geography,
@@ -203,7 +205,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         disciplines: sanitizeStringArray(call.disciplines),
         eligibilityText: sanitizeText(call.eligibility_text),
         expectedDeliverablesText: sanitizeText(call.expected_deliverables_text),
-        officialUrls: sanitizeStringArray(call.official_urls),
+        officialUrls: sanitizeExternalUrls(call.official_urls),
         contactInfo: sanitizeText(call.contact_info),
         sponsorTypeLabel:
           sanitizeText(call.sponsor_type)?.replace(/_/g, ' ') || sanitizeText(call.agency_name) || null,

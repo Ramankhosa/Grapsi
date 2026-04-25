@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
+import { toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import type { RecommendationSearchRequest } from '@/lib/recommendations/types'
 import { FundingAdvisorService } from '@/lib/services/fundingAdvisorService'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
@@ -58,7 +59,11 @@ export async function POST(request: NextRequest) {
         const history = conversationHistory[convId].messages
           .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
           .join('\n\n')
-        result = await fundingAdvisorService.processQuery({ query, conversationHistory: history })
+        result = await fundingAdvisorService.processQuery({
+          query,
+          conversationHistory: history,
+          access: toRecommendationAccessScope(auth.actor),
+        })
         conversationHistory[convId].messages.push({ role: 'user', content: query })
         conversationHistory[convId].messages.push({ role: 'assistant', content: result })
         if (conversationHistory[convId].messages.length > MAX_CONVERSATION_HISTORY) {
@@ -90,6 +95,7 @@ export async function POST(request: NextRequest) {
             limit: params?.limit || 5,
             sort: body.sort === 'deadline_soonest' ? 'deadline_soonest' : 'best_match',
           },
+          access: toRecommendationAccessScope(auth.actor),
         }
         const searchResult = await recommendationSearchService.search(recommendationRequest)
         if (searchResult.results.length === 0) {

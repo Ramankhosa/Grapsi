@@ -7,7 +7,7 @@ import {
   RECOMMENDATION_SORT_OPTIONS,
 } from '@/lib/recommendations/constants'
 import { checkRateLimit } from '@/lib/recommendations/rateLimit'
-import { requireRecommendationUser } from '@/lib/recommendations/request-auth'
+import { requireRecommendationUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import type { RecommendationDirectoryRequest } from '@/lib/recommendations/types'
 import { summarizeFilters, validateNormalizedControlledFilters } from '@/lib/recommendations/utils'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
@@ -86,6 +86,7 @@ export async function POST(request: NextRequest) {
     const result = await recommendationSearchService.browseDirectory({
       query: parsed.query,
       page: parsed.page,
+      access: toRecommendationAccessScope(auth.actor),
       filters: {
         ...parsed.filters,
         limit: parsed.filters?.limit || 8,

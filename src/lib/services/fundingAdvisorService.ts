@@ -1,6 +1,8 @@
 import { generateFromGemini } from '../geminiService';
 import { fillPromptTemplate, parseResponse } from '../promptTemplates';
-import { prisma } from '../prisma';
+import type { RecommendationAccessScope } from '../recommendations/types';
+import { formatFundingAmount } from '../recommendations/utils';
+import { recommendationSearchService } from './recommendationSearchService';
 
 /**
  * Interface for funding search parameters
@@ -38,6 +40,7 @@ export interface ApplicationAdviceParams {
 export interface ConversationParams {
   query: string;
   conversationHistory?: string;
+  access?: RecommendationAccessScope;
 }
 
 /**
@@ -196,57 +199,27 @@ export class FundingAdvisorService {
       switch (intent) {
         case 'funding_search':
           try {
-            // Use only the actual database
-            const fundingCallsService = require('./fundingCallsService').fundingCallsService;
-            console.log('Using database search with fundingCallsService');
-            
-            // Search filters
-            const filters = {
-              applicantTypes: [],
-              grantTypes: [],
-              countries: [],
-              limit: 10, // Increased limit to get more results
-              includeExpired: false
-            };
-            
-            // Debug database connection
-            try {
-              const { prisma } = require('../prisma');
-              console.log('Testing database connection...');
-              const testResult = await prisma.$queryRaw`SELECT 1 as test`;
-              console.log('Database connection test:', testResult);
-            } catch (dbConnError) {
-              console.error('Database connection test failed:', dbConnError);
-              const dbConnMessage = dbConnError instanceof Error ? dbConnError.message : String(dbConnError);
-              throw new Error('Failed to connect to database: ' + dbConnMessage);
-            }
-            
-            // Execute the search
-            console.log(`Executing vector search for query: "${query}"`);
-            const searchResult = await fundingCallsService.searchFundingCalls(query, filters);
-            console.log(`Search completed. Found ${searchResult.results?.length || 0} results.`);
-            console.log('Search results:', JSON.stringify(searchResult.results.map((r: { schemeTitle: string }) => r.schemeTitle)));
-            
-            // Check if we got results
-            if (searchResult.results && searchResult.results.length > 0) {
-              console.log(`Found ${searchResult.results.length} results from database`);
-              
-              // Format the results into a response
-              const formattedResults = searchResult.results.map((call: any, index: number) => {
-                const similarity = searchResult.similarity && searchResult.similarity[index] 
-                  ? `(${(searchResult.similarity[index] * 100).toFixed(1)}% match)` 
-                  : '';
-                
-                return `${index + 1}. **${call.schemeTitle}** by ${call.agencyName} ${similarity}\n` +
-                  `   - Deadline: ${call.deadline ? new Date(call.deadline).toLocaleDateString() : 'Not specified'}\n` +
-                  `   - Funding: ${call.fundingAmount || 'Not specified'}\n` +
-                  `   - Research Areas: ${call.researchAreas.join(', ')}\n` +
-                  `   - Description: ${call.description.substring(0, 150)}${call.description.length > 150 ? '...' : ''}`;
+            const searchResult = await recommendationSearchService.search({
+              inputMode: 'research_area',
+              query: { researchArea: query },
+              filters: { limit: 10, includeExpired: false },
+              access: params.access,
+            });
+
+            if (searchResult.rawResults.length > 0) {
+              const formattedResults = searchResult.rawResults.map((call, index) => {
+                const description = call.fullDescription || call.shortDescription || call.description || '';
+                const fundingAmount = formatFundingAmount(call.amountMin, call.amountMax, call.currency) || 'Not specified';
+
+                return `${index + 1}. **${call.schemeTitle}** by ${call.agencyName} (${(call.score * 100).toFixed(1)}% match)\n` +
+                  `   - Deadline: ${call.closeDate ? new Date(call.closeDate).toLocaleDateString() : 'Not specified'}\n` +
+                  `   - Funding: ${fundingAmount}\n` +
+                  `   - Research Areas: ${call.disciplines.join(', ') || 'Not specified'}\n` +
+                  `   - Description: ${description.substring(0, 150)}${description.length > 150 ? '...' : ''}`;
               }).join('\n\n');
-              
-              return `Based on your query about "${query}", I've found ${searchResult.results.length} funding opportunities that might interest you:\n\n${formattedResults}\n\n[Results from: **Database - Vector Search**]\n\nWould you like more details about any of these opportunities? You can ask about a specific one by number (e.g., "Tell me more about #2") or ask for more details about all of them.`;
+
+              return `Based on your query about "${query}", I've found ${searchResult.rawResults.length} funding opportunities that might interest you:\n\n${formattedResults}\n\n[Results from: **Database - Grounded Search**]\n\nWould you like more details about any of these opportunities? You can ask about a specific one by number (e.g., "Tell me more about #2") or ask for more details about all of them.`;
             } else {
-              // No results found in database - return empty result message
               return `I searched our database for funding opportunities related to "${query}", but couldn't find any exact matches. Here are some suggestions:\n\n` +
                 `1. Try using different keywords or more general terms\n` +
                 `2. Check if there are alternative terms for your research area\n` +
@@ -256,9 +229,7 @@ export class FundingAdvisorService {
             }
           } catch (dbError) {
             console.error('Error using database search:', dbError);
-            const dbMessage = dbError instanceof Error ? dbError.message : String(dbError);
             return `I apologize, but I encountered an issue accessing the funding database. This might be due to a connection problem or database maintenance.\n\n` +
-              `Error details: ${dbMessage}\n\n` + 
               `Please try again later or contact support if the problem persists.`;
           }
           break;

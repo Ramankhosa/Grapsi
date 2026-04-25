@@ -3,6 +3,7 @@ import prisma from '../prisma';
 import { EmbeddingService } from './embeddingService';
 import { generateFromGemini } from '../geminiService';
 import { extractJsonObject } from '../recommendations/conversationUtils';
+import { sanitizeExternalUrls } from '../urlSafety';
 import type {
   RecommendationDirectoryRequest,
   RecommendationDirectoryResponse,
@@ -12,6 +13,7 @@ import type {
   DirectoryFacetItem,
   InternalRecommendationSearchResponse,
   NormalizedRecommendationSearchRequest,
+  RecommendationAccessScope,
   RecommendationCandidate,
   RecommendationSearchFilters,
   RecommendationSearchRequest,
@@ -96,14 +98,31 @@ function buildScalarAnyCondition(columnName: string, values: string[]) {
   return Prisma.sql`LOWER(COALESCE(${Prisma.raw(columnName)}, '')) = ANY(${lowered})`;
 }
 
+function buildAccessCondition(access?: RecommendationAccessScope) {
+  if (access?.isSuperAdmin) {
+    return Prisma.sql`TRUE`;
+  }
+
+  if (access?.tenantId) {
+    return Prisma.sql`(
+      visibility = 'GLOBAL_PUBLISHED' OR
+      (visibility = 'TENANT_PRIVATE' AND "tenantId" = ${access.tenantId})
+    )`;
+  }
+
+  return Prisma.sql`visibility = 'GLOBAL_PUBLISHED'`;
+}
+
 function buildBaseConditions(
   normalized: NormalizedRecommendationSearchRequest,
-  ignoreUserFilters = false
+  ignoreUserFilters = false,
+  access?: RecommendationAccessScope
 ) {
   const { filters } = normalized;
   const conditions: Prisma.Sql[] = [
     Prisma.sql`(status = 'PUBLISHED' OR catalog_status = 'PUBLISHED')`,
     Prisma.sql`COALESCE(is_active, true) = true`,
+    buildAccessCondition(access),
   ];
 
   if (!filters.includeExpired) {
@@ -373,7 +392,7 @@ function toPublicResult(
     institutionTypes: candidate.institutionTypes,
     careerStages: candidate.careerStages,
     sponsorType: candidate.sponsorType,
-    officialUrls: candidate.officialUrls,
+    officialUrls: sanitizeExternalUrls(candidate.officialUrls),
     score: Number(score.toFixed(4)),
     matchReasons: buildMatchReasons(candidate, normalized),
     eligibilitySummary: buildEligibilitySummary(candidate),
@@ -633,7 +652,8 @@ export class RecommendationSearchService {
   }
 
   private async buildStrictFilterRecovery(
-    normalized: NormalizedRecommendationSearchRequest
+    normalized: NormalizedRecommendationSearchRequest,
+    access?: RecommendationAccessScope
   ): Promise<RecommendationStrictFilterRecovery | null> {
     if (!hasActiveUserFilters(normalized.filters)) {
       return null;
@@ -659,7 +679,7 @@ export class RecommendationSearchService {
         ...normalized,
         filters: cloneFilters(retryFilters),
       };
-      const relaxedExecution = await this.executeSearch(relaxedNormalized, false);
+      const relaxedExecution = await this.executeSearch(relaxedNormalized, false, access);
       const relaxedRanking = this.rankExecution(relaxedNormalized, relaxedExecution);
       if (relaxedRanking.filteredScored.length > 0) {
         return {
@@ -889,7 +909,8 @@ Rules:
 
   private async buildResponseFromExecution(
     normalized: NormalizedRecommendationSearchRequest,
-    execution: SearchExecutionResult
+    execution: SearchExecutionResult,
+    access?: RecommendationAccessScope
   ): Promise<{ response: InternalRecommendationSearchResponse; topScore: number }> {
     const ranked = this.rankExecution(normalized, execution);
     const { filteredScored, lowConfidence, topScore } = ranked;
@@ -900,7 +921,7 @@ Rules:
 
     if (filteredScored.length === 0) {
       strictFilterRecovery = hasActiveUserFilters(normalized.filters)
-        ? await this.buildStrictFilterRecovery(normalized)
+        ? await this.buildStrictFilterRecovery(normalized, access)
         : null;
       noResultsReason = strictFilterRecovery
         ? 'filters_too_strict'
@@ -931,9 +952,10 @@ Rules:
 
   private async searchByVector(
     normalized: NormalizedRecommendationSearchRequest,
-    ignoreUserFilters = false
+    ignoreUserFilters = false,
+    access?: RecommendationAccessScope
   ): Promise<SearchExecutionResult> {
-    const baseConditions = buildBaseConditions(normalized, ignoreUserFilters);
+    const baseConditions = buildBaseConditions(normalized, ignoreUserFilters, access);
     const vectorText = `[${(await embeddingService.generateEmbedding(normalized.normalizedQuery.semanticDocument)).embedding.join(',')}]`;
     const vectorLiteral = vectorText === '[]' ? null : vectorText;
 
@@ -963,13 +985,14 @@ Rules:
 
   private async searchByFullText(
     normalized: NormalizedRecommendationSearchRequest,
-    ignoreUserFilters = false
+    ignoreUserFilters = false,
+    access?: RecommendationAccessScope
   ): Promise<RecommendationCandidate[]> {
     if (!normalized.normalizedQuery.fullTextQuery) {
       return [];
     }
 
-    const baseConditions = buildBaseConditions(normalized, ignoreUserFilters);
+    const baseConditions = buildBaseConditions(normalized, ignoreUserFilters, access);
     const queryText = normalized.normalizedQuery.fullTextQuery;
 
     return prisma.$queryRaw<RecommendationCandidate[]>(
@@ -1015,11 +1038,12 @@ Rules:
 
   private async executeSearch(
     normalized: NormalizedRecommendationSearchRequest,
-    ignoreUserFilters = false
+    ignoreUserFilters = false,
+    access?: RecommendationAccessScope
   ): Promise<SearchExecutionResult> {
     const [vectorResult, fullTextResult] = await Promise.allSettled([
-      this.searchByVector(normalized, ignoreUserFilters),
-      this.searchByFullText(normalized, ignoreUserFilters),
+      this.searchByVector(normalized, ignoreUserFilters, access),
+      this.searchByFullText(normalized, ignoreUserFilters, access),
     ]);
 
     let degradedMode: 'full_text_only' | null = null;
@@ -1046,14 +1070,14 @@ Rules:
 
   async search(request: RecommendationSearchRequest): Promise<InternalRecommendationSearchResponse> {
     const normalized = normalizeRecommendationSearchRequest(request);
-    const execution = await this.executeSearch(normalized, false);
-    let best = await this.buildResponseFromExecution(normalized, execution);
+    const execution = await this.executeSearch(normalized, false, request.access);
+    let best = await this.buildResponseFromExecution(normalized, execution, request.access);
 
     if ((best.response.totalResults === 0 || best.response.lowConfidence) && normalized.inputMode === 'research_area') {
       const enriched = await this.enrichResearchAreaRequest(normalized);
       if (enriched) {
-        const enrichedExecution = await this.executeSearch(enriched, false);
-        const enrichedResult = await this.buildResponseFromExecution(enriched, enrichedExecution);
+        const enrichedExecution = await this.executeSearch(enriched, false, request.access);
+        const enrichedResult = await this.buildResponseFromExecution(enriched, enrichedExecution, request.access);
 
         if (
           enrichedResult.response.totalResults > best.response.totalResults ||
@@ -1073,7 +1097,7 @@ Rules:
       query: { researchArea: normalizeWhitespace(request.query || '') || 'funding opportunities' },
       filters: request.filters,
     });
-    const baseConditions = buildBaseConditions(normalized, false);
+    const baseConditions = buildBaseConditions(normalized, false, request.access);
     const where = combineConditions(baseConditions);
     const hasQuery = Boolean(request.query?.trim()) && Boolean(normalized.normalizedQuery.fullTextQuery);
 
@@ -1182,7 +1206,7 @@ Rules:
       query: { researchArea: rawQuery || 'funding opportunities' },
       filters: request.filters,
     });
-    const baseConditions = buildBaseConditions(normalized, false);
+    const baseConditions = buildBaseConditions(normalized, false, request.access);
     const hasQuery = Boolean(rawQuery) && Boolean(normalized.normalizedQuery.fullTextQuery);
     const page = Math.max(request.page || 1, 1);
     const pageSize = normalized.filters.limit;

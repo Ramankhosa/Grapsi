@@ -3,6 +3,11 @@ export type RecommendationSort = 'best_match' | 'deadline_soonest';
 export type RecommendationDegradedMode = 'full_text_only' | null;
 export type RecommendationNoResultsReason = 'no_match' | 'filters_too_strict' | 'query_too_weak' | null;
 
+export interface RecommendationAccessScope {
+  tenantId: string | null;
+  isSuperAdmin: boolean;
+}
+
 export interface RecommendationSearchFilters {
   geographyScope?: string[];
   eligibleCountries?: string[];
@@ -49,12 +54,14 @@ export interface RecommendationSearchRequest {
   inputMode: RecommendationInputMode;
   query: PaperMetadataQuery | ResearchAreaQuery;
   filters?: RecommendationSearchFilters;
+  access?: RecommendationAccessScope;
 }
 
 export interface RecommendationDirectoryRequest {
   query?: string;
   page?: number;
   filters?: RecommendationSearchFilters;
+  access?: RecommendationAccessScope;
 }
 
 export interface NormalizedRecommendationSearchRequest {
@@ -191,6 +198,7 @@ export interface DirectoryFacetItem {
 export interface DirectoryFacetRequest {
   query?: string;
   filters?: RecommendationSearchFilters;
+  access?: RecommendationAccessScope;
 }
 
 export interface DirectoryFacetResponse {

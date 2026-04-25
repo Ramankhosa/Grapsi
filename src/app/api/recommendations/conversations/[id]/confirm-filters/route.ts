@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
+import { requireRecommendationTenantUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
@@ -24,7 +24,8 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       auth.userId,
       auth.tenantId,
       params.id,
-      parsed
+      parsed,
+      toRecommendationAccessScope(auth.actor)
     )
     return NextResponse.json(response)
   } catch (error) {

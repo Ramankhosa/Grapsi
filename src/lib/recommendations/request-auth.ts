@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import type { FundingActor } from '@/lib/funding/access'
 import { requireFundingActor } from '@/lib/funding/access'
+import type { RecommendationAccessScope } from '@/lib/recommendations/types'
 
 type AuthResult =
   | { actor: FundingActor; userId: string; tenantId: string | null }
@@ -46,5 +47,12 @@ export async function requireRecommendationTenantUser(request: NextRequest): Pro
     actor: auth.actor,
     userId: auth.userId,
     tenantId: auth.tenantId,
+  }
+}
+
+export function toRecommendationAccessScope(actor: FundingActor): RecommendationAccessScope {
+  return {
+    tenantId: actor.tenantId,
+    isSuperAdmin: actor.isSuperAdmin,
   }
 }

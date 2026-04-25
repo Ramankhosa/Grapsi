@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
+import { toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
 import type { RecommendationSearchRequest } from '@/lib/recommendations/types'
 
@@ -39,6 +40,7 @@ export async function POST(request: NextRequest) {
         includeExpired: Boolean(filters?.includeExpired),
         limit: filters?.limit || 5,
       },
+      access: toRecommendationAccessScope(auth.actor),
     }
 
     const searchResult = await recommendationSearchService.search(searchRequest)

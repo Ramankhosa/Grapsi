@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService'
-import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
+import { CHAT_RATE_LIMIT_MAX_REQUESTS, CHAT_RATE_LIMIT_WINDOW_MS } from '@/lib/recommendations/constants'
+import { checkRateLimit } from '@/lib/recommendations/rateLimit'
+import { requireRecommendationTenantUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import type { RecommendationSearchFilters } from '@/lib/recommendations/types'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
@@ -40,6 +42,14 @@ const requestSchema = z.object({
   replaceManualFilters: z.boolean().optional(),
 })
 
+function getRequestIp(request: NextRequest) {
+  const forwarded = request.headers.get('x-forwarded-for')
+  if (forwarded) {
+    return forwarded.split(',')[0].trim()
+  }
+  return request.headers.get('x-real-ip') || 'unknown'
+}
+
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
   if ('response' in auth) {
@@ -47,12 +57,28 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   }
 
   try {
+    const rateLimit = checkRateLimit(
+      `${auth.userId}:${getRequestIp(request)}:chat:${params.id}`,
+      CHAT_RATE_LIMIT_MAX_REQUESTS,
+      CHAT_RATE_LIMIT_WINDOW_MS
+    )
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        {
+          error: 'Too many funding chat messages. Please wait and try again.',
+          resetAt: new Date(rateLimit.resetAt).toISOString(),
+        },
+        { status: 429 }
+      )
+    }
+
     const parsed = requestSchema.parse(await request.json())
     const response = await recommendationConversationService.processMessage(
       auth.userId,
       auth.tenantId,
       params.id,
-      parsed
+      parsed,
+      toRecommendationAccessScope(auth.actor)
     )
     return NextResponse.json(response)
   } catch (error) {
