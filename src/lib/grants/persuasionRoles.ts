@@ -129,16 +129,16 @@ export function inferGrantPersuasionRole(input: {
   if (/(policy|strategy|framework|priority|mission|roadmap|scheme|call alignment|strategic fit)/.test(text)) {
     return 'policy_alignment'
   }
-  if (/(gap|limitation|barrier|challenge|constraint|unmet|insufficient|shortfall|bottleneck)/.test(text)) {
+  if (/(gap|limitation|barrier|challenge|constraint|unmet|insufficient|shortfall|bottleneck|state of art|state of the art|evidence landscape|research landscape)/.test(text)) {
     return 'shows_gap'
   }
-  if (/(prevalence|incidence|burden|mortality|morbidity|cost|baseline|urgency|affected|demand|population)/.test(text)) {
+  if (/(prevalence|incidence|burden|mortality|morbidity|cost|baseline|urgency|affected|demand|population|malnutrition|undernutrition|stunting|wasting)/.test(text)) {
     return 'proves_need'
   }
   if (/(feasib|implementation|pilot|deployment|operational readiness|delivery readiness|adoption|uptake)/.test(text)) {
     return 'supports_feasibility'
   }
-  if (/(outcome|impact|effect size|improvement|reduction|increase|success rate|result metric)/.test(text)) {
+  if (/(outcome|impact|effect size|improvement|reduction|increase|success rate|result metric|performance|development|growth|cognitive|cognition|physical)/.test(text)) {
     return 'quantifies_impact'
   }
   if (/(validation|validated|reliability|benchmark|measurement|indicator|protocol|evaluation design)/.test(text)) {

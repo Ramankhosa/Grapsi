@@ -8,6 +8,7 @@ import {
   enrichGrantBlueprintSections,
   type GrantBlueprintEnrichmentContext,
 } from '@/lib/grants/blueprintEnrichment'
+import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import type {
   GrantBlueprintPlanSection,
   GrantCitationMode,
@@ -30,6 +31,24 @@ const responseSchema = z.object({
   }).optional(),
   sections: z.array(sectionSchema).default([]),
 })
+
+function cleanLlmList(value: unknown, limit = 12): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const next: string[] = []
+
+  for (const item of value) {
+    const text = String(item || '').trim().replace(/\s+/g, ' ')
+    if (!text) continue
+    const key = text.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(text)
+    if (next.length >= limit) break
+  }
+
+  return next
+}
 
 function buildPrompt(input: {
   baseSectionPlan: GrantBlueprintPlanSection[]
@@ -72,14 +91,15 @@ function buildPrompt(input: {
     'Return JSON only. Do not include prose before or after the JSON.',
     'Preserve section keys and section ordering.',
     'Improve section-specific mustCover, mustAvoid, citationMode, and proposal foundation quality.',
-    'Avoid duplicating mustCover points across sections.',
+    'In this grant pipeline, mustCover stores literature evidence pillars: searchable analytical dimensions that connect blueprint sections to literature search, paper mapping, evidence extraction, and section drafting.',
+    'Avoid duplicating evidence pillars across sections unless the same pillar genuinely supports multiple sections.',
     'For structured sections like checklist/table/budget_rows, prefer citationMode=no_citations.',
     'For narrative sections that need literature grounding, prefer citationMode=mapped_evidence.',
     'For direct-writing narrative/support sections that should not require mapped evidence, use citationMode=direct_draft.',
-    'Every mustCover item for a grant-backed narrative section must be a reviewer-convincing evidence claim: a specific assertion that should be proven with external evidence.',
-    'Do not write generic dimensions such as "Evidence for the problem", "Methodology overview", or "Background".',
-    'Prefer specific grant-native dimensions such as burden statistics, policy gap evidence, feasibility precedent, validation evidence, comparative advantage, outcome precedent, or continuation model precedent.',
-    'Use prep-captured facts as anchors. Dimensions should help prove the user\'s committed claims rather than drifting into generic topic coverage.',
+    'Every mustCover item for a grant-backed narrative section must be a literature-searchable pillar, not a final draft sentence. A pillar should be searchable in paper titles, abstracts, methods, findings, or policy literature.',
+    'Do not write generic headings such as "Evidence for the problem", "Methodology overview", "Background", or "Expected impact".',
+    'Prefer pillar labels like "Role of nutrition in child physical development", "Current state of art of malnutrition in India", "Implementation feasibility of school-based nutrition programs", or "Validation methods for child growth and cognitive outcomes".',
+    'Use prep-captured facts as anchors. The pillar should let literature mapping attach papers, extract facts/statistics/limitations/outcomes, and inject those evidence nails into section drafts.',
     'Use evaluation criteria and reviewer intent to shape the mustCover list toward scoring logic.',
     'Section semantic guidance:',
     '- problem_need: burden statistics, prevalence data, policy gap evidence, target population baseline',
@@ -142,7 +162,7 @@ export async function generateGrantBlueprintWithLlm(input: {
   }
 
   const prompt = buildPrompt({
-    baseSectionPlan: input.baseSectionPlan,
+    baseSectionPlan: fallbackSectionPlan,
     context: input.context,
     overrideReason: input.overrideReason,
   })
@@ -200,29 +220,38 @@ export async function generateGrantBlueprintWithLlm(input: {
 
     const llmSectionsByKey = new Map(parsed.data.sections.map((section) => [section.sectionKey, section]))
     const mergedPlan = enrichGrantBlueprintSections(
-      input.baseSectionPlan.map((section) => {
+      fallbackSectionPlan.map((section) => {
         const llmSection = llmSectionsByKey.get(section.sectionKey)
         if (!llmSection) {
           return section
         }
 
+        const draftable = isGrantSectionAutoDraftable(section)
+        const nextMustCover = cleanLlmList(llmSection.mustCover)
+        const nextMustAvoid = cleanLlmList(llmSection.mustAvoid)
+        const useLlmDimensions = draftable && nextMustCover.length > 0
+
         return {
           ...section,
           purpose: llmSection.purpose?.trim() || section.purpose,
-          mustCover: Array.isArray(llmSection.mustCover) && llmSection.mustCover.length > 0
-            ? llmSection.mustCover
+          mustCover: useLlmDimensions
+            ? nextMustCover
             : section.mustCover,
-          mustAvoid: Array.isArray(llmSection.mustAvoid)
-            ? llmSection.mustAvoid
+          mustAvoid: nextMustAvoid.length > 0
+            ? nextMustAvoid
             : section.mustAvoid,
-          suggestedCitationCount: typeof llmSection.suggestedCitationCount === 'number'
+          mustCoverTyping: useLlmDimensions ? undefined : section.mustCoverTyping,
+          thematicBlueprint: useLlmDimensions ? undefined : section.thematicBlueprint,
+          suggestedCitationCount: draftable && typeof llmSection.suggestedCitationCount === 'number'
             ? llmSection.suggestedCitationCount
             : section.suggestedCitationCount,
-          citationMode: llmSection.citationMode as GrantCitationMode | undefined || section.citationMode,
+          citationMode: draftable
+            ? (llmSection.citationMode as GrantCitationMode | undefined) || section.citationMode
+            : section.citationMode,
         }
       }),
       input.context,
-      'generate'
+      'hydrate'
     )
 
     return {

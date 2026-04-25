@@ -219,7 +219,7 @@ export function buildGrantBackedSearchStrategy(input: {
   })
 
   return {
-    summary: `Grant-aware literature strategy covering ${targets.length} blueprint dimensions across ${queries.length} bundled searches.`,
+    summary: `Grant-aware literature strategy covering ${targets.length} blueprint evidence pillars across ${queries.length} bundled searches.`,
     estimatedPapers: Math.max(queries.length * 12, targets.length * 2),
     queries,
   }

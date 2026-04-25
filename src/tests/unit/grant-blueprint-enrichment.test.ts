@@ -1,12 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { GuidelinePackDocument } from '../../lib/fundingGuidelines/types';
+import { llmGateway } from '@/lib/metering';
 import type { GrantPrepStageStates } from '../../lib/grantPrep/types';
+import { generateGrantBlueprintWithLlm } from '../../lib/grants/blueprintLlmGeneration';
 import {
   buildGeneratedGrantProposalFoundation,
   enrichGrantBlueprintSections,
 } from '../../lib/grants/blueprintEnrichment';
 import type { GrantBlueprintPlanSection } from '../../types/grant';
+
+vi.mock('@/lib/metering', () => ({
+  llmGateway: {
+    executeLLMOperation: vi.fn(),
+  },
+}));
+
+afterEach(() => {
+  vi.mocked(llmGateway.executeLLMOperation).mockReset();
+});
 
 function makeSection(
   overrides: Partial<GrantBlueprintPlanSection>
@@ -498,6 +510,58 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[0].grantSectionComplianceContract?.prepEvidence[0]?.status).toBe('covered');
   });
 
+  it('sends enriched prep evidence and rule contracts into the LLM blueprint prompt', async () => {
+    const mockedGateway = vi.mocked(llmGateway.executeLLMOperation);
+    mockedGateway.mockResolvedValueOnce({
+      success: false,
+      response: { output: '' },
+    } as any);
+
+    await generateGrantBlueprintWithLlm({
+      baseSectionPlan: [
+        makeSection({
+          sectionKey: 'technical_plan',
+          label: 'Technical Plan',
+          purpose: 'Explain the execution methodology, validation approach, milestones, and delivery readiness.',
+          reviewerIntent: 'Show implementation feasibility.',
+        }),
+      ],
+      context: {
+        projectTitle: 'Cyber Centre of Excellence',
+        fundingCallTitle: 'MeitY Cyber CoE Call',
+        guidelinePack: makeGuidelinePack(),
+        prepEvidenceBySection: {
+          technical_plan: [
+            {
+              stageKey: 'methodology',
+              pointKey: 'technical_approach',
+              label: 'Technical approach',
+              sourceTemplatePointer: 'technical_plan',
+              sectionKeys: ['technical_plan'],
+              keywords: ['federated cyber range'],
+              thrustLinkage: ['capacity building'],
+              factBullets: ['Federated cyber range network with threat emulation labs'],
+              ruleNotes: [],
+              confidence: 0.9,
+              captureBasis: ['user_confirmed'],
+              status: 'covered',
+            },
+          ],
+        },
+      },
+      tenantContext: { tenantId: 'tenant_1' } as any,
+      sessionId: 'prep_session_1',
+    });
+
+    expect(mockedGateway).toHaveBeenCalledTimes(1);
+    const prompt = String(mockedGateway.mock.calls[0]?.[1]?.prompt || '');
+    expect(prompt).toContain('"prepContextBlock"');
+    expect(prompt).toContain('Federated cyber range network with threat emulation labs');
+    expect(prompt).toContain('"grantRuleProfile"');
+    expect(prompt).toContain('"grantSectionComplianceContract"');
+    expect(prompt).toContain('Explain the execution methodology and validation plan.');
+  });
+
   it('classifies ambiguous headings by meaning and carries prep and rule context into app_draft sections', () => {
     const sections: GrantBlueprintPlanSection[] = [
       makeSection({
@@ -604,6 +668,118 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[1].grantSemantic).toBe('alignment');
     expect(enriched[1].mustCover).toEqual([]);
     expect(enriched[1].suggestedCitationCount).toBe(0);
+  });
+
+  it('routes explicit guideline metadata before semantic fallback', () => {
+    const methodologyRule = {
+      key: 'method_hard',
+      text: 'Explain the validation protocol and implementation feasibility evidence.',
+      importance: 'high' as const,
+      enforcementLevel: 'hard' as const,
+      appliesTo: ['methodology'],
+      draftingStage: ['methodology'],
+      draftingVsSubmission: 'drafting' as const,
+      confidence: 1,
+      sourceAnchors: [],
+    };
+    const problemRule = {
+      key: 'problem_hard',
+      text: 'Quantify the unmet need and baseline capability gap.',
+      importance: 'high' as const,
+      enforcementLevel: 'hard' as const,
+      appliesTo: ['problem_need'],
+      draftingStage: ['problem_definition'],
+      draftingVsSubmission: 'drafting' as const,
+      confidence: 1,
+      sourceAnchors: [],
+    };
+    const sections: GrantBlueprintPlanSection[] = [
+      makeSection({
+        sectionKey: 'rationale',
+        label: 'Need and Rationale',
+        purpose: 'Explain the unmet capability gap and baseline need.',
+      }),
+      makeSection({
+        sectionKey: 'methodology',
+        label: 'Methodology',
+        purpose: 'Explain the technical approach, validation protocol, and implementation plan.',
+      }),
+    ];
+
+    const enriched = enrichGrantBlueprintSections(sections, {
+      projectTitle: 'Cyber Centre of Excellence',
+      fundingCallTitle: 'MeitY Cyber CoE Call',
+      guidelinePack: {
+        ...makeGuidelinePack(),
+        mustAddress: [methodologyRule, problemRule],
+      },
+    });
+
+    expect(enriched[0].grantSemantic).toBe('problem_need');
+    expect(enriched[0].grantRuleProfile?.requiredPoints).toContain(
+      'Quantify the unmet need and baseline capability gap.'
+    );
+    expect(enriched[0].grantRuleProfile?.requiredPoints).not.toContain(
+      'Explain the validation protocol and implementation feasibility evidence.'
+    );
+    expect(enriched[0].grantSectionComplianceContract?.hardChecks.map((item) => item.ruleText)).not.toContain(
+      'Explain the validation protocol and implementation feasibility evidence.'
+    );
+
+    expect(enriched[1].grantSemantic).toBe('methodology');
+    expect(enriched[1].grantRuleProfile?.requiredPoints).toContain(
+      'Explain the validation protocol and implementation feasibility evidence.'
+    );
+    expect(enriched[1].grantRuleProfile?.requiredPoints).not.toContain(
+      'Quantify the unmet need and baseline capability gap.'
+    );
+    expect(enriched[1].grantSectionComplianceContract?.hardChecks.map((item) => item.ruleText)).toContain(
+      'Explain the validation protocol and implementation feasibility evidence.'
+    );
+  });
+
+  it('treats literature review and state-of-the-art sections as evidence mapped grant narrative', () => {
+    const enriched = enrichGrantBlueprintSections([
+      makeSection({
+        sectionKey: 'literature_review',
+        label: 'Literature Review and State of the Art',
+        wordBudget: 900,
+        purpose: 'Synthesize prior work, evidence landscape, remaining gaps, and comparative benchmarks.',
+      }),
+    ], {
+      projectTitle: 'Cyber Centre of Excellence',
+      fundingCallTitle: 'MeitY Cyber CoE Call',
+      globalKeywords: ['cybersecurity', 'capacity building'],
+      focusAreas: ['cybersecurity'],
+    });
+
+    expect(enriched[0].grantSemantic).toBe('problem_need');
+    expect(enriched[0].mustCover.length).toBeGreaterThanOrEqual(3);
+    expect(enriched[0].suggestedCitationCount).toBeGreaterThanOrEqual(3);
+    expect(enriched[0].thematicBlueprint?.mustCover).toEqual(enriched[0].mustCover);
+  });
+
+  it('generates searchable evidence pillars rather than final draft claims', () => {
+    const enriched = enrichGrantBlueprintSections([
+      makeSection({
+        sectionKey: 'need_and_evidence',
+        label: 'Need and Evidence Base',
+        wordBudget: 900,
+        purpose: 'Explain current state of malnutrition in India; role of nutrition in child physical development; role of nutrition in cognitive performance.',
+      }),
+    ], {
+      projectTitle: 'Child Nutrition Improvement Proposal',
+      fundingCallTitle: 'Child Health Grant',
+      globalKeywords: ['child nutrition', 'malnutrition in India', 'child physical development', 'cognitive performance'],
+      focusAreas: ['child health', 'nutrition'],
+    });
+
+    const pillars = enriched[0].mustCover;
+
+    expect(pillars.some((item) => /current state of malnutrition in india/i.test(item))).toBe(true);
+    expect(pillars.some((item) => /role of nutrition in child physical development|role of nutrition in cognitive performance/i.test(item))).toBe(true);
+    expect(pillars.join(' ')).not.toMatch(/scale, burden, or urgency|reviewer-visible|evidence for the problem/i);
+    expect(enriched[0].thematicBlueprint?.mustCover).toEqual(pillars);
   });
 
   it('uses trusted template intent as the semantic prior and falls back when alternates signal ambiguity', () => {

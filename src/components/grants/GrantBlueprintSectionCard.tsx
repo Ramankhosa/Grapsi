@@ -567,7 +567,7 @@ export default function GrantBlueprintSectionCard({
               </div>
               <div className="mt-3 text-sm text-slate-700">
                 {section.workflowMode === 'app_support'
-                  ? 'Keep this section in the workspace for visibility, but complete it manually. It will not participate in ideation, blueprint dimensions, literature mapping, or AI generation.'
+                  ? 'Keep this section in the workspace for visibility, but complete it manually. It will not participate in ideation, evidence pillars, literature mapping, or AI generation.'
                   : 'This team-owned section is shown inline so the final grant stays complete, but it is excluded from prep, blueprint semantics, literature mapping, and AI drafting.'}
               </div>
             </section>

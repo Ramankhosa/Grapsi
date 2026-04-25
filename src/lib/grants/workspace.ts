@@ -648,6 +648,42 @@ function buildGrantBlueprintEnrichmentContext(input: {
   }
 }
 
+function buildGrantBlueprintHydrationContext(input: {
+  blueprint: {
+    freezePayloadJson: unknown
+    globalKeywordsJson: unknown
+  }
+  projectTitle?: string | null
+  projectDescription?: string | null
+  fundingCallTitle?: string | null
+  agencyName?: string | null
+  guidelinePack?: GuidelinePackDocument | null
+}): GrantBlueprintEnrichmentContext {
+  const payload = asObject(input.blueprint.freezePayloadJson)
+  const project = asObject(payload.project)
+  const fundingCall = asObject(payload.fundingCall)
+  const stageStates = asObject(payload.stageStates)
+  const payloadKeywords = asStringArray(payload.globalKeywords)
+
+  return {
+    projectTitle: input.projectTitle || String(project.title || '').trim() || null,
+    projectDescription: input.projectDescription || String(project.description || '').trim() || null,
+    fundingCallTitle: input.fundingCallTitle || String(fundingCall.title || '').trim() || null,
+    agencyName: input.agencyName || String(fundingCall.agencyName || '').trim() || null,
+    globalKeywords: payloadKeywords.length > 0
+      ? payloadKeywords
+      : asStringArray(input.blueprint.globalKeywordsJson),
+    focusAreas: asStringArray(fundingCall.focusAreas),
+    capturedKeywords: collectGrantCapturedKeywords(stageStates),
+    prepEvidenceBySection: asObject(payload.prepEvidenceBySection) as GrantBlueprintEnrichmentContext['prepEvidenceBySection'],
+    globalCaptureSummary: asStringArray(payload.globalCaptureSummary),
+    stageStates: Object.keys(stageStates).length > 0
+      ? stageStates as GrantBlueprintEnrichmentContext['stageStates']
+      : null,
+    guidelinePack: input.guidelinePack || null,
+  }
+}
+
 function buildStructuredScaffold(
   section: GrantBlueprintPlanSection,
   payload: ReturnType<typeof buildGrantPrepFreezePayload>['payload']
@@ -1154,13 +1190,12 @@ async function ensureGrantShadowWorkspace(input: {
       }))
   const sectionPlan = enrichGrantBlueprintSections(
     baseSectionPlan,
-    {
+    buildGrantBlueprintHydrationContext({
+      blueprint,
       projectTitle: grantSession.project.name,
       fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
-      globalKeywords: asStringArray(blueprint.globalKeywordsJson),
-      stageStates: asObject(blueprint.freezePayloadJson).stageStates as never,
       guidelinePack: await resolveGuidelinePackForRevision(blueprint.sourceGuidelineRevisionId || null),
-    },
+    }),
     'hydrate'
   )
 
@@ -1417,7 +1452,7 @@ export async function launchGrantPrepToLocalWorkspace(input: {
   }
   const tenantContext = await resolveGrantTenantContext(input.actor.tenantId, input.actor.id)
   const generatedBlueprint = await generateGrantBlueprintWithLlm({
-    baseSectionPlan: state.baseSectionPlan,
+    baseSectionPlan: state.sectionPlan,
     context: state.enrichmentContext,
     proposalFoundationHint: state.proposalFoundation,
     tenantContext,
@@ -1636,13 +1671,13 @@ export async function getGrantWorkspace(input: {
   const sectionPlan = grantSession.blueprint
     ? enrichGrantBlueprintSections(
         baseSectionPlan,
-        {
+        buildGrantBlueprintHydrationContext({
+          blueprint: grantSession.blueprint,
           projectTitle: grantSession.project.name,
           fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
-          globalKeywords: asStringArray(grantSession.blueprint.globalKeywordsJson),
-          stageStates: asObject(grantSession.blueprint.freezePayloadJson).stageStates as never,
+          agencyName: grantSession.fundingCall?.agency_name || null,
           guidelinePack: await resolveGuidelinePackForRevision(grantSession.blueprint.sourceGuidelineRevisionId || null),
-        },
+        }),
         'hydrate'
       )
     : baseSectionPlan

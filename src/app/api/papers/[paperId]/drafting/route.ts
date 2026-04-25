@@ -3436,7 +3436,7 @@ function buildPass1ArtifactOutputInstructions(
         return `- ${normalizeDimensionKey(dimensionLabel)} | ${dimensionLabel} | role=${role}`;
       })
       .join('\n')
-    : '- (no blueprint dimensions available for this section)';
+    : '- (no blueprint evidence pillars available for this section)';
   const evidenceByDimension = new Map<string, string[]>();
   for (const entry of evidenceContext?.dimensionEvidence || []) {
     const dimensionKey = normalizeDimensionKey(entry.dimension);
@@ -3456,7 +3456,7 @@ function buildPass1ArtifactOutputInstructions(
         return `- ${dimensionKey}: ${citationKeys.join(', ') || '(none mapped)'}`;
       })
       .join('\n')
-    : '- (no dimension-level citation guidance available)';
+    : '- (no pillar-level citation guidance available)';
 
   return `OUTPUT FORMAT (MANDATORY):
 Return ONLY raw JSON. No markdown code fences. Start with { and end with }.
@@ -3474,7 +3474,7 @@ Return ONLY raw JSON. No markdown code fences. Start with { and end with }.
     "dimensionBriefs": [
       {
         "dimensionKey": "normalized_dimension_key",
-        "dimensionLabel": "Exact blueprint dimension label",
+        "dimensionLabel": "Exact blueprint evidence pillar label",
         "roleHint": "introduction|body|conclusion|intro_conclusion",
         "sourceSummary": "2-4 sentences summarizing only the part of the section draft that belongs to this dimension.",
         "claimFocus": ["specific claim or analytical angle"],
@@ -3492,18 +3492,18 @@ Return ONLY raw JSON. No markdown code fences. Start with { and end with }.
 
 PASS 1 MEMORY RULES:
 - "content" must be the full section draft in markdown, with headings, paragraphs, bullets, and [CITE:key] anchors when needed.
-- "dimensionBriefs" must follow the blueprint dimension order exactly when blueprint dimensions exist.
-- Each dimensionBrief must summarize only its own slice of the section draft.
-- "mustUseCitationKeys" should reflect mapped evidence for that dimension when available.
-- "openingStrategy" should help the first dimension introduce the section.
-- "closingStrategy" should help the last dimension conclude the section.
-- If no blueprint dimensions exist, return "dimensionBriefs": [].
+- "dimensionBriefs" must follow the blueprint evidence pillar order exactly when pillars exist.
+- Each dimensionBrief must summarize only the draft slice supported by its pillar.
+- "mustUseCitationKeys" should reflect mapped evidence for that pillar when available.
+- "openingStrategy" should help the first pillar introduce the section.
+- "closingStrategy" should help the last pillar conclude the section.
+- If no blueprint evidence pillars exist, return "dimensionBriefs": [].
 - For grant-backed sections, the top-level compliance arrays must reflect the section contract accurately.
 
-BLUEPRINT DIMENSION ORDER / ROLE HINTS:
+BLUEPRINT EVIDENCE PILLAR ORDER / ROLE HINTS:
 ${roleGuide}
 
-MAPPED CITATION HINTS BY DIMENSION:
+MAPPED CITATION HINTS BY EVIDENCE PILLAR:
 ${citationGuide}`;
 }
 
@@ -7235,7 +7235,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         if (!plan || plan.length === 0) {
           return NextResponse.json(
             {
-              error: 'No blueprint dimensions found for this section',
+              error: 'No blueprint evidence pillars found for this section',
               hint: 'Ensure the blueprint has mustCover dimensions defined for this section before starting dimension flow.',
               sectionKey
             },

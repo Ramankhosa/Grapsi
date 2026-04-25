@@ -69,10 +69,12 @@ const EVIDENCE_SIGNAL_PATTERN = /\b(evidence|literature|research|prior work|stat
 const STRONG_EVIDENCE_SIGNAL_PATTERN = /\b(literature|research|prior work|state of the art|benchmark|baseline|validation|comparison|comparative|burden|prevalence|evaluation)\b/i
 const OPERATIONAL_SECTION_PATTERN = /\b(objective|goal|aim|target|timeline|milestone|deliverable|work package|task breakdown|staffing|governance|management structure|committee|oversight|implementation schedule)\b/i
 const NARRATIVE_PROMPT_PATTERN = /\b(detailed|description|project plan|work ?plan|deliverable|timeline|functioning|implementation|approach|methodology|impact|outcome|innovation)\b/i
+const READY_MADE_PILLAR_PATTERN = /^(role|effect|effects|impact|association|relationship|current state|state of the art|prevalence|burden|evidence landscape|research landscape)\b/i
+const GENERIC_PILLAR_ANCHOR_PATTERN = /\b(section|proposal|project|program|reviewer|requested response|provide|describe|explain|summarize|overview|details?|approach|plan|model|expected outcomes?)\b/i
 
 const SEMANTIC_HINTS: Record<GrantSectionSemantic, string[]> = {
   summary: ['summary', 'executive', 'synopsis', 'abstract', 'proposal overview', 'project overview', 'overview'],
-  problem_need: ['problem', 'need', 'need statement', 'background', 'rationale', 'justification', 'introduction'],
+  problem_need: ['problem', 'need', 'need statement', 'background', 'rationale', 'justification', 'introduction', 'literature review', 'literature', 'state of the art', 'prior work'],
   objectives: ['objective', 'aim', 'goal', 'target'],
   methodology: ['methodology', 'approach', 'technical approach', 'technical plan', 'implementation approach'],
   workplan: ['workplan', 'work plan', 'timeline', 'deliverable', 'milestone', 'execution plan'],
@@ -166,15 +168,15 @@ function scoreAnchorForRole(anchor: string, role: GrantPersuasionRole): number {
   const keywordBonus = (() => {
     switch (role) {
       case 'proves_need':
-        return /(prevalence|incidence|burden|cost|baseline|urgency|affected|population|demand|need)/.test(lowered) ? 16 : 0
+        return /(prevalence|incidence|burden|cost|baseline|urgency|affected|population|demand|need|malnutrition|undernutrition|stunting|wasting|morbidity|mortality)/.test(lowered) ? 16 : 0
       case 'shows_gap':
-        return /(gap|limitation|barrier|challenge|insufficient|constraint|unmet|shortfall)/.test(lowered) ? 18 : 0
+        return /(gap|limitation|barrier|challenge|insufficient|constraint|unmet|shortfall|state of art|state of the art|evidence landscape|research landscape)/.test(lowered) ? 18 : 0
       case 'validates_approach':
         return /(validation|validated|evaluation|measure|metric|indicator|protocol|benchmark|reliability)/.test(lowered) ? 18 : 0
       case 'supports_feasibility':
         return /(feasib|implementation|pilot|deployment|operational|delivery|readiness|adoption)/.test(lowered) ? 18 : 0
       case 'quantifies_impact':
-        return /(impact|outcome|improvement|effect|reduction|increase|benefit|result)/.test(lowered) ? 18 : 0
+        return /(impact|outcome|improvement|effect|reduction|increase|benefit|result|performance|development|growth|cognitive|cognition|physical)/.test(lowered) ? 18 : 0
       case 'establishes_precedent':
         return /(compar|precedent|baseline|current practice|alternative|benchmark|advantage)/.test(lowered) ? 18 : 0
       case 'policy_alignment':
@@ -187,6 +189,41 @@ function scoreAnchorForRole(anchor: string, role: GrantPersuasionRole): number {
   return specificityBonus + numericBonus + keywordBonus - genericPenalty
 }
 
+function hasMeaningfulTokenOverlap(left: string, right: string): boolean {
+  const leftTokens = new Set(tokenize(left))
+  if (leftTokens.size === 0) return false
+  return tokenize(right).some((token) => leftTokens.has(token))
+}
+
+function primaryTopicFromAnchor(topicAnchor: string): string {
+  return topicAnchor
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)[0]
+    || topicAnchor.trim()
+    || 'the proposed program'
+}
+
+function normalizeLiteraturePillarAnchor(anchor: string, topicAnchor: string): string {
+  const colonParts = anchor.split(':').map((part) => part.trim()).filter(Boolean)
+  const colonAnchor = colonParts.length > 1 && tokenize(colonParts[0]).length <= 4
+    ? colonParts[colonParts.length - 1]
+    : anchor
+  const cleaned = colonAnchor
+    .replace(/\b(the proposal|this proposal|the project|this project|the program|this program|our project|our proposal|proposed)\b/gi, '')
+    .replace(/\b(evidence for|evidence on|discussion of|description of|overview of)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.:;]+$/g, '')
+  const fallback = primaryTopicFromAnchor(topicAnchor)
+
+  if (!cleaned || cleaned.length < 8) return fallback
+  if (GENERIC_PILLAR_ANCHOR_PATTERN.test(cleaned) && !hasMeaningfulTokenOverlap(cleaned, fallback)) {
+    return fallback
+  }
+  return cleaned
+}
+
 function buildSemanticFallbackAnchor(
   role: GrantPersuasionRole,
   semantic: GrantSectionSemantic,
@@ -196,21 +233,21 @@ function buildSemanticFallbackAnchor(
   switch (role) {
     case 'proves_need':
       return semantic === 'problem_need'
-        ? `the unmet burden affecting the target population in ${topicAnchor}`
-        : `the reviewer-visible need addressed by ${topicAnchor}`
+        ? `burden and prevalence of ${topicAnchor}`
+        : `need and baseline conditions for ${topicAnchor}`
     case 'shows_gap':
-      return `current responses addressing ${topicAnchor}`
+      return `current state of art and unresolved gaps in ${topicAnchor}`
     case 'validates_approach':
       return semantic === 'evaluation'
-        ? `the proposed measurement and validation plan for ${topicAnchor}`
-        : `the proposed approach for ${topicAnchor}`
+        ? `measurement and validation methods for ${topicAnchor}`
+        : `methods and benchmarks for ${topicAnchor}`
     case 'supports_feasibility':
-      return `the planned implementation model for ${topicAnchor}`
+      return `implementation feasibility of ${topicAnchor}`
     case 'quantifies_impact':
-      return `the expected outcomes of ${topicAnchor}`
+      return `outcomes associated with ${topicAnchor}`
     case 'establishes_precedent':
       return semantic === 'innovation'
-        ? `the proposed innovation relative to current practice in ${topicAnchor}`
+        ? `current practice and comparable innovations in ${topicAnchor}`
         : `related interventions relevant to ${topicAnchor}`
     case 'policy_alignment':
       return `${topicAnchor} and ${callAnchor}`
@@ -219,32 +256,40 @@ function buildSemanticFallbackAnchor(
   }
 }
 
-function buildGrantDimensionClaim(input: {
+function buildGrantEvidencePillar(input: {
   role: GrantPersuasionRole
   anchor: string
   topicAnchor: string
   callAnchor: string
   semantic: GrantSectionSemantic
 }): string {
-  const anchor = input.anchor.replace(/\s+/g, ' ').trim()
+  const anchor = normalizeLiteraturePillarAnchor(input.anchor, input.topicAnchor)
+  const primaryTopic = primaryTopicFromAnchor(input.topicAnchor)
+  if (READY_MADE_PILLAR_PATTERN.test(anchor)) {
+    return sentenceCase(anchor)
+  }
+
   switch (input.role) {
     case 'proves_need':
-      return sentenceCase(`Scale, burden, or urgency of ${anchor}`)
+      return sentenceCase(`Burden, prevalence, and current state of ${anchor}`)
     case 'shows_gap':
-      return sentenceCase(`Limitations of current responses for ${anchor}`)
+      return sentenceCase(`Current state of art and unresolved gaps in ${anchor}`)
     case 'validates_approach':
-      return sentenceCase(`Validation evidence for ${anchor}`)
+      return sentenceCase(`Validation methods and benchmarks for ${anchor}`)
     case 'supports_feasibility':
-      return sentenceCase(`Feasibility of ${anchor} in comparable settings`)
+      return sentenceCase(`Implementation feasibility and adoption evidence for ${anchor}`)
     case 'quantifies_impact':
-      return sentenceCase(`Outcome metrics achieved by related interventions for ${anchor}`)
+      if (!hasMeaningfulTokenOverlap(anchor, primaryTopic)) {
+        return sentenceCase(`Role of ${primaryTopic} in ${anchor}`)
+      }
+      return sentenceCase(`Outcome evidence associated with ${anchor}`)
     case 'establishes_precedent':
-      return sentenceCase(`Comparative advantage or precedent for ${anchor}`)
+      return sentenceCase(`Comparable interventions and precedent for ${anchor}`)
     case 'policy_alignment':
       return sentenceCase(
         input.semantic === 'alignment'
-          ? `Alignment of ${anchor} with ${input.callAnchor}`
-          : `Policy or strategic alignment evidence connecting ${anchor} to ${input.callAnchor}`
+          ? `Policy and program fit between ${anchor} and ${input.callAnchor}`
+          : `Policy and program evidence linking ${anchor} with ${input.callAnchor}`
       )
     default:
       return sentenceCase(anchor)
@@ -364,6 +409,9 @@ function classifyGrantSectionSemantic(section: GrantBlueprintPlanSection): Grant
     scores.set('summary', (scores.get('summary') || 0) + 4)
   }
   if (/(problem statement|need statement|unmet need|root cause|pain point|challenge landscape)/.test(text)) {
+    scores.set('problem_need', (scores.get('problem_need') || 0) + 5)
+  }
+  if (/(literature review|state of the art|prior work|research landscape|evidence landscape)/.test(text)) {
     scores.set('problem_need', (scores.get('problem_need') || 0) + 5)
   }
   if (/(objective|aim|goal|target)/.test(text)) {
@@ -491,7 +539,7 @@ function buildSeedDimensions(
       || buildSemanticFallbackAnchor(role, semantic, topicAnchor, callAnchor)
 
     usedAnchors.add(anchor.toLowerCase())
-    const dimension = buildGrantDimensionClaim({
+    const dimension = buildGrantEvidencePillar({
       role,
       anchor,
       topicAnchor,
@@ -510,7 +558,7 @@ function buildSeedDimensions(
       dimension: anchor,
       semantic,
     })
-    const dimension = buildGrantDimensionClaim({
+    const dimension = buildGrantEvidencePillar({
       role,
       anchor,
       topicAnchor,
@@ -709,6 +757,105 @@ function scoreRuleForSection(
   return score
 }
 
+function normalizeRoutingToken(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function routingAliases(value: unknown): string[] {
+  const raw = String(value || '').trim()
+  if (!raw) return []
+
+  return dedupeStrings([
+    normalizeRoutingToken(raw),
+    ...raw.split(/[.\s/_-]+/g).map((part) => normalizeRoutingToken(part)),
+  ]).filter(Boolean)
+}
+
+function normalizeRuleRoutingList(value: unknown): string[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? [value]
+      : []
+
+  return dedupeStrings(source.flatMap((item) => routingAliases(item)))
+}
+
+function buildSectionRoutingTokens(
+  section: GrantBlueprintPlanSection,
+  semantic: GrantSectionSemantic
+): Set<string> {
+  const tokens = new Set<string>()
+  const add = (value: unknown) => {
+    for (const alias of routingAliases(value)) {
+      tokens.add(alias)
+    }
+  }
+
+  add('all')
+  add(semantic)
+  add(section.sectionKey)
+  add(section.label)
+  add(section.sourceTemplatePointer)
+  add(section.templateIntent)
+  for (const alternate of section.templateIntentAlternates || []) add(alternate)
+  for (const stageKey of getPrepStageKeysForGrantSemantic(semantic)) add(stageKey)
+  for (const stageKey of getPrepStageKeysForTemplateIntent(section.templateIntent)) add(stageKey)
+  for (const hint of SEMANTIC_HINTS[semantic] || []) add(hint)
+
+  return tokens
+}
+
+function ruleRoutingScore(
+  rule: FundingGuidelineRuleItem,
+  section: GrantBlueprintPlanSection,
+  semantic: GrantSectionSemantic
+): { applies: boolean; hasSpecificRouting: boolean; score: number } {
+  const sectionTokens = buildSectionRoutingTokens(section, semantic)
+  const ruleWithLegacyStages = rule as FundingGuidelineRuleItem & { draftingStages?: unknown }
+  const appliesTo = normalizeRuleRoutingList(rule.appliesTo)
+  const draftingStages = dedupeStrings([
+    ...normalizeRuleRoutingList(rule.draftingStage),
+    ...normalizeRuleRoutingList(ruleWithLegacyStages.draftingStages),
+  ])
+
+  const scopedAppliesTo = appliesTo.filter((item) => item !== 'all')
+  const scopedDraftingStages = draftingStages.filter((item) => item !== 'all')
+  const appliesToMatches = scopedAppliesTo.filter((item) => sectionTokens.has(item))
+  const draftingStageMatches = scopedDraftingStages.filter((item) => sectionTokens.has(item))
+  const hasSpecificRouting = scopedAppliesTo.length > 0 || scopedDraftingStages.length > 0
+
+  if (scopedAppliesTo.length > 0 && appliesToMatches.length === 0) {
+    return { applies: false, hasSpecificRouting, score: 0 }
+  }
+  if (scopedDraftingStages.length > 0 && draftingStageMatches.length === 0) {
+    return { applies: false, hasSpecificRouting, score: 0 }
+  }
+
+  let score = 0
+  if (appliesTo.includes('all')) score += 4
+  if (draftingStages.includes('all')) score += 3
+  score += appliesToMatches.length * 30
+  score += draftingStageMatches.length * 20
+  if (rule.enforcementLevel === 'hard') score += 5
+  if (rule.draftingVsSubmission === 'drafting') score += 3
+  if (rule.draftingVsSubmission === 'both') score += 1
+
+  return { applies: true, hasSpecificRouting, score }
+}
+
+function ruleAppliesToSection(
+  rule: FundingGuidelineRuleItem,
+  section: GrantBlueprintPlanSection,
+  semantic: GrantSectionSemantic
+): boolean {
+  return ruleRoutingScore(rule, section, semantic).applies
+}
+
 function pickTopRuleTexts(
   rules: FundingGuidelineRuleItem[],
   section: GrantBlueprintPlanSection,
@@ -717,12 +864,32 @@ function pickTopRuleTexts(
   options?: { includeOperational?: boolean }
 ) {
   return rules
-    .filter((rule) => options?.includeOperational ? true : !OPERATIONAL_RULE_PATTERN.test(rule.text))
-    .map((rule) => ({
-      text: sentenceCase(rule.text.replace(/\s+/g, ' ').trim()),
-      score: scoreRuleForSection(rule, section, semantic),
-    }))
-    .filter((entry) => entry.text.length > 0)
+    .filter((rule) => options?.includeOperational
+      ? true
+      : rule.draftingVsSubmission !== 'submission' && !OPERATIONAL_RULE_PATTERN.test(rule.text))
+    .map((rule) => {
+      const routing = ruleRoutingScore(rule, section, semantic)
+      if (!routing.applies) return null
+      const semanticScore = scoreRuleForSection(rule, section, semantic)
+      return {
+        text: sentenceCase(rule.text.replace(/\s+/g, ' ').trim()),
+        score: routing.score + semanticScore,
+        semanticScore,
+        hasSpecificRouting: routing.hasSpecificRouting,
+        importance: rule.importance,
+        enforcementLevel: rule.enforcementLevel,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    .filter((entry) =>
+      entry.text.length > 0
+      && (
+        entry.hasSpecificRouting
+        || entry.semanticScore > 0
+        || entry.importance === 'high'
+        || entry.enforcementLevel === 'hard'
+      )
+    )
     .sort((left, right) => right.score - left.score || left.text.localeCompare(right.text))
     .slice(0, limit)
     .map((entry) => entry.text)
@@ -917,20 +1084,17 @@ function buildGrantSectionComplianceContract(
         .filter((rule) =>
           rule.enforcementLevel === 'hard'
           && rule.draftingVsSubmission !== 'submission'
-          && (
-            (rule.appliesTo || []).includes('all')
-            || (rule.appliesTo || []).includes(semantic)
-          )
+          && ruleAppliesToSection(rule, section, semantic)
         )
         .map((rule) => rule.text),
       ...(guidelinePack?.formatRules || [])
-        .filter((rule) => rule.enforcementLevel === 'hard')
+        .filter((rule) => rule.enforcementLevel === 'hard' && ruleAppliesToSection(rule, section, semantic))
         .map((rule) => rule.text),
       ...(guidelinePack?.durationRules || [])
-        .filter((rule) => rule.enforcementLevel === 'hard')
+        .filter((rule) => rule.enforcementLevel === 'hard' && ruleAppliesToSection(rule, section, semantic))
         .map((rule) => rule.text),
       ...(guidelinePack?.deliverableRules || [])
-        .filter((rule) => rule.enforcementLevel === 'hard')
+        .filter((rule) => rule.enforcementLevel === 'hard' && ruleAppliesToSection(rule, section, semantic))
         .map((rule) => rule.text),
     ]
   )

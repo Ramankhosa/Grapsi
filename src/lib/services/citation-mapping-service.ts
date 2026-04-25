@@ -510,11 +510,11 @@ ${p.positionalRelationRationale && !grantBacked ? `- Positional Rationale: ${thi
 `).join('\n');
 
     if (grantBacked) {
-      return `Map each paper to grant blueprint dimensions.
+      return `Map each paper to grant blueprint evidence pillars.
 
 Rules:
 - Use ONLY the sections and exact dimension text listed below.
-- A paper may map to 0-3 dimensions.
+- A paper may map to 0-3 evidence pillars.
 - Choose the best sectionKey or null if nothing fits.
 - Remarks must be 1 sentence, grounded in the abstract only.
 - Evaluate persuasion value for a reviewer, not just thematic similarity.
@@ -522,7 +522,7 @@ Rules:
 - For gap dimensions, prioritize papers that explicitly describe limitations, barriers, or insufficiency of current approaches.
 - For feasibility/method dimensions, prioritize analogous implementations, pilot results, delivery precedent, validation studies, or benchmark evidence.
 - For impact dimensions, prioritize measurable outcome metrics, effect sizes, or adoption results.
-- In each remark, state the specific fact that makes the paper useful for this grant section.
+- In each remark, state the specific fact, statistic, limitation, method, finding, or precedent that can be nailed to the selected evidence pillar and later used in drafting.
 - Return valid JSON only.
 
 SECTIONS

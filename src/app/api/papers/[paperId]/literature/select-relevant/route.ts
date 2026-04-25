@@ -1077,9 +1077,9 @@ function buildPrompt(
     const sectionsText = sectionsForMapping.map((section, idx) => {
       const dimensions = section.mustCover && section.mustCover.length > 0
         ? section.mustCover.map((dim, i) => `    ${i + 1}. "${dim}"`).join('\n')
-        : '    (No specific dimensions defined)';
+        : '    (No specific evidence pillars defined)';
       return `${idx + 1}. ${section.sectionKey} - "${section.purpose}"
-   Must Cover Dimensions:
+   Evidence Pillars:
 ${dimensions}`;
     }).join('\n\n');
 
@@ -1087,16 +1087,16 @@ ${dimensions}`;
 PAPER BLUEPRINT (Frozen Structure):
 Central Objective: ${blueprint.centralObjective || 'Not specified'}
 
-SECTIONS AND DIMENSIONS TO COVER:
+SECTIONS AND EVIDENCE PILLARS TO COVER:
 ${sectionsText}
 `;
 
     dimensionMappingInstructions = `
 7. DIMENSION MAPPINGS (CRITICAL):
-   For each paper, identify which blueprint dimensions it supports:
+   For each paper, identify which blueprint evidence pillars it supports:
    - Prefer the dimensionIndex (1-based) from the list above
    - If you provide dimension text, it must match EXACTLY from the blueprint above
-   - Provide a grounded remark (1-2 sentences from abstract) explaining how it supports the dimension
+   - Provide a grounded remark (1-2 sentences from abstract) naming the fact, statistic, limitation, method, finding, or precedent that can be nailed to the pillar
    - Assign confidence: HIGH (directly addresses), MEDIUM (partially relevant), LOW (tangentially related)
    - A paper can map to multiple dimensions across different sections
    - Only map if there's concrete evidence in the abstract
@@ -1104,7 +1104,7 @@ ${sectionsText}
 8. RECOMMENDATION:
    - "IMPORT" if paper maps to 2+ dimensions with HIGH/MEDIUM confidence
    - "MAYBE" if paper maps to 1 dimension or has only LOW confidence mappings
-   - "SKIP" if paper doesn't map to any blueprint dimensions (but might still be useful for background)
+   - "SKIP" if paper doesn't map to any blueprint evidence pillars (but might still be useful for background)
 
 9. DEEP ANALYSIS RECOMMENDATION (WORTHINESS ONLY):
    Assign exactly one: DEEP_ANCHOR, DEEP_SUPPORT, DEEP_STRESS_TEST, LIT_ONLY
@@ -1119,7 +1119,7 @@ ${sectionsText}
   const preferredTargetSection = preferredTargets.length > 0
     ? `
 SEARCH QUERY TARGETS (PRIOR CONTEXT ONLY):
-This search run originated from a query designed to cover these blueprint dimensions:
+This search run originated from a query designed to cover these blueprint evidence pillars:
 ${preferredTargets.map((target, index) => `  ${index + 1}. ${target.sectionKey} -> "${target.dimension}"${target.dimensionType ? ` [${target.dimensionType}]` : ''}`).join('\n')}
 
 Use these as a relevance prior, but you may still map a paper to any stronger blueprint dimension supported by the abstract.
@@ -1281,7 +1281,7 @@ For each paper, determine:
 
   return `${grantBacked
     ? 'You are a grant strategy analyst evaluating literature for a funding proposal.'
-    : 'You are a research assistant helping identify relevant papers for academic writing.'}${blueprint ? ' You will map papers to a structured blueprint with specific dimensions to cover.' : ''}
+    : 'You are a research assistant helping identify relevant papers for academic writing.'}${blueprint ? ' You will map papers to a structured blueprint with specific evidence pillars. Each pillar is a searchable literature dimension that connects blueprint sections, paper mapping, extracted facts, and section drafts.' : ''}
 
 RESEARCH QUESTION:
 ${researchQuestion}
@@ -1291,7 +1291,8 @@ CANDIDATE PAPERS:
 ${paperList}
 
 TASK:
-Analyze EVERY paper in the list above for relevance to the research question.${blueprint ? ' Map each paper to the blueprint dimensions it supports.' : ''} Assign a relevance score (0-100), recommendation, and deep analysis recommendation to each paper — do NOT skip any.
+${blueprint ? 'Treat blueprint dimensions as evidence pillars and map papers to pillars only when the abstract contains usable evidence for that pillar.' : ''}
+Analyze EVERY paper in the list above for relevance to the research question.${blueprint ? ' Map each paper to the blueprint evidence pillars it supports.' : ''} Assign a relevance score (0-100), recommendation, and deep analysis recommendation to each paper — do NOT skip any.
 ${baseTasks}${dimensionMappingInstructions}
 
 IMPORTANT CRITERIA:
@@ -1305,7 +1306,7 @@ IMPORTANT CRITERIA:
 - A paper covering multiple dimensions is more valuable
 - Be precise with dimension mapping - only map if abstract provides evidence` : ''}${grantBacked ? `
 - Score papers by persuasion value for the proposal, not just topic similarity
-- In reasoning and dimension remarks, state the specific fact, statistic, limitation, outcome, or precedent that helps convince a reviewer
+- In reasoning and dimension remarks, state the specific fact, statistic, limitation, outcome, or precedent that can be nailed to the selected evidence pillar and later injected into section drafts
 - For burden and gap dimensions, one concrete fact beats broad thematic similarity
 - For feasibility and method dimensions, recent analogous implementation evidence is especially valuable` : ''}
 

@@ -100,6 +100,58 @@ interface SectionPlanItem {
   reviewerIntent?: string | null;
   dependencies: string[];
   outputsPromised: string[];
+  sourceTemplatePointer?: string | null;
+  templateIntent?: string | null;
+  templateIntentAlternates?: string[];
+  templateIntentConfidence?: number | null;
+  grantSemantic?: string | null;
+  prepContextBlock?: {
+    stageKeys?: string[];
+    bullets?: string[];
+    keywords?: string[];
+  } | null;
+  authoritativePrepBundle?: {
+    stageKeys?: string[];
+    bullets?: string[];
+    keywords?: string[];
+  } | null;
+  relatedPrepAwareness?: {
+    stageKeys?: string[];
+    bullets?: string[];
+    keywords?: string[];
+  } | null;
+  grantRuleProfile?: {
+    requiredPoints?: string[];
+    evaluationFocus?: string[];
+    reviewerSignals?: string[];
+    avoidRules?: string[];
+    formatConstraints?: string[];
+    narrativeConstraints?: string[];
+  } | null;
+  grantTemplateGuidance?: {
+    guidanceText?: string[];
+    requiredFacts?: string[];
+    reviewerGoal?: string | null;
+    forbiddenMoves?: string[];
+  } | null;
+  grantSectionComplianceContract?: {
+    requiredPoints?: string[];
+    evaluationFocus?: string[];
+    reviewerSignals?: string[];
+    avoidRules?: string[];
+    formatConstraints?: string[];
+    narrativeConstraints?: string[];
+    prepEvidence?: Array<{
+      stageKey?: string;
+      pointKey?: string;
+      label?: string;
+      factBullets?: string[];
+      keywords?: string[];
+      status?: string;
+    }>;
+    hardChecks?: Array<{ ruleText?: string; label?: string }>;
+    softChecks?: Array<{ ruleText?: string; label?: string }>;
+  } | null;
   suggestedCitationCount?: number;
   citationMode?: 'mapped_evidence' | 'direct_draft' | 'no_citations';
   thematicBlueprint?: ThematicBlueprint;
@@ -454,6 +506,662 @@ function buildGrantBlueprintState(input: {
 
 function formatSectionName(key: string): string {
   return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+type GrantBlueprintFilter = 'all' | 'ai' | 'manual' | 'evidence';
+
+const GRANT_BLUEPRINT_FILTERS: Array<{ key: GrantBlueprintFilter; label: string }> = [
+  { key: 'all', label: 'All Sections' },
+  { key: 'ai', label: 'AI will draft these sections' },
+  { key: 'manual', label: 'Project team will manually fill these sections' },
+  { key: 'evidence', label: 'Evidence mapping sections' },
+];
+
+const GRANT_EVIDENCE_SEMANTICS = new Set([
+  'summary',
+  'problem_need',
+  'methodology',
+  'innovation',
+  'evaluation',
+  'impact_outcomes',
+  'sustainability',
+  'risk',
+]);
+
+function isGrantAppDraftSection(section: SectionPlanItem): boolean {
+  return (
+    section.workflowMode === 'app_draft'
+    && (section.sectionType === 'narrative' || section.sectionType === 'short_answer')
+  );
+}
+
+function isGrantManualSection(section: SectionPlanItem): boolean {
+  return section.workflowMode === 'team_manual' || section.workflowMode === 'app_support' || !isGrantAppDraftSection(section);
+}
+
+function hasEvidenceSemantics(section: SectionPlanItem): boolean {
+  const text = [
+    section.sectionKey,
+    section.label,
+    section.purpose,
+    section.reviewerIntent || '',
+    section.grantSemantic || '',
+    section.templateIntent || '',
+  ].join(' ').toLowerCase();
+
+  return (
+    (typeof section.grantSemantic === 'string' && GRANT_EVIDENCE_SEMANTICS.has(section.grantSemantic))
+    || /\b(summary|introduction|problem|need|background|rationale|methodology|literature|review|state of the art|innovation|evaluation|outcome|impact|sustainab|risk|evidence|citation|baseline|gap|validation|comparative)\b/.test(text)
+  );
+}
+
+function isGrantEvidenceMappingSection(section: SectionPlanItem): boolean {
+  return (
+    isGrantAppDraftSection(section)
+    && (
+      section.citationMode === 'mapped_evidence'
+      || hasEvidenceSemantics(section)
+      || (section.mustCover?.length || 0) > 0
+      || (section.suggestedCitationCount || 0) > 0
+    )
+  );
+}
+
+function getGrantOwnershipLabel(section: SectionPlanItem): string {
+  return isGrantAppDraftSection(section) ? 'AI will draft' : 'Project team will manually fill';
+}
+
+function getGrantLimitLabel(section: SectionPlanItem): string | null {
+  if (typeof section.wordBudget === 'number' && section.wordBudget > 0) {
+    return `${section.wordBudget} words`;
+  }
+  if (typeof section.characterLimit === 'number' && section.characterLimit > 0) {
+    return `${section.characterLimit} characters`;
+  }
+  return null;
+}
+
+function uniqueGrantList(items: unknown[], limit = 8): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const item of items) {
+    const value = String(item || '').trim().replace(/\s+/g, ' ');
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(value);
+    if (next.length >= limit) break;
+  }
+  return next;
+}
+
+function renderGrantBulletList(items: string[] | undefined, emptyLabel: string, className = 'text-slate-700 dark:text-slate-200') {
+  const cleanItems = uniqueGrantList(items || [], 5);
+  if (cleanItems.length === 0) {
+    return <p className="text-sm text-slate-400 dark:text-slate-500">{emptyLabel}</p>;
+  }
+
+  return (
+    <ul className="space-y-2">
+      {cleanItems.map((item) => (
+        <li key={item} className={`flex gap-2 text-sm leading-relaxed ${className}`}>
+          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function updateGrantDimensionTyping(
+  section: SectionPlanItem,
+  nextDimensions: string[],
+  oldDimension?: string,
+  newDimension?: string
+): Record<string, string> | undefined {
+  const existing = section.mustCoverTyping || {};
+  const nextTyping: Record<string, string> = {};
+  for (const dimension of nextDimensions) {
+    const carriedType = existing[dimension]
+      || (oldDimension && newDimension && dimension === newDimension ? existing[oldDimension] : undefined);
+    if (carriedType) {
+      nextTyping[dimension] = carriedType;
+    }
+  }
+  return Object.keys(nextTyping).length > 0 ? nextTyping : undefined;
+}
+
+interface GrantBlueprintApplicationViewProps {
+  blueprint: Blueprint;
+  isLocked: boolean;
+  isFrozen: boolean;
+  saving: boolean;
+  generating: boolean;
+  onGenerate: () => void;
+  onToggleFreeze: () => void;
+  onSaveFoundation: (updates: Partial<Blueprint>) => void;
+  onUpdateSection: (sectionKey: string, updated: SectionPlanItem) => void;
+}
+
+function GrantBlueprintApplicationView({
+  blueprint,
+  isLocked,
+  isFrozen,
+  saving,
+  generating,
+  onGenerate,
+  onToggleFreeze,
+  onSaveFoundation,
+  onUpdateSection,
+}: GrantBlueprintApplicationViewProps) {
+  const [filter, setFilter] = useState<GrantBlueprintFilter>('all');
+  const [editingFoundation, setEditingFoundation] = useState(false);
+  const [foundationDraft, setFoundationDraft] = useState({
+    thesisStatement: blueprint.thesisStatement || '',
+    centralObjective: blueprint.centralObjective || '',
+    keyContributions: (blueprint.keyContributions || []).join('\n'),
+  });
+
+  useEffect(() => {
+    setFoundationDraft({
+      thesisStatement: blueprint.thesisStatement || '',
+      centralObjective: blueprint.centralObjective || '',
+      keyContributions: (blueprint.keyContributions || []).join('\n'),
+    });
+  }, [blueprint.thesisStatement, blueprint.centralObjective, blueprint.keyContributions, blueprint.version]);
+
+  const orderedSections = useMemo(
+    () => [...(blueprint.sectionPlan || [])].sort((left, right) => (left.order || 0) - (right.order || 0)),
+    [blueprint.sectionPlan]
+  );
+  const aiSections = orderedSections.filter(isGrantAppDraftSection);
+  const manualSections = orderedSections.filter(isGrantManualSection);
+  const evidenceSections = orderedSections.filter(isGrantEvidenceMappingSection);
+  const totalDimensions = evidenceSections.reduce((sum, section) => sum + (section.mustCover?.length || 0), 0);
+  const citationTargetCount = evidenceSections.reduce((sum, section) => sum + (section.suggestedCitationCount || 0), 0);
+  const prepAnchoredSections = orderedSections.filter((section) =>
+    (section.prepContextBlock?.bullets?.length || 0) > 0
+    || (section.grantSectionComplianceContract?.prepEvidence?.length || 0) > 0
+  ).length;
+  const ruleAnchoredSections = orderedSections.filter((section) =>
+    (section.grantRuleProfile?.requiredPoints?.length || 0) > 0
+    || (section.grantSectionComplianceContract?.hardChecks?.length || 0) > 0
+  ).length;
+  const missingDimensionSections = evidenceSections.filter((section) => (section.mustCover?.length || 0) === 0);
+  const visibleSections = filter === 'ai'
+    ? aiSections
+    : filter === 'manual'
+      ? manualSections
+      : filter === 'evidence'
+        ? evidenceSections
+        : orderedSections;
+
+  const saveFoundation = () => {
+    onSaveFoundation({
+      thesisStatement: foundationDraft.thesisStatement,
+      centralObjective: foundationDraft.centralObjective,
+      keyContributions: foundationDraft.keyContributions
+        .split('\n')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    });
+    setEditingFoundation(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-20 dark:bg-slate-950">
+      <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 px-6 py-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-950/90">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm dark:bg-white dark:text-slate-950">
+              <Target className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-950 dark:text-white">Grant Application Blueprint</h1>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <Badge variant={isFrozen ? 'default' : 'secondary'} className="gap-1">
+                  {isFrozen ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+                  {isFrozen ? 'Frozen' : 'Draft'}
+                </Badge>
+                <span>v{blueprint.version}</span>
+                <span>{orderedSections.length} sections in template order</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {saving ? (
+              <span className="flex items-center gap-2 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" /> Saving
+              </span>
+            ) : null}
+            <Button variant="outline" onClick={onGenerate} disabled={generating || saving}>
+              {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+              Regenerate
+            </Button>
+            <Button
+              onClick={onToggleFreeze}
+              disabled={saving}
+              className={isFrozen ? '' : 'bg-emerald-600 text-white hover:bg-emerald-700'}
+              variant={isFrozen ? 'outline' : 'default'}
+            >
+              {isFrozen ? <Unlock className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {isFrozen ? 'Unlock for Editing' : 'Freeze & Continue'}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto max-w-7xl px-6 py-8">
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <Badge className="bg-sky-100 text-sky-800 hover:bg-sky-100">Proposal foundation</Badge>
+                <Badge variant="outline">{isFrozen ? 'Freeze status: frozen' : 'Freeze status: draft'}</Badge>
+                {prepAnchoredSections > 0 ? (
+                  <Badge variant="outline" className="border-emerald-200 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300">
+                    {prepAnchoredSections} prep-anchored
+                  </Badge>
+                ) : null}
+                {ruleAnchoredSections > 0 ? (
+                  <Badge variant="outline" className="border-indigo-200 text-indigo-700 dark:border-indigo-900 dark:text-indigo-300">
+                    {ruleAnchoredSections} rule-anchored
+                  </Badge>
+                ) : null}
+              </div>
+
+              {editingFoundation ? (
+                <div className="grid gap-4">
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase text-slate-500">Foundation statement</label>
+                    <Textarea
+                      value={foundationDraft.thesisStatement}
+                      onChange={(event) => setFoundationDraft((current) => ({ ...current, thesisStatement: event.target.value }))}
+                      className="min-h-[88px] resize-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase text-slate-500">Central objective</label>
+                    <Textarea
+                      value={foundationDraft.centralObjective}
+                      onChange={(event) => setFoundationDraft((current) => ({ ...current, centralObjective: event.target.value }))}
+                      className="min-h-[72px] resize-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase text-slate-500">Key contributions</label>
+                    <Textarea
+                      value={foundationDraft.keyContributions}
+                      onChange={(event) => setFoundationDraft((current) => ({ ...current, keyContributions: event.target.value }))}
+                      className="min-h-[90px] resize-none"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="ghost" onClick={() => setEditingFoundation(false)}>Cancel</Button>
+                    <Button onClick={saveFoundation} disabled={saving}>Save foundation</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase text-slate-500 dark:text-slate-400">Foundation statement</h2>
+                    <p className="mt-2 text-base leading-relaxed text-slate-900 dark:text-slate-100">
+                      {blueprint.thesisStatement || 'Foundation statement pending.'}
+                    </p>
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase text-slate-500 dark:text-slate-400">Central objective</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
+                      {blueprint.centralObjective || 'Central objective pending.'}
+                    </p>
+                  </div>
+                  {blueprint.keyContributions?.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {blueprint.keyContributions.map((item) => (
+                        <span key={item} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {!isLocked ? (
+                    <div>
+                      <Button variant="outline" size="sm" onClick={() => setEditingFoundation(true)}>
+                        <Edit3 className="mr-2 h-4 w-4" /> Edit foundation
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+
+            <div className="grid min-w-[280px] grid-cols-2 gap-3">
+              {[
+                ['Total sections', orderedSections.length],
+                ['AI-drafted sections', aiSections.length],
+                ['Manual sections', manualSections.length],
+                ['Evidence-mapped sections', evidenceSections.length],
+                ['Evidence pillars', totalDimensions],
+                ['Citation targets', citationTargetCount],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="text-2xl font-bold text-slate-950 dark:text-white">{value}</div>
+                  <div className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {missingDimensionSections.length > 0 && !isFrozen ? (
+          <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Missing evidence pillars before freeze: {missingDimensionSections.map((section) => section.label || formatSectionName(section.sectionKey)).join(', ')}.
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            <ListFilter className="h-4 w-4 text-slate-500" />
+            Blueprint filters
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {GRANT_BLUEPRINT_FILTERS.map((item) => (
+              <button
+                type="button"
+                key={item.key}
+                onClick={() => setFilter(item.key)}
+                className={`rounded-full border px-3 py-2 text-sm font-medium transition-colors ${
+                  filter === item.key
+                    ? 'border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-950'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="space-y-5">
+          {visibleSections.map((section, index) => (
+            <GrantApplicationSectionCard
+              key={section.sectionKey}
+              section={section}
+              index={orderedSections.findIndex((item) => item.sectionKey === section.sectionKey)}
+              visibleIndex={index}
+              isLocked={isLocked}
+              onUpdateSection={onUpdateSection}
+            />
+          ))}
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function GrantApplicationSectionCard({
+  section,
+  index,
+  visibleIndex,
+  isLocked,
+  onUpdateSection,
+}: {
+  section: SectionPlanItem;
+  index: number;
+  visibleIndex: number;
+  isLocked: boolean;
+  onUpdateSection: (sectionKey: string, updated: SectionPlanItem) => void;
+}) {
+  const evidenceMapped = isGrantEvidenceMappingSection(section);
+  const canEditDimensions = evidenceMapped && isGrantAppDraftSection(section) && !isLocked;
+  const limitLabel = getGrantLimitLabel(section);
+  const contract = section.grantSectionComplianceContract;
+  const ruleProfile = section.grantRuleProfile;
+  const prepBullets = uniqueGrantList([
+    ...(section.prepContextBlock?.bullets || []),
+    ...(section.authoritativePrepBundle?.bullets || []),
+    ...(contract?.prepEvidence || []).flatMap((item) => item.factBullets || []),
+  ], 5);
+  const prepKeywords = uniqueGrantList([
+    ...(section.prepContextBlock?.keywords || []),
+    ...(section.authoritativePrepBundle?.keywords || []),
+    ...(contract?.prepEvidence || []).flatMap((item) => item.keywords || []),
+  ], 10);
+  const prepStages = uniqueGrantList([
+    ...(section.prepContextBlock?.stageKeys || []),
+    ...(section.authoritativePrepBundle?.stageKeys || []),
+    ...(contract?.prepEvidence || []).map((item) => item.stageKey || ''),
+  ], 8);
+  const hasPrepAnchors = prepBullets.length > 0 || prepKeywords.length > 0;
+  const hasRuleAnchors = (
+    (contract?.requiredPoints?.length || 0)
+    + (contract?.evaluationFocus?.length || 0)
+    + (contract?.hardChecks?.length || 0)
+    + (ruleProfile?.requiredPoints?.length || 0)
+  ) > 0;
+
+  const updateDimensions = (nextDimensions: string[], oldDimension?: string, newDimension?: string) => {
+    const cleanDimensions = uniqueGrantList(nextDimensions, 20);
+    onUpdateSection(section.sectionKey, {
+      ...section,
+      mustCover: cleanDimensions,
+      mustCoverTyping: updateGrantDimensionTyping(section, cleanDimensions, oldDimension, newDimension),
+    });
+  };
+
+  const updateCitationTarget = (nextCount: number) => {
+    onUpdateSection(section.sectionKey, {
+      ...section,
+      suggestedCitationCount: Math.max(0, Math.min(50, nextCount)),
+    });
+  };
+
+  return (
+    <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-sky-50 to-emerald-50 px-5 py-4 dark:border-slate-800 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-slate-900 px-2.5 py-1 text-xs font-bold text-white dark:bg-white dark:text-slate-950">
+                {index + 1 || visibleIndex + 1}
+              </span>
+              <Badge className={isGrantAppDraftSection(section) ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100' : 'bg-amber-100 text-amber-900 hover:bg-amber-100'}>
+                {getGrantOwnershipLabel(section)}
+              </Badge>
+              <Badge variant="outline">{section.required ? 'Required' : 'Optional'}</Badge>
+              {limitLabel ? <Badge variant="outline">{limitLabel}</Badge> : null}
+              {evidenceMapped ? (
+                <Badge className="bg-indigo-100 text-indigo-800 hover:bg-indigo-100">
+                  {(section.mustCover?.length || 0)} pillars · {section.suggestedCitationCount || 0} citations
+                </Badge>
+              ) : (
+                <Badge variant="outline">No evidence mapping</Badge>
+              )}
+              <Badge variant="outline" className={hasPrepAnchors ? 'border-emerald-200 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300' : 'border-amber-200 text-amber-700 dark:border-amber-900 dark:text-amber-300'}>
+                {hasPrepAnchors ? 'Grant Prep anchors' : 'No prep anchors'}
+              </Badge>
+              <Badge variant="outline" className={hasRuleAnchors ? 'border-indigo-200 text-indigo-700 dark:border-indigo-900 dark:text-indigo-300' : 'border-amber-200 text-amber-700 dark:border-amber-900 dark:text-amber-300'}>
+                {hasRuleAnchors ? 'Rule anchors' : 'No rule anchors'}
+              </Badge>
+            </div>
+            <h2 className="text-xl font-bold text-slate-950 dark:text-white">
+              {section.label || formatSectionName(section.sectionKey)}
+            </h2>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span>{section.sectionType || 'section'}</span>
+              {section.grantSemantic ? <span>Semantic: {section.grantSemantic.replace(/_/g, ' ')}</span> : null}
+              {section.sourceTemplatePointer ? <span>Template: {section.sourceTemplatePointer}</span> : null}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/70 bg-white/70 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-200 lg:max-w-sm">
+            <div className="text-xs font-semibold uppercase text-slate-500">Grant writing plan</div>
+            <p className="mt-1 leading-relaxed">{section.purpose || 'Section purpose pending.'}</p>
+            {section.reviewerIntent ? (
+              <p className="mt-2 text-xs leading-relaxed text-indigo-700 dark:text-indigo-300">
+                Reviewer focus: {section.reviewerIntent}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+        <div className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4 dark:border-emerald-950 dark:bg-emerald-950/20">
+              <h3 className="mb-3 text-sm font-semibold text-emerald-900 dark:text-emerald-200">Required points</h3>
+              {renderGrantBulletList(contract?.requiredPoints || ruleProfile?.requiredPoints, 'No required points mapped yet.', 'text-emerald-950 dark:text-emerald-100')}
+            </div>
+            <div className="rounded-xl border border-sky-100 bg-sky-50/60 p-4 dark:border-sky-950 dark:bg-sky-950/20">
+              <h3 className="mb-3 text-sm font-semibold text-sky-900 dark:text-sky-200">Evaluation focus</h3>
+              {renderGrantBulletList(contract?.evaluationFocus || ruleProfile?.evaluationFocus, 'No evaluation focus mapped yet.', 'text-sky-950 dark:text-sky-100')}
+            </div>
+            <div className="rounded-xl border border-rose-100 bg-rose-50/60 p-4 dark:border-rose-950 dark:bg-rose-950/20">
+              <h3 className="mb-3 text-sm font-semibold text-rose-900 dark:text-rose-200">Avoid rules</h3>
+              {renderGrantBulletList(contract?.avoidRules || ruleProfile?.avoidRules || section.mustAvoid, 'No avoid rules mapped yet.', 'text-rose-950 dark:text-rose-100')}
+            </div>
+            <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4 dark:border-violet-950 dark:bg-violet-950/20">
+              <h3 className="mb-3 text-sm font-semibold text-violet-900 dark:text-violet-200">Format limits</h3>
+              {renderGrantBulletList(contract?.formatConstraints || ruleProfile?.formatConstraints, 'No format limits mapped yet.', 'text-violet-950 dark:text-violet-100')}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Grant Prep signals</h3>
+              <div className="flex flex-wrap gap-2">
+                {prepStages.map((stage) => (
+                  <span key={stage} className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm dark:bg-slate-900 dark:text-slate-300">
+                    {stage.replace(/_/g, ' ')}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {renderGrantBulletList(prepBullets, 'No section-specific Grant Prep anchors mapped yet.')}
+            {prepKeywords.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {prepKeywords.map((keyword) => (
+                  <span key={keyword} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                    {keyword}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <aside className="space-y-4">
+          <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-950 dark:bg-indigo-950/20">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">Literature evidence pillars</h3>
+                <p className="mt-1 text-xs text-indigo-700 dark:text-indigo-300">
+                  {evidenceMapped ? 'Mapped across literature search, evidence extraction, and drafting.' : 'Excluded from citation mapping.'}
+                </p>
+              </div>
+              {evidenceMapped ? (
+                <div className="flex items-center gap-1 rounded-full bg-white px-2 py-1 text-xs font-semibold text-indigo-700 shadow-sm dark:bg-slate-950 dark:text-indigo-300">
+                  <BookOpen className="h-3.5 w-3.5" />
+                  {section.suggestedCitationCount || 0}
+                </div>
+              ) : null}
+            </div>
+
+            {evidenceMapped && (section.mustCover?.length || 0) === 0 ? (
+              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                Evidence pillars are missing for this eligible section.
+              </div>
+            ) : null}
+
+            {evidenceMapped ? (
+              <div className="space-y-3">
+                {(section.mustCover || []).map((dimension, dimensionIndex) => (
+                  <div key={`${dimension}-${dimensionIndex}`} className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900 dark:bg-slate-950">
+                    {canEditDimensions ? (
+                      <div className="flex gap-2">
+                        <Textarea
+                          defaultValue={dimension}
+                          onBlur={(event) => {
+                            if (event.target.value.trim() === dimension.trim()) return;
+                            const nextDimensions = [...(section.mustCover || [])];
+                            const nextDimension = event.target.value;
+                            const oldDimension = nextDimensions[dimensionIndex];
+                            nextDimensions[dimensionIndex] = nextDimension;
+                            updateDimensions(nextDimensions, oldDimension, nextDimension);
+                          }}
+                          className="min-h-[68px] resize-none text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => updateDimensions((section.mustCover || []).filter((_, itemIndex) => itemIndex !== dimensionIndex))}
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                          title="Remove dimension"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm leading-relaxed text-slate-800 dark:text-slate-100">{dimension}</p>
+                    )}
+                  </div>
+                ))}
+
+                {canEditDimensions ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => updateDimensions([...(section.mustCover || []), 'Add searchable evidence pillar'])}
+                    >
+                      <Plus className="mr-2 h-4 w-4" /> Add pillar
+                    </Button>
+                    <div className="flex items-center gap-2 rounded-lg border border-indigo-100 bg-white px-2 py-1 dark:border-indigo-900 dark:bg-slate-950">
+                      <button
+                        type="button"
+                        onClick={() => updateCitationTarget((section.suggestedCitationCount || 0) - 1)}
+                        className="rounded-md px-2 py-1 text-sm font-bold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                      >
+                        -
+                      </button>
+                      <span className="min-w-[84px] text-center text-xs font-semibold text-slate-600 dark:text-slate-300">
+                        {section.suggestedCitationCount || 0} citations
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => updateCitationTarget((section.suggestedCitationCount || 0) + 1)}
+                        className="rounded-md px-2 py-1 text-sm font-bold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+                {isGrantAppDraftSection(section)
+                  ? 'This draftable section does not require literature evidence mapping.'
+                  : 'This manual section remains visible in the application plan and is excluded from AI drafting and evidence mapping.'}
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+            <h3 className="mb-3 text-sm font-semibold text-slate-900 dark:text-slate-100">Reviewer signals</h3>
+            {renderGrantBulletList(contract?.reviewerSignals || ruleProfile?.reviewerSignals, 'No reviewer signals mapped yet.')}
+          </div>
+        </aside>
+      </div>
+    </article>
+  );
 }
 
 // ============================================================================
@@ -1812,6 +2520,22 @@ export default function BlueprintStage({
   // ============================================================================
 
   console.log('[BlueprintStage] Rendering blueprint editor - sections:', blueprint.sectionPlan?.length || 0);
+
+  if (isGrantWorkspace) {
+    return (
+      <GrantBlueprintApplicationView
+        blueprint={blueprint}
+        isLocked={isLocked}
+        isFrozen={isFrozen}
+        saving={saving}
+        generating={generating}
+        onGenerate={handleGenerate}
+        onToggleFreeze={handleToggleFreeze}
+        onSaveFoundation={handleSave}
+        onUpdateSection={handleUpdateSection}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen pb-20">

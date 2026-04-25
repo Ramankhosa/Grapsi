@@ -132,12 +132,12 @@ function formatGrantDimensionContext(
     : [];
   if (hints.length === 0) {
     return blueprintDimensions.length > 0
-      ? `Blueprint context dimensions (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
+      ? `Blueprint evidence pillars (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
       : '';
   }
 
   return [
-    'Grant blueprint dimensions (prioritize evidence that can prove these reviewer-facing claims):',
+    'Grant blueprint evidence pillars (prioritize facts that can be attached to these searchable literature pillars):',
     ...hints.map((item) =>
       `- ${item.sectionKey} | ${item.dimension}${item.persuasionRole ? ` | role=${item.persuasionRole}` : ''}${item.grantSemantic ? ` | semantic=${item.grantSemantic}` : ''}`
     ),
@@ -167,7 +167,7 @@ sourceFragment, pageHint, confidence, sourceSection`,
     ? formatGrantDimensionContext(blueprintDimensions, grantDimensionHints)
     : (
       blueprintDimensions.length > 0
-        ? `Blueprint context dimensions (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
+        ? `Blueprint evidence pillars (for relevance only):\n${blueprintDimensions.map(d => `- ${d}`).join('\n')}`
         : ''
     );
 

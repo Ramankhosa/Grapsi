@@ -226,13 +226,13 @@ function buildPrompt(
   const sectionsText = sectionsForMapping.map((section, idx) => {
     const dimensions = section.mustCover && section.mustCover.length > 0
       ? section.mustCover.map((dim, i) => `    ${i + 1}. "${dim}"`).join('\n')
-      : '    (No specific dimensions defined)';
+      : '    (No specific evidence pillars defined)';
     return `${idx + 1}. ${section.sectionKey} - "${section.purpose}"
-   Must Cover Dimensions:
+   Evidence Pillars:
 ${dimensions}`;
   }).join('\n\n');
 
-  return `You are a research assistant analyzing imported citations against a paper blueprint. Map each citation to the blueprint dimensions it supports.
+  return `You are a research assistant analyzing imported citations against a paper blueprint. Map each citation to the blueprint evidence pillars it supports. Treat each dimension as an evidence pillar: a searchable literature theme where papers can be attached, facts can be extracted, and section drafts can later cite those facts.
 
 RESEARCH OBJECTIVE:
 ${researchQuestion}
@@ -240,17 +240,17 @@ ${researchQuestion}
 PAPER BLUEPRINT:
 Central Objective: ${blueprint.centralObjective || 'Not specified'}
 
-SECTIONS AND DIMENSIONS TO COVER:
+SECTIONS AND EVIDENCE PILLARS TO COVER:
 ${sectionsText}
 
 IMPORTED CITATIONS TO ANALYZE:
 ${paperList}
 
 TASK:
-For each citation, identify which blueprint dimensions it supports:
+For each citation, identify which blueprint evidence pillars it supports:
 - Prefer the dimensionIndex (1-based) from the list above
 - If you provide dimension text, it must match EXACTLY from the blueprint above
-- Provide a grounded remark (1-2 sentences) explaining how it supports the dimension
+- Provide a grounded remark (1-2 sentences) naming the concrete fact, statistic, limitation, method, finding, or precedent that can be nailed to that evidence pillar
 - Assign confidence: HIGH (directly addresses), MEDIUM (partially relevant), LOW (tangentially related)
 - A citation can map to multiple dimensions across different sections
 - Only map if there's concrete evidence in the title/abstract
