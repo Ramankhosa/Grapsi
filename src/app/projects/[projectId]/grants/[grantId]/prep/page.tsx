@@ -18,7 +18,6 @@ import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary';
 import type {
   GrantPrepLayoutMode,
   PointAction,
-  PointLookup,
   PrepContext,
   PrepDraftingContext,
   PrepEngagementMode,
@@ -266,16 +265,6 @@ export default function GrantPrepPage() {
     if (stages.length === 0) return 0;
     return stages.reduce((sum, stage) => sum + stage.readiness, 0) / stages.length;
   }, [prepContext, sessionData?.overall_readiness]);
-
-  const pointLookup = useMemo<PointLookup>(() => {
-    if (!prepContext) return {};
-    return Object.values(prepContext.stageMapping).reduce((acc, stageEntry) => {
-      stageEntry.discussionPoints.forEach((point) => {
-        acc[point.key] = { ...point, stageKey: stageEntry.stageKey };
-      });
-      return acc;
-    }, {} as PointLookup);
-  }, [prepContext]);
 
   const currentPointLabel = useMemo(() => {
     if (!prepContext || !activeStage) return null;
@@ -810,7 +799,6 @@ export default function GrantPrepPage() {
                   onSend={sendMessage}
                   onRetry={retryMessage}
                   sessionLocked={sessionLocked}
-                  pointLookup={pointLookup}
                   currentPointLabel={currentPointLabel}
                   activeStageTitle={activeStage.title}
                   activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
@@ -838,7 +826,6 @@ export default function GrantPrepPage() {
                   onSend={sendMessage}
                   onRetry={retryMessage}
                   sessionLocked={sessionLocked}
-                  pointLookup={pointLookup}
                   currentPointLabel={currentPointLabel}
                   activeStageTitle={activeStage.title}
                   activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}

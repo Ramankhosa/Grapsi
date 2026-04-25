@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node scripts/run-local-command.js next dev -p 3008",
-    "build": "node scripts/run-local-command.js next build",
+    "build": "node scripts/clean-next.js && node scripts/run-local-command.js next build",
     "start": "node scripts/run-local-command.js next start -p 3008",
     "lint": "next lint",
     "seed:plans:prod": "node scripts/run-local-command.js node scripts/seed-production-plans.js",

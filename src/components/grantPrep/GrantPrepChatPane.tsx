@@ -4,22 +4,10 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HiExclamationTriangle, HiPaperAirplane, HiSparkles } from 'react-icons/hi2';
-import type { PointLookup, PrepMessage } from './types';
+import type { PrepMessage } from './types';
 
 function clsx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
-}
-
-function asStringArray(value: unknown): string[] {
-  const source = Array.isArray(value)
-    ? value
-    : typeof value === 'string'
-      ? [value]
-      : [];
-
-  return source
-    .map((item) => (typeof item === 'string' ? item.trim() : ''))
-    .filter(Boolean);
 }
 
 type Props = {
@@ -31,7 +19,6 @@ type Props = {
   onSend: (contentOverride?: string) => void;
   onRetry?: (content: string) => void;
   sessionLocked: boolean;
-  pointLookup: PointLookup;
   currentPointLabel?: string | null;
   activeStageTitle?: string;
   activeStageDescription?: string;
@@ -49,6 +36,38 @@ function SteeringBanner({ level, message }: { level: string; message: string }) 
   return <div className={clsx('rounded-lg border px-3 py-2 text-xs', tone)}>{message}</div>;
 }
 
+type SuggestedAnswer = NonNullable<PrepMessage['suggested_answers']>[number];
+
+function buildOptionCombinations(options: SuggestedAnswer[]) {
+  const usableOptions = options
+    .filter((option) => option?.label && option?.text)
+    .slice(0, 3);
+  const combinations: Array<{ label: string; text: string }> = [];
+
+  for (let i = 0; i < usableOptions.length; i += 1) {
+    for (let j = i + 1; j < usableOptions.length; j += 1) {
+      const selected = [usableOptions[i], usableOptions[j]];
+      combinations.push({
+        label: `${selected[0].label} + ${selected[1].label}`,
+        text: `I approve a combination of options ${selected[0].label} and ${selected[1].label}:\n\n${selected
+          .map((option) => `${option.label}. ${option.text}`)
+          .join('\n\n')}`,
+      });
+    }
+  }
+
+  if (usableOptions.length > 2) {
+    combinations.push({
+      label: 'All options',
+      text: `I approve a combined version of options ${usableOptions.map((option) => option.label).join(', ')}:\n\n${usableOptions
+        .map((option) => `${option.label}. ${option.text}`)
+        .join('\n\n')}`,
+    });
+  }
+
+  return combinations;
+}
+
 /**
  * Strip inline answer options (A., B., C. lines) from message text when
  * the structured `suggested_answers` cards will be shown instead.
@@ -61,7 +80,7 @@ function stripInlineOptions(text: string): string {
   return text.replace(optionBlockPattern, '').trimEnd();
 }
 
-function MessageBubble({ message, pointLookup, isLast = false }: { message: PrepMessage; pointLookup: PointLookup; isLast?: boolean }) {
+function MessageBubble({ message, isLast = false }: { message: PrepMessage; isLast?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const rawContent = message.content || '';
 
@@ -71,7 +90,6 @@ function MessageBubble({ message, pointLookup, isLast = false }: { message: Prep
 
   const shouldCollapse = content.length > 320;
   const displayText = shouldCollapse && !expanded ? `${content.slice(0, 320).trimEnd()}...` : content;
-  const capturedPoints = Array.isArray(message.captured_content_json) ? message.captured_content_json : [];
   const steeringEvents = Array.isArray(message.steering_events_json) ? message.steering_events_json : [];
 
   return (
@@ -105,32 +123,6 @@ function MessageBubble({ message, pointLookup, isLast = false }: { message: Prep
           </button>
         ) : null}
 
-        {message.role !== 'user' && capturedPoints.length > 0 ? (
-          <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-xs text-emerald-900">
-            <div className="mb-2 font-semibold">Captured this turn</div>
-            <div className="space-y-2">
-              {capturedPoints.map((capture) => {
-                const pointLabel = pointLookup[capture.pointKey]?.label || capture.pointKey;
-                return (
-                  <div key={`${message.id}_${capture.pointKey}`}>
-                    <div className="font-medium">{pointLabel}</div>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {asStringArray(capture.keywords).map((keyword) => (
-                        <span
-                          key={`${capture.pointKey}_${keyword}`}
-                          className="rounded-md bg-white px-2 py-1 text-[11px] ring-1 ring-emerald-100"
-                        >
-                          {keyword}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
         {message.role !== 'user' && steeringEvents.length > 0 ? (
           <div className="mt-3 space-y-2">
             {steeringEvents.map((event, index) => (
@@ -156,7 +148,6 @@ export default function GrantPrepChatPane({
   onSend,
   onRetry,
   sessionLocked,
-  pointLookup,
   currentPointLabel,
   activeStageTitle,
   activeStageDescription,
@@ -245,20 +236,23 @@ export default function GrantPrepChatPane({
             </div>
           </div>
         ) : (
-          messages.map((message, index) => (
+          messages.map((message, index) => {
+            const isLastAssistant = message.role !== 'user' && index === messages.length - 1;
+            const structuredAnswers = Array.isArray(message.suggested_answers) ? message.suggested_answers : [];
+            const hasStructuredAnswers = isLastAssistant && structuredAnswers.length > 0;
+            const optionCombinations = hasStructuredAnswers ? buildOptionCombinations(structuredAnswers) : [];
+
+            return (
             <div key={message.id}>
-              <MessageBubble message={message} pointLookup={pointLookup} isLast={index === messages.length - 1} />
+              <MessageBubble message={message} isLast={index === messages.length - 1} />
 
               {/* B9: Answer Option Cards — only on last assistant message */}
-              {message.role !== 'user' &&
-                index === messages.length - 1 &&
-                Array.isArray(message.suggested_answers) &&
-                message.suggested_answers.length > 0 ? (
+              {hasStructuredAnswers ? (
                 <div className="mt-3 flex flex-col gap-2 pl-9">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
                     Approval bundles &mdash; approve as-is, edit, or write your own
                   </div>
-                  {message.suggested_answers.map((option, i) => (
+                  {structuredAnswers.map((option, i) => (
                     <div
                       key={i}
                       className="group relative rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-700 shadow-prep-card transition-all hover:border-emerald-300 hover:shadow-prep-card-hover"
@@ -316,12 +310,27 @@ export default function GrantPrepChatPane({
                       </div>
                     </div>
                   ))}
+                  {optionCombinations.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {optionCombinations.map((combination) => (
+                        <button
+                          key={combination.label}
+                          type="button"
+                          onClick={() => onInputChange(combination.text)}
+                          disabled={sessionLocked}
+                          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 shadow-prep-card transition hover:bg-emerald-100 disabled:opacity-50"
+                        >
+                          {combination.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
               {/* B3: Follow-Up Suggestion Chips — only on last assistant message */}
-              {message.role !== 'user' &&
-                index === messages.length - 1 &&
+              {isLastAssistant &&
+                !hasStructuredAnswers &&
                 Array.isArray(message.suggested_follow_ups) &&
                 message.suggested_follow_ups.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-2 pl-9">
@@ -339,7 +348,8 @@ export default function GrantPrepChatPane({
                 </div>
               ) : null}
             </div>
-          ))
+            );
+          })
         )}
 
         {/* EC-1: orphan message indicator */}
