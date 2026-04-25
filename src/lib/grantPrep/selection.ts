@@ -7,13 +7,21 @@ import type {
   GrantPrepMode,
   GrantPrepStageKey,
   GrantPrepStageMapping,
+  GrantPrepStageSelectionLevel,
   GrantPrepStageSelectionSource,
 } from './types';
 
 export const GRANT_PREP_V2_STAGE_SELECTION_VERSION = 'v2' as const;
+export const GRANT_PREP_V3_STAGE_SELECTION_VERSION = 'v3' as const;
 export const GRANT_PREP_INTERNAL_ALWAYS_ENABLED_STAGE_KEYS: GrantPrepStageKey[] = [
   'handoff_ready',
   'handoff_complete',
+];
+const REQUIRED_FOUNDATION_STAGE_KEYS: GrantPrepStageKey[] = [
+  'problem_definition',
+  'methodology',
+  'outcomes',
+  'final_pitch',
 ];
 
 type SelectionMode = 'template' | 'fallback';
@@ -23,8 +31,10 @@ type SelectorFundingContext = Pick<FundingCallContext, 'focusAreas' | 'deliverab
 type SelectorResult = {
   stageMapping: GrantPrepStageMapping;
   autoEnabledStageKeys: GrantPrepStageKey[];
+  autoOptionalStageKeys: GrantPrepStageKey[];
   selectionMode: SelectionMode;
   selectionSources: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionSource>>;
+  selectionLevels: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionLevel>>;
 };
 
 type PseudoTemplateMode = Exclude<GrantPrepMode, 'template_driven' | 'template_only'> | 'standard';
@@ -171,10 +181,18 @@ function hasUsableTemplate(templateInput?: unknown | null) {
   );
 }
 
-function getTemplateEvidenceStageKeys(stageMapping: GrantPrepStageMapping) {
+function getTemplatePrimaryStageKeys(stageMapping: GrantPrepStageMapping) {
   return sortStageKeys(
     Object.values(stageMapping)
-      .filter((entry) => entry.templatePointers.length > 0 || entry.secondaryPointers.length > 0)
+      .filter((entry) => entry.templatePointers.length > 0)
+      .map((entry) => entry.stageKey)
+  );
+}
+
+function getTemplateSecondaryStageKeys(stageMapping: GrantPrepStageMapping) {
+  return sortStageKeys(
+    Object.values(stageMapping)
+      .filter((entry) => entry.templatePointers.length === 0 && entry.secondaryPointers.length > 0)
       .map((entry) => entry.stageKey)
   );
 }
@@ -209,8 +227,10 @@ function collectCallFactTexts(fundingContext?: SelectorFundingContext | null) {
 function addSelection(
   target: Set<GrantPrepStageKey>,
   selectionSources: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionSource>>,
+  selectionLevels: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionLevel>>,
   stageKey: GrantPrepStageKey,
-  source: GrantPrepStageSelectionSource
+  source: GrantPrepStageSelectionSource,
+  level: GrantPrepStageSelectionLevel = 'recommended'
 ) {
   if (!target.has(stageKey)) {
     target.add(stageKey);
@@ -218,6 +238,11 @@ function addSelection(
 
   if (!selectionSources[stageKey]) {
     selectionSources[stageKey] = source;
+  }
+
+  const currentLevel = selectionLevels[stageKey];
+  if (level === 'required' || currentLevel !== 'required') {
+    selectionLevels[stageKey] = level;
   }
 }
 
@@ -285,6 +310,43 @@ export function buildSelectionSources(input: {
   return sources;
 }
 
+function getFallbackAutoStageKeys(input: {
+  mode: GrantPrepMode;
+  fundingContext?: SelectorFundingContext | null;
+}) {
+  const stageKeys = new Set<GrantPrepStageKey>([
+    'problem_definition',
+    'beneficiaries',
+    'methodology',
+    'outcomes',
+    'final_pitch',
+  ]);
+  const callFactTexts = collectCallFactTexts(input.fundingContext);
+
+  if (input.mode !== 'standalone') {
+    stageKeys.add('fit_and_scope');
+  }
+  if ((input.fundingContext?.focusAreas || []).length > 0) {
+    stageKeys.add('thrust_alignment');
+  }
+  if (includesAnyText(callFactTexts, ['deliverable', 'milestone', 'timeline', 'duration'])) {
+    stageKeys.add('workplan');
+  }
+  if (includesAnyText(callFactTexts, ['budget', 'cost', 'funding', 'cap'])) {
+    stageKeys.add('budget_strategy');
+  }
+
+  return sortStageKeys(stageKeys);
+}
+
+function markRequiredFoundation(selectionLevels: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionLevel>>) {
+  REQUIRED_FOUNDATION_STAGE_KEYS.forEach((stageKey) => {
+    if (selectionLevels[stageKey] && selectionLevels[stageKey] !== 'excluded') {
+      selectionLevels[stageKey] = 'required';
+    }
+  });
+}
+
 export function buildGrantPrepSelectorResult(input: {
   mode: GrantPrepMode;
   templateJson?: unknown | null;
@@ -305,12 +367,22 @@ export function buildGrantPrepSelectorResult(input: {
           : 'standard';
   const templateForMapping = useRealTemplate ? input.templateJson : buildPseudoTemplate(pseudoTemplateMode);
   const stageMapping = buildGrantPrepStageMapping(templateForMapping);
-  const autoEnabled = new Set<GrantPrepStageKey>(getTemplateEvidenceStageKeys(stageMapping));
+  const primaryStageKeys = useRealTemplate
+    ? getTemplatePrimaryStageKeys(stageMapping)
+    : getFallbackAutoStageKeys({ mode: input.mode, fundingContext: input.fundingContext || null });
+  const secondaryStageKeys = getTemplateSecondaryStageKeys(stageMapping);
+  const autoEnabled = new Set<GrantPrepStageKey>(primaryStageKeys);
+  const autoOptional = new Set<GrantPrepStageKey>(secondaryStageKeys);
   const baseSource: GrantPrepStageSelectionSource = useRealTemplate ? 'template' : 'fallback';
   const selectionSources: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionSource>> = {};
+  const selectionLevels: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionLevel>> = {};
 
   autoEnabled.forEach((stageKey) => {
     selectionSources[stageKey] = baseSource;
+    selectionLevels[stageKey] = 'recommended';
+  });
+  autoOptional.forEach((stageKey) => {
+    selectionLevels[stageKey] = 'optional';
   });
 
   const focusAreas = input.fundingContext?.focusAreas || [];
@@ -322,7 +394,7 @@ export function buildGrantPrepSelectorResult(input: {
     focusAreas.length > 0 ||
     collectGuidelineTexts(input.guidelinePack, ['priorities']).length > 0
   ) {
-    addSelection(autoEnabled, selectionSources, 'thrust_alignment', hasGuidelines ? 'guideline' : 'fallback');
+    addSelection(autoEnabled, selectionSources, selectionLevels, 'thrust_alignment', hasGuidelines ? 'guideline' : 'fallback');
   }
 
   if (hasGuidelines) {
@@ -340,11 +412,11 @@ export function buildGrantPrepSelectorResult(input: {
         'team',
       ])
     ) {
-      addSelection(autoEnabled, selectionSources, 'team_and_partnerships', 'guideline');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'team_and_partnerships', 'guideline');
     }
 
     if (collectGuidelineTexts(input.guidelinePack, ['evaluationCriteria', 'deliverableRules']).length > 0) {
-      addSelection(autoEnabled, selectionSources, 'evaluation', 'guideline');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'evaluation', 'guideline', 'required');
     }
 
     const riskTexts = collectGuidelineTexts(input.guidelinePack, ['avoid', 'mustAddress', 'reviewerSignals']);
@@ -352,12 +424,12 @@ export function buildGrantPrepSelectorResult(input: {
       collectGuidelineTexts(input.guidelinePack, ['avoid']).length > 0 ||
       includesAnyText(riskTexts, ['risk', 'ethics', 'compliance', 'approval', 'consent', 'security'])
     ) {
-      addSelection(autoEnabled, selectionSources, 'risk_and_ethics', 'guideline');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'risk_and_ethics', 'guideline', 'required');
     }
 
     const innovationTexts = collectGuidelineTexts(input.guidelinePack, ['evaluationCriteria', 'reviewerSignals']);
     if (includesAnyText(innovationTexts, ['innovation', 'novel', 'advance', 'original'])) {
-      addSelection(autoEnabled, selectionSources, 'innovation', 'guideline');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'innovation', 'guideline');
     }
 
     const sustainabilityTexts = collectGuidelineTexts(input.guidelinePack, [
@@ -376,18 +448,18 @@ export function buildGrantPrepSelectorResult(input: {
         'replication',
       ])
     ) {
-      addSelection(autoEnabled, selectionSources, 'sustainability_and_scale', 'guideline');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'sustainability_and_scale', 'guideline');
     }
   } else if (input.mode === 'lightweight' && focusAreas.length > 0) {
-    addSelection(autoEnabled, selectionSources, 'thrust_alignment', 'fallback');
+    addSelection(autoEnabled, selectionSources, selectionLevels, 'thrust_alignment', 'fallback');
   }
 
   if (input.mode === 'lightweight') {
     if (includesAnyText(callFactTexts, ['deliverable', 'milestone', 'timeline'])) {
-      addSelection(autoEnabled, selectionSources, 'workplan', 'fallback');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'workplan', 'fallback');
     }
     if (includesAnyText(callFactTexts, ['budget', 'cost', 'funding'])) {
-      addSelection(autoEnabled, selectionSources, 'budget_strategy', 'fallback');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'budget_strategy', 'fallback');
     }
   }
 
@@ -396,12 +468,21 @@ export function buildGrantPrepSelectorResult(input: {
     if (!selectionSources[stageKey]) {
       selectionSources[stageKey] = 'dependency';
     }
+    if (!selectionLevels[stageKey] || selectionLevels[stageKey] === 'optional') {
+      selectionLevels[stageKey] = 'recommended';
+    }
+  });
+  markRequiredFoundation(selectionLevels);
+  GRANT_PREP_INTERNAL_ALWAYS_ENABLED_STAGE_KEYS.forEach((stageKey) => {
+    selectionLevels[stageKey] = 'required';
   });
 
   return {
     stageMapping,
     autoEnabledStageKeys: withDependencies,
+    autoOptionalStageKeys: sortStageKeys(Array.from(autoOptional).filter((stageKey) => !withDependencies.includes(stageKey))),
     selectionMode,
     selectionSources,
+    selectionLevels,
   };
 }

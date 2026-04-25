@@ -3,6 +3,8 @@ import type {
   GrantPrepMarkerPayload,
   GrantPrepResponseEnvelope,
   GrantPrepSuggestedAnswer,
+  GrantPrepSuggestedAnswerCoverage,
+  GrantPrepStageKey,
   SteeringLevel,
 } from './types';
 
@@ -103,10 +105,70 @@ function sanitizeSuggestedAnswer(value: unknown, index: number): GrantPrepSugges
     return null;
   }
 
+  const covers = asObjectArray(answer.covers)
+    .map((item): GrantPrepSuggestedAnswerCoverage | null => {
+      const stageKey = asTrimmedString(item.stageKey);
+      const pointKey = asTrimmedString(item.pointKey);
+      const label = asTrimmedString(item.label);
+      if (!stageKey || !pointKey || !label) {
+        return null;
+      }
+
+      return {
+        stageKey: stageKey as GrantPrepStageKey,
+        pointKey,
+        label,
+      };
+    })
+    .filter((item): item is GrantPrepSuggestedAnswerCoverage => Boolean(item))
+    .slice(0, 6);
+
   return {
     label: asTrimmedString(answer.label) || String.fromCharCode(65 + index),
     text,
     rationale: asOptionalString(answer.rationale) ?? null,
+    covers,
+    coverageSummary: asOptionalString(answer.coverageSummary) ?? null,
+  };
+}
+
+function sanitizeMarkerPoint(value: Record<string, unknown>): NonNullable<GrantPrepMarkerPayload['pointsCovered']>[number] | null {
+  const pointKey = asTrimmedString(value.pointKey);
+  if (!pointKey) {
+    return null;
+  }
+
+  const stageKey = asTrimmedString(value.stageKey);
+  const ruleCompliance = asObject(value.ruleCompliance);
+  const status = asTrimmedString(ruleCompliance?.status);
+  const normalizedStatus =
+    status === 'ok' || status === 'warning' || status === 'needs_review'
+      ? status
+      : undefined;
+
+  return {
+    ...(stageKey ? { stageKey: stageKey as GrantPrepStageKey } : {}),
+    pointKey,
+    keywords: asStringArray(value.keywords, 12),
+    thrustLinkage: asStringArray(value.thrustLinkage, 6),
+    factBullets: asStringArray(value.factBullets, 8),
+    ruleNotes: asStringArray(value.ruleNotes, 6),
+    ...(typeof value.confidence === 'number' && Number.isFinite(value.confidence)
+      ? { confidence: Math.max(0, Math.min(1, value.confidence)) }
+      : {}),
+    captureBasis: sanitizeCaptureBasis(value.captureBasis),
+    ruleCompliance:
+      normalizedStatus || ruleCompliance?.reason !== undefined || ruleCompliance?.rescopeNeeded !== undefined
+        ? {
+            ...(normalizedStatus ? { status: normalizedStatus } : {}),
+            ...(asOptionalString(ruleCompliance?.reason) !== undefined
+              ? { reason: asOptionalString(ruleCompliance?.reason) ?? null }
+              : {}),
+            ...(typeof ruleCompliance?.rescopeNeeded === 'boolean'
+              ? { rescopeNeeded: ruleCompliance.rescopeNeeded }
+              : {}),
+          }
+        : undefined,
   };
 }
 
@@ -126,44 +188,12 @@ function sanitizeMarkerPayload(value: unknown): GrantPrepMarkerPayload | null {
   type SteeringEvent = NonNullable<GrantPrepMarkerPayload['steeringEvents']>[number];
 
   const pointsCovered = asObjectArray(parsed.pointsCovered)
-    .map((point): MarkerPoint | null => {
-      const pointKey = asTrimmedString(point.pointKey);
-      if (!pointKey) {
-        return null;
-      }
-
-      const ruleCompliance = asObject(point.ruleCompliance);
-      const status = asTrimmedString(ruleCompliance?.status);
-      const normalizedStatus =
-        status === 'ok' || status === 'warning' || status === 'needs_review'
-          ? status
-          : undefined;
-
-      return {
-        pointKey,
-        keywords: asStringArray(point.keywords, 12),
-        thrustLinkage: asStringArray(point.thrustLinkage, 6),
-        factBullets: asStringArray(point.factBullets, 8),
-        ruleNotes: asStringArray(point.ruleNotes, 6),
-        ...(typeof point.confidence === 'number' && Number.isFinite(point.confidence)
-          ? { confidence: Math.max(0, Math.min(1, point.confidence)) }
-          : {}),
-        captureBasis: sanitizeCaptureBasis(point.captureBasis),
-        ruleCompliance:
-          normalizedStatus || ruleCompliance?.reason !== undefined || ruleCompliance?.rescopeNeeded !== undefined
-            ? {
-                ...(normalizedStatus ? { status: normalizedStatus } : {}),
-                ...(asOptionalString(ruleCompliance?.reason) !== undefined
-                  ? { reason: asOptionalString(ruleCompliance?.reason) ?? null }
-                  : {}),
-                ...(typeof ruleCompliance?.rescopeNeeded === 'boolean'
-                  ? { rescopeNeeded: ruleCompliance.rescopeNeeded }
-                  : {}),
-              }
-            : undefined,
-      };
-    })
+    .map((point): MarkerPoint | null => sanitizeMarkerPoint(point))
     .filter((point): point is MarkerPoint => Boolean(point));
+  const crossStagePointsCovered = asObjectArray(parsed.crossStagePointsCovered)
+    .map((point): MarkerPoint | null => sanitizeMarkerPoint(point))
+    .filter((point): point is MarkerPoint => Boolean(point?.stageKey))
+    .slice(0, 12);
 
   const suggestedFollowUps = asStringArray(parsed.suggestedFollowUps, 3);
   const suggestedAnswers = (Array.isArray(parsed.suggestedAnswers) ? parsed.suggestedAnswers : [parsed.suggestedAnswers])
@@ -196,6 +226,7 @@ function sanitizeMarkerPayload(value: unknown): GrantPrepMarkerPayload | null {
     stageKey: stageKey as GrantPrepMarkerPayload['stageKey'],
     ...(readinessDelta !== undefined ? { readinessDelta } : {}),
     pointsCovered,
+    crossStagePointsCovered,
     currentPoint: asOptionalString(parsed.currentPoint) ?? null,
     suggestedFollowUps: suggestedFollowUps.length > 0 ? suggestedFollowUps : null,
     suggestedAnswers: suggestedAnswers.length > 0 ? suggestedAnswers : null,

@@ -3,10 +3,12 @@ import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY, getDefaultEnabledSta
 import type {
   GrantPrepMarkerPayload,
   GrantPrepMode,
+  GrantPrepPointConversationRole,
   GrantPrepPointCapture,
   GrantPrepSessionContext,
   GrantPrepStageKey,
   GrantPrepStageMapping,
+  GrantPrepStageSelectionLevel,
   GrantPrepStageSelectionSource,
   GrantPrepStageStates,
   GrantPrepSteeringEvent,
@@ -31,6 +33,47 @@ const CAPTURE_BASIS_VALUES = new Set<GrantPrepPointCapture['captureBasis'][numbe
   'generic_placeholder',
   'user_confirmed',
 ]);
+
+const POINT_CONVERSATION_ROLE_VALUES = new Set<GrantPrepPointConversationRole>([
+  'user_required',
+  'can_infer_and_confirm',
+  'ai_draftable',
+  'context_only',
+]);
+
+export function normalizeGrantPrepPointConversationRole(
+  value: unknown,
+  fallback: GrantPrepPointConversationRole = 'user_required'
+): GrantPrepPointConversationRole {
+  return POINT_CONVERSATION_ROLE_VALUES.has(value as GrantPrepPointConversationRole)
+    ? (value as GrantPrepPointConversationRole)
+    : fallback;
+}
+
+function inferPointConversationRole(point: {
+  priority?: PointPriority;
+  sourceTemplatePointer?: string | null;
+  conversationRole?: unknown;
+}) {
+  if (POINT_CONVERSATION_ROLE_VALUES.has(point.conversationRole as GrantPrepPointConversationRole)) {
+    return point.conversationRole as GrantPrepPointConversationRole;
+  }
+
+  if (point.priority === 'P3') {
+    return 'ai_draftable';
+  }
+
+  return point.sourceTemplatePointer ? 'can_infer_and_confirm' : 'user_required';
+}
+
+export function isGrantPrepUserFacingPoint(point: {
+  priority?: PointPriority;
+  sourceTemplatePointer?: string | null;
+  conversationRole?: unknown;
+}) {
+  const role = inferPointConversationRole(point);
+  return role === 'user_required' || role === 'can_infer_and_confirm';
+}
 
 function coerceStringArray(value: unknown) {
   const source = Array.isArray(value)
@@ -170,7 +213,8 @@ export function determineGrantPrepMode(options: {
 export function buildInitialStageStates(
   stageMapping: GrantPrepStageMapping,
   enabledStageKeys?: GrantPrepStageKey[],
-  selectionSources?: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionSource>>
+  selectionSources?: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionSource>>,
+  selectionLevels?: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionLevel>>
 ): GrantPrepStageStates {
   const enabled = enabledStageKeys && enabledStageKeys.length > 0
     ? new Set(enabledStageKeys)
@@ -184,6 +228,9 @@ export function buildInitialStageStates(
       enabled: isEnabled,
       pickable: stage.pickable,
       selectionSource: isEnabled ? selectionSources?.[stage.key] || null : null,
+      selectionLevel:
+        selectionLevels?.[stage.key] ||
+        (stage.pickable ? (isEnabled ? 'recommended' : 'optional') : 'required'),
       readiness: 0,
       status: isEnabled ? 'not_started' : 'disabled',
       steeringEvents: [],
@@ -191,6 +238,10 @@ export function buildInitialStageStates(
         key: point.key,
         label: point.label,
         priority: point.priority,
+        conversationRole: normalizeGrantPrepPointConversationRole(
+          point.conversationRole,
+          point.priority === 'P3' ? 'ai_draftable' : point.sourceTemplatePointer ? 'can_infer_and_confirm' : 'user_required'
+        ),
         status: 'pending',
         sourceTemplatePointer: point.sourceTemplatePointer,
         capture: null,
@@ -202,13 +253,13 @@ export function buildInitialStageStates(
 }
 
 export function computeStageReadiness(stageState: GrantPrepStageStates[GrantPrepStageKey]) {
-  const relevantPoints = stageState.points.filter((point) => point.priority !== 'P3');
-  const denominator = relevantPoints.length > 0 ? relevantPoints.length : stageState.points.length;
+  const relevantPoints = stageState.points.filter((point) => point.priority !== 'P3' && isGrantPrepUserFacingPoint(point));
+  const denominator = relevantPoints.length;
   if (denominator === 0) {
     return 1;
   }
 
-  const score = stageState.points.reduce((total, point) => {
+  const score = relevantPoints.reduce((total, point) => {
     if (point.status === 'covered') {
       return total + (point.priority === 'P1' ? 1 : point.priority === 'P2' ? 0.7 : 0.35);
     }
@@ -403,7 +454,7 @@ export function deriveStageStatus(stageState: GrantPrepStageStates[GrantPrepStag
     return 'disabled' as const;
   }
 
-  if (stageState.points.some((point) => point.status === 'needs_review')) {
+  if (stageState.points.some((point) => point.status === 'needs_review' && isGrantPrepUserFacingPoint(point))) {
     return 'needs_review' as const;
   }
 
@@ -440,6 +491,7 @@ export function isGrantPrepSessionReady(
     (stage) =>
       !stage.enabled ||
       !stage.pickable ||
+      stage.selectionLevel === 'optional' ||
       (stage.readiness >= 0.65 && (!isExpertGrantPrepMode(engagementMode) || stage.status !== 'needs_review'))
   );
 }
@@ -515,6 +567,101 @@ export function applyMarkerToStageStates(
   return nextStates;
 }
 
+function captureHasTraceableContent(capture: GrantPrepPointCapture) {
+  return [
+    ...(capture.keywords || []),
+    ...(capture.factBullets || []),
+    ...(capture.ruleNotes || []),
+  ].some((value) => String(value || '').trim().length > 0);
+}
+
+function crossStageCaptureCanReceiveFullCredit(capture: GrantPrepPointCapture) {
+  return (
+    (capture.confidence || 0) >= 0.85 &&
+    capture.ruleCompliance.status === 'ok' &&
+    !capture.captureBasis.includes('generic_placeholder') &&
+    captureHasTraceableContent(capture)
+  );
+}
+
+export function applyCrossStageMarkerToStageStates(
+  stageStates: GrantPrepStageStates,
+  marker: GrantPrepMarkerPayload,
+  options: {
+    engagementMode: GrantPrepSessionContext['engagementMode'];
+    selectedThrustAreaRuleKeys: string[];
+    availableFocusAreas: string[];
+    budgetLimits?: string | null;
+    projectDuration?: string | null;
+    allowedCrossStagePointKeys?: string[];
+  }
+) {
+  const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(stageStates));
+  const requiresThrustLinkage = requiresGrantPrepThrustLinkage(options);
+  const updates = Array.isArray(marker.crossStagePointsCovered) ? marker.crossStagePointsCovered : [];
+  const allowedCrossStagePointKeys = options.allowedCrossStagePointKeys
+    ? new Set(options.allowedCrossStagePointKeys)
+    : null;
+
+  for (const pointUpdate of updates) {
+    const targetStageKey = pointUpdate.stageKey;
+    if (!targetStageKey || targetStageKey === marker.stageKey) {
+      continue;
+    }
+    if (allowedCrossStagePointKeys && !allowedCrossStagePointKeys.has(`${targetStageKey}.${pointUpdate.pointKey}`)) {
+      continue;
+    }
+
+    const stageState = nextStates[targetStageKey];
+    if (!stageState?.pickable || stageState.selectionLevel === 'excluded') {
+      continue;
+    }
+
+    const point = stageState.points.find((item) => item.key === pointUpdate.pointKey);
+    if (!point) {
+      continue;
+    }
+
+    const capture = normalizeCapture(point.capture, pointUpdate);
+    point.capture = capture;
+
+    const statusResult = getGrantPrepPointStatus({
+      stageKey: targetStageKey,
+      capture,
+      requiresThrustLinkage,
+      engagementMode: options.engagementMode,
+      pointPriority: point.priority,
+      budgetLimits: options.budgetLimits,
+      projectDuration: options.projectDuration,
+    });
+
+    point.status = crossStageCaptureCanReceiveFullCredit(capture)
+      ? statusResult.status
+      : 'needs_review';
+
+    if (point.status === 'needs_review') {
+      addGrantPrepSteeringEvent(
+        stageState,
+        'This point was inferred from a related conversation turn and should be reviewed before handoff.',
+        'awareness_nudge',
+        point.key
+      );
+    } else if (statusResult.steeringMessage && statusResult.steeringLevel) {
+      addGrantPrepSteeringEvent(stageState, statusResult.steeringMessage, statusResult.steeringLevel, point.key);
+    }
+
+    if (!stageState.enabled && stageState.selectionLevel === 'optional') {
+      stageState.selectionLevel = 'recommended';
+      stageState.enabled = true;
+      stageState.selectionSource = stageState.selectionSource || 'manual';
+    }
+
+    recomputeStageState(stageState);
+  }
+
+  return nextStates;
+}
+
 export function reassessGrantPrepStageStates(
   stageStates: GrantPrepStageStates,
   options: {
@@ -576,19 +723,35 @@ export function normalizeGrantPrepStageStates(stageStates: GrantPrepStageStates)
   const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(stageStates || {}));
 
   Object.values(nextStates).forEach((stageState) => {
+    if (
+      stageState.selectionLevel !== 'required' &&
+      stageState.selectionLevel !== 'recommended' &&
+      stageState.selectionLevel !== 'optional' &&
+      stageState.selectionLevel !== 'excluded'
+    ) {
+      stageState.selectionLevel = stageState.pickable
+        ? (stageState.enabled ? 'recommended' : 'optional')
+        : 'required';
+    }
+
     if (!Array.isArray(stageState?.points)) {
       stageState.points = [];
       return;
     }
 
     stageState.points = stageState.points.map((point) => {
+      const conversationRole = inferPointConversationRole(point);
       if (!point.capture) {
-        return point;
+        return {
+          ...point,
+          conversationRole,
+        };
       }
 
       const ruleComplianceStatus = point.capture.ruleCompliance?.status;
       return {
         ...point,
+        conversationRole,
         capture: {
           ...point.capture,
           keywords: normalizeGrantPrepKeywords(point.capture.keywords),
@@ -613,6 +776,42 @@ export function normalizeGrantPrepStageStates(stageStates: GrantPrepStageStates)
         },
       };
     });
+  });
+
+  return nextStates;
+}
+
+export function applyGrantPrepPointRolesFromMapping(
+  stageStates: GrantPrepStageStates,
+  stageMapping: GrantPrepStageMapping
+) {
+  const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(stageStates || {}));
+
+  Object.values(nextStates).forEach((stageState) => {
+    const mappedPoints = new Map(
+      (stageMapping[stageState.stageKey]?.discussionPoints || []).map((point) => [point.key, point])
+    );
+
+    stageState.points = (stageState.points || []).map((point) => {
+      const mappedPoint = mappedPoints.get(point.key);
+      const conversationRole = mappedPoint
+        ? normalizeGrantPrepPointConversationRole(
+            mappedPoint.conversationRole,
+            mappedPoint.priority === 'P3'
+              ? 'ai_draftable'
+              : mappedPoint.sourceTemplatePointer
+                ? 'can_infer_and_confirm'
+                : 'user_required'
+          )
+        : inferPointConversationRole(point);
+
+      return {
+        ...point,
+        conversationRole,
+      };
+    });
+
+    recomputeStageState(stageState);
   });
 
   return nextStates;

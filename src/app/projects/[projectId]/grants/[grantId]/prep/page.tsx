@@ -48,6 +48,24 @@ function formatEngagementModeLabel(mode: PrepEngagementMode) {
   return ENGAGEMENT_MODE_OPTIONS.find((option) => option.key === mode)?.label || 'Expert';
 }
 
+function pointConversationRole(point: { conversationRole?: string; sourceTemplatePointer?: string | null; priority?: string }) {
+  if (
+    point.conversationRole === 'user_required' ||
+    point.conversationRole === 'can_infer_and_confirm' ||
+    point.conversationRole === 'ai_draftable' ||
+    point.conversationRole === 'context_only'
+  ) {
+    return point.conversationRole;
+  }
+  if (point.priority === 'P3') return 'ai_draftable';
+  return point.sourceTemplatePointer ? 'can_infer_and_confirm' : 'user_required';
+}
+
+function isUserFacingPoint(point: { conversationRole?: string; sourceTemplatePointer?: string | null; priority?: string }) {
+  const role = pointConversationRole(point);
+  return role === 'user_required' || role === 'can_infer_and_confirm';
+}
+
 // EC-14: safe localStorage helpers
 function safeLocalStorage(key: string, fallback: string): string {
   try {
@@ -266,7 +284,7 @@ export default function GrantPrepPage() {
       const point = activeStage.points.find((p) => p.key === lastAssistant.current_point);
       if (point) return point.label;
     }
-    const nextPending = activeStage.points.find((p) => p.status === 'pending' || p.status === 'needs_review');
+    const nextPending = activeStage.points.find((p) => (p.status === 'pending' || p.status === 'needs_review') && isUserFacingPoint(p));
     return nextPending?.label || null;
   }, [prepContext, activeStage, sessionData?.messages]);
 
@@ -274,7 +292,7 @@ export default function GrantPrepPage() {
     if (!activeStage || !prepContext) return [];
     const mapping = prepContext.stageMapping[prepContext.activeStageKey];
     return activeStage.points
-      .filter((p) => p.status === 'pending' || p.status === 'needs_review')
+      .filter((p) => (p.status === 'pending' || p.status === 'needs_review') && isUserFacingPoint(p))
       .map((p) => {
         const mapped = mapping?.discussionPoints.find((dp) => dp.key === p.key);
         return { key: p.key, label: p.label, helpText: mapped?.helpText };
@@ -429,10 +447,10 @@ export default function GrantPrepPage() {
   }, [confirmAction, sessionData?.id, sessionData?.project?.id, hydrateSession, router]);
 
   // EC-11: cooldown only on success
-  const sendMessage = useCallback(async () => {
-    if (!sessionData?.id || !prepContext || !input.trim() || sessionLocked) return;
+  const sendMessage = useCallback(async (contentOverride?: string) => {
+    const content = (contentOverride ?? input).trim();
+    if (!sessionData?.id || !prepContext || !content || sessionLocked) return;
 
-    const content = input.trim();
     const clientMessageId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     setInput('');
     setSending(true);

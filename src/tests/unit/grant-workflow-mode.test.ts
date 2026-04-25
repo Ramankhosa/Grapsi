@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildGrantPrepStageMapping } from '@/lib/grantPrep/templateMapper'
+import { buildGrantPrepSelectorResult } from '@/lib/grantPrep/selection'
 import { resolveGrantBackedDraftingMode } from '@/lib/grants/paperSectionConfig'
 import {
   MAX_TRUSTED_TEMPLATE_INTENT_ALTERNATES,
@@ -320,6 +321,41 @@ describe('grant workflow mode extraction and runtime', () => {
     expect(mapping.innovation.secondaryPointers).toContain('sections.section_2')
     expect(mapping.evaluation.secondaryPointers).toContain('sections.section_2')
     expect(mapping.risk_and_ethics.secondaryPointers).toContain('sections.section_2')
+    expect(mapping.methodology.discussionPoints.find((point) => point.sourceTemplatePointer === 'sections.section_2')?.conversationRole).toBe('can_infer_and_confirm')
+    expect(mapping.innovation.discussionPoints.find((point) => point.sourceTemplatePointer === 'sections.section_2')?.conversationRole).toBe('context_only')
+  })
+
+  it('keeps secondary-only template matches optional instead of auto-enabling extra stages', () => {
+    const selector = buildGrantPrepSelectorResult({
+      mode: 'template_driven',
+      templateJson: {
+        sections: [
+          {
+            key: 'section_2',
+            label: 'Section 2',
+            type: 'section',
+            workflowMode: 'app_draft',
+            guidance: 'Provide the requested response.',
+            templateIntent: 'methodology',
+            templateIntentConfidence: 0.93,
+            required: true,
+            repeatable: false,
+            supportLevel: 'full',
+            confidence: 1,
+            sourceAnchors: [],
+          },
+        ],
+      },
+      guidelinePack: null,
+      selectedThrustAreaRuleKeys: [],
+      fundingContext: null,
+    })
+
+    expect(selector.autoEnabledStageKeys).toContain('methodology')
+    expect(selector.autoEnabledStageKeys).not.toContain('innovation')
+    expect(selector.autoEnabledStageKeys).not.toContain('evaluation')
+    expect(selector.autoOptionalStageKeys).toContain('innovation')
+    expect(selector.selectionLevels.innovation).toBe('optional')
   })
 
   it('keeps only app_draft narrative sections in the shadow paper blueprint', () => {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
+import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService'
 import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
 import type { RecommendationSearchFilters } from '@/lib/recommendations/types'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
@@ -59,6 +60,23 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json(
         { error: 'Invalid chat message payload', details: error.flatten() },
         { status: 400 }
+      )
+    }
+
+    if (isGeminiRateLimitErrorLike(error)) {
+      const retryAfterMs = getGeminiRetryAfterMs(error)
+      return NextResponse.json(
+        {
+          error: 'AI service is temporarily rate limited. Please retry shortly.',
+          code: 'GEMINI_RATE_LIMITED',
+          retryAfterMs: retryAfterMs ?? null,
+        },
+        {
+          status: 429,
+          headers: retryAfterMs
+            ? { 'Retry-After': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
+            : undefined,
+        }
       )
     }
 

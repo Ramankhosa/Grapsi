@@ -9,8 +9,11 @@ import {
   buildGrantPrepModeWarning,
   inflateGrantPrepSessionContext,
   loadGrantPrepSession,
+  normalizeGrantPrepForPersistence,
+  refreshGrantPrepSessionContext,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
+import { isGrantPrepSessionReady } from '@/lib/grantPrep/sessionState'
 
 async function resolveProjectGrantPrepSession(input: {
   projectId: string
@@ -208,16 +211,60 @@ export async function GET(
   if (!resolved?.grantPrepSession || resolved.grantPrepSession.project_id !== projectId) {
     return NextResponse.json({ message: 'Grant Prep session not found' }, { status: 404 })
   }
-  const { grantPrepSession, grantSession } = resolved
+  let { grantPrepSession, grantSession } = resolved
 
   const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, {
     id: user.id,
     email: user.email ?? null,
     tenantId: user.tenantId,
   })
-  const prepContext = inflateGrantPrepSessionContext(grantPrepSession, {
-    warning: buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning),
+  const warning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
+  let prepContext = inflateGrantPrepSessionContext(grantPrepSession, {
+    warning,
   })
+  const canRefresh =
+    grantPrepSession.status !== 'archived' &&
+    grantPrepSession.status !== 'handed_off' &&
+    grantPrepSession.status !== 'launched'
+  const isStale =
+    grantPrepSession.template_revision_id !== serverContext.templateRevisionId ||
+    grantPrepSession.guideline_revision_id !== serverContext.guidelineRevisionId
+  if (canRefresh && isStale) {
+    prepContext = refreshGrantPrepSessionContext({
+      sessionContext: prepContext,
+      templateJson: serverContext.draftingContext?.approvedTemplate?.grant_template_json || null,
+      guidelinePack: (serverContext.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as any) || null,
+      fundingContext: serverContext.fundingContext,
+      warning,
+    })
+    grantPrepSession = await prisma.grantPrepSession.update({
+      where: { id: grantPrepSession.id },
+      data: {
+        ...normalizeGrantPrepForPersistence(prepContext),
+        template_revision_id: serverContext.templateRevisionId,
+        guideline_revision_id: serverContext.guidelineRevisionId,
+        status: isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode) ? 'ready' : 'active',
+        last_handoff_error: null,
+      },
+      include: {
+        messages: {
+          orderBy: {
+            created_at: 'asc',
+          },
+        },
+        project: {
+          select: {
+            id: true,
+            name: true,
+            tenantId: true,
+          },
+        },
+      },
+    })
+    prepContext = inflateGrantPrepSessionContext(grantPrepSession, {
+      warning,
+    })
+  }
 
   return NextResponse.json({
     session: serializeGrantPrepSession(grantPrepSession),

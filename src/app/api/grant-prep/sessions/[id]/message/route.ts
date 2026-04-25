@@ -11,26 +11,33 @@ import {
   inflateGrantPrepSessionContext,
   loadGrantPrepSession,
   normalizeGrantPrepForPersistence,
+  refreshGrantPrepSessionContext,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
+import {
+  buildGrantPrepConversationBundle,
+  getGrantPrepCrossStageAllowedPointKeys,
+} from '@/lib/grantPrep/proactivePlanner'
 import {
   parseGrantPrepResponse,
   sanitizeGrantPrepMarkerPayload,
   tryRepairGrantPrepResponse,
 } from '@/lib/grantPrep/marker'
 import {
+  applyCrossStageMarkerToStageStates,
   applyMarkerToStageStates,
   canAutoAdvanceGrantPrepStage,
   collectGlobalKeywords,
   computeOverallReadiness,
   getNextPickableStageKey,
   hasStageContentChanged,
+  isGrantPrepUserFacingPoint,
   isGrantPrepSessionReady,
   propagateDependentNeedsReview,
 } from '@/lib/grantPrep/sessionState'
 import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary'
 import { runGrantPrepStageTidyPass } from '@/lib/grantPrep/tidyPass'
-import type { GrantPrepMarkerPayload, GrantPrepStageKey } from '@/lib/grantPrep/types'
+import type { GrantPrepMarkerPayload, GrantPrepStageKey, GrantPrepStatus } from '@/lib/grantPrep/types'
 
 const messageSchema = z.object({
   content: z.string().min(1).max(12000),
@@ -83,6 +90,7 @@ async function inferMarkerFromTurn(input: {
     '  "version": "brainstorm_marker_v1",',
     `  "stageKey": "${input.stageKey}",`,
     '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": [], "factBullets": ["specific drafting fact"], "ruleNotes": ["rule caveat"], "confidence": 0.8, "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
+    '  "crossStagePointsCovered": [],',
     '  "currentPoint": "..." | null,',
     '  "qualityAssessment": "strong" | "adequate" | "weak" | null,',
     '  "steeringEvents": []',
@@ -190,7 +198,29 @@ export async function POST(
 
     const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
     const prepWarning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
-    const prepContext = inflateGrantPrepSessionContext(grantPrepSession, { warning: prepWarning })
+    let prepContext = inflateGrantPrepSessionContext(grantPrepSession, { warning: prepWarning })
+    const templateOrGuidelineStale =
+      grantPrepSession.template_revision_id !== serverContext.templateRevisionId ||
+      grantPrepSession.guideline_revision_id !== serverContext.guidelineRevisionId
+    if (templateOrGuidelineStale) {
+      prepContext = refreshGrantPrepSessionContext({
+        sessionContext: prepContext,
+        templateJson: serverContext.draftingContext?.approvedTemplate?.grant_template_json || null,
+        guidelinePack: (serverContext.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as any) || null,
+        fundingContext: serverContext.fundingContext,
+        warning: prepWarning,
+      })
+      await prisma.grantPrepSession.update({
+        where: { id: grantPrepSession.id },
+        data: {
+          ...normalizeGrantPrepForPersistence(prepContext),
+          template_revision_id: serverContext.templateRevisionId,
+          guideline_revision_id: serverContext.guidelineRevisionId,
+          status: isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode) ? 'ready' : 'active',
+          last_handoff_error: null,
+        },
+      })
+    }
     const stageKey = (payload.stageKey || prepContext.activeStageKey) as GrantPrepStageKey
     if (!GRANT_PREP_STAGE_BY_KEY[stageKey]) {
       return NextResponse.json({ message: 'Unknown stage key' }, { status: 400 })
@@ -240,11 +270,15 @@ export async function POST(
           {
             stageKey,
             userMessage: payload.content,
-            allowedPointKeys: prepContext.stageStates[stageKey].points.map((point) => point.key),
+            allowedPointKeys: prepContext.stageStates[stageKey].points
+              .filter((point) => isGrantPrepUserFacingPoint(point))
+              .map((point) => point.key),
           }
         )
 
-    const allowedPointKeys = prepContext.stageStates[stageKey].points.map((point) => point.key)
+    const allowedPointKeys = prepContext.stageStates[stageKey].points
+      .filter((point) => isGrantPrepUserFacingPoint(point))
+      .map((point) => point.key)
     const inferredMarker =
       repaired.marker ||
       (await inferMarkerFromTurn({
@@ -263,9 +297,15 @@ export async function POST(
     const assistantMessage = await compactAssistantMessage(repaired.assistantMessage, hasAnswerOptions)
 
     let nextContext = prepContext
-    let nextStatus = grantPrepSession.status
+    let nextStatus: GrantPrepStatus = isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode) ? 'ready' : 'active'
 
     if (inferredMarker && inferredMarker.stageKey === stageKey) {
+      const allowedCrossStagePointKeys = getGrantPrepCrossStageAllowedPointKeys(
+        buildGrantPrepConversationBundle({
+          session: prepContext,
+          stageKey,
+        })
+      )
       const stageBeforeUpdate = prepContext.stageStates[stageKey]
       let nextStageStates = applyMarkerToStageStates(prepContext.stageStates, stageKey, inferredMarker, {
         engagementMode: prepContext.engagementMode,
@@ -273,6 +313,14 @@ export async function POST(
         availableFocusAreas: serverContext.fundingContext.focusAreas || [],
         budgetLimits: serverContext.fundingContext.budgetLimits || null,
         projectDuration: serverContext.fundingContext.projectDuration || null,
+      })
+      nextStageStates = applyCrossStageMarkerToStageStates(nextStageStates, inferredMarker, {
+        engagementMode: prepContext.engagementMode,
+        selectedThrustAreaRuleKeys: prepContext.selectedThrustAreaRuleKeys,
+        availableFocusAreas: serverContext.fundingContext.focusAreas || [],
+        budgetLimits: serverContext.fundingContext.budgetLimits || null,
+        projectDuration: serverContext.fundingContext.projectDuration || null,
+        allowedCrossStagePointKeys,
       })
       const stageAfterMarker = nextStageStates[stageKey]
       const stageChanged = hasStageContentChanged(stageBeforeUpdate, stageAfterMarker)
@@ -297,15 +345,43 @@ export async function POST(
           `${GRANT_PREP_STAGE_BY_KEY[stageKey].title} changed. Review downstream assumptions before handoff.`
         )
       }
+      const crossStageChangedKeys = Array.from(
+        new Set(
+          (inferredMarker.crossStagePointsCovered || [])
+            .map((point) => point.stageKey)
+            .filter((value): value is GrantPrepStageKey => Boolean(value) && value !== stageKey)
+        )
+      )
+      for (const targetStageKey of crossStageChangedKeys) {
+        if (
+          prepContext.stageStates[targetStageKey] &&
+          nextStageStates[targetStageKey] &&
+          hasStageContentChanged(prepContext.stageStates[targetStageKey], nextStageStates[targetStageKey])
+        ) {
+          nextStageStates = propagateDependentNeedsReview(
+            nextStageStates,
+            targetStageKey,
+            `${GRANT_PREP_STAGE_BY_KEY[targetStageKey].title} changed from a proactive cross-stage capture. Review downstream assumptions before handoff.`
+          )
+        }
+      }
 
       const candidateActiveStage =
         canAutoAdvanceGrantPrepStage(nextStageStates[stageKey], prepContext.engagementMode)
           ? getNextPickableStageKey(nextStageStates, stageKey)
           : stageKey
+      const enabledStageKeys = Object.values(nextStageStates)
+        .filter((stage) => stage.enabled)
+        .map((stage) => stage.stageKey)
+      const disabledStageKeys = Object.values(nextStageStates)
+        .filter((stage) => !stage.enabled)
+        .map((stage) => stage.stageKey)
 
       nextContext = {
         ...prepContext,
         activeStageKey: candidateActiveStage,
+        enabledStageKeys,
+        disabledStageKeys,
         stageStates: nextStageStates,
         globalKeywords: collectGlobalKeywords(nextStageStates),
         warning: prepWarning,
@@ -334,9 +410,9 @@ export async function POST(
         readiness_snapshot: inferredMarker
           ? computeOverallReadiness(nextContext.stageStates)
           : grantPrepSession.overall_readiness,
-        points_covered_snapshot: (inferredMarker?.pointsCovered || []) as any,
+        points_covered_snapshot: ([...(inferredMarker?.pointsCovered || []), ...(inferredMarker?.crossStagePointsCovered || [])]) as any,
         current_point: inferredMarker?.currentPoint || null,
-        captured_content_json: (inferredMarker?.pointsCovered || null) as any,
+        captured_content_json: (inferredMarker ? [...(inferredMarker.pointsCovered || []), ...(inferredMarker.crossStagePointsCovered || [])] : null) as any,
         steering_events_json: (inferredMarker?.steeringEvents || []) as any,
         suggested_follow_ups: inferredMarker?.suggestedFollowUps || [],
         suggested_answers: (inferredMarker?.suggestedAnswers || null) as any,

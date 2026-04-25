@@ -195,6 +195,7 @@ function makeDefaultEntry(stageKey: GrantPrepStageKey): GrantPrepStageMappingEnt
       priority: point.priority,
       sourceTemplatePointer: null,
       origin: 'default' as const,
+      conversationRole: point.priority === 'P3' ? 'ai_draftable' as const : 'user_required' as const,
       helpText: point.helpText,
     })),
     templatePointers: [],
@@ -205,16 +206,20 @@ function makeDefaultEntry(stageKey: GrantPrepStageKey): GrantPrepStageMappingEnt
 function addTemplateItemToStage(entry: GrantPrepStageMappingEntry, item: TemplateLikeItem, primary: boolean) {
   const pointer = `${item.block}.${item.key}`;
   const key = `${item.block}_${slug(item.key || item.label)}`;
-  const exists = entry.discussionPoints.some((point) => point.key === key);
-  if (!exists) {
+  const existingPoint = entry.discussionPoints.find((point) => point.key === key);
+  const conversationRole = primary ? 'can_infer_and_confirm' as const : 'context_only' as const;
+  if (!existingPoint) {
     entry.discussionPoints.push({
       key,
       label: item.label,
       priority: item.block === 'evaluationCriteria' ? 'P1' : item.block === 'budget' ? 'P1' : 'P2',
       sourceTemplatePointer: pointer,
       origin: 'template',
+      conversationRole,
       helpText: item.guidance || 'Mapped from the approved template',
     });
+  } else if (primary && existingPoint.conversationRole === 'context_only') {
+    existingPoint.conversationRole = conversationRole;
   }
 
   const bucket = primary ? entry.templatePointers : entry.secondaryPointers;

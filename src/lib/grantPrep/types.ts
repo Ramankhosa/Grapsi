@@ -9,7 +9,7 @@ export const GRANT_PREP_MODES = [
 ] as const;
 
 export const GRANT_PREP_ENGAGEMENT_MODES = ['expert', 'express'] as const;
-export const GRANT_PREP_STAGE_SELECTION_VERSIONS = ['v1', 'v2'] as const;
+export const GRANT_PREP_STAGE_SELECTION_VERSIONS = ['v1', 'v2', 'v3'] as const;
 
 export const GRANT_PREP_STATUSES = [
   'active',
@@ -32,6 +32,12 @@ export type PointPriority = 'P1' | 'P2' | 'P3';
 export type SteeringLevel = 'hard_block' | 'gentle_redirect' | 'awareness_nudge';
 export type CaptureBasis = 'from_pitch' | 'inferred_from_call' | 'generic_placeholder' | 'user_confirmed';
 export type GrantPrepStageSelectionSource = 'template' | 'fallback' | 'guideline' | 'dependency' | 'manual';
+export type GrantPrepStageSelectionLevel = 'required' | 'recommended' | 'optional' | 'excluded';
+export type GrantPrepPointConversationRole =
+  | 'user_required'
+  | 'can_infer_and_confirm'
+  | 'ai_draftable'
+  | 'context_only';
 
 export type GrantPrepStageKey =
   | 'problem_definition'
@@ -103,6 +109,7 @@ export interface GrantPrepMappedPoint {
   priority: PointPriority;
   sourceTemplatePointer: string | null;
   origin: 'template' | 'default';
+  conversationRole?: GrantPrepPointConversationRole;
   helpText: string;
 }
 
@@ -136,6 +143,7 @@ export interface GrantPrepPointState {
   key: string;
   label: string;
   priority: PointPriority;
+  conversationRole?: GrantPrepPointConversationRole;
   status: 'pending' | 'covered' | 'skipped' | 'needs_review';
   sourceTemplatePointer: string | null;
   capture: GrantPrepPointCapture | null;
@@ -147,6 +155,7 @@ export interface GrantPrepStageState {
   enabled: boolean;
   pickable: boolean;
   selectionSource?: GrantPrepStageSelectionSource | null;
+  selectionLevel?: GrantPrepStageSelectionLevel;
   readiness: number;
   status: 'not_started' | 'in_progress' | 'completed' | 'needs_review' | 'disabled';
   steeringEvents: GrantPrepSteeringEvent[];
@@ -165,6 +174,7 @@ export interface GrantPrepSteeringEvent {
 }
 
 export interface GrantPrepMarkerPoint {
+  stageKey?: GrantPrepStageKey;
   pointKey: string;
   keywords: string[];
   thrustLinkage?: string[];
@@ -179,10 +189,18 @@ export interface GrantPrepMarkerPoint {
   };
 }
 
+export interface GrantPrepSuggestedAnswerCoverage {
+  stageKey: GrantPrepStageKey;
+  pointKey: string;
+  label: string;
+}
+
 export interface GrantPrepSuggestedAnswer {
   label: string;
   text: string;
   rationale?: string | null;
+  covers?: GrantPrepSuggestedAnswerCoverage[];
+  coverageSummary?: string | null;
 }
 
 export interface GrantPrepMarkerPayload {
@@ -190,6 +208,7 @@ export interface GrantPrepMarkerPayload {
   stageKey: GrantPrepStageKey;
   readinessDelta?: number;
   pointsCovered?: GrantPrepMarkerPoint[];
+  crossStagePointsCovered?: GrantPrepMarkerPoint[];
   currentPoint?: string | null;
   suggestedFollowUps?: string[] | null;
   suggestedAnswers?: GrantPrepSuggestedAnswer[] | null;

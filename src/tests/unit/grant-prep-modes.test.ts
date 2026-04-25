@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildGrantPrepPrompt } from '@/lib/grantPrep/promptComposer'
+import { parseGrantPrepResponse } from '@/lib/grantPrep/marker'
 import {
+  applyCrossStageMarkerToStageStates,
   applyMarkerToStageStates,
   buildGrantPrepSessionContext,
   buildInitialStageStates,
   canAutoAdvanceGrantPrepStage,
+  computeStageReadiness,
   isGrantPrepSessionReady,
 } from '@/lib/grantPrep/sessionState'
 import { buildGrantPrepStageMapping } from '@/lib/grantPrep/templateMapper'
@@ -199,5 +202,138 @@ describe('grant prep progression by mode', () => {
     expect(canAutoAdvanceGrantPrepStage(reviewStage, 'expert')).toBe(false)
     expect(isGrantPrepSessionReady(stageStates, 'express')).toBe(true)
     expect(isGrantPrepSessionReady(stageStates, 'expert')).toBe(false)
+  })
+
+  it('ignores context-only template points when computing user-facing readiness', () => {
+    const stage = {
+      stageKey: 'root_cause',
+      title: 'Root Cause',
+      enabled: true,
+      pickable: true,
+      readiness: 0,
+      status: 'in_progress',
+      steeringEvents: [],
+      lastUpdatedAt: null,
+      points: [
+        { key: 'root_drivers', label: 'Underlying drivers', priority: 'P1', conversationRole: 'user_required', status: 'covered', sourceTemplatePointer: null, capture: null },
+        { key: 'current_failure', label: 'Why current approaches fall short', priority: 'P2', conversationRole: 'user_required', status: 'covered', sourceTemplatePointer: null, capture: null },
+        { key: 'template_context_1', label: 'Template context 1', priority: 'P2', conversationRole: 'context_only', status: 'pending', sourceTemplatePointer: 'sections.problem', capture: null },
+        { key: 'template_context_2', label: 'Template context 2', priority: 'P2', conversationRole: 'context_only', status: 'pending', sourceTemplatePointer: 'questions.background', capture: null },
+      ],
+    } as any
+
+    expect(computeStageReadiness(stage)).toBeCloseTo(0.85)
+  })
+
+  it('parses cross-stage captures and coverage metadata from the marker', () => {
+    const parsed = parseGrantPrepResponse([
+      'Assistant prose.',
+      '<grant_prep_marker>{"version":"brainstorm_marker_v1","stageKey":"problem_definition","pointsCovered":[],"crossStagePointsCovered":[{"stageKey":"beneficiaries","pointKey":"direct_beneficiaries","keywords":["rural patients"],"factBullets":["Rural patients are the direct beneficiary group."],"confidence":0.9,"captureBasis":["user_confirmed"],"ruleCompliance":{"status":"ok","reason":null,"rescopeNeeded":false}}],"suggestedAnswers":[{"label":"A","text":"We focus on rural patients.","coverageSummary":"Problem + Beneficiaries","covers":[{"stageKey":"beneficiaries","pointKey":"direct_beneficiaries","label":"Direct beneficiaries"}]}],"steeringEvents":[]}</grant_prep_marker>',
+    ].join('\n'))
+
+    expect(parsed.marker?.crossStagePointsCovered?.[0]?.stageKey).toBe('beneficiaries')
+    expect(parsed.marker?.suggestedAnswers?.[0]?.coverageSummary).toBe('Problem + Beneficiaries')
+    expect(parsed.marker?.suggestedAnswers?.[0]?.covers?.[0]?.label).toBe('Direct beneficiaries')
+  })
+
+  it('applies high-confidence cross-stage captures as covered', () => {
+    const session = makeSession('express')
+
+    const nextStates = applyCrossStageMarkerToStageStates(
+      session.stageStates,
+      {
+        version: 'brainstorm_marker_v1',
+        stageKey: 'problem_definition',
+        pointsCovered: [],
+        crossStagePointsCovered: [
+          {
+            stageKey: 'beneficiaries',
+            pointKey: 'direct_beneficiaries',
+            keywords: ['rural patients'],
+            factBullets: ['Rural patients are the direct beneficiary group.'],
+            confidence: 0.9,
+            captureBasis: ['user_confirmed'],
+            ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
+          },
+        ],
+        steeringEvents: [],
+      },
+      {
+        engagementMode: 'express',
+        selectedThrustAreaRuleKeys: [],
+        availableFocusAreas: [],
+      }
+    )
+
+    const point = nextStates.beneficiaries.points.find((entry) => entry.key === 'direct_beneficiaries')
+    expect(point?.status).toBe('covered')
+  })
+
+  it('keeps low-confidence cross-stage captures in review', () => {
+    const session = makeSession('express')
+
+    const nextStates = applyCrossStageMarkerToStageStates(
+      session.stageStates,
+      {
+        version: 'brainstorm_marker_v1',
+        stageKey: 'problem_definition',
+        pointsCovered: [],
+        crossStagePointsCovered: [
+          {
+            stageKey: 'beneficiaries',
+            pointKey: 'direct_beneficiaries',
+            keywords: ['community'],
+            factBullets: ['The community may benefit.'],
+            confidence: 0.6,
+            captureBasis: ['inferred_from_call'],
+            ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
+          },
+        ],
+        steeringEvents: [],
+      },
+      {
+        engagementMode: 'express',
+        selectedThrustAreaRuleKeys: [],
+        availableFocusAreas: [],
+      }
+    )
+
+    const point = nextStates.beneficiaries.points.find((entry) => entry.key === 'direct_beneficiaries')
+    expect(point?.status).toBe('needs_review')
+  })
+
+  it('ignores cross-stage captures outside the planned lookahead allow-list', () => {
+    const session = makeSession('express')
+
+    const nextStates = applyCrossStageMarkerToStageStates(
+      session.stageStates,
+      {
+        version: 'brainstorm_marker_v1',
+        stageKey: 'problem_definition',
+        pointsCovered: [],
+        crossStagePointsCovered: [
+          {
+            stageKey: 'beneficiaries',
+            pointKey: 'direct_beneficiaries',
+            keywords: ['rural patients'],
+            factBullets: ['Rural patients are the direct beneficiary group.'],
+            confidence: 0.95,
+            captureBasis: ['user_confirmed'],
+            ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
+          },
+        ],
+        steeringEvents: [],
+      },
+      {
+        engagementMode: 'express',
+        selectedThrustAreaRuleKeys: [],
+        availableFocusAreas: [],
+        allowedCrossStagePointKeys: ['methodology.approach_summary'],
+      }
+    )
+
+    const point = nextStates.beneficiaries.points.find((entry) => entry.key === 'direct_beneficiaries')
+    expect(point?.status).toBe('pending')
+    expect(point?.capture).toBeNull()
   })
 })

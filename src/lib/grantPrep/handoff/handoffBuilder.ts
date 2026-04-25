@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { FundingCallContext } from '../../fundingContext';
 import type { GrantPrepFreezePayload, GrantPrepSessionContext, GrantPrepStageKey } from '../types';
+import { isGrantPrepUserFacingPoint } from '../sessionState';
 import type { GrantPrepEvidenceItem } from '@/types/grant';
 
 function stableStringify(value: unknown): string {
@@ -114,7 +115,7 @@ export function buildGrantPrepFreezePayload(input: {
 
   const blockers = Object.values(input.session.stageStates).flatMap((stage) =>
     stage.points
-      .filter((point) => point.priority !== 'P3' && point.status !== 'covered' && stage.enabled)
+      .filter((point) => point.priority !== 'P3' && isGrantPrepUserFacingPoint(point) && point.status !== 'covered' && stage.enabled)
       .map((point) => ({
         stageKey: stage.stageKey,
         pointKey: point.key,

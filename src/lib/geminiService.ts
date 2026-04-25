@@ -18,6 +18,7 @@ function debugGemini(...args: any[]) {
 const DEFAULT_GEMINI_RETRY_ATTEMPTS = 3;
 const DEFAULT_GEMINI_RETRY_BASE_DELAY_MS = 1500;
 const DEFAULT_GEMINI_RETRY_MAX_DELAY_MS = 15000;
+const DEFAULT_GEMINI_RATE_LIMIT_COOLDOWN_MS = 60000;
 
 let GoogleGenerativeAI: any;
 try {
@@ -100,6 +101,10 @@ function getGeminiRetryBaseDelayMs(): number {
 
 function getGeminiRetryMaxDelayMs(): number {
   return readPositiveInt(process.env.GEMINI_RETRY_MAX_DELAY_MS, DEFAULT_GEMINI_RETRY_MAX_DELAY_MS);
+}
+
+function getGeminiRateLimitCooldownMs(): number {
+  return readPositiveInt(process.env.GEMINI_RATE_LIMIT_COOLDOWN_MS, DEFAULT_GEMINI_RATE_LIMIT_COOLDOWN_MS);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -230,6 +235,10 @@ function isRetryableGeminiError(error: unknown): boolean {
 }
 
 function shouldTryFallbackModel(error: unknown): boolean {
+  if (isGeminiRateLimitError(error)) {
+    return false;
+  }
+
   const status = readErrorStatus(error);
   if (status === 401 || status === 403) {
     return false;
@@ -286,6 +295,36 @@ class GeminiRateLimitError extends Error {
     this.retryAfterMs = options.retryAfterMs;
     (this as any).cause = options.cause;
   }
+}
+
+let geminiRateLimitCooldownUntilMs = 0;
+
+export function isGeminiRateLimitErrorLike(error: unknown): boolean {
+  return (
+    error instanceof GeminiRateLimitError
+    || (error as { code?: unknown })?.code === 'GEMINI_RATE_LIMITED'
+    || isGeminiRateLimitError(error)
+  );
+}
+
+export function getGeminiRetryAfterMs(error: unknown): number | undefined {
+  if (error instanceof GeminiRateLimitError && typeof error.retryAfterMs === 'number') {
+    return error.retryAfterMs;
+  }
+
+  return getRetryAfterMsFromError(error);
+}
+
+function getGeminiCooldownRemainingMs(): number {
+  return Math.max(0, geminiRateLimitCooldownUntilMs - Date.now());
+}
+
+function rememberGeminiRateLimit(error: unknown) {
+  const retryAfterMs = getGeminiRetryAfterMs(error);
+  const cooldownMs = retryAfterMs && retryAfterMs > 0
+    ? retryAfterMs
+    : getGeminiRateLimitCooldownMs();
+  geminiRateLimitCooldownUntilMs = Math.max(geminiRateLimitCooldownUntilMs, Date.now() + cooldownMs);
 }
 
 function wrapGeminiError(error: unknown, modelName: string, attempts: number): Error {
@@ -359,6 +398,18 @@ async function runGeminiTextRequest(
   const client = ensureGeminiClient();
   const maxAttempts = getGeminiRetryAttempts();
   let lastError: unknown = null;
+  const cooldownRemainingMs = getGeminiCooldownRemainingMs();
+
+  if (cooldownRemainingMs > 0) {
+    throw new GeminiRateLimitError(
+      `Gemini is temporarily cooling down after a rate limit. ${formatRetryDelayForHumans(cooldownRemainingMs)}`,
+      {
+        model: modelName,
+        attempts: 0,
+        retryAfterMs: cooldownRemainingMs,
+      }
+    );
+  }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -373,6 +424,11 @@ async function runGeminiTextRequest(
       const status = readErrorStatus(error);
 
       debugGemini(`Error with Gemini model ${modelName}`, { attempt, status, error });
+
+      if (isGeminiRateLimitError(error)) {
+        rememberGeminiRateLimit(error);
+        throw wrapGeminiError(error, modelName, attempt);
+      }
 
       if (!retryable || attempt >= maxAttempts) {
         throw wrapGeminiError(error, modelName, attempt);
@@ -428,7 +484,11 @@ export async function generateFromGemini(prompt: string, model: string = 'gemini
 
     throw lastError instanceof Error ? lastError : new Error('Gemini text generation failed');
   } catch (error) {
-    console.error('Gemini API error:', error);
+    if (isGeminiRateLimitErrorLike(error)) {
+      console.warn('Gemini API rate limited:', error instanceof Error ? error.message : String(error));
+    } else {
+      console.error('Gemini API error:', error);
+    }
     throw error;
   }
 }

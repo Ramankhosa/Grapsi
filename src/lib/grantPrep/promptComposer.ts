@@ -2,6 +2,12 @@ import type { FundingCallContext } from '../fundingContext';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY } from './stageLibrary';
 import { getMarkerTags } from './marker';
+import {
+  buildGrantPrepConversationBundle,
+  formatGrantPrepConversationBundle,
+  getGrantPrepCrossStageAllowedPointKeys,
+} from './proactivePlanner';
+import { isGrantPrepUserFacingPoint } from './sessionState';
 import type {
   GrantPrepEngagementMode,
   GrantPrepSessionContext,
@@ -122,7 +128,9 @@ function getResponseRules(engagementMode: GrantPrepEngagementMode, stageKey: Gra
       'Extract as many discussion points as you can identify from their input. Do not ask one-at-a-time questions.',
       'Write at most 50 words of prose summarizing what you captured and what is still missing.',
       'Put all detail into the marker. Capture multiple pointsCovered entries if the input covers multiple topics.',
-      'If the input is short, ask one focused question about the most important uncovered point and provide 2-3 answer options.',
+      'If the input is short, ask one bundled approval question that covers several hard facts and provide 2-3 approval bundle options.',
+      'Each answer option should cover multiple useful details when possible and include structured covers metadata in the marker.',
+      'Every option should be usable as an approval message: the user should be able to send it with minimal edits.',
     ].join('\n');
   }
 
@@ -130,8 +138,9 @@ function getResponseRules(engagementMode: GrantPrepEngagementMode, stageKey: Gra
     return [
       'PROSE: Write 45-90 words across at most 2 short paragraphs.',
       'In Expert mode, if there is a blocker, cite one reviewer or guideline risk and propose one next move.',
-      'QUESTION + OPTIONS: Ask one question, then provide 2-3 answer options labeled A, B, C.',
-      'Each option: 1-2 sentences, specific and grounded. Do not count options toward the prose word limit.',
+      'QUESTION + OPTIONS: Ask one bundled approval question, then provide 2-3 answer options labeled A, B, C.',
+      'Each option: 1-3 compact sentences, specific and grounded. Do not count options toward the prose word limit.',
+      'Where safe, make each option cover the current risk/budget point plus one downstream implication.',
     ].join('\n');
   }
 
@@ -143,11 +152,13 @@ function getResponseRules(engagementMode: GrantPrepEngagementMode, stageKey: Gra
     'If the current answer is not concrete enough to support downstream drafting, do not accept it as reviewer-ready.',
     'If the user\'s last answer is weak, name the reviewer risk directly and explain what evidence, specificity, or differentiation is missing.',
     '',
-    'QUESTION + OPTIONS: After the prose, ask ONE focused question, then provide 2-3 answer options labeled A, B, C.',
+    'QUESTION + OPTIONS: After the prose, ask ONE bundled approval question, then provide 2-3 approval bundle options labeled A, B, C.',
     'Each option should be:',
-    '  - 1-3 sentences written in the user\'s voice (first person)',
+    '  - 1-3 sentences written in the user\'s voice (first person) or as an explicit approval bundle',
     '  - Specific and grounded in the funding call, prior answers, stage guidance, or domain norms',
     '  - Meaningfully different from each other (different angles, methods, scopes, or framing choices)',
+    '  - Bundled to cover 3-6 useful hard facts where possible, such as Problem + Root Cause + Beneficiaries + Urgency + Existing Solutions',
+    '  - Clear about which parts are user-approved facts versus AI-inferred drafting language',
     'If one option is stronger than others from a reviewer perspective, briefly note why.',
     '',
     'WORD BUDGET: The prose portion is 90-170 words. The options are ADDITIONAL and do not count toward the prose limit.',
@@ -182,14 +193,28 @@ export function buildGrantPrepPrompt(input: {
   const markerTags = getMarkerTags();
   const isExpertMode = input.session.engagementMode === 'expert';
   const pointLimit = input.session.engagementMode === 'express' ? 20 : 4;
+  const conversationBundle = buildGrantPrepConversationBundle({
+    session: input.session,
+    stageKey: input.stageKey,
+  });
+  const crossStageAllowedPointKeys = getGrantPrepCrossStageAllowedPointKeys(conversationBundle);
   const pendingPoints = stageState.points
-    .filter((point) => point.status !== 'covered')
+    .filter((point) => point.status !== 'covered' && isGrantPrepUserFacingPoint(point))
     .slice(0, pointLimit)
     .map((point) => {
       const mappedPoint = mapping.discussionPoints.find((entry) => entry.key === point.key);
-      return `- pointKey=${point.key} | label=${point.label}${point.sourceTemplatePointer ? ` | pointer=${point.sourceTemplatePointer}` : ''}${mappedPoint?.helpText ? ` | help=${mappedPoint.helpText}` : ''}`;
+      return `- pointKey=${point.key} | label=${point.label} | role=${point.conversationRole || mappedPoint?.conversationRole || 'user_required'}${point.sourceTemplatePointer ? ` | pointer=${point.sourceTemplatePointer}` : ''}${mappedPoint?.helpText ? ` | help=${mappedPoint.helpText}` : ''}`;
     });
-  const allowedPointKeys = stageState.points.map((point) => point.key);
+  const allowedPointKeys = stageState.points
+    .filter((point) => isGrantPrepUserFacingPoint(point))
+    .map((point) => point.key);
+  const aiDraftablePoints = stageState.points
+    .filter((point) => !isGrantPrepUserFacingPoint(point))
+    .slice(0, 8)
+    .map((point) => {
+      const mappedPoint = mapping.discussionPoints.find((entry) => entry.key === point.key);
+      return `- ${point.label} (${point.conversationRole || mappedPoint?.conversationRole || 'ai_draftable'}): ${mappedPoint?.helpText || 'Use as drafting context if relevant.'}`;
+    });
 
   const currentConversation = input.conversation
     .slice(-10)
@@ -208,7 +233,7 @@ export function buildGrantPrepPrompt(input: {
         '3. DIFFERENTIATE: Use your research-landscape knowledge. If the framing sounds like a standard or textbook version of a common topic, say so. Explain what would make it more distinctive.',
         '4. CONNECT: Use the stage steering rule, stage reviewer rubric, approved guideline context, funding call facts and constraints, mapped template guidance, and prior captured facts provided below. Treat them as active reviewer constraints, not optional background.',
         '5. CAPTURE: Only capture content that is concrete enough to support later drafting. If something is still too generic but worth tracking, mark it with captureBasis that includes "generic_placeholder".',
-        '6. ADVANCE: Ask one focused follow-up question that materially strengthens the current point. Then give 2-3 labeled answer options (A, B, C) that model strong grant-writing practice.',
+        '6. ADVANCE: Ask one bundled approval question that materially strengthens several hard facts at once. Then give 2-3 labeled approval bundle options (A, B, C) that model strong grant-writing practice.',
         '',
         'Coaching rules:',
         '- Reject vague answers. "We will address this comprehensively" is not a methodology, problem definition, or reviewer-facing claim.',
@@ -217,9 +242,10 @@ export function buildGrantPrepPrompt(input: {
         '- For framing-heavy stages, push for the under-studied population, mechanism, context, operational definition, or timely trigger that makes the proposal sharper.',
         '- Never invent or assume facts the user has not stated.',
         '- If the user\'s answer covers multiple current-stage discussion points, capture all valid current-stage content.',
-        '- ALWAYS offer answer options. Never ask a bare question without suggested answers. If context is thin, use structural but still specific templates.',
+        '- ALWAYS offer approval bundle options. Never ask a bare question without suggested answers. If context is thin, use structural but still specific templates.',
+        '- Each message interaction is expensive. Ask only for hard facts that are unsafe to invent; fill safe framing gaps with AI-inferred drafting language.',
         '- If the user previously gave a weak or vague answer, your options should model what a strong, reviewer-satisfying answer looks like.',
-        '- If the user provides information relevant to a different stage, acknowledge it briefly and add an "awareness_nudge" steering event instead of capturing it in the current stage.',
+        '- If the user provides information relevant to a planned lookahead stage, capture it in crossStagePointsCovered only when the user text or selected option clearly supports it. Otherwise use an awareness_nudge.',
       ].join('\n')
     : [
         'You are Grant Prep, a senior grant-writing advisor who helps researchers build compelling, reviewer-ready proposals.',
@@ -230,7 +256,7 @@ export function buildGrantPrepPrompt(input: {
         '2. CHALLENGE: If the answer has gaps, contradicts earlier stages, or makes unsupported claims, push back concisely. Say what\'s missing and why it matters to reviewers.',
         '3. CONNECT: Reference relevant captured facts from prior stages or the funding call to strengthen the conversation. Show the user you remember what they said.',
         '4. CAPTURE: Extract concrete keywords and claims into the marker. Only capture substantive, specific content, never vague phrases.',
-        '5. ADVANCE: Ask one focused follow-up question that moves the discussion point forward. Then provide 2-3 possible answers the user could give, formatted as labeled options (A, B, C). Each option should be:',
+        '5. ADVANCE: Ask one bundled approval question that moves multiple discussion points forward. Then provide 2-3 possible approval bundles the user could give, formatted as labeled options (A, B, C). Each option should be:',
         '   - Specific and substantive (not vague or generic)',
         '   - Grounded in the funding call priorities, the user\'s prior answers, or domain conventions',
         '   - Meaningfully different from each other (e.g., different methodological approaches, different framing angles, different scoping choices)',
@@ -242,10 +268,11 @@ export function buildGrantPrepPrompt(input: {
         '- When a steering rule fires, explain WHY it matters to a reviewer, not just that it is required.',
         '- If the user\'s answer covers multiple discussion points in one message, capture all of them. Do not ignore valid content.',
         '- Never invent or assume facts the user has not stated.',
-        '- ALWAYS offer answer options. Never ask a bare question without suggested answers. If you lack context to generate specific options, offer structural templates (e.g., "A: [specific population] in [specific region] facing [specific barrier]").',
+        '- ALWAYS offer approval bundle options. Never ask a bare question without suggested answers. If you lack context to generate specific options, offer structural templates (e.g., "A: I approve: [specific population] in [specific region] facing [specific barrier] because [root cause].").',
+        '- Each message interaction is expensive. Ask only for hard facts that are unsafe to invent; fill safe framing gaps with AI-inferred drafting language.',
         '- Frame options to teach grant-writing norms. If one option is stronger than others from a reviewer perspective, briefly note why (e.g., "Option B is strongest because it quantifies the gap").',
         '- If the user previously gave a weak or vague answer, your suggested options for the follow-up should model what a strong, specific answer looks like.',
-        '- If the user provides information relevant to a DIFFERENT stage (e.g., mentions team members during Problem Definition), acknowledge it briefly and add a steeringEvent with level "awareness_nudge" and a message like "Noted team information - this will be useful in the Team and Partnerships stage." Do not attempt to capture it as a point in the current stage.',
+        '- If the user provides information relevant to a planned lookahead stage, capture it in crossStagePointsCovered only when the user text or selected option clearly supports it. Otherwise use an awareness_nudge.',
       ].join('\n');
 
   const rubric = stage.reviewerRubric;
@@ -295,6 +322,17 @@ export function buildGrantPrepPrompt(input: {
     'Pending discussion points:',
     pendingPoints.join('\n') || '- None',
     `Allowed point keys for this stage: ${allowedPointKeys.join(', ') || 'none'}`,
+    'AI-fill / context-only points for this stage:',
+    aiDraftablePoints.join('\n') || '- None',
+    'Do not ask the user separately about AI-fill/context-only points unless they hide a hard fact that is unsafe to infer.',
+    '',
+    formatGrantPrepConversationBundle(conversationBundle),
+    `Allowed cross-stage point keys: ${crossStageAllowedPointKeys.join(', ') || 'none'}`,
+    'Cross-stage capture rules:',
+    '- Use crossStagePointsCovered only for the allowed cross-stage point keys listed above.',
+    '- Cross-stage captures must be traceable to the latest user message, a selected answer option, funding-call facts, template guidance, or prior confirmed facts.',
+    '- Use confidence >= 0.85 only when the cross-stage fact is concrete and reviewer-ready.',
+    '- If a cross-stage implication is useful but not confirmed, set confidence below 0.85 or ruleCompliance.status="needs_review".',
     '',
     'Selective guideline context:',
     buildGuidelineBlock(input.guidelinePack, input.stageKey),
@@ -312,15 +350,18 @@ export function buildGrantPrepPrompt(input: {
     '  "version": "brainstorm_marker_v1",',
     `  "stageKey": "${input.stageKey}",`,
     '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": ["..."], "factBullets": ["specific factual capture"], "ruleNotes": ["rule or reviewer caveat"], "confidence": 0.85, "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
+    '  "crossStagePointsCovered": [{ "stageKey": "lookahead stage key", "pointKey": "...", "keywords": ["..."], "thrustLinkage": ["..."], "factBullets": ["specific factual capture"], "ruleNotes": ["traceability or reviewer caveat"], "confidence": 0.85, "captureBasis": ["inferred_from_call"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
     '  "currentPoint": "pointKey of the discussion point the next question targets" | null,',
     '  "suggestedFollowUps": ["short follow-up prompt 1", "short follow-up prompt 2"] | null,',
-    '  "suggestedAnswers": [{ "label": "A", "text": "concrete answer option", "rationale": "optional strength note" }] | null,',
+    '  "suggestedAnswers": [{ "label": "A", "text": "I approve this bundle: concrete hard fact 1; concrete hard fact 2; AI-inferred drafting implication if acceptable.", "rationale": "optional strength note", "coverageSummary": "Problem + Root Cause + Beneficiaries + Urgency", "covers": [{ "stageKey": "problem_definition", "pointKey": "problem_core", "label": "Core problem statement" }] }] | null,',
     '  "qualityAssessment": "strong" | "adequate" | "weak" | null,',
     '  "steeringEvents": [{ "level": "hard_block"|"gentle_redirect"|"awareness_nudge", "message": "...", "pointKey": "..." | null }]',
     '}',
     'Set currentPoint to the point key your next question is about.',
     'Set suggestedFollowUps to 2-3 short prompts (under 12 words each) the user could type next. Make them specific to the current discussion, not generic.',
-    'Set suggestedAnswers to 2-3 options whenever you ask a question. Each option must be specific to the current discussion point and funding context. Do not offer generic options like "A comprehensive approach" - offer real content the user could submit.',
+    'Set suggestedAnswers to 2-3 approval bundle options whenever you ask a question. Each option must be specific to the conversation bundle and funding context. Do not offer generic options like "A comprehensive approach" - offer real content the user could approve or edit.',
+    'For suggestedAnswers, include coverageSummary and covers metadata whenever an option is designed to cover multiple points.',
+    'If an option includes inferred filler, label it as AI-inferred inside the option text unless it is directly grounded in user/call/template facts.',
     'If one option is clearly stronger from a reviewer perspective, include a short rationale explaining why.',
     'In Expert mode, if a captured point is still generic or only a placeholder for stronger content, set captureBasis to include "generic_placeholder".',
     'In Expert mode, do not mark placeholder wording as fully reviewer-ready.',

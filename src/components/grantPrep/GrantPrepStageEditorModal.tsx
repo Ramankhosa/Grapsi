@@ -49,6 +49,13 @@ const SOURCE_META: Record<GrantPrepStageSelectionSource, { label: string; tone: 
   },
 };
 
+const LEVEL_META: Record<string, { label: string; tone: string }> = {
+  required: { label: 'Required', tone: 'border-rose-200 bg-rose-50 text-rose-700' },
+  recommended: { label: 'Recommended', tone: 'border-amber-200 bg-amber-50 text-amber-700' },
+  optional: { label: 'Optional', tone: 'border-slate-200 bg-slate-50 text-slate-600' },
+  excluded: { label: 'Excluded', tone: 'border-slate-300 bg-slate-100 text-slate-700' },
+};
+
 function clsx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
 }
@@ -66,11 +73,19 @@ function getStageHelper(prepContext: PrepContext, stageKey: GrantPrepStageKey) {
     return SOURCE_META[stageState.selectionSource];
   }
 
-  if (prepContext.manualDisabledStageKeys.includes(stageKey)) {
+  if (prepContext.manualDisabledStageKeys.includes(stageKey) || stageState.selectionLevel === 'excluded') {
     return {
-      label: 'Disabled',
+      label: 'Excluded',
       tone: 'border-rose-200 bg-rose-50 text-rose-700',
       description: 'Manually disabled for this session.',
+    };
+  }
+
+  if (stageState.selectionLevel === 'optional') {
+    return {
+      label: 'Optional',
+      tone: 'border-slate-200 bg-slate-50 text-slate-600',
+      description: 'Available as context or proactive capture, but not in the main conversation.',
     };
   }
 
@@ -122,6 +137,9 @@ export default function GrantPrepStageEditorModal({
   const confirmDependents = confirmDisableStageKey
     ? getEnabledDependentStageKeys(confirmDisableStageKey, prepContext.enabledStageKeys)
     : [];
+  const confirmStageState = confirmDisableStageKey ? prepContext.stageStates[confirmDisableStageKey] : null;
+  const confirmBlocksRequiredDependency =
+    confirmStageState?.selectionLevel === 'required' && confirmDependents.length > 0;
   const controlsDisabled = disabled || Boolean(busyStageKey);
 
   if (!open) {
@@ -139,7 +157,7 @@ export default function GrantPrepStageEditorModal({
             </div>
             {prepContext.stageSelectionVersion === 'v1' ? (
               <div className="mt-2 text-xs font-medium text-amber-700">
-                Saving a change will upgrade this session to v2 stage selection.
+                Saving a change will upgrade this session to v3 stage selection.
               </div>
             ) : null}
           </div>
@@ -165,6 +183,7 @@ export default function GrantPrepStageEditorModal({
                   {group.stages.map((stage) => {
                     const stageState = prepContext.stageStates[stage.key];
                     const helper = getStageHelper(prepContext, stage.key);
+                    const levelMeta = LEVEL_META[stageState.selectionLevel || (stageState.enabled ? 'recommended' : 'optional')];
                     const dependentTitles = getEnabledDependentStageKeys(stage.key, prepContext.enabledStageKeys).map(
                       (stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey].title
                     );
@@ -195,6 +214,16 @@ export default function GrantPrepStageEditorModal({
                               >
                                 {helper.label}
                               </span>
+                              {levelMeta ? (
+                                <span
+                                  className={clsx(
+                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                                    levelMeta.tone
+                                  )}
+                                >
+                                  {levelMeta.label}
+                                </span>
+                              ) : null}
                             </div>
                             <div className="mt-1 text-sm text-slate-600">{stage.description}</div>
                             <div className="mt-2 text-xs text-slate-500">{helper.description}</div>
@@ -252,8 +281,9 @@ export default function GrantPrepStageEditorModal({
                     Disable {GRANT_PREP_STAGE_BY_KEY[confirmDisableStageKey].title}?
                   </div>
                   <div className="mt-1 text-sm text-amber-800">
-                    These enabled downstream stages depend on it: {confirmDependents.map((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey].title).join(', ')}.
-                    They will stay enabled, but may need review after you disable this stage.
+                    {confirmBlocksRequiredDependency
+                      ? `This required stage cannot be disabled while these downstream stages remain enabled: ${confirmDependents.map((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey].title).join(', ')}.`
+                      : `These enabled downstream stages depend on it: ${confirmDependents.map((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey].title).join(', ')}. They will stay enabled, but may need review after you disable this stage.`}
                   </div>
                 </div>
               </div>
@@ -275,7 +305,7 @@ export default function GrantPrepStageEditorModal({
                       void onDisableStage(stageKey);
                     }
                   }}
-                  disabled={controlsDisabled}
+                  disabled={controlsDisabled || confirmBlocksRequiredDependency}
                   className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Disable stage

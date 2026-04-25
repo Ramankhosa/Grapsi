@@ -11,6 +11,7 @@ import {
   buildGrantPrepSelectorResult,
   buildSelectionSources,
   GRANT_PREP_V2_STAGE_SELECTION_VERSION,
+  GRANT_PREP_V3_STAGE_SELECTION_VERSION,
   sortStageKeys,
 } from './selection';
 import {
@@ -22,6 +23,7 @@ import {
   collectGlobalKeywords,
   computeOverallReadiness,
   getNextPickableStageKey,
+  applyGrantPrepPointRolesFromMapping,
   recomputeStageState,
   stageHasCapturedContent,
 } from './sessionState';
@@ -199,13 +201,24 @@ function buildV2GrantPrepContext(input: {
   const stageStates = buildInitialStageStates(
     selectorResult.stageMapping,
     finalEnabledStageKeys,
-    selectionSources
+    selectionSources,
+    {
+      ...selectorResult.selectionLevels,
+      ...manualOverrides.manualEnabledStageKeys.reduce((acc, stageKey) => {
+        acc[stageKey] = 'recommended';
+        return acc;
+      }, {} as Partial<Record<GrantPrepStageKey, 'recommended'>>),
+      ...manualOverrides.manualDisabledStageKeys.reduce((acc, stageKey) => {
+        acc[stageKey] = 'excluded';
+        return acc;
+      }, {} as Partial<Record<GrantPrepStageKey, 'excluded'>>),
+    }
   );
 
   return buildGrantPrepSessionContext({
     mode: input.mode,
     engagementMode: input.engagementMode,
-    stageSelectionVersion: GRANT_PREP_V2_STAGE_SELECTION_VERSION,
+    stageSelectionVersion: GRANT_PREP_V3_STAGE_SELECTION_VERSION,
     autoEnabledStageKeys: selectorResult.autoEnabledStageKeys,
     manualEnabledStageKeys: manualOverrides.manualEnabledStageKeys,
     manualDisabledStageKeys: manualOverrides.manualDisabledStageKeys,
@@ -331,14 +344,17 @@ export function buildDefaultGrantPrepContext(input: {
 }
 
 export function ensureGrantPrepV2StageSelectionContext(sessionContext: GrantPrepSessionContext) {
-  if (sessionContext.stageSelectionVersion === GRANT_PREP_V2_STAGE_SELECTION_VERSION) {
+  if (
+    sessionContext.stageSelectionVersion === GRANT_PREP_V2_STAGE_SELECTION_VERSION ||
+    sessionContext.stageSelectionVersion === GRANT_PREP_V3_STAGE_SELECTION_VERSION
+  ) {
     return sessionContext;
   }
 
   return buildGrantPrepSessionContext({
     mode: sessionContext.mode,
     engagementMode: sessionContext.engagementMode,
-    stageSelectionVersion: GRANT_PREP_V2_STAGE_SELECTION_VERSION,
+    stageSelectionVersion: GRANT_PREP_V3_STAGE_SELECTION_VERSION,
     autoEnabledStageKeys: [],
     manualEnabledStageKeys: getConfigurableStageKeys(sessionContext.enabledStageKeys),
     manualDisabledStageKeys: getConfigurableStageKeys(sessionContext.disabledStageKeys),
@@ -378,14 +394,22 @@ export function applyGrantPrepManualStageSelection(input: {
     baseSources,
   });
   const enabledStageKeySet = new Set(finalEnabledStageKeys);
+  const manualEnabledSet = new Set(manualEnabledStageKeys);
+  const manualDisabledSet = new Set(manualDisabledStageKeys);
   const nextStageStates = Object.keys(baseContext.stageStates).reduce((acc, stageKey) => {
     const typedStageKey = stageKey as GrantPrepStageKey;
     const currentStage = baseContext.stageStates[typedStageKey];
     const isEnabled = enabledStageKeySet.has(typedStageKey);
+    const selectionLevel = manualDisabledSet.has(typedStageKey)
+      ? 'excluded'
+      : manualEnabledSet.has(typedStageKey)
+        ? 'recommended'
+        : currentStage.selectionLevel || (isEnabled ? 'recommended' : 'optional');
     const nextStage = {
       ...currentStage,
       enabled: isEnabled,
       selectionSource: isEnabled ? selectionSources[typedStageKey] || null : null,
+      selectionLevel,
     };
 
     recomputeStageState(nextStage);
@@ -401,7 +425,7 @@ export function applyGrantPrepManualStageSelection(input: {
     buildGrantPrepSessionContext({
       mode: baseContext.mode,
       engagementMode: baseContext.engagementMode,
-      stageSelectionVersion: GRANT_PREP_V2_STAGE_SELECTION_VERSION,
+      stageSelectionVersion: GRANT_PREP_V3_STAGE_SELECTION_VERSION,
       autoEnabledStageKeys: baseContext.autoEnabledStageKeys,
       manualEnabledStageKeys,
       manualDisabledStageKeys,
@@ -433,10 +457,11 @@ export function inflateGrantPrepSessionContext(session: Pick<
   const stageStates = normalizeGrantPrepStageStates(
     ((session.stage_states_json || {}) as unknown) as GrantPrepStageStates
   );
+  const roleAlignedStageStates = applyGrantPrepPointRolesFromMapping(stageStates, stageMapping);
   const storedGlobalKeywords = asStringArray(session.global_keywords_json);
   const globalKeywords = storedGlobalKeywords.length > 0
     ? storedGlobalKeywords
-    : collectGlobalKeywords(stageStates);
+    : collectGlobalKeywords(roleAlignedStageStates);
 
   return {
     mode: session.mode as GrantPrepSessionContext['mode'],
@@ -450,7 +475,7 @@ export function inflateGrantPrepSessionContext(session: Pick<
     enabledStageKeys: asStageKeyArray(session.enabled_stage_keys),
     disabledStageKeys: asStageKeyArray(session.disabled_stage_keys),
     stageMapping,
-    stageStates,
+    stageStates: roleAlignedStageStates,
     globalKeywords,
     warning: options?.warning || null,
   } satisfies GrantPrepSessionContext;
@@ -460,6 +485,12 @@ export function normalizeGrantPrepForPersistence(context: GrantPrepSessionContex
   const stageStates = normalizeGrantPrepStageStates(context.stageStates);
   const overallReadiness = computeOverallReadiness(stageStates);
   const globalKeywords = collectGlobalKeywords(stageStates);
+  const enabledStageKeys = Object.values(stageStates)
+    .filter((stage) => stage.enabled)
+    .map((stage) => stage.stageKey);
+  const disabledStageKeys = Object.values(stageStates)
+    .filter((stage) => !stage.enabled)
+    .map((stage) => stage.stageKey);
 
   return {
     mode: context.mode,
@@ -470,8 +501,8 @@ export function normalizeGrantPrepForPersistence(context: GrantPrepSessionContex
     manual_disabled_stage_keys: context.manualDisabledStageKeys,
     active_stage_key: context.activeStageKey,
     selected_thrust_area_rule_keys: context.selectedThrustAreaRuleKeys,
-    enabled_stage_keys: context.enabledStageKeys,
-    disabled_stage_keys: context.disabledStageKeys,
+    enabled_stage_keys: enabledStageKeys,
+    disabled_stage_keys: disabledStageKeys,
     stage_mapping_json: context.stageMapping as unknown as Prisma.InputJsonValue,
     stage_states_json: stageStates as unknown as Prisma.InputJsonValue,
     global_keywords_json: globalKeywords as unknown as Prisma.InputJsonValue,
@@ -712,7 +743,10 @@ export function refreshGrantPrepSessionContext(input: {
   fundingContext?: Pick<FundingCallContext, 'focusAreas' | 'deliverables' | 'budgetLimits' | 'projectDuration'> | null;
   warning?: string | null;
 }) {
-  if (input.sessionContext.stageSelectionVersion !== GRANT_PREP_V2_STAGE_SELECTION_VERSION) {
+  if (
+    input.sessionContext.stageSelectionVersion !== GRANT_PREP_V2_STAGE_SELECTION_VERSION &&
+    input.sessionContext.stageSelectionVersion !== GRANT_PREP_V3_STAGE_SELECTION_VERSION
+  ) {
     const nextStageMapping = buildGrantPrepStageMapping(input.templateJson);
     const previousSources = Object.values(input.sessionContext.stageStates).reduce((acc, stage) => {
       if (stage.enabled && stage.selectionSource) {
@@ -729,6 +763,7 @@ export function refreshGrantPrepSessionContext(input: {
 
     return withResolvedActiveStage({
       ...input.sessionContext,
+      stageSelectionVersion: GRANT_PREP_V3_STAGE_SELECTION_VERSION,
       stageMapping: nextStageMapping,
       stageStates: mergedStageStates,
       globalKeywords: collectGlobalKeywords(mergedStageStates),
@@ -761,14 +796,25 @@ export function refreshGrantPrepSessionContext(input: {
     const baseStageStates = buildInitialStageStates(
       selectorResult.stageMapping,
       finalEnabledStageKeys,
-      selectionSources
+      selectionSources,
+      {
+        ...selectorResult.selectionLevels,
+        ...nextManualEnabledStageKeys.reduce((acc, stageKey) => {
+          acc[stageKey] = 'recommended';
+          return acc;
+        }, {} as Partial<Record<GrantPrepStageKey, 'recommended'>>),
+        ...manualDisabledStageKeys.reduce((acc, stageKey) => {
+          acc[stageKey] = 'excluded';
+          return acc;
+        }, {} as Partial<Record<GrantPrepStageKey, 'excluded'>>),
+      }
     );
     const mergedStageStates = mergeStageStates(input.sessionContext.stageStates, baseStageStates);
 
     return buildGrantPrepSessionContext({
       mode: input.sessionContext.mode,
       engagementMode: input.sessionContext.engagementMode,
-      stageSelectionVersion: GRANT_PREP_V2_STAGE_SELECTION_VERSION,
+      stageSelectionVersion: GRANT_PREP_V3_STAGE_SELECTION_VERSION,
       autoEnabledStageKeys: selectorResult.autoEnabledStageKeys,
       manualEnabledStageKeys: nextManualEnabledStageKeys,
       manualDisabledStageKeys,

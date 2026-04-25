@@ -28,7 +28,7 @@ type Props = {
   sendCooldown?: boolean;
   input: string;
   onInputChange: (value: string) => void;
-  onSend: () => void;
+  onSend: (contentOverride?: string) => void;
   onRetry?: (content: string) => void;
   sessionLocked: boolean;
   pointLookup: PointLookup;
@@ -256,26 +256,65 @@ export default function GrantPrepChatPane({
                 message.suggested_answers.length > 0 ? (
                 <div className="mt-3 flex flex-col gap-2 pl-9">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                    Suggested answers &mdash; tap to use, or write your own
+                    Approval bundles &mdash; approve as-is, edit, or write your own
                   </div>
                   {message.suggested_answers.map((option, i) => (
-                    <button
+                    <div
                       key={i}
-                      type="button"
-                      onClick={() => onInputChange(option.text)}
-                      disabled={sessionLocked}
-                      className="group relative rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-700 shadow-prep-card transition-all hover:border-emerald-300 hover:shadow-prep-card-hover disabled:opacity-50"
+                      className="group relative rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-700 shadow-prep-card transition-all hover:border-emerald-300 hover:shadow-prep-card-hover"
                     >
-                      <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 group-hover:bg-emerald-100 group-hover:text-emerald-700">
-                        {option.label}
-                      </span>
-                      {option.text}
+                      <button
+                        type="button"
+                        onClick={() => onInputChange(option.text)}
+                        disabled={sessionLocked}
+                        className="w-full text-left disabled:opacity-50"
+                      >
+                        <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 group-hover:bg-emerald-100 group-hover:text-emerald-700">
+                          {option.label}
+                        </span>
+                        {option.text}
+                      </button>
+                      {option.coverageSummary || (Array.isArray(option.covers) && option.covers.length > 0) ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {option.coverageSummary ? (
+                            <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-100">
+                              {option.coverageSummary}
+                            </span>
+                          ) : null}
+                          {Array.isArray(option.covers) ? option.covers.slice(0, 4).map((cover) => (
+                            <span
+                              key={`${option.label}_${cover.stageKey}_${cover.pointKey}`}
+                              className="rounded-full bg-slate-50 px-2 py-1 text-[11px] text-slate-600 ring-1 ring-slate-200"
+                            >
+                              {cover.label}
+                            </span>
+                          )) : null}
+                        </div>
+                      ) : null}
                       {option.rationale ? (
                         <span className="mt-1 block text-[11px] italic text-slate-400">
                           {option.rationale}
                         </span>
                       ) : null}
-                    </button>
+                      <div className="mt-3 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onInputChange(option.text)}
+                          disabled={sessionLocked}
+                          className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          Edit bundle
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onSend(option.text)}
+                          disabled={sessionLocked || sending || !!sendCooldown}
+                          className="rounded-lg bg-prep-accent px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          Approve and send
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               ) : null}

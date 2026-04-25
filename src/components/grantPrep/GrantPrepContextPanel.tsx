@@ -45,6 +45,33 @@ const priorityTone: Record<string, string> = {
   P3: 'bg-slate-50 text-slate-500 border border-slate-200',
 };
 
+const pointRoleLabels: Record<string, string> = {
+  user_required: 'User fact',
+  can_infer_and_confirm: 'Approve bundle',
+  ai_draftable: 'AI draftable',
+  context_only: 'Context only',
+};
+
+const pointRoleTone: Record<string, string> = {
+  user_required: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+  can_infer_and_confirm: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  ai_draftable: 'bg-indigo-50 text-indigo-700 border border-indigo-200',
+  context_only: 'bg-slate-50 text-slate-500 border border-slate-200',
+};
+
+function pointConversationRole(point: { conversationRole?: string; sourceTemplatePointer?: string | null; priority?: string }) {
+  if (point.conversationRole && pointRoleLabels[point.conversationRole]) {
+    return point.conversationRole;
+  }
+  if (point.priority === 'P3') return 'ai_draftable';
+  return point.sourceTemplatePointer ? 'can_infer_and_confirm' : 'user_required';
+}
+
+function isUserFacingPoint(point: { conversationRole?: string; sourceTemplatePointer?: string | null; priority?: string }) {
+  const role = pointConversationRole(point);
+  return role === 'user_required' || role === 'can_infer_and_confirm';
+}
+
 const blockLabels: Record<string, string> = {
   priorities: 'Priorities',
   mustAddress: 'Must Address',
@@ -229,10 +256,12 @@ export default function GrantPrepContextPanel({
     }
   };
 
-  const currentStageTotal = activeStage.points.length;
-  const currentStageCovered = activeStage.points.filter(
+  const userFacingPoints = activeStage.points.filter(isUserFacingPoint);
+  const currentStageTotal = userFacingPoints.length;
+  const currentStageCovered = userFacingPoints.filter(
     (point) => point.status === 'covered'
   ).length;
+  const aiSupportCount = activeStage.points.length - userFacingPoints.length;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -251,8 +280,13 @@ export default function GrantPrepContextPanel({
           <div>
             <div className="text-base font-semibold text-slate-900">{activeStage.title}</div>
             <div className="mt-1 text-sm text-slate-600">
-              {currentStageCovered}/{currentStageTotal} points covered
+              {currentStageCovered}/{currentStageTotal} user facts approved
             </div>
+            {aiSupportCount > 0 ? (
+              <div className="mt-1 text-xs text-slate-500">
+                {aiSupportCount} AI/context drafting support{aiSupportCount === 1 ? '' : 's'}
+              </div>
+            ) : null}
           </div>
           {activeStage.steeringEvents.length > 0 ? (
             <div className="rounded-md bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-700">
@@ -325,6 +359,7 @@ export default function GrantPrepContextPanel({
             const hasRuleReason = Boolean(point.capture?.ruleCompliance?.reason);
             const pointKeywords = asStringArray(point.capture?.keywords);
             const pointThrustLinkage = asStringArray(point.capture?.thrustLinkage);
+            const role = pointConversationRole(point);
 
             return (
               <div
@@ -346,6 +381,9 @@ export default function GrantPrepContextPanel({
                     <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
                       <span className={clsx('rounded px-1.5 py-0.5 text-[10px] font-semibold', priorityTone[point.priority] || 'bg-slate-50 text-slate-500')}>
                         {priorityLabels[point.priority] || point.priority}
+                      </span>
+                      <span className={clsx('rounded px-1.5 py-0.5 text-[10px] font-semibold', pointRoleTone[role])}>
+                        {pointRoleLabels[role]}
                       </span>
                       {point.sourceTemplatePointer
                         ? <span>{point.sourceTemplatePointer}</span>
