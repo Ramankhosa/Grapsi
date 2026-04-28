@@ -274,6 +274,64 @@ function buildPass1ConsistencyFallback(): string {
   ].join('\n')
 }
 
+function buildReviewerPolishRulesBlock(): string {
+  return [
+    'REVIEWER POLISH RULES:',
+    '- Preserve supported facts, required points, named deliverables, and mandatory citation anchors.',
+    '- Improve scanability, credibility, and funder alignment inside the first draft rather than saving polish for a later pass.',
+    '- Tighten vague language, foreground feasibility, and keep the section directly aligned to the call logic.',
+    '- Do not rewrite the section into a journal article, literature review, or generic policy memo.',
+  ].join('\n')
+}
+
+function buildPersuasiveProseBlock(): string {
+  return [
+    'PERSUASIVE PROSE RULES:',
+    '- Write like an experienced grant writer, not an AI assistant.',
+    '- Vary sentence length and structure; avoid rhythmic, repetitive cadence.',
+    '- Lead paragraphs with analytical claims or reviewer-relevant judgments, not generic description.',
+    '- Replace mechanical transitions such as "Furthermore" or "Additionally" with logical movement grounded in the argument.',
+    '- Prefer one concrete comparison, benchmark, statistic, or implementation detail over several generic sentences.',
+    '- Cut filler, throat-clearing, and empty emphasis such as "it is important to note" or "X is a growing challenge".',
+    '- Match confidence to evidence strength; do not overclaim beyond what the cited support can carry.',
+    '- Every paragraph should increase reviewer confidence in significance, feasibility, or delivery credibility.',
+  ].join('\n')
+}
+
+function buildBudgetDisciplineBlock(input: GrantPromptComposerInput): string {
+  const budgetLines: string[] = []
+  if (input.wordBudget && input.wordBudget > 0) {
+    budgetLines.push(`- Target length: stay within ${input.wordBudget} words.`)
+  }
+  if (input.characterLimit && input.characterLimit > 0) {
+    budgetLines.push(`- Hard limit: stay within ${input.characterLimit} characters.`)
+  }
+  if (budgetLines.length === 0) {
+    return ''
+  }
+
+  return [
+    'BUDGET DISCIPLINE:',
+    ...budgetLines,
+    '- Fit the budget in one pass by compressing repetition, generic setup, and optional detail before cutting core reviewer-facing evidence.',
+    '- Keep the strongest quantitative facts, feasibility proof, and required compliance content.',
+    '- Do not pad to sound polished and do not exceed the stated limits just to preserve every sentence.',
+    '- Never invent new claims, numbers, or citation anchors while tightening to budget.',
+  ].join('\n')
+}
+
+function buildCitationAnchorPreservationBlock(input: GrantPromptComposerInput): string {
+  const requiredCitationKeys = dedupeStrings(input.requiredCitationKeys || [])
+  return [
+    'CITATION ANCHOR RULES:',
+    requiredCitationKeys.length > 0
+      ? `- Required citation anchors that must remain when their claims survive: ${requiredCitationKeys.map((key) => `[CITE:${key}]`).join(', ')}.`
+      : '- Preserve any mapped [CITE:key] anchors exactly where they support surviving claims.',
+    '- Do not fabricate new citation anchors or attach an anchor to a claim the source does not support.',
+    '- If a sentence is removed, remove only the anchors that belonged exclusively to that deleted claim.',
+  ].join('\n')
+}
+
 function buildPass2PersonaFallback(): string {
   return [
     'You are a senior grant-writing editor performing reviewer polish on a proposal section.',
@@ -503,6 +561,10 @@ export async function buildGrantDraftingPrompt(input: GrantPromptComposerInput):
     buildEvidenceDeploymentBlock(input),
     prepUsageRules,
     consistencyRules,
+    buildReviewerPolishRulesBlock(),
+    buildPersuasiveProseBlock(),
+    buildBudgetDisciplineBlock(input),
+    buildCitationAnchorPreservationBlock(input),
     formatGrantRulesBlock(input.grantRuleProfile),
     formatGrantComplianceContractForPrompt(input.grantSectionComplianceContract),
     formatPromptBundle('AUTHORITATIVE SECTION PREP POINTS', input.authoritativePrepBundle),

@@ -43,18 +43,6 @@ export interface GrantDraftingStrategyResolution {
   reason: string
 }
 
-const TWO_PASS_SEMANTICS = new Set<GrantSectionSemantic>([
-  'problem_need',
-  'methodology',
-  'workplan',
-  'evaluation',
-  'impact_outcomes',
-  'sustainability',
-  'risk',
-])
-
-const ONE_PASS_TEMPLATE_INTENTS = new Set<GrantTemplateIntent>(['team', 'eligibility'])
-
 function normalizePositiveNumber(value: unknown): number | null {
   const numeric = Number(value)
   if (!Number.isFinite(numeric) || numeric <= 0) return null
@@ -101,58 +89,21 @@ export function resolveGrantDraftingStrategy(
   const authoritativePrepPointCount = normalizePositiveNumber(input.authoritativePrepPointCount) || 0
   const evidenceLoad = normalizePositiveNumber(input.evidenceLoad) || 0
 
-  if (sectionType === 'short_answer') {
-    return { mode: 'one_pass', reason: 'short_answer sections stay one-pass.' }
-  }
+  const reasons = [
+    sectionType ? `sectionType=${sectionType}` : '',
+    grantSemantic ? `semantic=${grantSemantic}` : '',
+    templateIntent ? `intent=${templateIntent}` : '',
+    characterLimit ? `characterLimit=${characterLimit}` : '',
+    wordBudget ? `wordBudget=${wordBudget}` : '',
+    requiredPointCount > 0 ? `requiredPoints=${requiredPointCount}` : '',
+    authoritativePrepPointCount > 0 ? `prepPoints=${authoritativePrepPointCount}` : '',
+    evidenceLoad > 0 ? `evidenceLoad=${evidenceLoad}` : '',
+  ].filter(Boolean)
 
-  if (grantSemantic === 'summary') {
-    return { mode: 'one_pass', reason: 'summary sections stay one-pass.' }
+  return {
+    mode: 'one_pass',
+    reason: reasons.length > 0
+      ? `grant drafting uses one-pass generation for all sections (${reasons.join(', ')}).`
+      : 'grant drafting uses one-pass generation for all sections.',
   }
-
-  if (ONE_PASS_TEMPLATE_INTENTS.has(templateIntent as GrantTemplateIntent)) {
-    return {
-      mode: 'one_pass',
-      reason: `${templateIntent} sections default to one-pass reviewer drafting.`,
-    }
-  }
-
-  if (characterLimit && characterLimit <= 1500) {
-    return { mode: 'one_pass', reason: 'tight character limit favors one-pass drafting.' }
-  }
-
-  if (wordBudget && wordBudget <= 250) {
-    return { mode: 'one_pass', reason: 'short word budget favors one-pass drafting.' }
-  }
-
-  if (requiredPointCount > 0 && requiredPointCount <= 2 && authoritativePrepPointCount <= 2) {
-    return {
-      mode: 'one_pass',
-      reason: 'limited required points and limited authoritative prep support one-pass drafting.',
-    }
-  }
-
-  if (sectionType === 'narrative' && TWO_PASS_SEMANTICS.has(grantSemantic as GrantSectionSemantic)) {
-    return {
-      mode: 'two_pass',
-      reason: `${grantSemantic} narrative sections benefit from draft-then-reviewer-polish.`,
-    }
-  }
-
-  if (wordBudget && wordBudget >= 350) {
-    return { mode: 'two_pass', reason: 'longer section budget benefits from two-pass drafting.' }
-  }
-
-  if (requiredPointCount >= 3) {
-    return { mode: 'two_pass', reason: 'multiple required points benefit from two-pass drafting.' }
-  }
-
-  if (authoritativePrepPointCount >= 3) {
-    return { mode: 'two_pass', reason: 'dense authoritative prep support benefits from two-pass drafting.' }
-  }
-
-  if (evidenceLoad >= 4) {
-    return { mode: 'two_pass', reason: 'higher evidence load benefits from two-pass drafting.' }
-  }
-
-  return { mode: 'one_pass', reason: 'defaulting to one-pass drafting for compact grant sections.' }
 }

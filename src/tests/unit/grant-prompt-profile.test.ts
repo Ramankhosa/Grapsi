@@ -68,6 +68,7 @@ describe('grant prompt profile', () => {
         bullets: ['Validation metrics | benchmark exercises'],
         keywords: ['benchmark exercises'],
       },
+      wordBudget: 600,
       mustCover: ['Execution model', 'Validation plan'],
       mustAvoid: ['Generic claims'],
       keyContributions: ['National cyber range', 'Training network'],
@@ -77,6 +78,11 @@ describe('grant prompt profile', () => {
     expect(prompt).toContain('TASK: GRANT SECTION DRAFT')
     expect(prompt).toContain('AUTHORITATIVE SECTION PREP POINTS:')
     expect(prompt).toContain('RELATED SECTION AWARENESS:')
+    expect(prompt).toContain('REVIEWER POLISH RULES:')
+    expect(prompt).toContain('PERSUASIVE PROSE RULES:')
+    expect(prompt).toContain('BUDGET DISCIPLINE:')
+    expect(prompt).toContain('CITATION ANCHOR RULES:')
+    expect(prompt).toContain('Write like an experienced grant writer, not an AI assistant.')
     expect(prompt).not.toContain('Q1 journal')
     expect(prompt).not.toContain('publication quality')
     expect(prompt).not.toContain('paper blueprint')

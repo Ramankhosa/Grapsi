@@ -220,7 +220,7 @@ describe('grant workflow mode extraction and runtime', () => {
     })).toBe('short_answer')
   })
 
-  it('routes dense narrative grant sections to two_pass and compact team sections to one_pass', () => {
+  it('routes all grant sections to one_pass after the grant single-pass merge', () => {
     expect(resolveGrantBackedDraftingMode({
       sectionKey: 'methodology',
       workflowMode: 'app_draft',
@@ -231,7 +231,7 @@ describe('grant workflow mode extraction and runtime', () => {
       wordBudget: 600,
       suggestedCitationCount: 5,
       authoritativePrepPointCount: 3,
-    })).toBe('two_pass')
+    })).toBe('one_pass')
 
     expect(resolveGrantBackedDraftingMode({
       sectionKey: 'team_plan',
@@ -312,21 +312,19 @@ describe('grant workflow mode extraction and runtime', () => {
       },
     ]
 
-    expect(isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, 'problem_need')).toBe(true)
+    expect(isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, 'problem_need')).toBe(false)
     expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'problem_need')).toMatchObject({
-      eligible: true,
-      mode: 'two_pass',
+      eligible: false,
+      mode: 'one_pass',
     })
 
     expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'objectives')).toMatchObject({
       eligible: false,
       mode: 'one_pass',
-      reason: 'short_answer sections stay one-pass.',
     })
     expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'summary')).toMatchObject({
       eligible: false,
       mode: 'one_pass',
-      reason: 'summary sections stay one-pass.',
     })
     expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'team_plan')).toMatchObject({
       eligible: false,

@@ -51,10 +51,6 @@ import {
   isGrantBackedPass1BypassedSection,
   isGrantBackedSinglePassSection,
 } from '@/lib/grants/paperSectionConfig'
-import {
-  buildGrantDraftingStrategyInput,
-  resolveGrantDraftingStrategy,
-} from '@/lib/grants/draftingStrategy'
 import { buildGrantDraftingPrompt } from '@/lib/grants/draftingPromptComposer'
 import {
   formatGrantMustCoverItems,
@@ -4168,28 +4164,8 @@ async function generateSection(
   let pass2CompletedAt: Date | undefined;
   let directGrantGenerationTrace: GrantGenerationTrace | null = null;
   const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
-  const grantStrategy = grantBacked
-    ? resolveGrantDraftingStrategy(buildGrantDraftingStrategyInput({
-        sectionKey,
-        sectionType: blueprintPromptContext?.sectionType,
-        grantSemantic: blueprintPromptContext?.grantSemantic,
-        templateIntent: blueprintPromptContext?.templateIntent,
-        characterLimit: blueprintPromptContext?.characterLimit,
-        wordBudget: blueprintPromptContext?.wordBudget,
-        mustCover: blueprintPromptContext?.mustCover,
-        authoritativePrepBundle: blueprintPromptContext?.authoritativePrepBundle,
-        prepContextBlock: blueprintPromptContext?.prepContextBlock,
-        suggestedCitationCount: blueprintPromptContext?.thematicBlueprint?.suggestedCitationCount,
-        observedEvidenceCount: evidencePromptContext?.dimensionEvidence?.length,
-      }))
-    : null;
   const requestedGenerationMode = grantBacked
-    ? (
-        grantStrategy?.mode === 'two_pass'
-        && !isPass1BypassedSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)
-      )
-        ? 'two_pass'
-        : 'topup_final'
+    ? 'topup_final'
     : (
         payload.generationMode === 'two_pass'
         && !isPass1BypassedSection(sectionKey, paperTypeCode, session.paperBlueprint?.sectionPlan)

@@ -525,6 +525,18 @@ async function main() {
 
     // === DEEPSEEK MODELS ===
     {
+      code: 'deepseek-v4-pro',
+      displayName: 'DeepSeek V4 Pro',
+      provider: 'deepseek',
+      contextWindow: 1000000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 174,    // $1.74
+      outputCostPer1M: 348,   // $3.48
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'deepseek-chat',
       displayName: 'DeepSeek Chat',
       provider: 'deepseek',
@@ -834,21 +846,21 @@ async function main() {
     },
     {
       code: 'PAPER_SECTION_DRAFT',
-      displayName: 'Grant Writing Pass 1',
+      displayName: 'Grant Draft Generation',
       featureCode: 'GRANT_DRAFTING',
       sortOrder: 2,
-      description: 'Generate the first evidence-grounded grant section draft from blueprint and literature context.',
+      description: 'Generate the primary evidence-grounded grant section draft from blueprint, evidence, and grant context.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
     },
     {
       code: 'PAPER_SECTION_GEN',
-      displayName: 'Grant Writing Pass 2',
+      displayName: 'Grant Draft Finalization',
       featureCode: 'GRANT_DRAFTING',
       sortOrder: 3,
-      description: 'Polish, tighten, and finalize grant section drafts while preserving blueprint and evidence fidelity.',
+      description: 'Finalize grant section drafts in compatibility and memory-aware flows while preserving blueprint and evidence fidelity.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
     },
     {
       code: 'PAPER_SECTION_IMPROVE',

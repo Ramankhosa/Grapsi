@@ -222,15 +222,21 @@ const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
   GRANT_DRAFTING: [
     {
       code: 'PAPER_SECTION_DRAFT',
-      passLabel: 'Pass 1',
-      title: 'Base Draft Generation',
-      description: 'Initial evidence-grounded grant section drafting.'
+      passLabel: 'Generate',
+      title: 'Primary Grant Draft Generation',
+      description: 'Main single-pass grant section generation from blueprint, evidence, and grant context.'
     },
     {
       code: 'PAPER_SECTION_GEN',
-      passLabel: 'Pass 2',
-      title: 'Polish and Finalization',
-      description: 'Grant-section polish and final refinement.'
+      passLabel: 'Finalize',
+      title: 'Grant Draft Finalization',
+      description: 'Finalization path used by compatibility flows and memory-aware section generation.'
+    },
+    {
+      code: 'PAPER_SECTION_IMPROVE',
+      passLabel: 'Improve',
+      title: 'Grant Draft Improvement',
+      description: 'Cleanup, citation repair, and targeted quality improvements on existing grant sections.'
     }
   ]
 }
@@ -384,9 +390,9 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     tip: 'Critical planning stage; use a top-tier reasoning model.'
   },
   PAPER_SECTION_GEN: {
-    summary: 'Grant writing pass 2.',
-    responsibility: 'Polishes and finalizes section drafts using blueprint constraints and cross-section memory.',
-    tip: 'Higher reasoning and long-context support improve global coherence and reviewer-facing polish.'
+    summary: 'Grant draft finalization.',
+    responsibility: 'Finalizes section drafts in compatibility flows that still apply memory-aware coherence and blueprint constraints.',
+    tip: 'Keep this aligned with the primary generate stage so compatibility flows do not drift in tone or evidence handling.'
   },
   PAPER_MEMORY_EXTRACT: {
     summary: 'Grant draft memory extraction.',
@@ -394,9 +400,9 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     tip: 'Fast models are often enough for this structured extraction.'
   },
   PAPER_SECTION_DRAFT: {
-    summary: 'Grant writing pass 1.',
-    responsibility: 'Generates the first section draft from blueprint, evidence, and search-strategy context.',
-    tip: 'Keep aligned with pass 2 to avoid style drift between the two writing passes.'
+    summary: 'Primary grant draft generation.',
+    responsibility: 'Generates the main grant section draft from blueprint, evidence, and search-strategy context in the current single-pass flow.',
+    tip: 'This is the primary generate control for grant drafting. Optimize it for final-output quality, not intermediate prose.'
   },
   PAPER_SECTION_IMPROVE: {
     summary: 'Grant section improvement and repair.',
@@ -1101,7 +1107,7 @@ export default function LLMConfigPage() {
               </div>
             </div>
 
-            {/* Pass 1 / Pass 2 Quick Access */}
+            {/* Grant drafting quick access */}
             {(() => {
               const quickAccess = QUICK_ACCESS_BY_FEATURE[selectedFeature] || []
               if (quickAccess.length === 0) return null
@@ -1120,12 +1126,12 @@ export default function LLMConfigPage() {
               return (
                 <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
                   <div className="p-4 border-b border-slate-700">
-                    <h2 className="text-lg font-semibold">Pass 1 / Pass 2 Quick Access</h2>
+                    <h2 className="text-lg font-semibold">Grant Drafting Quick Access</h2>
                     <p className="text-sm text-slate-400">
-                      Jump directly to pass-stage model controls without searching the full list.
+                      Jump directly to the primary generate, finalize, and improvement model controls for grant drafting.
                     </p>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-4">
                     {quickRows.map(({ item, stage, config }) => (
                       <div key={stage.code} className="rounded-lg border border-slate-600 bg-slate-700/40 p-4">
                         <div className="flex items-center justify-between gap-3">

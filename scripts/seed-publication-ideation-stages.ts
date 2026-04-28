@@ -279,14 +279,14 @@ const publicationStages: StageDefinition[] = [
   // Drafting and refinement
   {
     code: 'PAPER_SECTION_DRAFT',
-    displayName: 'Draft Section (Pass 1)',
-    description: 'Generate section base draft content.',
+    displayName: 'Generate Section Draft',
+    description: 'Generate the primary section draft in the current single-pass drafting flow.',
     sortOrder: 30,
   },
   {
     code: 'PAPER_SECTION_GEN',
-    displayName: 'Generate Section with Memory (Pass 2)',
-    description: 'Polish and finalize sections with memory-aware coherence.',
+    displayName: 'Finalize Section Draft',
+    description: 'Finalize sections in memory-aware and compatibility drafting flows.',
     sortOrder: 31,
   },
   {

@@ -15,6 +15,7 @@ import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { paperSectionService } from '@/lib/services/paper-section-service';
 import { isFeatureEnabled } from '@/lib/feature-flags';
 import { extractTenantContextFromRequest } from '@/lib/metering/auth-bridge';
+import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
 
 export const runtime = 'nodejs';
 
@@ -80,7 +81,26 @@ async function getSessionForUser(
   capability: 'read' | 'editContent' = 'read'
 ) {
   return getDraftingSessionForUser(sessionId, user, capability, {
-    select: { id: true, userId: true, tenantId: true, bgGenStatus: true }
+    select: {
+      id: true,
+      userId: true,
+      tenantId: true,
+      bgGenStatus: true,
+      paperType: { select: { code: true } },
+      paperBlueprint: { select: { paperTypeCode: true } },
+    }
+  });
+}
+
+function buildZeroEligibleGrantResponse(skippedSections: unknown, paperTypeCode?: string) {
+  return NextResponse.json({
+    success: true,
+    status: 'COMPLETED',
+    progress: { total: 0, completed: 0, failed: 0, sections: {} },
+    eligibleSections: [],
+    skippedSections,
+    paperTypeCode: paperTypeCode || 'GRANT_TEMPLATE::UNKNOWN',
+    hint: 'All grant sections use single-pass generation.',
   });
 }
 
@@ -150,6 +170,12 @@ export async function GET(
     }
 
     const bgStatus = await paperSectionService.getBackgroundGenStatus(sessionId);
+    if (
+      isGrantBackedPaperTypeCode(bgStatus.paperTypeCode)
+      && bgStatus.eligibleSections.length === 0
+    ) {
+      return buildZeroEligibleGrantResponse(bgStatus.skippedSections, bgStatus.paperTypeCode);
+    }
     return NextResponse.json({ success: true, ...bgStatus });
   } catch (err) {
     console.error('[Prepare] GET error:', err);
@@ -253,6 +279,9 @@ export async function POST(
     }
 
     if (!sectionKeys && eligibility.eligibleSections.length === 0) {
+      if (isGrantBackedPaperTypeCode(eligibility.paperTypeCode)) {
+        return buildZeroEligibleGrantResponse(eligibility.skippedSections, eligibility.paperTypeCode);
+      }
       return NextResponse.json(
         {
           success: false,

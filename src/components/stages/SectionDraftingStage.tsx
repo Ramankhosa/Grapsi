@@ -37,9 +37,7 @@ import { extractFigureSuggestionMeta } from '@/lib/figure-generation/suggestion-
 import {
   buildGrantBackedCitationEligibility,
   buildGrantBackedSectionConfigs,
-  isGrantBackedPass1EligibleSection,
   isGrantBackedPass1BypassedSection,
-  supportsGrantBackedDimensionFlow,
 } from '@/lib/grants/paperSectionConfig'
 import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata'
 import { polishDraftMarkdown } from '@/lib/markdown-draft-formatter';
@@ -601,7 +599,7 @@ const PASS1_EXCLUDED_SECTION_KEYS = new Set(['references', 'reference', 'bibliog
 
 function supportsDimensionFlow(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
   if (isGrantBackedPaperTypeCode(paperTypeCode)) {
-    return supportsGrantBackedDimensionFlow(paperTypeCode, sectionPlan, sectionKey);
+    return false;
   }
   const normalized = normalizeSectionKey(sectionKey);
   return !SINGLE_PASS_SECTION_KEYS.has(normalized) && !PASS1_EXCLUDED_SECTION_KEYS.has(normalized);
@@ -616,14 +614,14 @@ function isPass1ExcludedSection(sectionKey: string, paperTypeCode?: string, sect
 
 function isPass1EligibleSection(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
   if (isGrantBackedPaperTypeCode(paperTypeCode)) {
-    return isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, sectionKey);
+    return false;
   }
   return !isPass1ExcludedSection(sectionKey, paperTypeCode, sectionPlan);
 }
 
 function supportsPass1FigureInjection(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
   if (isGrantBackedPaperTypeCode(paperTypeCode)) {
-    return isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, sectionKey);
+    return false;
   }
   const normalized = normalizeSectionKey(sectionKey);
   return normalized !== 'abstract' && !isPass1ExcludedSection(normalized);
@@ -3738,7 +3736,7 @@ export default function SectionDraftingStage({
                         : isGrantApplicationDraft
                     ))) && (
                       <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
-                        {primaryDimensionState.completed ? 'Dimension refined' : primaryPass1Eligible ? 'Refine Draft' : 'Direct draft'}
+                        {primaryDimensionState.completed ? 'Dimension refined' : primaryPass1Eligible ? 'Refine Draft' : isGrantApplicationDraft ? 'Generated' : 'Direct draft'}
                       </span>
                     )}
 
@@ -3840,7 +3838,7 @@ export default function SectionDraftingStage({
                             className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {primarySectionBusy && <Loader2 className="h-3 w-3 animate-spin" />}
-                            {primaryHasDraftContent ? 'Regenerate Direct Draft' : 'Direct Draft'}
+                            {primaryHasDraftContent ? 'Regenerate' : 'Generate'}
                           </button>
                         )}
                       </>
