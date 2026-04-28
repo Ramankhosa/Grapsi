@@ -8,7 +8,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Loader2, 
   AlertCircle,
-  Settings2,
   RefreshCw,
   Image as ImageIcon,
   X,
@@ -38,8 +37,8 @@ import { extractFigureSuggestionMeta } from '@/lib/figure-generation/suggestion-
 import {
   buildGrantBackedCitationEligibility,
   buildGrantBackedSectionConfigs,
+  isGrantBackedPass1EligibleSection,
   isGrantBackedPass1BypassedSection,
-  isGrantBackedSinglePassSection,
   supportsGrantBackedDimensionFlow,
 } from '@/lib/grants/paperSectionConfig'
 import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata'
@@ -615,10 +614,16 @@ function isPass1ExcludedSection(sectionKey: string, paperTypeCode?: string, sect
   return PASS1_EXCLUDED_SECTION_KEYS.has(normalizeSectionKey(sectionKey));
 }
 
+function isPass1EligibleSection(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
+  if (isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, sectionKey);
+  }
+  return !isPass1ExcludedSection(sectionKey, paperTypeCode, sectionPlan);
+}
+
 function supportsPass1FigureInjection(sectionKey: string, paperTypeCode?: string, sectionPlan?: unknown): boolean {
   if (isGrantBackedPaperTypeCode(paperTypeCode)) {
-    return !isGrantBackedSinglePassSection(paperTypeCode, sectionPlan, sectionKey)
-      && !isGrantBackedPass1BypassedSection(sectionKey);
+    return isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, sectionKey);
   }
   const normalized = normalizeSectionKey(sectionKey);
   return normalized !== 'abstract' && !isPass1ExcludedSection(normalized);
@@ -860,6 +865,8 @@ export default function SectionDraftingStage({
   const [bgGenRetrying, setBgGenRetrying] = useState(false);
   const [bgSectionSelectorOpen, setBgSectionSelectorOpen] = useState(false);
   const [bgSelectedSectionKeys, setBgSelectedSectionKeys] = useState<string[]>([]);
+  const [serverPass1EligibleSectionKeys, setServerPass1EligibleSectionKeys] = useState<string[] | null>(null);
+  const [serverPass1SkippedSections, setServerPass1SkippedSections] = useState<Array<{ sectionKey: string; displayLabel?: string; reason?: string; mode?: string }>>([]);
   const [showReferenceDraftModal, setShowReferenceDraftModal] = useState(false);
   const [referenceDraftLoading, setReferenceDraftLoading] = useState(false);
   const [referenceDraftError, setReferenceDraftError] = useState<string | null>(null);
@@ -902,17 +909,39 @@ export default function SectionDraftingStage({
     setTimeout(() => setMessage(null), 4000);
   };
 
+  const applyPass1EligibilityPayload = useCallback((data: any) => {
+    if (Array.isArray(data?.eligibleSections)) {
+      setServerPass1EligibleSectionKeys(
+        data.eligibleSections
+          .map((key: unknown) => normalizeSectionKey(String(key || '')))
+          .filter(Boolean)
+      );
+    }
+    if (Array.isArray(data?.skippedSections)) {
+      setServerPass1SkippedSections(
+        data.skippedSections
+          .map((section: any) => ({
+            sectionKey: normalizeSectionKey(String(section?.sectionKey || '')),
+            displayLabel: String(section?.displayLabel || '').trim() || undefined,
+            reason: String(section?.reason || '').trim() || undefined,
+            mode: String(section?.mode || '').trim() || undefined
+          }))
+          .filter((section: { sectionKey: string }) => Boolean(section.sectionKey))
+      );
+    }
+  }, []);
+
   const runtimeBlueprintSectionPlan = session?.paperBlueprint?.sectionPlan;
   const supportsDimensionFlowForSection = useCallback(
     (sectionKey: string) => supportsDimensionFlow(sectionKey, paperTypeCode, runtimeBlueprintSectionPlan),
     [paperTypeCode, runtimeBlueprintSectionPlan]
   );
-  const isPass1ExcludedForSection = useCallback(
-    (sectionKey: string) => isPass1ExcludedSection(sectionKey, paperTypeCode, runtimeBlueprintSectionPlan),
-    [paperTypeCode, runtimeBlueprintSectionPlan]
-  );
   const supportsPass1FigureInjectionForSection = useCallback(
     (sectionKey: string) => supportsPass1FigureInjection(sectionKey, paperTypeCode, runtimeBlueprintSectionPlan),
+    [paperTypeCode, runtimeBlueprintSectionPlan]
+  );
+  const isPass1EligibleForSection = useCallback(
+    (sectionKey: string) => isPass1EligibleSection(sectionKey, paperTypeCode, runtimeBlueprintSectionPlan),
     [paperTypeCode, runtimeBlueprintSectionPlan]
   );
 
@@ -1312,6 +1341,8 @@ export default function SectionDraftingStage({
     setReferenceDraftSections([]);
     setReferenceDraftSummary(null);
     setReferenceDraftFetchedAt(null);
+    setServerPass1EligibleSectionKeys(null);
+    setServerPass1SkippedSections([]);
   }, [sessionId]);
 
   useEffect(() => { loadSession(); loadCitations(); loadFigures(); }, [loadSession, loadCitations, loadFigures]);
@@ -1325,6 +1356,7 @@ export default function SectionDraftingStage({
       });
       const data = await res.json();
       if (res.ok) {
+        applyPass1EligibilityPayload(data);
         const normalizedStatus = typeof data.status === 'string' && data.status.trim().length > 0
           ? data.status.trim().toUpperCase()
           : 'IDLE';
@@ -1332,7 +1364,7 @@ export default function SectionDraftingStage({
         setBgGenProgress(data.progress || null);
       }
     } catch { /* non-critical */ }
-  }, [authToken, sessionId]);
+  }, [applyPass1EligibilityPayload, authToken, sessionId]);
 
   const handleRetryBgPreparation = useCallback(async (options?: { force?: boolean; retryFailedOnly?: boolean; sectionKeys?: string[] }) => {
     if (!authToken || !sessionId || bgGenRetrying) return;
@@ -1348,7 +1380,7 @@ export default function SectionDraftingStage({
         : (sectionConfigs || fallbackSections)
             .flatMap(section => section.keys || [])
             .map(key => normalizeSectionKey(String(key || '')))
-            .filter((key, index, list) => key && !isPass1ExcludedForSection(key) && list.indexOf(key) === index);
+            .filter((key, index, list) => key && isPass1EligibleForSection(key) && list.indexOf(key) === index);
     const figureSelections = figureTargetKeys.reduce<Record<string, { useFigures: boolean; selectedFigureIds: string[] }>>((acc, key) => {
       if (!supportsPass1FigureInjectionForSection(key)) return acc;
       acc[normalizeSectionKey(key)] = buildFigureInjectionPayload(key);
@@ -1374,6 +1406,7 @@ export default function SectionDraftingStage({
         throw new Error(data?.error || 'Failed to retry section preparation');
       }
 
+      applyPass1EligibilityPayload(data);
       setBgGenStatus(data.status || 'RUNNING');
       if (data.progress) {
         setBgGenProgress(data.progress);
@@ -1384,16 +1417,16 @@ export default function SectionDraftingStage({
       const totalSectionsPlanned = Number(data?.totalSectionsPlanned || 0);
       showMsg(
         sectionKeys.length > 0
-          ? `Pass 1 started for ${sectionKeys.length} selected section(s) (0/${sectionKeys.length} generated)`
+          ? `Generate Draft started for ${sectionKeys.length} selected section(s) (0/${sectionKeys.length} generated)`
           : retryFailedOnly
             ? 'Retrying failed sections only'
             : force
               ? totalSectionsPlanned > 0
-                ? `Pass 1 rerun started (0/${totalSectionsPlanned} generated)`
-                : 'Pass 1 rerun started'
+                ? `Generate Draft rerun started (0/${totalSectionsPlanned} generated)`
+                : 'Generate Draft rerun started'
               : totalSectionsPlanned > 0
-                ? `Pass 1 started (0/${totalSectionsPlanned} generated)`
-                : 'Pass 1 started',
+                ? `Generate Draft started (0/${totalSectionsPlanned} generated)`
+                : 'Generate Draft started',
         'success'
       );
       await loadBgGenStatus();
@@ -1402,7 +1435,7 @@ export default function SectionDraftingStage({
     } finally {
       setBgGenRetrying(false);
     }
-  }, [authToken, bgGenRetrying, bgSelectedSectionKeys, buildFigureInjectionPayload, loadBgGenStatus, sectionConfigs, sessionId, showMsg]);
+  }, [applyPass1EligibilityPayload, authToken, bgGenRetrying, bgSelectedSectionKeys, buildFigureInjectionPayload, isPass1EligibleForSection, loadBgGenStatus, sectionConfigs, sessionId, showMsg, supportsPass1FigureInjectionForSection]);
 
   const loadReferenceDraftOutput = useCallback(async () => {
     if (!authToken || !sessionId) return;
@@ -1418,6 +1451,7 @@ export default function SectionDraftingStage({
         throw new Error(data?.error || 'Failed to fetch reference draft output');
       }
 
+      applyPass1EligibilityPayload(data);
       const sections = Array.isArray(data?.sections)
         ? data.sections.map((section: any) => ({
             sectionKey: normalizeSectionKey(String(section?.sectionKey || '')),
@@ -1451,7 +1485,7 @@ export default function SectionDraftingStage({
                 }
               : null
           } as ReferenceDraftSectionView))
-          .filter((section: ReferenceDraftSectionView) => !isPass1ExcludedForSection(section.sectionKey))
+          .filter((section: ReferenceDraftSectionView) => isPass1EligibleForSection(section.sectionKey))
         : [];
 
       setReferenceDraftSections(sections);
@@ -1468,7 +1502,7 @@ export default function SectionDraftingStage({
     } finally {
       setReferenceDraftLoading(false);
     }
-  }, [authToken, sessionId, showMsg]);
+  }, [applyPass1EligibilityPayload, authToken, isPass1EligibleForSection, sessionId, showMsg]);
 
   const handleOpenReferenceDraftModal = useCallback(async () => {
     setShowReferenceDraftModal(true);
@@ -1509,12 +1543,16 @@ export default function SectionDraftingStage({
 
   const bgSelectableSections = useMemo(() => {
     const source = sectionConfigs || fallbackSections;
+    const eligibleKeys = serverPass1EligibleSectionKeys
+      ? new Set(serverPass1EligibleSectionKeys)
+      : null;
     const seen = new Set<string>();
     const sectionsForSelection: Array<{ key: string; label: string }> = [];
     for (const section of source) {
       for (const rawKey of section.keys || []) {
         const key = normalizeSectionKey(String(rawKey || ''));
-        if (!key || seen.has(key) || isPass1ExcludedForSection(key)) continue;
+        const eligible = eligibleKeys ? eligibleKeys.has(key) : isPass1EligibleForSection(key);
+        if (!key || seen.has(key) || !eligible) continue;
         seen.add(key);
         sectionsForSelection.push({
           key,
@@ -1523,7 +1561,7 @@ export default function SectionDraftingStage({
       }
     }
     return sectionsForSelection;
-  }, [sectionConfigs]);
+  }, [isPass1EligibleForSection, sectionConfigs, serverPass1EligibleSectionKeys]);
 
   useEffect(() => {
     if (bgSelectableSections.length === 0) {
@@ -2396,7 +2434,7 @@ export default function SectionDraftingStage({
     const normalizedKey = normalizeSectionKey(sectionKey);
     const useMappedEvidence = isMappedEvidenceEnabled(sectionKey);
     const figureInjection = buildFigureInjectionPayload(sectionKey);
-    const generationMode = isPass1ExcludedForSection(sectionKey) ? 'topup_final' : 'two_pass';
+    const generationMode = isPass1EligibleForSection(sectionKey) ? 'two_pass' : 'topup_final';
 
     setShowActivity(true);
     setDebugSteps([]);
@@ -2502,6 +2540,7 @@ export default function SectionDraftingStage({
     clearCitationValidationForSection,
     completeGenerationSteps,
     failGenerationSteps,
+    isPass1EligibleForSection,
     isMappedEvidenceEnabled,
     personaSelection,
     sessionId,
@@ -2966,7 +3005,7 @@ export default function SectionDraftingStage({
           addedFigureLabels.length > 0 ? `added: ${addedFigureLabels.join(', ')}` : '',
           removedFigureLabels.length > 0 ? `removed: ${removedFigureLabels.join(', ')}` : '',
         ].filter(Boolean).join(' | ');
-        reasons.push(`Figure selection changed since Pass 1 ran${changes ? ` (${changes})` : ''}.`);
+        reasons.push(`Figure selection changed since Generate Draft ran${changes ? ` (${changes})` : ''}.`);
       }
     }
 
@@ -2981,7 +3020,7 @@ export default function SectionDraftingStage({
         .map(formatFigureLabelById);
 
       if (updatedFigureLabels.length > 0) {
-        reasons.push(`Grounded figure metadata changed after Pass 1 ran: ${updatedFigureLabels.join(', ')}.`);
+        reasons.push(`Grounded figure metadata changed after Generate Draft ran: ${updatedFigureLabels.join(', ')}.`);
       }
     }
 
@@ -3025,7 +3064,7 @@ export default function SectionDraftingStage({
               disabled={!hasFigureOptions || bgGenRetrying}
               className="h-3.5 w-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 disabled:cursor-not-allowed"
             />
-            <span>Inject figures into Pass 1</span>
+            <span>Inject figures into Generate Draft</span>
           </label>
 
           {hasFigureOptions ? (
@@ -3081,7 +3120,7 @@ export default function SectionDraftingStage({
         </div>
 
         <p className="mt-1 text-[11px] text-slate-500">
-          Pass 1 will receive only the selected figure metadata and must reference them inline as [Figure N].
+          Generate Draft will receive only the selected figure metadata and must reference them inline as [Figure N].
         </p>
 
         {figureInjectionState.enabled && selectedFigures.length > 0 && (
@@ -3101,7 +3140,7 @@ export default function SectionDraftingStage({
         {figureInjectionState.enabled && pickerOpen && hasFigureOptions && (
           <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-              <span>Select only the figures this Pass 1 draft should use.</span>
+              <span>Select only the figures this generated draft should use.</span>
               <button
                 type="button"
                 onClick={() => selectAllFiguresForSection(sectionKey)}
@@ -3173,7 +3212,7 @@ export default function SectionDraftingStage({
 
     return (
       <div className={`mt-3 ${dividerClassName} pt-3`}>
-        <p className={`text-xs font-medium ${headingClassName}`}>Run Pass 1 only for selected non-reference sections</p>
+        <p className={`text-xs font-medium ${headingClassName}`}>Run Generate Draft only for selected refine-ready sections</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {bgSelectableSections.map(section => (
             <label
@@ -3211,16 +3250,16 @@ export default function SectionDraftingStage({
             disabled={bgGenRetrying || bgSelectedSectionKeys.length === 0}
             className="px-3 py-1 text-xs rounded-md border border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {bgGenRetrying ? 'Preparing...' : 'Run Pass 1 for Selected'}
+            {bgGenRetrying ? 'Preparing...' : 'Generate Draft for Selected'}
           </button>
         </div>
 
         {selectedFigureSections.length > 0 && (
           <div className="mt-4 space-y-3">
             <div>
-              <p className={`text-xs font-medium ${headingClassName}`}>Optional figure grounding for Pass 1</p>
+              <p className={`text-xs font-medium ${headingClassName}`}>Optional figure grounding for Generate Draft</p>
               <p className="mt-1 text-[11px] text-slate-500">
-                Choose which selected sections should receive generated figure metadata during reference draft creation. Abstract and references are excluded.
+                Only Generate Draft eligible sections can receive figure grounding.
               </p>
             </div>
             {selectedFigureSections.map((sectionKey) => renderPass1FigureConfigurator(sectionKey))}
@@ -3391,6 +3430,10 @@ export default function SectionDraftingStage({
 
   const sections = sectionConfigs || fallbackSections;
   const isGrantApplicationDraft = isGrantBackedPaperTypeCode(paperTypeCode);
+  const hasPass1EligibleSections = bgSelectableSections.length > 0;
+  const pass1SkippedSummary = serverPass1SkippedSections.length > 0
+    ? ` (${serverPass1SkippedSections.length} direct draft)`
+    : '';
 
   return (
     <div className="min-h-screen bg-slate-50 pb-12">
@@ -3420,304 +3463,199 @@ export default function SectionDraftingStage({
         </div>
       )}
 
-      {/* Top Controls Bar */}
-      <div className="max-w-[850px] mx-auto mb-6 px-8 pt-6">
-        <div className="flex items-center justify-between mb-4">
+      {/* Minimal Document Header */}
+      <div className="max-w-[850px] mx-auto pt-6 px-8 mb-2">
+        <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">
+            <h2 className="text-lg font-semibold text-gray-900" style={{ fontFamily: '"Noto Serif", Georgia, serif' }}>
               {isGrantApplicationDraft ? 'Grant Application Draft' : 'Paper Draft'}
             </h2>
-            <p className="text-sm text-gray-500">
+            <p className="text-xs text-gray-500 mt-0.5">
               {totalWordCount} words
-              {pendingChanges.size > 0 && <span className="ml-2 text-amber-500">• Saving...</span>}
+              {pendingChanges.size > 0 && <span className="ml-2 text-amber-500">Saving...</span>}
             </p>
-              </div>
-          <Tooltip content="Help guide" position="left">
-            <button onClick={() => setShowHelpPanel(!showHelpPanel)}
-              className={`p-2.5 rounded-full transition-all ${showHelpPanel ? 'bg-indigo-100 text-indigo-700 ring-2 ring-indigo-300' : 'bg-white border text-gray-500 hover:bg-gray-50 shadow-sm'}`}>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
-          </Tooltip>
-            </div>
-
-        {/* Controls */}
-        <div className="bg-white rounded-xl border shadow-sm p-3">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Writing Style */}
-            <div className="flex items-center gap-2 pr-3 border-r border-gray-200">
-              <Tooltip content="Enable AI to use your writing style" position="bottom">
-                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${usePersonaStyle ? 'bg-emerald-50' : 'bg-gray-50'}`}>
-                  <button onClick={() => setUsePersonaStyle(!usePersonaStyle)}
-                    className={`relative w-9 h-5 rounded-full ${usePersonaStyle ? 'bg-emerald-500' : 'bg-gray-300'}`}>
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${usePersonaStyle ? 'left-4' : 'left-0.5'}`} />
-              </button>
-                  <span className={`text-xs font-medium ${usePersonaStyle ? 'text-emerald-700' : 'text-gray-500'}`}>Style</span>
-                </div>
-              </Tooltip>
-              <Tooltip content="Choose persona" position="bottom">
-                <button onClick={() => setShowPersonaManager(true)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border ${personaSelection?.primaryPersonaName ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-                  👤 {personaSelection?.primaryPersonaName || 'Persona'}
-              </button>
-              </Tooltip>
-              <Tooltip content="Writing samples" position="bottom">
-                <button onClick={() => setShowWritingSamplesModal(true)} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50">
-                  ✍️ Samples
-              </button>
-              </Tooltip>
-            </div>
-
-            {/* Auto Mode */}
-            <div className="flex items-center gap-2 pr-3 border-r border-gray-200">
-              <Tooltip content="Auto-generate all sections" position="bottom">
-                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${autoModeRunning ? 'bg-amber-50' : autoMode ? 'bg-emerald-50' : 'bg-gray-50'}`}>
-                  <button onClick={() => setAutoMode(!autoMode)} disabled={autoModeRunning}
-                    className={`relative w-9 h-5 rounded-full ${autoMode ? 'bg-emerald-500' : 'bg-gray-300'} ${autoModeRunning ? 'opacity-50' : ''}`}>
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${autoMode ? 'left-4' : 'left-0.5'}`} />
-                  </button>
-                  <span className={`text-xs font-medium ${autoMode ? 'text-emerald-700' : 'text-gray-500'}`}>{autoModeRunning ? '⏳ Running...' : 'Auto'}</span>
           </div>
-              </Tooltip>
-              {autoMode && !autoModeRunning && (
-                <button onClick={handleAutoGenerateAll} disabled={loading} className="px-3 py-1.5 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-medium disabled:opacity-50">Generate All</button>
-              )}
-              {autoModeRunning && (
-                <>
-                  {autoModeProgress && (
-                    <div className="flex items-center gap-2 px-2 py-1 rounded bg-blue-50 border border-blue-100">
-                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                      <span className="text-xs font-medium text-blue-700">{autoModeProgress.current}/{autoModeProgress.total}</span>
-                      <span className="text-xs text-blue-600 max-w-[100px] truncate">{autoModeProgress.currentSection}</span>
-        </div>
-                  )}
-                  <button onClick={() => { autoModeCancelledRef.current = true; }} className="px-3 py-1.5 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 font-medium">Stop</button>
-                </>
-              )}
-            </div>
-
-            {/* Tools */}
-              <div className="flex items-center gap-2">
-              <Tooltip content="Section instructions" position="bottom">
-                <button onClick={() => setShowAllInstructionsModal(true)}
-                  className={`p-2 rounded-lg border relative ${Object.keys(userInstructions).length > 0 ? 'bg-violet-50 border-violet-200 text-violet-700' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-                  <Settings2 className="w-4 h-4" />
-                  {Object.values(userInstructions).filter(i => i?.isActive !== false).length > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-violet-500 rounded-full text-[9px] text-white flex items-center justify-center font-medium">
-                      {Object.values(userInstructions).filter(i => i?.isActive !== false).length}
-                    </span>
-                  )}
+          <div className="flex items-center gap-2">
+            {autoModeRunning && autoModeProgress && (
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-100 text-xs">
+                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                <span className="font-medium text-blue-700">{autoModeProgress.current}/{autoModeProgress.total}</span>
+                <button onClick={() => { autoModeCancelledRef.current = true; }} className="ml-1 px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium hover:bg-red-600">Stop</button>
+              </div>
+            )}
+            {!autoModeRunning && (
+              <Tooltip content="Auto-generate all sections" position="bottom">
+                <button
+                  onClick={() => { setAutoMode(true); void handleAutoGenerateAll(); }}
+                  disabled={loading || autoModeRunning}
+                  className="px-3 py-1.5 text-[11px] rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 font-medium disabled:opacity-50"
+                >
+                  <Sparkles className="w-3 h-3 inline mr-1" />
+                  Auto-generate
                 </button>
               </Tooltip>
-            </div>
-
-            <div className="ml-auto flex items-center gap-2">
-              <span className="text-xs text-slate-500 bg-slate-100 px-3 py-1.5 rounded-lg">{paperTypeCode}</span>
-            </div>
-              </div>
-            </div>
+            )}
+            <Tooltip content="Help guide" position="left">
+              <button onClick={() => setShowHelpPanel(!showHelpPanel)}
+                className={`p-2 rounded-lg transition-all ${showHelpPanel ? 'bg-indigo-100 text-indigo-700' : 'bg-white border border-slate-200 text-gray-400 hover:bg-gray-50'}`}>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+            </Tooltip>
           </div>
+        </div>
+      </div>
 
-        {session?.archetypeEvidenceStale && (
-          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+      {session?.archetypeEvidenceStale && (
+        <div className="max-w-[850px] mx-auto mb-2 px-8">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
             Evidence packs may be outdated after archetype changes. Refresh literature analysis and blueprint mapping before final drafting.
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Background section preparation status (two-pass pipeline) */}
-        {(bgGenStatus === 'IDLE' || bgGenStatus === null) && (
-          <div className="mt-4 max-w-[850px] mx-auto rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex h-3 w-3 rounded-full shrink-0 bg-slate-400" />
-              <div className="flex-1">
-                <p className="text-sm text-slate-800">
-                  Pass 1 reference draft is not prepared yet. Generate it for non-reference sections from base prompts to speed up section drafting.
-                </p>
-              </div>
-              <button
-                onClick={() => handleRetryBgPreparation()}
-                disabled={bgGenRetrying}
-                className="px-3 py-1.5 text-xs rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {bgGenRetrying ? 'Preparing...' : 'Generate Reference Draft (Pass 1)'}
-              </button>
-              <button
-                onClick={() => {
-                  void handleOpenReferenceDraftModal();
-                }}
-                disabled={referenceDraftLoading}
-                className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {referenceDraftLoading ? 'Loading...' : 'View Reference Draft'}
-              </button>
-              <button
-                onClick={() => setBgSectionSelectorOpen(prev => !prev)}
-                className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100"
-              >
-                {bgSectionSelectorOpen ? 'Hide Sections' : 'Select Sections'}
-              </button>
-            </div>
-
-            {bgSectionSelectorOpen && (
-              renderBgSectionSelector('text-slate-700', 'border-t border-slate-200')
-            )}
-          </div>
-        )}
-        {bgGenStatus === 'RUNNING' && (
-          <div className="mt-4 max-w-[850px] mx-auto rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 flex items-center gap-3">
-            <span className="relative flex h-3 w-3 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-500" />
-            </span>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-indigo-800">
-                Generating Pass 1 reference drafts...
-              </p>
-              {bgGenProgress && bgGenProgress.total > 0 && bgGenLiveCounts && (
-                <p className="text-xs text-indigo-600 mt-0.5">
-                  {bgGenLiveCounts.done}/{bgGenProgress.total} generated • {bgGenLiveCounts.waiting} waiting • {bgGenLiveCounts.running} in progress
-                  {bgGenLiveCounts.failed > 0 && ` • ${bgGenLiveCounts.failed} failed`}
-                </p>
-              )}
-            </div>
+      {/* Generate Draft / Refine Draft Stepper */}
+      {hasPass1EligibleSections && (
+      <div className="max-w-[850px] mx-auto px-8 mb-4">
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="flex items-stretch">
+            {/* Step 1: Generate Draft */}
             <button
+              type="button"
               onClick={() => {
-                void handleOpenReferenceDraftModal();
-              }}
-              disabled={referenceDraftLoading}
-              className="px-3 py-1.5 text-xs rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {referenceDraftLoading ? 'Loading...' : 'View Reference Draft'}
-            </button>
-          </div>
-        )}
-        {(bgGenStatus === 'COMPLETED' || bgGenStatus === 'PARTIAL') && bgGenProgress && (
-          <div className={`mt-4 max-w-[850px] mx-auto rounded-lg border px-4 py-3 ${
-            bgGenStatus === 'PARTIAL'
-              ? 'border-amber-200 bg-amber-50'
-              : 'border-emerald-200 bg-emerald-50'
-          }`}>
-            <div className="flex items-center gap-3">
-              <span className={`inline-flex h-3 w-3 rounded-full shrink-0 ${
-                bgGenStatus === 'PARTIAL' ? 'bg-amber-500' : 'bg-emerald-500'
-              }`} />
-              <div className="flex-1">
-                <p className={`text-sm ${bgGenStatus === 'PARTIAL' ? 'text-amber-800' : 'text-emerald-800'}`}>
-                {bgGenStatus === 'PARTIAL'
-                  ? `Paper structure partially ready — ${bgGenProgress.completed} of ${bgGenProgress.total} sections prepared (${bgGenProgress.failed} failed).`
-                  : 'Paper structure ready — sections will generate faster with pre-built evidence drafts.'
+                if (bgGenStatus === 'IDLE' || bgGenStatus === null || bgGenStatus === 'FAILED') {
+                  void handleRetryBgPreparation();
+                } else {
+                  void handleOpenReferenceDraftModal();
                 }
-                </p>
+              }}
+              disabled={bgGenRetrying || referenceDraftLoading}
+              className={`flex-1 flex items-center gap-3 px-4 py-3 text-left transition-colors relative disabled:cursor-wait ${
+                bgGenStatus === 'COMPLETED'
+                  ? 'bg-emerald-50/60'
+                  : bgGenStatus === 'RUNNING'
+                    ? 'bg-indigo-50/60'
+                    : (bgGenStatus === 'IDLE' || bgGenStatus === null)
+                      ? 'bg-slate-50 hover:bg-slate-100'
+                      : bgGenStatus === 'PARTIAL'
+                        ? 'bg-amber-50/60'
+                        : 'bg-red-50/60'
+              }`}
+            >
+              <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                bgGenStatus === 'COMPLETED' ? 'bg-emerald-500 text-white' :
+                bgGenStatus === 'RUNNING' ? 'bg-indigo-500 text-white animate-pulse' :
+                bgGenStatus === 'PARTIAL' ? 'bg-amber-500 text-white' :
+                bgGenStatus === 'FAILED' ? 'bg-red-500 text-white' :
+                'bg-slate-300 text-white'
+              }`}>
+                {bgGenStatus === 'COMPLETED' ? '✓' : '1'}
               </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold text-slate-800">Generate Draft</div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  {bgGenStatus === 'COMPLETED' && bgGenProgress
+                    ? `Ready — ${bgGenProgress.completed}/${bgGenProgress.total} sections`
+                    : bgGenStatus === 'RUNNING'
+                      ? `Generating${bgGenLiveCounts ? ` ${bgGenLiveCounts.done}/${bgGenProgress?.total || '?'}` : ''}...`
+                      : bgGenStatus === 'PARTIAL' && bgGenProgress
+                        ? `${bgGenProgress.completed}/${bgGenProgress.total} ready (${bgGenProgress.failed} failed)`
+                        : bgGenStatus === 'FAILED'
+                          ? 'Failed — click to retry'
+                          : `Not started — click to generate${pass1SkippedSummary}`
+                  }
+                </div>
+              </div>
+              {bgGenStatus === 'RUNNING' && (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-indigo-500" />
+              )}
+            </button>
+
+            <div className="w-px bg-slate-200" />
+
+            {/* Step 2: Refine Draft */}
+            <div className={`flex-1 flex items-center gap-3 px-4 py-3 ${
+              bgGenStatus === 'COMPLETED' || bgGenStatus === 'PARTIAL' ? 'bg-blue-50/40' : 'bg-white'
+            }`}>
+              <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                bgGenStatus === 'COMPLETED' || bgGenStatus === 'PARTIAL'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-slate-200 text-slate-400'
+              }`}>
+                2
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className={`text-xs font-semibold ${bgGenStatus === 'COMPLETED' || bgGenStatus === 'PARTIAL' ? 'text-blue-800' : 'text-slate-400'}`}>
+                  Refine Draft
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  {bgGenStatus === 'COMPLETED' || bgGenStatus === 'PARTIAL'
+                    ? 'Active — edit, regenerate, or dimension-draft below'
+                    : 'Generate Draft first'
+                  }
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Generate Draft expanded actions */}
+          {(bgGenStatus === 'COMPLETED' || bgGenStatus === 'PARTIAL' || bgGenStatus === 'FAILED') && (
+            <div className="border-t border-slate-100 px-4 py-2 flex flex-wrap items-center gap-2 bg-slate-50/50">
+              <button
+                onClick={() => { void handleOpenReferenceDraftModal(); }}
+                disabled={referenceDraftLoading}
+                className="px-2.5 py-1 text-[11px] rounded-md border border-slate-200 text-slate-600 hover:bg-white disabled:opacity-50"
+              >
+                {referenceDraftLoading ? 'Loading...' : 'View Generated Draft'}
+              </button>
               {(bgGenStatus === 'PARTIAL' || bgGenStatus === 'COMPLETED') && (
                 <button
                   onClick={() => handleRetryBgPreparation({ force: bgGenStatus === 'COMPLETED' })}
                   disabled={bgGenRetrying}
-                  className={`px-3 py-1.5 text-xs rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed ${
-                    bgGenStatus === 'COMPLETED'
-                      ? 'border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                      : 'border-amber-300 text-amber-800 hover:bg-amber-100'
-                  }`}
+                  className="px-2.5 py-1 text-[11px] rounded-md border border-slate-200 text-slate-600 hover:bg-white disabled:opacity-50"
                 >
-                  {bgGenRetrying
-                    ? 'Preparing...'
-                    : bgGenStatus === 'COMPLETED'
-                      ? 'Rerun Section Prep'
-                      : 'Retry Section Prep'}
+                  {bgGenRetrying ? 'Preparing...' : bgGenStatus === 'COMPLETED' ? 'Rerun Generate Draft' : 'Retry Generate Draft'}
                 </button>
               )}
-              <button
-                onClick={() => {
-                  void handleOpenReferenceDraftModal();
-                }}
-                disabled={referenceDraftLoading}
-                className={`px-3 py-1.5 text-xs rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed ${
-                  bgGenStatus === 'PARTIAL'
-                    ? 'border-amber-300 text-amber-800 hover:bg-amber-100'
-                    : 'border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                }`}
-              >
-                {referenceDraftLoading ? 'Loading...' : 'View Reference Draft'}
-              </button>
               {bgGenStatus === 'PARTIAL' && (bgGenLiveCounts?.failed || 0) > 0 && (
                 <button
                   onClick={() => handleRetryBgPreparation({ retryFailedOnly: true })}
                   disabled={bgGenRetrying}
-                  className="px-3 py-1.5 text-xs rounded-lg border border-amber-400 text-amber-900 bg-amber-100 hover:bg-amber-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-2.5 py-1 text-[11px] rounded-md border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
                 >
                   {bgGenRetrying ? 'Retrying...' : 'Retry Failed Only'}
                 </button>
               )}
-              <button
-                onClick={() => setBgSectionSelectorOpen(prev => !prev)}
-                className={`px-3 py-1.5 text-xs rounded-lg border ${
-                  bgGenStatus === 'PARTIAL'
-                    ? 'border-amber-300 text-amber-800 hover:bg-amber-100'
-                    : 'border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                }`}
-              >
-                {bgSectionSelectorOpen ? 'Hide Sections' : 'Select Sections'}
-              </button>
-            </div>
-
-            {bgSectionSelectorOpen && (
-              renderBgSectionSelector(
-                bgGenStatus === 'PARTIAL' ? 'text-amber-800' : 'text-emerald-800',
-                'border-t border-white/60'
-              )
-            )}
-          </div>
-        )}
-        {bgGenStatus === 'FAILED' && (
-          <div className="mt-4 max-w-[850px] mx-auto rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex h-3 w-3 rounded-full shrink-0 bg-red-500" />
-              <div className="flex-1">
-                <p className="text-sm text-red-800">
-                  Paper structure preparation failed. Retry generation to pre-build section drafts.
-                </p>
-              </div>
-              {(bgGenLiveCounts?.failed || 0) > 0 && (
+              {bgGenStatus === 'FAILED' && (
                 <button
-                  onClick={() => handleRetryBgPreparation({ retryFailedOnly: true })}
+                  onClick={() => handleRetryBgPreparation()}
                   disabled={bgGenRetrying}
-                  className="px-3 py-1.5 text-xs rounded-lg border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-2.5 py-1 text-[11px] rounded-md border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-50"
                 >
-                  {bgGenRetrying ? 'Retrying...' : 'Retry Failed Only'}
+                  {bgGenRetrying ? 'Retrying...' : 'Retry Section Prep'}
                 </button>
               )}
               <button
-                onClick={() => handleRetryBgPreparation()}
-                disabled={bgGenRetrying}
-                className="px-3 py-1.5 text-xs rounded-lg border border-red-300 text-red-800 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {bgGenRetrying ? 'Retrying...' : 'Retry Section Prep'}
-              </button>
-              <button
-                onClick={() => {
-                  void handleOpenReferenceDraftModal();
-                }}
-                disabled={referenceDraftLoading}
-                className="px-3 py-1.5 text-xs rounded-lg border border-red-300 text-red-800 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {referenceDraftLoading ? 'Loading...' : 'View Reference Draft'}
-              </button>
-              <button
                 onClick={() => setBgSectionSelectorOpen(prev => !prev)}
-                className="px-3 py-1.5 text-xs rounded-lg border border-red-300 text-red-800 hover:bg-red-100"
+                className="px-2.5 py-1 text-[11px] rounded-md border border-slate-200 text-slate-600 hover:bg-white"
               >
                 {bgSectionSelectorOpen ? 'Hide Sections' : 'Select Sections'}
               </button>
             </div>
+          )}
 
-            {bgSectionSelectorOpen && (
-              renderBgSectionSelector('text-red-800', 'border-t border-red-200')
-            )}
-          </div>
-        )}
+          {bgSectionSelectorOpen && (
+            <div className="border-t border-slate-100 px-4 py-2 bg-white">
+              {renderBgSectionSelector('text-slate-700', '')}
+            </div>
+          )}
+        </div>
+      </div>
+      )}
+
       {/* Paper Document */}
-      <div className="max-w-[850px] mx-auto bg-white shadow-[0_1px_12px_rgba(0,0,0,0.08)] min-h-[1100px] px-[72px] py-[72px] relative border border-gray-100/60 rounded-sm">
+      <div className="max-w-[850px] mx-auto bg-white shadow-[0_1px_12px_rgba(0,0,0,0.08)] min-h-[1100px] px-[72px] py-[72px] relative border border-gray-100/60 rounded-sm" style={{ scrollBehavior: 'smooth' }}>
         {showActivity && (currentKeys || autoModeRunning) && (
           <div className="absolute top-4 right-4 z-10">
             <BackendActivityPanel isVisible={true} onClose={() => setShowActivity(false)}
@@ -3741,7 +3679,18 @@ export default function SectionDraftingStage({
             const primarySectionKey = section.keys[0] || '';
             const primaryDimensionState = primarySectionKey ? getDimensionState(primarySectionKey) : createInitialDimensionUIState();
             const primarySupportsDimensionFlow = primarySectionKey ? supportsDimensionFlowForSection(primarySectionKey) : false;
+            const primaryPass1Eligible = primarySectionKey ? isPass1EligibleForSection(primarySectionKey) : false;
             const sectionWordCount = section.keys.reduce((acc, key) => acc + computeWordCount(content[key] || ''), 0);
+            const normalizedPrimarySectionKey = normalizeSectionKey(primarySectionKey);
+            const primaryPass1Status = normalizedPrimarySectionKey
+              ? bgGenProgress?.sections?.[normalizedPrimarySectionKey] || null
+              : null;
+            const primaryPass1Ready = primaryPass1Eligible && (
+              primaryPass1Status === 'done'
+              || bgGenStatus === 'COMPLETED'
+            );
+            const primaryHasDraftContent = sectionWordCount > 0;
+            const primarySectionBusy = primarySectionKey ? Boolean(sectionLoading[primarySectionKey]) : false;
 
             const sectionCitationIssue = (() => {
               const disallowedSet = new Set<string>();
@@ -3759,7 +3708,14 @@ export default function SectionDraftingStage({
             })();
 
             return (
-              <div key={section.keys.join('|') || idx} className="group/section-parent relative" style={{ marginTop: idx === 0 ? 0 : '1.5em' }}>
+              <div
+                key={section.keys.join('|') || idx}
+                id={`section-${primarySectionKey}`}
+                className={`group/section-parent relative transition-colors duration-200 ${
+                  isGrantApplicationDraft ? 'rounded-sm pl-3 border-l-[3px] border-l-emerald-300/70 bg-emerald-50/20 -ml-3' : ''
+                }`}
+                style={{ marginTop: idx === 0 ? 0 : '1.5em', paddingTop: idx === 0 ? 0 : '0.5em' }}
+              >
                 <div className="mb-1 flex flex-wrap items-end justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <h3
@@ -3775,6 +3731,16 @@ export default function SectionDraftingStage({
                     >
                       {section.label || section.keys.map(k => displayName[k] || k).join(' / ')}
                     </h3>
+
+                    {(primaryDimensionState.completed || (sectionWordCount > 0 && (
+                      primaryPass1Eligible
+                        ? (bgGenStatus === 'COMPLETED' || bgGenStatus === 'PARTIAL')
+                        : isGrantApplicationDraft
+                    ))) && (
+                      <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
+                        {primaryDimensionState.completed ? 'Dimension refined' : primaryPass1Eligible ? 'Refine Draft' : 'Direct draft'}
+                      </span>
+                    )}
 
                     {primarySupportsDimensionFlow && primaryDimensionState.started && primaryDimensionState.plan.length > 0 && (
                       <DimensionPlanPills
@@ -3826,7 +3792,59 @@ export default function SectionDraftingStage({
                     })()}
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-[11px] text-slate-300 opacity-0 transition-opacity duration-200 group-hover/section-parent:opacity-100">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5 text-[11px] text-slate-500">
+                    {isGrantApplicationDraft && primarySectionKey && (
+                      <>
+                        {primaryPass1Eligible ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void handleRetryBgPreparation({
+                                force: primaryPass1Ready || bgGenStatus === 'COMPLETED',
+                                sectionKeys: [primarySectionKey],
+                              })}
+                              disabled={bgGenRetrying || isWorking || autoModeRunning}
+                              className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {bgGenRetrying && primaryPass1Status === 'running' && <Loader2 className="h-3 w-3 animate-spin" />}
+                              {primaryPass1Ready ? 'Rerun Generate Draft' : 'Generate Draft'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (primaryHasDraftContent) {
+                                  void handleRegenerateSection(primarySectionKey);
+                                  return;
+                                }
+                                void handleGenerate([primarySectionKey]);
+                              }}
+                              disabled={!primaryPass1Ready || isWorking || loading || autoModeRunning}
+                              title={!primaryPass1Ready ? 'Generate Draft first' : undefined}
+                              className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {primarySectionBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                              {primaryHasDraftContent ? 'Refine Draft Again' : 'Refine Draft'}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (primaryHasDraftContent) {
+                                void handleRegenerateSection(primarySectionKey);
+                                return;
+                              }
+                              void handleGenerate([primarySectionKey]);
+                            }}
+                            disabled={isWorking || loading || autoModeRunning}
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {primarySectionBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                            {primaryHasDraftContent ? 'Regenerate Direct Draft' : 'Direct Draft'}
+                          </button>
+                        )}
+                      </>
+                    )}
                     {isSavingSection && <span className="animate-pulse text-amber-400">Saving</span>}
                     {hasPending && !isSavingSection && <span className="text-slate-400">Unsaved</span>}
                     {section.wordLimit && (
@@ -4284,7 +4302,7 @@ export default function SectionDraftingStage({
                         {regenOpen[keyName] && (
                           <div className="absolute right-0 top-0 z-30 w-[320px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
                             <div className="mb-2 flex items-center justify-between">
-                              <label className="text-xs font-semibold text-slate-700">Refinement</label>
+                              <label className="text-xs font-semibold text-slate-700">Refine Draft</label>
                               <button
                                 onClick={() => setRegenOpen(prev => ({ ...prev, [keyName]: false }))}
                                 className="flex h-5 w-5 items-center justify-center rounded hover:bg-slate-100"
@@ -4354,7 +4372,7 @@ export default function SectionDraftingStage({
         sections={(sectionConfigs || fallbackSections).flatMap(s => s.keys.map(k => ({ key: k, label: displayName[k] || formatSectionLabel(k) })))}
         instructions={userInstructions} onSaveAll={(newInstr) => setUserInstructions(newInstr as Record<string, UserInstruction>)} />
 
-      {/* Reference Draft (Pass 1) Preview Modal */}
+      {/* Generated Draft Preview Modal */}
       <AnimatePresence>
         {showReferenceDraftModal && (
           <motion.div
@@ -4373,13 +4391,13 @@ export default function SectionDraftingStage({
             >
               <div className="p-4 border-b border-slate-200 flex flex-wrap items-start justify-between gap-3 bg-slate-50">
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-800">Reference Draft Output (Pass 1)</h3>
+                  <h3 className="text-lg font-semibold text-slate-800">Generated Draft Output</h3>
                   <p className="text-xs text-slate-500 mt-1">
                     Review base-prompt outputs across all configured sections.
                   </p>
                   {referenceDraftSummary && (
                     <p className="text-xs text-slate-600 mt-1">
-                      {referenceDraftSummary.withPass1Content} / {referenceDraftSummary.totalSections} sections have Pass 1 output
+                      {referenceDraftSummary.withPass1Content} / {referenceDraftSummary.totalSections} sections have generated draft output
                     </p>
                   )}
                   {referenceDraftFetchedAt && (
@@ -4421,7 +4439,7 @@ export default function SectionDraftingStage({
 
                 {!referenceDraftLoading && !referenceDraftError && referenceDraftSections.length === 0 && (
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                    No eligible non-reference sections found for Pass 1 preview.
+                    No eligible sections found for Generate Draft preview.
                     </div>
                 )}
 
@@ -4439,7 +4457,7 @@ export default function SectionDraftingStage({
                               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                               : 'bg-slate-100 text-slate-600 border-slate-200'
                           }`}>
-                            {section.hasContent ? 'Pass 1 Ready' : 'No Pass 1 Output'}
+                              {section.hasContent ? 'Generate Draft Ready' : 'No Generated Draft Output'}
                           </span>
                           <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-white text-slate-600">
                             {section.wordCount} words
@@ -4454,7 +4472,7 @@ export default function SectionDraftingStage({
                           )}
                           {figureWarning.stale && (
                             <span className="text-[10px] px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700">
-                              Figure-aware Pass 1 is stale
+                              Figure-aware Generate Draft is stale
                             </span>
                           )}
                         </div>
@@ -4482,7 +4500,7 @@ export default function SectionDraftingStage({
                       <div className="p-4 bg-white">
                         {figureWarning.stale && (
                           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
-                            <div className="font-medium">This Pass 1 draft may be outdated.</div>
+                            <div className="font-medium">This generated draft may be outdated.</div>
                             <ul className="mt-1 list-disc space-y-1 pl-4">
                               {figureWarning.reasons.map((reason) => (
                                 <li key={`${section.sectionKey}-${reason}`}>{reason}</li>
@@ -4494,7 +4512,7 @@ export default function SectionDraftingStage({
                               disabled={bgGenRetrying}
                               className="mt-2 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              {bgGenRetrying ? 'Preparing...' : 'Regenerate Pass 1 for this section'}
+                              {bgGenRetrying ? 'Preparing...' : 'Regenerate Draft for this section'}
                             </button>
                           </div>
                         )}
@@ -4508,7 +4526,7 @@ export default function SectionDraftingStage({
                           />
                         ) : (
                           <p className="text-sm text-slate-500 italic">
-                            Pass 1 output not generated for this section yet.
+                            Generated draft output not created for this section yet.
                           </p>
                         )}
                       </div>

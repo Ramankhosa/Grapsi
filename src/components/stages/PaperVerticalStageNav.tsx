@@ -32,6 +32,8 @@ import { countPendingRewriteIssues, getLatestPaperReview } from '@/lib/paper-rev
 // Types
 // ============================================================================
 
+type DraftingFilter = 'all' | 'app_draft' | 'team_draft' | 'evidence'
+
 interface PaperVerticalStageNavProps {
   session: any
   currentStage: string
@@ -46,10 +48,14 @@ interface PaperVerticalStageNavProps {
     description?: string
     required?: boolean
     status: SubStageStatus
+    workflowMode?: 'app_draft' | 'app_support' | 'team_manual'
+    sectionType?: string
+    dimensions?: string[]
   }>
-  // For Section Drafting - allows selecting specific sections
   selectedSection?: string
   onSectionSelect?: (sectionKey: string) => void
+  sectionFilter?: DraftingFilter
+  onSectionFilterChange?: (filter: DraftingFilter) => void
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
   allowCollapse?: boolean
@@ -891,6 +897,20 @@ function StatusIcon({ status, size = 'md' }: StatusIconProps) {
 // Main Component
 // ============================================================================
 
+function isDraftingSectionAppDraft(section: { workflowMode?: string; sectionType?: string }): boolean {
+  return section.workflowMode === 'app_draft' && (section.sectionType === 'narrative' || section.sectionType === 'short_answer')
+}
+
+function draftingFilterMatches(
+  section: { workflowMode?: string; sectionType?: string; dimensions?: string[] },
+  filter: DraftingFilter
+): boolean {
+  if (filter === 'app_draft') return isDraftingSectionAppDraft(section)
+  if (filter === 'team_draft') return !isDraftingSectionAppDraft(section)
+  if (filter === 'evidence') return isDraftingSectionAppDraft(section) && (section.dimensions || []).length > 0
+  return true
+}
+
 export default function PaperVerticalStageNav({
   session,
   currentStage,
@@ -902,6 +922,8 @@ export default function PaperVerticalStageNav({
   draftingSections,
   selectedSection,
   onSectionSelect,
+  sectionFilter = 'all',
+  onSectionFilterChange,
   collapsed = false,
   onCollapsedChange,
   allowCollapse = false
@@ -1293,12 +1315,57 @@ export default function PaperVerticalStageNav({
               {/* Sub-stages (expandable) */}
               {isExpanded && subStages.length > 0 && (
                 <div className={`ml-5 pl-4 border-l ${themeClasses.subStageBorder} py-1 mt-1 space-y-0.5`}>
-                  {subStages.map(subStage => {
+                  {/* Section Drafting filter pills */}
+                  {stage.key === 'SECTION_DRAFTING' && draftingSections && onSectionFilterChange && (
+                    <div className="flex flex-wrap gap-1 pb-2 mb-1 border-b border-slate-100">
+                      {(['all', 'app_draft', 'team_draft', 'evidence'] as const).map((filterKey) => {
+                        const isActive = sectionFilter === filterKey
+                        const labels: Record<DraftingFilter, string> = {
+                          all: 'All',
+                          app_draft: 'App',
+                          team_draft: 'Team',
+                          evidence: 'Evidence',
+                        }
+                        const count = filterKey === 'all'
+                          ? draftingSections.length
+                          : draftingSections.filter((s) => draftingFilterMatches(s, filterKey)).length
+                        return (
+                          <button
+                            key={filterKey}
+                            type="button"
+                            onClick={() => onSectionFilterChange(filterKey)}
+                            className={`
+                              rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors
+                              ${isActive
+                                ? 'bg-slate-800 text-white'
+                                : theme === 'dark'
+                                  ? 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }
+                            `}
+                          >
+                            {labels[filterKey]} {count}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {subStages.map((subStage, subIdx) => {
                     const SubIcon = subStage.icon
                     const status = subStage.getStatus(session)
                     const isSectionDrafting = stage.key === 'SECTION_DRAFTING'
                     const isSelectedSection = isSectionDrafting && selectedSection === subStage.key
                     const canClickSection = isSectionDrafting && onSectionSelect
+
+                    const draftMeta = isSectionDrafting && draftingSections
+                      ? draftingSections.find((s) => s.key === subStage.key)
+                      : null
+                    const isAppDraft = draftMeta ? isDraftingSectionAppDraft(draftMeta) : false
+
+                    if (isSectionDrafting && draftMeta && !draftingFilterMatches(draftMeta, sectionFilter)) {
+                      return null
+                    }
 
                     return (
                       <button
@@ -1306,42 +1373,66 @@ export default function PaperVerticalStageNav({
                         type="button"
                         onClick={() => {
                           if (canClickSection) {
-                            // If not on Section Drafting stage, navigate there first
                             if (currentStage !== 'SECTION_DRAFTING') {
                               onNavigateToStage('SECTION_DRAFTING')
                             }
                             onSectionSelect(subStage.key)
+                            const anchor = document.getElementById(`section-${subStage.key}`)
+                            if (anchor) {
+                              anchor.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                            }
                           }
                         }}
                         disabled={!canClickSection}
                         className={`
                           w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors text-left
-                          ${isSelectedSection 
-                            ? theme === 'dark' 
-                              ? 'bg-blue-500/20 border border-blue-400/30' 
+                          ${isSelectedSection
+                            ? theme === 'dark'
+                              ? 'bg-blue-500/20 border border-blue-400/30'
                               : 'bg-blue-50 border border-blue-200'
-                            : `${themeClasses.hover} border border-transparent`
+                            : isSectionDrafting && isAppDraft
+                              ? theme === 'dark'
+                                ? 'bg-emerald-900/20 border border-emerald-800/30 hover:bg-emerald-900/30'
+                                : 'bg-emerald-50/60 border border-emerald-200/60 hover:bg-emerald-50'
+                              : `${themeClasses.hover} border border-transparent`
                           }
                           ${canClickSection ? 'cursor-pointer' : 'cursor-default'}
                         `}
                         title={subStage.description}
                       >
-                        <StatusIcon status={status} size="sm" />
+                        {isSectionDrafting ? (
+                          <span className={`
+                            flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold
+                            ${status === 'completed'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : status === 'in_progress'
+                                ? 'bg-sky-100 text-sky-700'
+                                : 'bg-slate-100 text-slate-500'
+                            }
+                          `}>
+                            {subIdx + 1}
+                          </span>
+                        ) : (
+                          <StatusIcon status={status} size="sm" />
+                        )}
                         <span className={`
                           text-xs flex-1 truncate
-                          ${isSelectedSection 
+                          ${isSelectedSection
                             ? themeClasses.activeText
                             : status === 'completed' ? themeClasses.completedText :
                               status === 'skipped' ? themeClasses.textSubtle + ' line-through' :
                               themeClasses.textMuted}
                         `}>
                           {subStage.label}
-                          {subStage.required && status !== 'completed' && status !== 'skipped' && (
-                            <span className="text-red-400 ml-0.5">*</span>
-                          )}
                         </span>
-                        {!isSelectedSection && <SubIcon className={`w-3 h-3 ${themeClasses.textSubtle}`} />}
-                        {isSelectedSection && <ChevronRight className={`w-3 h-3 ${themeClasses.activeText}`} />}
+                        {isSectionDrafting && (
+                          <span className={`
+                            h-2 w-2 shrink-0 rounded-full
+                            ${status === 'completed' ? 'bg-emerald-500' : status === 'in_progress' ? 'bg-sky-500' : 'bg-slate-300'}
+                          `} />
+                        )}
+                        {!isSectionDrafting && !isSelectedSection && <SubIcon className={`w-3 h-3 ${themeClasses.textSubtle}`} />}
+                        {!isSectionDrafting && isSelectedSection && <ChevronRight className={`w-3 h-3 ${themeClasses.activeText}`} />}
                       </button>
                     )
                   })}

@@ -19,16 +19,16 @@ import {
 } from '@/lib/grants/blueprintMetadata';
 import { buildGrantDraftingPrompt } from '@/lib/grants/draftingPromptComposer';
 import {
-  buildGrantDraftingStrategyInput,
-  resolveGrantDraftingStrategy,
-} from '@/lib/grants/draftingStrategy';
-import {
   formatGrantMustCoverItems,
   summarizeGrantFreezePayload,
 } from '@/lib/grants/promptOverlay';
 import {
   normalizeGrantGenerationTrace,
 } from '@/lib/grants/compliance';
+import {
+  isGrantBackedPass1EligibleSection,
+  resolveGrantBackedPass1Eligibility,
+} from '@/lib/grants/paperSectionConfig';
 import {
   buildGrantDraftContextContract,
   buildGrantPostGenerationValidation,
@@ -201,6 +201,20 @@ export interface BackgroundGenResult {
   success: boolean;
   progress: BackgroundGenProgress;
   error?: string;
+  eligibility?: Pass1SectionEligibility;
+}
+
+export interface Pass1SkippedSection {
+  sectionKey: string;
+  displayLabel: string;
+  mode: 'one_pass' | 'two_pass';
+  reason: string;
+}
+
+export interface Pass1SectionEligibility {
+  paperTypeCode: string;
+  eligibleSections: string[];
+  skippedSections: Pass1SkippedSection[];
 }
 
 interface StoredPass1Artifact {
@@ -279,6 +293,36 @@ function readStoredPass1Content(section: Pick<PaperSection, 'baseContentInternal
 
 function normalizeSectionKey(sectionKey: string): string {
   return String(sectionKey || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function normalizeSectionOrder(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeSectionKey(String(entry || ''))).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      return normalizeSectionOrder(parsed);
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+export function resolvePaperSectionGenerationPaperTypeCode(session: {
+  paperType?: { code?: string | null } | null;
+  paperBlueprint?: { paperTypeCode?: string | null } | null;
+} | null | undefined): string {
+  return String(
+    session?.paperType?.code
+    || session?.paperBlueprint?.paperTypeCode
+    || 'JOURNAL_ARTICLE'
+  );
 }
 
 const PASS1_EXCLUDED_SECTION_KEYS = new Set(['references', 'reference', 'bibliography']);
@@ -528,7 +572,13 @@ class PaperSectionService {
         where: { id: sessionId },
         include: {
           researchTopic: true,
-          paperType: true
+          paperType: true,
+          paperBlueprint: {
+            select: {
+              paperTypeCode: true,
+              sectionPlan: true,
+            },
+          },
         }
       });
 
@@ -539,31 +589,21 @@ class PaperSectionService {
         };
       }
 
-      const paperTypeCode = session.paperType?.code || 'JOURNAL_ARTICLE';
+      const paperTypeCode = resolvePaperSectionGenerationPaperTypeCode(session);
       const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
-      const grantStrategy = grantBacked
-        ? resolveGrantDraftingStrategy(buildGrantDraftingStrategyInput({
-            sectionKey,
-            sectionType: blueprintContext.currentSection.sectionType,
-            grantSemantic: blueprintContext.currentSection.grantSemantic,
-            templateIntent: blueprintContext.currentSection.templateIntent,
-            characterLimit: blueprintContext.currentSection.characterLimit,
-            wordBudget: blueprintContext.currentSection.wordBudget,
-            mustCover: blueprintContext.currentSection.mustCover,
-            authoritativePrepBundle: blueprintContext.currentSection.authoritativePrepBundle,
-            prepContextBlock: blueprintContext.currentSection.prepContextBlock,
-            suggestedCitationCount: blueprintContext.currentSection.suggestedCitationCount,
-          }))
-        : null;
       const effectiveTwoPass = twoPassEnabled
         && !isPass1ExcludedSection(sectionKey)
-        && (!grantBacked || grantStrategy?.mode === 'two_pass');
+        && (!grantBacked || isGrantBackedPass1EligibleSection(
+          paperTypeCode,
+          session.paperBlueprint?.sectionPlan || [blueprintContext.currentSection],
+          sectionKey
+        ));
 
       if (effectiveTwoPass) {
         if (!existingSection || !storedPass1Content) {
           return {
             success: false,
-            error: `Pass 1 reference draft is missing for "${sectionKey}". Generate Pass 1 first.`
+            error: `Generated draft is missing for "${sectionKey}". Run Generate Draft first.`
           };
         }
 
@@ -837,16 +877,23 @@ class PaperSectionService {
     if (!baseContent) {
       return {
         success: false,
-        error: `Pass 1 reference draft is missing for "${section.sectionKey}". Generate Pass 1 first.`
+        error: `Generated draft is missing for "${section.sectionKey}". Run Generate Draft first.`
       };
     }
 
     if (!paperTypeCode) {
       const session = await prisma.draftingSession.findUnique({
         where: { id: section.sessionId },
-        include: { paperType: true }
+        include: {
+          paperType: true,
+          paperBlueprint: {
+            select: {
+              paperTypeCode: true,
+            },
+          },
+        }
       });
-      paperTypeCode = session?.paperType?.code || 'JOURNAL_ARTICLE';
+      paperTypeCode = resolvePaperSectionGenerationPaperTypeCode(session);
     }
 
     await prisma.paperSection.update({
@@ -966,6 +1013,78 @@ class PaperSectionService {
     return { success: true, section: this.transformSection(updated) };
   }
 
+  async getPass1SectionEligibility(sessionId: string): Promise<Pass1SectionEligibility> {
+    const session = await prisma.draftingSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        paperType: {
+          select: {
+            code: true,
+            sectionOrder: true,
+          },
+        },
+        paperBlueprint: {
+          select: {
+            paperTypeCode: true,
+            sectionPlan: true,
+          },
+        },
+      },
+    });
+
+    const paperTypeCode = resolvePaperSectionGenerationPaperTypeCode(session);
+    const generationOrder = await this.getSectionGenerationOrder(sessionId);
+    const fallbackOrder = normalizeSectionOrder(session?.paperType?.sectionOrder);
+    const orderedKeys = Array.from(new Set(
+      (generationOrder.length > 0 ? generationOrder : fallbackOrder)
+        .map((key) => normalizeSectionKey(key))
+        .filter(Boolean)
+    ));
+    const sectionPlan = session?.paperBlueprint?.sectionPlan || [];
+    const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
+    const eligibleSections: string[] = [];
+    const skippedSections: Pass1SkippedSection[] = [];
+
+    for (const sectionKey of orderedKeys) {
+      if (grantBacked) {
+        const eligibility = resolveGrantBackedPass1Eligibility(
+          paperTypeCode,
+          sectionPlan,
+          sectionKey
+        );
+        if (eligibility.eligible) {
+          eligibleSections.push(sectionKey);
+        } else {
+          skippedSections.push({
+            sectionKey,
+            displayLabel: eligibility.displayLabel,
+            mode: eligibility.mode,
+            reason: eligibility.reason,
+          });
+        }
+        continue;
+      }
+
+      if (isPass1ExcludedSection(sectionKey)) {
+        skippedSections.push({
+          sectionKey,
+          displayLabel: SECTION_DISPLAY_NAMES[sectionKey] || sectionKey,
+          mode: 'one_pass',
+          reason: 'reference-style sections bypass Generate Draft.',
+        });
+        continue;
+      }
+
+      eligibleSections.push(sectionKey);
+    }
+
+    return {
+      paperTypeCode,
+      eligibleSections,
+      skippedSections,
+    };
+  }
+
   // ============================================================================
   // Background Parallel Pass 1 (manual trigger from UI)
   // ============================================================================
@@ -994,17 +1113,23 @@ class PaperSectionService {
         return { success: false, progress, error: blueprintReady.reason || 'Blueprint not ready' };
       }
 
-      const fullGenerationOrder = (await this.getSectionGenerationOrder(sessionId))
-        .filter((sectionKey) => !isPass1ExcludedSection(sectionKey));
+      const eligibility = await this.getPass1SectionEligibility(sessionId);
+      const fullGenerationOrder = eligibility.eligibleSections;
       if (fullGenerationOrder.length === 0) {
-        return { success: false, progress, error: 'No sections in blueprint' };
+        return {
+          success: false,
+          progress,
+          eligibility,
+          error: 'No sections in blueprint are eligible for Generate Draft',
+        };
       }
 
+      const eligibleSectionSet = new Set(fullGenerationOrder);
       const requestedSectionKeys = Array.isArray(options?.sectionKeys)
         ? options.sectionKeys
-          .map(key => String(key || '').trim())
+          .map(key => normalizeSectionKey(String(key || '').trim()))
           .filter(Boolean)
-          .filter((sectionKey) => !isPass1ExcludedSection(sectionKey))
+          .filter((sectionKey) => eligibleSectionSet.has(sectionKey))
         : [];
       const requestedSectionSet = requestedSectionKeys.length > 0
         ? new Set(requestedSectionKeys)
@@ -1019,7 +1144,8 @@ class PaperSectionService {
         return {
           success: false,
           progress,
-          error: 'No eligible sections selected for Pass 1 run. References are excluded from Pass 1.'
+          eligibility,
+          error: 'No eligible sections selected for Generate Draft.'
         };
       }
 
@@ -1040,14 +1166,22 @@ class PaperSectionService {
       // Load shared context once
       const session = await prisma.draftingSession.findUnique({
         where: { id: sessionId },
-        include: { researchTopic: true, paperType: true }
+        include: {
+          researchTopic: true,
+          paperType: true,
+          paperBlueprint: {
+            select: {
+              paperTypeCode: true,
+            },
+          },
+        }
       });
       if (!session || !session.researchTopic) {
         await this.updateBgGenStatus(sessionId, 'FAILED', progress);
         return { success: false, progress, error: 'Session or research topic not found' };
       }
 
-      const paperTypeCode = session.paperType?.code || 'JOURNAL_ARTICLE';
+      const paperTypeCode = resolvePaperSectionGenerationPaperTypeCode(session);
       const blueprint = await blueprintService.getBlueprint(sessionId);
       const methodologyType = (blueprint as any)?.methodologyType || null;
       const blueprintVersion = blueprint?.version || 1;
@@ -1225,7 +1359,7 @@ class PaperSectionService {
           : 'FAILED';
       await this.updateBgGenStatus(sessionId, finalStatus, progress);
 
-      return { success: progress.failed === 0, progress };
+      return { success: progress.failed === 0, progress, eligibility };
     } catch (error) {
       console.error('[BgGen] runParallelPass1 error:', error);
       await this.updateBgGenStatus(sessionId, 'FAILED', progress);
@@ -1241,16 +1375,25 @@ class PaperSectionService {
     progress: BackgroundGenProgress | null;
     startedAt: Date | null;
     completedAt: Date | null;
+    eligibleSections: string[];
+    skippedSections: Pass1SkippedSection[];
+    paperTypeCode: string;
   }> {
-    const session = await prisma.draftingSession.findUnique({
-      where: { id: sessionId },
-      select: { bgGenStatus: true, bgGenStartedAt: true, bgGenCompletedAt: true, bgGenProgress: true }
-    });
+    const [session, eligibility] = await Promise.all([
+      prisma.draftingSession.findUnique({
+        where: { id: sessionId },
+        select: { bgGenStatus: true, bgGenStartedAt: true, bgGenCompletedAt: true, bgGenProgress: true }
+      }),
+      this.getPass1SectionEligibility(sessionId),
+    ]);
     return {
       status: session?.bgGenStatus || 'IDLE',
       progress: (session?.bgGenProgress as unknown as BackgroundGenProgress) || null,
       startedAt: session?.bgGenStartedAt || null,
       completedAt: session?.bgGenCompletedAt || null,
+      eligibleSections: eligibility.eligibleSections,
+      skippedSections: eligibility.skippedSections,
+      paperTypeCode: eligibility.paperTypeCode,
     };
   }
 

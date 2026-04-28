@@ -43,7 +43,7 @@ function parseSectionKeys(value: unknown): string[] {
   const normalized = value
     .map((entry) => normalizeSectionKey(String(entry || '').trim()))
     .filter(Boolean);
-  return Array.from(new Set(normalized)).filter((sectionKey) => !isPass1ExcludedSection(sectionKey));
+  return Array.from(new Set(normalized));
 }
 
 function supportsPass1FigureInjection(sectionKey: string): boolean {
@@ -199,20 +199,35 @@ export async function POST(
     const selectedSectionKeys = parseSectionKeys(requestBody?.sectionKeys);
     const figureSelections = parseFigureSelections(requestBody?.figureSelections);
     const requestHeaders = Object.fromEntries(request.headers.entries());
+    const eligibility = await paperSectionService.getPass1SectionEligibility(sessionId);
+    const eligibleSectionSet = new Set(eligibility.eligibleSections);
 
     let sectionKeys: string[] | undefined;
     if (Array.isArray(requestBody?.sectionKeys) && selectedSectionKeys.length === 0) {
       return NextResponse.json(
         {
           success: false,
-          error: 'No eligible sections selected for Pass 1. References are excluded from Pass 1.'
+          error: 'No sections selected for Generate Draft.',
+          eligibleSections: eligibility.eligibleSections,
+          skippedSections: eligibility.skippedSections,
         },
         { status: 400 }
       );
     }
 
     if (selectedSectionKeys.length > 0) {
-      sectionKeys = selectedSectionKeys;
+      sectionKeys = selectedSectionKeys.filter((sectionKey) => eligibleSectionSet.has(sectionKey));
+      if (sectionKeys.length === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'No selected sections are eligible for Generate Draft.',
+            eligibleSections: eligibility.eligibleSections,
+            skippedSections: eligibility.skippedSections,
+          },
+          { status: 400 }
+        );
+      }
     } else if (retryFailedOnly) {
       const bgStatus = await paperSectionService.getBackgroundGenStatus(sessionId);
       const sectionStateMap = bgStatus.progress?.sections || {};
@@ -221,7 +236,7 @@ export async function POST(
         .map(([sectionKey]) => sectionKey)
         .filter(Boolean)
         .map((sectionKey) => normalizeSectionKey(sectionKey))
-        .filter((sectionKey) => !isPass1ExcludedSection(sectionKey));
+        .filter((sectionKey) => eligibleSectionSet.has(sectionKey));
 
       if (!sectionKeys.length) {
         return NextResponse.json(
@@ -229,10 +244,24 @@ export async function POST(
             success: false,
             error: 'No failed sections found to retry',
             retryFailedOnly: true,
+            eligibleSections: eligibility.eligibleSections,
+            skippedSections: eligibility.skippedSections,
           },
           { status: 400 }
         );
       }
+    }
+
+    if (!sectionKeys && eligibility.eligibleSections.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'No sections in this workspace are eligible for Generate Draft.',
+          eligibleSections: eligibility.eligibleSections,
+          skippedSections: eligibility.skippedSections,
+        },
+        { status: 400 }
+      );
     }
 
     // Prevent duplicate runs
@@ -257,10 +286,7 @@ export async function POST(
     });
 
     const allEligibleSectionCount = sectionKeys?.length
-      || (await paperSectionService.getSectionGenerationOrder(sessionId))
-        .map((key) => normalizeSectionKey(key))
-        .filter((key, index, list) => key && !isPass1ExcludedSection(key) && list.indexOf(key) === index)
-        .length;
+      || eligibility.eligibleSections.length;
 
     return NextResponse.json({
       success: true,
@@ -276,6 +302,9 @@ export async function POST(
       retryFailedOnly,
       targetedSections: sectionKeys || null,
       totalSectionsPlanned: allEligibleSectionCount,
+      eligibleSections: eligibility.eligibleSections,
+      skippedSections: eligibility.skippedSections,
+      paperTypeCode: eligibility.paperTypeCode,
     });
   } catch (err) {
     console.error('[Prepare] POST error:', err);

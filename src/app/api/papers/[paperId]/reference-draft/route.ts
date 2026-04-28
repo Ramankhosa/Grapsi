@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
+import { paperSectionService } from '@/lib/services/paper-section-service';
 
 export const runtime = 'nodejs';
 
@@ -26,36 +27,6 @@ function formatSectionLabel(sectionKey: string): string {
 function computeWordCount(content: string): number {
   const cleaned = String(content || '').replace(/\s+/g, ' ').trim();
   return cleaned ? cleaned.split(' ').length : 0;
-}
-
-function parseSectionOrder(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((entry) => String(entry || '').trim()).filter(Boolean);
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return [];
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.map((entry) => String(entry || '').trim()).filter(Boolean);
-    } catch {
-      return [];
-    }
-  }
-
-  return [];
-}
-
-function parseBlueprintOrder(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => {
-      if (!entry || typeof entry !== 'object') return '';
-      return String((entry as Record<string, unknown>).sectionKey || '').trim();
-    })
-    .filter(Boolean);
 }
 
 type Pass1Artifact = {
@@ -122,8 +93,6 @@ async function getSessionForUser(sessionId: string, user: SessionUser) {
     select: {
       id: true,
       bgGenStatus: true,
-      paperType: { select: { sectionOrder: true } },
-      paperBlueprint: { select: { sectionPlan: true } }
     }
   });
 }
@@ -146,6 +115,7 @@ export async function GET(
     if (!session) {
       return NextResponse.json({ error: 'Paper session not found' }, { status: 404 });
     }
+    const eligibility = await paperSectionService.getPass1SectionEligibility(sessionId);
 
     const dbSections = await prisma.paperSection.findMany({
       where: { sessionId },
@@ -173,9 +143,7 @@ export async function GET(
       orderedKeys.push(normalized);
     };
 
-    parseBlueprintOrder(session.paperBlueprint?.sectionPlan).forEach(addKey);
-    parseSectionOrder(session.paperType?.sectionOrder).forEach(addKey);
-    dbSections.forEach((section) => addKey(section.sectionKey));
+    eligibility.eligibleSections.forEach(addKey);
 
     const sections = orderedKeys.map((sectionKey) => {
       const record = byKey.get(sectionKey);
@@ -213,6 +181,9 @@ export async function GET(
       success: true,
       bgGenStatus: session.bgGenStatus || 'IDLE',
       sections,
+      eligibleSections: eligibility.eligibleSections,
+      skippedSections: eligibility.skippedSections,
+      paperTypeCode: eligibility.paperTypeCode,
       summary: {
         totalSections: sections.length,
         withPass1Content: withContentCount,

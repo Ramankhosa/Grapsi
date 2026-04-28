@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import { buildGrantPrepStageMapping } from '@/lib/grantPrep/templateMapper'
 import { buildGrantPrepSelectorResult } from '@/lib/grantPrep/selection'
-import { resolveGrantBackedDraftingMode } from '@/lib/grants/paperSectionConfig'
+import {
+  isGrantBackedPass1EligibleSection,
+  resolveGrantBackedDraftingMode,
+  resolveGrantBackedPass1Eligibility,
+} from '@/lib/grants/paperSectionConfig'
+import { resolvePaperSectionGenerationPaperTypeCode } from '@/lib/services/paper-section-service'
 import {
   MAX_TRUSTED_TEMPLATE_INTENT_ALTERNATES,
   shouldTrustTemplateIntent,
@@ -218,6 +223,7 @@ describe('grant workflow mode extraction and runtime', () => {
   it('routes dense narrative grant sections to two_pass and compact team sections to one_pass', () => {
     expect(resolveGrantBackedDraftingMode({
       sectionKey: 'methodology',
+      workflowMode: 'app_draft',
       mustCover: ['Execution model', 'Validation plan', 'Risk controls'],
       sectionType: 'narrative',
       grantSemantic: 'methodology',
@@ -229,6 +235,7 @@ describe('grant workflow mode extraction and runtime', () => {
 
     expect(resolveGrantBackedDraftingMode({
       sectionKey: 'team_plan',
+      workflowMode: 'team_manual',
       mustCover: ['Key personnel'],
       sectionType: 'short_answer',
       grantSemantic: null,
@@ -237,6 +244,115 @@ describe('grant workflow mode extraction and runtime', () => {
       suggestedCitationCount: 0,
       authoritativePrepPointCount: 1,
     })).toBe('one_pass')
+  })
+
+  it('limits grant Pass 1 eligibility to two-pass app-draft sections', () => {
+    const paperTypeCode = 'GRANT_TEMPLATE::rev1'
+    const sectionPlan = [
+      {
+        sectionKey: 'problem_need',
+        displayLabel: 'Problem Need',
+        workflowMode: 'app_draft',
+        sectionType: 'narrative',
+        grantSemantic: 'problem_need',
+        templateIntent: 'problem_need',
+        wordBudget: 800,
+        mustCover: ['Need', 'Gap', 'Evidence base'],
+        suggestedCitationCount: 4,
+      },
+      {
+        sectionKey: 'objectives',
+        displayLabel: 'Objectives',
+        workflowMode: 'app_draft',
+        sectionType: 'short_answer',
+        grantSemantic: 'objectives',
+        templateIntent: 'objectives',
+        wordBudget: 250,
+        mustCover: ['Objective 1', 'Objective 2'],
+      },
+      {
+        sectionKey: 'summary',
+        displayLabel: 'Summary',
+        workflowMode: 'app_draft',
+        sectionType: 'narrative',
+        grantSemantic: 'summary',
+        templateIntent: 'summary',
+        wordBudget: 700,
+        mustCover: ['Problem', 'Approach', 'Outcome'],
+      },
+      {
+        sectionKey: 'team_plan',
+        displayLabel: 'Team Plan',
+        workflowMode: 'team_manual',
+        sectionType: 'narrative',
+        grantSemantic: 'methodology',
+        templateIntent: 'team',
+        wordBudget: 800,
+        mustCover: ['PI', 'Collaborators', 'Governance'],
+      },
+      {
+        sectionKey: 'references',
+        displayLabel: 'References',
+        workflowMode: 'app_draft',
+        sectionType: 'narrative',
+        grantSemantic: 'methodology',
+        templateIntent: 'methodology',
+        wordBudget: 800,
+        mustCover: ['References'],
+      },
+      {
+        sectionKey: 'budget_justification',
+        displayLabel: 'Budget Justification',
+        workflowMode: 'app_support',
+        sectionType: 'narrative',
+        grantSemantic: 'methodology',
+        templateIntent: 'budget',
+        wordBudget: 800,
+        mustCover: ['Cost categories', 'Justification', 'Timeline'],
+      },
+    ]
+
+    expect(isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, 'problem_need')).toBe(true)
+    expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'problem_need')).toMatchObject({
+      eligible: true,
+      mode: 'two_pass',
+    })
+
+    expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'objectives')).toMatchObject({
+      eligible: false,
+      mode: 'one_pass',
+      reason: 'short_answer sections stay one-pass.',
+    })
+    expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'summary')).toMatchObject({
+      eligible: false,
+      mode: 'one_pass',
+      reason: 'summary sections stay one-pass.',
+    })
+    expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'team_plan')).toMatchObject({
+      eligible: false,
+      mode: 'one_pass',
+    })
+    expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'references')).toMatchObject({
+      eligible: false,
+      mode: 'one_pass',
+      reason: 'reference-style sections bypass Generate Draft.',
+    })
+    expect(resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, 'budget_justification')).toMatchObject({
+      eligible: false,
+      mode: 'one_pass',
+    })
+  })
+
+  it('resolves grant shadow session paper type from paperBlueprint before journal fallback', () => {
+    expect(resolvePaperSectionGenerationPaperTypeCode({
+      paperType: null,
+      paperBlueprint: { paperTypeCode: 'GRANT_TEMPLATE::abc' },
+    })).toBe('GRANT_TEMPLATE::abc')
+
+    expect(resolvePaperSectionGenerationPaperTypeCode({
+      paperType: { code: 'JOURNAL_ARTICLE' },
+      paperBlueprint: { paperTypeCode: 'GRANT_TEMPLATE::abc' },
+    })).toBe('JOURNAL_ARTICLE')
   })
 
   it('filters team-owned response items out of grant prep mapping while keeping budget guidance', () => {

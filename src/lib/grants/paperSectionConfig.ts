@@ -6,9 +6,14 @@ import {
 import {
   buildGrantDraftingStrategyInput,
   resolveGrantDraftingStrategy,
+  type GrantDraftingStrategyResolution,
 } from '@/lib/grants/draftingStrategy'
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import type { GrantSectionSemantic, GrantTemplateIntent } from '@/types/grant'
+import {
+  isGrantSectionAutoDraftable,
+  normalizeGrantWorkflowMode,
+} from '@/lib/grants/workflowMode'
+import type { GrantSectionSemantic, GrantTemplateIntent, GrantWorkflowMode } from '@/types/grant'
 
 export type GrantBackedSectionType =
   | 'narrative'
@@ -27,6 +32,7 @@ export interface GrantBackedPaperSectionPlanItem {
   wordBudget?: number | null
   characterLimit?: number | null
   sectionType?: GrantBackedSectionType | null
+  workflowMode?: GrantWorkflowMode | string | null
   reviewerIntent?: string | null
   grantSemantic?: GrantSectionSemantic | string | null
   templateIntent?: GrantTemplateIntent | string | null
@@ -89,6 +95,7 @@ export function normalizeGrantBackedSectionPlanItem(
     sectionType: String(record.sectionType || '').trim()
       ? (String(record.sectionType || '').trim() as GrantBackedSectionType)
       : null,
+    workflowMode: normalizeGrantWorkflowMode(record.workflowMode, 'app_draft'),
     reviewerIntent: String(record.reviewerIntent || '').trim() || null,
     grantSemantic: String(record.grantSemantic || '').trim() || null,
     templateIntent: String(record.templateIntent || '').trim() || null,
@@ -126,8 +133,31 @@ export function getGrantBackedSectionPlanEntry(
 export function resolveGrantBackedDraftingMode(
   section: GrantBackedPaperSectionPlanItem | null | undefined
 ): GrantBackedDraftingMode {
-  if (!section) return 'two_pass'
-  if (!isFeatureEnabled('ENABLE_TWO_PASS_GENERATION')) return 'one_pass'
+  return resolveGrantBackedDraftingStrategy(section).mode
+}
+
+export function resolveGrantBackedDraftingStrategy(
+  section: GrantBackedPaperSectionPlanItem | null | undefined
+): GrantDraftingStrategyResolution {
+  if (!section) {
+    return { mode: 'one_pass', reason: 'section is not present in the grant-backed section plan.' }
+  }
+
+  if (isGrantBackedPass1BypassedSection(section.sectionKey)) {
+    return { mode: 'one_pass', reason: 'reference-style sections bypass Generate Draft.' }
+  }
+
+  if (!isGrantSectionAutoDraftable({
+    sectionType: section.sectionType || '',
+    workflowMode: section.workflowMode || 'app_draft',
+  })) {
+    return { mode: 'one_pass', reason: 'section is not an app-draft narrative or short-answer section.' }
+  }
+
+  if (!isFeatureEnabled('ENABLE_TWO_PASS_GENERATION')) {
+    return { mode: 'one_pass', reason: 'two-pass generation is disabled.' }
+  }
+
   return resolveGrantDraftingStrategy(buildGrantDraftingStrategyInput({
     sectionKey: section.sectionKey,
     sectionType: section.sectionType,
@@ -138,7 +168,7 @@ export function resolveGrantBackedDraftingMode(
     mustCover: section.mustCover,
     authoritativePrepPointCount: section.authoritativePrepPointCount,
     suggestedCitationCount: section.suggestedCitationCount,
-  })).mode
+  }))
 }
 
 export function buildGrantBackedSectionConfigs(
@@ -187,11 +217,53 @@ export function isGrantBackedPass1BypassedSection(sectionKey: string): boolean {
   return GRANT_PASS1_BYPASS_SECTION_KEYS.has(normalizeGrantBackedSectionKey(sectionKey))
 }
 
+export function resolveGrantBackedPass1Eligibility(
+  paperTypeCode: unknown,
+  sectionPlan: unknown,
+  sectionKey: string
+): {
+  sectionKey: string
+  displayLabel: string
+  eligible: boolean
+  mode: GrantBackedDraftingMode
+  reason: string
+} {
+  const normalizedKey = normalizeGrantBackedSectionKey(sectionKey)
+
+  if (!isGrantBackedPaperTypeCode(paperTypeCode)) {
+    return {
+      sectionKey: normalizedKey,
+      displayLabel: formatGrantBackedSectionLabel(normalizedKey),
+      eligible: false,
+      mode: 'one_pass',
+      reason: 'not a grant-backed paper type.',
+    }
+  }
+
+  const section = getGrantBackedSectionPlanEntry(paperTypeCode, sectionPlan, normalizedKey)
+  const strategy = resolveGrantBackedDraftingStrategy(section)
+
+  return {
+    sectionKey: normalizedKey,
+    displayLabel: section?.displayLabel || formatGrantBackedSectionLabel(normalizedKey),
+    eligible: strategy.mode === 'two_pass',
+    mode: strategy.mode,
+    reason: strategy.reason,
+  }
+}
+
+export function isGrantBackedPass1EligibleSection(
+  paperTypeCode: unknown,
+  sectionPlan: unknown,
+  sectionKey: string
+): boolean {
+  return resolveGrantBackedPass1Eligibility(paperTypeCode, sectionPlan, sectionKey).eligible
+}
+
 export function supportsGrantBackedDimensionFlow(
   paperTypeCode: unknown,
   sectionPlan: unknown,
   sectionKey: string
 ): boolean {
-  return !isGrantBackedPass1BypassedSection(sectionKey)
-    && !isGrantBackedSinglePassSection(paperTypeCode, sectionPlan, sectionKey)
+  return isGrantBackedPass1EligibleSection(paperTypeCode, sectionPlan, sectionKey)
 }

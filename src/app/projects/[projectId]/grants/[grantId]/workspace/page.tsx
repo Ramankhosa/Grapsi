@@ -145,6 +145,7 @@ export default function GrantWorkspacePage() {
   const [hasHydratedStage, setHasHydratedStage] = useState(false)
   const [stageWarning, setStageWarning] = useState<string | null>(null)
   const [selectedSection, setSelectedSection] = useState<string>('')
+  const [sectionFilter, setSectionFilter] = useState<'all' | 'app_draft' | 'team_draft' | 'evidence'>('all')
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [launchingBlueprint, setLaunchingBlueprint] = useState(false)
   const autoLaunchAttemptedRef = useRef(false)
@@ -268,6 +269,8 @@ export default function GrantWorkspacePage() {
         : 'Edited directly in the grant workspace',
       required: true,
       status: getDraftingStatus(section),
+      workflowMode: section.workflowMode,
+      sectionType: section.sectionType,
     }))
   }, [workspace?.blueprint?.sectionDrafts])
 
@@ -527,6 +530,8 @@ export default function GrantWorkspacePage() {
         onNavigateToStage={handleNavigateToStage}
         selectedSection={selectedSection}
         onSectionSelect={setSelectedSection}
+        sectionFilter={sectionFilter}
+        onSectionFilterChange={setSectionFilter}
         collapsed={navCollapsed}
         onCollapsedChange={setNavCollapsed}
         allowCollapse={true}
@@ -678,6 +683,8 @@ export default function GrantWorkspacePage() {
                 onSectionSelect={setSelectedSection}
                 onSessionUpdated={setShadowSession}
                 onSectionsUpdated={handleGrantSectionsUpdated}
+                sectionFilter={sectionFilter}
+                onSectionFilterChange={setSectionFilter}
               />
             ) : null}
           </div>
