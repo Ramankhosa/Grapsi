@@ -5,6 +5,31 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 
+function readEnvFile(envPath) {
+  const buffer = fs.readFileSync(envPath);
+
+  if (buffer.length >= 2) {
+    const bom0 = buffer[0];
+    const bom1 = buffer[1];
+
+    if (bom0 === 0xff && bom1 === 0xfe) {
+      return buffer.toString('utf16le');
+    }
+
+    if (bom0 === 0xfe && bom1 === 0xff) {
+      const swapped = Buffer.from(buffer);
+      for (let index = 0; index + 1 < swapped.length; index += 2) {
+        const first = swapped[index];
+        swapped[index] = swapped[index + 1];
+        swapped[index + 1] = first;
+      }
+      return swapped.toString('utf16le');
+    }
+  }
+
+  return buffer.toString('utf8');
+}
+
 function loadDatabaseUrlFromRepoEnv() {
   for (const filename of ['.env', '.env.local']) {
     const envPath = path.join(process.cwd(), filename);
@@ -12,7 +37,7 @@ function loadDatabaseUrlFromRepoEnv() {
       continue;
     }
 
-    const parsed = dotenv.parse(fs.readFileSync(envPath));
+    const parsed = dotenv.parse(readEnvFile(envPath));
     if (parsed.DATABASE_URL) {
       process.env.DATABASE_URL = parsed.DATABASE_URL;
     }

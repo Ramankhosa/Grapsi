@@ -7,7 +7,7 @@
  *
  * Seeds the database with:
  * 1. All available LLM models (Google, OpenAI, Anthropic, DeepSeek, Groq, Zhipu, Qwen)
- * 2. All workflow stages (Patent Drafting, Novelty Search, etc.)
+ * 2. The active grant-focused workflow stages used by the current pipeline
  * 3. PRODUCTION TOKEN LIMITS for all plans (same limits, different models per tier)
  *
  * PRODUCTION TOKEN LIMITS are standardized across all plans from Enterprise config.
@@ -22,12 +22,12 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('🚀 Seeding LLM Models and Workflow Stages (PRODUCTION CONFIG)...\n');
+  console.log('[seed] Seeding LLM models and workflow stages...\n');
 
   // ============================================================================
   // STEP 1: Seed all available LLM models
   // ============================================================================
-  console.log('📦 Step 1: Seeding LLM Models Registry...\n');
+  console.log('[seed] Step 1: Seeding LLM model registry...\n');
 
   const models = [
     // === GOOGLE MODELS ===
@@ -686,12 +686,12 @@ async function main() {
         update: model,
         create: model
       });
-      console.log(`  ✅ ${model.displayName} (${model.provider})`);
+      console.log(`  - ${model.displayName} (${model.provider})`);
     }
   } catch (error) {
     if (error.code === 'P2021' || error.message.includes('does not exist')) {
-      console.log('  ⚠️  LLMModel table does not exist yet. Skipping LLM models seeding.');
-      console.log('  💡 Run migrations first: npx prisma migrate deploy');
+      console.log('  [warn] LLMModel table does not exist yet. Skipping LLM model seeding.');
+      console.log('  [hint] Run migrations first: npx prisma migrate deploy');
       await prisma.$disconnect();
       return;
     }
@@ -701,80 +701,276 @@ async function main() {
   // ============================================================================
   // STEP 2: Seed workflow stages
   // ============================================================================
-  console.log('\n📋 Step 2: Seeding Workflow Stages...\n');
+  console.log('\n[seed] Step 2: Seeding workflow stages...\n');
 
-  const stages = [
-    // === PATENT DRAFTING STAGES (LLM-Powered) ===
-    { code: 'DRAFT_IDEA_ENTRY', displayName: 'Idea Entry & Normalization', featureCode: 'PATENT_DRAFTING', sortOrder: 1, description: 'Initial idea input and AI-based normalization' },
-    { code: 'DRAFT_CLAIM_GENERATION', displayName: 'Initial Claims Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 2, description: 'Generate initial patent claims from idea' },
-    { code: 'DRAFT_PRIOR_ART_ANALYSIS', displayName: 'Prior Art Analysis', featureCode: 'PATENT_DRAFTING', sortOrder: 3, description: 'Analyze prior art relevance' },
-    { code: 'DRAFT_CLAIM_REFINEMENT', displayName: 'Claim Refinement', featureCode: 'PATENT_DRAFTING', sortOrder: 4, description: 'Refine claims based on prior art' },
-    { code: 'DRAFT_FIGURE_PLANNER', displayName: 'Figure Planning', featureCode: 'PATENT_DRAFTING', sortOrder: 5, description: 'AI-powered figure planning and diagram suggestions' },
-    { code: 'DRAFT_SKETCH_GENERATION', displayName: 'Sketch Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 6, description: 'Generate patent sketches using Gemini 3 Pro Image Preview' },
-    { code: 'DRAFT_DIAGRAM_GENERATION', displayName: 'Diagram Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 7, description: 'Generate PlantUML/technical diagrams' },
+  const stageSeeds = [
+    {
+      code: 'PAPER_BLUEPRINT_GEN',
+      displayName: 'Grant Blueprint Planning',
+      featureCode: 'GRANT_PREP',
+      sortOrder: 1,
+      description: 'Build the working grant blueprint, scope, contribution path, and must-cover dimensions from the active context.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'GRANT_BLUEPRINT_GEN',
+      displayName: 'Grant Blueprint Dimensions',
+      featureCode: 'GRANT_PREP',
+      sortOrder: 2,
+      description: 'Generate grant-specific blueprint dimensions, section framing, and evaluation anchors from prep context.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'RESEARCH_INTENT_LOCK',
+      displayName: 'Research Intent Lock',
+      featureCode: 'GRANT_PREP',
+      sortOrder: 3,
+      description: 'Lock the core grant intent, scope boundaries, and decision-critical assumptions before drafting.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5' }
+    },
+    {
+      code: 'ARGUMENT_PLAN',
+      displayName: 'Argument Plan',
+      featureCode: 'GRANT_PREP',
+      sortOrder: 4,
+      description: 'Plan the argument sequence, evidence posture, and persuasive structure for the grant narrative.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'PAPER_ARCHETYPE_DETECTION',
+      displayName: 'Evidence Archetype Detection',
+      featureCode: 'GRANT_PREP',
+      sortOrder: 5,
+      description: 'Classify evidence and reference material into archetypes for downstream extraction and mapping.',
+      tokenLimits: { maxTokensIn: 24000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash-lite', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
 
-    // === ANNEXURE/SECTION DRAFTING STAGES ===
-    { code: 'DRAFT_ANNEXURE_TITLE', displayName: 'Title Drafting', featureCode: 'PATENT_DRAFTING', sortOrder: 8, description: 'Draft patent title (superset: title)' },
-    { code: 'DRAFT_ANNEXURE_PREAMBLE', displayName: 'Preamble Drafting', featureCode: 'PATENT_DRAFTING', sortOrder: 9, description: 'Draft legal preamble (superset: preamble)' },
-    { code: 'DRAFT_ANNEXURE_FIELD', displayName: 'Field of Invention', featureCode: 'PATENT_DRAFTING', sortOrder: 10, description: 'Draft field of invention section (superset: fieldOfInvention)' },
-    { code: 'DRAFT_ANNEXURE_BACKGROUND', displayName: 'Background Drafting', featureCode: 'PATENT_DRAFTING', sortOrder: 11, description: 'Draft background section (superset: background)' },
-    { code: 'DRAFT_ANNEXURE_OBJECTS', displayName: 'Objects of Invention', featureCode: 'PATENT_DRAFTING', sortOrder: 12, description: 'Draft objects of invention (superset: objectsOfInvention)' },
-    { code: 'DRAFT_ANNEXURE_SUMMARY', displayName: 'Summary Drafting', featureCode: 'PATENT_DRAFTING', sortOrder: 13, description: 'Draft invention summary (superset: summary)' },
-    { code: 'DRAFT_ANNEXURE_TECHNICAL_PROBLEM', displayName: 'Technical Problem', featureCode: 'PATENT_DRAFTING', sortOrder: 14, description: 'Draft technical problem statement (superset: technicalProblem)' },
-    { code: 'DRAFT_ANNEXURE_TECHNICAL_SOLUTION', displayName: 'Technical Solution', featureCode: 'PATENT_DRAFTING', sortOrder: 15, description: 'Draft technical solution (superset: technicalSolution)' },
-    { code: 'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS', displayName: 'Advantageous Effects', featureCode: 'PATENT_DRAFTING', sortOrder: 16, description: 'Draft advantageous effects (superset: advantageousEffects)' },
-    { code: 'DRAFT_ANNEXURE_DRAWINGS', displayName: 'Brief Description of Drawings', featureCode: 'PATENT_DRAFTING', sortOrder: 17, description: 'Draft brief description of drawings (superset: briefDescriptionOfDrawings)' },
-    { code: 'DRAFT_REFERENCE_DRAFT_PASS1', displayName: 'Reference Draft Pass 1', featureCode: 'PATENT_DRAFTING', sortOrder: 18, description: 'Generate country-neutral reference draft before jurisdiction adaptation' },
-    { code: 'DRAFT_ANNEXURE_DESCRIPTION', displayName: 'Reference Draft Pass 2 / Detailed Description', featureCode: 'PATENT_DRAFTING', sortOrder: 19, description: 'Apply jurisdiction-specific top-up/translation and support detailed description generation' },
-    { code: 'DRAFT_ANNEXURE_BEST_MODE', displayName: 'Best Mode', featureCode: 'PATENT_DRAFTING', sortOrder: 20, description: 'Draft best mode description (superset: bestMethod)' },
-    { code: 'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY', displayName: 'Industrial Applicability', featureCode: 'PATENT_DRAFTING', sortOrder: 21, description: 'Draft industrial applicability (superset: industrialApplicability)' },
-    { code: 'DRAFT_ANNEXURE_CLAIMS', displayName: 'Claims Drafting', featureCode: 'PATENT_DRAFTING', sortOrder: 22, description: 'Draft final patent claims (superset: claims)' },
-    { code: 'DRAFT_ANNEXURE_ABSTRACT', displayName: 'Abstract Drafting', featureCode: 'PATENT_DRAFTING', sortOrder: 23, description: 'Draft patent abstract (superset: abstract)' },
-    { code: 'DRAFT_ANNEXURE_NUMERALS', displayName: 'List of Reference Numerals', featureCode: 'PATENT_DRAFTING', sortOrder: 24, description: 'Draft list of reference numerals (superset: listOfNumerals)' },
-    { code: 'DRAFT_ANNEXURE_CROSS_REFERENCE', displayName: 'Cross-Reference to Related Applications', featureCode: 'PATENT_DRAFTING', sortOrder: 25, description: 'Draft cross-reference section (superset: crossReference)' },
-    { code: 'DRAFT_REVIEW', displayName: 'AI Review & Fix', featureCode: 'PATENT_DRAFTING', sortOrder: 26, description: 'AI-powered patent review' },
+    {
+      code: 'LITERATURE_SEARCH',
+      displayName: 'Literature Search Assist',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 1,
+      description: 'Support literature review retrieval planning, search framing, and source-targeting prompts.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'SEARCH_STRATEGY_PLANNING',
+      displayName: 'Search Strategy Planning',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 2,
+      description: 'Turn the research problem and grant blueprint into a structured literature search strategy.',
+      tokenLimits: { maxTokensIn: 40000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'SEARCH_QUERY_GENERATION',
+      displayName: 'Search Query Generation',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 3,
+      description: 'Generate database-ready query sets, synonyms, filters, and retrieval variants for literature search.',
+      tokenLimits: { maxTokensIn: 24000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'PAPER_LITERATURE_SUMMARIZE',
+      displayName: 'Literature Evidence Extraction',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 4,
+      description: 'Extract structured evidence, claims, metrics, and limitations from full-text literature for grant use.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'PAPER_LITERATURE_GAP',
+      displayName: 'Literature Gap Analysis',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 5,
+      description: 'Identify evidence gaps, unresolved questions, and positioning opportunities from the literature base.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'LITERATURE_RELEVANCE',
+      displayName: 'Literature Relevance Scoring',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 6,
+      description: 'Rank and filter candidate papers against the active grant topic, blueprint, and search intent.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash-lite', PRO_PLAN: 'gpt-4o-mini', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'CITATION_BLUEPRINT_MAPPING',
+      displayName: 'Citation-to-Blueprint Mapping',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 7,
+      description: 'Map extracted evidence and citations onto blueprint dimensions, sections, and grant-use cases.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'PAPER_REVIEW_COHERENCE',
+      displayName: 'Evidence Coherence Mapping',
+      featureCode: 'SEARCH_STRATEGY',
+      sortOrder: 8,
+      description: 'Check coherence between extracted evidence, mapped citations, and the grant blueprint dimension structure.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
 
-    // === NOVELTY SEARCH STAGES ===
-    { code: 'NOVELTY_QUERY_GENERATION', displayName: 'Query Generation', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 1, description: 'Generate search queries from idea' },
-    { code: 'NOVELTY_PATENT_SEARCH', displayName: 'Patent Search', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 2, description: 'Search patent databases' },
-    { code: 'NOVELTY_RELEVANCE_SCORING', displayName: 'Relevance Scoring', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 3, description: 'Score patent relevance' },
-    { code: 'NOVELTY_FEATURE_ANALYSIS', displayName: 'Feature Analysis', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 4, description: 'Analyze feature overlap' },
-    { code: 'NOVELTY_COMPARISON', displayName: 'Detailed Comparison', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 5, description: 'Compare with prior art' },
-    { code: 'NOVELTY_REPORT_GENERATION', displayName: 'Report Generation', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 6, description: 'Generate novelty report' },
-
-    // === IDEA BANK STAGES ===
-    { code: 'IDEA_BANK_GENERATION', displayName: 'Idea Generation', featureCode: 'IDEA_BANK', sortOrder: 1, description: 'Generate white-space patent ideas from prior art analysis' },
-    { code: 'IDEA_BANK_NORMALIZE', displayName: 'Idea Normalization', featureCode: 'IDEA_BANK', sortOrder: 2, description: 'Normalize and structure idea' },
-    { code: 'IDEA_BANK_SEARCH', displayName: 'Similar Ideas Search', featureCode: 'IDEA_BANK', sortOrder: 3, description: 'Search for similar ideas' },
-
-    // === DIAGRAM GENERATION STAGES ===
-    { code: 'DIAGRAM_PLANTUML', displayName: 'PlantUML Generation', featureCode: 'DIAGRAM_GENERATION', sortOrder: 1, description: 'Generate PlantUML code' },
-    { code: 'DIAGRAM_FLOWCHART', displayName: 'Flowchart Generation', featureCode: 'DIAGRAM_GENERATION', sortOrder: 2, description: 'Generate flowcharts' },
-    { code: 'DIAGRAM_SEQUENCE', displayName: 'Sequence Diagram', featureCode: 'DIAGRAM_GENERATION', sortOrder: 3, description: 'Generate sequence diagrams' },
-    { code: 'DIAGRAM_BLOCK', displayName: 'Block Diagram', featureCode: 'DIAGRAM_GENERATION', sortOrder: 4, description: 'Generate block diagrams' },
-
-    // === PAPER WRITING ASSISTANT STAGES ===
-    { code: 'PAPER_CREATE_SECTIONS', displayName: 'Create Sections from Selected Text', featureCode: 'PAPER_DRAFTING', sortOrder: 1, description: 'Reorganize selected plain text into headed sections with coherent body paragraphs' },
-    { code: 'PAPER_FIGURE_SUGGESTION', displayName: 'Figure Suggestions', featureCode: 'PAPER_DRAFTING', sortOrder: 2, description: 'Suggest publication-quality figures aligned to section rhetoric and available evidence' },
-    { code: 'PAPER_CHART_GENERATOR', displayName: 'Chart Generator', featureCode: 'PAPER_DRAFTING', sortOrder: 3, description: 'Generate chart configurations for paper figures' },
-    { code: 'PAPER_DIAGRAM_GENERATOR', displayName: 'Diagram Generator', featureCode: 'PAPER_DRAFTING', sortOrder: 4, description: 'Generate Mermaid/PlantUML diagrams for paper figures' },
-    { code: 'PAPER_DIAGRAM_FROM_TEXT', displayName: 'Diagram From Text', featureCode: 'PAPER_DRAFTING', sortOrder: 5, description: 'Create a diagram directly from selected paper text' },
-    { code: 'PAPER_SKETCH_GENERATION', displayName: 'Paper Sketch Generation', featureCode: 'PAPER_DRAFTING', sortOrder: 6, description: 'Generate scientific figure sketches/images' },
-    { code: 'PAPER_FIGURE_METADATA_INFER', displayName: 'Paper Figure Metadata Inference', featureCode: 'PAPER_DRAFTING', sortOrder: 7, description: 'Infer concise metadata from generated figure images using a low-cost vision model' },
-    { code: 'PAPER_MANUSCRIPT_REVIEW', displayName: 'Paper Manuscript Review', featureCode: 'PAPER_DRAFTING', sortOrder: 8, description: 'Run a structured manuscript audit across sections, evidence, citations, and figure references' },
-    { code: 'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY', displayName: 'Paper Review Context Summary', featureCode: 'PAPER_DRAFTING', sortOrder: 9, description: 'Extract compact structured summaries of neighboring sections for section-by-section review' },
-    { code: 'PAPER_MANUSCRIPT_IMPROVE', displayName: 'Paper Manuscript Improve', featureCode: 'PAPER_DRAFTING', sortOrder: 10, description: 'Apply approved review recommendations to improve the manuscript section by section' },
-    { code: 'PAPER_EXPORT_EXTRACTION', displayName: 'Paper Export Extraction', featureCode: 'PAPER_DRAFTING', sortOrder: 11, description: 'Extract adaptive export settings from DOCX, LaTeX, or pasted formatting guidelines' },
-
-    // === IDEATION ENGINE STAGES (Mind-Map Patent Ideation) ===
-    { code: 'IDEATION_NORMALIZE', displayName: 'Seed Normalization', featureCode: 'IDEATION', sortOrder: 1, description: 'Extracts structured information from the seed input (core entity, goal, constraints, unknowns, contradictions)' },
-    { code: 'IDEATION_CLASSIFY', displayName: 'Invention Classification', featureCode: 'IDEATION', sortOrder: 2, description: 'Classifies the invention into categories (Product/Method/System/etc.) with multi-label support' },
-    { code: 'IDEATION_CONTRADICTION_MAPPING', displayName: 'Contradiction Mapping (Stage 2.5)', featureCode: 'IDEATION', sortOrder: 3, description: 'Maps technical contradictions to TRIZ inventive principles and resolution strategies' },
-    { code: 'IDEATION_EXPAND', displayName: 'Dimension Expansion', featureCode: 'IDEATION', sortOrder: 4, description: 'Expands dimension nodes with specific options based on the invention context' },
-    { code: 'IDEATION_OBVIOUSNESS_FILTER', displayName: 'Obviousness Filter (Stage 3.5)', featureCode: 'IDEATION', sortOrder: 5, description: 'Scores selected dimensions for novelty before generation, suggests wildcards for obvious combinations' },
-    { code: 'IDEATION_GENERATE', displayName: 'Idea Frame Generation', featureCode: 'IDEATION', sortOrder: 6, description: 'Generates structured invention ideas (IdeaFrames) from selected components, dimensions, and operators with inventive logic' },
-    { code: 'IDEATION_NOVELTY', displayName: 'Novelty Assessment', featureCode: 'IDEATION', sortOrder: 7, description: 'Analyzes search results to assess novelty, provides mutation instructions for weak ideas' }
+    {
+      code: 'PAPER_CREATE_SECTIONS',
+      displayName: 'Grant Section Structuring',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 1,
+      description: 'Reorganize selected draft text into coherent grant sections and subsections.',
+      tokenLimits: { maxTokensIn: 24000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5' }
+    },
+    {
+      code: 'PAPER_SECTION_DRAFT',
+      displayName: 'Grant Writing Pass 1',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 2,
+      description: 'Generate the first evidence-grounded grant section draft from blueprint and literature context.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'PAPER_SECTION_GEN',
+      displayName: 'Grant Writing Pass 2',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 3,
+      description: 'Polish, tighten, and finalize grant section drafts while preserving blueprint and evidence fidelity.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'PAPER_SECTION_IMPROVE',
+      displayName: 'Grant Section Improvement',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 4,
+      description: 'Run targeted section-level improvement passes, including cleanup, citation repair, and coherence fixes.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'PAPER_MEMORY_EXTRACT',
+      displayName: 'Grant Draft Memory Extraction',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 5,
+      description: 'Extract compact structured draft memory for downstream grant-writing consistency across sections.',
+      tokenLimits: { maxTokensIn: 24000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-4o-mini', ENTERPRISE_PLAN: 'gpt-4o-mini' }
+    },
+    {
+      code: 'PAPER_TEXT_ACTION',
+      displayName: 'Grant Text Actions',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 6,
+      description: 'Apply focused edit actions such as rewrite, condense, expand, or formalize on selected grant text.',
+      tokenLimits: { maxTokensIn: 24000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'PAPER_FIGURE_SUGGESTION',
+      displayName: 'Figure Suggestions',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 7,
+      description: 'Suggest figures, charts, and diagrams that strengthen the grant story and evidence presentation.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'PAPER_CHART_GENERATOR',
+      displayName: 'Chart Generator',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 8,
+      description: 'Generate structured chart specifications for grant figures and quantitative summaries.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gpt-4o', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'PAPER_DIAGRAM_GENERATOR',
+      displayName: 'Diagram Generator',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 9,
+      description: 'Generate Mermaid or PlantUML diagrams that explain methods, workflows, or systems in the grant.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gpt-4o', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'PAPER_DIAGRAM_FROM_TEXT',
+      displayName: 'Diagram From Text',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 10,
+      description: 'Convert highlighted grant text directly into diagram specifications and visual structure.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gpt-4o', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+    },
+    {
+      code: 'PAPER_SKETCH_GENERATION',
+      displayName: 'Sketch Generation',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 11,
+      description: 'Generate concept sketches and visual figure drafts for grant diagrams and illustrations.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-3.1-flash-image', PRO_PLAN: 'gemini-3.1-flash-image', ENTERPRISE_PLAN: 'gemini-3.1-flash-image' }
+    },
+    {
+      code: 'PAPER_FIGURE_METADATA_INFER',
+      displayName: 'Figure Metadata Inference',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 12,
+      description: 'Infer concise figure metadata from generated visuals for captions and downstream drafting workflows.',
+      tokenLimits: { maxTokensIn: 16000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gpt-4o-mini', PRO_PLAN: 'gpt-4o-mini', ENTERPRISE_PLAN: 'gpt-4o-mini' }
+    },
+    {
+      code: 'PAPER_MANUSCRIPT_REVIEW',
+      displayName: 'Grant Draft Review',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 13,
+      description: 'Run a structured grant-draft review across sections, claims, evidence, and figure references.',
+      tokenLimits: { maxTokensIn: 96000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY',
+      displayName: 'Grant Review Context Summary',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 14,
+      description: 'Extract compact neighboring-section summaries so grant review can stay focused without losing context.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'PAPER_MANUSCRIPT_IMPROVE',
+      displayName: 'Grant Draft Improvement',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 15,
+      description: 'Apply accepted review fixes to improve the grant draft with high edit fidelity.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'PAPER_EXPORT_EXTRACTION',
+      displayName: 'Formatting Profile Extraction',
+      featureCode: 'GRANT_DRAFTING',
+      sortOrder: 16,
+      description: 'Extract structured formatting and submission-profile settings from templates, examples, or guidelines.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+    }
   ];
+
+  const stages = stageSeeds.map(({ tokenLimits, models, ...stage }) => stage);
+  const activeStageCodes = stages.map(stage => stage.code);
 
   try {
     for (const stage of stages) {
@@ -783,11 +979,39 @@ async function main() {
         update: stage,
         create: stage
       });
-      console.log(`  ✅ ${stage.displayName} (${stage.featureCode})`);
+      console.log(`  - ${stage.displayName} (${stage.featureCode})`);
+    }
+
+    const retiredStages = await prisma.workflowStage.findMany({
+      where: {
+        code: { notIn: activeStageCodes }
+      },
+      select: {
+        id: true,
+        code: true
+      }
+    });
+
+    if (retiredStages.length > 0) {
+      const retiredStageIds = retiredStages.map(stage => stage.id);
+      const deletedConfigs = await prisma.planStageModelConfig.deleteMany({
+        where: {
+          stageId: { in: retiredStageIds }
+        }
+      });
+      const retiredUpdate = await prisma.workflowStage.updateMany({
+        where: {
+          id: { in: retiredStageIds }
+        },
+        data: {
+          isActive: false
+        }
+      });
+      console.log(`  - Retired ${retiredUpdate.count} obsolete stages and removed ${deletedConfigs.count} stage-model configs`);
     }
   } catch (error) {
     if (error.code === 'P2021' || error.message.includes('does not exist')) {
-      console.log('  ⚠️  WorkflowStage table does not exist yet. Skipping stages seeding.');
+      console.log('  [warn] WorkflowStage table does not exist yet. Skipping stage seeding.');
       await prisma.$disconnect();
       return;
     }
@@ -797,13 +1021,13 @@ async function main() {
   // ============================================================================
   // STEP 3: Seed PRODUCTION TOKEN LIMITS for all plans
   // ============================================================================
-  console.log('\n⚙️ Step 3: Seeding Production Token Limits for All Plans...\n');
+  console.log('\n[seed] Step 3: Seeding plan stage-model defaults...\n');
 
   // Get all plans
   const plans = await prisma.plan.findMany();
 
   if (plans.length === 0) {
-    console.log('  ⚠️  No plans found. Run seed-production-plans.js first.');
+    console.log('  [warn] No plans found. Run seed-production-plans.js first.');
     await prisma.$disconnect();
     return;
   }
@@ -815,7 +1039,11 @@ async function main() {
 
   // Get stage IDs
   const stagesByCode = {};
-  const allStages = await prisma.workflowStage.findMany();
+  const allStages = await prisma.workflowStage.findMany({
+    where: {
+      code: { in: activeStageCodes }
+    }
+  });
   allStages.forEach(s => { stagesByCode[s.code] = s.id; });
 
   // ============================================================================
@@ -824,294 +1052,30 @@ async function main() {
   // ============================================================================
   const MIN_STAGE_MAX_TOKENS_IN = 12000;
   const MIN_STAGE_MAX_TOKENS_OUT = 8000;
-  const tokenLimits = {
-    // Core drafting stages - HIGH LIMITS for complex generation
-    'DRAFT_IDEA_ENTRY':                   { maxTokensIn: 20000,  maxTokensOut: 16000 },
-    'DRAFT_CLAIM_GENERATION':             { maxTokensIn: 30000,  maxTokensOut: 16000 },
-    'DRAFT_PRIOR_ART_ANALYSIS':           { maxTokensIn: 50000,  maxTokensOut: 16000 },
-    'DRAFT_CLAIM_REFINEMENT':             { maxTokensIn: 30000,  maxTokensOut: 16000 },
-    'DRAFT_FIGURE_PLANNER':               { maxTokensIn: 30000,  maxTokensOut: 16000 },
-    'DRAFT_SKETCH_GENERATION':            { maxTokensIn: 20000,  maxTokensOut: 8192 },
-    'DRAFT_DIAGRAM_GENERATION':           { maxTokensIn: 30000,  maxTokensOut: 16000 },
-    // Annexure/Section stages - GENEROUS LIMITS for patent sections
-    'DRAFT_ANNEXURE_TITLE':               { maxTokensIn: 20000,  maxTokensOut: 2000 },
-    'DRAFT_ANNEXURE_PREAMBLE':            { maxTokensIn: 20000,  maxTokensOut: 4000 },
-    'DRAFT_ANNEXURE_FIELD':               { maxTokensIn: 20000,  maxTokensOut: 4000 },
-    'DRAFT_ANNEXURE_BACKGROUND':          { maxTokensIn: 40000,  maxTokensOut: 16000 },
-    'DRAFT_ANNEXURE_OBJECTS':             { maxTokensIn: 20000,  maxTokensOut: 8000 },
-    'DRAFT_ANNEXURE_SUMMARY':             { maxTokensIn: 40000,  maxTokensOut: 16000 },
-    'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   { maxTokensIn: 30000,  maxTokensOut: 10000 },
-    'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  { maxTokensIn: 30000,  maxTokensOut: 10000 },
-    'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':{ maxTokensIn: 30000,  maxTokensOut: 10000 },
-    'DRAFT_ANNEXURE_DRAWINGS':            { maxTokensIn: 30000,  maxTokensOut: 10000 },
-    'DRAFT_REFERENCE_DRAFT_PASS1':        { maxTokensIn: 60000,  maxTokensOut: 16000 },
-    'DRAFT_ANNEXURE_DESCRIPTION':         { maxTokensIn: 60000,  maxTokensOut: 16000 },  // Largest section
-    'DRAFT_ANNEXURE_BEST_MODE':           { maxTokensIn: 30000,  maxTokensOut: 10000 },
-    'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': { maxTokensIn: 20000, maxTokensOut: 8000 },
-    'DRAFT_ANNEXURE_CLAIMS':              { maxTokensIn: 40000,  maxTokensOut: 16000 },  // Critical section
-    'DRAFT_ANNEXURE_ABSTRACT':            { maxTokensIn: 30000,  maxTokensOut: 8000 },
-    'DRAFT_ANNEXURE_NUMERALS':            { maxTokensIn: 20000,  maxTokensOut: 8000 },
-    'DRAFT_ANNEXURE_CROSS_REFERENCE':     { maxTokensIn: 30000,  maxTokensOut: 10000 },
-    'DRAFT_REVIEW':                       { maxTokensIn: 100000, maxTokensOut: 16000 },  // Needs full patent context
-    // Novelty search stages - HIGH LIMITS for analysis
-    'NOVELTY_QUERY_GENERATION':           { maxTokensIn: 20000,  maxTokensOut: 8000 },
-    'NOVELTY_RELEVANCE_SCORING':          { maxTokensIn: 40000,  maxTokensOut: 8000 },
-    'NOVELTY_FEATURE_ANALYSIS':           { maxTokensIn: 60000,  maxTokensOut: 16000 },
-    'NOVELTY_COMPARISON':                 { maxTokensIn: 80000,  maxTokensOut: 16000 },
-    'NOVELTY_REPORT_GENERATION':          { maxTokensIn: 100000, maxTokensOut: 16000 },  // Comprehensive report
-    // Idea bank stages
-    'IDEA_BANK_GENERATION':               { maxTokensIn: 40000,  maxTokensOut: 16000 },
-    'IDEA_BANK_NORMALIZE':                { maxTokensIn: 20000,  maxTokensOut: 8000 },
-    'IDEA_BANK_SEARCH':                   { maxTokensIn: 20000,  maxTokensOut: 8000 },
-    // Diagram stages
-    'DIAGRAM_PLANTUML':                   { maxTokensIn: 30000,  maxTokensOut: 8000 },
-    'DIAGRAM_FLOWCHART':                  { maxTokensIn: 30000,  maxTokensOut: 8000 },
-    'DIAGRAM_SEQUENCE':                   { maxTokensIn: 30000,  maxTokensOut: 8000 },
-    'DIAGRAM_BLOCK':                      { maxTokensIn: 30000,  maxTokensOut: 8000 },
-    // Paper assistant stages
-    'PAPER_CREATE_SECTIONS':              { maxTokensIn: 24000,  maxTokensOut: 12000 },
-    'PAPER_FIGURE_SUGGESTION':            { maxTokensIn: 48000,  maxTokensOut: 12000 },
-    'PAPER_CHART_GENERATOR':              { maxTokensIn: 32000,  maxTokensOut: 8000 },
-    'PAPER_DIAGRAM_GENERATOR':            { maxTokensIn: 48000,  maxTokensOut: 12000 },
-    'PAPER_DIAGRAM_FROM_TEXT':            { maxTokensIn: 48000,  maxTokensOut: 12000 },
-    'PAPER_SKETCH_GENERATION':            { maxTokensIn: 32000,  maxTokensOut: 12000 },
-    'PAPER_FIGURE_METADATA_INFER':        { maxTokensIn: 16000,  maxTokensOut: 4000 },
-    'PAPER_MANUSCRIPT_REVIEW':            { maxTokensIn: 96000,  maxTokensOut: 16000 },
-    'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY': { maxTokensIn: 32000,  maxTokensOut: 4000 },
-    'PAPER_MANUSCRIPT_IMPROVE':           { maxTokensIn: 64000,  maxTokensOut: 16000 },
-    'PAPER_EXPORT_EXTRACTION':            { maxTokensIn: 32000,  maxTokensOut: 8000 },
-    // IDEATION stages (Mind-Map Patent Ideation Engine) - GENEROUS for creative work
-    'IDEATION_NORMALIZE':                 { maxTokensIn: 20000,  maxTokensOut: 8192 },
-    'IDEATION_CLASSIFY':                  { maxTokensIn: 20000,  maxTokensOut: 8192 },
-    'IDEATION_CONTRADICTION_MAPPING':     { maxTokensIn: 30000,  maxTokensOut: 8192 },
-    'IDEATION_EXPAND':                    { maxTokensIn: 30000,  maxTokensOut: 8192 },
-    'IDEATION_OBVIOUSNESS_FILTER':        { maxTokensIn: 30000,  maxTokensOut: 8192 },
-    'IDEATION_GENERATE':                  { maxTokensIn: 40000,  maxTokensOut: 16000 },  // Heavy generation
-    'IDEATION_NOVELTY':                   { maxTokensIn: 50000,  maxTokensOut: 16000 },  // Complex analysis
-  };
+  const tokenLimits = Object.fromEntries(
+    stageSeeds.map(stage => [stage.code, stage.tokenLimits])
+  );
 
   // ============================================================================
-  // MODEL ASSIGNMENTS PER PLAN (KEEP EXISTING - DO NOT COPY FROM ENTERPRISE)
-  // Token limits are now PRODUCTION values, but models remain per-tier
+  // MODEL ASSIGNMENTS PER PLAN
+  // Keep a consistent grant-stage catalog while varying model quality by plan tier.
   // ============================================================================
-  const planConfigs = {
-    // =========================================================================
-    // FREE_PLAN - Cost-effective: Gemini 2.5 Flash Lite, 2.5 Pro for major sections
-    // =========================================================================
-    'FREE_PLAN': {
-      // Core drafting stages
-      'DRAFT_IDEA_ENTRY':                   'gemini-2.5-flash-lite',
-      'DRAFT_CLAIM_GENERATION':             'gemini-2.5-flash-lite',
-      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_CLAIM_REFINEMENT':             'gemini-2.5-flash-lite',
-      'DRAFT_FIGURE_PLANNER':               'gemini-2.5-flash-lite',
-      'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
-      'DRAFT_DIAGRAM_GENERATION':           'gemini-2.5-flash-lite',
-      // Annexure/Section stages
-      'DRAFT_ANNEXURE_TITLE':               'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_PREAMBLE':            'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_FIELD':               'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_BACKGROUND':          'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_OBJECTS':             'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_SUMMARY':             'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_DRAWINGS':            'gemini-2.5-flash-lite',
-      'DRAFT_REFERENCE_DRAFT_PASS1':        'claude-opus-4.5',
-      'DRAFT_ANNEXURE_DESCRIPTION':         'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_ANNEXURE_BEST_MODE':           'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_CLAIMS':              'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_ANNEXURE_ABSTRACT':            'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_NUMERALS':            'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-2.5-flash-lite',
-      'DRAFT_REVIEW':                       'gemini-2.5-pro',         // Major: use Pro
-      // Novelty search stages
-      'NOVELTY_QUERY_GENERATION':           'gemini-2.5-flash-lite',
-      'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
-      'NOVELTY_FEATURE_ANALYSIS':           'gemini-2.5-flash-lite',
-      'NOVELTY_COMPARISON':                 'gemini-2.5-flash-lite',
-      'NOVELTY_REPORT_GENERATION':          'gemini-2.5-pro',         // Major: use Pro
-      // Idea bank stages
-      'IDEA_BANK_GENERATION':               'gemini-2.5-pro',         // Creative: use Pro
-      'IDEA_BANK_NORMALIZE':                'gemini-2.5-flash-lite',
-      'IDEA_BANK_SEARCH':                   'gemini-2.5-flash-lite',
-      // Diagram stages
-      'DIAGRAM_PLANTUML':                   'gemini-2.5-flash-lite',
-      'DIAGRAM_FLOWCHART':                  'gemini-2.5-flash-lite',
-      'DIAGRAM_SEQUENCE':                   'gemini-2.5-flash-lite',
-      'DIAGRAM_BLOCK':                      'gemini-2.5-flash-lite',
-      // Paper assistant stages
-      'PAPER_CREATE_SECTIONS':              'gemini-2.5-flash',
-      'PAPER_FIGURE_SUGGESTION':            'gemini-2.5-pro',
-      'PAPER_CHART_GENERATOR':              'gpt-4o',
-      'PAPER_DIAGRAM_GENERATOR':            'gpt-4o',
-      'PAPER_DIAGRAM_FROM_TEXT':            'gpt-4o',
-      'PAPER_SKETCH_GENERATION':            'gemini-3.1-flash-image',
-      'PAPER_FIGURE_METADATA_INFER':        'gpt-4o-mini',
-      'PAPER_MANUSCRIPT_REVIEW':            'gpt-5.2',
-      'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY': 'gpt-5.2',
-      'PAPER_MANUSCRIPT_IMPROVE':           'gpt-5.2',
-      'PAPER_EXPORT_EXTRACTION':            'gpt-5.2',
-      // IDEATION stages - Use Pro for heavy reasoning, Flash Lite for lighter tasks
-      'IDEATION_NORMALIZE':                 'gemini-2.5-flash-lite',
-      'IDEATION_CLASSIFY':                  'gemini-2.5-flash-lite',
-      'IDEATION_CONTRADICTION_MAPPING':     'gemini-2.5-pro',         // Complex TRIZ reasoning
-      'IDEATION_EXPAND':                    'gemini-2.5-flash-lite',
-      'IDEATION_OBVIOUSNESS_FILTER':        'gemini-2.5-pro',         // Novelty assessment
-      'IDEATION_GENERATE':                  'gemini-2.5-pro',         // Creative idea generation
-      'IDEATION_NOVELTY':                   'gemini-2.5-pro',         // Complex analysis
-    },
-
-    // =========================================================================
-    // PRO_PLAN - Balanced: Mix of Gemini 2.5 Pro and GPT-5 models
-    // =========================================================================
-    'PRO_PLAN': {
-      // Core drafting stages
-      'DRAFT_IDEA_ENTRY':                   'gemini-2.5-pro',
-      'DRAFT_CLAIM_GENERATION':             'gpt-5-mini',
-      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-2.5-pro',
-      'DRAFT_CLAIM_REFINEMENT':             'gpt-5-mini',
-      'DRAFT_FIGURE_PLANNER':               'gemini-2.5-pro',
-      'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
-      'DRAFT_DIAGRAM_GENERATION':           'gpt-4o',
-      // Annexure/Section stages
-      'DRAFT_ANNEXURE_TITLE':               'gpt-5-mini',
-      'DRAFT_ANNEXURE_PREAMBLE':            'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_FIELD':               'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_BACKGROUND':          'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_OBJECTS':             'gpt-5-mini',
-      'DRAFT_ANNEXURE_SUMMARY':             'gpt-5',
-      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5-mini',
-      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gpt-5-mini',
-      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_DRAWINGS':            'gemini-2.5-pro',
-      'DRAFT_REFERENCE_DRAFT_PASS1':        'claude-opus-4.5',
-      'DRAFT_ANNEXURE_DESCRIPTION':         'gpt-5',
-      'DRAFT_ANNEXURE_BEST_MODE':           'gpt-5-mini',
-      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_CLAIMS':              'gpt-5',
-      'DRAFT_ANNEXURE_ABSTRACT':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_NUMERALS':            'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-2.5-pro',
-      'DRAFT_REVIEW':                       'gpt-5',
-      // Novelty search stages
-      'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
-      'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
-      'NOVELTY_FEATURE_ANALYSIS':           'gemini-2.5-pro',
-      'NOVELTY_COMPARISON':                 'gpt-5-mini',
-      'NOVELTY_REPORT_GENERATION':          'gpt-5',
-      // Idea bank stages
-      'IDEA_BANK_GENERATION':               'gpt-5',
-      'IDEA_BANK_NORMALIZE':                'gpt-5-mini',
-      'IDEA_BANK_SEARCH':                   'gemini-2.5-pro',
-      // Diagram stages
-      'DIAGRAM_PLANTUML':                   'gpt-4o',
-      'DIAGRAM_FLOWCHART':                  'gpt-4o',
-      'DIAGRAM_SEQUENCE':                   'gpt-4o',
-      'DIAGRAM_BLOCK':                      'gpt-4o',
-      // Paper assistant stages
-      'PAPER_CREATE_SECTIONS':              'gpt-5.2',
-      'PAPER_FIGURE_SUGGESTION':            'gpt-5.2',
-      'PAPER_CHART_GENERATOR':              'gemini-2.5-pro',
-      'PAPER_DIAGRAM_GENERATOR':            'gpt-5.2',
-      'PAPER_DIAGRAM_FROM_TEXT':            'gpt-5.2',
-      'PAPER_SKETCH_GENERATION':            'gemini-3.1-flash-image',
-      'PAPER_FIGURE_METADATA_INFER':        'gpt-4o-mini',
-      'PAPER_MANUSCRIPT_REVIEW':            'gpt-5.2',
-      'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY': 'gpt-5.2',
-      'PAPER_MANUSCRIPT_IMPROVE':           'gpt-5.2',
-      'PAPER_EXPORT_EXTRACTION':            'gpt-5.2',
-      // IDEATION stages - Pro tier: GPT-5 for creative, Gemini Pro for analysis
-      'IDEATION_NORMALIZE':                 'gemini-2.5-pro',
-      'IDEATION_CLASSIFY':                  'gemini-2.5-pro',
-      'IDEATION_CONTRADICTION_MAPPING':     'gpt-5',                  // Complex TRIZ reasoning
-      'IDEATION_EXPAND':                    'gemini-2.5-pro',
-      'IDEATION_OBVIOUSNESS_FILTER':        'gpt-5',                  // Novelty assessment
-      'IDEATION_GENERATE':                  'gpt-5',                  // Creative idea generation
-      'IDEATION_NOVELTY':                   'gpt-5',                  // Complex analysis
-    },
-
-    // =========================================================================
-    // ENTERPRISE_PLAN - Premium: GPT-5 series (as provided by user)
-    // =========================================================================
-    'ENTERPRISE_PLAN': {
-      // Core drafting stages
-      'DRAFT_IDEA_ENTRY':                   'gpt-5-mini',
-      'DRAFT_CLAIM_GENERATION':             'gpt-5',
-      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-2.5-pro',
-      'DRAFT_CLAIM_REFINEMENT':             'gpt-5',
-      'DRAFT_FIGURE_PLANNER':               'gemini-2.5-pro',
-      'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
-      'DRAFT_DIAGRAM_GENERATION':           'gpt-4o',
-      // Annexure/Section stages
-      'DRAFT_ANNEXURE_TITLE':               'gpt-5-mini',
-      'DRAFT_ANNEXURE_PREAMBLE':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_FIELD':               'gpt-5-mini',
-      'DRAFT_ANNEXURE_BACKGROUND':          'gpt-5-mini',
-      'DRAFT_ANNEXURE_OBJECTS':             'gpt-5-mini',
-      'DRAFT_ANNEXURE_SUMMARY':             'gpt-5',
-      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5',
-      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gpt-5',
-      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gpt-5-mini',
-      'DRAFT_ANNEXURE_DRAWINGS':            'gpt-5-mini',
-      'DRAFT_REFERENCE_DRAFT_PASS1':        'claude-opus-4.5',
-      'DRAFT_ANNEXURE_DESCRIPTION':         'gpt-5',
-      'DRAFT_ANNEXURE_BEST_MODE':           'gpt-5-mini',
-      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gpt-5-mini',
-      'DRAFT_ANNEXURE_CLAIMS':              'gpt-5',
-      'DRAFT_ANNEXURE_ABSTRACT':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_NUMERALS':            'gpt-5-nano',
-      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gpt-5-nano',
-      'DRAFT_REVIEW':                       'gpt-5.1',
-      // Novelty search stages
-      'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
-      'NOVELTY_RELEVANCE_SCORING':          'gpt-5-nano',
-      'NOVELTY_FEATURE_ANALYSIS':           'gpt-5',
-      'NOVELTY_COMPARISON':                 'gpt-5',
-      'NOVELTY_REPORT_GENERATION':          'gpt-5',
-      // Idea bank stages
-      'IDEA_BANK_GENERATION':               'gpt-5',
-      'IDEA_BANK_NORMALIZE':                'gpt-5-mini',
-      'IDEA_BANK_SEARCH':                   'gpt-5-nano',
-      // Diagram stages
-      'DIAGRAM_PLANTUML':                   'gpt-4o',
-      'DIAGRAM_FLOWCHART':                  'gpt-4o',
-      'DIAGRAM_SEQUENCE':                   'gpt-4o',
-      'DIAGRAM_BLOCK':                      'gpt-4o',
-      // Paper assistant stages
-      'PAPER_CREATE_SECTIONS':              'gpt-5',
-      'PAPER_FIGURE_SUGGESTION':            'gpt-5.2-thinking',
-      'PAPER_CHART_GENERATOR':              'gpt-5.2',
-      'PAPER_DIAGRAM_GENERATOR':            'gpt-5.2-thinking',
-      'PAPER_DIAGRAM_FROM_TEXT':            'gpt-5.2-thinking',
-      'PAPER_SKETCH_GENERATION':            'gemini-3.1-flash-image',
-      'PAPER_FIGURE_METADATA_INFER':        'gpt-4o-mini',
-      'PAPER_MANUSCRIPT_REVIEW':            'gpt-5.2',
-      'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY': 'gpt-5.2',
-      'PAPER_MANUSCRIPT_IMPROVE':           'gpt-5.2',
-      'PAPER_EXPORT_EXTRACTION':            'gpt-5.2',
-      // IDEATION stages - Enterprise tier: Best models for maximum quality
-      'IDEATION_NORMALIZE':                 'gpt-5-mini',
-      'IDEATION_CLASSIFY':                  'gpt-5-mini',
-      'IDEATION_CONTRADICTION_MAPPING':     'gpt-5.1',                // Complex TRIZ reasoning - best model
-      'IDEATION_EXPAND':                    'gpt-5-mini',
-      'IDEATION_OBVIOUSNESS_FILTER':        'gpt-5',                  // Novelty assessment
-      'IDEATION_GENERATE':                  'gpt-5.1',                // Creative idea generation - best model
-      'IDEATION_NOVELTY':                   'gpt-5.1',                // Complex analysis - best model
-    }
-  };
+  const planConfigs = ['FREE_PLAN', 'PRO_PLAN', 'ENTERPRISE_PLAN'].reduce((acc, planCode) => {
+    acc[planCode] = Object.fromEntries(
+      stageSeeds.map(stage => [stage.code, stage.models[planCode]])
+    );
+    return acc;
+  }, {});
 
   try {
     for (const plan of plans) {
       const config = planConfigs[plan.code];
       if (!config) {
-        console.log(`  ⏭️ Skipping ${plan.code} (no default config defined)`);
+        console.log(`  [warn] Skipping ${plan.code} (no default config defined)`);
         continue;
       }
 
-      console.log(`  📝 Configuring ${plan.code}...`);
+      console.log(`  - Configuring ${plan.code}...`);
       let configuredCount = 0;
       
       for (const [stageCode, modelCode] of Object.entries(config)) {
@@ -1126,11 +1090,11 @@ async function main() {
           : null;
         
         if (!stageId) {
-          console.log(`    ⚠️ Stage ${stageCode} not found, skipping`);
+          console.log(`    [warn] Stage ${stageCode} not found, skipping`);
           continue;
         }
         if (!modelId) {
-          console.log(`    ⚠️ Model ${modelCode} not found, skipping`);
+          console.log(`    [warn] Model ${modelCode} not found, skipping`);
           continue;
         }
 
@@ -1158,18 +1122,18 @@ async function main() {
         });
         configuredCount++;
       }
-      console.log(`  ✅ ${plan.code} configured (${configuredCount} stages)`);
+      console.log(`  - ${plan.code} configured (${configuredCount} stages)`);
     }
   } catch (error) {
     if (error.code === 'P2021' || error.message.includes('does not exist')) {
-      console.log('  ⚠️  PlanStageModelConfig table does not exist yet.');
+      console.log('  [warn] PlanStageModelConfig table does not exist yet.');
       await prisma.$disconnect();
       return;
     }
     throw error;
   }
 
-  console.log('\n✨ PRODUCTION LLM Models & Workflow Stages seeding complete!');
+  console.log('\n[done] LLM model and workflow stage seeding complete.');
   console.log(`   - ${models.length} LLM models (new models unassigned)`);
   console.log(`   - ${stages.length} workflow stages`);
   console.log(`   - ${plans.length} plans configured with PRODUCTION token limits`);
@@ -1177,7 +1141,7 @@ async function main() {
 
 main()
   .catch((e) => {
-    console.error('❌ Seeding failed:', e);
+    console.error('[error] Seeding failed:', e);
     process.exit(1);
   })
   .finally(async () => {

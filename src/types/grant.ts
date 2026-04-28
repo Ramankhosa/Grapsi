@@ -103,6 +103,8 @@ export type GrantDraftingSubmissionMode = typeof GRANT_DRAFTING_SUBMISSION_MODES
 export interface GrantThematicBlueprint {
   mustCover: string[]
   mustAvoid: string[]
+  dimensions?: string[]
+  dimensionTyping?: Record<string, GrantBlueprintDimensionType>
   mustCoverTyping?: Record<string, GrantBlueprintDimensionType>
   suggestedCitationCount?: number
 }
@@ -265,6 +267,8 @@ export interface CompiledGrantTemplateSection {
   templateIntentConfidence?: number | null
   mustCover: string[]
   mustAvoid: string[]
+  dimensions?: string[]
+  dimensionTyping?: Record<string, GrantBlueprintDimensionType>
   mustCoverTyping?: Record<string, GrantBlueprintDimensionType>
   suggestedCitationCount?: number | null
   thematicBlueprint?: GrantThematicBlueprint | null
@@ -306,6 +310,8 @@ export interface GrantBlueprintPlanSection {
   templateIntentConfidence?: number | null
   mustCover: string[]
   mustAvoid: string[]
+  dimensions?: string[]
+  dimensionTyping?: Record<string, GrantBlueprintDimensionType>
   mustCoverTyping?: Record<string, GrantBlueprintDimensionType>
   suggestedCitationCount?: number | null
   thematicBlueprint?: GrantThematicBlueprint | null

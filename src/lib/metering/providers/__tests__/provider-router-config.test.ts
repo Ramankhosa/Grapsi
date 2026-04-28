@@ -23,4 +23,13 @@ describe('LLMProviderRouter OpenAI config defaults', () => {
     expect(configs.openai.timeout).toBe(45000)
     expect(configs.openai.maxRetries).toBe(5)
   })
+
+  it('uses the current DeepSeek OpenAI-compatible base URL by default', () => {
+    const configs = buildProviderConfigsFromEnv({
+      NODE_ENV: 'test',
+      DEEPSEEK_API_KEY: 'test-key',
+    } as NodeJS.ProcessEnv)
+
+    expect(configs.deepseek.baseURL).toBe('https://api.deepseek.com')
+  })
 })

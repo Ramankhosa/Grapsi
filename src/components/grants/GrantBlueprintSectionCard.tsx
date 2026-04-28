@@ -121,7 +121,9 @@ function getCitationPlanBadge(section: BlueprintSection, draftable: boolean) {
     }
   }
 
-  if (section.mustCover.length === 0 || citationCount === 0) {
+  const dimensions = section.dimensions || []
+
+  if (dimensions.length === 0 || citationCount === 0) {
     return {
       label: 'No citation mapping',
       description: 'Draft from prep and rules',
@@ -131,7 +133,7 @@ function getCitationPlanBadge(section: BlueprintSection, draftable: boolean) {
 
   return {
     label: `${formatCount(citationCount, 'citation')}`,
-    description: `${formatCount(section.mustCover.length, 'dimension')}`,
+    description: `${formatCount(dimensions.length, 'dimension')}`,
     classes: 'bg-emerald-100 text-emerald-800',
   }
 }
@@ -145,11 +147,11 @@ const DIMENSION_TYPE_LABELS = {
 } as const
 
 function updateDimensionList(section: BlueprintSection, nextDimensions: string[]) {
-  const nextMustCoverTyping: Record<string, GrantBlueprintDimensionType> | undefined = section.mustCoverTyping
+  const nextDimensionTyping: Record<string, GrantBlueprintDimensionType> | undefined = section.dimensionTyping
     ? Object.fromEntries(
         nextDimensions
           .map((dimension) => {
-            const type = section.mustCoverTyping?.[dimension]
+            const type = section.dimensionTyping?.[dimension]
             return type ? ([dimension, type] as const) : null
           })
           .filter(Boolean) as Array<readonly [string, GrantBlueprintDimensionType]>
@@ -157,10 +159,10 @@ function updateDimensionList(section: BlueprintSection, nextDimensions: string[]
     : undefined
 
   return {
-    mustCover: nextDimensions,
-    ...(nextMustCoverTyping && Object.keys(nextMustCoverTyping).length > 0
-      ? { mustCoverTyping: nextMustCoverTyping }
-      : { mustCoverTyping: undefined }),
+    dimensions: nextDimensions,
+    ...(nextDimensionTyping && Object.keys(nextDimensionTyping).length > 0
+      ? { dimensionTyping: nextDimensionTyping }
+      : { dimensionTyping: undefined }),
   }
 }
 
@@ -190,6 +192,7 @@ export default function GrantBlueprintSectionCard({
   onChange,
 }: GrantBlueprintSectionCardProps) {
   const draftable = isAutoDraftable(section)
+  const dimensions = section.dimensions || []
   const teamManaged = section.workflowMode === 'team_manual'
   const canEdit = !isFrozen && !teamManaged
   const citationPlan = getCitationPlanBadge(section, draftable)
@@ -287,7 +290,7 @@ export default function GrantBlueprintSectionCard({
               </div>
               <div className="mt-2 text-sm text-slate-700">
                 {draftable
-                  ? section.mustCover.length > 0
+                  ? dimensions.length > 0
                     ? `This section will use literature-backed dimensions during search, relevance review, and drafting.`
                     : 'This section will stay in app drafting, but it currently has no literature mapping and a zero citation target.'
                   : 'This section stays visible in the blueprint, but it is handled manually outside the AI literature flow.'}
@@ -300,10 +303,10 @@ export default function GrantBlueprintSectionCard({
           </div>
 
           {draftable ? (
-            section.mustCover.length > 0 ? (
+            dimensions.length > 0 ? (
               <>
                 <div className="mt-4 space-y-3">
-                  {section.mustCover.map((dimension, dimensionIndex) => (
+                  {dimensions.map((dimension, dimensionIndex) => (
                     <div
                       key={`${section.sectionKey}_dimension_${dimensionIndex}`}
                       className="rounded-2xl border border-slate-200 bg-white p-4"
@@ -311,27 +314,27 @@ export default function GrantBlueprintSectionCard({
                       <input
                         value={dimension}
                         onChange={(event) => {
-                          const nextDimensions = [...section.mustCover]
+                          const nextDimensions = [...dimensions]
                           nextDimensions[dimensionIndex] = event.target.value
-                          const previousDimension = section.mustCover[dimensionIndex]
-                          const nextType = section.mustCoverTyping?.[previousDimension]
-                          const nextMustCoverTyping = {
-                            ...(section.mustCoverTyping || {}),
+                          const previousDimension = dimensions[dimensionIndex]
+                          const nextType = section.dimensionTyping?.[previousDimension]
+                          const nextDimensionTyping = {
+                            ...(section.dimensionTyping || {}),
                           }
                           if (previousDimension && previousDimension !== event.target.value) {
-                            delete nextMustCoverTyping[previousDimension]
+                            delete nextDimensionTyping[previousDimension]
                           }
                           if (event.target.value.trim() && nextType) {
-                            nextMustCoverTyping[event.target.value.trim()] = nextType
+                            nextDimensionTyping[event.target.value.trim()] = nextType
                           }
                           onChange(section.sectionKey, {
                             ...updateDimensionList(
                               section,
                               nextDimensions.map((item) => item.trim()).filter(Boolean)
                             ),
-                            ...(Object.keys(nextMustCoverTyping).length > 0
-                              ? { mustCoverTyping: nextMustCoverTyping }
-                              : { mustCoverTyping: undefined }),
+                            ...(Object.keys(nextDimensionTyping).length > 0
+                              ? { dimensionTyping: nextDimensionTyping }
+                              : { dimensionTyping: undefined }),
                           })
                         }}
                         disabled={!canEdit}
@@ -343,11 +346,11 @@ export default function GrantBlueprintSectionCard({
                           Evidence Type
                         </label>
                         <select
-                          value={section.mustCoverTyping?.[dimension] || 'empirical'}
+                          value={section.dimensionTyping?.[dimension] || 'empirical'}
                           onChange={(event) =>
                             onChange(section.sectionKey, {
-                              mustCoverTyping: {
-                                ...(section.mustCoverTyping || {}),
+                              dimensionTyping: {
+                                ...(section.dimensionTyping || {}),
                                 [dimension]: event.target.value as GrantBlueprintDimensionType,
                               },
                             })
@@ -362,15 +365,15 @@ export default function GrantBlueprintSectionCard({
                           ))}
                         </select>
                         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                          {DIMENSION_TYPE_LABELS[section.mustCoverTyping?.[dimension] || 'empirical']}
+                          {DIMENSION_TYPE_LABELS[section.dimensionTyping?.[dimension] || 'empirical']}
                         </span>
                         <button
                           type="button"
                           onClick={() => {
-                            const nextDimensions = section.mustCover.filter((_, idx) => idx !== dimensionIndex)
+                            const nextDimensions = dimensions.filter((_, idx) => idx !== dimensionIndex)
                             onChange(section.sectionKey, updateDimensionList(section, nextDimensions))
                           }}
-                          disabled={!canEdit || section.mustCover.length <= 1}
+                          disabled={!canEdit || dimensions.length <= 1}
                           className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40"
                         >
                           Remove
@@ -385,7 +388,7 @@ export default function GrantBlueprintSectionCard({
                     type="button"
                     onClick={() =>
                       onChange(section.sectionKey, {
-                        mustCover: [...section.mustCover, ''],
+                        dimensions: [...dimensions, ''],
                       })
                     }
                     disabled={!canEdit}
@@ -426,7 +429,7 @@ export default function GrantBlueprintSectionCard({
                     type="button"
                     onClick={() =>
                       onChange(section.sectionKey, {
-                        mustCover: [''],
+                        dimensions: [''],
                       })
                     }
                     disabled={!canEdit}

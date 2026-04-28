@@ -109,6 +109,8 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'groq-llama-3.3-70b': { maxInput: 128000, maxOutput: 8192 },
   'mixtral-8x7b-32768': { maxInput: 32768, maxOutput: 8192 },
   // DeepSeek
+  'deepseek-v4-pro': { maxInput: 1000000, maxOutput: 384000 },
+  'deepseek-v4-flash': { maxInput: 1000000, maxOutput: 384000 },
   'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
   // Zhipu
   'glm-5': { maxInput: 200000, maxOutput: 65536 },
@@ -165,7 +167,7 @@ export function buildProviderConfigsFromEnv(env: NodeJS.ProcessEnv = process.env
     deepseek: {
       apiKey: env.DEEPSEEK_API_KEY,
       model: 'deepseek-chat',
-      baseURL: 'https://api.deepseek.com/v1'
+      baseURL: env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
     },
     
     // Groq provider (ultra-fast)

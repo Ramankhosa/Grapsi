@@ -6,6 +6,7 @@ import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import {
   filterGrantBackedLiteratureSections,
   isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
 } from '@/lib/grants/blueprintMetadata';
 import { llmGateway } from '@/lib/metering/gateway';
 import { defaultConfig as meteringDefaultConfig } from '@/lib/metering/config';
@@ -224,8 +225,11 @@ function buildPrompt(
 
   // Build blueprint sections string
   const sectionsText = sectionsForMapping.map((section, idx) => {
-    const dimensions = section.mustCover && section.mustCover.length > 0
-      ? section.mustCover.map((dim, i) => `    ${i + 1}. "${dim}"`).join('\n')
+    const sectionDimensions = isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+      ? resolveGrantSectionDimensions(section)
+      : (section.mustCover || []);
+    const dimensions = sectionDimensions.length > 0
+      ? sectionDimensions.map((dim, i) => `    ${i + 1}. "${dim}"`).join('\n')
       : '    (No specific evidence pillars defined)';
     return `${idx + 1}. ${section.sectionKey} - "${section.purpose}"
    Evidence Pillars:
@@ -390,11 +394,14 @@ function parseAndValidateLLMResponse(
   for (const section of sectionsForValidation) {
     validSectionKeys.add(section.sectionKey);
     const dimMap = new Map<string, string>();
-    for (const dim of section.mustCover || []) {
+    const sectionDimensions = isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+      ? resolveGrantSectionDimensions(section)
+      : (section.mustCover || []);
+    for (const dim of sectionDimensions) {
       dimMap.set(normalizeDimension(dim), dim);
     }
     validDimensions.set(section.sectionKey, dimMap);
-    sectionDimensionsByKey.set(section.sectionKey, section.mustCover || []);
+    sectionDimensionsByKey.set(section.sectionKey, sectionDimensions);
   }
 
   // Validate suggestions
@@ -487,7 +494,9 @@ function calculateBlueprintCoverage(
   );
 
   for (const section of sectionsForCoverage) {
-    const dimensions = section.mustCover || [];
+    const dimensions = isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+      ? resolveGrantSectionDimensions(section)
+      : (section.mustCover || []);
     const dimensionData: BlueprintCoverage['sectionCoverage'][string]['dimensions'] = [];
     
     for (const dimension of dimensions) {
@@ -901,9 +910,17 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           suggestions: [],
           summary: 'Analysis completed but results could not be parsed. Try again with fewer citations.',
           blueprintCoverage: {
-            totalDimensions: blueprint.sectionPlan.reduce((acc, s) => acc + (s.mustCover?.length || 0), 0),
+            totalDimensions: blueprint.sectionPlan.reduce((acc, s) => acc + (
+              isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+                ? resolveGrantSectionDimensions(s).length
+                : (s.mustCover?.length || 0)
+            ), 0),
             coveredDimensions: 0,
-            gaps: blueprint.sectionPlan.flatMap(s => (s.mustCover || []).map(d => ({
+            gaps: blueprint.sectionPlan.flatMap(s => (
+              isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+                ? resolveGrantSectionDimensions(s)
+                : (s.mustCover || [])
+            ).map(d => ({
               sectionKey: s.sectionKey,
               sectionTitle: s.purpose,
               dimension: d

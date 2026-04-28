@@ -10,6 +10,8 @@ const DIMENSION_TYPE_SET = new Set<string>(GRANT_BLUEPRINT_DIMENSION_TYPES)
 type SectionWithDimensions = {
   sectionKey: string
   mustCover?: string[] | null
+  dimensions?: string[] | null
+  dimensionTyping?: Record<string, unknown> | null
   mustCoverTyping?: Record<string, unknown> | null
   suggestedCitationCount?: number | null
   thematicBlueprint?: unknown
@@ -39,12 +41,19 @@ export function normalizeGrantMustCoverTyping(
   mustCover: string[],
   value: unknown
 ): Record<string, GrantBlueprintDimensionType> | undefined {
+  return normalizeGrantDimensionTyping(mustCover, value)
+}
+
+export function normalizeGrantDimensionTyping(
+  dimensions: string[],
+  value: unknown
+): Record<string, GrantBlueprintDimensionType> | undefined {
   const record = asObject(value)
-  if (mustCover.length === 0) {
+  if (dimensions.length === 0) {
     return undefined
   }
 
-  const normalizedEntries = mustCover
+  const normalizedEntries = dimensions
     .map((dimension) => {
       const typedValue = record[dimension]
       return typedValue
@@ -69,18 +78,32 @@ export function normalizeGrantSuggestedCitationCount(value: unknown): number | u
 export function buildGrantThematicBlueprint(input: {
   mustCover: string[]
   mustAvoid: string[]
+  dimensions?: string[] | null
+  dimensionTyping?: Record<string, GrantBlueprintDimensionType> | null
   mustCoverTyping?: Record<string, GrantBlueprintDimensionType> | null
   suggestedCitationCount?: number | null
 }): GrantThematicBlueprint {
+  const dimensions = normalizeStringList(input.dimensions || [])
   const thematicBlueprint: GrantThematicBlueprint = {
     mustCover: [...input.mustCover],
     mustAvoid: [...input.mustAvoid],
   }
 
+  const dimensionTyping = input.dimensionTyping
+    ? normalizeGrantDimensionTyping(dimensions, input.dimensionTyping)
+    : undefined
   const mustCoverTyping = input.mustCoverTyping
     ? normalizeGrantMustCoverTyping(input.mustCover, input.mustCoverTyping)
     : undefined
   const suggestedCitationCount = normalizeGrantSuggestedCitationCount(input.suggestedCitationCount)
+
+  if (dimensions.length > 0) {
+    thematicBlueprint.dimensions = dimensions
+  }
+
+  if (dimensionTyping) {
+    thematicBlueprint.dimensionTyping = dimensionTyping
+  }
 
   if (mustCoverTyping) {
     thematicBlueprint.mustCoverTyping = mustCoverTyping
@@ -93,34 +116,57 @@ export function buildGrantThematicBlueprint(input: {
   return thematicBlueprint
 }
 
+function normalizeStringList(items: unknown[] | null | undefined): string[] {
+  if (!Array.isArray(items)) return []
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const item of items) {
+    const value = String(item || '').trim().replace(/\s+/g, ' ')
+    const key = value.toLowerCase()
+    if (!value || seen.has(key)) continue
+    seen.add(key)
+    next.push(value)
+  }
+  return next
+}
+
+export function resolveGrantSectionDimensions(section: SectionWithDimensions): string[] {
+  const thematicBlueprint = asObject(section.thematicBlueprint)
+  const directDimensions = normalizeStringList(section.dimensions || [])
+  if (directDimensions.length > 0) return directDimensions
+
+  const thematicDimensions = normalizeStringList(
+    Array.isArray(thematicBlueprint.dimensions) ? thematicBlueprint.dimensions : []
+  )
+  return thematicDimensions
+}
+
 export function extractGrantDimensionTargets(
   sections: SectionWithDimensions[]
 ): GrantBlueprintDimensionTarget[] {
   return sections.flatMap((section) => {
-    const mustCover = Array.isArray(section.mustCover)
-      ? section.mustCover.map((item) => String(item || '').trim()).filter(Boolean)
-      : []
-    if (mustCover.length === 0) {
+    const dimensions = resolveGrantSectionDimensions(section)
+    if (dimensions.length === 0) {
       return []
     }
 
     const thematicBlueprint = asObject(section.thematicBlueprint)
-    const mustCoverTyping =
-      normalizeGrantMustCoverTyping(mustCover, section.mustCoverTyping)
-      || normalizeGrantMustCoverTyping(mustCover, thematicBlueprint.mustCoverTyping)
+    const dimensionTyping =
+      normalizeGrantDimensionTyping(dimensions, section.dimensionTyping)
+      || normalizeGrantDimensionTyping(dimensions, thematicBlueprint.dimensionTyping)
 
-    return mustCover.map((dimension) => ({
+    return dimensions.map((dimension) => ({
       sectionKey: section.sectionKey,
       dimension,
-      ...(mustCoverTyping?.[dimension] ? { dimensionType: mustCoverTyping[dimension] } : {}),
+      ...(dimensionTyping?.[dimension] ? { dimensionType: dimensionTyping[dimension] } : {}),
     }))
   })
 }
 
-export function filterGrantBackedLiteratureSections<T extends { mustCover?: string[] | null }>(
+export function filterGrantBackedLiteratureSections<T extends SectionWithDimensions>(
   sections: T[]
 ): T[] {
   return sections.filter((section) =>
-    Array.isArray(section.mustCover) && section.mustCover.some((dimension) => String(dimension || '').trim())
+    resolveGrantSectionDimensions(section).length > 0
   )
 }

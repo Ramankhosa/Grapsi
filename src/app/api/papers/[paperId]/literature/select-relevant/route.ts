@@ -6,6 +6,7 @@ import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import {
   filterGrantBackedLiteratureSections,
   isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
 } from '@/lib/grants/blueprintMetadata';
 import { llmGateway } from '@/lib/metering/gateway';
 import { defaultConfig as meteringDefaultConfig } from '@/lib/metering/config';
@@ -31,7 +32,14 @@ const updateSchema = z.object({
   removedResultIds: z.array(z.string().min(1)).min(1)
 });
 
-const BATCH_SIZE = 12;
+const MAX_BATCH_SIZE = parsePositiveInt(
+  process.env.LITERATURE_RELEVANCE_MAX_BATCH_SIZE,
+  16
+);
+const BATCH_SIZE = Math.max(1, Math.min(
+  parsePositiveInt(process.env.LITERATURE_RELEVANCE_BATCH_SIZE, 8),
+  MAX_BATCH_SIZE
+));
 const DEFAULT_PARALLEL_BATCH_LIMIT = parsePositiveInt(
   process.env.LITERATURE_RELEVANCE_DEFAULT_PARALLEL_BATCH_LIMIT,
   5
@@ -1075,8 +1083,11 @@ function buildPrompt(
     console.log(`[LiteratureRelevance] Paper type: ${blueprint.paperTypeCode || 'unknown'}, isReview: ${isReview}, sections for mapping: ${sectionsForMapping.map(s => s.sectionKey).join(', ')}`);
     
     const sectionsText = sectionsForMapping.map((section, idx) => {
-      const dimensions = section.mustCover && section.mustCover.length > 0
-        ? section.mustCover.map((dim, i) => `    ${i + 1}. "${dim}"`).join('\n')
+      const sectionDimensions = isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+        ? resolveGrantSectionDimensions(section)
+        : (section.mustCover || []);
+      const dimensions = sectionDimensions.length > 0
+        ? sectionDimensions.map((dim, i) => `    ${i + 1}. "${dim}"`).join('\n')
         : '    (No specific evidence pillars defined)';
       return `${idx + 1}. ${section.sectionKey} - "${section.purpose}"
    Evidence Pillars:
@@ -1374,7 +1385,7 @@ function parseAndValidateLLMResponse(
   // Build valid section keys and dimensions from blueprint
   const validSectionKeys = new Set<string>();
   const validDimensions = new Map<string, Map<string, string>>(); // sectionKey -> normalized -> canonical
-  const sectionDimensionsByKey = new Map<string, string[]>(); // sectionKey -> ordered mustCover
+  const sectionDimensionsByKey = new Map<string, string[]>(); // sectionKey -> ordered dimensions
   
   if (blueprint?.sectionPlan) {
     const isReview = isReviewPaper(blueprint.paperTypeCode ?? undefined);
@@ -1385,11 +1396,14 @@ function parseAndValidateLLMResponse(
     for (const section of sectionsForValidation) {
       validSectionKeys.add(section.sectionKey);
       const dimMap = new Map<string, string>();
-      for (const dim of section.mustCover || []) {
+      const sectionDimensions = isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+        ? resolveGrantSectionDimensions(section)
+        : (section.mustCover || []);
+      for (const dim of sectionDimensions) {
         dimMap.set(normalizeDimension(dim), dim);
       }
       validDimensions.set(section.sectionKey, dimMap);
-      sectionDimensionsByKey.set(section.sectionKey, section.mustCover || []);
+      sectionDimensionsByKey.set(section.sectionKey, sectionDimensions);
     }
   }
 
@@ -1575,7 +1589,9 @@ function calculateBlueprintCoverage(
     : filterSectionsForLiteratureMapping(blueprint.sectionPlan, blueprint.paperTypeCode ?? undefined);
 
   for (const section of sectionsForCoverage) {
-    const dimensions = section.mustCover || [];
+    const dimensions = isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+      ? resolveGrantSectionDimensions(section)
+      : (section.mustCover || []);
     const dimensionData: BlueprintCoverage['sectionCoverage'][string]['dimensions'] = [];
     
     for (const dimension of dimensions) {
@@ -1966,7 +1982,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
 
     const parallelBatchLimit = await resolveParallelBatchLimit(user.tenantId);
     console.log(
-      `[LiteratureRelevance] Effective parallel batch limit: ${parallelBatchLimit} (default=${DEFAULT_PARALLEL_BATCH_LIMIT}, max=${MAX_PARALLEL_BATCH_LIMIT})`
+      `[LiteratureRelevance] Effective batch size: ${BATCH_SIZE} (max=${MAX_BATCH_SIZE}); parallel batch limit: ${parallelBatchLimit} (default=${DEFAULT_PARALLEL_BATCH_LIMIT}, max=${MAX_PARALLEL_BATCH_LIMIT})`
     );
 
     const totalBatches = batches.length;
@@ -2127,6 +2143,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
                 batchIndex: batchIndex + 1,
                 totalBatches,
                 blueprintId: blueprint?.id || null,
+                primaryModelCode: 'deepseek-reasoner',
               }
             }
           );
@@ -2142,6 +2159,23 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
             console.log(`[LiteratureRelevance] Concurrency limit hit for batch ${batchIndex + 1}, waiting ${delayMs / 1000}s (${attempt + 1}/${MAX_CONCURRENCY_RETRIES})`);
             await new Promise(resolve => setTimeout(resolve, delayMs));
             continue;
+          }
+
+          if (errorCode === 'INPUT_TOO_LARGE' && batch.length > 1 && depth < 3) {
+            console.warn(`[LiteratureRelevance] Batch ${batchIndex + 1} exceeded token budget; retrying as smaller chunks (size ${batch.length})`);
+            const mid = Math.ceil(batch.length / 2);
+            const [left, right] = await Promise.all([
+              processBatchWithRetry(batch.slice(0, mid), batchIndex, depth + 1),
+              processBatchWithRetry(batch.slice(mid), batchIndex, depth + 1)
+            ]);
+            return {
+              suggestions: [...left.suggestions, ...right.suggestions],
+              summary: left.summary || right.summary || '',
+              parseError: left.parseError || right.parseError,
+              outputTokens: (left.outputTokens || 0) + (right.outputTokens || 0),
+              modelClass: left.modelClass !== 'unknown' ? left.modelClass : right.modelClass,
+              failedPaperIds: [...left.failedPaperIds, ...right.failedPaperIds]
+            };
           }
 
           break;
@@ -2349,9 +2383,17 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
             suggestions: [],
             summary: 'AI analysis completed but results could not be parsed. You can still manually review papers.',
             blueprintCoverage: blueprint ? {
-              totalDimensions: blueprint.sectionPlan.reduce((acc, s) => acc + (s.mustCover?.length || 0), 0),
+              totalDimensions: blueprint.sectionPlan.reduce((acc, s) => acc + (
+                isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+                  ? resolveGrantSectionDimensions(s).length
+                  : (s.mustCover?.length || 0)
+              ), 0),
               coveredDimensions: 0,
-              gaps: blueprint.sectionPlan.flatMap(s => (s.mustCover || []).map(d => ({
+              gaps: blueprint.sectionPlan.flatMap(s => (
+                isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+                  ? resolveGrantSectionDimensions(s)
+                  : (s.mustCover || [])
+              ).map(d => ({
                 sectionKey: s.sectionKey,
                 sectionTitle: s.purpose,
                 dimension: d
@@ -2376,9 +2418,17 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           suggestions: [],
           summary: 'AI analysis completed but results could not be parsed. You can still manually review papers.',
           blueprintCoverage: blueprint ? {
-            totalDimensions: blueprint.sectionPlan.reduce((acc, s) => acc + (s.mustCover?.length || 0), 0),
+            totalDimensions: blueprint.sectionPlan.reduce((acc, s) => acc + (
+              isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+                ? resolveGrantSectionDimensions(s).length
+                : (s.mustCover?.length || 0)
+            ), 0),
             coveredDimensions: 0,
-            gaps: blueprint.sectionPlan.flatMap(s => (s.mustCover || []).map(d => ({
+            gaps: blueprint.sectionPlan.flatMap(s => (
+              isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+                ? resolveGrantSectionDimensions(s)
+                : (s.mustCover || [])
+            ).map(d => ({
               sectionKey: s.sectionKey,
               sectionTitle: s.purpose,
               dimension: d

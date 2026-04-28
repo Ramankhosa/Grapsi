@@ -133,6 +133,8 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'claude-3-haiku-20240307': 'anthropic',
     
     // DeepSeek
+    'deepseek-v4-pro': 'deepseek',
+    'deepseek-v4-flash': 'deepseek',
     'deepseek-chat': 'deepseek',
     'deepseek-reasoner': 'deepseek',
     

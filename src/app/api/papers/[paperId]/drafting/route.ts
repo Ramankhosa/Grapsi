@@ -67,6 +67,12 @@ import {
   formatGrantComplianceContractForPrompt,
   normalizeGrantGenerationTrace,
 } from '@/lib/grants/compliance'
+import {
+  buildGrantDraftContextContract,
+  buildGrantPostGenerationValidation,
+  mergeGrantValidationReport,
+  type GrantDraftContextContract,
+} from '@/lib/grants/draftContextContract'
 import type {
   GrantComplianceReport,
   GrantCitationMode,
@@ -121,6 +127,7 @@ const generateSchema = z.object({
   selectedFigureIds: z.array(z.string().min(1)).max(12).optional(),
   generationMode: z.enum(['two_pass', 'topup_final']).optional(),
   autoCitationRepair: z.boolean().optional(),
+  allowGrantEvidenceBypass: z.boolean().optional(),
   // Persona style support (borrowed from patent drafting)
   usePersonaStyle: z.boolean().optional(),
   personaSelection: z.object({
@@ -137,7 +144,8 @@ const startDimensionFlowSchema = z.object({
   useMappedEvidence: z.boolean().optional(),
   useFigures: z.boolean().optional(),
   selectedFigureIds: z.array(z.string().min(1)).max(12).optional(),
-  temperature: z.number().min(0).max(1).optional()
+  temperature: z.number().min(0).max(1).optional(),
+  allowGrantEvidenceBypass: z.boolean().optional()
 });
 
 const generateDimensionSchema = z.object({
@@ -148,7 +156,8 @@ const generateDimensionSchema = z.object({
   temperature: z.number().min(0).max(1).optional(),
   useMappedEvidence: z.boolean().optional(),
   useFigures: z.boolean().optional(),
-  selectedFigureIds: z.array(z.string().min(1)).max(12).optional()
+  selectedFigureIds: z.array(z.string().min(1)).max(12).optional(),
+  allowGrantEvidenceBypass: z.boolean().optional()
 });
 
 const acceptDimensionSchema = z.object({
@@ -159,7 +168,8 @@ const acceptDimensionSchema = z.object({
   useMappedEvidence: z.boolean().optional(),
   useFigures: z.boolean().optional(),
   selectedFigureIds: z.array(z.string().min(1)).max(12).optional(),
-  allowCitationBypass: z.boolean().optional()
+  allowCitationBypass: z.boolean().optional(),
+  allowGrantEvidenceBypass: z.boolean().optional()
 });
 
 const rejectDimensionSchema = z.object({
@@ -169,7 +179,8 @@ const rejectDimensionSchema = z.object({
   temperature: z.number().min(0).max(1).optional(),
   useMappedEvidence: z.boolean().optional(),
   useFigures: z.boolean().optional(),
-  selectedFigureIds: z.array(z.string().min(1)).max(12).optional()
+  selectedFigureIds: z.array(z.string().min(1)).max(12).optional(),
+  allowGrantEvidenceBypass: z.boolean().optional()
 });
 
 const getDimensionFlowSchema = z.object({
@@ -1691,12 +1702,16 @@ interface BlueprintPromptContext {
   keyContributions?: string[];
   sectionPlan?: Array<{ sectionKey: string; purpose?: string }>;
   mustCover?: string[];
+  dimensions?: string[];
+  dimensionTyping?: Record<string, string>;
   mustAvoid?: string[];
   seededContext?: string | null;
   wordBudget?: number;
   thematicBlueprint?: {
     mustCover: string[];
     mustAvoid: string[];
+    dimensions?: string[];
+    dimensionTyping?: Record<string, string>;
     mustCoverTyping?: Record<string, string>;
     suggestedCitationCount?: number;
   };
@@ -3199,6 +3214,7 @@ interface SectionPromptRuntimeBundle {
   sectionWordBudget?: number;
   blueprintPromptContext?: BlueprintPromptContext;
   evidencePromptContext: EvidencePromptContext;
+  grantDraftContextContract?: GrantDraftContextContract | null;
   figurePromptContext: FigurePromptContext;
   previousSectionMemories: PreviousSectionMemoryEntry[];
 }
@@ -3426,13 +3442,13 @@ function buildPass1ArtifactOutputInstructions(
   blueprintContext?: BlueprintPromptContext,
   evidenceContext?: EvidencePromptContext
 ): string {
-  const mustCover = Array.isArray(blueprintContext?.mustCover)
-    ? blueprintContext!.mustCover.map((label) => String(label || '').trim()).filter(Boolean)
+  const dimensions = Array.isArray(blueprintContext?.dimensions)
+    ? blueprintContext!.dimensions.map((label) => String(label || '').trim()).filter(Boolean)
     : [];
-  const roleGuide = mustCover.length > 0
-    ? mustCover
+  const roleGuide = dimensions.length > 0
+    ? dimensions
       .map((dimensionLabel, index) => {
-        const role = resolveDimensionRole(index, mustCover.length);
+        const role = resolveDimensionRole(index, dimensions.length);
         return `- ${normalizeDimensionKey(dimensionLabel)} | ${dimensionLabel} | role=${role}`;
       })
       .join('\n')
@@ -3448,8 +3464,8 @@ function buildPass1ArtifactOutputInstructions(
     )).slice(0, MAX_CITATIONS_PER_DIMENSION);
     evidenceByDimension.set(dimensionKey, citationKeys);
   }
-  const citationGuide = mustCover.length > 0
-    ? mustCover
+  const citationGuide = dimensions.length > 0
+    ? dimensions
       .map((dimensionLabel) => {
         const dimensionKey = normalizeDimensionKey(dimensionLabel);
         const citationKeys = evidenceByDimension.get(dimensionKey) || [];
@@ -3671,6 +3687,7 @@ Rationale: ${archetypeRationale || '(not provided)'}`
       purpose: blueprintContext?.sectionPlan?.find((entry) => normalizeSectionKey(entry.sectionKey) === normalizeSectionKey(sectionKey))?.purpose
         || '',
       mustCover: blueprintContext?.mustCover || [],
+      dimensions: blueprintContext?.dimensions || [],
       mustAvoid: blueprintContext?.mustAvoid || [],
       wordBudget: blueprintContext?.wordBudget,
       characterLimit: blueprintContext?.characterLimit,
@@ -3716,10 +3733,10 @@ Rationale: ${archetypeRationale || '(not provided)'}`
   const blueprintRoadmap = blueprintContext?.sectionPlan?.length
     ? blueprintContext.sectionPlan.map(s => s.sectionKey.replace(/_/g, ' ')).join(' → ')
     : '(not available)';
-  const mustCoverDimensions = blueprintContext?.mustCover?.length
+  const mustCoverDimensions = blueprintContext?.dimensions?.length
     ? formatGrantMustCoverItems(
-        blueprintContext.mustCover,
-        blueprintContext.thematicBlueprint?.mustCoverTyping
+        blueprintContext.dimensions,
+        blueprintContext.dimensionTyping || blueprintContext.thematicBlueprint?.dimensionTyping
       ).map(d => `- ${d}`).join('\n')
     : '(none specified)';
   const rhetoricalBlock = isFeatureEnabled('ENABLE_RHETORICAL_BLUEPRINT')
@@ -4101,6 +4118,7 @@ async function generateSection(
     sectionKey,
     instructions: payload.instructions,
     useMappedEvidence: payload.useMappedEvidence,
+    allowGrantEvidenceBypass: payload.allowGrantEvidenceBypass,
     useFigures: payload.useFigures,
     selectedFigureIds: payload.selectedFigureIds,
     writingSampleBlock,
@@ -4111,6 +4129,7 @@ async function generateSection(
   const useMappedEvidence = bundle.useMappedEvidence;
   const citationContext = bundle.citationContext;
   const evidencePromptContext = bundle.evidencePromptContext;
+  const grantDraftContextContract = bundle.grantDraftContextContract || null;
   const blueprintPromptContext = bundle.blueprintPromptContext;
   const sectionWordBudget = bundle.sectionWordBudget;
   const prompt = bundle.prompt;
@@ -4118,7 +4137,7 @@ async function generateSection(
 
   // DEBUG: Log evidence and blueprint context for troubleshooting citation injection
   console.log(`[PaperDrafting] Section: ${sectionKey}, useMappedEvidence: ${useMappedEvidence}`);
-  console.log(`[PaperDrafting] Blueprint exists: ${!!blueprintPromptContext}, mustCover count: ${blueprintPromptContext?.mustCover?.length || 0}`);
+  console.log(`[PaperDrafting] Blueprint exists: ${!!blueprintPromptContext}, dimension count: ${blueprintPromptContext?.dimensions?.length || 0}`);
   console.log(`[PaperDrafting] Evidence pack - allowedKeys: ${evidencePromptContext?.allowedCitationKeys?.length || 0}, dimensions: ${evidencePromptContext?.dimensionEvidence?.length || 0}, coverageAssignments: ${evidencePromptContext?.coverageAssignments?.length || 0}, gaps: ${evidencePromptContext?.gaps?.length || 0}`);
   if (evidencePromptContext?.allowedCitationKeys?.length) {
     console.log(`[PaperDrafting] Allowed citation keys: ${evidencePromptContext.allowedCitationKeys.join(', ')}`);
@@ -4147,6 +4166,7 @@ async function generateSection(
   let pass2ValidationReport: unknown;
   let mergedValidationReport: unknown;
   let pass2CompletedAt: Date | undefined;
+  let directGrantGenerationTrace: GrantGenerationTrace | null = null;
   const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
   const grantStrategy = grantBacked
     ? resolveGrantDraftingStrategy(buildGrantDraftingStrategyInput({
@@ -4295,13 +4315,14 @@ async function generateSection(
     pass2PromptUsed = polishResult.promptUsed;
     pass2TokensUsed = polishResult.tokensUsed ?? undefined;
     pass2ValidationReport = polishResult.driftReport;
-    mergedValidationReport = {
-      ...(pass2ValidationReport && typeof pass2ValidationReport === 'object' && !Array.isArray(pass2ValidationReport)
-        ? pass2ValidationReport as Record<string, unknown>
-        : {}),
-      ...(polishResult.grantComplianceReport ? { grantComplianceReport: polishResult.grantComplianceReport } : {}),
-      ...(polishResult.reviewerReadinessReport ? { reviewerReadinessReport: polishResult.reviewerReadinessReport } : {}),
-    };
+    mergedValidationReport = mergeGrantValidationReport(
+      pass2ValidationReport,
+      {
+        contract: grantDraftContextContract,
+        grantComplianceReport: polishResult.grantComplianceReport || null,
+        reviewerReadinessReport: polishResult.reviewerReadinessReport || null,
+      }
+    );
     pass2CompletedAt = new Date();
     llmTokensUsed = (llmTokensUsed || 0) + (polishResult.tokensUsed || 0);
     if (llmTokensUsed === 0) llmTokensUsed = undefined;
@@ -4335,7 +4356,9 @@ async function generateSection(
 
     llmTokensUsed = result.response.outputTokens;
     const rawOutput = (result.response.output || '').trim();
-    rawContent = extractSectionOutput(rawOutput).content;
+    const extracted = extractSectionOutput(rawOutput);
+    rawContent = extracted.content;
+    directGrantGenerationTrace = extracted.grantGenerationTrace;
   }
 
   if (!rawContent?.trim()) {
@@ -4501,6 +4524,24 @@ async function generateSection(
     });
   }
 
+  if (grantDraftContextContract && !mergedValidationReport) {
+    const validation = buildGrantPostGenerationValidation({
+      contract: grantDraftContextContract,
+      content: polishedContent,
+      trace: directGrantGenerationTrace,
+      stage: 'pass2',
+    });
+    mergedValidationReport = mergeGrantValidationReport(null, {
+      contract: grantDraftContextContract,
+      grantComplianceReport: validation.grantComplianceReport,
+      reviewerReadinessReport: validation.reviewerReadinessReport,
+    });
+  } else if (grantDraftContextContract && mergedValidationReport) {
+    mergedValidationReport = mergeGrantValidationReport(mergedValidationReport, {
+      contract: grantDraftContextContract,
+    });
+  }
+
   await emitStatus?.('persist', 'Saving section and citation usage metadata');
   const [updatedDraft, usageSync] = await Promise.all([
     updateDraftContent(
@@ -4569,6 +4610,38 @@ async function generateSection(
         sectionKey
       });
     }
+  } else if (grantDraftContextContract) {
+    await prisma.paperSection.upsert({
+      where: { sessionId_sectionKey: { sessionId, sectionKey } },
+      update: {
+        content: polishedContent,
+        wordCount: computeWordCount(polishedContent),
+        generationMode: 'single_pass',
+        promptUsed: prompt,
+        llmResponse: polishedContent,
+        tokensUsed: llmTokensUsed,
+        validationReport: mergedValidationReport as any,
+        status: 'DRAFT',
+        isStale: false,
+        generatedAt: new Date(),
+        version: { increment: 1 },
+      },
+      create: {
+        sessionId,
+        sectionKey,
+        displayName: formatSectionLabel(sectionKey),
+        content: polishedContent,
+        wordCount: computeWordCount(polishedContent),
+        generationMode: 'single_pass',
+        promptUsed: prompt,
+        llmResponse: polishedContent,
+        tokensUsed: llmTokensUsed,
+        validationReport: mergedValidationReport as any,
+        status: 'DRAFT',
+        isStale: false,
+        generatedAt: new Date(),
+      },
+    });
   }
 
   const dimensionCoverageReport = (mergedValidationReport || pass2ValidationReport)
@@ -4655,6 +4728,7 @@ async function buildSectionPromptRuntimeBundle(params: {
   sectionKey: string;
   instructions?: string;
   useMappedEvidence?: boolean;
+  allowGrantEvidenceBypass?: boolean;
   useFigures?: boolean;
   selectedFigureIds?: string[];
   writingSampleBlock?: string;
@@ -4663,6 +4737,7 @@ async function buildSectionPromptRuntimeBundle(params: {
   const { sessionId, session, paperTypeCode, sectionKey, tenantContext } = params;
   const normalizedSectionKey = normalizeSectionKey(sectionKey);
   const requestedMappedEvidence = params.useMappedEvidence !== false;
+  const explicitGrantEvidenceBypass = params.allowGrantEvidenceBypass === true || params.useMappedEvidence === false;
   const sectionContextPolicy = await resolveSectionContextPolicyForDrafting({
     sectionKey: normalizedSectionKey,
     paperTypeCode,
@@ -4749,6 +4824,8 @@ async function buildSectionPromptRuntimeBundle(params: {
     const thematicBlueprint = currentSectionPlan?.thematicBlueprint || {
       mustCover: currentSectionPlan?.mustCover || [],
       mustAvoid: currentSectionPlan?.mustAvoid || [],
+      dimensions: currentSectionPlan?.dimensions || [],
+      ...(currentSectionPlan?.dimensionTyping ? { dimensionTyping: currentSectionPlan.dimensionTyping } : {}),
       ...(currentSectionPlan?.mustCoverTyping ? { mustCoverTyping: currentSectionPlan.mustCoverTyping } : {}),
       ...(typeof currentSectionPlan?.suggestedCitationCount === 'number'
         ? { suggestedCitationCount: currentSectionPlan.suggestedCitationCount }
@@ -4762,6 +4839,8 @@ async function buildSectionPromptRuntimeBundle(params: {
       keyContributions: blueprint.keyContributions,
       sectionPlan: blueprint.sectionPlan.map((entry) => ({ sectionKey: entry.sectionKey, purpose: entry.purpose })),
       mustCover: thematicBlueprint.mustCover || [],
+      dimensions: thematicBlueprint.dimensions || [],
+      dimensionTyping: thematicBlueprint.dimensionTyping || currentSectionPlan?.dimensionTyping,
       mustAvoid: thematicBlueprint.mustAvoid || [],
       wordBudget: blueprintWordBudget,
       thematicBlueprint,
@@ -4838,9 +4917,7 @@ async function buildSectionPromptRuntimeBundle(params: {
         || (evidencePack.coverageAssignments?.length || 0) > 0
       )
     ) {
-      // Grant-backed drafting should not hard-fail when mapped evidence is missing.
-      // Fall back to direct drafting (AUTO_CITATION_MODE=OFF) so users can proceed.
-      if (grantBacked) {
+      if (grantBacked && explicitGrantEvidenceBypass) {
         useMappedEvidence = false;
         evidencePromptContext = {
           useMappedEvidence: false,
@@ -4874,6 +4951,41 @@ async function buildSectionPromptRuntimeBundle(params: {
       coverageAssignments: [],
       evidenceDigest: { digests: [], mustCiteKeys: [], optionalCiteKeys: [] }
     };
+  }
+
+  const grantDraftContextContract = grantBacked && blueprintPromptContext
+    ? buildGrantDraftContextContract({
+        section: {
+          sectionKey: normalizedSectionKey,
+          label: blueprintPromptContext.displayLabel || normalizedSectionKey,
+          workflowMode: 'app_draft',
+          citationMode: blueprintPromptContext.citationMode || null,
+          mustCover: blueprintPromptContext.mustCover || [],
+          dimensions: blueprintPromptContext.dimensions || [],
+          grantRuleProfile: blueprintPromptContext.grantRuleProfile || null,
+          grantSectionComplianceContract: blueprintPromptContext.grantSectionComplianceContract || null,
+          authoritativePrepBundle: blueprintPromptContext.authoritativePrepBundle || blueprintPromptContext.prepContextBlock || null,
+          relatedPrepAwareness: blueprintPromptContext.relatedPrepAwareness || null,
+          wordBudget: blueprintPromptContext.wordBudget,
+          characterLimit: blueprintPromptContext.characterLimit,
+        },
+        grantContextSummary: blueprintPromptContext.grantContextSummary || null,
+        evidence: evidencePromptContext,
+        allowEvidenceBypass: explicitGrantEvidenceBypass,
+      })
+    : null;
+
+  if (grantDraftContextContract?.readiness.issues.length) {
+    throw new DraftingRequestError(
+      'Grant evidence readiness failed',
+      409,
+      {
+        error: 'Grant evidence readiness failed',
+        sectionKey: normalizedSectionKey,
+        readiness: grantDraftContextContract.readiness,
+        grantDraftContextFingerprint: grantDraftContextContract.fingerprint,
+      }
+    );
   }
 
   const sharedContext = {
@@ -4933,29 +5045,28 @@ async function buildSectionPromptRuntimeBundle(params: {
     sectionWordBudget,
     blueprintPromptContext,
     evidencePromptContext,
+    grantDraftContextContract,
     figurePromptContext,
     previousSectionMemories
   };
 }
 
 /**
- * Build dimension plan deterministically from the frozen blueprint mustCover
- * dimensions ONLY (same labels + same order). No new dimensions are created
- * in drafting flow. Evidence mappings are used only to attach citation keys.
+ * Build dimension plan deterministically from the frozen blueprint dimensions
+ * ONLY (same labels + same order). Section mustCover remains writing guidance;
+ * it is not used as the literature/citation spine.
  *
- * Returns null when the blueprint has no mustCover for this section.
+ * Returns null when the blueprint has no dimensions for this section.
  */
 function buildBlueprintDimensionPlan(
   bundle: SectionPromptRuntimeBundle
 ): DimensionPlanEntry[] | null {
   const contract = bundle.blueprintPromptContext?.grantSectionComplianceContract
-  const mustCover = (contract?.requiredPoints?.length
-    ? contract.requiredPoints
-    : (bundle.blueprintPromptContext?.mustCover || []))
+  const dimensions = (bundle.blueprintPromptContext?.dimensions || [])
     .map((dimensionLabel) => String(dimensionLabel || '').trim())
     .filter(Boolean);
 
-  if (mustCover.length === 0) return null;
+  if (dimensions.length === 0) return null;
 
   const evidenceByDimension = new Map<string, string[]>();
   for (const entry of bundle.evidencePromptContext.dimensionEvidence || []) {
@@ -4977,13 +5088,13 @@ function buildBlueprintDimensionPlan(
     .map((claim) => String(claim || '').trim())
     .filter(Boolean);
 
-  const plan: DimensionPlanEntry[] = mustCover
+  const plan: DimensionPlanEntry[] = dimensions
     .map((dimensionLabel, index) => {
       const dimensionKey = normalizeDimensionKey(dimensionLabel);
       if (!dimensionKey) return null;
       const mustUseCitationKeys = evidenceByDimension.get(dimensionKey) || [];
-      const isLast = index === mustCover.length - 1;
-      const nextLabel = isLast ? null : mustCover[index + 1];
+      const isLast = index === dimensions.length - 1;
+      const nextLabel = isLast ? null : dimensions[index + 1];
       const bridgeHint = isLast
         ? 'Conclude this dimension naturally as the final topic of the section.'
         : `Transition smoothly from "${dimensionLabel}" into the next topic: "${nextLabel}".`;
@@ -5005,8 +5116,8 @@ function buildBlueprintDimensionPlan(
   return applyDimensionPlanMetadata(plan, bundle.sectionWordBudget);
 }
 
-// parseDimensionPlan removed — blueprint mustCover dimensions are now the
-// single source of truth.  See buildBlueprintDimensionPlan().
+// parseDimensionPlan removed. Blueprint dimensions are now the single source
+// of truth for literature/citation flow. See buildBlueprintDimensionPlan().
 
 function collectCanonicalCitationKeys(
   content: string,
@@ -5061,10 +5172,12 @@ async function persistDimensionFlowState(params: {
   existingValidationReport: unknown;
   flow: DimensionFlowState;
   stitchedContent?: string;
+  validationReportOverride?: Record<string, unknown> | null;
 }) {
   const now = new Date();
   const content = params.stitchedContent ?? undefined;
-  const cleanedValidationReport = stripDimensionFlowFromValidationReport(params.existingValidationReport);
+  const cleanedValidationReport = params.validationReportOverride
+    || stripDimensionFlowFromValidationReport(params.existingValidationReport);
   return prisma.paperSection.update({
     where: { id: params.sectionId },
     data: {
@@ -5253,7 +5366,7 @@ function buildDimensionFlowResponse(
 }
 
 // buildDimensionPlannerPrompt removed — dimension planning no longer uses an
-// LLM call.  Blueprint mustCover dimensions are the single source of truth.
+// LLM call. Blueprint dimensions are the single source of truth.
 // See buildBlueprintDimensionPlan().
 
 async function generateDimensionProposal(params: {
@@ -7202,6 +7315,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           sectionKey,
           instructions: payload.instructions,
           useMappedEvidence: payload.useMappedEvidence,
+          allowGrantEvidenceBypass: payload.allowGrantEvidenceBypass,
           useFigures: payload.useFigures,
           selectedFigureIds: payload.selectedFigureIds,
           tenantContext
@@ -7228,7 +7342,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         });
 
         // Dimension plan is built deterministically from the frozen blueprint
-        // mustCover dimensions — no LLM call needed.  These are the same
+        // blueprint dimensions — no LLM call needed. These are the same
         // dimensions used for paper relevance mapping, citation mapping, and
         // evidence card mapping.
         const plan = buildBlueprintDimensionPlan(bundle);
@@ -7236,7 +7350,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           return NextResponse.json(
             {
               error: 'No blueprint evidence pillars found for this section',
-              hint: 'Ensure the blueprint has mustCover dimensions defined for this section before starting dimension flow.',
+              hint: 'Ensure the blueprint has dimensions defined for this section before starting dimension flow.',
               sectionKey
             },
             { status: 422 }
@@ -7313,6 +7427,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           paperTypeCode,
           sectionKey,
           useMappedEvidence: payload.useMappedEvidence,
+          allowGrantEvidenceBypass: payload.allowGrantEvidenceBypass,
           useFigures: payload.useFigures,
           selectedFigureIds: payload.selectedFigureIds,
           tenantContext
@@ -7505,6 +7620,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           paperTypeCode,
           sectionKey,
           useMappedEvidence: payload.useMappedEvidence,
+          allowGrantEvidenceBypass: payload.allowGrantEvidenceBypass,
           useFigures: payload.useFigures,
           selectedFigureIds: payload.selectedFigureIds,
           tenantContext
@@ -7662,12 +7778,28 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           };
         }
         sectionContentForPersist = stripInlineMarkdownStyling(polishDraftMarkdown(sectionContentForPersist));
+        const dimensionGrantValidation = flowCompleted && bundle.grantDraftContextContract
+          ? buildGrantPostGenerationValidation({
+              contract: bundle.grantDraftContextContract,
+              content: sectionContentForPersist,
+              trace: null,
+              stage: 'pass2',
+            })
+          : null;
+        const dimensionValidationReport = flowCompleted && bundle.grantDraftContextContract && dimensionGrantValidation
+          ? mergeGrantValidationReport(sectionRecord.validationReport, {
+              contract: bundle.grantDraftContextContract,
+              grantComplianceReport: dimensionGrantValidation.grantComplianceReport,
+              reviewerReadinessReport: dimensionGrantValidation.reviewerReadinessReport,
+            })
+          : null;
 
         let persistedSection = await persistDimensionFlowState({
           sectionId: sectionRecord.id,
           existingValidationReport: sectionRecord.validationReport,
           flow,
-          stitchedContent: sectionContentForPersist
+          stitchedContent: sectionContentForPersist,
+          validationReportOverride: dimensionValidationReport,
         });
 
         if (flowCompleted) {
@@ -7815,6 +7947,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           paperTypeCode,
           sectionKey,
           useMappedEvidence: payload.useMappedEvidence,
+          allowGrantEvidenceBypass: payload.allowGrantEvidenceBypass,
           useFigures: payload.useFigures,
           selectedFigureIds: payload.selectedFigureIds,
           tenantContext

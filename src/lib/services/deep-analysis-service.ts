@@ -3,6 +3,10 @@ import type { DeepAnalysisStatus, Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { blueprintService, type BlueprintWithSectionPlan } from './blueprint-service';
 import {
+  isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
+} from '@/lib/grants/blueprintMetadata';
+import {
   BATCH_MAPPING_CHUNK_SIZE,
   DEEP_ANALYSIS_LABELS,
   DEFAULT_EXTRACTION_CONCURRENCY,
@@ -422,20 +426,30 @@ class DeepAnalysisService {
       return { blueprint: null, dimensions: [], dimensionHints: [] };
     }
 
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     const dimensions = Array.from(
       new Set(
-        blueprint.sectionPlan.flatMap(section => Array.isArray(section.mustCover) ? section.mustCover : [])
+        blueprint.sectionPlan.flatMap(section =>
+          grantBacked
+            ? resolveGrantSectionDimensions(section)
+            : (Array.isArray(section.mustCover) ? section.mustCover : [])
+        )
       )
     );
     const dimensionHints = blueprint.sectionPlan.flatMap((section) =>
-      (Array.isArray(section.mustCover) ? section.mustCover : []).map((dimension) => ({
+      (grantBacked
+        ? resolveGrantSectionDimensions(section)
+        : (Array.isArray(section.mustCover) ? section.mustCover : [])
+      ).map((dimension) => ({
         sectionKey: section.sectionKey,
         dimension,
         grantSemantic: section.grantSemantic || null,
         persuasionRole: inferGrantPersuasionRole({
           dimension,
           semantic: section.grantSemantic || null,
-          dimensionType: section.mustCoverTyping?.[dimension],
+          dimensionType: grantBacked
+            ? section.dimensionTyping?.[dimension]
+            : section.mustCoverTyping?.[dimension],
         }),
       }))
     );
@@ -1640,8 +1654,10 @@ class DeepAnalysisService {
       };
     }
 
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     const allDimensions = blueprint.sectionPlan.flatMap(section =>
-      (section.mustCover || []).map(dimension => ({ sectionKey: section.sectionKey, dimension }))
+      (grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []))
+        .map(dimension => ({ sectionKey: section.sectionKey, dimension }))
     );
 
     if (allDimensions.length === 0) {
@@ -1941,9 +1957,11 @@ class DeepAnalysisService {
       minConfidence: item.minConfidence,
     }));
 
+    const grantBacked = blueprint ? isGrantBackedPaperTypeCode(blueprint.paperTypeCode) : false;
     const blueprintDimensions = blueprint
       ? blueprint.sectionPlan.flatMap(section =>
-        (section.mustCover || []).map(dimension => ({ sectionKey: section.sectionKey, dimension }))
+        (grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []))
+          .map(dimension => ({ sectionKey: section.sectionKey, dimension }))
       )
       : [];
 

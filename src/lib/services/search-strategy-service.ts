@@ -9,6 +9,10 @@
 
 import { prisma } from '../prisma';
 import { buildGrantBackedSearchStrategy } from '@/lib/grants/searchStrategy';
+import {
+  isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
+} from '@/lib/grants/blueprintMetadata';
 import { llmGateway, type TenantContext } from '../metering';
 import { blueprintService, type BlueprintWithSectionPlan, type SectionPlanItem } from './blueprint-service';
 import { paperTypeService } from './paper-type-service';
@@ -890,9 +894,12 @@ Return ONLY the JSON array.`;
       gap: 0
     };
     
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     for (const section of blueprint.sectionPlan) {
-      if (section.mustCoverTyping) {
-        for (const dimType of Object.values(section.mustCoverTyping)) {
+      const typing = grantBacked ? section.dimensionTyping : section.mustCoverTyping;
+      const dimensions = grantBacked ? resolveGrantSectionDimensions(section) : section.mustCover;
+      if (typing && dimensions.length > 0) {
+        for (const dimType of Object.values(typing)) {
           if (typeCounts[dimType] !== undefined) {
             typeCounts[dimType]++;
           }

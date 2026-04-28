@@ -50,6 +50,7 @@ export interface GrantPromptComposerInput {
   seededContext?: string | null
   purpose?: string | null
   mustCover?: string[]
+  dimensions?: string[]
   mustAvoid?: string[]
   wordBudget?: number | null
   characterLimit?: number | null
@@ -153,6 +154,7 @@ function formatGrantRulesBlock(profile?: GrantRuleProfile | null): string {
 
 function buildBlueprintContextBlock(input: GrantPromptComposerInput): string {
   const mustCover = dedupeStrings(input.mustCover || []).slice(0, 8)
+  const dimensions = dedupeStrings(input.dimensions || []).slice(0, 8)
   const mustAvoid = dedupeStrings(input.mustAvoid || []).slice(0, 6)
   const contributions = dedupeStrings(input.keyContributions || []).slice(0, 5)
 
@@ -166,7 +168,8 @@ function buildBlueprintContextBlock(input: GrantPromptComposerInput): string {
     input.thesisStatement ? `- Proposal thesis: ${input.thesisStatement}` : '',
     input.centralObjective ? `- Central objective: ${input.centralObjective}` : '',
     contributions.length > 0 ? `- Key contributions: ${contributions.join(' | ')}` : '',
-    mustCover.length > 0 ? `- Must cover: ${mustCover.join(' | ')}` : '',
+    mustCover.length > 0 ? `- Section writing pointers: ${mustCover.join(' | ')}` : '',
+    dimensions.length > 0 ? `- Literature/citation dimensions: ${dimensions.join(' | ')}` : '',
     mustAvoid.length > 0 ? `- Must avoid: ${mustAvoid.join(' | ')}` : '',
   ].filter(Boolean).join('\n')
 }
@@ -290,21 +293,21 @@ function buildPass2ReviewerPolishFallback(): string {
 
 function buildPass1OutputFallback(input: GrantPromptComposerInput): string {
   if (input.outputMode === 'pass1_json') {
-    const mustCover = dedupeStrings(input.mustCover || [])
-    const roleGuide = mustCover.length > 0
-      ? mustCover.map((dimensionLabel, index) => {
-          const role = mustCover.length <= 1
+    const dimensions = dedupeStrings(input.dimensions || [])
+    const roleGuide = dimensions.length > 0
+      ? dimensions.map((dimensionLabel, index) => {
+          const role = dimensions.length <= 1
             ? 'intro_conclusion'
             : index === 0
               ? 'introduction'
-              : index === mustCover.length - 1
+              : index === dimensions.length - 1
                 ? 'conclusion'
                 : 'body'
           return `- ${normalizeDimensionKey(dimensionLabel)} | ${dimensionLabel} | role=${role}`
         }).join('\n')
       : '- (no blueprint evidence pillars available for this section)'
-    const citationGuide = mustCover.length > 0
-      ? mustCover.map((dimensionLabel) => {
+    const citationGuide = dimensions.length > 0
+      ? dimensions.map((dimensionLabel) => {
           const dimensionKey = normalizeDimensionKey(dimensionLabel)
           const entry = (input.dimensionCitationHints || []).find(
             (item) => normalizeDimensionKey(item.dimension) === dimensionKey

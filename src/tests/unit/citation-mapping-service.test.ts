@@ -452,7 +452,8 @@ describe('CitationMappingService', () => {
           {
             sectionKey: 'problem_need',
             purpose: 'Establish need',
-            mustCover: ['Scale, burden, or urgency of medication non-adherence among older adults'],
+            mustCover: [],
+            dimensions: ['Scale, burden, or urgency of medication non-adherence among older adults'],
             mustAvoid: []
           }
         ]

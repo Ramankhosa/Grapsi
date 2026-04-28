@@ -1,5 +1,8 @@
 import { prisma } from '../prisma';
-import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import {
+  isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
+} from '@/lib/grants/blueprintMetadata';
 import {
   getGrantEvidenceDigestTag,
   getGrantEvidenceUsageHint,
@@ -949,9 +952,12 @@ class EvidencePackService {
       s => normalizeSectionKey(s.sectionKey) === normalizedRequestedSectionKey
     );
     const resolvedSectionKey = section?.sectionKey || requestedSectionKey;
-    const mustCover = section?.mustCover || [];
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
+    const dimensions = section
+      ? (grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []))
+      : [];
 
-    if (!section || mustCover.length === 0) {
+    if (!section || dimensions.length === 0) {
       return {
         sectionKey: resolvedSectionKey,
         hasBlueprint: true,
@@ -965,10 +971,9 @@ class EvidencePackService {
 
     const perDimension = new Map<string, EvidenceCitation[]>();
     const sectionKeyNormalized = normalizeSectionKey(section.sectionKey);
-    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     const selectionLimits = getEvidencePackSelectionLimits(sectionKeyNormalized, {
       paperTypeCode: blueprint.paperTypeCode,
-      mustCoverCount: mustCover.length,
+      mustCoverCount: dimensions.length,
       suggestedCitationCount: section.suggestedCitationCount,
     });
 
@@ -1120,13 +1125,15 @@ class EvidencePackService {
       + (grantBacked && role ? computeGrantPersuasionWeight(citation, role) * 100 : 0)
       + (citation.year || 0);
 
-    for (const dim of mustCover) {
+    for (const dim of dimensions) {
       const normalized = normalizeDimension(dim);
       const grantPersuasionRole = grantBacked
         ? inferGrantPersuasionRole({
           dimension: dim,
           semantic: section.grantSemantic || null,
-          dimensionType: section.mustCoverTyping?.[dim],
+          dimensionType: grantBacked
+            ? section.dimensionTyping?.[dim]
+            : section.mustCoverTyping?.[dim],
         })
         : undefined;
       const rows = (perDimension.get(normalized) || [])

@@ -59,6 +59,8 @@ export type DimensionType =
 export interface ThematicBlueprint {
   mustCover: string[];
   mustAvoid: string[];
+  dimensions?: string[];
+  dimensionTyping?: Record<string, DimensionType>;
   mustCoverTyping?: Record<string, DimensionType>;
   suggestedCitationCount?: number;
 }
@@ -70,6 +72,7 @@ export interface SectionPlanItem {
   purpose: string;
   mustCover: string[];
   mustAvoid: string[];
+  dimensions?: string[];
   seededContext?: string | null;
   wordBudget?: number;
   characterLimit?: number;
@@ -93,6 +96,7 @@ export interface SectionPlanItem {
   outputsPromised: string[]; // What this section will provide for later sections
   
   // Citation mapping support (Part B integration)
+  dimensionTyping?: Record<string, DimensionType>; // Maps each literature dimension to its type
   mustCoverTyping?: Record<string, DimensionType>; // Maps each mustCover dimension to its type
   suggestedCitationCount?: number; // Minimum citations expected for this section
   thematicBlueprint?: ThematicBlueprint;
@@ -121,10 +125,12 @@ export interface SectionContext {
   purpose: string;
   mustCover: string[];
   mustAvoid: string[];
+  dimensions?: string[];
   seededContext?: string | null;
   wordBudget?: number;
   characterLimit?: number;
   dependencies: string[];
+  dimensionTyping?: Record<string, DimensionType>;
   mustCoverTyping?: Record<string, DimensionType>;
   suggestedCitationCount?: number;
   citationMode?: GrantCitationMode | null;
@@ -534,10 +540,12 @@ class BlueprintService {
         purpose: sectionPlan.purpose,
         mustCover: sectionPlan.mustCover,
         mustAvoid: sectionPlan.mustAvoid,
+        dimensions: sectionPlan.dimensions,
         seededContext: sectionPlan.seededContext || null,
         wordBudget: sectionPlan.wordBudget,
         characterLimit: sectionPlan.characterLimit,
         dependencies: sectionPlan.dependencies,
+        dimensionTyping: sectionPlan.dimensionTyping,
         mustCoverTyping: sectionPlan.mustCoverTyping,
         suggestedCitationCount: sectionPlan.suggestedCitationCount,
         citationMode: sectionPlan.citationMode,
@@ -804,11 +812,22 @@ CRITICAL RULES:
       // Validate and normalize section plan items
       const sectionPlan: SectionPlanItem[] = parsed.sectionPlan.map((item: any) => {
         const mustCover = Array.isArray(item.mustCover) ? item.mustCover : [];
+        const dimensions = Array.isArray(item.dimensions) ? item.dimensions : [];
+        const validTypes = ['foundational', 'methodological', 'empirical', 'comparative', 'gap'];
+
+        let dimensionTyping: Record<string, DimensionType> | undefined;
+        if (item.dimensionTyping && typeof item.dimensionTyping === 'object') {
+          dimensionTyping = {};
+          for (const [dimension, type] of Object.entries(item.dimensionTyping)) {
+            dimensionTyping[dimension] = validTypes.includes(type as string)
+              ? type as DimensionType
+              : 'empirical';
+          }
+        }
         
         // Validate and normalize mustCoverTyping
         let mustCoverTyping: Record<string, DimensionType> | undefined;
         if (item.mustCoverTyping && typeof item.mustCoverTyping === 'object') {
-          const validTypes = ['foundational', 'methodological', 'empirical', 'comparative', 'gap'];
           mustCoverTyping = {};
           for (const [dimension, type] of Object.entries(item.mustCoverTyping)) {
             if (validTypes.includes(type as string)) {
@@ -827,6 +846,7 @@ CRITICAL RULES:
           purpose: item.purpose || '',
           mustCover,
           mustAvoid: Array.isArray(item.mustAvoid) ? item.mustAvoid : [],
+          dimensions,
           seededContext: typeof item.seededContext === 'string' ? item.seededContext : undefined,
           wordBudget: typeof item.wordBudget === 'number' ? item.wordBudget : undefined,
           characterLimit: typeof item.characterLimit === 'number' ? item.characterLimit : undefined,
@@ -860,6 +880,7 @@ CRITICAL RULES:
             : undefined,
           dependencies: Array.isArray(item.dependencies) ? item.dependencies : [],
           outputsPromised: Array.isArray(item.outputsPromised) ? item.outputsPromised : [],
+          dimensionTyping,
           mustCoverTyping,
           suggestedCitationCount: typeof item.suggestedCitationCount === 'number' 
             ? item.suggestedCitationCount 
@@ -1042,6 +1063,39 @@ CRITICAL RULES:
         : Array.isArray(thematicRaw?.mustAvoid)
           ? thematicRaw.mustAvoid.map(item => String(item || '').trim()).filter(Boolean)
           : [];
+      const dimensions = Array.isArray(raw.dimensions)
+        ? raw.dimensions.map(item => String(item || '').trim()).filter(Boolean)
+        : Array.isArray(thematicRaw?.dimensions)
+          ? thematicRaw.dimensions.map(item => String(item || '').trim()).filter(Boolean)
+          : [];
+
+      const dimensionTypingRaw = (
+        raw.dimensionTyping
+        && typeof raw.dimensionTyping === 'object'
+        && !Array.isArray(raw.dimensionTyping)
+      )
+        ? raw.dimensionTyping as Record<string, unknown>
+        : (
+          thematicRaw?.dimensionTyping
+          && typeof thematicRaw.dimensionTyping === 'object'
+          && !Array.isArray(thematicRaw.dimensionTyping)
+        )
+          ? thematicRaw.dimensionTyping as Record<string, unknown>
+          : {};
+
+      const dimensionTyping: Record<string, DimensionType> = {};
+      for (const [dimension, type] of Object.entries(dimensionTypingRaw)) {
+        const normalizedType = String(type || '').trim().toLowerCase();
+        if (
+          normalizedType === 'foundational'
+          || normalizedType === 'methodological'
+          || normalizedType === 'empirical'
+          || normalizedType === 'comparative'
+          || normalizedType === 'gap'
+        ) {
+          dimensionTyping[String(dimension || '').trim()] = normalizedType as DimensionType;
+        }
+      }
 
       const mustCoverTypingRaw = (
         raw.mustCoverTyping
@@ -1079,6 +1133,8 @@ CRITICAL RULES:
       const thematicBlueprint: ThematicBlueprint = {
         mustCover,
         mustAvoid,
+        ...(dimensions.length > 0 ? { dimensions } : {}),
+        ...(Object.keys(dimensionTyping).length > 0 ? { dimensionTyping } : {}),
         ...(Object.keys(mustCoverTyping).length > 0 ? { mustCoverTyping } : {}),
         ...(typeof suggestedCitationCount === 'number' ? { suggestedCitationCount } : {}),
       };
@@ -1099,6 +1155,7 @@ CRITICAL RULES:
         purpose: String(raw.purpose || '').trim(),
         mustCover,
         mustAvoid,
+        ...(dimensions.length > 0 ? { dimensions } : {}),
         ...(typeof raw.seededContext === 'string' ? { seededContext: raw.seededContext.trim() } : {}),
         ...(typeof wordBudget === 'number' ? { wordBudget } : {}),
         ...(typeof raw.characterLimit === 'number' ? { characterLimit: Number(raw.characterLimit) } : {}),
@@ -1154,6 +1211,7 @@ CRITICAL RULES:
         outputsPromised: Array.isArray(raw.outputsPromised)
           ? raw.outputsPromised.map(item => String(item || '').trim()).filter(Boolean)
           : [],
+        ...(Object.keys(dimensionTyping).length > 0 ? { dimensionTyping } : {}),
         ...(Object.keys(mustCoverTyping).length > 0 ? { mustCoverTyping } : {}),
         ...(typeof suggestedCitationCount === 'number' ? { suggestedCitationCount } : {}),
         thematicBlueprint,

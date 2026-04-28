@@ -73,37 +73,43 @@ export class LLMGateway {
         llmRequest.inputTokens = this.estimateInputTokens(llmRequest)
       }
 
-      // 3. Create feature request for metering
-      const featureRequest: FeatureRequest = {
-        tenantId: tenantContext.tenantId,
-        featureCode: this.getFeatureForTask(llmRequest.taskCode),
-        taskCode: llmRequest.taskCode,
-        userId: tenantContext.userId,
-        metadata: {
-          idempotencyKey: llmRequest.idempotencyKey || crypto.randomUUID(),
-          stageCode: llmRequest.stageCode
-        }
-      }
+      const skipFeaturePolicy = llmRequest.metadata?.skipFeaturePolicy === true
 
-      // 4. Enforce metering policies (Super Admin controlled via Plan Features)
-      try {
-        decision = await this.system.policy.evaluateAccess(featureRequest)
-      } catch (policyError) {
-        if (policyError instanceof MeteringError) {
-          return {
-            success: false,
-            error: policyError
+      if (skipFeaturePolicy) {
+        decision = { allowed: true }
+      } else {
+        // 3. Create feature request for metering
+        const featureRequest: FeatureRequest = {
+          tenantId: tenantContext.tenantId,
+          featureCode: this.getFeatureForTask(llmRequest.taskCode),
+          taskCode: llmRequest.taskCode,
+          userId: tenantContext.userId,
+          metadata: {
+            idempotencyKey: llmRequest.idempotencyKey || crypto.randomUUID(),
+            stageCode: llmRequest.stageCode
           }
         }
-        // Re-throw unexpected errors
-        throw policyError
-      }
 
-      if (!decision.allowed) {
-        // This shouldn't happen anymore since policy now throws MeteringError
-        return {
-          success: false,
-          error: new MeteringError('POLICY_VIOLATION', decision.reason || 'Access denied')
+        // 4. Enforce metering policies (Super Admin controlled via Plan Features)
+        try {
+          decision = await this.system.policy.evaluateAccess(featureRequest)
+        } catch (policyError) {
+          if (policyError instanceof MeteringError) {
+            return {
+              success: false,
+              error: policyError
+            }
+          }
+          // Re-throw unexpected errors
+          throw policyError
+        }
+
+        if (!decision.allowed) {
+          // This shouldn't happen anymore since policy now throws MeteringError
+          return {
+            success: false,
+            error: new MeteringError('POLICY_VIOLATION', decision.reason || 'Access denied')
+          }
         }
       }
 
@@ -154,8 +160,12 @@ export class LLMGateway {
         console.warn('[Gateway]   This will NOT honor plan-specific LLM configurations!')
       }
 
+      const requestedPrimaryModel = typeof llmRequest.metadata?.primaryModelCode === 'string'
+        ? llmRequest.metadata.primaryModelCode.trim()
+        : ''
+
       // 6. Validate model capabilities (vision, streaming, etc.)
-      const selectedModel = modelResolution?.modelCode || 'gemini-2.5-pro' // Default model
+      const selectedModel = requestedPrimaryModel || modelResolution?.modelCode || 'gemini-2.5-pro' // Default model
       const capabilityCheck = this.validateModelCapabilities(selectedModel, llmRequest)
       if (!capabilityCheck.valid) {
         console.error(`✗ Model capability validation failed: ${capabilityCheck.error}`)
@@ -206,13 +216,30 @@ export class LLMGateway {
       // 8. Route to LLM provider with resolved model or default routing
       let response: LLMResponse
       
-      if (modelResolution) {
+      if (modelResolution || requestedPrimaryModel) {
+        const disableModelFallbacks = llmRequest.metadata?.disableModelFallbacks === true
+        const requestFallbackModels = Array.isArray(llmRequest.metadata?.fallbackModelCodes)
+          ? llmRequest.metadata.fallbackModelCodes
+              .map((modelCode) => String(modelCode || '').trim())
+              .filter(Boolean)
+          : []
+        const resolvedModelCode = modelResolution?.modelCode || selectedModel
+        const fallbackModelCodes = disableModelFallbacks
+          ? []
+          : [
+              ...(modelResolution?.fallbacks.map(f => f.modelCode) || []),
+              ...requestFallbackModels.filter((modelCode) =>
+                !(modelResolution?.fallbacks.some((fallback) => fallback.modelCode === modelCode))
+                && modelCode !== resolvedModelCode
+              ),
+            ]
+
         // Use the resolved model with fallbacks
         response = await llmProviderRouter.routeWithModel(
           llmRequest,
           decision,
-          modelResolution.modelCode,
-          modelResolution.fallbacks.map(f => f.modelCode)
+          selectedModel,
+          fallbackModelCodes
         )
       } else {
         // Fall back to default priority-based routing
@@ -541,6 +568,8 @@ export class LLMGateway {
       'gemini-3-pro-image-preview': { maxInput: 1000000, maxOutput: 8192 },
       
       // DeepSeek
+      'deepseek-v4-pro': { maxInput: 1000000, maxOutput: 384000 },
+      'deepseek-v4-flash': { maxInput: 1000000, maxOutput: 384000 },
       'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
       'deepseek-reasoner': { maxInput: 128000, maxOutput: 8192 },
 
@@ -659,7 +688,7 @@ export class LLMGateway {
       FUNDING_TEMPLATE_EXTRACT: 'FUNDING_DISCOVERY',
       FUNDING_GUIDELINE_EXTRACT: 'FUNDING_DISCOVERY',
       GRANT_PREP_CHAT: 'GRANT_PREP',
-      GRANT_BLUEPRINT_GENERATE: 'GRANT_DRAFTING',
+      GRANT_BLUEPRINT_GENERATE: 'GRANT_PREP',
       GRANT_SECTION_GENERATE: 'GRANT_DRAFTING',
       // Paper writing tasks
       LITERATURE_RELEVANCE: 'PAPER_DRAFTING',

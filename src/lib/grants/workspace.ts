@@ -14,6 +14,7 @@ import { generateGrantBlueprintWithLlm } from '@/lib/grants/blueprintLlmGenerati
 import { normalizeGrantCitationMode } from '@/lib/grants/citationMode'
 import {
   buildGrantThematicBlueprint,
+  normalizeGrantDimensionTyping,
   normalizeGrantMustCoverTyping,
   normalizeGrantSuggestedCitationCount,
 } from '@/lib/grants/blueprintMetadata'
@@ -159,12 +160,16 @@ function normalizeCompiledSection(
 ): CompiledGrantTemplateSection {
   const mustCover = Array.isArray(section.mustCover) ? section.mustCover : []
   const mustAvoid = Array.isArray(section.mustAvoid) ? section.mustAvoid : []
+  const dimensions = Array.isArray(section.dimensions) ? section.dimensions : []
+  const dimensionTyping = normalizeGrantDimensionTyping(dimensions, section.dimensionTyping)
   const mustCoverTyping = normalizeGrantMustCoverTyping(mustCover, section.mustCoverTyping)
   const suggestedCitationCount = normalizeGrantSuggestedCitationCount(section.suggestedCitationCount)
   const thematicBlueprint = section.thematicBlueprint
     ? buildGrantThematicBlueprint({
         mustCover,
         mustAvoid,
+        dimensions,
+        dimensionTyping,
         mustCoverTyping,
         suggestedCitationCount,
       })
@@ -197,6 +202,8 @@ function normalizeCompiledSection(
     templateIntentConfidence,
     mustCover,
     mustAvoid,
+    ...(dimensions.length > 0 ? { dimensions } : {}),
+    ...(dimensionTyping ? { dimensionTyping } : {}),
     ...(mustCoverTyping ? { mustCoverTyping } : {}),
     ...(typeof suggestedCitationCount === 'number' ? { suggestedCitationCount } : {}),
     ...(thematicBlueprint ? { thematicBlueprint } : {}),
@@ -607,6 +614,8 @@ export function buildBlueprintPlanFromCompiledTemplate(
       templateIntentConfidence: section.templateIntentConfidence ?? null,
       mustCover: section.mustCover || [],
       mustAvoid: section.mustAvoid || [],
+      dimensions: section.dimensions || [],
+      ...(section.dimensionTyping ? { dimensionTyping: section.dimensionTyping } : {}),
       ...(section.mustCoverTyping ? { mustCoverTyping: section.mustCoverTyping } : {}),
       ...(typeof section.suggestedCitationCount === 'number'
         ? { suggestedCitationCount: section.suggestedCitationCount }
@@ -885,6 +894,12 @@ export function buildPaperSectionPlanFromGrantSections(
     .map((section) => {
       const existing = existingByKey.get(section.sectionKey) || {}
       const existingThematic = asObject(existing.thematicBlueprint)
+      const dimensions = Array.isArray(section.dimensions) ? section.dimensions : []
+      const dimensionTyping =
+        normalizeGrantDimensionTyping(dimensions, section.dimensionTyping)
+        || normalizeGrantDimensionTyping(dimensions, section.thematicBlueprint?.dimensionTyping)
+        || normalizeGrantDimensionTyping(dimensions, existing.dimensionTyping)
+        || normalizeGrantDimensionTyping(dimensions, existingThematic.dimensionTyping)
       const mustCoverTyping =
         normalizeGrantMustCoverTyping(section.mustCover, section.mustCoverTyping)
         || normalizeGrantMustCoverTyping(section.mustCover, section.thematicBlueprint?.mustCoverTyping)
@@ -907,6 +922,8 @@ export function buildPaperSectionPlanFromGrantSections(
       const thematicBlueprint: GrantThematicBlueprint = buildGrantThematicBlueprint({
         mustCover: [...section.mustCover],
         mustAvoid: [...section.mustAvoid],
+        dimensions,
+        dimensionTyping,
         mustCoverTyping,
         suggestedCitationCount,
       })
@@ -918,6 +935,7 @@ export function buildPaperSectionPlanFromGrantSections(
         purpose: section.purpose,
         mustCover: [...section.mustCover],
         mustAvoid: [...section.mustAvoid],
+        dimensions,
         seededContext: section.seededContext,
         sectionType: section.sectionType,
         reviewerIntent: section.reviewerIntent,
@@ -942,6 +960,7 @@ export function buildPaperSectionPlanFromGrantSections(
           : {}),
         dependencies: [...section.dependencies],
         outputsPromised: asStringArray(existing.outputsPromised),
+        ...(dimensionTyping ? { dimensionTyping } : {}),
         ...(mustCoverTyping ? { mustCoverTyping } : {}),
         ...(typeof suggestedCitationCount === 'number'
           ? { suggestedCitationCount }
@@ -1135,6 +1154,12 @@ async function ensureGrantShadowWorkspaceTx(
         version: { increment: 1 },
       },
     })
+    if (input.resetStatus) {
+      await tx.paperSection.updateMany({
+        where: { sessionId: draftingSession.id },
+        data: { isStale: true },
+      })
+    }
   }
 
   return {
@@ -1713,6 +1738,8 @@ export async function getGrantWorkspace(input: {
       ...draft,
       content: shadowContent || null,
       status: String(paperSection?.status || draft.status || 'NOT_STARTED'),
+      isStale: Boolean(paperSection?.isStale),
+      validationReport: paperValidationReport,
       grantComplianceReport:
         asGrantComplianceReport(paperValidationReport.grantComplianceReport)
         || asGrantComplianceReport(draftRecord.grantComplianceReport)
@@ -1850,6 +1877,12 @@ export async function updateBlueprintPlan(input: {
 
   const normalizedSections = nextSections.map((section) => {
     const existing = existingPlanByKey.get(section.sectionKey)
+    const dimensions = Array.isArray(section.dimensions) ? section.dimensions : []
+    const dimensionTyping =
+      normalizeGrantDimensionTyping(dimensions, section.dimensionTyping)
+      || normalizeGrantDimensionTyping(dimensions, section.thematicBlueprint?.dimensionTyping)
+      || normalizeGrantDimensionTyping(dimensions, existing?.dimensionTyping)
+      || normalizeGrantDimensionTyping(dimensions, existing?.thematicBlueprint?.dimensionTyping)
     const mustCoverTyping = normalizeGrantMustCoverTyping(
       section.mustCover,
       section.mustCoverTyping
@@ -1866,6 +1899,8 @@ export async function updateBlueprintPlan(input: {
     const thematicBlueprint = buildGrantThematicBlueprint({
       mustCover: section.mustCover,
       mustAvoid: section.mustAvoid,
+      dimensions,
+      dimensionTyping,
       mustCoverTyping,
       suggestedCitationCount,
     })
@@ -1880,7 +1915,9 @@ export async function updateBlueprintPlan(input: {
 
     return {
       ...section,
+      dimensions,
       citationMode,
+      ...(dimensionTyping ? { dimensionTyping } : { dimensionTyping: undefined }),
       ...(mustCoverTyping ? { mustCoverTyping } : { mustCoverTyping: undefined }),
       suggestedCitationCount: suggestedCitationCount ?? null,
       thematicBlueprint,
@@ -1951,11 +1988,61 @@ export async function updateBlueprintPlan(input: {
   })
 }
 
+export async function generateBlueprintLiteratureDimensions(input: {
+  grantSessionId: string
+  tenantId: string
+  userId: string
+}) {
+  const workspace = await getGrantWorkspace({
+    grantSessionId: input.grantSessionId,
+    tenantId: input.tenantId,
+  })
+  if (!workspace?.blueprint) {
+    throw new Error('Grant blueprint not found')
+  }
+  if (workspace.blueprint.status === 'FROZEN') {
+    throw new Error('Cannot generate literature dimensions for a frozen grant blueprint. Unfreeze it first.')
+  }
+
+  const blueprint = workspace.blueprint
+  const guidelinePack = await resolveGuidelinePackForRevision(blueprint.sourceGuidelineRevisionId || null)
+  const enrichmentContext = buildGrantBlueprintHydrationContext({
+    blueprint,
+    projectTitle: workspace.grantSession.project.name,
+    fundingCallTitle: workspace.grantSession.fundingCall?.scheme_title || null,
+    agencyName: workspace.grantSession.fundingCall?.agency_name || null,
+    guidelinePack,
+  })
+  const tenantContext = await resolveGrantTenantContext(input.tenantId, input.userId)
+  const generated = await generateGrantBlueprintWithLlm({
+    baseSectionPlan: workspace.blueprint.sectionPlan,
+    context: enrichmentContext,
+    proposalFoundationHint: {
+      thesisStatement: workspace.proposalFoundation.thesisStatement || '',
+      centralObjective: workspace.proposalFoundation.centralObjective || '',
+      keyContributions: workspace.proposalFoundation.keyContributions || [],
+    },
+    tenantContext,
+    sessionId: input.grantSessionId,
+    requireLlm: true,
+  })
+
+  await updateBlueprintPlan({
+    grantSessionId: input.grantSessionId,
+    tenantId: input.tenantId,
+    userId: input.userId,
+    sections: generated.sectionPlan,
+  })
+
+  return generated
+}
+
 export async function setGrantBlueprintStatus(input: {
   grantSessionId: string
   tenantId: string
   userId: string
   status: 'DRAFT' | 'FROZEN'
+  overrideReason?: string | null
 }) {
   const workspace = await getGrantWorkspace({
     grantSessionId: input.grantSessionId,
@@ -1979,7 +2066,12 @@ export async function setGrantBlueprintStatus(input: {
 
     const readiness = await blueprintService.getFreezeReadiness(shadowWorkspace.draftingSessionId)
     if (!readiness.ok) {
-      throw new Error(readiness.issues.join('\n'))
+      const canOverrideGrantSectionWarnings = readiness.issues.every((issue) =>
+        issue.startsWith('Grant-backed section ')
+      )
+      if (!input.overrideReason?.trim() || !canOverrideGrantSectionWarnings) {
+        throw new Error(readiness.issues.join('\n'))
+      }
     }
 
     await prisma.$transaction(async (tx) => {

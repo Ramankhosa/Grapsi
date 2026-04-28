@@ -3390,6 +3390,7 @@ export default function SectionDraftingStage({
   }
 
   const sections = sectionConfigs || fallbackSections;
+  const isGrantApplicationDraft = isGrantBackedPaperTypeCode(paperTypeCode);
 
   return (
     <div className="min-h-screen bg-slate-50 pb-12">
@@ -3423,7 +3424,9 @@ export default function SectionDraftingStage({
       <div className="max-w-[850px] mx-auto mb-6 px-8 pt-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Paper Draft</h2>
+            <h2 className="text-xl font-semibold text-gray-900">
+              {isGrantApplicationDraft ? 'Grant Application Draft' : 'Paper Draft'}
+            </h2>
             <p className="text-sm text-gray-500">
               {totalWordCount} words
               {pendingChanges.size > 0 && <span className="ml-2 text-amber-500">• Saving...</span>}

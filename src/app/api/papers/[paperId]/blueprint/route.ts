@@ -61,6 +61,8 @@ const rhetoricalBlueprintSchema = z.object({
 const thematicBlueprintSchema = z.object({
   mustCover: z.array(z.string().min(10).max(200)),
   mustAvoid: z.array(z.string()),
+  dimensions: z.array(z.string().min(10).max(200)).optional(),
+  dimensionTyping: z.record(z.string(), dimensionTypeEnum).optional(),
   mustCoverTyping: z.record(z.string(), dimensionTypeEnum).optional(),
   suggestedCitationCount: z.number().min(0).max(50).optional()
 });
@@ -73,7 +75,9 @@ const updateBlueprintSchema = z.object({
   sectionPlan: z.array(z.object({
     sectionKey: z.string(),
     purpose: z.string(),
-    mustCover: z.array(z.string().min(10).max(200)), // Citation-mappable dimensions
+    mustCover: z.array(z.string().min(1).max(500)), // Section-writing pointers
+    dimensions: z.array(z.string().min(10).max(200)).optional(), // Citation-mappable literature pillars
+    dimensionTyping: z.record(z.string(), dimensionTypeEnum).optional(),
     mustCoverTyping: z.record(z.string(), dimensionTypeEnum).optional(),
     mustAvoid: z.array(z.string()),
     wordBudget: z.number().optional(),

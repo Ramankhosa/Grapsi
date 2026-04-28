@@ -23,6 +23,8 @@ type BlueprintLike = {
   sectionPlan?: Array<{
     sectionKey: string
     mustCover?: string[] | null
+    dimensions?: string[] | null
+    dimensionTyping?: Record<string, unknown> | null
     mustCoverTyping?: Record<string, unknown> | null
     suggestedCitationCount?: number | null
     grantSemantic?: string | null

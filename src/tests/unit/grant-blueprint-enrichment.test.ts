@@ -414,16 +414,16 @@ describe('grant blueprint enrichment', () => {
       focusAreas: ['cybersecurity'],
     });
 
-    expect(enriched[0].mustCover.length).toBeGreaterThanOrEqual(2);
-    expect(enriched[0].mustCover.length).toBeLessThanOrEqual(4);
-    expect(enriched[0].mustCoverTyping).toBeTruthy();
+    expect(enriched[0].dimensions?.length).toBeGreaterThanOrEqual(2);
+    expect(enriched[0].dimensions?.length).toBeLessThanOrEqual(4);
+    expect(enriched[0].dimensionTyping).toBeTruthy();
     expect(enriched[0].suggestedCitationCount).toBeGreaterThanOrEqual(2);
-    expect(enriched[0].thematicBlueprint?.mustCover).toEqual(enriched[0].mustCover);
+    expect(enriched[0].thematicBlueprint?.dimensions).toEqual(enriched[0].dimensions);
     expect(enriched[0].grantSemantic).toBe('summary');
     expect(enriched[0].prepContextBlock).toBeNull();
     expect(enriched[0].grantRuleProfile?.formatConstraints).toContain('Target approximately 600 words.');
 
-    expect(enriched[1].mustCover.length).toBe(0);
+    expect(enriched[1].dimensions || []).toHaveLength(0);
     expect(enriched[1].suggestedCitationCount).toBe(0);
     expect(enriched[1].grantSemantic).toBe('objectives');
 
@@ -559,7 +559,144 @@ describe('grant blueprint enrichment', () => {
     expect(prompt).toContain('Federated cyber range network with threat emulation labs');
     expect(prompt).toContain('"grantRuleProfile"');
     expect(prompt).toContain('"grantSectionComplianceContract"');
+    expect(prompt).toContain('"dimensions"');
+    expect(prompt).toContain('Do not output or modify purpose');
     expect(prompt).toContain('Explain the execution methodology and validation plan.');
+  });
+
+  it('lets the LLM refine only literature dimensions and preserves deterministic blueprint mapping', async () => {
+    const mockedGateway = vi.mocked(llmGateway.executeLLMOperation);
+    mockedGateway.mockResolvedValueOnce({
+      success: true,
+      response: {
+        output: JSON.stringify({
+          proposalFoundation: {
+            thesisStatement: 'LLM should not replace this.',
+            centralObjective: 'LLM should not replace this either.',
+            keyContributions: ['ignored'],
+          },
+          sections: [
+            {
+              sectionKey: 'technical_plan',
+              purpose: 'LLM purpose must be ignored.',
+              mustAvoid: ['LLM avoid rule must be ignored'],
+              suggestedCitationCount: 0,
+              citationMode: 'no_citations',
+              dimensions: [
+                'Implementation feasibility of federated cyber range networks',
+                'Validation benchmarks for threat emulation labs',
+              ],
+            },
+            {
+              sectionKey: 'manual_budget',
+              dimensions: ['Manual sections must not receive LLM dimensions'],
+            },
+          ],
+        }),
+      },
+    } as any);
+
+    const result = await generateGrantBlueprintWithLlm({
+      baseSectionPlan: [
+        makeSection({
+          sectionKey: 'technical_plan',
+          label: 'Technical Plan',
+          purpose: 'Explain the execution methodology, validation approach, milestones, and delivery readiness.',
+          reviewerIntent: 'Show implementation feasibility.',
+          mustCover: ['Describe the validated delivery model.'],
+          mustAvoid: ['Avoid vague implementation claims.'],
+          citationMode: 'mapped_evidence',
+        }),
+        makeSection({
+          sectionKey: 'manual_budget',
+          label: 'Budget',
+          sectionType: 'budget_rows',
+          workflowMode: 'app_support',
+          citationMode: 'no_citations',
+        }),
+      ],
+      context: {
+        projectTitle: 'Cyber Centre of Excellence',
+        fundingCallTitle: 'MeitY Cyber CoE Call',
+        globalKeywords: ['cyber range', 'threat emulation'],
+      },
+      proposalFoundationHint: {
+        thesisStatement: 'Deterministic foundation.',
+        centralObjective: 'Deterministic objective.',
+        keyContributions: ['Deterministic contribution one.', 'Deterministic contribution two.'],
+      },
+      tenantContext: { tenantId: 'tenant_1' } as any,
+      sessionId: 'prep_session_1',
+    });
+
+    const technical = result.sectionPlan.find((section) => section.sectionKey === 'technical_plan');
+    const budget = result.sectionPlan.find((section) => section.sectionKey === 'manual_budget');
+
+    expect(result.proposalFoundation.thesisStatement).toBe('Deterministic foundation.');
+    expect(result.diagnostics.invalidSections).toContain('manual_budget');
+    expect(technical?.purpose).toBe('Explain the execution methodology, validation approach, milestones, and delivery readiness.');
+    expect(technical?.mustCover).toEqual(['Describe the validated delivery model.']);
+    expect(technical?.mustAvoid).toContain('Avoid vague implementation claims.');
+    expect(technical?.mustAvoid).not.toContain('LLM avoid rule must be ignored');
+    expect(technical?.citationMode).toBe('mapped_evidence');
+    expect(technical?.suggestedCitationCount || 0).toBeGreaterThan(0);
+    expect(technical?.dimensions).toEqual([
+      'Implementation feasibility of federated cyber range networks',
+      'Validation benchmarks for threat emulation labs',
+    ]);
+    expect(budget?.dimensions || []).toEqual([]);
+  });
+
+  it('promotes high-confidence prep evidence into synthesis sections without exact section keys', () => {
+    const enriched = enrichGrantBlueprintSections([
+      makeSection({
+        sectionKey: 'project_summary',
+        label: 'Project Summary',
+        purpose: 'Summarize the proposal, need, intervention model, beneficiaries, and expected outcomes.',
+      }),
+    ], {
+      projectTitle: 'Phulkari Artisan STI Hub',
+      fundingCallTitle: 'STI Hubs',
+      prepEvidenceBySection: {
+        target_beneficiaries: [
+          {
+            stageKey: 'outcomes',
+            pointKey: 'women_artisans',
+            label: 'Target Beneficiaries',
+            sourceTemplatePointer: 'target_beneficiaries',
+            sectionKeys: ['target_beneficiaries'],
+            keywords: ['women Phulkari artisans', 'Jalandhar'],
+            thrustLinkage: ['livelihoods'],
+            factBullets: ['Target population is 100% female Phulkari artisans in Jalandhar micro-clusters.'],
+            ruleNotes: [],
+            confidence: 0.94,
+            captureBasis: ['user_confirmed'],
+            status: 'covered',
+          },
+        ],
+        intervention_model: [
+          {
+            stageKey: 'fit_and_scope',
+            pointKey: 'sti_delivery',
+            label: 'S&T delivery model',
+            sourceTemplatePointer: 'proposed_st_delivery_methods',
+            sectionKeys: ['proposed_st_delivery_methods'],
+            keywords: ['SHG mobilization', 'semi-mechanized winders'],
+            thrustLinkage: ['technology delivery'],
+            factBullets: ['S&T delivery will use SHG mobilization and semi-mechanized yarn winders.'],
+            ruleNotes: [],
+            confidence: 0.9,
+            captureBasis: ['user_confirmed'],
+            status: 'covered',
+          },
+        ],
+      },
+    });
+
+    expect(enriched[0].grantSemantic).toBe('summary');
+    expect(enriched[0].grantSectionComplianceContract?.prepEvidence.length).toBeGreaterThanOrEqual(2);
+    expect(enriched[0].prepContextBlock?.bullets.join(' ')).toContain('100% female Phulkari artisans');
+    expect(enriched[0].prepContextBlock?.bullets.join(' ')).toContain('semi-mechanized yarn winders');
   });
 
   it('classifies ambiguous headings by meaning and carries prep and rule context into app_draft sections', () => {
@@ -754,9 +891,9 @@ describe('grant blueprint enrichment', () => {
     });
 
     expect(enriched[0].grantSemantic).toBe('problem_need');
-    expect(enriched[0].mustCover.length).toBeGreaterThanOrEqual(3);
+    expect(enriched[0].dimensions?.length).toBeGreaterThanOrEqual(3);
     expect(enriched[0].suggestedCitationCount).toBeGreaterThanOrEqual(3);
-    expect(enriched[0].thematicBlueprint?.mustCover).toEqual(enriched[0].mustCover);
+    expect(enriched[0].thematicBlueprint?.dimensions).toEqual(enriched[0].dimensions);
   });
 
   it('generates searchable evidence pillars rather than final draft claims', () => {
@@ -774,12 +911,12 @@ describe('grant blueprint enrichment', () => {
       focusAreas: ['child health', 'nutrition'],
     });
 
-    const pillars = enriched[0].mustCover;
+    const pillars = enriched[0].dimensions || [];
 
     expect(pillars.some((item) => /current state of malnutrition in india/i.test(item))).toBe(true);
     expect(pillars.some((item) => /role of nutrition in child physical development|role of nutrition in cognitive performance/i.test(item))).toBe(true);
     expect(pillars.join(' ')).not.toMatch(/scale, burden, or urgency|reviewer-visible|evidence for the problem/i);
-    expect(enriched[0].thematicBlueprint?.mustCover).toEqual(pillars);
+    expect(enriched[0].thematicBlueprint?.dimensions).toEqual(pillars);
   });
 
   it('uses trusted template intent as the semantic prior and falls back when alternates signal ambiguity', () => {

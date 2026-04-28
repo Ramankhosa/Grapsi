@@ -2,6 +2,10 @@ import crypto from 'crypto';
 import { llmGateway, type TenantContext } from '../metering';
 import type { BlueprintWithSectionPlan } from './blueprint-service';
 import {
+  isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
+} from '@/lib/grants/blueprintMetadata';
+import {
   BATCH_MAPPING_CHUNK_SIZE,
   mappingResponseSchema,
   NOT_EXTRACTED_FROM_SOURCE,
@@ -27,7 +31,7 @@ const MAPPING_SYSTEM_PROMPT = `You are mapping extracted evidence cards to secti
 
 INPUT:
 1. Evidence cards (with cardId, claim, claimType, quantitativeDetail, citationKey, archetype, and optional tradeOff/competingExplanation)
-2. Blueprint sections with mustCover dimensions
+2. Blueprint sections with literature dimensions
 
 TASK:
 For each card, map it to relevant section/dimension pairs and assign:
@@ -101,10 +105,11 @@ function buildMappingPrompt(
     return summary;
   });
 
+  const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
   const blueprintStructure = blueprint.sectionPlan.map(section => ({
     sectionKey: section.sectionKey,
     sectionLabel: section.purpose,
-    dimensions: section.mustCover,
+    dimensions: grantBacked ? resolveGrantSectionDimensions(section) : section.mustCover,
   }));
 
   const user = [
@@ -180,8 +185,10 @@ function heuristicMapCards(
       score: number;
     }> = [];
 
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     for (const section of blueprint.sectionPlan) {
-      for (const dimension of section.mustCover || []) {
+      const dimensions = grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []);
+      for (const dimension of dimensions) {
         const dimensionTokens = tokenize(dimension);
         if (dimensionTokens.length === 0) continue;
         const overlap = dimensionTokens.filter(token => cardTokens.has(token)).length;
@@ -410,12 +417,14 @@ class EvidenceMappingService {
 
     const sectionKeyMap = new Map<string, string>();
     const dimensionsBySection = new Map<string, Map<string, string>>();
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     blueprint.sectionPlan.forEach(section => {
       sectionKeyMap.set(section.sectionKey, section.sectionKey);
       sectionKeyMap.set(normalizeSectionKey(section.sectionKey), section.sectionKey);
 
       const dimMap = new Map<string, string>();
-      for (const dimension of section.mustCover || []) {
+      const dimensions = grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []);
+      for (const dimension of dimensions) {
         const normalized = normalizeDimension(dimension);
         if (!dimMap.has(normalized)) {
           dimMap.set(normalized, dimension);

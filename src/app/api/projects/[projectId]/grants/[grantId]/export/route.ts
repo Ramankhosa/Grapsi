@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { renderGrantSectionForExport } from '@/lib/grants/drafting'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
+import { validateGrantFinalExportReadiness } from '@/lib/grants/draftContextContract'
 import { buildPaperDocxBuffer } from '@/lib/export/paper-docx-export'
 
 export const runtime = 'nodejs'
@@ -25,6 +26,29 @@ export async function GET(
     })
     if (!workspace || workspace.grantSession.projectId !== projectId || !workspace.blueprint) {
       return NextResponse.json({ message: 'Grant workspace not found' }, { status: 404 })
+    }
+
+    const readiness = validateGrantFinalExportReadiness({
+      sections: workspace.blueprint.sectionDrafts.map((section) => ({
+        sectionKey: section.sectionKey,
+        label: section.label,
+        workflowMode: (section as { workflowMode?: string | null }).workflowMode || null,
+        required: section.required,
+        content: section.content,
+        status: section.status,
+        isStale: (section as { isStale?: boolean | null }).isStale || false,
+        validationReport: (section as { validationReport?: unknown }).validationReport,
+        grantComplianceReport: (section as { grantComplianceReport?: any }).grantComplianceReport || null,
+      })),
+    })
+    if (!readiness.ok) {
+      return NextResponse.json(
+        {
+          message: 'Grant draft is not ready for export',
+          issues: readiness.issues,
+        },
+        { status: 409 }
+      )
     }
 
     const sections = workspace.blueprint.sectionDrafts.map((section) => ({

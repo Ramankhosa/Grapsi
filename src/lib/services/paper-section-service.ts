@@ -13,7 +13,10 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
-import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import {
+  isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
+} from '@/lib/grants/blueprintMetadata';
 import { buildGrantDraftingPrompt } from '@/lib/grants/draftingPromptComposer';
 import {
   buildGrantDraftingStrategyInput,
@@ -26,6 +29,12 @@ import {
 import {
   normalizeGrantGenerationTrace,
 } from '@/lib/grants/compliance';
+import {
+  buildGrantDraftContextContract,
+  buildGrantPostGenerationValidation,
+  mergeGrantValidationReport,
+  type GrantDraftContextContract,
+} from '@/lib/grants/draftContextContract';
 import { llmGateway, type TenantContext } from '../metering';
 import { blueprintService, type BlueprintContext, type SectionPlanItem } from './blueprint-service';
 import { sectionTemplateService } from './section-template-service';
@@ -207,6 +216,7 @@ interface StoredPass1Artifact {
   grantGenerationTrace?: GrantGenerationTrace | null;
   grantComplianceReport?: GrantComplianceReport | null;
   reviewerReadinessReport?: ReviewerReadinessReport | null;
+  grantDraftContextContract?: GrantDraftContextContract | null;
 }
 
 interface BackgroundPass1FigureSelection {
@@ -234,6 +244,7 @@ function buildStoredPass1Artifact(params: {
   grantGenerationTrace?: GrantGenerationTrace | null;
   grantComplianceReport?: GrantComplianceReport | null;
   reviewerReadinessReport?: ReviewerReadinessReport | null;
+  grantDraftContextContract?: GrantDraftContextContract | null;
 }): StoredPass1Artifact | null {
   const content = String(params.content || '').trim();
   if (!content) return null;
@@ -254,6 +265,7 @@ function buildStoredPass1Artifact(params: {
     grantGenerationTrace: params.grantGenerationTrace || null,
     ...(params.grantComplianceReport ? { grantComplianceReport: params.grantComplianceReport } : {}),
     ...(params.reviewerReadinessReport ? { reviewerReadinessReport: params.reviewerReadinessReport } : {}),
+    ...(params.grantDraftContextContract ? { grantDraftContextContract: params.grantDraftContextContract } : {}),
   };
 }
 
@@ -621,7 +633,7 @@ class PaperSectionService {
       }
 
       // Build the generation prompt with debug info
-      const { prompt, debugInfo } = await this.buildSectionPromptWithDebug(
+      const { prompt, debugInfo, grantDraftContextContract } = await this.buildSectionPromptWithDebug(
         blueprintContext,
         previousMemories,
         session.researchTopic,
@@ -708,9 +720,21 @@ class PaperSectionService {
         };
       }
       const blueprintVersion = blueprint?.version || 1;
+      if (grantDraftContextContract?.readiness.issues.length) {
+        throw new Error(grantDraftContextContract.readiness.issues.join('\n'));
+      }
+
       const grantContract = blueprintContext.currentSection.grantSectionComplianceContract || null;
       const pass1GrantTrace = grantContract
         ? (parsed.grantGenerationTrace || normalizeGrantGenerationTrace({}))
+        : null;
+      const pass1GrantValidation = grantDraftContextContract
+        ? buildGrantPostGenerationValidation({
+            contract: grantDraftContextContract,
+            content: parsed.content,
+            trace: pass1GrantTrace,
+            stage: effectiveTwoPass ? 'pass1' : 'pass2',
+          })
         : null;
 
 
@@ -727,7 +751,13 @@ class PaperSectionService {
           llmResponse: result.response.output,
           tokensUsed: result.response.outputTokens,
           generationMode: 'single_pass',
-          validationReport: Prisma.JsonNull,
+          validationReport: pass1GrantValidation
+            ? mergeGrantValidationReport(null, {
+                contract: grantDraftContextContract,
+                grantComplianceReport: pass1GrantValidation.grantComplianceReport,
+                reviewerReadinessReport: pass1GrantValidation.reviewerReadinessReport,
+              }) as any
+            : Prisma.JsonNull,
           status: 'DRAFT' as PaperSectionStatus,
           isStale: false,
           generatedAt: new Date()
@@ -746,6 +776,9 @@ class PaperSectionService {
         promptUsed: prompt,
         tokensUsed: result.response.outputTokens,
         grantGenerationTrace: pass1GrantTrace,
+        grantComplianceReport: pass1GrantValidation?.grantComplianceReport || null,
+        reviewerReadinessReport: pass1GrantValidation?.reviewerReadinessReport || null,
+        grantDraftContextContract: grantDraftContextContract || null,
       });
       const pass1Data = {
         sectionKey,
@@ -765,7 +798,13 @@ class PaperSectionService {
         status: 'BASE_READY' as PaperSectionStatus,
         isStale: false,
         generatedAt: pass1CompletedAt,
-        validationReport: Prisma.JsonNull,
+        validationReport: pass1GrantValidation
+          ? mergeGrantValidationReport(null, {
+              contract: grantDraftContextContract,
+              grantComplianceReport: pass1GrantValidation.grantComplianceReport,
+              reviewerReadinessReport: pass1GrantValidation.reviewerReadinessReport,
+            }) as any
+          : Prisma.JsonNull,
       };
 
       const pass1Section = await this.upsertSection(sessionId, sectionKey, pass1Data, existingSection);
@@ -901,6 +940,11 @@ class PaperSectionService {
     )
       ? { ...(polishResult.driftReport as unknown as Record<string, unknown>) }
       : {};
+    validationReport = mergeGrantValidationReport(validationReport, {
+      contract: (pass1ArtifactRecord.grantDraftContextContract as GrantDraftContextContract | undefined) || null,
+      grantComplianceReport: polishResult.grantComplianceReport || null,
+      reviewerReadinessReport: polishResult.reviewerReadinessReport || null,
+    });
 
     const updated = await prisma.paperSection.update({
       where: { id: section.id },
@@ -1661,7 +1705,11 @@ class PaperSectionService {
     sectionKey?: string,
     tenantContext?: TenantContext,
     figurePromptContext?: FigurePromptContext | null
-  ): Promise<{ prompt: string; debugInfo: PromptDebugInfo | null }> {
+  ): Promise<{
+    prompt: string;
+    debugInfo: PromptDebugInfo | null;
+    grantDraftContextContract?: GrantDraftContextContract | null;
+  }> {
     const { thesisStatement, centralObjective, keyContributions, currentSection, preferredTerms } = blueprintContext;
     const grantBacked = isGrantBackedPaperTypeCode(paperTypeCode);
     const grantSession = grantBacked && sessionId
@@ -1757,9 +1805,12 @@ class PaperSectionService {
     const citationBudgetBlock = evidenceContext.evidenceDigest.digests.length > 0
       ? formatCitationBudgetRules(evidenceContext.evidenceDigest)
       : '(no citation budget rules)';
+    const sectionDimensions = grantBacked
+      ? resolveGrantSectionDimensions(currentSection)
+      : currentSection.mustCover;
     const formattedMustCover = formatGrantMustCoverItems(
-      currentSection.mustCover,
-      currentSection.mustCoverTyping
+      sectionDimensions,
+      grantBacked ? currentSection.dimensionTyping : currentSection.mustCoverTyping
     );
 
     // Replace both new and legacy placeholders for backward compatibility
@@ -1920,6 +1971,27 @@ ${pm.memory.forwardReferences.length > 0 ? `- Promises: ${pm.memory.forwardRefer
     }
 
     if (grantBacked) {
+      const grantDraftContextContract = buildGrantDraftContextContract({
+        section: {
+          sectionKey: currentSection.sectionKey,
+          label: grantPromptContext?.displayLabel || currentSection.sectionKey,
+          workflowMode: (currentSection as { workflowMode?: string | null }).workflowMode || 'app_draft',
+          citationMode: currentSection.citationMode || null,
+          mustCover: currentSection.mustCover,
+          dimensions: currentSection.dimensions || [],
+          grantRuleProfile: currentSection.grantRuleProfile as GrantRuleProfile | null,
+          grantSectionComplianceContract: currentSection.grantSectionComplianceContract as GrantSectionComplianceContract | null,
+          authoritativePrepBundle: currentSection.authoritativePrepBundle || currentSection.prepContextBlock || null,
+          relatedPrepAwareness: currentSection.relatedPrepAwareness || null,
+          wordBudget: currentSection.wordBudget,
+          characterLimit: currentSection.characterLimit,
+        },
+        grantContextSummary: grantPromptContext?.grantContextSummary || null,
+        evidence: evidenceContext,
+      });
+      if (grantDraftContextContract.readiness.issues.length > 0) {
+        throw new Error(grantDraftContextContract.readiness.issues.join('\n'));
+      }
       const topicContextBlock = researchTopic
         ? `PROJECT / TECHNICAL CONTEXT:
 Title: ${researchTopic.title}
@@ -1964,6 +2036,7 @@ Keywords: ${Array.isArray(researchTopic.keywords) ? researchTopic.keywords.join(
         keyContributions,
         purpose: currentSection.purpose,
         mustCover: currentSection.mustCover,
+        dimensions: currentSection.dimensions || [],
         mustAvoid: currentSection.mustAvoid,
         wordBudget: currentSection.wordBudget,
         characterLimit: currentSection.characterLimit,
@@ -1992,7 +2065,7 @@ Keywords: ${Array.isArray(researchTopic.keywords) ? researchTopic.keywords.join(
         );
       }
 
-      return { prompt, debugInfo };
+      return { prompt, debugInfo, grantDraftContextContract };
     }
 
     // Resolve intellectual rigor block from DB (falls back to hardcoded default)

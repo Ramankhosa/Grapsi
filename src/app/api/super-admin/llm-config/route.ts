@@ -79,9 +79,11 @@ export async function GET(request: NextRequest) {
 
     // Fetch plan stage configs
     if (section === 'all' || section === 'configs') {
-      const where = planId ? { planId } : {}
+      const stageConfigWhere = planId
+        ? { planId, stage: { isActive: true } }
+        : { stage: { isActive: true } }
       result.stageConfigs = await prisma.planStageModelConfig.findMany({
-        where,
+        where: stageConfigWhere,
         include: {
           plan: { select: { id: true, code: true, name: true } },
           stage: { select: { id: true, code: true, displayName: true, featureCode: true } },
@@ -90,8 +92,9 @@ export async function GET(request: NextRequest) {
         orderBy: [{ planId: 'asc' }, { stage: { sortOrder: 'asc' } }]
       })
 
+      const taskConfigWhere = planId ? { planId } : {}
       result.taskConfigs = await prisma.planTaskModelConfig.findMany({
-        where,
+        where: taskConfigWhere,
         include: {
           plan: { select: { id: true, code: true, name: true } },
           model: { select: { id: true, code: true, displayName: true, provider: true } }
@@ -559,7 +562,10 @@ async function copyPlanConfig(body: any) {
 
   // Get source configs
   const sourceConfigs = await prisma.planStageModelConfig.findMany({
-    where: { planId: sourcePlanId }
+    where: {
+      planId: sourcePlanId,
+      stage: { isActive: true }
+    }
   })
 
   // Copy to target

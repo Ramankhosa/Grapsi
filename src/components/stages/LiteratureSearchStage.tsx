@@ -41,6 +41,7 @@ interface SearchStrategyQuery {
   suggestedSources: string[];
   suggestedYearFrom: number | null;
   suggestedYearTo: number | null;
+  resultLimit?: number | null;
   status: 'PENDING' | 'SEARCHING' | 'SEARCHED' | 'COMPLETED' | 'SKIPPED';
   importedCount: number | null;
   resultsCount: number | null;
@@ -1356,6 +1357,7 @@ export default function LiteratureSearchStage({
     sources?: string[];
     yearFrom?: string;
     yearTo?: string;
+    limit?: number;
     strategyQueryId?: string | null;
   }) => {
     // Abort any previous in-flight search
@@ -1374,6 +1376,7 @@ export default function LiteratureSearchStage({
       const searchSources = overrides?.sources ?? sources;
       const searchYearFrom = overrides?.yearFrom ?? yearFrom;
       const searchYearTo = overrides?.yearTo ?? yearTo;
+      const searchLimit = overrides?.limit;
       const strategyId = overrides?.strategyQueryId ?? currentStrategyQueryId;
       
       // Validate year values before sending — ensure they are valid integers
@@ -1392,6 +1395,7 @@ export default function LiteratureSearchStage({
           sources: searchSources,
           yearFrom: parsedYearFrom && Number.isFinite(parsedYearFrom) ? parsedYearFrom : undefined,
           yearTo: parsedYearTo && Number.isFinite(parsedYearTo) ? parsedYearTo : undefined,
+          limit: typeof searchLimit === 'number' && searchLimit > 0 ? searchLimit : undefined,
           // Enhanced filters
           publicationTypes: publicationTypes.length > 0 ? publicationTypes : undefined,
           openAccessOnly: openAccessOnly || undefined,
@@ -2984,22 +2988,12 @@ export default function LiteratureSearchStage({
           duration: 4000
         });
       } else {
-        // Handle Pro plan requirement
-        if (data.code === 'PRO_REQUIRED') {
-          showToast({
-            type: 'info',
-            title: '✨ Pro Feature',
-            message: 'AI Search Strategy is a Pro feature. Upgrade your plan to access systematic search query generation.',
-            duration: 6000
-          });
-        } else {
-          showToast({
-            type: 'error',
-            title: 'Generation Failed',
-            message: data.error || 'Could not generate search strategy',
-            duration: 5000
-          });
-        }
+        showToast({
+          type: 'error',
+          title: 'Generation Failed',
+          message: data.error || 'Could not generate search strategy',
+          duration: 5000
+        });
       }
     } catch (err) {
       console.error('Failed to generate search strategy:', err);
@@ -3173,6 +3167,9 @@ export default function LiteratureSearchStage({
       : sources;
     const selectedYearFrom = strategyQuery.suggestedYearFrom ? strategyQuery.suggestedYearFrom.toString() : yearFrom;
     const selectedYearTo = strategyQuery.suggestedYearTo ? strategyQuery.suggestedYearTo.toString() : yearTo;
+    const selectedLimit = typeof strategyQuery.resultLimit === 'number' && strategyQuery.resultLimit > 0
+      ? strategyQuery.resultLimit
+      : undefined;
     
     // Update query status to searching
     await updateQueryStatus(strategyQuery.id, 'SEARCHING');
@@ -3183,6 +3180,7 @@ export default function LiteratureSearchStage({
       sources: selectedSources,
       yearFrom: selectedYearFrom,
       yearTo: selectedYearTo,
+      limit: selectedLimit,
       strategyQueryId: strategyQuery.id
     });
   };
@@ -3554,13 +3552,15 @@ export default function LiteratureSearchStage({
   }, [filteredCoverageRows]);
 
   const coverageSectionOptions = useMemo<CoverageSectionOption[]>(() => {
+    const paperTypeCode = String((session as any)?.paperBlueprint?.paperTypeCode || '');
+    const grantBacked = paperTypeCode.toUpperCase().startsWith('GRANT_TEMPLATE::');
     const fromBlueprint = Array.isArray((session as any)?.paperBlueprint?.sectionPlan)
       ? (session as any).paperBlueprint.sectionPlan
           .map((section: any) => ({
             sectionKey: String(section?.sectionKey || '').trim(),
             sectionTitle: String(section?.purpose || section?.sectionKey || '').trim(),
-            dimensions: Array.isArray(section?.mustCover)
-              ? section.mustCover.map((dim: any) => String(dim || '').trim()).filter(Boolean)
+            dimensions: Array.isArray(grantBacked ? section?.dimensions : section?.mustCover)
+              ? (grantBacked ? section.dimensions : section.mustCover).map((dim: any) => String(dim || '').trim()).filter(Boolean)
               : []
           }))
           .filter((section: CoverageSectionOption) => section.sectionKey && section.dimensions.length > 0)
@@ -4199,8 +4199,7 @@ export default function LiteratureSearchStage({
                         <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
-                        <span className="mr-1">Generate Strategy</span>
-                        <Badge className="bg-amber-400/90 text-amber-900 text-[9px] px-1 py-0">PRO</Badge>
+                        <span>Generate Strategy</span>
                       </>
                     )}
                   </Button>

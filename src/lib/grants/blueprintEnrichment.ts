@@ -310,11 +310,27 @@ function inferDimensionType(
     )
 }
 
+function buildDimensionTyping(
+  dimensions: string[],
+  semantic: GrantSectionSemantic,
+  existing?: Record<string, GrantBlueprintDimensionType>
+): Record<string, GrantBlueprintDimensionType> | undefined {
+  if (dimensions.length === 0) return undefined
+
+  return Object.fromEntries(
+    dimensions.map((dimension) => [
+      dimension,
+      existing?.[dimension] || inferDimensionType(dimension, semantic),
+    ] as const)
+  )
+}
+
 function buildSectionText(section: GrantBlueprintPlanSection): string {
   return [
     section.label,
     section.purpose,
     section.reviewerIntent || '',
+    ...(section.dimensions || []),
     section.mustCover.join(' '),
   ]
     .join(' ')
@@ -404,6 +420,9 @@ function classifyGrantSectionSemantic(section: GrantBlueprintPlanSection): Grant
 
   if (/(summary|synopsis|abstract|executive)/.test(text)) {
     scores.set('summary', (scores.get('summary') || 0) + 5)
+  }
+  if (/\b(project|proposal|program|executive)?\s*(summary|synopsis|abstract)\b/.test(section.label.toLowerCase())) {
+    scores.set('summary', (scores.get('summary') || 0) + 8)
   }
   if (/(overview|proposal overview|project overview|program overview|high level overview)/.test(text)) {
     scores.set('summary', (scores.get('summary') || 0) + 4)
@@ -634,7 +653,8 @@ function suggestCitationCount(
 
 function shouldRegenerateDimensions(section: GrantBlueprintPlanSection): boolean {
   if (!isGrantSectionAutoDraftable(section)) return false
-  if (section.mustCoverTyping && Object.keys(section.mustCoverTyping).length > 0) return false
+  if ((section.dimensions || []).length > 0) return false
+  if (section.dimensionTyping && Object.keys(section.dimensionTyping).length > 0) return false
   if (typeof section.suggestedCitationCount === 'number') return false
   if (section.thematicBlueprint && typeof section.thematicBlueprint === 'object') return false
   return true
@@ -644,14 +664,111 @@ function filterPromptablePrepEvidence(items: GrantPrepEvidenceItem[]): GrantPrep
   return items.filter((item) => item.status === 'covered')
 }
 
+function prepEvidenceKey(item: GrantPrepEvidenceItem): string {
+  return `${item.stageKey}:${item.pointKey}`.toLowerCase()
+}
+
+function prepEvidenceText(item: GrantPrepEvidenceItem): string {
+  return [
+    item.label,
+    ...(item.factBullets || []),
+    ...(item.keywords || []),
+    ...(item.thrustLinkage || []),
+    ...(item.ruleNotes || []),
+  ].join(' ')
+}
+
+function getAllPromptablePrepEvidence(context: GrantBlueprintEnrichmentContext): GrantPrepEvidenceItem[] {
+  return dedupePrepEvidence(
+    filterPromptablePrepEvidence(
+      Object.values(context.prepEvidenceBySection || {}).flatMap((items) => items || [])
+    )
+  )
+}
+
+function shouldPromotePrepEvidence(
+  section: GrantBlueprintPlanSection,
+  semantic: GrantSectionSemantic
+): boolean {
+  const text = [
+    section.sectionKey,
+    section.label,
+    section.purpose,
+    section.templateIntent || '',
+  ].join(' ').toLowerCase()
+
+  if (semantic === 'summary' || semantic === 'sustainability') return true
+
+  return /\b(title|keywords?|subject area|summary|synopsis|abstract|sustainab|revenue|replication|scale|scale-up|any other|additional information)\b/.test(text)
+}
+
+function scorePrepEvidenceForSection(
+  item: GrantPrepEvidenceItem,
+  section: GrantBlueprintPlanSection,
+  semantic: GrantSectionSemantic,
+  relevantStageKeys: Set<string>
+): number {
+  let score = 0
+  if (relevantStageKeys.has(item.stageKey)) score += 8
+  if ((item.confidence || 0) >= 0.85) score += 2
+  else if ((item.confidence || 0) >= 0.7) score += 1
+
+  const sectionTokens = new Set(tokenize(buildSectionText(section)))
+  const evidenceTokens = new Set(tokenize(prepEvidenceText(item)))
+  for (const token of evidenceTokens) {
+    if (sectionTokens.has(token)) score += 1
+  }
+
+  if (semantic === 'summary' && ['final_pitch', 'thrust_alignment', 'fit_and_scope', 'outcomes'].includes(item.stageKey)) {
+    score += 3
+  }
+  if (semantic === 'sustainability' && ['sustainability_and_scale', 'outcomes', 'budget_strategy'].includes(item.stageKey)) {
+    score += 3
+  }
+
+  return score
+}
+
+function collectPromotedPrepEvidence(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext,
+  semantic: GrantSectionSemantic
+): GrantPrepEvidenceItem[] {
+  if (!shouldPromotePrepEvidence(section, semantic)) return []
+
+  const relevantStageKeys = new Set(resolveRelevantPrepStageKeys(section, semantic))
+  if (relevantStageKeys.size === 0) return []
+
+  const scored = getAllPromptablePrepEvidence(context)
+    .map((item) => ({
+      item,
+      score: scorePrepEvidenceForSection(item, section, semantic, relevantStageKeys),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) =>
+      right.score - left.score
+      || (right.item.confidence || 0) - (left.item.confidence || 0)
+      || prepEvidenceText(right.item).length - prepEvidenceText(left.item).length
+      || prepEvidenceKey(left.item).localeCompare(prepEvidenceKey(right.item))
+    )
+
+  const limit = semantic === 'summary' ? 4 : 3
+  return dedupePrepEvidence(scored.map((entry) => entry.item)).slice(0, limit)
+}
+
 function collectMappedPrepEvidence(
   section: GrantBlueprintPlanSection,
-  context: GrantBlueprintEnrichmentContext
+  context: GrantBlueprintEnrichmentContext,
+  semantic?: GrantSectionSemantic
 ): GrantPrepEvidenceItem[] {
-  return dedupePrepEvidence(filterPromptablePrepEvidence([
+  const directEvidence = dedupePrepEvidence(filterPromptablePrepEvidence([
     ...(context.prepEvidenceBySection?.[section.sectionKey] || []),
     ...(section.sourceTemplatePointer ? context.prepEvidenceBySection?.[section.sourceTemplatePointer] || [] : []),
   ]))
+
+  if (directEvidence.length > 0 || !semantic) return directEvidence
+
+  return collectPromotedPrepEvidence(section, context, semantic)
 }
 
 function formatPrepEvidenceBundle(
@@ -702,12 +819,14 @@ function resolveRelevantPrepStageKeys(
 function buildRelatedPrepAwareness(
   section: GrantBlueprintPlanSection,
   context: GrantBlueprintEnrichmentContext,
-  semantic: GrantSectionSemantic
+  semantic: GrantSectionSemantic,
+  authoritativeEvidence: GrantPrepEvidenceItem[] = []
 ): GrantPrepPromptBundle | null {
   const prepEvidenceBySection = context.prepEvidenceBySection || {}
   const excludedKeys = new Set(
     dedupeStrings([section.sectionKey, section.sourceTemplatePointer || '']).map((key) => key.toLowerCase())
   )
+  const authoritativeEvidenceKeys = new Set(authoritativeEvidence.map(prepEvidenceKey))
   const relevantStageKeys = new Set(resolveRelevantPrepStageKeys(section, semantic))
 
   if (relevantStageKeys.size === 0) return null
@@ -716,7 +835,10 @@ function buildRelatedPrepAwareness(
     filterPromptablePrepEvidence(
       Object.entries(prepEvidenceBySection).flatMap(([key, items]) => {
         if (excludedKeys.has(String(key || '').trim().toLowerCase())) return []
-        return items.filter((item) => relevantStageKeys.has(item.stageKey))
+        return items.filter((item) =>
+          relevantStageKeys.has(item.stageKey)
+          && !authoritativeEvidenceKeys.has(prepEvidenceKey(item))
+        )
       })
     )
   )
@@ -726,9 +848,10 @@ function buildRelatedPrepAwareness(
 
 function buildPrepContextBlock(
   section: GrantBlueprintPlanSection,
-  context: GrantBlueprintEnrichmentContext
+  context: GrantBlueprintEnrichmentContext,
+  semantic: GrantSectionSemantic
 ): GrantPrepContextBlock | null {
-  return formatPrepEvidenceBundle(collectMappedPrepEvidence(section, context))
+  return formatPrepEvidenceBundle(collectMappedPrepEvidence(section, context, semantic))
 }
 
 function scoreRuleForSection(
@@ -968,7 +1091,7 @@ function dedupePrepEvidence(items: GrantPrepEvidenceItem[]): GrantPrepEvidenceIt
   const seen = new Set<string>()
   const next: GrantPrepEvidenceItem[] = []
   for (const item of items) {
-    const key = `${item.stageKey}:${item.pointKey}`.toLowerCase()
+    const key = prepEvidenceKey(item)
     if (seen.has(key)) continue
     seen.add(key)
     next.push(item)
@@ -996,9 +1119,9 @@ function buildTemplateGuidanceProfile(section: GrantBlueprintPlanSection): Grant
 function buildSectionPrepEvidence(
   section: GrantBlueprintPlanSection,
   context: GrantBlueprintEnrichmentContext,
-  _semantic: GrantSectionSemantic
+  semantic: GrantSectionSemantic
 ): GrantPrepEvidenceItem[] {
-  return collectMappedPrepEvidence(section, context)
+  return collectMappedPrepEvidence(section, context, semantic)
 }
 
 function toComplianceCheck(input: {
@@ -1283,6 +1406,8 @@ function enrichOneSection(
       grantSectionComplianceContract: null,
       grantComplianceReport: null,
       reviewerReadinessReport: null,
+      dimensions: undefined,
+      dimensionTyping: undefined,
       mustCoverTyping: undefined,
       suggestedCitationCount: null,
       thematicBlueprint: null,
@@ -1292,8 +1417,8 @@ function enrichOneSection(
   const semantic = resolveGrantSectionSemantic(section)
   const grantRuleProfile = buildGrantRuleProfile(section, context, semantic)
   const prepEvidence = buildSectionPrepEvidence(section, context, semantic)
-  const authoritativePrepBundle = buildPrepContextBlock(section, context)
-  const relatedPrepAwareness = buildRelatedPrepAwareness(section, context, semantic)
+  const authoritativePrepBundle = buildPrepContextBlock(section, context, semantic)
+  const relatedPrepAwareness = buildRelatedPrepAwareness(section, context, semantic, prepEvidence)
   const prepContextBlock = authoritativePrepBundle
   const grantSectionComplianceContract = buildGrantSectionComplianceContract(
     section,
@@ -1309,7 +1434,7 @@ function enrichOneSection(
   })
   const regenerate = mode === 'generate' || shouldRegenerateDimensions(section)
   const evidenceNeed = inferCitationEvidenceNeed(section, semantic)
-  const generated = evidenceNeed === 'none'
+  const generatedDimensions = evidenceNeed === 'none'
     ? []
     : buildSeedDimensions({
         ...section,
@@ -1318,20 +1443,26 @@ function enrichOneSection(
           : section.mustCover,
       }, context, semantic, grantRuleProfile?.evaluationFocus || []).slice(0, targetDimensionCount(section, evidenceNeed))
 
-  const mustCover = regenerate
-    ? generated.map((item) => item.dimension)
-    : dedupeStrings(section.mustCover)
-  const mustCoverTyping = regenerate
-    ? Object.fromEntries(generated.map((item) => [item.dimension, item.type] as const))
-    : section.mustCoverTyping
+  const mustCover = dedupeStrings(section.mustCover)
+  const dimensions = regenerate
+    ? generatedDimensions.map((item) => item.dimension)
+    : dedupeStrings(section.dimensions || [])
+  const dimensionTyping = regenerate
+    ? Object.fromEntries(generatedDimensions.map((item) => [item.dimension, item.type] as const))
+    : buildDimensionTyping(
+        dimensions,
+        semantic,
+        section.dimensionTyping || section.thematicBlueprint?.dimensionTyping
+      )
   const suggestedCitationCount = regenerate
-    ? suggestCitationCount(section, generated, evidenceNeed, semantic)
+    ? suggestCitationCount(section, generatedDimensions, evidenceNeed, semantic)
     : section.suggestedCitationCount ?? section.thematicBlueprint?.suggestedCitationCount
 
   const thematicBlueprint: GrantThematicBlueprint = buildGrantThematicBlueprint({
     mustCover,
     mustAvoid: dedupeStrings(section.mustAvoid),
-    mustCoverTyping: mustCoverTyping || undefined,
+    dimensions,
+    dimensionTyping: dimensionTyping || undefined,
     suggestedCitationCount,
   })
 
@@ -1339,7 +1470,9 @@ function enrichOneSection(
     ...section,
     mustCover,
     mustAvoid: thematicBlueprint.mustAvoid,
-    ...(mustCoverTyping ? { mustCoverTyping } : { mustCoverTyping: undefined }),
+    dimensions,
+    ...(dimensionTyping ? { dimensionTyping } : { dimensionTyping: undefined }),
+    mustCoverTyping: undefined,
     suggestedCitationCount: suggestedCitationCount ?? null,
     thematicBlueprint,
     grantSemantic: semantic,
@@ -1384,7 +1517,7 @@ export function buildGeneratedGrantProposalFoundation(
 
   const contributionSeeds = dedupeStrings(
     draftableSections
-      .flatMap((section) => section.mustCover.slice(0, 2))
+      .flatMap((section) => [...section.mustCover, ...(section.dimensions || [])].slice(0, 2))
       .slice(0, 6)
       .map((dimension) => cleanGrantClaimAnchor(dimension) || dimension)
       .filter(Boolean) as string[]

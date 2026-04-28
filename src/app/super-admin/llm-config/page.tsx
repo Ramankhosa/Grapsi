@@ -71,10 +71,11 @@ const PROVIDER_COLORS: Record<string, string> = {
 
 const RETIRED_MODEL_CODES = new Set(['gpt-5.1-thinking'])
 
-// Show only actively used drafting features in admin LLM control.
+// Show only the grant-oriented stage groups that are still relevant in admin LLM control.
 const FEATURE_LABELS: Record<string, string> = {
-  PAPER_DRAFTING: 'Paper Drafting',
-  PATENT_DRAFTING: 'Patent Drafting'
+  GRANT_PREP: 'Grant Prep & Blueprint',
+  SEARCH_STRATEGY: 'Literature Review & Search Strategy',
+  GRANT_DRAFTING: 'Grant Writing'
 }
 
 // Stages that DO NOT use LLMs (excluded from LLM control)
@@ -84,25 +85,14 @@ const NON_LLM_STAGES = [
 ]
 
 const VISIBLE_STAGE_CODES_BY_FEATURE: Partial<Record<string, Set<string>>> = {
-  PAPER_DRAFTING: new Set([
-    'PAPER_TOPIC_EXTRACT_FROM_FILE',
-    'PAPER_TOPIC_REFINE_QUESTION',
-    'PAPER_CREATE_SECTIONS',
-    'PAPER_FIGURE_SUGGESTION',
-    'PAPER_TOPIC_SUGGEST_KEYWORDS',
-    'PAPER_TOPIC_GENERATE_HYPOTHESIS',
-    'PAPER_CHART_GENERATOR',
-    'PAPER_TOPIC_DRAFT_ABSTRACT',
-    'PAPER_DIAGRAM_GENERATOR',
-    'PAPER_DIAGRAM_FROM_TEXT',
-    'PAPER_TOPIC_FORMULATE_QUESTION',
-    'PAPER_TOPIC_ENHANCE_ALL',
-    'PAPER_SKETCH_GENERATION',
-    'PAPER_ABSTRACT_TITLE',
-    'PAPER_CONTENT_GENERATION',
-    'PAPER_CITATION_FORMATTING',
-    'PAPER_LITERATURE_ANALYSIS',
-    'PAPER_LITERATURE_SEARCH',
+  GRANT_PREP: new Set([
+    'PAPER_BLUEPRINT_GEN',
+    'GRANT_BLUEPRINT_GEN',
+    'RESEARCH_INTENT_LOCK',
+    'ARGUMENT_PLAN',
+    'PAPER_ARCHETYPE_DETECTION',
+  ]),
+  SEARCH_STRATEGY: new Set([
     'LITERATURE_SEARCH',
     'SEARCH_STRATEGY_PLANNING',
     'SEARCH_QUERY_GENERATION',
@@ -110,24 +100,26 @@ const VISIBLE_STAGE_CODES_BY_FEATURE: Partial<Record<string, Set<string>>> = {
     'PAPER_LITERATURE_GAP',
     'LITERATURE_RELEVANCE',
     'CITATION_BLUEPRINT_MAPPING',
-    'PAPER_BLUEPRINT_GEN',
-    'RESEARCH_INTENT_LOCK',
-    'ARGUMENT_PLAN',
-    'PAPER_ARCHETYPE_DETECTION',
+    'PAPER_REVIEW_COHERENCE',
+  ]),
+  GRANT_DRAFTING: new Set([
+    'PAPER_CREATE_SECTIONS',
     'PAPER_SECTION_DRAFT',
     'PAPER_SECTION_GEN',
     'PAPER_SECTION_IMPROVE',
     'PAPER_MEMORY_EXTRACT',
-    'PAPER_CITATION_FORMAT',
     'PAPER_TEXT_ACTION',
-    'PAPER_REWRITER',
-    'PAPER_REVIEW_GAPS',
-    'PAPER_REVIEW_COHERENCE',
+    'PAPER_FIGURE_SUGGESTION',
+    'PAPER_CHART_GENERATOR',
+    'PAPER_DIAGRAM_GENERATOR',
+    'PAPER_DIAGRAM_FROM_TEXT',
+    'PAPER_SKETCH_GENERATION',
+    'PAPER_FIGURE_METADATA_INFER',
     'PAPER_MANUSCRIPT_REVIEW',
     'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY',
     'PAPER_MANUSCRIPT_IMPROVE',
     'PAPER_EXPORT_EXTRACTION',
-  ])
+  ]),
 }
 
 // Ideation stage metadata - helps Super Admin choose appropriate models
@@ -227,32 +219,18 @@ interface QuickAccessStage {
 }
 
 const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
-  PAPER_DRAFTING: [
+  GRANT_DRAFTING: [
     {
       code: 'PAPER_SECTION_DRAFT',
       passLabel: 'Pass 1',
-      title: 'Base Content Generation',
-      description: 'Initial evidence-grounded section draft generation.'
+      title: 'Base Draft Generation',
+      description: 'Initial evidence-grounded grant section drafting.'
     },
     {
       code: 'PAPER_SECTION_GEN',
       passLabel: 'Pass 2',
       title: 'Polish and Finalization',
-      description: 'Section polish and publication-ready refinement.'
-    }
-  ],
-  PATENT_DRAFTING: [
-    {
-      code: 'DRAFT_REFERENCE_DRAFT_PASS1',
-      passLabel: 'Pass 1',
-      title: 'Reference Draft Base',
-      description: 'Country-neutral reference draft generation.'
-    },
-    {
-      code: 'DRAFT_ANNEXURE_DESCRIPTION',
-      passLabel: 'Pass 2',
-      title: 'Jurisdiction Top-Up',
-      description: 'Pass 2 adaptation/polish for jurisdiction specifics.'
+      description: 'Grant-section polish and final refinement.'
     }
   ]
 }
@@ -260,15 +238,30 @@ const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
 // Human-friendly help text for super-admin LLM controls.
 // Covers all paper drafting stage codes and deep-analysis linked operations.
 const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
-  DRAFT_REFERENCE_DRAFT_PASS1: {
-    summary: 'Reference draft generation pass 1.',
-    responsibility: 'Builds the country-neutral master reference draft before any jurisdiction top-up is applied.',
-    tip: 'Use a high-reasoning model here (default seeded to Claude Opus 4.5 alias).'
+  GRANT_BLUEPRINT_GEN: {
+    summary: 'Grant blueprint dimension generation.',
+    responsibility: 'Builds grant-specific dimensions, framing, and evaluation anchors from prep context.',
+    tip: 'Use a top-tier reasoning model because this stage sets the structure for downstream drafting and review.'
   },
-  DRAFT_ANNEXURE_DESCRIPTION: {
-    summary: 'Reference draft generation pass 2 and detailed-description support.',
-    responsibility: 'Adapts pass 1 reference content to jurisdiction-specific requirements using top-up instructions and also backs detailed-description generation flows.',
-    tip: 'Tune for instruction-following and reliability with structured section output.'
+  SEARCH_STRATEGY_PLANNING: {
+    summary: 'Literature search strategy planning.',
+    responsibility: 'Turns the grant problem and blueprint into a structured search plan with scope, lenses, and evidence priorities.',
+    tip: 'Reasoning quality matters more than speed here.'
+  },
+  SEARCH_QUERY_GENERATION: {
+    summary: 'Database-ready query generation.',
+    responsibility: 'Expands the search strategy into query sets, synonyms, and retrieval variants for literature databases.',
+    tip: 'Prefer models with strong structured-output discipline and consistent terminology handling.'
+  },
+  RESEARCH_INTENT_LOCK: {
+    summary: 'Intent lock for grant scope.',
+    responsibility: 'Stabilizes scope, claims, and assumptions before the writing passes start.',
+    tip: 'Use a model that is good at constraint tracking and contradiction detection.'
+  },
+  ARGUMENT_PLAN: {
+    summary: 'Argument sequencing and persuasion planning.',
+    responsibility: 'Plans how the grant case should unfold across sections, evidence, and reviewer expectations.',
+    tip: 'Higher-reasoning models produce tighter argument structures and fewer redundant moves.'
   },
   PAPER_TOPIC_EXTRACT_FROM_FILE: {
     summary: 'Paper idea normalization from uploaded files.',
@@ -321,9 +314,9 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     tip: 'Fast models are usually enough unless topic complexity is high.'
   },
   PAPER_FIGURE_SUGGESTION: {
-    summary: 'Figure and visualization planning.',
-    responsibility: 'Suggests useful charts, diagrams, and visual artifacts based on paper content.',
-    tip: 'Use reasoning-capable models for better relevance to section goals.'
+    summary: 'Grant figure and visualization planning.',
+    responsibility: 'Suggests charts, diagrams, and visual artifacts that strengthen the grant story and evidence presentation.',
+    tip: 'Use reasoning-capable models for better alignment with reviewer-facing section goals.'
   },
   PAPER_TOPIC_ENHANCE_ALL: {
     summary: 'Full topic enhancement.',
@@ -331,89 +324,84 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     tip: 'Stronger models reduce contradictions across fields.'
   },
   PAPER_CHART_GENERATOR: {
-    summary: 'Chart specification generation.',
-    responsibility: 'Creates structured chart configurations (e.g., Chart.js) from prompts or data.',
+    summary: 'Grant chart specification generation.',
+    responsibility: 'Creates structured chart configurations from prompts, numbers, or summary data for grant figures.',
     tip: 'Favor models with strong structured-output reliability.'
   },
   PAPER_DIAGRAM_GENERATOR: {
-    summary: 'Diagram code generation.',
-    responsibility: 'Generates Mermaid or PlantUML diagrams from requirements or prose.',
+    summary: 'Grant diagram code generation.',
+    responsibility: 'Generates Mermaid or PlantUML diagrams from grant requirements, workflows, or prose.',
     tip: 'Use models with good syntax reliability to minimize repair passes.'
   },
   PAPER_SKETCH_GENERATION: {
     summary: 'AI sketch and illustration generation.',
-    responsibility: 'Generates paper visuals using image-capable models from textual guidance.',
+    responsibility: 'Generates grant-ready concept visuals and figure sketches from textual guidance.',
     tip: 'Ensure the selected model supports image generation.'
   },
   PAPER_FIGURE_METADATA_INFER: {
     summary: 'Low-cost figure metadata inference.',
-    responsibility: 'Reads a generated figure image and extracts concise, evidence-safe metadata for downstream drafting.',
+    responsibility: 'Reads a generated figure image and extracts concise metadata for captions and downstream grant drafting.',
     tip: 'Prefer reliable vision models with low latency and strong JSON adherence.'
   },
   PAPER_TEXT_ACTION: {
-    summary: 'Targeted text transformations.',
-    responsibility: 'Applies rewrite, expand, condense, formalize, or simplify actions on selected text.',
+    summary: 'Targeted grant text transformations.',
+    responsibility: 'Applies rewrite, expand, condense, formalize, or simplify actions on selected grant text.',
     tip: 'Choose models with controllable style behavior and low latency.'
   },
   PAPER_CREATE_SECTIONS: {
-    summary: 'Section structuring from selected text.',
-    responsibility: 'Transforms a selected paragraph or block into headed subsections with coherent body text.',
-    tip: 'Prefer models that are strong at structural organization and markdown heading discipline.'
+    summary: 'Grant section structuring from selected text.',
+    responsibility: 'Transforms a selected paragraph or block into headed grant subsections with coherent body text.',
+    tip: 'Prefer models that are strong at structural organization and heading discipline.'
   },
-  PAPER_REWRITER: {
-    summary: 'Full rewrite with academic tone.',
-    responsibility: 'Rewrites larger passages while preserving meaning and improving clarity and flow.',
-    tip: 'Prefer higher-quality writing models for this stage.'
-  },
-  PAPER_LITERATURE_SEARCH: {
+  LITERATURE_SEARCH: {
     summary: 'Literature search assistance.',
-    responsibility: 'Supports retrieval-oriented prompting for finding relevant academic references.',
-    tip: 'Fast, cost-efficient models are usually sufficient.'
+    responsibility: 'Supports retrieval-oriented prompting and search framing for finding relevant literature.',
+    tip: 'Fast models are acceptable, but keep terminology consistency high.'
   },
   PAPER_LITERATURE_SUMMARIZE: {
-    summary: 'Deep Analysis: Full-Text Evidence Extraction.',
-    responsibility: 'Deep analysis extraction step that builds structured Evidence Cards from full text with claims, metrics, boundaries, and verbatim source fragments.',
-    tip: 'Primary Deep Analysis extraction gateway; keep generous token limits for full papers.'
+    summary: 'Full-text literature evidence extraction.',
+    responsibility: 'Builds structured evidence cards from full text with claims, metrics, limitations, and source-grounded fragments for grant use.',
+    tip: 'Keep generous token limits here because full papers and dense source packets are common.'
   },
   PAPER_DIAGRAM_FROM_TEXT: {
     summary: 'Diagram generation from selected text.',
-    responsibility: 'Transforms highlighted document text into diagram specifications automatically.',
+    responsibility: 'Transforms highlighted grant text into diagram specifications automatically.',
     tip: 'Structured-output accuracy is more important than creative writing quality.'
   },
   PAPER_LITERATURE_GAP: {
-    summary: 'Research gap analysis.',
+    summary: 'Literature gap analysis.',
     responsibility: 'Identifies missing evidence, unresolved questions, and contribution opportunities from reviewed literature.',
     tip: 'Use reasoning-strong models for higher-quality gap statements.'
   },
   LITERATURE_RELEVANCE: {
     summary: 'Relevance scoring for discovered papers.',
-    responsibility: 'Ranks and filters candidate papers by fit with the active research topic and blueprint intent.',
+    responsibility: 'Ranks and filters candidate papers by fit with the active grant topic and blueprint intent.',
     tip: 'A balance of speed and ranking quality is ideal.'
   },
   PAPER_BLUEPRINT_GEN: {
-    summary: 'Blueprint generation.',
-    responsibility: 'Builds thesis, section plan, must-cover dimensions, and terminology policy.',
+    summary: 'Grant blueprint planning.',
+    responsibility: 'Builds the core grant structure, must-cover dimensions, terminology policy, and section plan.',
     tip: 'Critical planning stage; use a top-tier reasoning model.'
   },
   PAPER_SECTION_GEN: {
-    summary: 'Section generation with memory.',
-    responsibility: 'Generates section drafts using blueprint constraints and cross-section memory.',
-    tip: 'Higher reasoning and long-context support improve global coherence.'
+    summary: 'Grant writing pass 2.',
+    responsibility: 'Polishes and finalizes section drafts using blueprint constraints and cross-section memory.',
+    tip: 'Higher reasoning and long-context support improve global coherence and reviewer-facing polish.'
   },
   PAPER_MEMORY_EXTRACT: {
-    summary: 'Section memory extraction.',
-    responsibility: 'Extracts compact structured memory from edited sections for downstream drafting consistency.',
+    summary: 'Grant draft memory extraction.',
+    responsibility: 'Extracts compact structured memory from edited grant sections for downstream drafting consistency.',
     tip: 'Fast models are often enough for this structured extraction.'
   },
   PAPER_SECTION_DRAFT: {
-    summary: 'Legacy section drafting endpoint.',
-    responsibility: 'Generates section content in drafting routes that still use the legacy stage code.',
-    tip: 'Keep aligned with the primary section generation model to avoid style drift.'
+    summary: 'Grant writing pass 1.',
+    responsibility: 'Generates the first section draft from blueprint, evidence, and search-strategy context.',
+    tip: 'Keep aligned with pass 2 to avoid style drift between the two writing passes.'
   },
   PAPER_SECTION_IMPROVE: {
-    summary: 'Deep Analysis support: Section improvement and citation-repair pass.',
-    responsibility: 'Runs post-draft improvement tasks, including Deep Analysis aware citation whitelist correction in drafting flow.',
-    tip: 'Used as a Deep Analysis downstream support stage during citation repair.'
+    summary: 'Grant section improvement and repair.',
+    responsibility: 'Runs post-draft improvement tasks, including citation repair and coherence fixes in the drafting flow.',
+    tip: 'Use models with high edit fidelity so localized fixes do not destabilize adjacent content.'
   },
   PAPER_CITATION_FORMAT: {
     summary: 'Citation formatting (newer stage code).',
@@ -426,33 +414,33 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     tip: 'Use reasoning-focused models for more actionable critique.'
   },
   PAPER_REVIEW_COHERENCE: {
-    summary: 'Deep Analysis: Evidence card to dimension mapping.',
-    responsibility: 'Deep analysis mapping step that maps extracted Evidence Cards to blueprint dimensions (sectionKey/dimension/useAs) and also supports coherence-oriented review tasks.',
-    tip: 'Primary Deep Analysis mapping gateway; prioritize structured JSON reliability and reasoning.'
+    summary: 'Evidence card to dimension mapping.',
+    responsibility: 'Maps extracted evidence cards to blueprint dimensions and also supports coherence-oriented review tasks.',
+    tip: 'Prioritize structured JSON reliability and reasoning.'
   },
   PAPER_MANUSCRIPT_REVIEW: {
-    summary: 'Structured manuscript review.',
-    responsibility: 'Runs the post-drafting review stage and produces the persisted review report used by the Improve stage.',
-    tip: 'Prefer high-reasoning, long-context models because the full manuscript, citations, and figure context may be inspected together.'
+    summary: 'Structured grant-draft review.',
+    responsibility: 'Runs the post-drafting review stage and produces the persisted review report used by the improvement stage.',
+    tip: 'Prefer high-reasoning, long-context models because the full draft, citations, and figure context may be inspected together.'
   },
   PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY: {
     summary: 'Neighbor-section context summarization.',
-    responsibility: 'Extracts compact structured summaries of nearby sections so section-by-section review can keep full text only for the active section.',
+    responsibility: 'Extracts compact structured summaries of nearby grant sections so review can keep full text only for the active section.',
     tip: 'Structured-output reliability matters most; keep this aligned to the summary prompt and current review strategy.'
   },
   PAPER_MANUSCRIPT_IMPROVE: {
-    summary: 'Review-driven manuscript improvement.',
-    responsibility: 'Executes approved rewrite-fixable recommendations from the latest manuscript review and updates draft sections.',
+    summary: 'Review-driven grant-draft improvement.',
+    responsibility: 'Executes approved rewrite-fixable recommendations from the latest review and updates draft sections.',
     tip: 'Use models with strong edit fidelity and instruction-following to avoid collateral rewrites.'
   },
   PAPER_EXPORT_EXTRACTION: {
-    summary: 'Adaptive export profile extraction.',
-    responsibility: 'Reads an uploaded DOCX or LaTeX reference, or pasted formatting guidelines, and converts them into the structured export profile used by DOCX and LaTeX exporters.',
+    summary: 'Formatting profile extraction.',
+    responsibility: 'Reads an uploaded reference or pasted formatting guidelines and converts them into the structured export profile used by exporters.',
     tip: 'Prioritize structured JSON reliability and formatting inference quality over creative output.'
   },
   PAPER_ARCHETYPE_DETECTION: {
-    summary: 'Reference archetype detection.',
-    responsibility: 'Classifies papers into archetypes for downstream extraction and mapping logic.',
+    summary: 'Evidence archetype detection.',
+    responsibility: 'Classifies literature and evidence into archetypes for downstream extraction and mapping logic.',
     tip: 'Reliable classification is more important than creative output.'
   },
   PAPER_DIAGRAM_REPAIR: {
@@ -525,7 +513,7 @@ export default function LLMConfigPage() {
 
   // Selection states
   const [selectedPlan, setSelectedPlan] = useState<string>('')
-  const [selectedFeature, setSelectedFeature] = useState<string>('PAPER_DRAFTING')
+  const [selectedFeature, setSelectedFeature] = useState<string>('GRANT_PREP')
   const stageRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   // Edit states

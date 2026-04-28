@@ -9,7 +9,7 @@ import type { LLMProvider, ProviderConfig } from './llm-provider'
 
 export class DeepSeekProvider implements LLMProvider {
   name = 'deepseek'
-  supportedModels = ['deepseek-chat', 'deepseek-reasoner']
+  supportedModels = ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']
 
   private config: ProviderConfig
   private client: any
@@ -31,7 +31,7 @@ export class DeepSeekProvider implements LLMProvider {
         const OpenAI = require('openai')
         this.client = new OpenAI({
           apiKey: config.apiKey,
-          baseURL: config.baseURL || 'https://api.deepseek.com/v1'
+          baseURL: config.baseURL || 'https://api.deepseek.com'
         })
         console.log('DeepSeek client initialized successfully')
       } catch (error) {
@@ -50,6 +50,10 @@ export class DeepSeekProvider implements LLMProvider {
     
     // Map friendly names to API model names
     const modelMap: Record<string, string> = {
+      'DeepSeek-V4-Pro': 'deepseek-v4-pro',
+      'deepseek-v4-pro': 'deepseek-v4-pro',
+      'DeepSeek-V4-Flash': 'deepseek-v4-flash',
+      'deepseek-v4-flash': 'deepseek-v4-flash',
       'deepseek-chat': 'deepseek-chat',
       'deepseek-reasoner': 'deepseek-reasoner'
     }
@@ -78,9 +82,8 @@ export class DeepSeekProvider implements LLMProvider {
         throw new Error('No valid content provided for DeepSeek request')
       }
 
-      // Apply token limits - admin config takes priority
-      // DeepSeek models support up to 64K output tokens
-      const defaultMax = 8192
+      // Apply token limits - admin config takes priority.
+      const defaultMax = this.getTokenLimits(actualModel).output
       const maxTokens = limits.maxTokensOut || defaultMax
       console.log(`[DeepSeekProvider] Token limits: admin=${limits.maxTokensOut || 'not set'}, using=${maxTokens}`)
 
@@ -128,15 +131,23 @@ export class DeepSeekProvider implements LLMProvider {
 
   getTokenLimits(modelName: string): { input: number; output: number } {
     const limits: Record<string, { input: number; output: number }> = {
-      'deepseek-chat': { input: 64000, output: 8192 },
-      'deepseek-reasoner': { input: 64000, output: 8192 }
+      'deepseek-v4-pro': { input: 1000000, output: 384000 },
+      'DeepSeek-V4-Pro': { input: 1000000, output: 384000 },
+      'deepseek-v4-flash': { input: 1000000, output: 384000 },
+      'DeepSeek-V4-Flash': { input: 1000000, output: 384000 },
+      'deepseek-chat': { input: 1000000, output: 384000 },
+      'deepseek-reasoner': { input: 1000000, output: 384000 }
     }
-    return limits[modelName] || { input: 64000, output: 8192 }
+    return limits[modelName] || { input: 1000000, output: 384000 }
   }
 
   getCostPerToken(modelName: string): { input: number; output: number } {
     // Cost per token in USD
     const costs: Record<string, { input: number; output: number }> = {
+      'deepseek-v4-pro': { input: 0.00000174, output: 0.00000348 },
+      'DeepSeek-V4-Pro': { input: 0.00000174, output: 0.00000348 },
+      'deepseek-v4-flash': { input: 0.00000014, output: 0.00000028 },
+      'DeepSeek-V4-Flash': { input: 0.00000014, output: 0.00000028 },
       'deepseek-chat': { input: 0.00000014, output: 0.00000028 },
       'deepseek-reasoner': { input: 0.00000055, output: 0.00000219 }
     }

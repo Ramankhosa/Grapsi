@@ -6,8 +6,9 @@ describe('grant-backed search strategy', () => {
   it('bundles blueprint dimensions into 4-12 queries and preserves full coverage', () => {
     const sectionPlan = Array.from({ length: 5 }, (_, sectionIndex) => ({
       sectionKey: `section_${sectionIndex + 1}`,
-      mustCover: Array.from({ length: 4 }, (_, dimensionIndex) => `Dimension ${sectionIndex + 1}.${dimensionIndex + 1}`),
-      mustCoverTyping: Object.fromEntries(
+      mustCover: [],
+      dimensions: Array.from({ length: 4 }, (_, dimensionIndex) => `Dimension ${sectionIndex + 1}.${dimensionIndex + 1}`),
+      dimensionTyping: Object.fromEntries(
         Array.from({ length: 4 }, (_, dimensionIndex) => [
           `Dimension ${sectionIndex + 1}.${dimensionIndex + 1}`,
           dimensionIndex % 2 === 0 ? 'empirical' : 'methodological',
@@ -35,7 +36,7 @@ describe('grant-backed search strategy', () => {
       strategy!.queries.flatMap((query) => query.dimensionTargets.map((target) => `${target.sectionKey}::${target.dimension}`))
     );
     const expectedDimensions = new Set(
-      sectionPlan.flatMap((section) => section.mustCover.map((dimension) => `${section.sectionKey}::${dimension}`))
+      sectionPlan.flatMap((section) => section.dimensions.map((dimension) => `${section.sectionKey}::${dimension}`))
     );
 
     expect(coveredDimensions.size).toBe(expectedDimensions.size);
@@ -70,12 +71,13 @@ describe('grant-backed search strategy', () => {
           {
             sectionKey: 'methodology',
             grantSemantic: 'methodology',
-            mustCover: [
+            mustCover: [],
+            dimensions: [
               'Feasibility of community health worker mobile adherence support in comparable settings',
               'Validation evidence for the proposed adherence monitoring workflow',
               'Comparative advantage or precedent for the implementation model',
             ],
-            mustCoverTyping: {
+            dimensionTyping: {
               'Feasibility of community health worker mobile adherence support in comparable settings': 'empirical',
               'Validation evidence for the proposed adherence monitoring workflow': 'methodological',
               'Comparative advantage or precedent for the implementation model': 'comparative',

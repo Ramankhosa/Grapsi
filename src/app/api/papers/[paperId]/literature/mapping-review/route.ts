@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
+import {
+  isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
+} from '@/lib/grants/blueprintMetadata';
 import { blueprintService } from '@/lib/services/blueprint-service';
 
 export const runtime = 'nodejs';
@@ -49,8 +53,11 @@ async function resolveBlueprintDimension(
     return null;
   }
 
+  const dimensions = isGrantBackedPaperTypeCode(blueprint.paperTypeCode)
+    ? resolveGrantSectionDimensions(section)
+    : (section.mustCover || []);
   const normalizedDimension = normalizeToken(dimension);
-  const matchedDimension = (section.mustCover || []).find(dim => normalizeToken(String(dim || '')) === normalizedDimension);
+  const matchedDimension = dimensions.find(dim => normalizeToken(String(dim || '')) === normalizedDimension);
   if (!matchedDimension) {
     return null;
   }
@@ -102,11 +109,12 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
       blueprintService.getBlueprint(sessionId)
     ]);
 
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint?.paperTypeCode);
     const sectionOptions = (blueprint?.sectionPlan || [])
       .map(section => ({
         sectionKey: section.sectionKey,
         sectionTitle: section.purpose || section.sectionKey,
-        dimensions: Array.isArray(section.mustCover) ? section.mustCover : []
+        dimensions: grantBacked ? resolveGrantSectionDimensions(section) : (Array.isArray(section.mustCover) ? section.mustCover : [])
       }))
       .filter(section => section.dimensions.length > 0);
 

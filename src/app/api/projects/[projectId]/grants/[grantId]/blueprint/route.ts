@@ -11,6 +11,7 @@ import {
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import {
   buildGrantPrepLocalLaunchPreview,
+  generateBlueprintLiteratureDimensions,
   getGrantWorkspace,
   launchGrantPrepToLocalWorkspace,
   setGrantBlueprintStatus,
@@ -36,11 +37,15 @@ const planSectionSchema = z.object({
   templateIntentConfidence: z.number().min(0).max(1).nullable().optional(),
   mustCover: z.array(z.string()).default([]),
   mustAvoid: z.array(z.string()).default([]),
+  dimensions: z.array(z.string()).default([]),
+  dimensionTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
   mustCoverTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
   suggestedCitationCount: z.number().int().min(0).max(50).nullable().optional(),
   thematicBlueprint: z.object({
     mustCover: z.array(z.string()).default([]),
     mustAvoid: z.array(z.string()).default([]),
+    dimensions: z.array(z.string()).default([]).optional(),
+    dimensionTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
     mustCoverTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
     suggestedCitationCount: z.number().int().min(0).max(50).optional(),
   }).nullable().optional(),
@@ -73,7 +78,7 @@ const updateBlueprintSchema = z.object({
 })
 
 const blueprintActionSchema = z.object({
-  action: z.enum(['freeze', 'unfreeze', 'regenerate']),
+  action: z.enum(['freeze', 'unfreeze', 'regenerate', 'generate_dimensions']),
   overrideReason: z.string().trim().max(1000).optional(),
 })
 
@@ -183,13 +188,26 @@ export async function POST(
   try {
     const payload = blueprintActionSchema.parse(await request.json())
 
+    let generationDiagnostics: unknown = null
+
     if (payload.action === 'freeze' || payload.action === 'unfreeze') {
       await setGrantBlueprintStatus({
         grantSessionId: grantId,
         tenantId: actor.tenantId,
         userId: actor.id,
         status: payload.action === 'freeze' ? 'FROZEN' : 'DRAFT',
+        overrideReason: payload.action === 'freeze' ? payload.overrideReason : undefined,
       })
+    } else if (payload.action === 'generate_dimensions') {
+      const generated = await generateBlueprintLiteratureDimensions({
+        grantSessionId: grantId,
+        tenantId: actor.tenantId,
+        userId: actor.id,
+      })
+      generationDiagnostics = {
+        source: generated.source,
+        diagnostics: generated.diagnostics,
+      }
     } else {
       const workspace = await getGrantWorkspace({
         grantSessionId: grantId,
@@ -222,6 +240,7 @@ export async function POST(
       proposalComplianceReport: workspace?.proposalComplianceReport || null,
       proposalReviewerReadinessReport: workspace?.proposalReviewerReadinessReport || null,
       freezeReadiness: workspace?.freezeReadiness || null,
+      generationDiagnostics,
     })
   } catch (error) {
     console.error('[Grant Blueprint] action error:', error)

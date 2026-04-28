@@ -64,8 +64,8 @@ const PRO_PLAN_PRODUCTION_OVERRIDES: Partial<Record<string, StagePlanConfigInput
   RESEARCH_INTENT_LOCK: { modelPreferences: ['gemini-2.5-pro'], maxTokensIn: 64_000, maxTokensOut: 16_000 },
   ARGUMENT_PLAN: { modelPreferences: ['gemini-2.5-pro'], maxTokensIn: 64_000, maxTokensOut: 16_000 },
   PAPER_ARCHETYPE_DETECTION: { modelPreferences: ['gemini-2.5-pro'], maxTokensIn: 36_000, maxTokensOut: 12_000 },
-  PAPER_SECTION_DRAFT: { modelPreferences: ['gpt-5.2'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
-  PAPER_SECTION_GEN: { modelPreferences: ['gpt-5.2'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
+  PAPER_SECTION_DRAFT: { modelPreferences: ['deepseek-v4-pro'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
+  PAPER_SECTION_GEN: { modelPreferences: ['deepseek-v4-pro'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
   PAPER_SECTION_IMPROVE: { modelPreferences: ['gemini-2.5-flash-lite'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
   PAPER_CREATE_SECTIONS: { modelPreferences: ['gpt-5.2'], maxTokensIn: 24_000, maxTokensOut: 12_000 },
   PAPER_MEMORY_EXTRACT: { modelPreferences: ['gpt-5-mini'], maxTokensIn: 36_000, maxTokensOut: 8_000 },
@@ -535,15 +535,15 @@ const stageConfigs: Record<string, StageRuntimeConfig> = {
 
   PAPER_SECTION_DRAFT: stagePlan(
     0.62,
-    { modelPreferences: ['gemini-2.5-pro', 'gpt-5-mini'], maxTokensIn: 96_000, maxTokensOut: 18_000 },
-    { modelPreferences: ['gpt-5.1', 'gpt-5.1-thinking'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
-    { modelPreferences: ['gpt-5.2', 'gpt-5.2-thinking'], maxTokensIn: 200_000, maxTokensOut: 32_000 }
+    { modelPreferences: ['deepseek-v4-pro', 'gemini-2.5-pro', 'gpt-5-mini'], maxTokensIn: 96_000, maxTokensOut: 18_000 },
+    { modelPreferences: ['deepseek-v4-pro', 'gpt-5.1', 'gpt-5.1-thinking'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
+    { modelPreferences: ['deepseek-v4-pro', 'gpt-5.2', 'gpt-5.2-thinking'], maxTokensIn: 200_000, maxTokensOut: 32_000 }
   ),
   PAPER_SECTION_GEN: stagePlan(
     0.45,
-    { modelPreferences: ['gemini-2.5-pro', 'gpt-5-mini'], maxTokensIn: 96_000, maxTokensOut: 18_000 },
-    { modelPreferences: ['gpt-5.1', 'gpt-5.1-thinking'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
-    { modelPreferences: ['gpt-5.2', 'gpt-5.2-thinking'], maxTokensIn: 200_000, maxTokensOut: 32_000 }
+    { modelPreferences: ['deepseek-v4-pro', 'gemini-2.5-pro', 'gpt-5-mini'], maxTokensIn: 96_000, maxTokensOut: 18_000 },
+    { modelPreferences: ['deepseek-v4-pro', 'gpt-5.1', 'gpt-5.1-thinking'], maxTokensIn: 140_000, maxTokensOut: 26_000 },
+    { modelPreferences: ['deepseek-v4-pro', 'gpt-5.2', 'gpt-5.2-thinking'], maxTokensIn: 200_000, maxTokensOut: 32_000 }
   ),
   PAPER_SECTION_IMPROVE: stagePlan(
     0.4,
@@ -735,6 +735,33 @@ async function main() {
     })
     console.log(`  Stage seeded: ${stage.code}`)
   }
+
+  await prisma.lLMModel.upsert({
+    where: { code: 'deepseek-v4-pro' },
+    update: {
+      displayName: 'DeepSeek V4 Pro',
+      provider: 'deepseek',
+      contextWindow: 1_000_000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 174,
+      outputCostPer1M: 348,
+      isActive: true,
+    },
+    create: {
+      code: 'deepseek-v4-pro',
+      displayName: 'DeepSeek V4 Pro',
+      provider: 'deepseek',
+      contextWindow: 1_000_000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 174,
+      outputCostPer1M: 348,
+      isActive: true,
+      isDefault: false,
+    },
+  })
+  console.log('  Model seeded: deepseek-v4-pro')
 
   const defaultModel = await prisma.lLMModel.findFirst({
     where: { isDefault: true, isActive: true },

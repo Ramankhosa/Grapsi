@@ -80,6 +80,8 @@ interface RhetoricalBlueprint {
 interface ThematicBlueprint {
   mustCover: string[];
   mustAvoid: string[];
+  dimensions?: string[];
+  dimensionTyping?: Record<string, string>;
   mustCoverTyping?: Record<string, string>;
   suggestedCitationCount?: number;
 }
@@ -93,6 +95,8 @@ interface SectionPlanItem {
   workflowMode?: 'app_draft' | 'app_support' | 'team_manual';
   purpose: string;
   mustCover: string[];
+  dimensions?: string[];
+  dimensionTyping?: Record<string, string>;
   mustCoverTyping?: Record<string, string>;
   mustAvoid: string[];
   wordBudget?: number;
@@ -183,6 +187,10 @@ interface BlueprintStageProps {
     projectId: string;
     isGrantWorkspace: boolean;
   };
+}
+
+interface FreezeOverrideWarning {
+  issues: string[];
 }
 
 // ============================================================================
@@ -452,6 +460,12 @@ function syncThematicBlueprint(section: SectionPlanItem): SectionPlanItem {
   const mustAvoid = Array.isArray(section.mustAvoid)
     ? section.mustAvoid.map(item => String(item || '').trim()).filter(Boolean)
     : [];
+  const dimensions = Array.isArray(section.dimensions)
+    ? section.dimensions.map(item => String(item || '').trim()).filter(Boolean)
+    : [];
+  const dimensionTyping = section.dimensionTyping && typeof section.dimensionTyping === 'object'
+    ? section.dimensionTyping
+    : undefined;
   const mustCoverTyping = section.mustCoverTyping && typeof section.mustCoverTyping === 'object'
     ? section.mustCoverTyping
     : undefined;
@@ -463,10 +477,14 @@ function syncThematicBlueprint(section: SectionPlanItem): SectionPlanItem {
     ...section,
     mustCover,
     mustAvoid,
+    dimensions,
+    ...(dimensionTyping ? { dimensionTyping } : {}),
     ...(mustCoverTyping ? { mustCoverTyping } : {}),
     thematicBlueprint: {
       mustCover,
       mustAvoid,
+      ...(dimensions.length > 0 ? { dimensions } : {}),
+      ...(dimensionTyping ? { dimensionTyping } : {}),
       ...(mustCoverTyping ? { mustCoverTyping } : {}),
       ...(typeof suggestedCitationCount === 'number' ? { suggestedCitationCount } : {})
     }
@@ -561,7 +579,7 @@ function isGrantEvidenceMappingSection(section: SectionPlanItem): boolean {
     && (
       section.citationMode === 'mapped_evidence'
       || hasEvidenceSemantics(section)
-      || (section.mustCover?.length || 0) > 0
+      || (section.dimensions?.length || 0) > 0
       || (section.suggestedCitationCount || 0) > 0
     )
   );
@@ -620,7 +638,7 @@ function updateGrantDimensionTyping(
   oldDimension?: string,
   newDimension?: string
 ): Record<string, string> | undefined {
-  const existing = section.mustCoverTyping || {};
+  const existing = section.dimensionTyping || {};
   const nextTyping: Record<string, string> = {};
   for (const dimension of nextDimensions) {
     const carriedType = existing[dimension]
@@ -638,7 +656,9 @@ interface GrantBlueprintApplicationViewProps {
   isFrozen: boolean;
   saving: boolean;
   generating: boolean;
+  generatingDimensions: boolean;
   onGenerate: () => void;
+  onGenerateDimensions: () => void;
   onToggleFreeze: () => void;
   onSaveFoundation: (updates: Partial<Blueprint>) => void;
   onUpdateSection: (sectionKey: string, updated: SectionPlanItem) => void;
@@ -650,7 +670,9 @@ function GrantBlueprintApplicationView({
   isFrozen,
   saving,
   generating,
+  generatingDimensions,
   onGenerate,
+  onGenerateDimensions,
   onToggleFreeze,
   onSaveFoundation,
   onUpdateSection,
@@ -678,7 +700,7 @@ function GrantBlueprintApplicationView({
   const aiSections = orderedSections.filter(isGrantAppDraftSection);
   const manualSections = orderedSections.filter(isGrantManualSection);
   const evidenceSections = orderedSections.filter(isGrantEvidenceMappingSection);
-  const totalDimensions = evidenceSections.reduce((sum, section) => sum + (section.mustCover?.length || 0), 0);
+  const totalDimensions = evidenceSections.reduce((sum, section) => sum + (section.dimensions?.length || 0), 0);
   const citationTargetCount = evidenceSections.reduce((sum, section) => sum + (section.suggestedCitationCount || 0), 0);
   const prepAnchoredSections = orderedSections.filter((section) =>
     (section.prepContextBlock?.bullets?.length || 0) > 0
@@ -688,7 +710,7 @@ function GrantBlueprintApplicationView({
     (section.grantRuleProfile?.requiredPoints?.length || 0) > 0
     || (section.grantSectionComplianceContract?.hardChecks?.length || 0) > 0
   ).length;
-  const missingDimensionSections = evidenceSections.filter((section) => (section.mustCover?.length || 0) === 0);
+  const missingDimensionSections = evidenceSections.filter((section) => (section.dimensions?.length || 0) === 0);
   const visibleSections = filter === 'ai'
     ? aiSections
     : filter === 'manual'
@@ -739,6 +761,15 @@ function GrantBlueprintApplicationView({
             <Button variant="outline" onClick={onGenerate} disabled={generating || saving}>
               {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
               Regenerate
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onGenerateDimensions}
+              disabled={generatingDimensions || generating || saving || isFrozen}
+              className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-950"
+            >
+              {generatingDimensions ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              Generate dimensions for literature review
             </Button>
             <Button
               onClick={onToggleFreeze}
@@ -951,8 +982,8 @@ function GrantApplicationSectionCard({
     const cleanDimensions = uniqueGrantList(nextDimensions, 20);
     onUpdateSection(section.sectionKey, {
       ...section,
-      mustCover: cleanDimensions,
-      mustCoverTyping: updateGrantDimensionTyping(section, cleanDimensions, oldDimension, newDimension),
+      dimensions: cleanDimensions,
+      dimensionTyping: updateGrantDimensionTyping(section, cleanDimensions, oldDimension, newDimension),
     });
   };
 
@@ -979,7 +1010,7 @@ function GrantApplicationSectionCard({
               {limitLabel ? <Badge variant="outline">{limitLabel}</Badge> : null}
               {evidenceMapped ? (
                 <Badge className="bg-indigo-100 text-indigo-800 hover:bg-indigo-100">
-                  {(section.mustCover?.length || 0)} pillars · {section.suggestedCitationCount || 0} citations
+                  {(section.dimensions?.length || 0)} pillars · {section.suggestedCitationCount || 0} citations
                 </Badge>
               ) : (
                 <Badge variant="outline">No evidence mapping</Badge>
@@ -1075,7 +1106,7 @@ function GrantApplicationSectionCard({
               ) : null}
             </div>
 
-            {evidenceMapped && (section.mustCover?.length || 0) === 0 ? (
+            {evidenceMapped && (section.dimensions?.length || 0) === 0 ? (
               <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
                 Evidence pillars are missing for this eligible section.
               </div>
@@ -1083,7 +1114,7 @@ function GrantApplicationSectionCard({
 
             {evidenceMapped ? (
               <div className="space-y-3">
-                {(section.mustCover || []).map((dimension, dimensionIndex) => (
+                {(section.dimensions || []).map((dimension, dimensionIndex) => (
                   <div key={`${dimension}-${dimensionIndex}`} className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900 dark:bg-slate-950">
                     {canEditDimensions ? (
                       <div className="flex gap-2">
@@ -1091,7 +1122,7 @@ function GrantApplicationSectionCard({
                           defaultValue={dimension}
                           onBlur={(event) => {
                             if (event.target.value.trim() === dimension.trim()) return;
-                            const nextDimensions = [...(section.mustCover || [])];
+                            const nextDimensions = [...(section.dimensions || [])];
                             const nextDimension = event.target.value;
                             const oldDimension = nextDimensions[dimensionIndex];
                             nextDimensions[dimensionIndex] = nextDimension;
@@ -1101,7 +1132,7 @@ function GrantApplicationSectionCard({
                         />
                         <button
                           type="button"
-                          onClick={() => updateDimensions((section.mustCover || []).filter((_, itemIndex) => itemIndex !== dimensionIndex))}
+                          onClick={() => updateDimensions((section.dimensions || []).filter((_, itemIndex) => itemIndex !== dimensionIndex))}
                           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
                           title="Remove dimension"
                         >
@@ -1119,7 +1150,7 @@ function GrantApplicationSectionCard({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => updateDimensions([...(section.mustCover || []), 'Add searchable evidence pillar'])}
+                      onClick={() => updateDimensions([...(section.dimensions || []), 'Add searchable evidence pillar'])}
                     >
                       <Plus className="mr-2 h-4 w-4" /> Add pillar
                     </Button>
@@ -2094,6 +2125,75 @@ function SectionNode({ section, isFrozen, isFocused = false, onUpdateSection }: 
   );
 }
 
+function FreezeOverrideWarningModal({
+  warning,
+  saving,
+  onCancel,
+  onConfirm,
+}: {
+  warning: FreezeOverrideWarning;
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const visibleIssues = warning.issues.slice(0, 8);
+  const hiddenCount = Math.max(0, warning.issues.length - visibleIssues.length);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-2xl rounded-xl border border-amber-200 bg-white shadow-2xl dark:border-amber-900 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+              <AlertCircle className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-slate-950 dark:text-white">Freeze with incomplete Grant Prep context?</h2>
+              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                Some sections are missing reviewer guidance or mapped required points. Drafting will continue using the best available blueprint, guideline, and prep context.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50 dark:hover:bg-slate-900 dark:hover:text-slate-200"
+            aria-label="Close warning"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="max-h-[45vh] overflow-y-auto px-5 py-4">
+          <ul className="space-y-2">
+            {visibleIssues.map((issue) => (
+              <li key={issue} className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                {issue}
+              </li>
+            ))}
+          </ul>
+          {hiddenCount > 0 ? (
+            <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+              {hiddenCount} more warning{hiddenCount === 1 ? '' : 's'} will be carried into drafting.
+            </p>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end dark:border-slate-800">
+          <Button variant="ghost" onClick={onCancel} disabled={saving}>
+            Keep editing
+          </Button>
+          <Button onClick={onConfirm} disabled={saving} className="bg-amber-600 text-white hover:bg-amber-700">
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Lock className="mr-2 h-4 w-4" />}
+            Freeze anyway
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============================================================================
 // Main Component
 // ============================================================================
@@ -2112,9 +2212,11 @@ export default function BlueprintStage({
   const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [generatingDimensions, setGeneratingDimensions] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [grantManaged, setGrantManaged] = useState(false);
+  const [freezeOverrideWarning, setFreezeOverrideWarning] = useState<FreezeOverrideWarning | null>(null);
   
   // Editing states
   const [editingThesis, setEditingThesis] = useState(false);
@@ -2239,6 +2341,58 @@ export default function BlueprintStage({
     }
   };
 
+  const handleGenerateDimensions = async () => {
+    if (!authToken || !isGrantWorkspace) return;
+    if (blueprint?.status === 'FROZEN') {
+      showToast({ type: 'error', title: 'Blueprint frozen', message: 'Unfreeze the blueprint before generating literature dimensions.' });
+      return;
+    }
+
+    try {
+      setGeneratingDimensions(true);
+      const res = await fetch(blueprintApiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ action: 'generate_dimensions' })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.message || 'Failed to generate literature dimensions');
+
+      // Debug: backend tells us whether dimensions came from the LLM or deterministic fallback.
+      console.log('[BlueprintStage] generate_dimensions diagnostics:', data?.generationDiagnostics || null);
+
+      const nextBlueprint = buildGrantBlueprintState({
+        sessionId,
+        blueprint: data.blueprint,
+        proposalFoundation: data.proposalFoundation,
+      });
+
+      setBlueprint(nextBlueprint);
+      setThesisValue(nextBlueprint?.thesisStatement || '');
+      setObjectiveValue(nextBlueprint?.centralObjective || '');
+      await refreshShadowSession();
+      showToast({
+        type: 'success',
+        title: 'Dimensions generated',
+        message:
+          `Literature-review dimensions were generated only for citation-mapped grant sections. ` +
+          `Source: ${data?.generationDiagnostics?.source || 'unknown'}.`
+      });
+    } catch (err) {
+      showToast({
+        type: 'error',
+        title: 'Dimension generation failed',
+        message: err instanceof Error ? err.message : 'Unknown error'
+      });
+    } finally {
+      setGeneratingDimensions(false);
+    }
+  };
+
   // Save blueprint updates
   const handleSave = async (updates: Partial<Blueprint>) => {
     if (!authToken || !blueprint) return;
@@ -2294,6 +2448,67 @@ export default function BlueprintStage({
     }
   };
 
+  const parseFreezeReadinessIssues = (data: any): string[] => {
+    if (Array.isArray(data?.issues)) {
+      return data.issues.map((issue: unknown) => String(issue || '').trim()).filter(Boolean);
+    }
+
+    return String(data?.message || data?.error || '')
+      .split('\n')
+      .map((issue) => issue.trim())
+      .filter(Boolean);
+  };
+
+  const submitFreezeAction = async (action: 'freeze' | 'unfreeze', overrideReason?: string) => {
+    const res = await fetch(blueprintApiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        action,
+        ...(overrideReason ? { overrideReason } : {})
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      const issues = action === 'freeze' && isGrantWorkspace ? parseFreezeReadinessIssues(data) : [];
+      if (issues.length > 0 && issues.every((issue) => issue.startsWith('Grant-backed section '))) {
+        setFreezeOverrideWarning({ issues });
+        return null;
+      }
+      throw new Error(data.error || data.message || `Failed to ${action}`);
+    }
+
+    return data;
+  };
+
+  const applyFreezeResponse = async (action: 'freeze' | 'unfreeze', data: any) => {
+    const nextBlueprint = isGrantWorkspace
+      ? buildGrantBlueprintState({
+          sessionId,
+          blueprint: data.blueprint,
+          proposalFoundation: data.proposalFoundation,
+        })
+      : data.blueprint;
+
+    setBlueprint(nextBlueprint);
+    await refreshShadowSession();
+    showToast({
+      type: 'success',
+      title: action === 'freeze' ? 'Blueprint Frozen' : 'Blueprint Unlocked',
+      message: action === 'freeze'
+        ? 'Your blueprint is now locked. You can proceed to literature search.'
+        : 'Blueprint unlocked for editing. Existing sections marked as stale.'
+    });
+
+    if (action === 'freeze' && onNavigateToStage) {
+      setTimeout(() => onNavigateToStage('LITERATURE_SEARCH'), 1500);
+    }
+  };
+
   // Freeze/unfreeze blueprint
   const handleToggleFreeze = async () => {
     if (!authToken || !blueprint) return;
@@ -2306,39 +2521,33 @@ export default function BlueprintStage({
     
     try {
       setSaving(true);
-      const res = await fetch(blueprintApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ action })
-      });
-      
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Failed to ${action}`);
-      
-      const nextBlueprint = isGrantWorkspace
-        ? buildGrantBlueprintState({
-            sessionId,
-            blueprint: data.blueprint,
-            proposalFoundation: data.proposalFoundation,
-          })
-        : data.blueprint;
-
-      setBlueprint(nextBlueprint);
-      await refreshShadowSession();
+      const data = await submitFreezeAction(action);
+      if (data) {
+        await applyFreezeResponse(action, data);
+      }
+    } catch (err) {
       showToast({
-        type: 'success',
-        title: action === 'freeze' ? 'Blueprint Frozen' : 'Blueprint Unlocked',
-        message: action === 'freeze' 
-          ? 'Your blueprint is now locked. You can proceed to literature search.'
-          : 'Blueprint unlocked for editing. Existing sections marked as stale.'
+        type: 'error',
+        title: 'Action failed',
+        message: err instanceof Error ? err.message : 'Unknown error'
       });
-      
-      // Navigate to literature search after freezing
-      if (action === 'freeze' && onNavigateToStage) {
-        setTimeout(() => onNavigateToStage('LITERATURE_SEARCH'), 1500);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConfirmFreezeOverride = async () => {
+    if (!authToken || !blueprint || !freezeOverrideWarning) return;
+
+    try {
+      setSaving(true);
+      const data = await submitFreezeAction(
+        'freeze',
+        'User confirmed freeze despite incomplete Grant Prep readiness warnings.'
+      );
+      if (data) {
+        setFreezeOverrideWarning(null);
+        await applyFreezeResponse('freeze', data);
       }
     } catch (err) {
       showToast({
@@ -2523,17 +2732,29 @@ export default function BlueprintStage({
 
   if (isGrantWorkspace) {
     return (
-      <GrantBlueprintApplicationView
-        blueprint={blueprint}
-        isLocked={isLocked}
-        isFrozen={isFrozen}
-        saving={saving}
-        generating={generating}
-        onGenerate={handleGenerate}
-        onToggleFreeze={handleToggleFreeze}
-        onSaveFoundation={handleSave}
-        onUpdateSection={handleUpdateSection}
-      />
+      <>
+        <GrantBlueprintApplicationView
+          blueprint={blueprint}
+          isLocked={isLocked}
+          isFrozen={isFrozen}
+          saving={saving}
+          generating={generating}
+          generatingDimensions={generatingDimensions}
+          onGenerate={handleGenerate}
+          onGenerateDimensions={handleGenerateDimensions}
+          onToggleFreeze={handleToggleFreeze}
+          onSaveFoundation={handleSave}
+          onUpdateSection={handleUpdateSection}
+        />
+        {freezeOverrideWarning ? (
+          <FreezeOverrideWarningModal
+            warning={freezeOverrideWarning}
+            saving={saving}
+            onCancel={() => setFreezeOverrideWarning(null)}
+            onConfirm={handleConfirmFreezeOverride}
+          />
+        ) : null}
+      </>
     );
   }
 

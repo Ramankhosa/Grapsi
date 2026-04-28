@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { OpenAIProvider } from '../openai-provider'
 import { GeminiProvider } from '../gemini-provider'
+import { DeepSeekProvider } from '../deepseek-provider'
 import { getProviderFromModelCode } from '../llm-provider'
 
 describe('Provider model aliasing', () => {
@@ -37,6 +38,17 @@ describe('Provider model aliasing', () => {
     expect(p.getCostPerToken('gemini-3.1-flash-image')).toEqual(p.getCostPerToken('gemini-3.1-flash-image-preview'))
   })
 
+  it('DeepSeekProvider supports DeepSeek V4 Pro aliases for limits/costs', () => {
+    const p = new DeepSeekProvider({
+      apiKey: 'x',
+      baseURL: 'https://api.deepseek.com',
+      model: 'deepseek-v4-pro'
+    })
+
+    expect(p.getTokenLimits('DeepSeek-V4-Pro')).toEqual(p.getTokenLimits('deepseek-v4-pro'))
+    expect(p.getCostPerToken('DeepSeek-V4-Pro')).toEqual(p.getCostPerToken('deepseek-v4-pro'))
+  })
+
   it('routes new model codes to the expected providers', () => {
     expect(getProviderFromModelCode('claude-opus-4.5')).toBe('anthropic')
     expect(getProviderFromModelCode('claude-opus-4.6')).toBe('anthropic')
@@ -44,5 +56,6 @@ describe('Provider model aliasing', () => {
     expect(getProviderFromModelCode('glm-4.5v')).toBe('zhipu')
     expect(getProviderFromModelCode('qwen2.5-72b-instruct')).toBe('qwen')
     expect(getProviderFromModelCode('gemini-3.1-flash-image')).toBe('gemini')
+    expect(getProviderFromModelCode('deepseek-v4-pro')).toBe('deepseek')
   })
 })

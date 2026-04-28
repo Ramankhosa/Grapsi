@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
-import { buildGrantBackedSearchStrategy } from '@/lib/grants/searchStrategy';
+import { extractGrantDimensionTargets, isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
 import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { llmGateway } from '@/lib/metering/gateway';
+import type { Prisma } from '@prisma/client';
+import type { GrantBlueprintDimensionTarget } from '@/types/grant';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,13 +55,69 @@ interface GeneratedQuery {
   suggestedYearFrom?: number;
   suggestedYearTo?: number;
   searchIntent?: string;
-  dimensionTargets?: Array<{ sectionKey: string; dimension: string; dimensionType?: string }>;
+  resultLimit?: number;
+  targetIds?: string[];
+  dimensionTargets?: GrantBlueprintDimensionTarget[];
 }
 
 interface LLMStrategyResponse {
   summary: string;
   estimatedPapers: number;
   queries: GeneratedQuery[];
+}
+
+type IndexedGrantDimensionTarget = GrantBlueprintDimensionTarget & { id: string };
+type GrantDimensionTargetBundle = {
+  id: string;
+  targets: IndexedGrantDimensionTarget[];
+};
+
+const GRANT_STRATEGY_QUERY_COUNT = 8;
+const GRANT_STRATEGY_RESULTS_PER_QUERY = 10;
+
+const VALID_SEARCH_QUERY_CATEGORIES = [
+  'CORE_CONCEPTS',
+  'DOMAIN_APPLICATION',
+  'METHODOLOGY',
+  'THEORETICAL_FOUNDATION',
+  'SURVEYS_REVIEWS',
+  'COMPETING_APPROACHES',
+  'RECENT_ADVANCES',
+  'GAP_IDENTIFICATION',
+  'CUSTOM',
+];
+
+const DEFAULT_SEARCH_SOURCES = ['semantic_scholar', 'openalex', 'crossref'];
+
+function strategyQueriesHaveProgress(
+  queries: Array<{ status?: string | null; resultsCount?: number | null; importedCount?: number | null }>
+): boolean {
+  return queries.some((query) =>
+    query.status !== 'PENDING'
+    || (query.resultsCount || 0) > 0
+    || (query.importedCount || 0) > 0
+  );
+}
+
+function bundleGrantDimensionTargets(targets: IndexedGrantDimensionTarget[]): GrantDimensionTargetBundle[] {
+  if (targets.length === 0) return [];
+
+  const queryCount = Math.min(GRANT_STRATEGY_QUERY_COUNT, targets.length);
+  const bundles: GrantDimensionTargetBundle[] = [];
+
+  for (let index = 0; index < queryCount; index += 1) {
+    const start = Math.floor((index * targets.length) / queryCount);
+    const end = Math.floor(((index + 1) * targets.length) / queryCount);
+    const bundleTargets = targets.slice(start, end);
+    if (bundleTargets.length > 0) {
+      bundles.push({
+        id: `B${bundles.length + 1}`,
+        targets: bundleTargets,
+      });
+    }
+  }
+
+  return bundles;
 }
 
 async function getSessionForUser(
@@ -132,31 +190,118 @@ Respond in JSON format ONLY:
 Generate queries that together provide COMPLETE coverage for writing Introduction, Literature Review, and Methodology sections.`;
 }
 
-function parseStrategyResponse(output: string): LLMStrategyResponse {
+function buildGrantDimensionStrategyPrompt(input: {
+  paperTitle: string;
+  paperAbstract: string;
+  keywords: string[];
+  researchFocus: string;
+  bundles: GrantDimensionTargetBundle[];
+}): string {
+  const bundlePayload = input.bundles.map((bundle) => ({
+    bundleId: bundle.id,
+    targetIds: bundle.targets.map((target) => target.id),
+    dimensions: bundle.targets.map((target) => ({
+      id: target.id,
+      sectionKey: target.sectionKey,
+      dimensionType: target.dimensionType || 'empirical',
+      dimension: target.dimension,
+    })),
+  }));
+  const queryCount = input.bundles.length;
+  const targetPaperCount = queryCount * GRANT_STRATEGY_RESULTS_PER_QUERY;
+
+  return `You are an expert academic research librarian creating a literature search strategy for a grant-backed literature review.
+
+The grant blueprint already exists. Your job is only to generate search queries that will retrieve papers useful for the listed blueprint dimensions.
+
+PROJECT CONTEXT:
+Title: ${input.paperTitle}
+Abstract/Description: ${input.paperAbstract || 'Not provided'}
+Keywords: ${input.keywords.join(', ') || 'Not provided'}
+Research Focus: ${input.researchFocus || 'Not provided'}
+
+BLUEPRINT DIMENSION BUNDLES:
+${JSON.stringify(bundlePayload)}
+
+TASK:
+Generate exactly ${queryCount} high-quality academic search queries, one query per bundle.
+The app will retrieve about ${GRANT_STRATEGY_RESULTS_PER_QUERY} papers per query, so the total search pool should stay around ${targetPaperCount} papers before deduplication and relevance filtering.
+
+Rules:
+- Each output query must use one bundleId from the input.
+- Each bundleId must be used exactly once.
+- Use the bundle's targetIds exactly. Do not invent ids and do not split a bundle into multiple queries.
+- Write short keyword search phrases, usually 4-10 words.
+- Do not use question format.
+- Avoid generic phrases like "literature review" unless genuinely useful.
+- Prefer terms that will find empirical evidence, intervention studies, implementation evidence, comparisons, policy evidence, or evaluation metrics relevant to the targetIds.
+- Keep the strategy selective. It should support selecting 20-30 final grant citations from roughly ${targetPaperCount} candidate papers, not broad harvesting.
+
+Respond in JSON format ONLY:
+{
+  "summary": "<1-2 sentence overview of how the queries cover the grant dimensions>",
+  "estimatedPapers": ${targetPaperCount},
+  "queries": [
+    {
+      "bundleId": "B1",
+      "queryText": "<keyword search phrase>",
+      "category": "<CORE_CONCEPTS|DOMAIN_APPLICATION|METHODOLOGY|THEORETICAL_FOUNDATION|SURVEYS_REVIEWS|COMPETING_APPROACHES|RECENT_ADVANCES|GAP_IDENTIFICATION>",
+      "description": "<what evidence this query should find for the mapped dimensions>",
+      "priority": <1-${queryCount}>,
+      "suggestedSources": ["semantic_scholar", "openalex", "crossref"],
+      "suggestedYearFrom": <optional year>,
+      "suggestedYearTo": <optional year>,
+      "searchIntent": "<short snake_case intent>",
+      "targetIds": ["exact ids from that bundle"]
+    }
+  ]
+}`;
+}
+
+function parseJsonFromOutput(output: string): any {
   let cleaned = output.trim();
   if (cleaned.startsWith('```json')) cleaned = cleaned.slice(7);
   else if (cleaned.startsWith('```')) cleaned = cleaned.slice(3);
   if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
   cleaned = cleaned.trim();
 
-  const parsed = JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch (error) {
+    const objectStart = cleaned.indexOf('{');
+    const objectEnd = cleaned.lastIndexOf('}');
+    if (objectStart >= 0 && objectEnd > objectStart) {
+      return JSON.parse(cleaned.slice(objectStart, objectEnd + 1));
+    }
+
+    const arrayStart = cleaned.indexOf('[');
+    const arrayEnd = cleaned.lastIndexOf(']');
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      return JSON.parse(cleaned.slice(arrayStart, arrayEnd + 1));
+    }
+
+    throw error;
+  }
+}
+
+function normalizeSearchCategory(value: unknown): string {
+  const category = String(value || '').trim();
+  return VALID_SEARCH_QUERY_CATEGORIES.includes(category) ? category : 'CUSTOM';
+}
+
+function parseStrategyResponse(output: string): LLMStrategyResponse {
+  const parsed = parseJsonFromOutput(output);
   
   if (!parsed.queries || !Array.isArray(parsed.queries)) {
     throw new Error('Invalid response: missing queries array');
   }
 
-  const validCategories = [
-    'CORE_CONCEPTS', 'DOMAIN_APPLICATION', 'METHODOLOGY', 
-    'THEORETICAL_FOUNDATION', 'SURVEYS_REVIEWS', 'COMPETING_APPROACHES',
-    'RECENT_ADVANCES', 'GAP_IDENTIFICATION', 'CUSTOM'
-  ];
-
   const queries: GeneratedQuery[] = parsed.queries.map((q: any, idx: number) => ({
     queryText: String(q.queryText || '').slice(0, 200),
-    category: validCategories.includes(q.category) ? q.category : 'CUSTOM',
+    category: normalizeSearchCategory(q.category),
     description: String(q.description || 'Search query').slice(0, 500),
     priority: Number(q.priority) || idx + 1,
-    suggestedSources: Array.isArray(q.suggestedSources) ? q.suggestedSources : ['semantic_scholar', 'openalex'],
+    suggestedSources: Array.isArray(q.suggestedSources) ? q.suggestedSources : DEFAULT_SEARCH_SOURCES,
     suggestedYearFrom: q.suggestedYearFrom ? Number(q.suggestedYearFrom) : undefined,
     suggestedYearTo: q.suggestedYearTo ? Number(q.suggestedYearTo) : undefined
   }));
@@ -166,6 +311,100 @@ function parseStrategyResponse(output: string): LLMStrategyResponse {
     estimatedPapers: Number(parsed.estimatedPapers) || 50,
     queries
   };
+}
+
+function parseGrantDimensionStrategyResponse(
+  output: string,
+  bundles: GrantDimensionTargetBundle[]
+): LLMStrategyResponse {
+  const parsed = parseJsonFromOutput(output);
+  const rawQueries = Array.isArray(parsed) ? parsed : parsed.queries;
+  if (!Array.isArray(rawQueries)) {
+    throw new Error('Invalid response: missing queries array');
+  }
+
+  if (rawQueries.length < bundles.length) {
+    throw new Error(`Invalid response: expected ${bundles.length} bundled queries, received ${rawQueries.length}`);
+  }
+
+  const targetById = new Map(bundles.flatMap((bundle) => bundle.targets).map((target) => [target.id, target]));
+  const coveredTargetIds = new Set<string>();
+
+  const queries = bundles
+    .map((expectedBundle, idx): GeneratedQuery => {
+      const q = rawQueries.find((candidate: any) =>
+        String(candidate?.bundleId || '').trim() === expectedBundle.id
+      ) || rawQueries[idx];
+
+      const rawTargetIds = Array.isArray(q?.targetIds)
+        ? q.targetIds
+            .map((value: unknown) => String(value || '').trim())
+            .filter((targetId: string) => targetById.has(targetId))
+        : [];
+      const rawTargetSet = new Set(rawTargetIds);
+      const expectedTargetIds = expectedBundle.targets.map((target) => target.id);
+      const targetIds = expectedTargetIds.every((targetId) => rawTargetSet.has(targetId))
+        ? rawTargetIds.filter((targetId: string) => expectedTargetIds.includes(targetId))
+        : expectedTargetIds;
+
+      targetIds.forEach((targetId: string) => coveredTargetIds.add(targetId));
+
+      return {
+        queryText: String(q?.queryText || '').slice(0, 200),
+        category: normalizeSearchCategory(q?.category),
+        description: String(q?.description || 'Search query').slice(0, 500),
+        priority: idx + 1,
+        suggestedSources: Array.isArray(q?.suggestedSources) && q.suggestedSources.length > 0
+          ? q.suggestedSources.map((source: unknown) => String(source || '').trim()).filter(Boolean)
+          : DEFAULT_SEARCH_SOURCES,
+        suggestedYearFrom: q?.suggestedYearFrom ? Number(q.suggestedYearFrom) : undefined,
+        suggestedYearTo: q?.suggestedYearTo ? Number(q.suggestedYearTo) : undefined,
+        searchIntent: q?.searchIntent ? String(q.searchIntent).slice(0, 80) : undefined,
+        resultLimit: GRANT_STRATEGY_RESULTS_PER_QUERY,
+        targetIds,
+        dimensionTargets: targetIds.map((targetId: string) => {
+          const target = targetById.get(targetId)!;
+          return {
+            sectionKey: target.sectionKey,
+            dimension: target.dimension,
+            ...(target.dimensionType ? { dimensionType: target.dimensionType } : {}),
+          };
+        }),
+      };
+    })
+
+  const emptyQuery = queries.find((query) => query.queryText.trim().length < 2);
+  if (emptyQuery) {
+    throw new Error('Invalid response: one or more bundled queries omitted queryText');
+  }
+
+  if (coveredTargetIds.size < targetById.size) {
+    throw new Error(`Invalid response: omitted ${targetById.size - coveredTargetIds.size} blueprint dimension targets`);
+  }
+
+  return {
+    summary: String(parsed.summary || `Search strategy covering ${targetById.size} blueprint dimensions`),
+    estimatedPapers: queries.length * GRANT_STRATEGY_RESULTS_PER_QUERY,
+    queries,
+  };
+}
+
+function buildSuggestedFilters(query: GeneratedQuery): Prisma.InputJsonObject {
+  const filters: Record<string, unknown> = {};
+  if (query.searchIntent) {
+    filters.searchIntent = query.searchIntent;
+  }
+  if (query.resultLimit) {
+    filters.resultLimit = query.resultLimit;
+  }
+  if (query.dimensionTargets?.length) {
+    filters.dimensionTargets = query.dimensionTargets.map((target) => ({
+      sectionKey: target.sectionKey,
+      dimension: target.dimension,
+      ...(target.dimensionType ? { dimensionType: target.dimensionType } : {}),
+    }));
+  }
+  return filters as Prisma.InputJsonObject;
 }
 
 // GET - Retrieve existing search strategy
@@ -191,6 +430,19 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
 
     // Calculate progress
     const queries = session.citationSearchStrategy.queries;
+    const isUnusedLegacyGrantStrategy =
+      isGrantBackedPaperTypeCode(session.paperBlueprint?.paperTypeCode)
+      && session.citationSearchStrategy.aiModelUsed === 'grant_blueprint_bundle'
+      && !strategyQueriesHaveProgress(queries);
+
+    if (isUnusedLegacyGrantStrategy) {
+      return NextResponse.json({
+        strategy: null,
+        message: 'Existing rule-built grant search strategy needs regeneration from the blueprint dimensions.',
+        needsRegeneration: true,
+      });
+    }
+
     const completedQueries = queries.filter(q => 
       q.status === 'COMPLETED' || q.status === 'SKIPPED'
     ).length;
@@ -199,6 +451,7 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
     const hydratedQueries = session.citationSearchStrategy.queries.map((q) => ({
       ...q,
       searchIntent: (q.suggestedFilters as { searchIntent?: string } | null)?.searchIntent || null,
+      resultLimit: (q.suggestedFilters as { resultLimit?: number } | null)?.resultLimit || null,
       dimensionTargets: (q.suggestedFilters as { dimensionTargets?: unknown[] } | null)?.dimensionTargets || [],
     }));
 
@@ -218,30 +471,12 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
   }
 }
 
-// Helper to check if user has Pro plan
-async function userHasProPlan(userId: string): Promise<boolean> {
-  const credits = await prisma.userCredit.findUnique({
-    where: { userId },
-    select: { planTier: true }
-  });
-  return credits?.planTier === 'pro' || credits?.planTier === 'enterprise';
-}
-
 // POST - Generate new search strategy or add custom query
 export async function POST(request: NextRequest, context: { params: { paperId: string } }) {
   try {
     const { user, error } = await authenticateUser(request);
     if (error || !user) {
       return NextResponse.json({ error: error?.message || 'Unauthorized' }, { status: error?.status || 401 });
-    }
-
-    // Check if user has Pro plan for strategy generation
-    const hasPro = await userHasProPlan(user.id);
-    if (!hasPro) {
-      return NextResponse.json({ 
-        error: 'Search Strategy generation requires a Pro plan. Upgrade to access AI-powered systematic search queries.',
-        code: 'PRO_REQUIRED'
-      }, { status: 403 });
     }
 
     const sessionId = context.params.paperId;
@@ -283,14 +518,6 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     // Generate new strategy
     const data = generateSchema.parse(body);
 
-    // Check if strategy already exists and regenerate is not requested
-    if (session.citationSearchStrategy && !data.regenerate) {
-      return NextResponse.json({ 
-        error: 'Search strategy already exists. Set regenerate: true to create a new one.',
-        strategy: session.citationSearchStrategy
-      }, { status: 409 });
-    }
-
     // Get paper information for strategy generation
     const paperTitle = session.researchTopic?.title 
       || session.ideaRecord?.title 
@@ -311,36 +538,98 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       || session.ideaRecord?.logic
       || '';
 
-    const grantBackedStrategy = session.paperBlueprint
-      ? buildGrantBackedSearchStrategy({
-          researchTopic: {
-            title: session.researchTopic?.title || paperTitle,
-            researchQuestion: session.researchTopic?.researchQuestion || paperAbstract,
-            keywords,
-          },
-          blueprint: {
-            paperTypeCode: session.paperBlueprint.paperTypeCode,
-            sectionPlan: Array.isArray(session.paperBlueprint.sectionPlan)
-              ? session.paperBlueprint.sectionPlan as any[]
-              : [],
-          },
-        })
-      : null;
+    const blueprintSectionPlan = Array.isArray(session.paperBlueprint?.sectionPlan)
+      ? session.paperBlueprint.sectionPlan as any[]
+      : [];
+    const isGrantBackedBlueprint = isGrantBackedPaperTypeCode(session.paperBlueprint?.paperTypeCode);
+    const grantDimensionTargets = isGrantBackedBlueprint
+      ? extractGrantDimensionTargets(blueprintSectionPlan)
+      : [];
+    const indexedGrantDimensionTargets: IndexedGrantDimensionTarget[] = grantDimensionTargets.map((target, index) => ({
+      ...target,
+      id: `D${index + 1}`,
+    }));
+    const grantDimensionBundles = bundleGrantDimensionTargets(indexedGrantDimensionTargets);
 
-    if (!paperAbstract && !researchFocus && !grantBackedStrategy) {
+    const existingGrantStrategyIsLegacy =
+      isGrantBackedBlueprint
+      && session.citationSearchStrategy?.aiModelUsed === 'grant_blueprint_bundle'
+      && !strategyQueriesHaveProgress(session.citationSearchStrategy.queries);
+
+    // Check if strategy already exists and regenerate is not requested.
+    // Legacy grant_blueprint_bundle strategies are replaced automatically because they were rule-built.
+    if (session.citationSearchStrategy && !data.regenerate && !existingGrantStrategyIsLegacy) {
+      return NextResponse.json({ 
+        error: 'Search strategy already exists. Set regenerate: true to create a new one.',
+        strategy: session.citationSearchStrategy
+      }, { status: 409 });
+    }
+
+    if (isGrantBackedBlueprint && grantDimensionTargets.length === 0) {
+      return NextResponse.json({
+        error: 'Generate literature-review dimensions in the Blueprint stage before creating a grant-backed search strategy.'
+      }, { status: 400 });
+    }
+
+    if (!paperAbstract && !researchFocus && !isGrantBackedBlueprint) {
       return NextResponse.json({ 
         error: 'Please complete the Research Topic stage first to generate search strategy' 
       }, { status: 400 });
     }
 
     let strategyData: LLMStrategyResponse;
-    let aiModelUsed = 'grant_blueprint_bundle';
+    let aiModelUsed = 'unknown';
+    const authHeader = request.headers.get('authorization') || '';
 
-    if (grantBackedStrategy) {
-      strategyData = grantBackedStrategy;
+    if (isGrantBackedBlueprint) {
+      const prompt = buildGrantDimensionStrategyPrompt({
+        paperTitle,
+        paperAbstract,
+        keywords,
+        researchFocus,
+        bundles: grantDimensionBundles,
+      });
+
+      const llmResult = await llmGateway.executeLLMOperation(
+        { headers: { authorization: authHeader } },
+        {
+          taskCode: 'SEARCH_STRATEGY_GEN',
+          stageCode: 'LITERATURE_SEARCH',
+          prompt,
+          parameters: { temperature: 0.25 },
+          idempotencyKey: `grant-search-strategy-${sessionId}-${Date.now()}`,
+          metadata: {
+            sessionId,
+            skipFeaturePolicy: true,
+            primaryModelCode: 'gemini-2.5-pro',
+            disableModelFallbacks: true,
+          }
+        }
+      );
+
+      if (!llmResult.success || !llmResult.response) {
+        console.error('[SearchStrategy] Grant dimension LLM call failed:', llmResult.error);
+        return NextResponse.json({ 
+          error: llmResult.error?.message || 'Failed to generate grant dimension search strategy' 
+        }, { status: 500 });
+      }
+
+      try {
+        strategyData = parseGrantDimensionStrategyResponse(
+          llmResult.response.output,
+          grantDimensionBundles
+        );
+        aiModelUsed = llmResult.response.modelClass || 'gemini-2.5-pro';
+      } catch (parseError) {
+        console.error('[SearchStrategy] Grant dimension parse error:', parseError);
+        return NextResponse.json({
+          error: parseError instanceof Error
+            ? `Failed to parse AI dimension search strategy response: ${parseError.message}`
+            : 'Failed to parse AI dimension search strategy response'
+        }, { status: 500 });
+      }
     } else {
       const prompt = buildStrategyPrompt(paperTitle, paperAbstract, keywords, researchFocus);
-      const authHeader = request.headers.get('authorization') || '';
 
       const llmResult = await llmGateway.executeLLMOperation(
         { headers: { authorization: authHeader } },
@@ -350,7 +639,10 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           prompt,
           parameters: { temperature: 0.4 },
           idempotencyKey: `search-strategy-${sessionId}-${Date.now()}`,
-          metadata: { sessionId }
+          metadata: {
+            sessionId,
+            skipFeaturePolicy: true,
+          }
         }
       );
 
@@ -398,10 +690,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
             suggestedSources: q.suggestedSources,
             suggestedYearFrom: q.suggestedYearFrom,
             suggestedYearTo: q.suggestedYearTo,
-            suggestedFilters: {
-              ...(q.searchIntent ? { searchIntent: q.searchIntent } : {}),
-              ...(q.dimensionTargets ? { dimensionTargets: q.dimensionTargets } : {}),
-            },
+            suggestedFilters: buildSuggestedFilters(q),
             status: 'PENDING'
           }))
         }
@@ -435,6 +724,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         queries: strategy.queries.map((q) => ({
           ...q,
           searchIntent: (q.suggestedFilters as { searchIntent?: string } | null)?.searchIntent || null,
+          resultLimit: (q.suggestedFilters as { resultLimit?: number } | null)?.resultLimit || null,
           dimensionTargets: (q.suggestedFilters as { dimensionTargets?: unknown[] } | null)?.dimensionTargets || [],
         })),
       }

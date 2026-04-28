@@ -12,6 +12,7 @@ import { prisma } from '../prisma';
 import {
   filterGrantBackedLiteratureSections,
   isGrantBackedPaperTypeCode,
+  resolveGrantSectionDimensions,
 } from '@/lib/grants/blueprintMetadata';
 import { llmGateway, type TenantContext } from '../metering';
 import { blueprintService, type BlueprintWithSectionPlan, type SectionPlanItem } from './blueprint-service';
@@ -399,6 +400,7 @@ class CitationMappingService {
     const dimensionToCanonical = new Map<string, string>();
     const validSectionKeys = new Set<string>();
     const sectionDimensionsByKey = new Map<string, string[]>();
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
     
     // Filter sections for literature mapping (non-review papers exclude Results/Discussion)
     const sectionsForMapping = filterSectionsForLiteratureMapping(
@@ -407,11 +409,12 @@ class CitationMappingService {
     );
     
     for (const section of sectionsForMapping) {
+      const dimensions = grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []);
       // Collect valid section keys
       validSectionKeys.add(section.sectionKey);
-      sectionDimensionsByKey.set(section.sectionKey, section.mustCover || []);
+      sectionDimensionsByKey.set(section.sectionKey, dimensions);
       
-      for (const dimension of section.mustCover) {
+      for (const dimension of dimensions) {
         // Normalize: trim whitespace, normalize internal whitespace
         const normalized = this.normalizeDimensionString(dimension);
         validDimensions.add(normalized);
@@ -474,10 +477,16 @@ class CitationMappingService {
     
     const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
 
-    // Build section context with mustCover items (dimensions) and their types
+    // Build section context with literature dimensions and their types
     const sectionContext = sectionsForMapping.map(section => {
-      const dimensionsWithTypes = section.mustCover.map((mc, i) => {
-        const dimType = section.mustCoverTyping?.[mc] || 'empirical';
+      const dimensions = grantBacked
+        ? resolveGrantSectionDimensions(section)
+        : section.mustCover;
+      const typing = grantBacked
+        ? section.dimensionTyping
+        : section.mustCoverTyping;
+      const dimensionsWithTypes = dimensions.map((mc, i) => {
+        const dimType = typing?.[mc] || 'empirical';
         return `  ${i + 1}. "${mc}" [${dimType}]`;
       }).join('\n');
 
@@ -1235,6 +1244,7 @@ Return ONLY the JSON array, no additional text or explanation.`;
       blueprint.sectionPlan, 
       blueprint.paperTypeCode
     );
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
 
     // Calculate per-section coverage
     for (const section of sectionsForCoverage) {
@@ -1242,7 +1252,8 @@ Return ONLY the JSON array, no additional text or explanation.`;
       report.sectionCoverage[section.sectionKey] = sectionMappings.length;
 
       // Calculate per-dimension coverage within section using EXACT matching
-      for (const dimension of section.mustCover) {
+      const dimensions = grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []);
+      for (const dimension of dimensions) {
         const normalizedBlueprintDim = this.normalizeDimensionString(dimension);
         const dimKey = `${section.sectionKey}:${dimension}`;
         
@@ -1313,11 +1324,13 @@ Return ONLY the JSON array, no additional text or explanation.`;
       blueprint.sectionPlan, 
       blueprint.paperTypeCode
     );
+    const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
 
     // All dimensions are gaps
     for (const section of sectionsForCoverage) {
       report.sectionCoverage[section.sectionKey] = 0;
-      for (const dimension of section.mustCover) {
+      const dimensions = grantBacked ? resolveGrantSectionDimensions(section) : (section.mustCover || []);
+      for (const dimension of dimensions) {
         const dimKey = `${section.sectionKey}:${dimension}`;
         report.dimensionCoverage[dimKey] = { count: 0, papers: [] };
         report.gaps.push({

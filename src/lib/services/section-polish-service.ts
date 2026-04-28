@@ -19,6 +19,8 @@ import { applyLengthControlToWordBudget } from '../paper-length-control';
 import crypto from 'crypto';
 import { buildGrantDraftingPrompt, type GrantPromptSummary, type GrantPass1MemoryContext } from '@/lib/grants/draftingPromptComposer';
 import {
+  buildGrantComplianceReport,
+  buildReviewerReadinessReport,
   formatGrantComplianceContractForPrompt,
 } from '@/lib/grants/compliance';
 import {
@@ -713,11 +715,30 @@ class SectionPolishService {
       polished = stripInlineMarkdownStyling(polishDraftMarkdown(polished));
 
       const driftReport = buildDriftReport(input.baseContent, polished, input.dimensionCitations);
+      const grantComplianceReport = input.grantSectionComplianceContract
+        ? buildGrantComplianceReport({
+            stage: 'pass2',
+            content: polished,
+            contract: input.grantSectionComplianceContract,
+            trace: input.baseGrantGenerationTrace,
+            wordBudget: input.wordBudget ?? input.targetWordCount,
+            characterLimit: input.characterLimit,
+          })
+        : undefined;
+      const reviewerReadinessReport = grantComplianceReport
+        ? buildReviewerReadinessReport({
+            contract: input.grantSectionComplianceContract,
+            report: grantComplianceReport,
+            content: polished,
+          })
+        : undefined;
 
       return {
         success: true,
         polishedContent: polished,
         driftReport,
+        grantComplianceReport,
+        reviewerReadinessReport,
         promptUsed: prompt,
         tokensUsed: result.response.outputTokens,
       };
