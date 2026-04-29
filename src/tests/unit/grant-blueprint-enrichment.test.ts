@@ -379,12 +379,18 @@ function makeGuidelinePack(): GuidelinePackDocument {
 }
 
 describe('grant blueprint enrichment', () => {
-  it('generates typed dimensions only for app_draft sections', () => {
+  it('generates typed dimensions only for citation-worthy app_draft sections', () => {
     const sections: GrantBlueprintPlanSection[] = [
       makeSection({
-        sectionKey: 'summary',
+        sectionKey: 'proposal_summary',
         label: 'Summary of the Proposal',
-        purpose: 'Summarize the proposal, its need, delivery model, and expected impact.',
+        purpose: 'Summarize the proposal, delivery model, and expected impact using the grant prep session.',
+        sectionType: 'narrative',
+      }),
+      makeSection({
+        sectionKey: 'introduction',
+        label: 'Introduction',
+        purpose: 'Introduce the background, rationale, need, delivery model, and expected impact.',
         sectionType: 'narrative',
       }),
       makeSection({
@@ -414,27 +420,33 @@ describe('grant blueprint enrichment', () => {
       focusAreas: ['cybersecurity'],
     });
 
-    expect(enriched[0].dimensions?.length).toBeGreaterThanOrEqual(2);
-    expect(enriched[0].dimensions?.length).toBeLessThanOrEqual(4);
-    expect(enriched[0].dimensionTyping).toBeTruthy();
-    expect(enriched[0].suggestedCitationCount).toBeGreaterThanOrEqual(2);
-    expect(enriched[0].thematicBlueprint?.dimensions).toEqual(enriched[0].dimensions);
+    expect(enriched[0].dimensions || []).toHaveLength(0);
+    expect(enriched[0].suggestedCitationCount).toBe(0);
+    expect(enriched[0].citationMode).toBe('direct_draft');
     expect(enriched[0].grantSemantic).toBe('summary');
     expect(enriched[0].prepContextBlock).toBeNull();
     expect(enriched[0].grantRuleProfile?.formatConstraints).toContain('Target approximately 600 words.');
 
-    expect(enriched[1].dimensions || []).toHaveLength(0);
-    expect(enriched[1].suggestedCitationCount).toBe(0);
-    expect(enriched[1].grantSemantic).toBe('objectives');
+    expect(enriched[1].dimensions?.length).toBeGreaterThanOrEqual(2);
+    expect(enriched[1].dimensions?.length).toBeLessThanOrEqual(4);
+    expect(enriched[1].dimensionTyping).toBeTruthy();
+    expect(enriched[1].suggestedCitationCount).toBeGreaterThanOrEqual(2);
+    expect(enriched[1].citationMode).toBe('mapped_evidence');
+    expect(enriched[1].thematicBlueprint?.dimensions).toEqual(enriched[1].dimensions);
 
-    expect(enriched[2].suggestedCitationCount).toBeNull();
-    expect(enriched[2].thematicBlueprint).toBeNull();
-    expect(enriched[2].grantSemantic).toBeNull();
-    expect(enriched[2].prepContextBlock).toBeNull();
-    expect(enriched[2].grantRuleProfile).toBeNull();
+    expect(enriched[2].dimensions || []).toHaveLength(0);
+    expect(enriched[2].suggestedCitationCount).toBe(0);
+    expect(enriched[2].citationMode).toBe('direct_draft');
+    expect(enriched[2].grantSemantic).toBe('objectives');
+
     expect(enriched[3].suggestedCitationCount).toBeNull();
     expect(enriched[3].thematicBlueprint).toBeNull();
     expect(enriched[3].grantSemantic).toBeNull();
+    expect(enriched[3].citationMode).toBe('no_citations');
+    expect(enriched[4].suggestedCitationCount).toBeNull();
+    expect(enriched[4].thematicBlueprint).toBeNull();
+    expect(enriched[4].grantSemantic).toBeNull();
+    expect(enriched[4].citationMode).toBe('no_citations');
   });
 
   it('uses covered direct prep as authoritative and keeps cross-section prep as awareness only', () => {
@@ -555,16 +567,15 @@ describe('grant blueprint enrichment', () => {
 
     expect(mockedGateway).toHaveBeenCalledTimes(1);
     const prompt = String(mockedGateway.mock.calls[0]?.[1]?.prompt || '');
-    expect(prompt).toContain('"prepContextBlock"');
+    expect(prompt).toContain('"prepAnchors"');
     expect(prompt).toContain('Federated cyber range network with threat emulation labs');
-    expect(prompt).toContain('"grantRuleProfile"');
-    expect(prompt).toContain('"grantSectionComplianceContract"');
+    expect(prompt).toContain('"ruleAnchors"');
     expect(prompt).toContain('"dimensions"');
     expect(prompt).toContain('Do not output or modify purpose');
     expect(prompt).toContain('Explain the execution methodology and validation plan.');
   });
 
-  it('lets the LLM refine only literature dimensions and preserves deterministic blueprint mapping', async () => {
+  it('lets the same LLM response refine citation decision, count, and dimensions while preserving blueprint mapping', async () => {
     const mockedGateway = vi.mocked(llmGateway.executeLLMOperation);
     mockedGateway.mockResolvedValueOnce({
       success: true,
@@ -580,8 +591,8 @@ describe('grant blueprint enrichment', () => {
               sectionKey: 'technical_plan',
               purpose: 'LLM purpose must be ignored.',
               mustAvoid: ['LLM avoid rule must be ignored'],
-              suggestedCitationCount: 0,
-              citationMode: 'no_citations',
+              suggestedCitationCount: 3,
+              citationMode: 'mapped_evidence',
               dimensions: [
                 'Implementation feasibility of federated cyber range networks',
                 'Validation benchmarks for threat emulation labs',
@@ -639,12 +650,61 @@ describe('grant blueprint enrichment', () => {
     expect(technical?.mustAvoid).toContain('Avoid vague implementation claims.');
     expect(technical?.mustAvoid).not.toContain('LLM avoid rule must be ignored');
     expect(technical?.citationMode).toBe('mapped_evidence');
-    expect(technical?.suggestedCitationCount || 0).toBeGreaterThan(0);
+    expect(technical?.suggestedCitationCount).toBe(3);
     expect(technical?.dimensions).toEqual([
       'Implementation feasibility of federated cyber range networks',
       'Validation benchmarks for threat emulation labs',
     ]);
     expect(budget?.dimensions || []).toEqual([]);
+  });
+
+  it('lets the same LLM response downgrade an evidence-capable section to direct draft', async () => {
+    const mockedGateway = vi.mocked(llmGateway.executeLLMOperation);
+    mockedGateway.mockResolvedValueOnce({
+      success: true,
+      response: {
+        output: JSON.stringify({
+          sections: [
+            {
+              sectionKey: 'technical_plan',
+              citationMode: 'direct_draft',
+              suggestedCitationCount: 0,
+              dimensions: [],
+              citationDecisionRationale: 'The section can rely on grant prep and execution details without mapped literature.',
+            },
+          ],
+        }),
+      },
+    } as any);
+
+    const result = await generateGrantBlueprintWithLlm({
+      baseSectionPlan: [
+        makeSection({
+          sectionKey: 'technical_plan',
+          label: 'Technical Plan',
+          purpose: 'Explain the execution methodology, validation approach, milestones, and delivery readiness.',
+          reviewerIntent: 'Show implementation feasibility.',
+        }),
+      ],
+      context: {
+        projectTitle: 'Cyber Centre of Excellence',
+        fundingCallTitle: 'MeitY Cyber CoE Call',
+        globalKeywords: ['cyber range', 'threat emulation'],
+      },
+      proposalFoundationHint: {
+        thesisStatement: 'Deterministic foundation.',
+        centralObjective: 'Deterministic objective.',
+        keyContributions: ['Deterministic contribution one.', 'Deterministic contribution two.'],
+      },
+      tenantContext: { tenantId: 'tenant_1' } as any,
+      sessionId: 'prep_session_1',
+    });
+
+    const technical = result.sectionPlan.find((section) => section.sectionKey === 'technical_plan');
+
+    expect(technical?.citationMode).toBe('direct_draft');
+    expect(technical?.suggestedCitationCount).toBe(0);
+    expect(technical?.dimensions || []).toEqual([]);
   });
 
   it('promotes high-confidence prep evidence into synthesis sections without exact section keys', () => {
@@ -733,6 +793,8 @@ describe('grant blueprint enrichment', () => {
     });
 
     expect(enriched[0].grantSemantic).toBe('summary');
+    expect(enriched[0].citationMode).toBe('mapped_evidence');
+    expect(enriched[0].suggestedCitationCount).toBeGreaterThan(0);
     expect(enriched[0].prepContextBlock).toBeNull();
     expect(enriched[0].authoritativePrepBundle).toBeNull();
     expect(enriched[0].relatedPrepAwareness).toBeNull();
@@ -804,6 +866,36 @@ describe('grant blueprint enrichment', () => {
 
     expect(enriched[1].grantSemantic).toBe('alignment');
     expect(enriched[1].mustCover).toEqual([]);
+    expect(enriched[1].suggestedCitationCount).toBe(0);
+  });
+
+  it('keeps simple prep-backed narrative sections in direct draft mode', () => {
+    const enriched = enrichGrantBlueprintSections([
+      makeSection({
+        sectionKey: 'expected_outcomes',
+        label: 'Expected Outcomes',
+        purpose: 'Describe the expected outputs, beneficiary changes, and uptake pathway from the completed grant prep session.',
+        reviewerIntent: 'Show what the project will deliver.',
+      }),
+      makeSection({
+        sectionKey: 'workplan',
+        label: 'Work Plan and Timeline',
+        purpose: 'Describe phases, milestones, deliverables, and implementation schedule.',
+      }),
+    ], {
+      projectTitle: 'Cyber Centre of Excellence',
+      fundingCallTitle: 'MeitY Cyber CoE Call',
+      globalKeywords: ['cybersecurity', 'capacity building'],
+    });
+
+    expect(enriched[0].grantSemantic).toBe('impact_outcomes');
+    expect(enriched[0].citationMode).toBe('direct_draft');
+    expect(enriched[0].dimensions || []).toHaveLength(0);
+    expect(enriched[0].suggestedCitationCount).toBe(0);
+
+    expect(enriched[1].grantSemantic).toBe('workplan');
+    expect(enriched[1].citationMode).toBe('direct_draft');
+    expect(enriched[1].dimensions || []).toHaveLength(0);
     expect(enriched[1].suggestedCitationCount).toBe(0);
   });
 
@@ -891,6 +983,7 @@ describe('grant blueprint enrichment', () => {
     });
 
     expect(enriched[0].grantSemantic).toBe('problem_need');
+    expect(enriched[0].citationMode).toBe('mapped_evidence');
     expect(enriched[0].dimensions?.length).toBeGreaterThanOrEqual(3);
     expect(enriched[0].suggestedCitationCount).toBeGreaterThanOrEqual(3);
     expect(enriched[0].thematicBlueprint?.dimensions).toEqual(enriched[0].dimensions);

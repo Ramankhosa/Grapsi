@@ -12,6 +12,7 @@ import {
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
 import { isGrantPrepSessionReady } from '@/lib/grantPrep/sessionState'
+import { isPostLaunchGrantPrepStatus, resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
 
 export async function POST(
   request: NextRequest,
@@ -45,15 +46,6 @@ export async function POST(
       return NextResponse.json({ message: 'Archived sessions cannot be refreshed' }, { status: 400 })
     }
 
-    if (grantPrepSession.status === 'handed_off' || grantPrepSession.status === 'launched') {
-      return NextResponse.json(
-        {
-          message: 'This session has already been handed off. Start a new prep revision to change the mapping.',
-        },
-        { status: 400 }
-      )
-    }
-
     const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
     const warning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
     const prepContext = inflateGrantPrepSessionContext(grantPrepSession, { warning })
@@ -64,7 +56,20 @@ export async function POST(
       fundingContext: serverContext.fundingContext,
       warning,
     })
-    const nextStatus = isGrantPrepSessionReady(nextContext.stageStates, nextContext.engagementMode) ? 'ready' : 'active'
+    const nextStatus = resolveMutableGrantPrepStatus({
+      currentStatus: grantPrepSession.status,
+      isReady: isGrantPrepSessionReady(nextContext.stageStates, nextContext.engagementMode),
+    })
+    const resetLaunchFields = isPostLaunchGrantPrepStatus(grantPrepSession.status)
+      ? {}
+      : {
+          frozen_payload_json: Prisma.DbNull,
+          frozen_payload_version: null,
+          frozen_payload_hash: null,
+          frozen_at: null,
+          papsi_session_id: null,
+          papsi_launch_url: null,
+        }
 
     await prisma.grantPrepSession.update({
       where: { id: grantPrepSession.id },
@@ -73,12 +78,7 @@ export async function POST(
         template_revision_id: serverContext.templateRevisionId,
         guideline_revision_id: serverContext.guidelineRevisionId,
         status: nextStatus,
-        frozen_payload_json: Prisma.DbNull,
-        frozen_payload_version: null,
-        frozen_payload_hash: null,
-        frozen_at: null,
-        papsi_session_id: null,
-        papsi_launch_url: null,
+        ...resetLaunchFields,
         last_handoff_error: null,
       },
     })

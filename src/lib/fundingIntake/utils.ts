@@ -550,7 +550,7 @@ export function buildDescriptionFromEvidence(
 
 export function normalizeExtractionPayload(
   raw: any,
-  options?: { segments?: FundingSourceSegment[] }
+  options?: { segments?: FundingSourceSegment[]; allowDescriptionWithoutEvidence?: boolean }
 ): FundingExtractionPayload {
   const fields = {} as FundingExtractionPayload['fields'];
   const warnings = Array.isArray(raw?.warnings) ? raw.warnings.map((item: unknown) => String(item)) : [];
@@ -575,7 +575,7 @@ export function normalizeExtractionPayload(
         ? deterministic.description || coerceTextareaText(value)
         : null;
       summarySegments = deterministic.segmentIds;
-      status = deterministic.description ? status : 'unsupported';
+      status = deterministic.description || options?.allowDescriptionWithoutEvidence ? status : 'unsupported';
     }
 
     if (ARRAY_FIELD_KEYS.has(definition.key) && Array.isArray(value) && value.length === 0) {
@@ -618,6 +618,15 @@ export function buildDraftValuesFromExtraction(
     .map((value) => (typeof value === 'string' && value.trim() ? normalizeUrl(value) : null))
     .filter((value): value is string => Boolean(value))
     .filter((value, index, values) => values.indexOf(value) === index);
+  const extractedOfficialUrls = coerceStringArray(getField('official_urls'))
+    .map((value) => {
+      try {
+        return normalizeUrl(value);
+      } catch {
+        return null;
+      }
+    })
+    .filter((value): value is string => Boolean(value));
 
   return {
     agency_name: coerceText(getField('agency_name')),
@@ -646,7 +655,7 @@ export function buildDraftValuesFromExtraction(
     project_duration_text: coerceTextareaText(getField('project_duration_text')),
     eligibility_text: coerceTextareaText(getField('eligibility_text')),
     expected_deliverables_text: coerceTextareaText(getField('expected_deliverables_text')),
-    official_urls: deterministicOfficialUrls,
+    official_urls: uniqueStrings([...deterministicOfficialUrls, ...extractedOfficialUrls]),
     contact_info: coerceTextareaText(getField('contact_info')),
     sponsor_type: coerceText(getField('sponsor_type')),
   };

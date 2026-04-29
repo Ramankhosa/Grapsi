@@ -23,6 +23,7 @@ import {
   isGrantSectionAutoDraftable,
   normalizeGrantWorkflowMode,
 } from '@/lib/grants/workflowMode'
+import { buildGrantWorkspaceUrl } from '@/lib/grants/workspaceNavigation'
 import {
   normalizeGrantTemplateIntent,
   normalizeGrantTemplateIntentConfidence,
@@ -1440,9 +1441,11 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
 
 export async function buildGrantPrepLocalLaunchPreview(sessionId: string, actor: GrantPrepActor): Promise<LocalGrantLaunchPreview> {
   const state = await buildLaunchState(sessionId, actor)
-  const launchUrl = state.grantSessionId
-    ? `/projects/${state.prepSession.project_id}/grants/${state.grantSessionId}/workspace`
-    : null
+  const launchUrl = buildGrantWorkspaceUrl({
+    projectId: state.prepSession.project_id,
+    grantSessionId: state.grantSessionId,
+    prepStatus: state.prepSession.status,
+  })
 
   return {
     blockers: state.freeze.blockers,
@@ -1622,7 +1625,11 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       foundation: generatedBlueprint.proposalFoundation,
     })
 
-    const launchUrl = `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/workspace`
+    const launchUrl = buildGrantWorkspaceUrl({
+      projectId: state.prepSession.project_id,
+      grantSessionId: grantSession.id,
+      stage: 'BLUEPRINT',
+    }) || `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/workspace?stage=BLUEPRINT`
     await tx.grantPrepSession.update({
       where: { id: state.prepSession.id },
       data: {

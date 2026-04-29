@@ -6,6 +6,7 @@ import {
   normalizeExtractionPayload,
   validateFundingExtractionPayload,
 } from '@/lib/fundingIntake/utils'
+import { prepareFundingJsonIntake } from '@/lib/fundingIntake/jsonIngestion'
 
 describe('funding intake normalization', () => {
   it('builds description deterministically from evidence-backed segments', () => {
@@ -102,6 +103,63 @@ describe('funding intake normalization', () => {
     } as any)
 
     expect(draft.disciplines).toEqual([])
+  })
+
+  it('prepares uploaded JSON into call, template, and guideline artifacts', () => {
+    const prepared = prepareFundingJsonIntake({
+      schema_version: 'funding_intake_json_v1',
+      call: {
+        fields: {
+          agency_name: 'Global Research Fund',
+          scheme_title: 'AI for Health Call',
+          description: 'Funds applied AI health research pilots.',
+          close_date: '2026-09-30',
+        },
+      },
+      template: {
+        grant_template_json: {
+          questions: [
+            {
+              key: 'project_summary',
+              label: 'Project Summary',
+              type: 'field',
+              workflowMode: 'app_draft',
+              required: true,
+              templateIntent: 'summary',
+              sourceAnchors: [{ asset_id: 'not-a-uuid', quote: 'ignored' }],
+            },
+          ],
+          sections: [],
+          budget: null,
+          attachments: [],
+          evaluationCriteria: [],
+          submissionRules: { notes: null, items: [], sourceAnchors: [] },
+          sourceAnchors: [],
+          mergeConflicts: [],
+        },
+      },
+      guidelines: {
+        guideline_pack_json: {
+          priorities: [
+            {
+              key: 'alignment',
+              text: 'Show alignment with AI for health priorities.',
+              importance: 'high',
+              confidence: 0.9,
+              sourceAnchors: [],
+            },
+          ],
+        },
+      },
+    })
+
+    expect(prepared.draftValues.agency_name).toBe('Global Research Fund')
+    expect(prepared.draftValues.description).toBe('Funds applied AI health research pilots.')
+    expect(prepared.template?.questions[0]?.key).toBe('project_summary')
+    expect(prepared.template?.questions[0]?.sourceAnchors).toEqual([])
+    expect(prepared.guidelinePack?.priorities[0]?.text).toContain('AI for health')
+    expect(prepared.metadata.has_template).toBe(true)
+    expect(prepared.metadata.has_guidelines).toBe(true)
   })
 
   it('flags supported values that are missing evidence and allows ambiguous null fields', () => {

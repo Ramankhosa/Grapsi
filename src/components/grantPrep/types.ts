@@ -44,6 +44,16 @@ export type PrepSession = {
   messages: PrepMessage[];
 };
 
+export type PrepPostLaunchImpact = {
+  hasLaunchedWorkspace: boolean;
+  hasBlueprint: boolean;
+  blueprintStatus: string | null;
+  hasDraftContent: boolean;
+  draftedSectionCount: number;
+  appDraftContentCount: number;
+  manualDraftContentCount: number;
+};
+
 export type PrepFundingContext = {
   title: string;
   agencyName: string;

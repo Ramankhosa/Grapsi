@@ -8,11 +8,14 @@ import { fundingIntakeService } from '@/lib/fundingIntake/service'
 export const runtime = 'nodejs'
 
 const intakeSubmitSchema = z.object({
-  inputType: z.enum(['url', 'text', 'pdf']),
+  inputType: z.enum(['url', 'text', 'pdf', 'json']),
   sourceUrl: z.string().trim().optional(),
   sourceText: z.string().optional(),
+  sourceJsonText: z.string().optional(),
   operatorNotes: z.string().max(5000).optional(),
 })
+
+const MAX_JSON_UPLOAD_BYTES = 5 * 1024 * 1024
 
 export async function GET(request: NextRequest) {
   const auth = await requireFundingOperatorRequest(request)
@@ -44,15 +47,37 @@ export async function POST(request: NextRequest) {
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData()
+      const inputType = String(formData.get('inputType') || 'pdf').toLowerCase()
       const file = formData.get('file')
       if (!(file instanceof File)) {
-        return NextResponse.json({ message: 'No PDF file received' }, { status: 400 })
+        return NextResponse.json(
+          { message: inputType === 'json' ? 'No JSON file received' : 'No PDF file received' },
+          { status: 400 }
+        )
       }
 
-      payload = {
-        inputType: 'pdf',
-        operatorNotes: String(formData.get('operatorNotes') || '').trim() || undefined,
-        sourceFile: await stagePdfUpload(file),
+      if (inputType === 'json') {
+        if (file.size > MAX_JSON_UPLOAD_BYTES) {
+          return NextResponse.json({ message: 'JSON intake file is too large' }, { status: 400 })
+        }
+
+        const sourceJsonText = await file.text()
+        payload = {
+          inputType: 'json',
+          operatorNotes: String(formData.get('operatorNotes') || '').trim() || undefined,
+          sourceJsonText,
+          sourceJsonFile: {
+            originalName: file.name || 'funding-intake.json',
+            mimeType: file.type || 'application/json',
+            size: file.size,
+          },
+        }
+      } else {
+        payload = {
+          inputType: 'pdf',
+          operatorNotes: String(formData.get('operatorNotes') || '').trim() || undefined,
+          sourceFile: await stagePdfUpload(file),
+        }
       }
     } else {
       payload = intakeSubmitSchema.parse(await request.json())
@@ -68,13 +93,26 @@ export async function POST(request: NextRequest) {
             ? payload.sourceUrl
             : payload.inputType === 'text'
               ? `${(payload.sourceText || '').slice(0, 120)}${(payload.sourceText || '').length > 120 ? '...' : ''}`
-              : payload.sourceFile?.originalName || 'PDF upload',
+              : payload.inputType === 'json'
+                ? payload.sourceJsonFile?.originalName || 'JSON upload'
+                : payload.sourceFile?.originalName || 'PDF upload',
       },
       { status: 201 }
     )
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ message: 'Invalid request', issues: error.flatten() }, { status: 400 })
+      const issueSummary = error.issues
+        .slice(0, 5)
+        .map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`)
+        .join('; ')
+      return NextResponse.json(
+        {
+          message: issueSummary ? `Invalid request: ${issueSummary}` : 'Invalid request',
+          issues: error.flatten(),
+          rawIssues: error.issues,
+        },
+        { status: 400 }
+      )
     }
 
     console.error('[Funding Intake] create error:', error)

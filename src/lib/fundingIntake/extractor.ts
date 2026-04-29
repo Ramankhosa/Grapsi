@@ -1,5 +1,13 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { generateJsonFromDeepSeek } from '../deepseekService';
+import {
+  buildPdfFileContentPart,
+  FUNDING_CALL_INGEST_PDF_STAGE_CODE,
+  FUNDING_CALL_INGEST_TEXT_STAGE_CODE,
+  runFundingGatewayExtraction,
+  type FundingLlmRoutingContext,
+} from '../funding/llmRouting';
 import { parseStructuredFromOpenAI } from '../openaiService';
 import {
   FUNDING_INTAKE_EXTRACTOR_VERSION,
@@ -75,10 +83,63 @@ ${serializedSegments}
 }
 
 async function callCoreExtractor(
-  prompt: string
+  prompt: string,
+  llmContext?: FundingLlmRoutingContext | null
 ): Promise<{ model: string; parsed: FundingIntakeStructuredOutput }> {
+  const gatewayResponse = await runFundingGatewayExtraction({
+    stageCode: FUNDING_CALL_INGEST_TEXT_STAGE_CODE,
+    prompt,
+    systemPrompt: SYSTEM_INSTRUCTIONS,
+    context: llmContext,
+    maxTokensOut: 12000,
+    temperature: 0,
+    metadata: {
+      action: 'funding_call_core_extraction',
+    },
+  });
+
+  if (gatewayResponse) {
+    const parsedJson = parseJsonResponse(gatewayResponse.rawText);
+    const parsed = fundingIntakeStructuredOutputSchema.parse(parsedJson);
+
+    return {
+      model: gatewayResponse.model,
+      parsed,
+    };
+  }
+
+  if (process.env.DEEPSEEK_API_KEY) {
+    const model = process.env.FUNDING_INTAKE_DEEPSEEK_MODEL || 'deepseek-v4-pro';
+
+    try {
+      const response = await generateJsonFromDeepSeek({
+        prompt,
+        model,
+        systemPrompt: SYSTEM_INSTRUCTIONS,
+        maxTokens: 12000,
+        temperature: 0,
+      });
+      const parsedJson = parseJsonResponse(response.rawText);
+      const parsed = fundingIntakeStructuredOutputSchema.parse(parsedJson);
+
+      return {
+        model: response.model,
+        parsed,
+      };
+    } catch (error) {
+      if (!process.env.OPENAI_API_KEY) {
+        throw error;
+      }
+
+      console.warn(
+        '[Funding Intake] DeepSeek core extraction failed, falling back to OpenAI:',
+        error
+      );
+    }
+  }
+
   if (!process.env.OPENAI_API_KEY) {
-    throw new Error('Core funding intake extraction requires OPENAI_API_KEY');
+    throw new Error('Core funding intake extraction requires DEEPSEEK_API_KEY or OPENAI_API_KEY');
   }
 
   const model = process.env.FUNDING_INTAKE_OPENAI_MODEL || 'gpt-5.4';
@@ -130,19 +191,20 @@ function assertRetryableValidationState(validationIssues: FundingExtractionValid
 }
 
 async function runValidatedExtraction(
-  segments: FundingSourceSegment[]
+  segments: FundingSourceSegment[],
+  llmContext?: FundingLlmRoutingContext | null
 ): Promise<{
   payload: FundingExtractionPayload;
   extractorModel: string;
   validationErrors: FundingExtractionValidationIssue[];
 }> {
   const prompt = buildSegmentPrompt(segments);
-  const firstPass = await callCoreExtractor(prompt);
+  const firstPass = await callCoreExtractor(prompt, llmContext);
   let payload = normalizeExtractionPayload(firstPass.parsed, { segments });
   let validationErrors = validateFundingExtractionPayload(payload, segments);
 
   if (validationErrors.some((issue) => issue.retryable)) {
-    const retry = await callCoreExtractor(buildRetryPrompt(segments, validationErrors));
+    const retry = await callCoreExtractor(buildRetryPrompt(segments, validationErrors), llmContext);
     payload = normalizeExtractionPayload(retry.parsed, { segments });
     validationErrors = validateFundingExtractionPayload(payload, segments);
   }
@@ -182,12 +244,52 @@ function extractGeminiRestText(parsedBody: any, rawBody: string): string {
   return textParts.join('');
 }
 
-export async function extractCanonicalTextFromPdf(storagePath: string): Promise<{
+export async function extractCanonicalTextFromPdf(
+  storagePath: string,
+  llmContext?: FundingLlmRoutingContext | null
+): Promise<{
   rawText: string;
   normalizedText: string;
   warnings: string[];
   extractorModel: string;
 }> {
+  const pdfFilePart = await buildPdfFileContentPart(storagePath);
+  const gatewayResponse = await runFundingGatewayExtraction({
+    stageCode: FUNDING_CALL_INGEST_PDF_STAGE_CODE,
+    prompt: buildPdfTextPrompt(),
+    context: llmContext,
+    contentParts: [
+      {
+        type: 'text',
+        text: 'Transcribe this PDF into clean plain text. Use the exact JSON schema from the prompt.',
+      },
+      pdfFilePart,
+    ],
+    maxTokensOut: 16000,
+    temperature: 0.1,
+    metadata: {
+      action: 'funding_call_pdf_transcription',
+    },
+  });
+
+  if (gatewayResponse) {
+    const parsed = parseJsonResponse(gatewayResponse.rawText);
+    const rawText = String(parsed?.rawText || '').trim();
+    const warnings = Array.isArray(parsed?.warnings) ? parsed.warnings.map((warning: unknown) => String(warning)) : [];
+    const normalizedText = normalizeMultilineText(rawText);
+
+    if (!normalizedText) {
+      throw new Error('PDF transcription returned no usable text');
+    }
+
+    return {
+      rawText,
+      normalizedText,
+      warnings,
+      extractorModel: gatewayResponse.model,
+    };
+  }
+
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) {
     const error = new Error('Gemini multimodal extraction requires GOOGLE_AI_API_KEY');
@@ -260,7 +362,10 @@ export async function extractCanonicalTextFromPdf(storagePath: string): Promise<
   };
 }
 
-export async function extractFundingOpportunity(sourceText: string): Promise<{
+export async function extractFundingOpportunity(
+  sourceText: string,
+  llmContext?: FundingLlmRoutingContext | null
+): Promise<{
   payload: FundingExtractionPayload;
   extractorModel: string;
   extractorVersion: string;
@@ -272,7 +377,7 @@ export async function extractFundingOpportunity(sourceText: string): Promise<{
     throw new Error('Funding extraction requires normalized source text');
   }
 
-  const extraction = await runValidatedExtraction(segments);
+  const extraction = await runValidatedExtraction(segments, llmContext);
 
   return {
     payload: extraction.payload,

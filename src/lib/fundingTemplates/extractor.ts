@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { generateJsonFromDeepSeek } from '../deepseekService';
 import { generateFromGemini } from '../geminiService';
 import { generateFromOpenAI } from '../openaiService';
 import { parseJsonResponse } from '../fundingIntake/utils';
@@ -243,6 +244,30 @@ async function buildGeminiRestParts(assets: TemplateExtractionAssetInput[]): Pro
 }
 
 async function callTextExtractor(prompt: string): Promise<{ model: string; rawText: string }> {
+  if (process.env.DEEPSEEK_API_KEY) {
+    const model = process.env.FUNDING_TEMPLATE_DEEPSEEK_MODEL || 'deepseek-v4-pro';
+    console.log(`[Funding Template] Using DeepSeek text extraction model: ${model}`);
+
+    try {
+      return await generateJsonFromDeepSeek({
+        prompt,
+        model,
+        systemPrompt: SYSTEM_INSTRUCTIONS,
+        maxTokens: 24000,
+        temperature: 0,
+      });
+    } catch (error) {
+      if (!process.env.GOOGLE_AI_API_KEY && !process.env.OPENAI_API_KEY) {
+        throw error;
+      }
+
+      console.warn(
+        '[Funding Template] DeepSeek text extraction failed, falling back to the next configured provider:',
+        error
+      );
+    }
+  }
+
   if (process.env.GOOGLE_AI_API_KEY) {
     const model = process.env.FUNDING_TEMPLATE_GEMINI_MODEL || 'gemini-2.5-pro';
     console.log(`[Funding Template] Using Gemini text extraction model: ${model}`);

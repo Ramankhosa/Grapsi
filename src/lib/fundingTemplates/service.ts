@@ -632,7 +632,7 @@ export class FundingTemplateService {
     fundingCallId: string,
     intakeJob: {
       id: string;
-      input_type: 'url' | 'text' | 'pdf';
+      input_type: 'url' | 'text' | 'pdf' | 'json';
       source_url?: string | null;
       source_file_path?: string | null;
       source_text_hash?: string | null;
@@ -662,7 +662,7 @@ export class FundingTemplateService {
       intake_input_type: intakeJob.input_type,
       intake_source_url: intakeJob.source_url || null,
     };
-    const sourceType = intakeJob.input_type === 'url' ? 'url' : intakeJob.input_type === 'text' ? 'text' : 'pdf';
+    const sourceType = intakeJob.input_type === 'url' ? 'url' : intakeJob.input_type === 'pdf' ? 'pdf' : 'text';
     const checksum = sourceType === 'url'
       ? hashText(`${intakeJob.source_url || ''}::${intakeJob.normalized_text || ''}`)
       : sourceType === 'text'

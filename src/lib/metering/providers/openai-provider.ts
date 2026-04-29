@@ -196,6 +196,11 @@ export class OpenAIProvider implements LLMProvider {
         ]
       }
 
+      const responseFormat = request.parameters?.response_format || request.parameters?.responseFormat
+      if (responseFormat && typeof responseFormat === 'object') {
+        requestBody.response_format = responseFormat
+      }
+
       // Reasoning / "thinking" controls:
       // - Thinking variants (e.g., gpt-5.2-thinking) default to higher reasoning effort.
       // - Non-thinking variants (gpt-5, gpt-5.1, gpt-5.2) default to 'low' for faster responses.

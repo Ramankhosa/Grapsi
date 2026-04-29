@@ -121,6 +121,114 @@ function buildGuidelineBlock(guidelinePack: GuidelinePackDocument | null | undef
   return lines.join('\n');
 }
 
+function getConcreteFactTargets(stageKey: GrantPrepStageKey): string[] {
+  const defaultTargets = [
+    'problem scale, urgency, or baseline when relevant',
+    'specific beneficiaries, setting, or institution',
+    'methodology, delivery, or implementation detail',
+    'feasibility proof, capability, precedent, or risk control',
+    'success metric, milestone, output, or evaluation signal',
+    'funder fit, call priority, or rule constraint',
+  ];
+
+  const targetsByStage: Partial<Record<GrantPrepStageKey, string[]>> = {
+    problem_definition: [
+      'problem scale, burden, cost, prevalence, or baseline',
+      'who is affected, where, and why this setting matters',
+      'current practice, comparator, or unresolved gap',
+      'urgency or timing tied to the funding call',
+      'funder priority or reviewer criterion this problem serves',
+    ],
+    root_cause: [
+      'specific drivers or mechanisms behind the problem',
+      'evidence or logic showing why those drivers matter',
+      'where current approaches fail and why',
+      'the leverage point the project can realistically change',
+    ],
+    beneficiaries: [
+      'direct beneficiaries with inclusion criteria or size estimate',
+      'indirect beneficiaries or system-level stakeholders',
+      'geographic, institutional, or service setting',
+      'barriers, needs, or value created for each group',
+    ],
+    fit_and_scope: [
+      'call priority, eligibility, or template requirement served',
+      'scope boundary, geography, duration, or delivery setting',
+      'why this funder is the right fit',
+      'what the proposal will not attempt',
+    ],
+    thrust_alignment: [
+      'selected thrust or priority area and exact fit',
+      'call language or evaluation criterion being answered',
+      'proposal contribution to funder outcomes',
+      'scope or eligibility caveat that must be respected',
+    ],
+    methodology: [
+      'core intervention or technical approach components',
+      'who does what, when, and with what assets',
+      'data, validation, or evidence-generation method',
+      'feasibility proof, pilot, prototype, or delivery precedent',
+      'method-specific risks and controls',
+    ],
+    workplan: [
+      'phases, milestones, and time-bound deliverables',
+      'responsible owner or partner for each workstream',
+      'dependencies, decision gates, or critical path',
+      'evidence that the timeline is feasible',
+    ],
+    team_and_partnerships: [
+      'named roles, expertise, and delivery responsibilities',
+      'partner contribution, facility, data access, or network',
+      'governance or coordination mechanism',
+      'track record or capability proof',
+    ],
+    innovation: [
+      'current practice or comparator the proposal improves on',
+      'distinctive mechanism, population, setting, or integration',
+      'why the innovation is feasible now',
+      'defensible advantage under review criteria',
+    ],
+    evaluation: [
+      'success metrics, baselines, targets, or thresholds',
+      'data source, measurement method, and verification cadence',
+      'who validates outcomes and when',
+      'how findings will change decisions or scale-up plans',
+    ],
+    outcomes: [
+      'specific outputs, outcomes, and beneficiary changes',
+      'baseline and target values where available',
+      'time horizon for expected results',
+      'how outcomes map to funder priorities',
+    ],
+    risk_and_ethics: [
+      'named technical, delivery, ethical, privacy, or adoption risks',
+      'mitigation owner, trigger, and contingency',
+      'required approval, safeguard, or compliance step',
+      'residual risk and why it is acceptable',
+    ],
+    budget_strategy: [
+      'main cost drivers tied to workplan activities',
+      'value-for-money argument or benchmark',
+      'matched support, in-kind assets, or sustainability contribution',
+      'budget risk, tradeoff, or justification gap',
+    ],
+    sustainability_and_scale: [
+      'post-grant owner, adoption route, or institutional home',
+      'scale setting, beneficiary growth, or replication path',
+      'resources, partnerships, or policy hooks needed after funding',
+      'evidence that uptake is plausible',
+    ],
+    final_pitch: [
+      'one-sentence reviewer-facing case for funding',
+      'strongest problem, method, feasibility, and impact facts',
+      'why this team and this call fit now',
+      'one concrete outcome the funder can remember',
+    ],
+  };
+
+  return targetsByStage[stageKey] || defaultTargets;
+}
+
 function getResponseRules(engagementMode: GrantPrepEngagementMode, stageKey: GrantPrepStageKey) {
   if (engagementMode === 'express') {
     return [
@@ -314,6 +422,9 @@ export function buildGrantPrepPrompt(input: {
           'Assess the user\'s current answers against this rubric. If the coverage is weak or adequate, tell the user specifically what would make it stronger.',
         ]
       : []),
+    'Concrete reviewer-useful facts to capture for this stage:',
+    getConcreteFactTargets(input.stageKey).map((item) => `- ${item}`).join('\n'),
+    'If these facts are not confirmed, ask for them in the approval options or label any framing as AI-inferred. Do not store invented values as user-approved facts.',
     `Mapped template pointers: ${mapping.templatePointers.join(', ') || 'None'}`,
     'Mapped template guidance for this stage:',
     (isExpertMode ? mapping.discussionPoints : mapping.discussionPoints.slice(0, pointLimit))

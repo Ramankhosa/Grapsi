@@ -89,6 +89,7 @@ enum FundingInputType {
   url
   text
   pdf
+  json
 }
 
 enum FundingCallStatus {
@@ -250,6 +251,30 @@ enum GrantSectionDraftStatus {
   DRAFT
   REVIEWED
   APPROVED
+}
+
+enum CallInputType {
+  url
+  file
+  text
+}
+
+enum ReviewStatus {
+  parsed
+  pending
+  failed
+}
+
+enum SectionStatus {
+  draft
+  reviewed
+  revised
+}
+
+enum SectionAssetType {
+  METHODOLOGY
+  TIMELINE
+  BUDGET_JUSTIFICATION
 }
 
 // Service types for access control
@@ -463,6 +488,7 @@ model User {
   // Funding finder and researcher profile relations
   grant_prep_sessions                GrantPrepSession[]
   recommendation_conversations       RecommendationConversation[]
+  reviewer_calls                     ReviewerCall[]
   researcher_profile                 ResearcherProfile?
   researcher_notification_preference ResearcherNotificationPreference?
   researcher_saved_research_areas    ResearcherSavedResearchArea[]
@@ -1351,6 +1377,100 @@ model GrantStructuredFieldResponse {
   @@index([grantSessionId, sectionKey])
   @@index([tenantId, projectId])
   @@map("grant_structured_field_responses")
+}
+
+model ReviewerCall {
+  id                    String            @id @default(cuid())
+  user_id               String
+  tenantId              String?
+  projectId             String?
+  grantSessionId        String?
+  fundingCallId         String?
+  project_title         String
+  agency_name           String
+  call_input_type       CallInputType
+  call_input_data       String            @db.Text
+  parsed_json           Json              @default("{}")
+  raw_text_backup       String?           @db.Text
+  LLM_model_used        String?
+  review_status         ReviewStatus      @default(parsed)
+  created_at            DateTime          @default(now())
+  updated_at            DateTime          @updatedAt
+  final_review_status   ReviewStatus      @default(parsed)
+  overall_review_json   Json?
+  review_progress_state Json?
+  is_public             Boolean           @default(false)
+  share_token           String?           @unique
+  user                  User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  reviewer_sections     ReviewerSection[]
+
+  @@index([user_id])
+  @@index([tenantId])
+  @@index([projectId])
+  @@index([grantSessionId])
+  @@index([fundingCallId])
+  @@map("reviewer_calls")
+}
+
+model ReviewerSection {
+  id                    String        @id @default(cuid())
+  call_id               String
+  section_title         String
+  user_input            String        @db.Text
+  ai_review_json        Json          @default("{}")
+  last_reviewed_at      DateTime      @default(now())
+  status                SectionStatus @default(draft)
+  improvement_flag      Boolean?
+  is_revision           Boolean       @default(false)
+  previous_section_id   String?
+  review_linked_context Boolean       @default(true)
+  version               Int           @default(1)
+  context_summary       String?       @db.Text
+  reviewer_call         ReviewerCall  @relation(fields: [call_id], references: [id], onDelete: Cascade)
+
+  @@index([call_id])
+  @@index([call_id, section_title, version])
+  @@map("reviewer_sections")
+}
+
+model ReviewAsset {
+  id                     String   @id @default(cuid())
+  project_id             String
+  gcs_uri                String   @db.Text
+  gcs_preview_uri        String?  @db.Text
+  mime                   String
+  bytes                  Int
+  sha256                 String   @db.VarChar(128)
+  width                  Int?
+  height                 Int?
+  page_count             Int?
+  original_name          String?
+  google_file_id         String?
+  google_file_updated_at DateTime?
+  ocr_text               String?  @db.Text
+  created_by_user_id     String
+  created_at             DateTime @default(now())
+  deprecated             Boolean  @default(false)
+
+  @@unique([project_id, sha256])
+  @@index([project_id])
+  @@index([created_by_user_id])
+  @@map("review_assets")
+}
+
+model ReviewAssetLink {
+  id                String           @id @default(cuid())
+  review_version_id String
+  section_type      SectionAssetType
+  asset_id          String
+  attach_in_prompt  Boolean          @default(true)
+  order             Int              @default(0)
+  created_at        DateTime         @default(now())
+
+  @@unique([review_version_id, section_type, asset_id])
+  @@index([review_version_id, section_type])
+  @@index([asset_id])
+  @@map("review_asset_links")
 }
 
 model RecommendationConversation {

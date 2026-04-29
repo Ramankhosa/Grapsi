@@ -5,6 +5,10 @@ import {
   buildGrantPostGenerationValidation,
   validateGrantFinalExportReadiness,
 } from '@/lib/grants/draftContextContract'
+import {
+  buildGrantComplianceReport,
+  buildReviewerReadinessReport,
+} from '@/lib/grants/compliance'
 import type { GrantSectionComplianceContract } from '@/types/grant'
 
 function makeContract(): GrantSectionComplianceContract {
@@ -144,6 +148,22 @@ describe('GrantDraftContextContract', () => {
     expect(validation.grantComplianceReport.usedPrepEvidence).toContain('problem_definition:national_gap')
     expect(validation.grantComplianceReport.passed).toBe(true)
     expect(validation.reviewerReadinessReport.strengths.join(' ')).toMatch(/Grant Prep evidence/i)
+  })
+
+  it('recommends measurable reviewer metrics when a draft lacks them', () => {
+    const content = 'A 12-site pilot validated feasibility compared with current practice and showed delivery readiness.'
+    const report = buildGrantComplianceReport({
+      stage: 'pass2',
+      content,
+      contract: null,
+    })
+    const readiness = buildReviewerReadinessReport({
+      report,
+      content,
+    })
+
+    expect(readiness.recommendedActions.join(' ')).toMatch(/measurable success metric/i)
+    expect(readiness.missingSignals.join(' ')).toMatch(/Measurable metrics or milestones are missing/i)
   })
 
   it('blocks final export when app draft sections are stale or unvalidated', () => {

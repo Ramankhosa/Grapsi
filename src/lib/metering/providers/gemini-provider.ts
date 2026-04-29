@@ -24,6 +24,9 @@ export class GeminiProvider implements LLMProvider {
     'gemini-1.5-flash-002',
     // Legacy Image Generation Models (for backwards compatibility)
     'gemini-3.0-nano-banana',
+    'gemini-3.1-flash',
+    'gemini-3.1-flash-preview',
+    'gemini-3-flash-preview',
     'gemini-3-pro-preview',
     'gemini-3-pro-preview-thinking',
     'gemini-3-pro-image-preview',
@@ -46,6 +49,9 @@ export class GeminiProvider implements LLMProvider {
     'gemini-exp-1206': 'gemini-exp-1206',
     // Legacy image models (pass through as-is)
     'gemini-3.0-nano-banana': 'gemini-3.0-nano-banana',
+    'gemini-3.1-flash': 'gemini-3-flash-preview',
+    'gemini-3.1-flash-preview': 'gemini-3-flash-preview',
+    'gemini-3-flash-preview': 'gemini-3-flash-preview',
     'gemini-3-pro-preview': 'gemini-3-pro-preview',
     'gemini-3-pro-preview-thinking': 'gemini-3-pro-preview',
     'gemini-3-pro-image-preview': 'gemini-3-pro-image-preview',
@@ -165,7 +171,10 @@ export class GeminiProvider implements LLMProvider {
         generationConfig: {
           maxOutputTokens: maxTokens,
           temperature: temperature,
-          topP: topP
+          topP: topP,
+          ...(request.parameters?.responseMimeType
+            ? { responseMimeType: request.parameters.responseMimeType }
+            : {})
         }
       })
 
@@ -321,6 +330,9 @@ export class GeminiProvider implements LLMProvider {
       'gemini-1.5-flash-002': { input: 1048576, output: 8192 },
       // Legacy image generation models (backwards compatibility)
       'gemini-3.0-nano-banana': { input: 128000, output: 8192 },
+      'gemini-3.1-flash': { input: 1048576, output: 65536 },
+      'gemini-3.1-flash-preview': { input: 1048576, output: 65536 },
+      'gemini-3-flash-preview': { input: 1048576, output: 65536 },
       'gemini-3-pro-preview': { input: 2097152, output: 65536 },
       'gemini-3-pro-image-preview': { input: 128000, output: 8192 },
       'gemini-3.1-flash-image': { input: 128000, output: 8192 },
@@ -353,6 +365,9 @@ export class GeminiProvider implements LLMProvider {
       'gemini-1.5-flash-002': { input: 0.0000001, output: 0.0000004 },
       // Legacy image generation models (backwards compatibility)
       'gemini-3.0-nano-banana': { input: 0.000001, output: 0.000004 },      // $1.00/$4.00 per M
+      'gemini-3.1-flash': { input: 0.0000005, output: 0.000003 },           // $0.50/$3.00 per M
+      'gemini-3.1-flash-preview': { input: 0.0000005, output: 0.000003 },
+      'gemini-3-flash-preview': { input: 0.0000005, output: 0.000003 },
       'gemini-3-pro-preview': { input: 0.00000125, output: 0.000005 },      // Placeholder - update if pricing differs
       'gemini-3-pro-image-preview': { input: 0.000001, output: 0.000004 },  // $1.00/$4.00 per M
       'gemini-3.1-flash-image': { input: 0.000001, output: 0.000004 },      // Placeholder - verify with official pricing
@@ -414,7 +429,10 @@ export class GeminiProvider implements LLMProvider {
       generationConfig: {
         maxOutputTokens: maxTokens,
         temperature,
-        topP
+        topP,
+        ...(request.parameters?.responseMimeType
+          ? { responseMimeType: request.parameters.responseMimeType }
+          : {})
       }
     }
 

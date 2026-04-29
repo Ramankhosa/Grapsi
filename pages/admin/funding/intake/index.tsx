@@ -4,10 +4,11 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
+import { FUNDING_JSON_UPLOAD_CHATGPT_PROMPT } from '@/lib/fundingIntake/jsonPrompt';
 
 type JobSummary = {
   id: string;
-  input_type: 'url' | 'text' | 'pdf';
+  input_type: 'url' | 'text' | 'pdf' | 'json';
   source_url: string | null;
   status: string;
   error_code: string | null;
@@ -52,10 +53,12 @@ function formatJobErrorCode(errorCode: string | null | undefined) {
 export default function FundingIntakeAdminPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
-  const [inputType, setInputType] = useState<'url' | 'text' | 'pdf'>('url');
+  const [inputType, setInputType] = useState<'url' | 'text' | 'pdf' | 'json'>('url');
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceText, setSourceText] = useState('');
   const [sourcePdf, setSourcePdf] = useState<File | null>(null);
+  const [sourceJson, setSourceJson] = useState<File | null>(null);
+  const [showJsonPrompt, setShowJsonPrompt] = useState(false);
   const [operatorNotes, setOperatorNotes] = useState('');
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
@@ -125,12 +128,14 @@ export default function FundingIntakeAdminPage() {
     setSubmitting(true);
 
     try {
-      const response = inputType === 'pdf'
+      const response = inputType === 'pdf' || inputType === 'json'
         ? await (async () => {
             const formData = new FormData();
-            if (sourcePdf) {
-              formData.append('file', sourcePdf);
+            const file = inputType === 'json' ? sourceJson : sourcePdf;
+            if (file) {
+              formData.append('file', file);
             }
+            formData.append('inputType', inputType);
             formData.append('operatorNotes', operatorNotes);
             return fetch('/api/admin/funding/intake', {
               method: 'POST',
@@ -157,6 +162,7 @@ export default function FundingIntakeAdminPage() {
       setSourceUrl('');
       setSourceText('');
       setSourcePdf(null);
+      setSourceJson(null);
       setOperatorNotes('');
       await loadJobs(false);
       router.push(`/admin/funding/intake/${data.jobId}`);
@@ -260,6 +266,15 @@ export default function FundingIntakeAdminPage() {
     }
   }
 
+  async function handleCopyJsonPrompt() {
+    try {
+      await navigator.clipboard.writeText(FUNDING_JSON_UPLOAD_CHATGPT_PROMPT);
+      toast.success('JSON extraction prompt copied.');
+    } catch {
+      toast.error('Could not copy prompt from this browser.');
+    }
+  }
+
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center text-gray-600">Loading...</div>;
   }
@@ -290,9 +305,9 @@ export default function FundingIntakeAdminPage() {
         <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Funding Intake</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Create structured funding drafts from URL, text, or PDF</h1>
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Create structured funding drafts from URL, text, PDF, or JSON</h1>
             <p className="mt-3 max-w-3xl text-sm text-slate-600">
-              Submit a funding opportunity source, let the extractor build a structured draft, then review, author guidelines and templates, and publish from the intake workspace.
+              Submit a funding opportunity source, or upload a ChatGPT-extracted JSON file that can seed call fields, guidelines, and templates from one intake job.
             </p>
           </div>
           <Link href="/admin" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
@@ -331,6 +346,13 @@ export default function FundingIntakeAdminPage() {
                 >
                   PDF
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setInputType('json')}
+                  className={`rounded-full px-4 py-2 text-sm font-medium ${inputType === 'json' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                >
+                  JSON Uploading
+                </button>
               </div>
 
               {inputType === 'url' ? (
@@ -356,7 +378,7 @@ export default function FundingIntakeAdminPage() {
                     placeholder="Paste the funding opportunity announcement here"
                   />
                 </label>
-              ) : (
+              ) : inputType === 'pdf' ? (
                 <label key="intake-pdf-input" className="block">
                   <span className="mb-2 block text-sm font-medium text-slate-700">Funding opportunity PDF</span>
                   <input
@@ -368,6 +390,52 @@ export default function FundingIntakeAdminPage() {
                   />
                   <p className="mt-2 text-xs text-slate-500">PDF intake stores the uploaded file once, derives canonical text from it, and reuses that same source for extract-all.</p>
                 </label>
+              ) : (
+                <div key="intake-json-input" className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">ChatGPT extraction JSON</span>
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={(event) => setSourceJson(event.target.files?.[0] || null)}
+                      disabled={!canWriteFundingIntake}
+                      className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                    <p className="mt-2 text-xs text-slate-500">JSON intake skips the internal extractor for call fields. When the draft is saved, included guideline and template JSON are imported into their review tabs.</p>
+                  </label>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-slate-900">ChatGPT JSON extraction prompt</div>
+                        <div className="mt-1 text-xs text-slate-500">Use this prompt with the call data, then upload the returned JSON here.</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowJsonPrompt((value) => !value)}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                        >
+                          {showJsonPrompt ? 'Hide Prompt' : 'Show Prompt'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCopyJsonPrompt}
+                          className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white"
+                        >
+                          Copy Prompt
+                        </button>
+                      </div>
+                    </div>
+                    {showJsonPrompt && (
+                      <textarea
+                        readOnly
+                        value={FUNDING_JSON_UPLOAD_CHATGPT_PROMPT}
+                        rows={14}
+                        className="mt-4 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 font-mono text-xs leading-5 text-slate-700"
+                      />
+                    )}
+                  </div>
+                </div>
               )}
 
               <label className="block">
@@ -383,12 +451,12 @@ export default function FundingIntakeAdminPage() {
               </label>
 
               <div className="rounded-xl bg-slate-50 p-4 text-xs leading-6 text-slate-600">
-                V1 rules: only HTTPS URLs are accepted for web intake, private-network URLs are blocked, PDF transcription requires Gemini multimodal support, and extraction runs asynchronously.
+                V1 rules: only HTTPS URLs are accepted for web intake, private-network URLs are blocked, PDF transcription requires Gemini multimodal support, JSON uploads must match the prompt schema, and extraction runs asynchronously.
               </div>
 
                 <button
                   type="submit"
-                  disabled={!canWriteFundingIntake || submitting || (inputType === 'pdf' && !sourcePdf)}
+                  disabled={!canWriteFundingIntake || submitting || (inputType === 'pdf' && !sourcePdf) || (inputType === 'json' && !sourceJson)}
                   className="inline-flex items-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                 {submitting ? 'Submitting...' : 'Create Intake Job'}
@@ -454,7 +522,7 @@ export default function FundingIntakeAdminPage() {
                       <td className="px-4 py-4 align-top text-slate-700">
                         <div className="font-medium uppercase tracking-[0.18em] text-xs text-slate-500">{job.input_type}</div>
                         <div className="mt-1 max-w-sm break-all text-slate-800">
-                          {job.source_url || 'Text submission'}
+                          {job.source_url || (job.input_type === 'json' ? 'JSON upload' : job.input_type === 'pdf' ? 'PDF upload' : 'Text submission')}
                         </div>
                       </td>
                       <td className="px-4 py-4 align-top text-slate-600">

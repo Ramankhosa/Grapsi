@@ -26,6 +26,8 @@ import {
 } from '@/lib/grantPrep/sessionState'
 import type { GrantPrepPointCapture, GrantPrepStageKey } from '@/lib/grantPrep/types'
 import { runGrantPrepStageTidyPass } from '@/lib/grantPrep/tidyPass'
+import { resolveGrantPrepTenantContext } from '@/lib/grantPrep/llm'
+import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
 
 const requestSchema = z.discriminatedUnion('action', [
   z.object({
@@ -78,15 +80,6 @@ export async function PATCH(
 
     if (grantPrepSession.status === 'archived') {
       return NextResponse.json({ message: 'Archived Grant Prep sessions are read-only' }, { status: 400 })
-    }
-
-    if (grantPrepSession.status === 'handed_off' || grantPrepSession.status === 'launched') {
-      return NextResponse.json(
-        {
-          message: 'This Grant Prep session is already in Grapsi. Start a new prep revision to make further changes.',
-        },
-        { status: 400 }
-      )
     }
 
     const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
@@ -181,11 +174,20 @@ export async function PATCH(
       !canAutoAdvanceGrantPrepStage(stageBeforeUpdate, prepContext.engagementMode) &&
       canAutoAdvanceGrantPrepStage(stageState, prepContext.engagementMode)
     if (stageJustCompleted) {
+      const tenantContext = await resolveGrantPrepTenantContext(auth.actor.tenantId, auth.actor.id)
+      if (!tenantContext) {
+        return NextResponse.json(
+          { message: 'Grant Prep tidy pass requires an active tenant plan before LLM usage can be metered.' },
+          { status: 403 }
+        )
+      }
+
       nextStageStates = {
         ...nextStageStates,
         [stageKey]: await runGrantPrepStageTidyPass({
           stageKey,
           stageState: nextStageStates[stageKey],
+          tenantContext,
         }),
       }
     }
@@ -204,7 +206,10 @@ export async function PATCH(
       globalKeywords: collectGlobalKeywords(nextStageStates),
       warning,
     }
-    const nextStatus = isGrantPrepSessionReady(nextStageStates, prepContext.engagementMode) ? 'ready' : 'active'
+    const nextStatus = resolveMutableGrantPrepStatus({
+      currentStatus: grantPrepSession.status,
+      isReady: isGrantPrepSessionReady(nextStageStates, prepContext.engagementMode),
+    })
 
     await prisma.grantPrepSession.update({
       where: { id: grantPrepSession.id },

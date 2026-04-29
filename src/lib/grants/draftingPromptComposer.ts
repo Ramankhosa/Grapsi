@@ -196,6 +196,17 @@ function buildSeededContextBlock(seededContext?: string | null): string {
   ].join('\n')
 }
 
+function buildPromptPrecedenceBlock(): string {
+  return [
+    'PROMPT PRECEDENCE:',
+    '- Hard call, template, budget, eligibility, length, and compliance rules override all other guidance.',
+    '- Authoritative Grant Prep facts are the factual backbone for this section when they apply.',
+    '- Mapped citation evidence may support only the exact claims it substantiates.',
+    '- Related-section awareness is for consistency only; do not turn it into new commitments, metrics, or compliance claims.',
+    '- Style guidance and user instructions apply only when they do not conflict with the rules above.',
+  ].join('\n')
+}
+
 function buildCompetitivePositioningBlock(semantic?: GrantSectionSemantic | null): string {
   if (semantic !== 'problem_need' && semantic !== 'innovation') {
     return ''
@@ -221,6 +232,7 @@ function buildEvidenceDeploymentBlock(input: GrantPromptComposerInput): string {
     '- If the evidence digest labels a citation as "prove feasibility", use it to show comparable implementation success.',
     '- If the evidence digest labels a citation as "quantify impact", attach it to the concrete outcome metric or effect size.',
     '- If the evidence digest labels a citation as "establish precedent" or "show policy fit", make the comparison or framework explicit in the sentence.',
+    '- If no mapped citation supports a needed claim, write cautious uncited prose or flag the claim as an open question; do not invent anchors.',
   ].join('\n')
 }
 
@@ -322,11 +334,19 @@ function buildBudgetDisciplineBlock(input: GrantPromptComposerInput): string {
 
 function buildCitationAnchorPreservationBlock(input: GrantPromptComposerInput): string {
   const requiredCitationKeys = dedupeStrings(input.requiredCitationKeys || [])
+  const citationMode = input.citationMode || null
+  const modeRule = citationMode === 'mapped_evidence'
+    ? '- Mapped-evidence mode: use only mapped or required [CITE:key] anchors, and only on claims directly supported by that evidence.'
+    : citationMode === 'direct_draft' || citationMode === 'no_citations'
+      ? '- Direct-draft or no-citations mode: do not create [CITE:key] anchors unless they already appear in provided base content or required keys.'
+      : '- If citation mode is unclear, preserve existing required anchors but do not create new [CITE:key] placeholders.'
   return [
     'CITATION ANCHOR RULES:',
     requiredCitationKeys.length > 0
       ? `- Required citation anchors that must remain when their claims survive: ${requiredCitationKeys.map((key) => `[CITE:${key}]`).join(', ')}.`
       : '- Preserve any mapped [CITE:key] anchors exactly where they support surviving claims.',
+    '- Every [CITE:key] anchor must support the exact sentence claim it follows; never use citations as general decoration.',
+    modeRule,
     '- Do not fabricate new citation anchors or attach an anchor to a claim the source does not support.',
     '- If a sentence is removed, remove only the anchors that belonged exclusively to that deleted claim.',
   ].join('\n')
@@ -517,6 +537,7 @@ export async function buildGrantDraftingPrompt(input: GrantPromptComposerInput):
       input.retryNoticeBlock || '',
       buildGrantContextBlock(input.grantContextSummary),
       buildSeededContextBlock(input.seededContext),
+      buildPromptPrecedenceBlock(),
       buildBlueprintContextBlock(input),
       formatGrantPromptProfileForPrompt(profile),
       buildCompetitivePositioningBlock(input.grantSemantic),
@@ -554,6 +575,7 @@ export async function buildGrantDraftingPrompt(input: GrantPromptComposerInput):
     persona,
     buildGrantContextBlock(input.grantContextSummary),
     buildSeededContextBlock(input.seededContext),
+    buildPromptPrecedenceBlock(),
     buildBlueprintContextBlock(input),
     formatGrantPromptProfileForPrompt(profile),
     playbook,

@@ -66,13 +66,16 @@ const PROVIDER_COLORS: Record<string, string> = {
   openai: 'bg-green-100 text-green-800 border-green-200',
   anthropic: 'bg-orange-100 text-orange-800 border-orange-200',
   deepseek: 'bg-purple-100 text-purple-800 border-purple-200',
-  groq: 'bg-pink-100 text-pink-800 border-pink-200'
+  groq: 'bg-pink-100 text-pink-800 border-pink-200',
+  qwen: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+  zhipu: 'bg-teal-100 text-teal-800 border-teal-200'
 }
 
 const RETIRED_MODEL_CODES = new Set(['gpt-5.1-thinking'])
 
 // Show only the grant-oriented stage groups that are still relevant in admin LLM control.
 const FEATURE_LABELS: Record<string, string> = {
+  FUNDING_DISCOVERY: 'Funding Call Ingestion',
   GRANT_PREP: 'Grant Prep & Blueprint',
   SEARCH_STRATEGY: 'Literature Review & Search Strategy',
   GRANT_DRAFTING: 'Grant Writing'
@@ -85,7 +88,12 @@ const NON_LLM_STAGES = [
 ]
 
 const VISIBLE_STAGE_CODES_BY_FEATURE: Partial<Record<string, Set<string>>> = {
+  FUNDING_DISCOVERY: new Set([
+    'FUNDING_CALL_INGEST_PDF',
+    'FUNDING_CALL_INGEST_TEXT',
+  ]),
   GRANT_PREP: new Set([
+    'GRANT_PREP_CHAT',
     'PAPER_BLUEPRINT_GEN',
     'GRANT_BLUEPRINT_GEN',
     'RESEARCH_INTENT_LOCK',
@@ -219,6 +227,34 @@ interface QuickAccessStage {
 }
 
 const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
+  FUNDING_DISCOVERY: [
+    {
+      code: 'FUNDING_CALL_INGEST_PDF',
+      passLabel: 'PDF',
+      title: 'Call Ingestion PDF',
+      description: 'PDF transcription for funding-call intake before structured field extraction.'
+    },
+    {
+      code: 'FUNDING_CALL_INGEST_TEXT',
+      passLabel: 'Web/Text',
+      title: 'Call Ingestion Web & Text',
+      description: 'Structured funding-call facts extraction from URL content, pasted text, and transcribed PDF text.'
+    }
+  ],
+  GRANT_PREP: [
+    {
+      code: 'GRANT_PREP_CHAT',
+      passLabel: 'Chatbot',
+      title: 'Grant Prep Chatbot',
+      description: 'Interactive coaching turns, marker extraction, response repair, compaction, and tidy cleanup.'
+    },
+    {
+      code: 'GRANT_BLUEPRINT_GEN',
+      passLabel: 'Blueprint',
+      title: 'Grant Blueprint Generation',
+      description: 'Grant-specific dimensions, framing, and evaluation anchors from the completed prep session.'
+    }
+  ],
   GRANT_DRAFTING: [
     {
       code: 'PAPER_SECTION_DRAFT',
@@ -244,6 +280,21 @@ const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
 // Human-friendly help text for super-admin LLM controls.
 // Covers all paper drafting stage codes and deep-analysis linked operations.
 const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
+  FUNDING_CALL_INGEST_PDF: {
+    summary: 'Funding call PDF transcription.',
+    responsibility: 'Controls the multimodal model used to read uploaded PDF calls and convert them into clean source text.',
+    tip: 'Use Gemini 2.5 Pro or another configured file-capable model. Non-file-capable text models will fail this stage.'
+  },
+  FUNDING_CALL_INGEST_TEXT: {
+    summary: 'Funding call URL and text extraction.',
+    responsibility: 'Controls structured fact extraction for URL intake, pasted text intake, and the second pass after PDF transcription.',
+    tip: 'DeepSeek V4 Pro is the cost-conscious default for evidence-backed JSON extraction.'
+  },
+  GRANT_PREP_CHAT: {
+    summary: 'Interactive Grant Prep chatbot.',
+    responsibility: 'Controls the model used for coaching turns, marker extraction, marker repair, assistant compaction, and tidy cleanup.',
+    tip: 'Use a fast balanced model for normal chat; switch to DeepSeek V4 Flash when testing max-reasoning behavior.'
+  },
   GRANT_BLUEPRINT_GEN: {
     summary: 'Grant blueprint dimension generation.',
     responsibility: 'Builds grant-specific dimensions, framing, and evaluation anchors from prep context.',
@@ -474,6 +525,9 @@ function isStageVisibleInAdmin(stage: WorkflowStage): boolean {
 }
 
 function getStageCodeBadgeClasses(stageCode: string): string {
+  if (/^FUNDING_CALL_INGEST/.test(stageCode)) {
+    return 'border-lime-700/50 bg-lime-900/25 text-lime-200'
+  }
   if (/^PAPER_TOPIC_|^PAPER_ABSTRACT_TITLE$/.test(stageCode)) {
     return 'border-sky-700/50 bg-sky-900/30 text-sky-200'
   }
@@ -483,7 +537,7 @@ function getStageCodeBadgeClasses(stageCode: string): string {
   if (/LITERATURE|SEARCH|CITATION_BLUEPRINT_MAPPING/.test(stageCode)) {
     return 'border-emerald-700/50 bg-emerald-900/25 text-emerald-200'
   }
-  if (/BLUEPRINT|INTENT|ARGUMENT|ARCHETYPE/.test(stageCode)) {
+  if (/BLUEPRINT|INTENT|ARGUMENT|ARCHETYPE|GRANT_PREP_CHAT/.test(stageCode)) {
     return 'border-amber-700/50 bg-amber-900/25 text-amber-200'
   }
   if (/SECTION|CONTENT|MEMORY|TEXT_ACTION|REWRITER|CITATION_FORMAT/.test(stageCode)) {
@@ -519,7 +573,7 @@ export default function LLMConfigPage() {
 
   // Selection states
   const [selectedPlan, setSelectedPlan] = useState<string>('')
-  const [selectedFeature, setSelectedFeature] = useState<string>('GRANT_PREP')
+  const [selectedFeature, setSelectedFeature] = useState<string>('FUNDING_DISCOVERY')
   const stageRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   // Edit states
@@ -1107,7 +1161,7 @@ export default function LLMConfigPage() {
               </div>
             </div>
 
-            {/* Grant drafting quick access */}
+            {/* Feature quick access */}
             {(() => {
               const quickAccess = QUICK_ACCESS_BY_FEATURE[selectedFeature] || []
               if (quickAccess.length === 0) return null
@@ -1126,9 +1180,9 @@ export default function LLMConfigPage() {
               return (
                 <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
                   <div className="p-4 border-b border-slate-700">
-                    <h2 className="text-lg font-semibold">Grant Drafting Quick Access</h2>
+                    <h2 className="text-lg font-semibold">{FEATURE_LABELS[selectedFeature]} Quick Access</h2>
                     <p className="text-sm text-slate-400">
-                      Jump directly to the primary generate, finalize, and improvement model controls for grant drafting.
+                      Jump directly to the most frequently adjusted model controls for this feature.
                     </p>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-4">

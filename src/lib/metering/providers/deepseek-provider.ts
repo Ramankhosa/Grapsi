@@ -84,15 +84,57 @@ export class DeepSeekProvider implements LLMProvider {
 
       // Apply token limits - admin config takes priority.
       const defaultMax = this.getTokenLimits(actualModel).output
-      const maxTokens = limits.maxTokensOut || defaultMax
+      let maxTokens = limits.maxTokensOut || defaultMax
+
+      const explicitReasoningEffort =
+        request.parameters?.reasoning_effort ??
+        request.parameters?.reasoningEffort
+      const reasoningEffort =
+        explicitReasoningEffort ??
+        (actualModel === 'deepseek-v4-flash' ? 'max' : undefined)
+      const thinkingDisabled =
+        String(reasoningEffort || '').toLowerCase() === 'off' ||
+        String(reasoningEffort || '').toLowerCase() === 'none' ||
+        request.parameters?.thinking === false
+      const thinkingEnabled = actualModel === 'deepseek-v4-flash' && !thinkingDisabled
+
+      const extraBody: Record<string, any> =
+        request.parameters?.extra_body && typeof request.parameters.extra_body === 'object'
+          ? { ...request.parameters.extra_body }
+          : request.parameters?.extraBody && typeof request.parameters.extraBody === 'object'
+          ? { ...request.parameters.extraBody }
+          : {}
+
+      if (thinkingEnabled && !('thinking' in extraBody)) {
+        extraBody.thinking =
+          request.parameters?.thinking && typeof request.parameters.thinking === 'object'
+            ? request.parameters.thinking
+            : { type: 'enabled' }
+      }
+
+      if (thinkingEnabled && maxTokens > 64000) {
+        maxTokens = 64000
+      }
+
       console.log(`[DeepSeekProvider] Token limits: admin=${limits.maxTokensOut || 'not set'}, using=${maxTokens}`)
 
-      const response = await this.client.chat.completions.create({
+      const createParams: Record<string, any> = {
         model: actualModel,
         messages,
         max_tokens: maxTokens,
         temperature: request.parameters?.temperature ?? 0.7
-      })
+      }
+
+      const responseFormat = request.parameters?.response_format || request.parameters?.responseFormat
+      if (responseFormat && typeof responseFormat === 'object') {
+        createParams.response_format = responseFormat
+      }
+
+      if (Object.keys(extraBody).length > 0) {
+        createParams.extra_body = extraBody
+      }
+
+      const response = await this.client.chat.completions.create(createParams)
 
       const outputText = response.choices?.[0]?.message?.content || ''
       const usage = (response.usage || {}) as Record<string, any>
@@ -117,6 +159,8 @@ export class DeepSeekProvider implements LLMProvider {
           outputTokens,
           thoughtTokens,
           totalTokens,
+          reasoningEffort,
+          thinkingEnabled,
           latencyMs: latency,
           finishReason: response.choices?.[0]?.finish_reason,
           usage

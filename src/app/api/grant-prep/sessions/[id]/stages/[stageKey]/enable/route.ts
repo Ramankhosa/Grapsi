@@ -47,9 +47,6 @@ export async function PUT(
     if (grantPrepSession.status === 'archived') {
       return NextResponse.json({ message: 'This Grant Prep session is archived' }, { status: 400 })
     }
-    if (grantPrepSession.status === 'handed_off' || grantPrepSession.status === 'launched') {
-      return NextResponse.json({ message: 'This Grant Prep session can no longer be edited' }, { status: 400 })
-    }
     if (!GRANT_PREP_STAGE_BY_KEY[stageKey as GrantPrepStageKey].pickable) {
       return NextResponse.json({ message: 'That stage cannot be toggled manually' }, { status: 400 })
     }

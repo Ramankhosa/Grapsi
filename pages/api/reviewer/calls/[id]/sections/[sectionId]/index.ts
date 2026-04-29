@@ -1,0 +1,148 @@
+// @ts-nocheck
+import { NextApiRequest, NextApiResponse } from 'next';
+import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import prisma from '../../../../../../../lib/prisma';
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  // Get the user session
+  const session = await getServerSession(req, res);
+  
+  // Check authentication
+  if (!session || !session.user?.id) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  
+  // Get the call ID and section ID from the URL
+  const callId = req.query.id as string;
+  const sectionId = req.query.sectionId as string;
+  
+  if (!callId || !sectionId) {
+    return res.status(400).json({ error: 'Call ID and Section ID are required' });
+  }
+  
+  // Verify the call belongs to the user
+  try {
+    const calls = await prisma.$queryRaw`
+      SELECT user_id FROM "reviewer_calls" 
+      WHERE id = ${callId}
+    `;
+    
+    const call = calls[0];
+    
+    if (!call) {
+      return res.status(404).json({ error: 'Call not found' });
+    }
+    
+    if (call.user_id !== session.user.id) {
+      return res.status(403).json({ error: 'Not authorized to access this call' });
+    }
+  } catch (error) {
+    console.error('Error verifying call ownership:', error);
+    return res.status(500).json({ error: 'Failed to verify call ownership' });
+  }
+  
+  // Handle different HTTP methods
+  if (req.method === 'GET') {
+    try {
+      // Fetch the requested section
+      const sections = await prisma.$queryRaw`
+        SELECT * FROM "reviewer_sections" 
+        WHERE id = ${sectionId} AND call_id = ${callId}
+      `;
+      
+      if (!sections || Array.isArray(sections) && sections.length === 0) {
+        return res.status(404).json({ error: 'Section not found' });
+      }
+      
+      return res.status(200).json({ section: sections[0] });
+    } catch (error) {
+      console.error('Error fetching section:', error);
+      return res.status(500).json({ error: 'Failed to fetch section' });
+    }
+  } else if (req.method === 'PUT') {
+    try {
+      const { user_input, section_title } = req.body;
+      
+      // Validate required fields
+      if (!user_input) {
+        return res.status(400).json({
+          error: 'Missing required fields',
+          details: 'Section content is required'
+        });
+      }
+      
+      // Check if section exists and can be edited
+      const sections = await prisma.$queryRaw`
+        SELECT * FROM "reviewer_sections" 
+        WHERE id = ${sectionId} AND call_id = ${callId}
+      `;
+      
+      if (!sections || Array.isArray(sections) && sections.length === 0) {
+        return res.status(404).json({ error: 'Section not found' });
+      }
+      
+      const section = sections[0];
+      
+      // Only draft sections can be edited directly
+      if (section.status !== 'draft') {
+        return res.status(400).json({
+          error: 'Cannot edit this section',
+          details: 'Only draft sections can be edited directly. For reviewed sections, please create a revision.'
+        });
+      }
+      
+      // Update the section
+      const updatedSection = await prisma.$queryRaw`
+        UPDATE "reviewer_sections"
+        SET 
+          user_input = ${user_input},
+          section_title = ${section_title || section.section_title},
+          last_reviewed_at = NOW()
+        WHERE id = ${sectionId}
+        RETURNING *
+      `;
+      
+      return res.status(200).json({ 
+        success: true,
+        section: updatedSection[0]
+      });
+      
+    } catch (error) {
+      console.error('Error updating section:', error);
+      return res.status(500).json({ error: 'Failed to update section' });
+    }
+  } else if (req.method === 'DELETE') {
+    try {
+      // Check if section exists
+      const sections = await prisma.$queryRaw`
+        SELECT * FROM "reviewer_sections" 
+        WHERE id = ${sectionId} AND call_id = ${callId}
+      `;
+      
+      if (!sections || Array.isArray(sections) && sections.length === 0) {
+        return res.status(404).json({ error: 'Section not found' });
+      }
+      
+      // Delete the section
+      await prisma.$queryRaw`
+        DELETE FROM "reviewer_sections"
+        WHERE id = ${sectionId} AND call_id = ${callId}
+      `;
+      
+      return res.status(200).json({ 
+        success: true,
+        message: 'Section deleted successfully'
+      });
+      
+    } catch (error) {
+      console.error('Error deleting section:', error);
+      return res.status(500).json({ error: 'Failed to delete section' });
+    }
+  } else {
+    res.setHeader('Allow', ['GET', 'PUT', 'DELETE']);
+    res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+  }
+} 

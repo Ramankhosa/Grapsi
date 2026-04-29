@@ -9,6 +9,7 @@ import { buildGrantThematicBlueprint } from '@/lib/grants/blueprintMetadata'
 import {
   buildReviewerReadinessReport,
 } from '@/lib/grants/compliance'
+import { normalizeGrantCitationMode } from '@/lib/grants/citationMode'
 import {
   getPrepStageKeysForGrantSemantic,
   getPrepStageKeysForTemplateIntent,
@@ -26,6 +27,7 @@ import type {
   GrantComplianceReport,
   GrantBlueprintDimensionType,
   GrantBlueprintPlanSection,
+  GrantCitationMode,
   GrantPrepEvidenceItem,
   GrantPrepContextBlock,
   GrantPrepPromptBundle,
@@ -65,8 +67,9 @@ const EDITORIAL_WORDS = new Set(['overview', 'summary', 'discussion', 'coverage'
 const LEADING_IMPERATIVES = /^(provide|describe|explain|discuss|outline|summarize|detail|highlight|state|mention|write|prepare|include|list)\s+/i
 const SECTION_LABEL_SPLIT = /[;,/]| and /i
 const OPERATIONAL_RULE_PATTERN = /\b(portal|upload|attachment|annexure|signature|submit|submission|deadline|deadline extension|certificate|proof|letter of intent|loi|application form)\b/i
-const EVIDENCE_SIGNAL_PATTERN = /\b(evidence|literature|research|prior work|state of the art|benchmark|baseline|gap|need|burden|demand|validation|feasibility|comparison|comparative|impact|outcome|adoption|evaluation|novel|innovation|problem|challenge|beneficiar)\b/i
-const STRONG_EVIDENCE_SIGNAL_PATTERN = /\b(literature|research|prior work|state of the art|benchmark|baseline|validation|comparison|comparative|burden|prevalence|evaluation)\b/i
+const CITATION_SECTION_PATTERN = /\b(introduction|intro|background|rationale|literature review|review of literature|related work|prior work|research landscape|evidence landscape|state of the art|status of the art|problem definition|problem statement|need statement|methodology|methods?|research design|study design|technical approach)\b/i
+const EVIDENCE_SIGNAL_PATTERN = /\b(evidence|evidence base|literature|research|prior work|state of the art|status of the art|benchmark|baseline|gap|burden|prevalence|incidence|validation|validated|feasibility evidence|comparison|comparative|empirical|data|statistics?|published|peer-reviewed|citations?|references?|justify|justification|substantiate|substantiation)\b/i
+const STRONG_EVIDENCE_SIGNAL_PATTERN = /\b(literature|research landscape|evidence landscape|prior work|state of the art|status of the art|benchmark|baseline|validation|validated|comparison|comparative|burden|prevalence|incidence|empirical|statistics?|peer-reviewed|citations?|references?)\b/i
 const OPERATIONAL_SECTION_PATTERN = /\b(objective|goal|aim|target|timeline|milestone|deliverable|work package|task breakdown|staffing|governance|management structure|committee|oversight|implementation schedule)\b/i
 const NARRATIVE_PROMPT_PATTERN = /\b(detailed|description|project plan|work ?plan|deliverable|timeline|functioning|implementation|approach|methodology|impact|outcome|innovation)\b/i
 const READY_MADE_PILLAR_PATTERN = /^(role|effect|effects|impact|association|relationship|current state|state of the art|prevalence|burden|evidence landscape|research landscape)\b/i
@@ -355,52 +358,61 @@ function inferCitationEvidenceNeed(
   const shortAnswer = section.sectionType === 'short_answer'
   const veryTight = (typeof section.wordBudget === 'number' && section.wordBudget > 0 && section.wordBudget <= 120)
     || (typeof section.characterLimit === 'number' && section.characterLimit > 0 && section.characterLimit <= 900)
+  const citationSection = CITATION_SECTION_PATTERN.test(text)
   const evidenceSignal = EVIDENCE_SIGNAL_PATTERN.test(text)
   const strongEvidenceSignal = STRONG_EVIDENCE_SIGNAL_PATTERN.test(text)
   const operationalSignal = OPERATIONAL_SECTION_PATTERN.test(text)
-  const narrativePromptSignal = NARRATIVE_PROMPT_PATTERN.test(text)
   const callFitOnly = /(alignment|mission|priority|fit|relevance)/.test(text)
     && !/(gap|need|baseline|benchmark|compar|evidence|literature|research)/.test(text)
 
+  if (veryTight && !citationSection && !strongEvidenceSignal) return 'none'
+
   switch (semantic) {
     case 'problem_need':
-      return lengthTier === 'long' || strongEvidenceSignal ? 'heavy' : 'medium'
+      return lengthTier === 'long' || strongEvidenceSignal || citationSection ? 'heavy' : 'medium'
     case 'methodology':
       if (operationalSignal && !evidenceSignal && /(timeline|milestone|deliverable|work package)/.test(text)) {
-        return shortAnswer ? 'none' : 'light'
+        return citationSection && !shortAnswer ? 'medium' : 'none'
       }
       return lengthTier === 'long' || strongEvidenceSignal ? 'heavy' : 'medium'
     case 'innovation':
-      return strongEvidenceSignal || lengthTier !== 'short' ? 'heavy' : 'medium'
+      return strongEvidenceSignal || /\b(current practice|comparison|comparative|benchmark|prior work|substantiat)/.test(text)
+        ? (lengthTier === 'short' ? 'light' : 'medium')
+        : 'none'
     case 'evaluation':
-      return strongEvidenceSignal ? 'medium' : 'light'
+      return strongEvidenceSignal || /\b(validation|validated|benchmark|indicator reliability|measurement validity|evaluation evidence)\b/.test(text)
+        ? (lengthTier === 'long' ? 'medium' : 'light')
+        : 'none'
     case 'impact_outcomes':
-      return strongEvidenceSignal || lengthTier !== 'short' ? 'medium' : 'light'
+      return strongEvidenceSignal || /\b(outcome evidence|impact evidence|effect size|baseline|quantif|statistics?)\b/.test(text)
+        ? (lengthTier === 'long' ? 'medium' : 'light')
+        : 'none'
     case 'summary':
-      if (veryTight) return 'none'
-      if (shortAnswer && narrativePromptSignal) return 'light'
-      return strongEvidenceSignal ? 'medium' : 'light'
+      if (citationSection) return strongEvidenceSignal || lengthTier === 'long' ? 'medium' : 'light'
+      return strongEvidenceSignal ? 'light' : 'none'
     case 'objectives':
-      if (veryTight || (shortAnswer && !evidenceSignal)) return 'none'
       return evidenceSignal ? 'light' : 'none'
     case 'alignment':
-      if (callFitOnly && !narrativePromptSignal) return 'none'
-      if (shortAnswer && narrativePromptSignal) return 'light'
+      if (callFitOnly) return 'none'
       return evidenceSignal ? 'light' : 'none'
     case 'workplan':
-      if (!evidenceSignal && operationalSignal && !narrativePromptSignal) return 'none'
-      if (shortAnswer && narrativePromptSignal) return 'light'
+      if (!evidenceSignal || operationalSignal) return 'none'
       return shortAnswer ? 'none' : 'light'
     case 'sustainability':
-      return strongEvidenceSignal ? 'medium' : 'light'
+      return strongEvidenceSignal ? 'light' : 'none'
     case 'risk':
       return evidenceSignal ? 'light' : 'none'
     default:
-      if (veryTight && !evidenceSignal) return 'none'
-      if (shortAnswer && narrativePromptSignal) return 'light'
+      if (citationSection) return lengthTier === 'long' || strongEvidenceSignal ? 'medium' : 'light'
       if (evidenceSignal) return shortAnswer ? 'light' : 'medium'
-      return shortAnswer ? 'none' : 'light'
+      return 'none'
   }
+}
+
+export function isGrantBlueprintSectionCitationWorthy(section: GrantBlueprintPlanSection): boolean {
+  if (!isGrantSectionAutoDraftable(section)) return false
+  const semantic = resolveGrantSectionSemantic(section)
+  return inferCitationEvidenceNeed(section, semantic) !== 'none'
 }
 
 function classifyGrantSectionSemantic(section: GrantBlueprintPlanSection): GrantSectionSemantic {
@@ -617,17 +629,15 @@ function targetDimensionCount(
   }
 
   if (evidenceNeed === 'light') {
-    return lengthTier === 'long' ? 3 : 2
+    return lengthTier === 'short' ? 1 : 2
   }
   if (evidenceNeed === 'medium') {
     if (lengthTier === 'short') return 2
-    if (lengthTier === 'medium') return 3
-    return 4
+    return 3
   }
 
   if (lengthTier === 'short') return 3
-  if (lengthTier === 'medium') return 4
-  return 5
+  return 4
 }
 
 function suggestCitationCount(
@@ -640,15 +650,45 @@ function suggestCitationCount(
   if (evidenceNeed === 'none' || dimensions.length === 0) return 0
 
   const lengthTier = resolveSectionLengthTier(section)
-  const densityBonus = dimensions.some((item) => item.type === 'gap' || item.type === 'comparative') ? 1 : 0
-  const evidenceBonus = evidenceNeed === 'heavy' ? 2 : evidenceNeed === 'medium' ? 1 : 0
-  const lengthBonus = lengthTier === 'long' ? 2 : lengthTier === 'medium' ? 1 : 0
-  const semanticBonus = ['problem_need', 'methodology', 'innovation'].includes(semantic) ? 1 : 0
+  const densityBonus = semantic === 'problem_need' && dimensions.some((item) => item.type === 'gap' || item.type === 'comparative') ? 1 : 0
+  const evidenceBonus = evidenceNeed === 'heavy' ? 1 : 0
+  const lengthBonus = lengthTier === 'long' ? 1 : 0
   const shortAnswerPenalty = section.sectionType === 'short_answer' ? 1 : 0
-  const rawCount = dimensions.length + densityBonus + evidenceBonus + lengthBonus + semanticBonus - shortAnswerPenalty
+  const rawCount = dimensions.length + densityBonus + evidenceBonus + lengthBonus - shortAnswerPenalty
   const minCount = section.sectionType === 'short_answer' ? 1 : 2
-  const maxCount = section.sectionType === 'short_answer' ? 4 : 10
+  const maxCount = section.sectionType === 'short_answer' ? 3 : 7
   return Math.max(minCount, Math.min(maxCount, rawCount))
+}
+
+function resolveCitationModeForEnrichedSection(input: {
+  section: GrantBlueprintPlanSection
+  evidenceNeed: CitationEvidenceNeed
+  dimensions: string[]
+  suggestedCitationCount?: number | null
+}): GrantCitationMode {
+  const section = input.section
+  if (!isGrantSectionAutoDraftable(section)) {
+    return 'no_citations'
+  }
+
+  const currentMode = normalizeGrantCitationMode(section.citationMode, {
+    sectionType: section.sectionType,
+    workflowMode: section.workflowMode,
+    suggestedCitationCount: input.suggestedCitationCount,
+  })
+  if (currentMode === 'no_citations') {
+    return 'no_citations'
+  }
+
+  if (
+    input.evidenceNeed !== 'none'
+    && input.dimensions.length > 0
+    && (input.suggestedCitationCount || 0) > 0
+  ) {
+    return 'mapped_evidence'
+  }
+
+  return 'direct_draft'
 }
 
 function shouldRegenerateDimensions(section: GrantBlueprintPlanSection): boolean {
@@ -1397,6 +1437,7 @@ function enrichOneSection(
   if (!isGrantSectionAutoDraftable(section)) {
     return {
       ...section,
+      citationMode: 'no_citations',
       grantSemantic: null,
       prepContextBlock: null,
       authoritativePrepBundle: null,
@@ -1434,7 +1475,12 @@ function enrichOneSection(
   })
   const regenerate = mode === 'generate' || shouldRegenerateDimensions(section)
   const evidenceNeed = inferCitationEvidenceNeed(section, semantic)
-  const generatedDimensions = evidenceNeed === 'none'
+  const citationDisabled = normalizeGrantCitationMode(section.citationMode, {
+    sectionType: section.sectionType,
+    workflowMode: section.workflowMode,
+    suggestedCitationCount: section.suggestedCitationCount,
+  }) === 'no_citations'
+  const generatedDimensions = evidenceNeed === 'none' || citationDisabled
     ? []
     : buildSeedDimensions({
         ...section,
@@ -1446,7 +1492,9 @@ function enrichOneSection(
   const mustCover = dedupeStrings(section.mustCover)
   const dimensions = regenerate
     ? generatedDimensions.map((item) => item.dimension)
-    : dedupeStrings(section.dimensions || [])
+    : evidenceNeed === 'none' || citationDisabled
+      ? []
+      : dedupeStrings(section.dimensions || [])
   const dimensionTyping = regenerate
     ? Object.fromEntries(generatedDimensions.map((item) => [item.dimension, item.type] as const))
     : buildDimensionTyping(
@@ -1456,7 +1504,15 @@ function enrichOneSection(
       )
   const suggestedCitationCount = regenerate
     ? suggestCitationCount(section, generatedDimensions, evidenceNeed, semantic)
-    : section.suggestedCitationCount ?? section.thematicBlueprint?.suggestedCitationCount
+    : evidenceNeed === 'none' || citationDisabled
+      ? 0
+      : section.suggestedCitationCount ?? section.thematicBlueprint?.suggestedCitationCount
+  const citationMode = resolveCitationModeForEnrichedSection({
+    section,
+    evidenceNeed,
+    dimensions,
+    suggestedCitationCount,
+  })
 
   const thematicBlueprint: GrantThematicBlueprint = buildGrantThematicBlueprint({
     mustCover,
@@ -1468,6 +1524,7 @@ function enrichOneSection(
 
   return {
     ...section,
+    citationMode,
     mustCover,
     mustAvoid: thematicBlueprint.mustAvoid,
     dimensions,

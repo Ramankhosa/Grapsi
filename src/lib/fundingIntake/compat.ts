@@ -148,6 +148,21 @@ function buildDerivedAssets(details: IntakeJobDetailsLike): FundingImportJobView
     })
   }
 
+  if (details.job.input_type === 'json' && details.job.raw_text) {
+    assets.push({
+      id: `${details.job.id}:json-upload`,
+      kind: 'RAW_TEXT',
+      fileName: String(fetchMetadata.json_upload && typeof fetchMetadata.json_upload === 'object'
+        ? (fetchMetadata.json_upload as Record<string, unknown>).original_name || 'funding-intake.json'
+        : 'funding-intake.json'),
+      mimeType: 'application/json',
+      byteSize: Buffer.byteLength(details.job.raw_text, 'utf8'),
+      storagePath: null,
+      textPreview: details.job.raw_text.slice(0, 400),
+      createdAt,
+    })
+  }
+
   if (details.job.input_type === 'pdf' && details.job.raw_text) {
     assets.push({
       id: `${details.job.id}:extracted-text`,
@@ -206,6 +221,10 @@ function serializeDate(value: Date | string | null | undefined): string | null {
 function mapInputType(inputType: FundingInputType | null | undefined): FundingImportJobView['inputType'] {
   if (inputType === 'pdf') {
     return 'file'
+  }
+
+  if (inputType === 'json') {
+    return 'text'
   }
 
   return inputType === 'text' ? 'text' : 'url'

@@ -349,11 +349,13 @@ export function buildReviewerReadinessReport(input: {
         missingStatistics: !/\b\d[\d,]*(?:\.\d+)?\s*(%|percent|million|billion|thousand|participants|patients|schools|states|years)?\b/i.test(content),
         missingComparison: !/\b(compared with|versus|relative to|unlike|current practice|standard of care|benchmark|existing (approach|program|method)|alternative)\b/i.test(content),
         missingFeasibility: !/\b(feasib|pilot|implemented|deployment|achieved|validated|prototype|delivery readiness|operational readiness)\b/i.test(content),
+        missingMetric: !/\b(metric|indicator|milestone|target|baseline|endpoint|success criteri(?:on|a)|kpi|measur(?:e|able)|outcome measure|deliverable)\b/i.test(content),
       }
     : {
         missingStatistics: false,
         missingComparison: false,
         missingFeasibility: false,
+        missingMetric: false,
       }
 
   const score = Math.max(
@@ -366,6 +368,7 @@ export function buildReviewerReadinessReport(input: {
     - (competitiveSignals.missingStatistics ? 6 : 0)
     - (competitiveSignals.missingComparison ? 6 : 0)
     - (competitiveSignals.missingFeasibility ? 6 : 0)
+    - (competitiveSignals.missingMetric ? 5 : 0)
   )
 
   const strengths = dedupeGrantStrings([
@@ -374,6 +377,7 @@ export function buildReviewerReadinessReport(input: {
     ...(!competitiveSignals.missingStatistics ? ['Draft contains concrete statistics rather than generic burden language.'] : []),
     ...(!competitiveSignals.missingComparison ? ['Draft names a comparison point or current-practice contrast.'] : []),
     ...(!competitiveSignals.missingFeasibility ? ['Draft includes explicit feasibility evidence or implementation precedent.'] : []),
+    ...(!competitiveSignals.missingMetric ? ['Draft includes a measurable metric, milestone, target, or deliverable.'] : []),
   ], 6)
 
   const risks = dedupeGrantStrings([
@@ -382,6 +386,7 @@ export function buildReviewerReadinessReport(input: {
     ...(competitiveSignals.missingStatistics ? ['Reviewer-facing statistics are missing or too vague.'] : []),
     ...(competitiveSignals.missingComparison ? ['The draft does not name a concrete comparison point or current-practice contrast.'] : []),
     ...(competitiveSignals.missingFeasibility ? ['Feasibility is asserted without explicit precedent or validation language.'] : []),
+    ...(competitiveSignals.missingMetric ? ['The draft does not give reviewers a measurable metric, milestone, target, or deliverable to score.'] : []),
   ], 8)
 
   const recommendedActions = dedupeGrantStrings([
@@ -392,6 +397,7 @@ export function buildReviewerReadinessReport(input: {
     ...(competitiveSignals.missingStatistics ? ['Add at least one concrete burden, prevalence, cost, or baseline statistic.'] : []),
     ...(competitiveSignals.missingComparison ? ['Name the current practice, comparator, or benchmark the proposal is differentiating from.'] : []),
     ...(competitiveSignals.missingFeasibility ? ['Add explicit feasibility evidence, pilot precedent, or validation language.'] : []),
+    ...(competitiveSignals.missingMetric ? ['Add a measurable success metric, milestone, baseline, target, or deliverable the reviewer can score.'] : []),
   ], 8)
 
   return {
@@ -403,6 +409,7 @@ export function buildReviewerReadinessReport(input: {
       ...(competitiveSignals.missingStatistics ? ['Specific statistics are missing.'] : []),
       ...(competitiveSignals.missingComparison ? ['Named comparisons are missing.'] : []),
       ...(competitiveSignals.missingFeasibility ? ['Feasibility evidence is missing.'] : []),
+      ...(competitiveSignals.missingMetric ? ['Measurable metrics or milestones are missing.'] : []),
     ], 12),
     recommendedActions,
     generatedAt: new Date().toISOString(),

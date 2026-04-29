@@ -7,6 +7,7 @@ import { prisma } from '@/lib/prisma'
 import { getTrialUserInfo } from '@/lib/trial-plan-service'
 import { createMeteringService } from './metering'
 import { createReservationService } from './reservation'
+import { isPlanAgnosticFeature } from './plan-features'
 
 const POLICY_LIMITS_CACHE_TTL_MS = 30_000
 
@@ -101,8 +102,9 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
         const planFeature = plan.planFeatures.find(
           pf => pf.feature.code === request.featureCode
         )
+        const isPlanAgnostic = isPlanAgnosticFeature(request.featureCode)
 
-        if (!planFeature) {
+        if (!planFeature && !isPlanAgnostic) {
           return {
             allowed: false,
             reason: `Feature '${request.featureCode}' not available in plan '${plan.code}'`
@@ -123,7 +125,7 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
         let quotaRemaining: any = { monthly: 999999, daily: 999999 }
 
         // 6. Check quota limits (skip for trial users)
-        if (!isTrialUser) {
+        if (!isTrialUser && planFeature) {
           const quotaCheck = await this.checkQuota(request)
           if (!quotaCheck.allowed) {
             return {

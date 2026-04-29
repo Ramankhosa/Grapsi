@@ -14,6 +14,16 @@ import {
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
 import { isGrantPrepSessionReady } from '@/lib/grantPrep/sessionState'
+import { buildGrantWorkspaceUrl } from '@/lib/grants/workspaceNavigation'
+import { getGrantPrepPostLaunchImpact } from '@/lib/grants/prepImpact'
+
+function resolveWorkspaceLaunchUrl(input: {
+  projectId: string
+  grantSessionId?: string | null
+  prepStatus?: string | null
+}) {
+  return buildGrantWorkspaceUrl(input)
+}
 
 async function resolveProjectGrantPrepSession(input: {
   projectId: string
@@ -50,13 +60,21 @@ async function resolveProjectGrantPrepSession(input: {
     if (
       grantSession &&
       (directPrepSession.grant_session_id !== grantSession.id ||
-        directPrepSession.papsi_launch_url !== `/projects/${input.projectId}/grants/${grantSession.id}/workspace?stage=GRANTMENTOR`)
+        directPrepSession.papsi_launch_url !== resolveWorkspaceLaunchUrl({
+          projectId: input.projectId,
+          grantSessionId: grantSession.id,
+          prepStatus: directPrepSession.status,
+        }))
     ) {
       directPrepSession = await prisma.grantPrepSession.update({
         where: { id: directPrepSession.id },
         data: {
           grant_session_id: grantSession.id,
-          papsi_launch_url: `/projects/${input.projectId}/grants/${grantSession.id}/workspace?stage=GRANTMENTOR`,
+          papsi_launch_url: resolveWorkspaceLaunchUrl({
+            projectId: input.projectId,
+            grantSessionId: grantSession.id,
+            prepStatus: directPrepSession.status,
+          }),
         },
         include: {
           messages: {
@@ -146,7 +164,11 @@ async function resolveProjectGrantPrepSession(input: {
         where: { id: grantPrepSession.id },
         data: {
           grant_session_id: grantSession.id,
-          papsi_launch_url: `/projects/${input.projectId}/grants/${grantSession.id}/workspace?stage=GRANTMENTOR`,
+          papsi_launch_url: resolveWorkspaceLaunchUrl({
+            projectId: input.projectId,
+            grantSessionId: grantSession.id,
+            prepStatus: grantPrepSession.status,
+          }),
         },
         include: {
           messages: {
@@ -275,5 +297,10 @@ export async function GET(
       approvedGuidelineRevision: serverContext.draftingContext?.approvedGuidelineRevision || null,
       approvedTemplate: serverContext.draftingContext?.approvedTemplate || null,
     },
+    postLaunchImpact: await getGrantPrepPostLaunchImpact({
+      tenantId: user.tenantId,
+      grantSessionId: grantSession?.id || grantPrepSession.grant_session_id,
+      prepSessionId: grantPrepSession.id,
+    }),
   })
 }

@@ -9,6 +9,7 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import type { GrantPrepStageKey } from '@/lib/grantPrep/types'
 import { normalizeGrantPrepEngagementMode } from '@/lib/grantPrep/types'
+import { buildGrantWorkspaceUrl } from '@/lib/grants/workspaceNavigation'
 
 const createGrantSchema = z.object({
   fundingCallId: z.string().min(1).optional().nullable(),
@@ -95,7 +96,15 @@ export async function GET(
   ])
 
   return NextResponse.json({
-    prepSessions: prepSessions.map((session) => serializeGrantPrepSession(session)),
+    prepSessions: prepSessions.map((session) => ({
+      ...serializeGrantPrepSession(session),
+      papsi_launch_url:
+        buildGrantWorkspaceUrl({
+          projectId,
+          grantSessionId: session.grant_session_id,
+          prepStatus: session.status,
+        }) || session.papsi_launch_url,
+    })),
     grantSessions,
   })
 }

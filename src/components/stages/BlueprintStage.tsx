@@ -180,7 +180,7 @@ interface Blueprint {
 interface BlueprintStageProps {
   sessionId: string;
   authToken: string | null;
-  onSessionUpdated?: (session: any) => void;
+  onSessionUpdated?: (session: any) => void | Promise<void>;
   onNavigateToStage?: (stage: string) => void;
   grantContext?: {
     grantSessionId: string;
@@ -535,17 +535,6 @@ const GRANT_BLUEPRINT_FILTERS: Array<{ key: GrantBlueprintFilter; label: string 
   { key: 'evidence', label: 'Evidence mapping sections' },
 ];
 
-const GRANT_EVIDENCE_SEMANTICS = new Set([
-  'summary',
-  'problem_need',
-  'methodology',
-  'innovation',
-  'evaluation',
-  'impact_outcomes',
-  'sustainability',
-  'risk',
-]);
-
 function isGrantAppDraftSection(section: SectionPlanItem): boolean {
   return (
     section.workflowMode === 'app_draft'
@@ -557,30 +546,14 @@ function isGrantManualSection(section: SectionPlanItem): boolean {
   return section.workflowMode === 'team_manual' || section.workflowMode === 'app_support' || !isGrantAppDraftSection(section);
 }
 
-function hasEvidenceSemantics(section: SectionPlanItem): boolean {
-  const text = [
-    section.sectionKey,
-    section.label,
-    section.purpose,
-    section.reviewerIntent || '',
-    section.grantSemantic || '',
-    section.templateIntent || '',
-  ].join(' ').toLowerCase();
-
-  return (
-    (typeof section.grantSemantic === 'string' && GRANT_EVIDENCE_SEMANTICS.has(section.grantSemantic))
-    || /\b(summary|introduction|problem|need|background|rationale|methodology|literature|review|state of the art|innovation|evaluation|outcome|impact|sustainab|risk|evidence|citation|baseline|gap|validation|comparative)\b/.test(text)
-  );
-}
-
 function isGrantEvidenceMappingSection(section: SectionPlanItem): boolean {
+  const hasLegacyEvidencePlan = !section.citationMode
+    && ((section.dimensions?.length || 0) > 0 || (section.suggestedCitationCount || 0) > 0);
   return (
     isGrantAppDraftSection(section)
     && (
       section.citationMode === 'mapped_evidence'
-      || hasEvidenceSemantics(section)
-      || (section.dimensions?.length || 0) > 0
-      || (section.suggestedCitationCount || 0) > 0
+      || hasLegacyEvidencePlan
     )
   );
 }
@@ -679,6 +652,7 @@ function GrantBlueprintApplicationView({
 }: GrantBlueprintApplicationViewProps) {
   const [filter, setFilter] = useState<GrantBlueprintFilter>('all');
   const [editingFoundation, setEditingFoundation] = useState(false);
+  const [expandedSectionKey, setExpandedSectionKey] = useState<string | null>(null);
   const [foundationDraft, setFoundationDraft] = useState({
     thesisStatement: blueprint.thesisStatement || '',
     centralObjective: blueprint.centralObjective || '',
@@ -718,6 +692,12 @@ function GrantBlueprintApplicationView({
       : filter === 'evidence'
         ? evidenceSections
         : orderedSections;
+
+  useEffect(() => {
+    if (!expandedSectionKey) return;
+    if (visibleSections.some((section) => section.sectionKey === expandedSectionKey)) return;
+    setExpandedSectionKey(null);
+  }, [expandedSectionKey, visibleSections]);
 
   const saveFoundation = () => {
     onSaveFoundation({
@@ -769,7 +749,7 @@ function GrantBlueprintApplicationView({
               className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-950"
             >
               {generatingDimensions ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              Generate dimensions for literature review
+              Generate citation dimensions
             </Button>
             <Button
               onClick={onToggleFreeze}
@@ -928,6 +908,10 @@ function GrantBlueprintApplicationView({
               index={orderedSections.findIndex((item) => item.sectionKey === section.sectionKey)}
               visibleIndex={index}
               isLocked={isLocked}
+              isExpanded={expandedSectionKey === section.sectionKey}
+              onToggleExpanded={() => setExpandedSectionKey((current) =>
+                current === section.sectionKey ? null : section.sectionKey
+              )}
               onUpdateSection={onUpdateSection}
             />
           ))}
@@ -942,12 +926,16 @@ function GrantApplicationSectionCard({
   index,
   visibleIndex,
   isLocked,
+  isExpanded,
+  onToggleExpanded,
   onUpdateSection,
 }: {
   section: SectionPlanItem;
   index: number;
   visibleIndex: number;
   isLocked: boolean;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
   onUpdateSection: (sectionKey: string, updated: SectionPlanItem) => void;
 }) {
   const evidenceMapped = isGrantEvidenceMappingSection(section);
@@ -996,9 +984,27 @@ function GrantApplicationSectionCard({
 
   return (
     <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-sky-50 to-emerald-50 px-5 py-4 dark:border-slate-800 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900">
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        onClick={onToggleExpanded}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onToggleExpanded();
+          }
+        }}
+        className={`cursor-pointer bg-gradient-to-r from-slate-50 via-sky-50 to-emerald-50 px-5 py-4 transition-colors hover:from-slate-100 hover:via-sky-100 hover:to-emerald-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900 dark:hover:from-slate-900 dark:hover:via-slate-900 dark:hover:to-slate-800 ${
+          isExpanded ? 'border-b border-slate-200 dark:border-slate-800' : ''
+        }`}
+      >
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
+          <div className="flex min-w-0 gap-3">
+            <div className="pt-1 text-slate-500 dark:text-slate-400">
+              {isExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
+            </div>
+            <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-slate-900 px-2.5 py-1 text-xs font-bold text-white dark:bg-white dark:text-slate-950">
                 {index + 1 || visibleIndex + 1}
@@ -1030,6 +1036,7 @@ function GrantApplicationSectionCard({
               {section.grantSemantic ? <span>Semantic: {section.grantSemantic.replace(/_/g, ' ')}</span> : null}
               {section.sourceTemplatePointer ? <span>Template: {section.sourceTemplatePointer}</span> : null}
             </div>
+            </div>
           </div>
 
           <div className="rounded-xl border border-white/70 bg-white/70 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-200 lg:max-w-sm">
@@ -1044,6 +1051,7 @@ function GrantApplicationSectionCard({
         </div>
       </div>
 
+      {isExpanded ? (
       <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
         <div className="space-y-5">
           <div className="grid gap-4 md:grid-cols-2">
@@ -1191,6 +1199,7 @@ function GrantApplicationSectionCard({
           </div>
         </aside>
       </div>
+      ) : null}
     </article>
   );
 }
@@ -1835,7 +1844,7 @@ function SectionNode({ section, isFrozen, isFocused = false, onUpdateSection }: 
                               </p>
                             </div>
                             <select
-                              value={section.citationMode || 'mapped_evidence'}
+                              value={section.citationMode || 'direct_draft'}
                               onChange={(event) => pushSectionUpdate({ ...section, citationMode: event.target.value as SectionPlanItem['citationMode'] })}
                               disabled={isFrozen}
                               className="rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-60 dark:border-sky-800 dark:bg-slate-900 dark:text-slate-200"
@@ -2238,7 +2247,7 @@ export default function BlueprintStage({
       if (!sessionRes.ok) return;
       const sessionData = await sessionRes.json();
       if (sessionData.session) {
-        onSessionUpdated(sessionData.session);
+        await onSessionUpdated(sessionData.session);
       }
     } catch {
       // Best-effort refresh for the surrounding workspace shell.
@@ -2379,7 +2388,7 @@ export default function BlueprintStage({
         type: 'success',
         title: 'Dimensions generated',
         message:
-          `Literature-review dimensions were generated only for citation-mapped grant sections. ` +
+          `Citation dimensions were generated only for sections marked for mapped evidence. ` +
           `Source: ${data?.generationDiagnostics?.source || 'unknown'}.`
       });
     } catch (err) {

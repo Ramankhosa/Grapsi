@@ -89,6 +89,9 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gemini-1.5-flash-002': 'gemini',
     // Google - Image Generation Models
     'gemini-3.0-nano-banana': 'gemini',
+    'gemini-3.1-flash': 'gemini',
+    'gemini-3.1-flash-preview': 'gemini',
+    'gemini-3-flash-preview': 'gemini',
     'gemini-3-pro-preview': 'gemini',
     'gemini-3-pro-preview-thinking': 'gemini',
     'gemini-3-pro-image-preview': 'gemini',

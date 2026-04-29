@@ -461,7 +461,8 @@ export class LLMGateway {
     'gemini-2.0-flash-lite', 'gemini-2.0-flash-lite-001',
     'gemini-1.5-pro', 'gemini-1.5-pro-002',
     'gemini-1.5-flash', 'gemini-1.5-flash-002',
-    'gemini-3.0-nano-banana', 'gemini-3-pro-preview', 'gemini-3-pro-preview-thinking', 'gemini-3-pro-image-preview',
+    'gemini-3.0-nano-banana', 'gemini-3.1-flash', 'gemini-3.1-flash-preview', 'gemini-3-flash-preview',
+    'gemini-3-pro-preview', 'gemini-3-pro-preview-thinking', 'gemini-3-pro-image-preview',
   ])
 
   /**
@@ -563,6 +564,9 @@ export class LLMGateway {
       'gemini-1.5-flash': { maxInput: 1000000, maxOutput: 8192 },
       'gemini-1.5-flash-002': { maxInput: 1000000, maxOutput: 8192 },
       'gemini-3.0-nano-banana': { maxInput: 1000000, maxOutput: 8192 },
+      'gemini-3.1-flash': { maxInput: 1048576, maxOutput: 65536 },
+      'gemini-3.1-flash-preview': { maxInput: 1048576, maxOutput: 65536 },
+      'gemini-3-flash-preview': { maxInput: 1048576, maxOutput: 65536 },
       'gemini-3-pro-preview': { maxInput: 2000000, maxOutput: 16384 },
       'gemini-3-pro-preview-thinking': { maxInput: 2000000, maxOutput: 16384 },
       'gemini-3-pro-image-preview': { maxInput: 1000000, maxOutput: 8192 },

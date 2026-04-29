@@ -4,9 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import {
   AlertCircle,
-  ArrowLeft,
-  ArrowRight,
   ChevronLeft,
+  X,
 } from 'lucide-react'
 
 import GrantPrepPage from '../prep/page'
@@ -19,6 +18,7 @@ import PaperFigurePlannerStage from '@/components/stages/PaperFigurePlannerStage
 import PaperVerticalStageNav from '@/components/stages/PaperVerticalStageNav'
 import LoadingBird from '@/components/ui/loading-bird'
 import { useAuth } from '@/lib/auth-context'
+import { withGrantWorkspaceStage } from '@/lib/grants/workspaceNavigation'
 
 const STAGES = [
   { key: 'GRANTMENTOR', label: 'GrantMentor' },
@@ -129,6 +129,41 @@ function serializeGrantSectionContent(section: GrantSection): string {
   }
 }
 
+function hasMeaningfulDraftContent(value: unknown): boolean {
+  return String(value || '').replace(/<[^>]*>/g, ' ').trim().length > 0
+}
+
+function hasMeaningfulStructuredDraft(value: unknown): boolean {
+  if (value === null || typeof value === 'undefined') return false
+  if (typeof value === 'string') return hasMeaningfulDraftContent(value)
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    if (Array.isArray(record.items)) {
+      return record.items.some((item) => {
+        const entry = item as Record<string, unknown>
+        return Boolean(entry.completed) || hasMeaningfulDraftContent(entry.notes)
+      })
+    }
+    if (Array.isArray(record.rows)) {
+      return record.rows.length > 0
+    }
+    return Object.keys(record).length > 0
+  }
+  return true
+}
+
+function hasMeaningfulGrantSectionDraft(section: GrantSection): boolean {
+  if (hasMeaningfulDraftContent(section.content)) return true
+  return (section.structuredResponses || []).some((response) =>
+    hasMeaningfulStructuredDraft(response.responseJson)
+  )
+}
+
+function isFreezeBlueprintLockMessage(value: string | null): boolean {
+  return Boolean(value && value.includes('Freeze the grant blueprint'))
+}
+
 export default function GrantWorkspacePage() {
   const params = useParams()
   const router = useRouter()
@@ -144,6 +179,7 @@ export default function GrantWorkspacePage() {
   const [currentStage, setCurrentStage] = useState<StageKey>('GRANTMENTOR')
   const [hasHydratedStage, setHasHydratedStage] = useState(false)
   const [stageWarning, setStageWarning] = useState<string | null>(null)
+  const [stageLockDialog, setStageLockDialog] = useState<string | null>(null)
   const [selectedSection, setSelectedSection] = useState<string>('')
   const [sectionFilter, setSectionFilter] = useState<'all' | 'app_draft' | 'team_draft' | 'evidence'>('all')
   const [navCollapsed, setNavCollapsed] = useState(false)
@@ -169,11 +205,12 @@ export default function GrantWorkspacePage() {
     ? currentStage
     : 'GRANTMENTOR'
 
-  const loadWorkspace = useCallback(async () => {
+  const loadWorkspace = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!projectId || !grantId || !user) return
 
+    const showLoading = options.showLoading !== false
     try {
-      setLoading(true)
+      if (showLoading) setLoading(true)
       const grantResponse = await authFetch(`/api/projects/${projectId}/grants/${grantId}/blueprint`)
       const grantPayload = await grantResponse.json().catch(() => ({})) as GrantWorkspaceResponse & { message?: string }
       if (!grantResponse.ok) {
@@ -181,6 +218,10 @@ export default function GrantWorkspacePage() {
       }
 
       setWorkspace(grantPayload)
+      if (grantPayload.blueprint?.status === 'FROZEN') {
+        setStageWarning((current) => isFreezeBlueprintLockMessage(current) ? null : current)
+        setStageLockDialog((current) => isFreezeBlueprintLockMessage(current) ? null : current)
+      }
 
       const draftingSessionId = grantPayload.grantSession?.draftingSessionId
       if (draftingSessionId) {
@@ -195,12 +236,52 @@ export default function GrantWorkspacePage() {
       }
 
       setError(null)
+      if (grantPayload.grantSession?.draftingSessionId) {
+        setStageWarning((current) => {
+          if (
+            current === 'Preparing the grant blueprint workspace...' ||
+            current === 'Preparing the grant blueprint workspace. Try opening the blueprint again in a moment.' ||
+            current === 'Cover the core GrantMentor points, then open the blueprint.'
+          ) {
+            return null
+          }
+          return current
+        })
+      }
+      return grantPayload
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to load grant workspace')
+      return null
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }, [authFetch, grantId, projectId, user])
+
+  const handleGrantPrepWorkspaceLaunched = useCallback(async (payload: {
+    grantSessionId?: string | null
+    launchUrl?: string | null
+  }) => {
+    const targetGrantId = payload.grantSessionId || workspace?.grantSession?.id || grantId
+    const targetUrl = withGrantWorkspaceStage(
+      payload.launchUrl || `/projects/${projectId}/grants/${targetGrantId}/workspace`,
+      'BLUEPRINT'
+    )
+
+    if (targetGrantId !== grantId) {
+      router.push(targetUrl)
+      return
+    }
+
+    const refreshed = await loadWorkspace({ showLoading: false })
+    if (!refreshed?.grantSession?.draftingSessionId) {
+      setStageWarning('Preparing the grant blueprint workspace. Try opening the blueprint again in a moment.')
+      return
+    }
+
+    setStageWarning(null)
+    setCurrentStage('BLUEPRINT')
+    router.replace(targetUrl, { scroll: false })
+  }, [grantId, loadWorkspace, projectId, router, workspace?.grantSession?.id])
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -334,6 +415,35 @@ export default function GrantWorkspacePage() {
     return combinedSections
   }, [shadowSession?.paperSections, workspace?.blueprint?.sectionDrafts])
 
+  const draftedGrantContentCount = useMemo(() => {
+    const sectionKeys = new Set<string>()
+
+    for (const section of workspace?.blueprint?.sectionDrafts || []) {
+      if (hasMeaningfulGrantSectionDraft(section)) {
+        sectionKeys.add(section.sectionKey)
+      }
+    }
+
+    for (const section of Array.isArray(shadowSession?.paperSections) ? shadowSession.paperSections : []) {
+      const sectionKey = String(section?.sectionKey || '').trim()
+      if (sectionKey && hasMeaningfulDraftContent(section?.content)) {
+        sectionKeys.add(sectionKey)
+      }
+    }
+
+    return sectionKeys.size
+  }, [shadowSession?.paperSections, workspace?.blueprint?.sectionDrafts])
+
+  const prepPostLaunchImpact = useMemo(() => ({
+    hasLaunchedWorkspace: Boolean(workspace?.blueprint || workspace?.grantSession?.draftingSessionId),
+    hasBlueprint: Boolean(workspace?.blueprint),
+    blueprintStatus: workspace?.blueprint?.status || null,
+    hasDraftContent: draftedGrantContentCount > 0,
+    draftedSectionCount: draftedGrantContentCount,
+    appDraftContentCount: 0,
+    manualDraftContentCount: 0,
+  }), [draftedGrantContentCount, workspace?.blueprint, workspace?.grantSession?.draftingSessionId])
+
   const navSession = useMemo(() => {
     return {
       ...(shadowSession || {}),
@@ -368,6 +478,13 @@ export default function GrantWorkspacePage() {
 
   const draftingSessionId = workspace?.grantSession.draftingSessionId || null
   const hasFrozenBlueprint = workspace?.blueprint?.status === 'FROZEN'
+  const hasBlueprint = Boolean(workspace?.blueprint)
+
+  useEffect(() => {
+    if (!hasFrozenBlueprint) return
+    setStageWarning((current) => isFreezeBlueprintLockMessage(current) ? null : current)
+    setStageLockDialog((current) => isFreezeBlueprintLockMessage(current) ? null : current)
+  }, [hasFrozenBlueprint])
 
   const hydrateShadowSession = useCallback(async (sessionId: string) => {
     const shadowResponse = await authFetch(`/api/papers/${sessionId}`)
@@ -377,6 +494,11 @@ export default function GrantWorkspacePage() {
     }
     setShadowSession(shadowPayload.session || null)
   }, [authFetch])
+
+  const handleBlueprintSessionUpdated = useCallback(async (session: any) => {
+    setShadowSession(session || null)
+    await loadWorkspace({ showLoading: false })
+  }, [loadWorkspace])
 
   const launchBlueprintFromGrantMentor = useCallback(async () => {
     if (!workspace?.launchPreview?.canLaunch || launchingBlueprint) {
@@ -416,7 +538,7 @@ export default function GrantWorkspacePage() {
       case 'GRANTMENTOR':
         return null
       case 'BLUEPRINT':
-        if (!draftingSessionId && !workspace?.launchPreview?.canLaunch) {
+        if (!draftingSessionId && !hasBlueprint && !workspace?.launchPreview?.canLaunch) {
           return 'Cover the core GrantMentor points, then open the blueprint.'
         }
         return null
@@ -440,28 +562,43 @@ export default function GrantWorkspacePage() {
       default:
         return null
     }
-  }, [citationsCount, deepCandidatesCount, draftingSessionId, hasFrozenBlueprint, workspace?.launchPreview?.canLaunch])
+  }, [citationsCount, deepCandidatesCount, draftingSessionId, hasBlueprint, hasFrozenBlueprint, workspace?.launchPreview?.canLaunch])
 
   const handleNavigateToStage = useCallback(async (stageKey: string) => {
     const nextStage = stageKey as StageKey
     const lockReason = getStageLockReason(nextStage)
     if (lockReason) {
-      setStageWarning(lockReason)
+      setStageWarning(null)
+      setStageLockDialog(lockReason)
       return
     }
 
     if (nextStage === 'BLUEPRINT' && !draftingSessionId) {
-      const launched = await launchBlueprintFromGrantMentor()
-      if (!launched) return
+      if (workspace?.blueprint) {
+        const refreshed = await loadWorkspace({ showLoading: false })
+        if (!refreshed?.grantSession?.draftingSessionId) {
+          setStageWarning('Preparing the grant blueprint workspace. Try opening the blueprint again in a moment.')
+          return
+        }
+      } else {
+        const launched = await launchBlueprintFromGrantMentor()
+        if (!launched) return
+      }
     }
 
     setStageWarning(null)
+    setStageLockDialog(null)
     setCurrentStage(nextStage)
     router.replace(`/projects/${projectId}/grants/${grantId}/workspace?stage=${nextStage}`, { scroll: false })
-  }, [draftingSessionId, getStageLockReason, grantId, launchBlueprintFromGrantMentor, projectId, router])
+  }, [draftingSessionId, getStageLockReason, grantId, launchBlueprintFromGrantMentor, loadWorkspace, projectId, router, workspace?.blueprint])
 
   useEffect(() => {
     if (!hasHydratedStage || resolvedCurrentStage !== 'BLUEPRINT' || draftingSessionId) return
+    if (hasBlueprint) {
+      setStageWarning('Preparing the grant blueprint workspace...')
+      void loadWorkspace({ showLoading: false })
+      return
+    }
     if (workspace?.launchPreview?.canLaunch && !launchingBlueprint && !autoLaunchAttemptedRef.current) {
       autoLaunchAttemptedRef.current = true
       void launchBlueprintFromGrantMentor()
@@ -470,20 +607,14 @@ export default function GrantWorkspacePage() {
     setStageWarning('Cover the core GrantMentor points, then open the blueprint.')
   }, [
     draftingSessionId,
+    hasBlueprint,
     hasHydratedStage,
     launchingBlueprint,
     launchBlueprintFromGrantMentor,
+    loadWorkspace,
     resolvedCurrentStage,
     workspace?.launchPreview?.canLaunch,
   ])
-
-  const { prev, next } = (() => {
-    const index = visibleStageKeys.indexOf(resolvedCurrentStage)
-    return {
-      prev: index > 0 ? visibleStageKeys[index - 1] as StageKey : null,
-      next: index >= 0 && index < visibleStageKeys.length - 1 ? visibleStageKeys[index + 1] as StageKey : null,
-    }
-  })()
 
   if (authLoading || loading) {
     return (
@@ -608,6 +739,14 @@ export default function GrantWorkspacePage() {
             </div>
           ) : null}
 
+          {draftedGrantContentCount > 0 && resolvedCurrentStage === 'BLUEPRINT' ? (
+            <div
+              className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            >
+              Drafted grant content already exists in {draftedGrantContentCount} section{draftedGrantContentCount === 1 ? '' : 's'}. Prep and blueprint edits are allowed, but review affected drafted sections afterward.
+            </div>
+          ) : null}
+
           <div
             className={
               resolvedCurrentStage === 'GRANTMENTOR'
@@ -617,7 +756,10 @@ export default function GrantWorkspacePage() {
           >
             {resolvedCurrentStage === 'GRANTMENTOR' ? (
               <GrantPrepEmbedModeProvider embedded={true}>
-                <GrantPrepPage />
+                <GrantPrepPage
+                  onWorkspaceLaunched={handleGrantPrepWorkspaceLaunched}
+                  postLaunchImpactOverride={prepPostLaunchImpact}
+                />
               </GrantPrepEmbedModeProvider>
             ) : null}
 
@@ -628,7 +770,7 @@ export default function GrantWorkspacePage() {
                   authToken={token}
                   projectId={projectId}
                   grantSessionId={grantId}
-                  onSessionUpdated={setShadowSession}
+                  onSessionUpdated={handleBlueprintSessionUpdated}
                   onNavigateToStage={handleNavigateToStage}
                 />
               ) : (
@@ -691,29 +833,60 @@ export default function GrantWorkspacePage() {
         </main>
       </div>
 
-      <div className="fixed bottom-6 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
-        {prev ? (
-          <button
-            type="button"
-            onClick={() => void handleNavigateToStage(prev)}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-lg hover:border-slate-300"
+      {stageLockDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="grant-stage-lock-title"
+            aria-describedby="grant-stage-lock-message"
+            className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-5 shadow-2xl"
           >
-            <ArrowLeft className="h-4 w-4" />
-            <span className="hidden sm:inline">{STAGES.find((stage) => stage.key === prev)?.label}</span>
-          </button>
-        ) : null}
-
-        {next ? (
-          <button
-            type="button"
-            onClick={() => void handleNavigateToStage(next)}
-            className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg hover:bg-blue-700"
-          >
-            <span className="hidden sm:inline">{STAGES.find((stage) => stage.key === next)?.label}</span>
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        ) : null}
-      </div>
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-full bg-rose-100 p-2 text-rose-600">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 id="grant-stage-lock-title" className="text-base font-semibold text-slate-950">
+                  Action needed
+                </h2>
+                <p id="grant-stage-lock-message" className="mt-2 text-sm leading-6 text-slate-700">
+                  {stageLockDialog}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStageLockDialog(null)}
+                className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              {!hasFrozenBlueprint && stageLockDialog.includes('Freeze the grant blueprint') ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStageLockDialog(null)
+                    void handleNavigateToStage('BLUEPRINT')
+                  }}
+                  className="inline-flex items-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  Go to Blueprint
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setStageLockDialog(null)}
+                className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -5,6 +5,7 @@ import type { FundingCallContext } from '../fundingContext';
 import { fundingGuidelineService } from '../fundingGuidelines/service';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { resolveProjectFundingContext } from '../fundingContext';
+import { buildGrantWorkspaceUrl } from '../grants/workspaceNavigation';
 import { GRANT_PREP_STAGE_BY_KEY } from './stageLibrary';
 import {
   buildFinalEnabledStageKeys,
@@ -599,8 +600,12 @@ export async function createOrReuseGrantPrepSession(input: {
     : null;
 
   const context = await resolveGrantPrepContext(input.projectId, input.user);
-  const resolveWorkspaceLaunchUrl = (grantSessionId: string | null) =>
-    grantSessionId ? `/projects/${input.projectId}/grants/${grantSessionId}/workspace?stage=GRANTMENTOR` : null;
+  const resolveWorkspaceLaunchUrl = (grantSessionId: string | null, prepStatus?: string | null) =>
+    buildGrantWorkspaceUrl({
+      projectId: input.projectId,
+      grantSessionId,
+      prepStatus,
+    });
   const resolvePrepUrl = (grantSessionId: string | null, sessionId: string) =>
     grantSessionId
       ? `/projects/${input.projectId}/grants/${grantSessionId}/prep`
@@ -621,7 +626,7 @@ export async function createOrReuseGrantPrepSession(input: {
 
   if (existingSession && !input.restart) {
     const effectiveGrantSessionId = linkedGrantSession?.id || existingSession.grant_session_id || null;
-    const launchUrl = resolveWorkspaceLaunchUrl(effectiveGrantSessionId);
+    const launchUrl = resolveWorkspaceLaunchUrl(effectiveGrantSessionId, existingSession.status);
     let hydrated = null;
 
     if (
@@ -710,7 +715,7 @@ export async function createOrReuseGrantPrepSession(input: {
       grant_session_id: linkedGrantSession?.id || null,
       template_revision_id: context.templateRevisionId,
       guideline_revision_id: context.guidelineRevisionId,
-      papsi_launch_url: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null),
+      papsi_launch_url: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null, 'active'),
       ...persistence,
       status: 'active',
     },
@@ -731,7 +736,7 @@ export async function createOrReuseGrantPrepSession(input: {
     reused: false,
     context,
     grantSessionId: linkedGrantSession?.id || null,
-    launchUrl: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null),
+    launchUrl: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null, 'active'),
     prepUrl: resolvePrepUrl(linkedGrantSession?.id || null, createdSession.id),
   };
 }

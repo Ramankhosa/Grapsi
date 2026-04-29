@@ -28,10 +28,10 @@ export function defaultGrantCitationMode(input: {
   }
 
   if (workflowMode !== 'app_draft') {
-    return 'direct_draft'
+    return 'no_citations'
   }
 
-  if (suggestedCitationCount === null || suggestedCitationCount > 0) {
+  if (suggestedCitationCount !== null && suggestedCitationCount > 0) {
     return 'mapped_evidence'
   }
 

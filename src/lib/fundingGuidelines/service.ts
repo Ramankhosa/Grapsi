@@ -255,7 +255,8 @@ type GuidelineExtractionSourceInput =
 
 async function resolveGuidelineSource(
   call: Awaited<ReturnType<typeof ensureFundingCall>>,
-  sourceInput?: GuidelineExtractionSourceInput
+  sourceInput?: GuidelineExtractionSourceInput,
+  operator?: IntakeOperator
 ) {
   if (!sourceInput || sourceInput.sourceMode === 'intake') {
     return {
@@ -291,7 +292,10 @@ async function resolveGuidelineSource(
     };
   }
 
-  const extracted = await extractCanonicalTextFromPdf(sourceInput.sourceFilePath);
+  const extracted = await extractCanonicalTextFromPdf(sourceInput.sourceFilePath, {
+    tenantId: operator?.tenantId || null,
+    userId: operator?.userId || null,
+  });
   return {
     rawText: extracted.rawText,
     normalizedText: extracted.normalizedText,
@@ -476,7 +480,7 @@ export class FundingGuidelineService {
     sourceInput?: GuidelineExtractionSourceInput
   ) {
     const { call, guideline } = await ensureGuidelineRecord(fundingCallId, operator);
-    const guidelineSource = await resolveGuidelineSource(call, sourceInput);
+    const guidelineSource = await resolveGuidelineSource(call, sourceInput, operator);
 
     const run = await prisma.fundingCallGuidelineRun.create({
       data: {

@@ -1,3 +1,4 @@
+import { generateJsonFromDeepSeek } from '../deepseekService';
 import { generateFromGemini } from '../geminiService';
 import { generateFromOpenAI } from '../openaiService';
 import { parseJsonResponse } from '../fundingIntake/utils';
@@ -131,6 +132,29 @@ ${(input.normalizedText || input.rawText || '').slice(0, 80000)}
 }
 
 async function callExtractor(prompt: string) {
+  if (process.env.DEEPSEEK_API_KEY) {
+    const model = process.env.FUNDING_GUIDELINE_DEEPSEEK_MODEL || 'deepseek-v4-pro';
+
+    try {
+      return await generateJsonFromDeepSeek({
+        prompt,
+        model,
+        systemPrompt: SYSTEM_INSTRUCTIONS,
+        maxTokens: 16000,
+        temperature: 0,
+      });
+    } catch (error) {
+      if (!process.env.GOOGLE_AI_API_KEY && !process.env.OPENAI_API_KEY) {
+        throw error;
+      }
+
+      console.warn(
+        '[Funding Guidelines] DeepSeek extraction failed, falling back to the next configured provider:',
+        error
+      );
+    }
+  }
+
   if (process.env.GOOGLE_AI_API_KEY) {
     const model = process.env.FUNDING_GUIDELINE_GEMINI_MODEL || 'gemini-2.5-pro';
     const rawText = await generateFromGemini(prompt, model);

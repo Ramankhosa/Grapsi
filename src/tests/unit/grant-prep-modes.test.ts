@@ -58,6 +58,8 @@ describe('grant prep prompt modes', () => {
     expect(prompt).toContain('reviewed hundreds of funding proposals')
     expect(prompt).toContain('Treat them as active reviewer constraints, not optional background.')
     expect(prompt).toContain('COMPETITIVE PROBING:')
+    expect(prompt).toContain('Concrete reviewer-useful facts to capture for this stage:')
+    expect(prompt).toContain('problem scale, burden, cost, prevalence, or baseline')
     expect(prompt).toContain('captureBasis to include "generic_placeholder"')
   })
 

@@ -36,7 +36,7 @@ const productOptions = [
   }
 ] as const
 
-function getAccentClasses(accent: 'emerald' | 'sky' | 'amber') {
+function getAccentClasses(accent: 'emerald' | 'sky' | 'amber' | 'violet') {
   if (accent === 'emerald') {
     return {
       iconWrap: 'bg-emerald-100 text-emerald-700',
@@ -52,6 +52,15 @@ function getAccentClasses(accent: 'emerald' | 'sky' | 'amber') {
       border: 'border-amber-200 hover:border-amber-300',
       glow: 'from-amber-100 via-white to-orange-50',
       link: 'text-amber-700'
+    }
+  }
+
+  if (accent === 'violet') {
+    return {
+      iconWrap: 'bg-violet-100 text-violet-700',
+      border: 'border-violet-200 hover:border-violet-300',
+      glow: 'from-violet-100 via-white to-fuchsia-50',
+      link: 'text-violet-700'
     }
   }
 
@@ -133,32 +142,26 @@ export default function UserProductChooser() {
                 </div>
               </Link>
 
-              <div
-                aria-disabled="true"
-                className="flex h-full flex-col rounded-3xl border border-slate-200 bg-slate-100/80 p-6 text-slate-500 md:col-span-2"
+              <Link
+                href="/reviewer"
+                className="group flex h-full flex-col rounded-3xl border bg-gradient-to-br from-violet-100 via-white to-fuchsia-50 p-6 transition-all duration-200 hover:-translate-y-1 hover:shadow-xl border-violet-200 hover:border-violet-300 md:col-span-2"
               >
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-200 text-slate-600">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
                     <ShieldCheck className="h-6 w-6" />
                   </div>
-                  <span className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                    Coming soon
-                  </span>
+                  <ArrowRight className="h-5 w-5 text-violet-700 transition-transform duration-200 group-hover:translate-x-1" />
                 </div>
                 <div className="mt-6">
-                  <h2 className="text-2xl font-semibold text-slate-800">Grant Reviewer</h2>
+                  <h2 className="text-2xl font-semibold text-slate-950">Grant Reviewer</h2>
                   <p className="mt-3 text-sm leading-6 text-slate-600">
-                    Review workflows are planned here, but this workspace is not available yet.
+                    Run structured section reviews, context summaries, revisions, and generate a final review report.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  disabled
-                  className="mt-8 inline-flex w-fit cursor-not-allowed items-center rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-400"
-                >
-                  Grant Reviewer unavailable
-                </button>
-              </div>
+                <div className="mt-8 inline-flex w-fit items-center text-sm font-semibold text-violet-700">
+                  Open Grant Reviewer
+                </div>
+              </Link>
             </div>
           </section>
 

@@ -5,6 +5,7 @@ import type { MeteringConfig, MeteringService, FeatureRequest, QuotaCheckResult,
 import { MeteringErrorUtils, MeteringError } from './errors'
 import { prisma } from '@/lib/prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER } from './cost-calculator'
+import { isPlanAgnosticFeature } from './plan-features'
 
 function getCurrentPeriod(type: 'DAILY' | 'MONTHLY'): { key: string, start: Date, end: Date } {
   const now = new Date()
@@ -26,6 +27,63 @@ function getCurrentPeriod(type: 'DAILY' | 'MONTHLY'): { key: string, start: Date
 }
 
 export function createMeteringService(config: MeteringConfig): MeteringService {
+  const writeUsageMeter = async (
+    reservation: any,
+    periodType: 'DAILY' | 'MONTHLY',
+    periodKey: string,
+    increment: number
+  ) => {
+    const meterKey = {
+      tenantId: reservation.tenantId,
+      featureId: reservation.featureId || null,
+      taskCode: reservation.taskCode || null,
+      periodType,
+      periodKey
+    }
+
+    const update = {
+      currentUsage: {
+        increment
+      },
+      lastUpdated: new Date()
+    }
+
+    const create = {
+      ...meterKey,
+      currentUsage: increment
+    }
+
+    if (reservation.featureId && reservation.taskCode) {
+      return prisma.usageMeter.upsert({
+        where: {
+          tenantId_featureId_taskCode_periodType_periodKey: {
+            tenantId: reservation.tenantId,
+            featureId: reservation.featureId,
+            taskCode: reservation.taskCode,
+            periodType,
+            periodKey
+          }
+        },
+        update,
+        create
+      })
+    }
+
+    const existing = await prisma.usageMeter.findFirst({
+      where: meterKey,
+      select: { id: true }
+    })
+
+    if (existing) {
+      return prisma.usageMeter.update({
+        where: { id: existing.id },
+        data: update
+      })
+    }
+
+    return prisma.usageMeter.create({ data: create })
+  }
+
   return {
     async recordUsage(reservationId: string, stats: UsageStats, userId?: string): Promise<MeteringResult> {
       try {
@@ -199,6 +257,10 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         })
 
         if (!planFeature) {
+          if (isPlanAgnosticFeature(request.featureCode)) {
+            return { allowed: true, remaining: { monthly: 999999, daily: 999999 } }
+          }
+
           return { allowed: false, remaining: { monthly: 0, daily: 0 } }
         }
 
@@ -215,12 +277,18 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           'DAILY'
         )
 
-        // Calculate remaining
-        const monthlyRemaining = Math.max(0, (planFeature.monthlyQuota || 0) - monthlyUsage)
-        const dailyRemaining = Math.max(0, (planFeature.dailyQuota || 0) - dailyUsage)
+        // Calculate remaining. A null quota means unlimited.
+        const monthlyRemaining = planFeature.monthlyQuota === null
+          ? 999999
+          : Math.max(0, planFeature.monthlyQuota - monthlyUsage)
+        const dailyRemaining = planFeature.dailyQuota === null
+          ? 999999
+          : Math.max(0, planFeature.dailyQuota - dailyUsage)
 
         // Check if quota exceeded
-        const allowed = monthlyRemaining > 0 && dailyRemaining > 0
+        const allowed =
+          (planFeature.monthlyQuota === null || monthlyRemaining > 0) &&
+          (planFeature.dailyQuota === null || dailyRemaining > 0)
 
         // Calculate reset time (monthly by default)
         const resetTime = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1)
@@ -289,66 +357,19 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
     },
 
     async updateUsageMeters(reservation: any, stats: UsageStats): Promise<void> {
+      const increment = stats.outputTokens || stats.apiCalls || 1
       const updates = []
 
       // Update monthly meter
       const monthlyPeriod = getCurrentPeriod('MONTHLY')
       updates.push(
-        prisma.usageMeter.upsert({
-          where: {
-            tenantId_featureId_taskCode_periodType_periodKey: {
-              tenantId: reservation.tenantId,
-              featureId: reservation.featureId,
-              taskCode: reservation.taskCode,
-              periodType: 'MONTHLY',
-              periodKey: monthlyPeriod.key
-            }
-          },
-          update: {
-            currentUsage: {
-              increment: stats.outputTokens || stats.apiCalls || 1
-            },
-            lastUpdated: new Date()
-          },
-          create: {
-            tenantId: reservation.tenantId,
-            featureId: reservation.featureId,
-            taskCode: reservation.taskCode,
-            periodType: 'MONTHLY',
-            periodKey: monthlyPeriod.key,
-            currentUsage: stats.outputTokens || stats.apiCalls || 1
-          }
-        })
+        writeUsageMeter(reservation, 'MONTHLY', monthlyPeriod.key, increment)
       )
 
       // Update daily meter
       const dailyPeriod = getCurrentPeriod('DAILY')
       updates.push(
-        prisma.usageMeter.upsert({
-          where: {
-            tenantId_featureId_taskCode_periodType_periodKey: {
-              tenantId: reservation.tenantId,
-              featureId: reservation.featureId,
-              taskCode: reservation.taskCode,
-              periodType: 'DAILY',
-              periodKey: dailyPeriod.key
-            }
-          },
-          update: {
-            currentUsage: {
-              increment: stats.outputTokens || stats.apiCalls || 1
-            },
-            lastUpdated: new Date()
-          },
-          create: {
-            tenantId: reservation.tenantId,
-            featureId: reservation.featureId,
-            taskCode: reservation.taskCode,
-            periodType: 'DAILY',
-            periodKey: dailyPeriod.key,
-            currentUsage: stats.outputTokens || stats.apiCalls || 1
-          }
-        })
+        writeUsageMeter(reservation, 'DAILY', dailyPeriod.key, increment)
       )
 
       await Promise.all(updates)
@@ -370,6 +391,8 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
     },
 
     async checkQuotaAlerts(tenantId: string, featureId?: string, taskCode?: any): Promise<void> {
+      if (!featureId) return
+
       try {
         // Get current usage
         const monthlyUsage = await this.getCurrentUsage(tenantId, featureId, 'MONTHLY')

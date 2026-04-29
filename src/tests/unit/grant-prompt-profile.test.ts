@@ -76,16 +76,38 @@ describe('grant prompt profile', () => {
     })
 
     expect(prompt).toContain('TASK: GRANT SECTION DRAFT')
+    expect(prompt).toContain('PROMPT PRECEDENCE:')
+    expect(prompt).toContain('Mapped citation evidence may support only the exact claims it substantiates.')
     expect(prompt).toContain('AUTHORITATIVE SECTION PREP POINTS:')
     expect(prompt).toContain('RELATED SECTION AWARENESS:')
     expect(prompt).toContain('REVIEWER POLISH RULES:')
     expect(prompt).toContain('PERSUASIVE PROSE RULES:')
     expect(prompt).toContain('BUDGET DISCIPLINE:')
     expect(prompt).toContain('CITATION ANCHOR RULES:')
+    expect(prompt).toContain('If no mapped citation supports a needed claim')
+    expect(prompt).toContain('Every [CITE:key] anchor must support the exact sentence claim it follows')
     expect(prompt).toContain('Write like an experienced grant writer, not an AI assistant.')
     expect(prompt).not.toContain('Q1 journal')
     expect(prompt).not.toContain('publication quality')
     expect(prompt).not.toContain('paper blueprint')
+  })
+
+  it('keeps direct-draft grant prompts from inventing citation anchors', async () => {
+    const prompt = await buildGrantDraftingPrompt({
+      pass: 'pass1',
+      outputMode: 'markdown',
+      sectionKey: 'team_plan',
+      displayLabel: 'Team Plan',
+      sectionType: 'short_answer',
+      templateIntent: 'team',
+      citationMode: 'direct_draft',
+      purpose: 'Explain who will deliver the work and why the team is credible.',
+    })
+
+    expect(prompt).toContain('PROMPT PRECEDENCE:')
+    expect(prompt).toContain('Direct-draft or no-citations mode: do not create [CITE:key] anchors')
+    expect(prompt).not.toContain('Q1 journal')
+    expect(prompt).not.toContain('publication quality')
   })
 
   it('builds a reviewer-polish pass2 prompt without paper-type publication guidance', async () => {

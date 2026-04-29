@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { AppProps } from 'next/app'
 import { Toaster } from 'react-hot-toast'
+import axios from 'axios'
 
 import { AuthProvider } from '@/lib/auth-context'
 import '@/app/globals.css'
@@ -49,10 +50,39 @@ function PagesAuthFetchBridge() {
   return null
 }
 
+function PagesAxiosAuthBridge() {
+  useEffect(() => {
+    const requestInterceptor = axios.interceptors.request.use((config) => {
+      if (typeof window === 'undefined') return config
+
+      const requestUrl = config.url || ''
+      const isApiRequest = requestUrl.startsWith('/api/') || requestUrl.startsWith(`${window.location.origin}/api/`)
+      if (!isApiRequest) return config
+
+      const token = window.localStorage.getItem('auth_token')
+      if (token) {
+        config.headers = config.headers || {}
+        if (!config.headers.Authorization) {
+          config.headers.Authorization = `Bearer ${token}`
+        }
+      }
+      config.withCredentials = config.withCredentials ?? true
+      return config
+    })
+
+    return () => {
+      axios.interceptors.request.eject(requestInterceptor)
+    }
+  }, [])
+
+  return null
+}
+
 export default function GrapsiPagesApp({ Component, pageProps }: AppProps) {
   return (
     <AuthProvider>
       <PagesAuthFetchBridge />
+      <PagesAxiosAuthBridge />
       <Toaster position="top-right" />
       <Component {...pageProps} />
     </AuthProvider>

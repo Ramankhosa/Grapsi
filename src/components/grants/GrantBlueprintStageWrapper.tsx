@@ -7,7 +7,7 @@ interface GrantBlueprintStageWrapperProps {
   authToken: string | null
   projectId: string
   grantSessionId: string
-  onSessionUpdated?: (session: any) => void
+  onSessionUpdated?: (session: any) => void | Promise<void>
   onNavigateToStage?: (stage: string) => void
 }
 

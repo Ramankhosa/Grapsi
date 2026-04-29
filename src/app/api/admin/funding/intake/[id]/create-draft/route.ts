@@ -89,6 +89,9 @@ export async function POST(
       templateRunId: successResult.templateRunId ?? null,
       templateAssetId: successResult.templateAssetId ?? null,
       templateExtractionError: successResult.templateExtractionError ?? null,
+      jsonGuidelineImported: successResult.jsonGuidelineImported ?? false,
+      jsonTemplateImported: successResult.jsonTemplateImported ?? false,
+      jsonImportSkippedReason: successResult.jsonImportSkippedReason ?? null,
     })
   } catch (error) {
     if (error instanceof z.ZodError) {

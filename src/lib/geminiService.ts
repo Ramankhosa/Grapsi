@@ -61,6 +61,8 @@ const getGeminiModelName = (modelName: string): string => {
     'gemini-2.5-pro-preview': 'gemini-2.5-pro-preview',
     'gemini-3-pro-preview': 'gemini-3-pro-preview',
     'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
+    'gemini-3.1-flash': 'gemini-3-flash-preview',
+    'gemini-3.1-flash-preview': 'gemini-3-flash-preview',
     'gemini-3-flash-preview': 'gemini-3-flash-preview',
   };
 

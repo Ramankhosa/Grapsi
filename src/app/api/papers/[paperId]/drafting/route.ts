@@ -5411,6 +5411,24 @@ async function generateDimensionProposal(params: {
   const grantContractBlock = formatGrantComplianceContractForPrompt(
     params.bundle.blueprintPromptContext?.grantSectionComplianceContract
   );
+  const grantBackedDimension = isGrantBackedPaperTypeCode(params.bundle.paperTypeCode);
+  const promptApplicationMode = grantBackedDimension ? 'grant' : 'paper';
+  const dimensionQualityTarget = grantBackedDimension
+    ? 'reviewer-ready grant prose for this dimension - no further polish pass will follow'
+    : 'publication-ready prose for this dimension - no further polish pass will follow';
+  const dimensionOpening = grantBackedDimension
+    ? 'You are refining and elevating ONE dimension of a grant proposal section for funding reviewers.'
+    : 'You are refining and elevating ONE dimension of a paper section to publication quality.';
+  const dimensionOutcomeSentence = grantBackedDimension
+    ? 'and ensure it reads as funder-aligned, reviewer-ready grant prose.'
+    : 'and ensure it reads as Q1 journal-quality prose.';
+  const dimensionFormattingRule = grantBackedDimension
+    ? 'FORMATTING: Output plain reviewer-facing proposal prose only. No bold (**), italic (*), or markdown emphasis. Headings are acceptable when the template needs them.'
+    : 'FORMATTING: Output plain academic prose only. No bold (**), italic (*), or markdown emphasis. Headings are acceptable.';
+  const dimensionQualityHeading = grantBackedDimension ? 'REVIEWER QUALITY:' : 'ARGUMENTATIVE QUALITY:';
+  const dimensionAudienceRule = grantBackedDimension
+    ? '- Write to convince a grant reviewer: foreground call fit, feasibility, evidence strength, scoring criteria, and concrete outcomes.'
+    : '- Write to convince an expert reviewer, not just to inform.';
   const budgetLines = [
     `DIMENSION ROLE: ${roleLabel}`,
     budget.sectionWordBudget
@@ -5499,7 +5517,7 @@ No mapped evidence exists for this dimension. STRICT RULES:
 - Preserve ALL evidence, citations, and factual claims from Pass 1.
 - UPGRADE: strengthen argument flow, sharpen prose, improve transitions, add analytical depth.
 - Use the TARGET DIMENSION EVIDENCE PACK to enrich citation integration — weave citations into arguments, not just append them.
-- The output should read as PUBLICATION-READY prose for this dimension — no further polish pass will follow.
+- The output should read as ${dimensionQualityTarget}.
 
 CONTINUITY:
 - Maintain seamless continuity with the previous accepted dimension — reference what was established and build on it.
@@ -5514,40 +5532,40 @@ CITATIONS:
 - If this dimension has REQUIRED CITATION KEYS, include each at least once.
 - Weave citations into the argument — seminal works get narrative treatment, supporting evidence gets parenthetical grouping.
 
-FORMATTING: Output plain academic prose only. No bold (**), italic (*), or markdown emphasis. Headings are acceptable.
+${dimensionFormattingRule}
 
-ARGUMENTATIVE QUALITY:
+${dimensionQualityHeading}
 - Each paragraph must advance the argument — information without analytical purpose is filler.
 - Open paragraphs with analytical claims, not descriptions.
 - Synthesize across sources: show what multiple studies collectively establish, not just what each says.
 - Where evidence conflicts, discuss the tension explicitly — this is where analytical depth lives.
 - Use analytical transitions ("This limitation motivates...", "The tension between X and Y suggests...") not mechanical ones ("Furthermore", "Additionally").
-- Write to convince an expert reviewer, not just to inform.`;
+${dimensionAudienceRule}`;
 
   const [evidenceGapTemplate, dimensionRulesTemplate, argumentativeArcBlock] = await Promise.all([
     isEvidenceGapDimension
       ? systemPromptTemplateService.resolveWithFallback(
-          { templateKey: TEMPLATE_KEYS.EVIDENCE_GAP_GUARDRAIL, applicationMode: 'paper' },
+          { templateKey: TEMPLATE_KEYS.EVIDENCE_GAP_GUARDRAIL, applicationMode: promptApplicationMode },
           FALLBACK_EVIDENCE_GAP
         )
       : Promise.resolve(''),
     systemPromptTemplateService.resolveWithFallback(
-      { templateKey: TEMPLATE_KEYS.DIMENSION_PROMPT_RULES, applicationMode: 'paper' },
+      { templateKey: TEMPLATE_KEYS.DIMENSION_PROMPT_RULES, applicationMode: promptApplicationMode },
       FALLBACK_DIMENSION_RULES
     ),
     systemPromptTemplateService.resolveWithFallback(
-      { templateKey: TEMPLATE_KEYS.ARGUMENTATIVE_ARC, applicationMode: 'paper' },
+      { templateKey: TEMPLATE_KEYS.ARGUMENTATIVE_ARC, applicationMode: promptApplicationMode },
       ''
     ),
   ]);
 
   const evidenceGapGuardrail = isEvidenceGapDimension ? `\n${evidenceGapTemplate}\n` : '';
 
-  const prompt = `You are refining and elevating ONE dimension of a paper section to publication quality.
+  const prompt = `${dimensionOpening}
 
 A Pass 1 evidence draft already exists. Your task is to take the relevant portion of that draft
 for this dimension and ELEVATE it: strengthen the argument, sharpen the prose, improve transitions,
-and ensure it reads as Q1 journal-quality prose. Preserve the evidence and citations from Pass 1
+${dimensionOutcomeSentence} Preserve the evidence and citations from Pass 1
 while upgrading the analytical depth and writing quality.
 
 SECTION KEY: ${params.sectionKey}
@@ -7723,11 +7741,17 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         let polishMetadata: { promptUsed?: string; tokensUsed?: number; completedAt: Date } | null = null;
 
         if (flowCompleted && sectionContentForPersist.trim()) {
-          // Dimension flow already produces publication-quality prose per dimension.
+          const dimensionFlowQualityLabel = isGrantBackedPaperTypeCode(paperTypeCode)
+            ? 'reviewer-ready grant prose'
+            : 'publication-quality prose';
+          // Dimension flow already produces final-quality prose per dimension.
           // Skip the separate Pass 2 polish — it adds latency and can flatten the
           // argumentative structure that dimension refinement carefully built.
           polishSummary = { attempted: false, applied: false };
-          console.log('[PaperDrafting] Dimension flow complete — skipping Pass 2 polish (dimensions already refined to publication quality)', { sectionKey });
+          console.log('[PaperDrafting] Dimension flow complete — skipping Pass 2 polish', {
+            sectionKey,
+            qualityTarget: dimensionFlowQualityLabel
+          });
         }
 
         // Pass 2B (Rhetorical Composer) is skipped for dimension flow.

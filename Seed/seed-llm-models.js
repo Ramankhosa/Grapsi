@@ -183,6 +183,21 @@ async function main() {
       isActive: true,
       isDefault: false
     },
+    // Google - Gemini 3 Flash text model, exposed internally as Gemini 3.1 Flash
+    // because the product family is 3.1 while the current API endpoint is
+    // gemini-3-flash-preview.
+    {
+      code: 'gemini-3.1-flash',
+      displayName: 'Gemini 3.1 Flash',
+      provider: 'google',
+      contextWindow: 1048576,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 50,     // $0.50
+      outputCostPer1M: 300,   // $3.00
+      isActive: true,
+      isDefault: false
+    },
     // Google - Gemini 3 Pro (Preview) + Thinking Alias
     // Note: "thinking" is enabled via a request parameter (thinking_level) and
     // represented in our system as a model-code alias for easy selection.
@@ -537,6 +552,18 @@ async function main() {
       isDefault: false
     },
     {
+      code: 'deepseek-v4-flash',
+      displayName: 'DeepSeek V4 Flash (Max Reasoning)',
+      provider: 'deepseek',
+      contextWindow: 1000000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 14,     // $0.14
+      outputCostPer1M: 28,    // $0.28
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'deepseek-chat',
       displayName: 'DeepSeek Chat',
       provider: 'deepseek',
@@ -716,6 +743,15 @@ async function main() {
   console.log('\n[seed] Step 2: Seeding workflow stages...\n');
 
   const stageSeeds = [
+    {
+      code: 'GRANT_PREP_CHAT',
+      displayName: 'Grant Prep Chatbot',
+      featureCode: 'GRANT_PREP',
+      sortOrder: 0,
+      description: 'Run the interactive Grant Prep coaching chat, marker extraction, response repair, and compact follow-up generation.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-3.1-flash', PRO_PLAN: 'gemini-3.1-flash', ENTERPRISE_PLAN: 'deepseek-v4-flash' }
+    },
     {
       code: 'PAPER_BLUEPRINT_GEN',
       displayName: 'Grant Blueprint Planning',
@@ -1146,7 +1182,7 @@ async function main() {
   }
 
   console.log('\n[done] LLM model and workflow stage seeding complete.');
-  console.log(`   - ${models.length} LLM models (new models unassigned)`);
+  console.log(`   - ${models.length} LLM models registered`);
   console.log(`   - ${stages.length} workflow stages`);
   console.log(`   - ${plans.length} plans configured with PRODUCTION token limits`);
 }

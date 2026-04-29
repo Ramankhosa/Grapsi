@@ -22,7 +22,7 @@ type JobDetails = {
   job: {
     id: string;
     status: string;
-    input_type: 'url' | 'text' | 'pdf';
+    input_type: 'url' | 'text' | 'pdf' | 'json';
     source_url: string | null;
     source_file_path: string | null;
     raw_text: string | null;
@@ -569,7 +569,7 @@ export default function FundingIntakeJobPage() {
       if (data.extractAllSkippedReason === 'merged_to_existing') {
         toast.success('Linked this intake job to the existing funding call.');
       } else if (extractAll) {
-        toast.success('Draft saved and extract-all started.');
+        toast.success(details?.job.input_type === 'json' ? 'Draft saved and JSON artifacts imported.' : 'Draft saved and extract-all started.');
       } else {
         toast.success('Draft saved.');
       }
@@ -579,6 +579,9 @@ export default function FundingIntakeJobPage() {
       }
       if (data.templateExtractionError) {
         toast.error(`Template extraction warning: ${data.templateExtractionError}`);
+      }
+      if (data.jsonGuidelineImported || data.jsonTemplateImported) {
+        toast.success(`Imported JSON artifacts:${data.jsonGuidelineImported ? ' guidelines' : ''}${data.jsonTemplateImported ? ' template' : ''}.`);
       }
 
       await loadDetails(false);
@@ -628,12 +631,15 @@ export default function FundingIntakeJobPage() {
         throw new Error(data.message || 'Failed to run extract all');
       }
 
-      toast.success('Extract all completed.');
+      toast.success(details?.job.input_type === 'json' ? 'JSON artifact import completed.' : 'Extract all completed.');
       if (data.guidelineExtractionError) {
         toast.error(`Guideline extraction warning: ${data.guidelineExtractionError}`);
       }
       if (data.templateExtractionError) {
         toast.error(`Template extraction warning: ${data.templateExtractionError}`);
+      }
+      if (data.jsonGuidelineImported || data.jsonTemplateImported) {
+        toast.success(`Imported JSON artifacts:${data.jsonGuidelineImported ? ' guidelines' : ''}${data.jsonTemplateImported ? ' template' : ''}.`);
       }
 
       await loadDetails(false);
@@ -1206,7 +1212,7 @@ export default function FundingIntakeJobPage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-slate-900">Source and extraction</h2>
-                <p className="mt-1 text-sm text-slate-600">Canonical source text for this intake job. URL, text, and PDF all feed the same review workspace. Guideline and template-specific extraction now happens only in their dedicated tabs.</p>
+                <p className="mt-1 text-sm text-slate-600">Canonical source text for this intake job. URL, text, PDF, and JSON all feed the same review workspace. Guideline and template-specific extraction happens in the dedicated tabs or from the uploaded JSON artifacts.</p>
               </div>
               <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
                 Latest extraction: {details.extraction ? formatDateTime(details.extraction.created_at) : 'Not available'}
@@ -1249,7 +1255,11 @@ export default function FundingIntakeJobPage() {
                 {callId && (
                   <div className="rounded-xl border border-slate-200 p-4">
                     <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Extraction actions</div>
-                    <p className="mt-2 text-sm text-slate-600">Run the full downstream pipeline from this original source, or move into the Guidelines and Template tabs to run those extractions separately with the intake source or override sources.</p>
+                    <p className="mt-2 text-sm text-slate-600">
+                      {details.job.input_type === 'json'
+                        ? 'Import guideline and template artifacts from the uploaded JSON, or move into the tabs to edit them directly.'
+                        : 'Run the full downstream pipeline from this original source, or move into the Guidelines and Template tabs to run those extractions separately with the intake source or override sources.'}
+                    </p>
                     <div className="mt-4 flex flex-wrap items-center gap-2">
                       <button
                         type="button"
@@ -1257,7 +1267,7 @@ export default function FundingIntakeJobPage() {
                         disabled={!canWriteFundingIntake || extractingAll}
                         className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {extractingAll ? 'Running...' : 'Extract All From Source'}
+                        {extractingAll ? 'Running...' : details.job.input_type === 'json' ? 'Import JSON Artifacts' : 'Extract All From Source'}
                       </button>
                       <span className="text-xs text-slate-500">Use the tabs above for guideline-only or template-only runs.</span>
                     </div>
@@ -1358,7 +1368,7 @@ export default function FundingIntakeJobPage() {
                   disabled={!canWriteFundingIntake || savingDraft || !['needs_review', 'draft_created'].includes(details.job.status)}
                   className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingDraft ? 'Saving...' : 'Save Draft + Extract All'}
+                  {savingDraft ? 'Saving...' : details.job.input_type === 'json' ? 'Save Draft + Import JSON' : 'Save Draft + Extract All'}
                 </button>
               </div>
             </div>

@@ -11,6 +11,7 @@ import {
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
 import { normalizeGrantPrepEngagementMode } from '@/lib/grantPrep/types'
+import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
 import {
   collectGlobalKeywords,
   isGrantPrepSessionReady,
@@ -54,15 +55,6 @@ export async function PUT(
       return NextResponse.json({ message: 'Archived Grant Prep sessions are read-only' }, { status: 400 })
     }
 
-    if (grantPrepSession.status === 'handed_off' || grantPrepSession.status === 'launched') {
-      return NextResponse.json(
-        {
-          message: 'This Grant Prep session is already in Grapsi. Start a new prep revision to make further changes.',
-        },
-        { status: 400 }
-      )
-    }
-
     const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
     const warning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
     const prepContext = inflateGrantPrepSessionContext(grantPrepSession, { warning })
@@ -80,7 +72,10 @@ export async function PUT(
       engagementMode: payload.engagementMode,
       warning,
     }
-    const nextStatus = isGrantPrepSessionReady(nextContext.stageStates, nextContext.engagementMode) ? 'ready' : 'active'
+    const nextStatus = resolveMutableGrantPrepStatus({
+      currentStatus: grantPrepSession.status,
+      isReady: isGrantPrepSessionReady(nextContext.stageStates, nextContext.engagementMode),
+    })
 
     await prisma.grantPrepSession.update({
       where: { id: grantPrepSession.id },

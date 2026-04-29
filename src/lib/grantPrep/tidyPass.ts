@@ -1,5 +1,5 @@
-import { generateFromGemini } from '../geminiService';
-import { getGrantPrepGeminiModel } from './model';
+import type { TenantContext } from '../metering';
+import { generateGrantPrepText } from './llm';
 import type { GrantPrepStageKey, GrantPrepStageState } from './types';
 import { recomputeStageState } from './sessionState';
 
@@ -89,6 +89,7 @@ function applyDeterministicCleanup(stageState: GrantPrepStageState) {
 export async function runGrantPrepStageTidyPass(input: {
   stageKey: GrantPrepStageKey;
   stageState: GrantPrepStageState;
+  tenantContext: TenantContext | null;
 }) {
   const cleanedStage = applyDeterministicCleanup(input.stageState);
   const capturedPoints = cleanedStage.points.filter((point) => asStringArray(point.capture?.keywords).length > 0);
@@ -112,7 +113,13 @@ export async function runGrantPrepStageTidyPass(input: {
   ].join('\n');
 
   try {
-    const raw = await generateFromGemini(prompt, getGrantPrepGeminiModel());
+    const raw = await generateGrantPrepText({
+      prompt,
+      tenantContext: input.tenantContext,
+      action: 'tidy_pass',
+      parameters: { temperature: 0.1 },
+      metadata: { stageKey: input.stageKey },
+    });
     const parsed = tryParseTidyResponse(raw);
     if (!parsed) {
       return cleanedStage;

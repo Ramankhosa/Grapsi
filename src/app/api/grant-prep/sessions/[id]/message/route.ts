@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { prisma } from '@/lib/prisma'
-import { generateFromGemini } from '@/lib/geminiService'
 import { assertGrantPrepProjectCapability, requireGrantPrepActor } from '@/lib/grantPrep/access'
-import { getGrantPrepGeminiModel } from '@/lib/grantPrep/model'
+import { generateGrantPrepText, resolveGrantPrepTenantContext } from '@/lib/grantPrep/llm'
 import { buildGrantPrepPrompt } from '@/lib/grantPrep/promptComposer'
 import {
   buildGrantPrepModeWarning,
@@ -38,12 +37,19 @@ import {
 import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary'
 import { runGrantPrepStageTidyPass } from '@/lib/grantPrep/tidyPass'
 import type { GrantPrepMarkerPayload, GrantPrepStageKey, GrantPrepStatus } from '@/lib/grantPrep/types'
+import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
 
 const messageSchema = z.object({
   content: z.string().min(1).max(12000),
   clientMessageId: z.string().min(1).max(120).optional(),
   stageKey: z.string().optional(),
 })
+
+type GrantPrepTextGenerator = (
+  prompt: string,
+  action?: string,
+  parameters?: Record<string, any>
+) => Promise<string>
 
 function countWords(value: string) {
   return value.trim().split(/\s+/).filter(Boolean).length
@@ -77,6 +83,7 @@ async function inferMarkerFromTurn(input: {
   allowedPointKeys: string[]
   userMessage: string
   assistantMessage: string
+  generateText: GrantPrepTextGenerator
 }) {
   const prompt = [
     'Return only one JSON object.',
@@ -100,11 +107,15 @@ async function inferMarkerFromTurn(input: {
     `Assistant message: ${input.assistantMessage}`,
   ].join('\n')
 
-  const raw = await generateFromGemini(prompt, getGrantPrepGeminiModel())
+  const raw = await input.generateText(prompt, 'marker_inference', { temperature: 0.2 })
   return tryParseJsonObject(raw)
 }
 
-async function compactAssistantMessage(message: string, hasAnswerOptions: boolean) {
+async function compactAssistantMessage(
+  message: string,
+  hasAnswerOptions: boolean,
+  generateText: GrantPrepTextGenerator
+) {
   const charLimit = hasAnswerOptions ? 2500 : 1200
   const wordLimit = hasAnswerOptions ? 500 : 200
 
@@ -137,7 +148,7 @@ async function compactAssistantMessage(message: string, hasAnswerOptions: boolea
       ].join('\n')
 
   try {
-    const compacted = await generateFromGemini(compactPrompt, getGrantPrepGeminiModel())
+    const compacted = await generateText(compactPrompt, 'assistant_compaction', { temperature: 0.2 })
     return compacted.trim() || message
   } catch {
     return message
@@ -175,15 +186,6 @@ export async function POST(
 
     if (grantPrepSession.status === 'archived') {
       return NextResponse.json({ message: 'Archived Grant Prep sessions are read-only' }, { status: 400 })
-    }
-
-    if (grantPrepSession.status === 'handed_off' || grantPrepSession.status === 'launched') {
-      return NextResponse.json(
-        {
-          message: 'This Grant Prep session is already in Grapsi. Start a new prep revision to make further changes.',
-        },
-        { status: 400 }
-      )
     }
 
     if (payload.clientMessageId) {
@@ -230,6 +232,26 @@ export async function POST(
       return NextResponse.json({ message: 'This stage is disabled for the current session' }, { status: 400 })
     }
 
+    const tenantContext = await resolveGrantPrepTenantContext(auth.actor.tenantId, auth.actor.id)
+    if (!tenantContext) {
+      return NextResponse.json(
+        { message: 'Grant Prep chatbot requires an active tenant plan before LLM usage can be metered.' },
+        { status: 403 }
+      )
+    }
+
+    const generateText: GrantPrepTextGenerator = (llmPrompt, action = 'chat', parameters) =>
+      generateGrantPrepText({
+        prompt: llmPrompt,
+        tenantContext,
+        action,
+        parameters,
+        metadata: {
+          sessionId: grantPrepSession.id,
+          stageKey,
+        },
+      })
+
     await prisma.grantPrepMessage.create({
       data: {
         session_id: grantPrepSession.id,
@@ -259,14 +281,14 @@ export async function POST(
       userMessage: payload.content,
     })
 
-    const rawResponse = await generateFromGemini(prompt, getGrantPrepGeminiModel())
+    const rawResponse = await generateText(prompt, 'chat_response')
 
     const parsed = parseGrantPrepResponse(rawResponse)
     const repaired = parsed.marker
       ? parsed
       : await tryRepairGrantPrepResponse(
           rawResponse,
-          (repairPrompt) => generateFromGemini(repairPrompt, getGrantPrepGeminiModel()),
+          (repairPrompt) => generateText(repairPrompt, 'marker_repair', { temperature: 0.2 }),
           {
             stageKey,
             userMessage: payload.content,
@@ -286,6 +308,7 @@ export async function POST(
         allowedPointKeys,
         userMessage: payload.content,
         assistantMessage: repaired.assistantMessage,
+        generateText,
       }))
 
     const finalWarning =
@@ -294,10 +317,13 @@ export async function POST(
         : repaired.warning
 
     const hasAnswerOptions = !!(inferredMarker?.suggestedAnswers && inferredMarker.suggestedAnswers.length > 0)
-    const assistantMessage = await compactAssistantMessage(repaired.assistantMessage, hasAnswerOptions)
+    const assistantMessage = await compactAssistantMessage(repaired.assistantMessage, hasAnswerOptions, generateText)
 
     let nextContext = prepContext
-    let nextStatus: GrantPrepStatus = isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode) ? 'ready' : 'active'
+    let nextStatus: GrantPrepStatus = resolveMutableGrantPrepStatus({
+      currentStatus: grantPrepSession.status,
+      isReady: isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode),
+    })
 
     if (inferredMarker && inferredMarker.stageKey === stageKey) {
       const allowedCrossStagePointKeys = getGrantPrepCrossStageAllowedPointKeys(
@@ -334,6 +360,7 @@ export async function POST(
           [stageKey]: await runGrantPrepStageTidyPass({
             stageKey,
             stageState: nextStageStates[stageKey],
+            tenantContext,
           }),
         }
       }
@@ -387,7 +414,10 @@ export async function POST(
         warning: prepWarning,
       }
 
-      nextStatus = isGrantPrepSessionReady(nextStageStates, prepContext.engagementMode) ? 'ready' : 'active'
+      nextStatus = resolveMutableGrantPrepStatus({
+        currentStatus: grantPrepSession.status,
+        isReady: isGrantPrepSessionReady(nextStageStates, prepContext.engagementMode),
+      })
       const persistence = normalizeGrantPrepForPersistence(nextContext)
       await prisma.grantPrepSession.update({
         where: { id: grantPrepSession.id },

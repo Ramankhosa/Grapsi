@@ -23,9 +23,11 @@ import type {
   PrepEngagementMode,
   PrepFundingContext,
   PrepHandoffPreview,
+  PrepPostLaunchImpact,
   PrepSession,
 } from '@/components/grantPrep/types';
 import { useAuth } from '@/lib/auth-context';
+import { withGrantWorkspaceStage } from '@/lib/grants/workspaceNavigation';
 
 const DESKTOP_SPLIT_KEY = 'grant-prep-desktop-split';
 const DESKTOP_CONTEXT_KEY = 'grant-prep-desktop-context-open';
@@ -81,7 +83,33 @@ function safeLocalStorageSet(key: string, value: string): void {
   } catch {}
 }
 
-export default function GrantPrepPage() {
+type GrantPrepPageProps = {
+  onWorkspaceLaunched?: (payload: {
+    grantSessionId?: string | null;
+    blueprintId?: string | null;
+    launchUrl?: string | null;
+  }) => Promise<void> | void;
+  postLaunchImpactOverride?: PrepPostLaunchImpact | null;
+};
+
+function buildPostLaunchWarning(impact: PrepPostLaunchImpact | null, sessionStatus?: string | null) {
+  if (!impact || sessionStatus === 'archived') return null;
+
+  if (impact.hasDraftContent) {
+    return `Drafted grant content already exists in ${impact.draftedSectionCount} section${impact.draftedSectionCount === 1 ? '' : 's'}. You can continue Grant Prep, but changes may require updating the blueprint and reviewing drafted sections.`;
+  }
+
+  if (impact.hasBlueprint || impact.hasLaunchedWorkspace) {
+    return 'A blueprint snapshot already exists. You can continue Grant Prep, but update the blueprint from the latest prep when you are done.';
+  }
+
+  return null;
+}
+
+export default function GrantPrepPage({
+  onWorkspaceLaunched,
+  postLaunchImpactOverride,
+}: GrantPrepPageProps = {}) {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -95,6 +123,7 @@ export default function GrantPrepPage() {
   const [prepContext, setPrepContext] = useState<PrepContext | null>(null);
   const [fundingContext, setFundingContext] = useState<PrepFundingContext | null>(null);
   const [draftingContext, setDraftingContext] = useState<PrepDraftingContext | null>(null);
+  const [postLaunchImpact, setPostLaunchImpact] = useState<PrepPostLaunchImpact | null>(null);
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -134,6 +163,7 @@ export default function GrantPrepPage() {
     setPrepContext(response.data.prepContext);
     setFundingContext(response.data.fundingContext);
     setDraftingContext(response.data.draftingContext);
+    setPostLaunchImpact(response.data.postLaunchImpact || null);
   }, [axiosConfig]);
 
   useEffect(() => {
@@ -204,6 +234,7 @@ export default function GrantPrepPage() {
         setPrepContext(response.data.prepContext);
         setFundingContext(response.data.fundingContext);
         setDraftingContext(response.data.draftingContext);
+        setPostLaunchImpact(response.data.postLaunchImpact || null);
       } catch (error) {
         toast.error(
           axios.isAxiosError(error) && error.response?.data?.message
@@ -259,9 +290,9 @@ export default function GrantPrepPage() {
 
   const activeStage = prepContext ? prepContext.stageStates[prepContext.activeStageKey] : null;
   const sessionLocked =
-    sessionData?.status === 'handed_off' ||
-    sessionData?.status === 'launched' ||
     sessionData?.status === 'archived';
+  const effectivePostLaunchImpact = postLaunchImpactOverride ?? postLaunchImpact;
+  const postLaunchWarning = buildPostLaunchWarning(effectivePostLaunchImpact, sessionData?.status);
   const pendingReviewCount = useMemo(() => {
     if (!prepContext) return 0;
     return Object.values(prepContext.stageStates).filter(
@@ -556,8 +587,10 @@ export default function GrantPrepPage() {
         axiosConfig()
       );
       toast.success('Local grant workspace created');
-      if (response.data.launchUrl) {
-        router.push(response.data.launchUrl);
+      if (onWorkspaceLaunched) {
+        await onWorkspaceLaunched(response.data);
+      } else if (response.data.launchUrl) {
+        router.push(withGrantWorkspaceStage(response.data.launchUrl, 'BLUEPRINT'));
       }
     } catch (error) {
       toast.error(
@@ -568,7 +601,7 @@ export default function GrantPrepPage() {
     } finally {
       setLaunching(false);
     }
-  }, [axiosConfig, overrideReason, router, sessionData?.id]);
+  }, [axiosConfig, onWorkspaceLaunched, overrideReason, router, sessionData?.id]);
 
   const handleJumpToKeyword = useCallback(
     async (keyword: string) => {
@@ -771,11 +804,16 @@ export default function GrantPrepPage() {
           )}
           style={{ minHeight: 0 }}
         >
-          {isEmbeddedGrantMentor && (prepContext.warning || sessionData.last_handoff_error) ? (
+          {isEmbeddedGrantMentor && (prepContext.warning || sessionData.last_handoff_error || postLaunchWarning) ? (
             <div className="mb-4 space-y-2">
               {prepContext.warning ? (
                 <div className="rounded-2xl border border-amber-100 bg-amber-50/80 px-4 py-3 text-sm text-amber-800">
                   {prepContext.warning}
+                </div>
+              ) : null}
+              {postLaunchWarning ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  {postLaunchWarning}
                 </div>
               ) : null}
               {sessionData.last_handoff_error ? (
@@ -783,6 +821,11 @@ export default function GrantPrepPage() {
                   Last launch issue: {sessionData.last_handoff_error}
                 </div>
               ) : null}
+            </div>
+          ) : null}
+          {!isEmbeddedGrantMentor && postLaunchWarning ? (
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {postLaunchWarning}
             </div>
           ) : null}
           {isEmbeddedGrantMentor && !effectiveChatFullscreen ? (

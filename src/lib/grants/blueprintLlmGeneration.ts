@@ -6,6 +6,7 @@ import { llmGateway, type TenantContext } from '@/lib/metering'
 import {
   buildGeneratedGrantProposalFoundation,
   enrichGrantBlueprintSections,
+  isGrantBlueprintSectionCitationWorthy,
   type GrantBlueprintEnrichmentContext,
 } from '@/lib/grants/blueprintEnrichment'
 import { normalizeGrantCitationMode } from '@/lib/grants/citationMode'
@@ -13,10 +14,14 @@ import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import type {
   GrantBlueprintPlanSection,
 } from '@/types/grant'
+import { GRANT_CITATION_MODES } from '@/types/grant'
 
 const sectionSchema = z.object({
   sectionKey: z.string().min(1),
+  citationMode: z.enum(GRANT_CITATION_MODES).optional(),
+  suggestedCitationCount: z.number().int().min(0).max(20).nullable().optional(),
   dimensions: z.array(z.string().min(1)).optional(),
+  citationDecisionRationale: z.string().optional(),
 })
 
 const responseSchema = z.object({
@@ -69,6 +74,11 @@ function compactSectionForDimensions(section: GrantBlueprintPlanSection) {
     purpose: compactText(section.purpose, 240),
     reviewerIntent: compactText(section.reviewerIntent, 180),
     wordBudget: section.wordBudget,
+    currentCitationMode: normalizeGrantCitationMode(section.citationMode, {
+      sectionType: section.sectionType,
+      workflowMode: section.workflowMode,
+      suggestedCitationCount: section.suggestedCitationCount,
+    }),
     suggestedCitationCount: section.suggestedCitationCount,
     sectionWritingPointers: compactList(section.mustCover, 4, 140),
     currentDimensions: compactList(section.dimensions || [], 6, 120),
@@ -106,7 +116,7 @@ function buildPrompt(input: {
   overrideReason?: string
 }): string {
   const sectionPayload = input.baseSectionPlan
-    .filter(isLlmDimensionEligibleSection)
+    .filter(isLlmCitationDecisionCandidateSection)
     .map(compactSectionForDimensions)
 
   const evaluationCriteria = input.context.guidelinePack?.evaluationCriteria
@@ -124,14 +134,22 @@ function buildPrompt(input: {
     ].filter(Boolean).join(' | '))
 
   return [
-    'You are generating literature dimensions for a grant blueprint.',
-    'The blueprint already exists. Your only job is to generate or refine dimensions for the eligible sections below.',
+    'You are generating citation decisions and literature dimensions for a grant blueprint.',
+    'The blueprint already exists. Your job is to decide which candidate sections need mapped citations and generate/refine dimensions only for those sections.',
     'Return JSON only. Do not include prose before or after the JSON.',
     'Preserve section keys and section ordering.',
-    'Do not add, remove, reorder, or rename sections. Do not output purpose, mustCover, mustAvoid, citationMode, counts, workflowMode, reviewer rules, or proposal foundation.',
-    'Dimensions are literature-searchable pillars that connect grant sections to literature search, paper mapping, evidence extraction, citations, and section drafting.',
+    'Do not add, remove, reorder, or rename sections. Do not output or modify purpose, mustCover, mustAvoid, workflowMode, reviewer rules, or proposal foundation.',
+    'For each candidate section, return citationMode and suggestedCitationCount.',
+    'Use citationMode="mapped_evidence" only when the section genuinely needs external literature, statistics, prior work, benchmarks, validation, or state-of-the-art support.',
+    'Use citationMode="direct_draft" when the section should be drafted from Grant Prep facts, section rules, and funding-call context without mapped citations.',
+    'Use citationMode="no_citations" only when citations would be inappropriate or explicitly excluded.',
+    'If citationMode is not "mapped_evidence", return suggestedCitationCount=0 and dimensions=[].',
+    'Dimensions are literature-searchable pillars for sections that genuinely need external evidence, paper mapping, evidence extraction, citations, and evidence-aware drafting.',
+    'Be selective: dimensions belong in introduction/background, literature review/state-of-the-art, problem/need definition, methodology, and other sections whose claims require external backing.',
+    'Do not create dimensions for simple summary, objectives, alignment, workplan, team, budget, attachment, or prep-only response sections unless they are explicitly present in the eligible payload.',
     'Avoid duplicating dimensions across sections unless the same literature pillar genuinely supports multiple sections.',
-    'Return 3-7 dimensions per section, fewer for short sections and more only when citation count or section scope justifies it.',
+    'Return 2-5 dimensions per section, fewer for short sections and more only when citation count or section scope justifies it.',
+    'For mapped_evidence sections, suggestedCitationCount should usually be 2-6; use 1-3 for short answers and never exceed 7.',
     'Every dimension must be a searchable concept or anchor point, not a final draft sentence. It should be searchable in paper titles, abstracts, methods, findings, or policy literature.',
     'Do not write generic headings such as "Evidence for the problem", "Methodology overview", "Background", or "Expected impact".',
     'Prefer pillar labels like "Role of nutrition in child physical development", "Current state of art of malnutrition in India", "Implementation feasibility of school-based nutrition programs", or "Validation methods for child growth and cognitive outcomes".',
@@ -152,23 +170,110 @@ function buildPrompt(input: {
     prepFacts.length > 0 ? `Prep-captured facts already committed in the workspace:\n${prepFacts.map((item) => `- ${item}`).join('\n')}` : '',
     '',
     'JSON schema:',
-    '{"sections":[{"sectionKey":"","dimensions":["literature-searchable evidence pillar"]}]}',
+    '{"sections":[{"sectionKey":"","citationMode":"mapped_evidence|direct_draft|no_citations","suggestedCitationCount":0,"dimensions":["literature-searchable evidence pillar"],"citationDecisionRationale":"short reason"}]}',
     '',
-    'Eligible sections:',
+    'Candidate sections:',
     JSON.stringify(sectionPayload, null, 2),
   ].filter(Boolean).join('\n')
 }
 
-function isLlmDimensionEligibleSection(section: GrantBlueprintPlanSection): boolean {
-  return (
-    isGrantSectionAutoDraftable(section)
-    && normalizeGrantCitationMode(section.citationMode, {
-      sectionType: section.sectionType,
-      workflowMode: section.workflowMode,
-      suggestedCitationCount: section.suggestedCitationCount,
-    }) === 'mapped_evidence'
-    && (section.suggestedCitationCount || 0) > 0
+function isLlmCitationDecisionCandidateSection(section: GrantBlueprintPlanSection): boolean {
+  if (!isGrantSectionAutoDraftable(section)) return false
+  return normalizeGrantCitationMode(section.citationMode, {
+    sectionType: section.sectionType,
+    workflowMode: section.workflowMode,
+    suggestedCitationCount: section.suggestedCitationCount,
+  }) !== 'no_citations'
+}
+
+function clampLlmCitationCount(
+  value: unknown,
+  section: GrantBlueprintPlanSection,
+  fallback: number
+): number {
+  const numeric = Number(value)
+  const raw = Number.isFinite(numeric) ? Math.round(numeric) : fallback
+  const max = section.sectionType === 'short_answer' ? 3 : 7
+  return Math.max(0, Math.min(max, raw))
+}
+
+function applyLlmCitationDecision(
+  section: GrantBlueprintPlanSection,
+  llmSection: z.infer<typeof sectionSchema> | undefined,
+  candidateSectionKeys: Set<string>
+): GrantBlueprintPlanSection {
+  if (!llmSection || !candidateSectionKeys.has(section.sectionKey)) {
+    return section
+  }
+
+  const requestedMode = normalizeGrantCitationMode(llmSection.citationMode, {
+    sectionType: section.sectionType,
+    workflowMode: section.workflowMode,
+    suggestedCitationCount: section.suggestedCitationCount,
+  })
+  const nextDimensions = cleanLlmList(llmSection.dimensions)
+
+  if (requestedMode !== 'mapped_evidence') {
+    return {
+      ...section,
+      citationMode: requestedMode === 'no_citations' ? 'no_citations' : 'direct_draft',
+      suggestedCitationCount: 0,
+      dimensions: [],
+      dimensionTyping: undefined,
+      thematicBlueprint: section.thematicBlueprint
+        ? {
+            ...section.thematicBlueprint,
+            dimensions: [],
+            dimensionTyping: undefined,
+            suggestedCitationCount: 0,
+          }
+        : section.thematicBlueprint,
+    }
+  }
+
+  const citationWorthy = isGrantBlueprintSectionCitationWorthy(section)
+  const fallbackCount = typeof section.suggestedCitationCount === 'number'
+    ? section.suggestedCitationCount
+    : Math.max(2, nextDimensions.length)
+  const suggestedCitationCount = clampLlmCitationCount(
+    llmSection.suggestedCitationCount,
+    section,
+    fallbackCount
   )
+
+  if (!citationWorthy || nextDimensions.length === 0 || suggestedCitationCount <= 0) {
+    return {
+      ...section,
+      citationMode: 'direct_draft',
+      suggestedCitationCount: 0,
+      dimensions: [],
+      dimensionTyping: undefined,
+      thematicBlueprint: section.thematicBlueprint
+        ? {
+            ...section.thematicBlueprint,
+            dimensions: [],
+            dimensionTyping: undefined,
+            suggestedCitationCount: 0,
+          }
+        : section.thematicBlueprint,
+    }
+  }
+
+  return {
+    ...section,
+    citationMode: 'mapped_evidence',
+    suggestedCitationCount,
+    dimensions: nextDimensions,
+    dimensionTyping: undefined,
+    thematicBlueprint: section.thematicBlueprint
+      ? {
+          ...section.thematicBlueprint,
+          dimensions: nextDimensions,
+          dimensionTyping: undefined,
+          suggestedCitationCount,
+        }
+      : section.thematicBlueprint,
+  }
 }
 
 function findDuplicateDimensions(sections: Array<{ dimensions?: string[] }>): string[] {
@@ -218,15 +323,15 @@ export async function generateGrantBlueprintWithLlm(input: {
   )
   const fallbackFoundation = input.proposalFoundationHint
     || buildGeneratedGrantProposalFoundation(fallbackSectionPlan, input.context)
-  const eligibleSectionKeys = new Set(
+  const candidateSectionKeys = new Set(
     fallbackSectionPlan
-      .filter(isLlmDimensionEligibleSection)
+      .filter(isLlmCitationDecisionCandidateSection)
       .map((section) => section.sectionKey)
   )
 
-  if (eligibleSectionKeys.size === 0) {
+  if (candidateSectionKeys.size === 0) {
     if (input.requireLlm) {
-      throw new Error('No citation-mapped grant sections are eligible for LLM literature-dimension generation.')
+      throw new Error('No grant sections are eligible for LLM citation-decision and dimension generation.')
     }
 
     return {
@@ -329,28 +434,16 @@ export async function generateGrantBlueprintWithLlm(input: {
     const llmSectionsByKey = new Map(parsed.data.sections.map((section) => [section.sectionKey, section]))
     const invalidSections = parsed.data.sections
       .map((section) => section.sectionKey)
-      .filter((sectionKey) => !eligibleSectionKeys.has(sectionKey))
+      .filter((sectionKey) => !candidateSectionKeys.has(sectionKey))
     const duplicateDimensions = findDuplicateDimensions(parsed.data.sections)
     const mergedPlan = enrichGrantBlueprintSections(
-      fallbackSectionPlan.map((section) => {
-        const llmSection = llmSectionsByKey.get(section.sectionKey)
-        if (!llmSection) {
-          return section
-        }
-
-        const eligible = eligibleSectionKeys.has(section.sectionKey)
-        const nextDimensions = cleanLlmList(llmSection.dimensions)
-        const useLlmDimensions = eligible && nextDimensions.length > 0
-
-        return {
-          ...section,
-          dimensions: useLlmDimensions
-            ? nextDimensions
-            : section.dimensions,
-          dimensionTyping: useLlmDimensions ? undefined : section.dimensionTyping,
-          thematicBlueprint: useLlmDimensions ? undefined : section.thematicBlueprint,
-        }
-      }),
+      fallbackSectionPlan.map((section) =>
+        applyLlmCitationDecision(
+          section,
+          llmSectionsByKey.get(section.sectionKey),
+          candidateSectionKeys
+        )
+      ),
       input.context,
       'hydrate'
     )

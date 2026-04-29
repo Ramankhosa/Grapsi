@@ -4,6 +4,7 @@
 import type { MeteringConfig, ReservationService, MeteringContext } from './types'
 import { MeteringErrorUtils, MeteringError } from './errors'
 import { prisma } from '@/lib/prisma'
+import { isPlanAgnosticFeature } from './plan-features'
 
 const STAGE_CONCURRENCY_OVERRIDES: Record<string, number> = {
   PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY: 10,
@@ -118,7 +119,7 @@ export function createReservationService(config: MeteringConfig): ReservationSer
         }
         const featureId = await getFeatureIdByCode(featureCode)
 
-        if (!featureId) {
+        if (!featureId && !isPlanAgnosticFeature(featureCode)) {
           throw new MeteringError('FEATURE_NOT_FOUND', `Feature '${context.featureCode}' not found`)
         }
 

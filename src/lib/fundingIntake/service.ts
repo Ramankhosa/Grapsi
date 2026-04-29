@@ -18,6 +18,14 @@ import {
   DRAFT_MINIMUM_FIELDS,
 } from './constants';
 import { extractCanonicalTextFromPdf, extractFundingOpportunity } from './extractor';
+import {
+  FUNDING_JSON_UPLOAD_EXTRACTOR_MODEL,
+  FUNDING_JSON_UPLOAD_EXTRACTOR_VERSION,
+  FUNDING_JSON_UPLOAD_PROMPT_VERSION,
+  parseFundingJsonUpload,
+  prepareFundingJsonIntake,
+  readPreparedFundingJsonArtifacts,
+} from './jsonIngestion';
 import type {
   DuplicateCandidateSummary,
   DomainDuplicateCandidateSummary,
@@ -296,6 +304,20 @@ function buildDraftingReadiness(call: { guideline_status?: string | null; templa
     templateApproved,
     issues,
   };
+}
+
+function mapFundingSourceType(inputType: string) {
+  switch (inputType) {
+    case 'pdf':
+      return 'FILE';
+    case 'text':
+      return 'TEXT';
+    case 'json':
+      return 'MANUAL';
+    case 'url':
+    default:
+      return 'URL';
+  }
 }
 
 function buildPublishWarnings(options: {
@@ -777,7 +799,7 @@ async function persistDraft(
     agencyName: deterministicDraftValues.agency_name || null,
     sourceUrl: job.source_url || null,
     summary: deterministicDraftValues.description || null,
-    sourceType: job.input_type === 'pdf' ? 'FILE' : job.input_type.toUpperCase(),
+    sourceType: mapFundingSourceType(job.input_type),
     deadlineAt: deterministicDraftValues.close_date ? new Date(deterministicDraftValues.close_date) : null,
     extractedFacts: latestExtraction?.extracted_json || null,
     normalizedMetadata: latestExtraction?.confidence_json || null,
@@ -889,11 +911,23 @@ class FundingIntakeService {
       }
     }
 
+    let preparedJsonIntake: ReturnType<typeof prepareFundingJsonIntake> | null = null;
+    let parsedJsonUpload: unknown = null;
+    if (input.inputType === 'json') {
+      if (!input.sourceJsonText || normalizeWhitespace(input.sourceJsonText).length < 2) {
+        throw new Error('JSON file is required for JSON intake');
+      }
+      parsedJsonUpload = parseFundingJsonUpload(input.sourceJsonText);
+      preparedJsonIntake = prepareFundingJsonIntake(parsedJsonUpload);
+    }
+
     const canonicalSource = input.inputType === 'url'
       ? normalizeUrl(input.sourceUrl!)
       : input.inputType === 'text'
         ? normalizeMultilineText(input.sourceText || '')
-        : input.sourceFile?.checksum || '';
+        : input.inputType === 'json'
+          ? JSON.stringify(parsedJsonUpload)
+          : input.sourceFile?.checksum || '';
     const sourceHash = input.inputType === 'pdf'
       ? String(input.sourceFile?.checksum || '')
       : hashText(canonicalSource);
@@ -928,6 +962,25 @@ class FundingIntakeService {
           checksum: input.sourceFile.checksum,
         }
       : null;
+    const jsonMetadata = input.inputType === 'json' && preparedJsonIntake
+      ? {
+          json_upload: {
+            ...preparedJsonIntake.metadata,
+            original_name: input.sourceJsonFile?.originalName || 'funding-intake.json',
+            mime: input.sourceJsonFile?.mimeType || 'application/json',
+            bytes: input.sourceJsonFile?.size || Buffer.byteLength(input.sourceJsonText || '', 'utf8'),
+            checksum: sourceHash,
+          },
+          json_artifacts: {
+            grant_template_json: preparedJsonIntake.template || null,
+            guideline_pack_json: preparedJsonIntake.guidelinePack || null,
+          },
+        }
+      : null;
+    const jsonRawText = input.inputType === 'json' ? input.sourceJsonText || '' : null;
+    const jsonNormalizedText = input.inputType === 'json'
+      ? preparedJsonIntake?.sourceText || normalizeMultilineText(input.sourceJsonText || '')
+      : null;
 
     const job = await prisma.fundingIntakeJob.create({
       data: {
@@ -937,9 +990,13 @@ class FundingIntakeService {
         source_text_hash: sourceHash,
         source_file_path: storedPdfPath,
         operator_notes: input.operatorNotes?.trim() || null,
-        raw_text: input.inputType === 'text' ? input.sourceText || null : null,
-        normalized_text: input.inputType === 'text' ? normalizeMultilineText(input.sourceText || '') : null,
-        fetch_metadata_json: pdfMetadata ? (pdfMetadata as any) : undefined,
+        raw_text: input.inputType === 'text' ? input.sourceText || null : jsonRawText,
+        normalized_text: input.inputType === 'text'
+          ? normalizeMultilineText(input.sourceText || '')
+          : input.inputType === 'json'
+            ? normalizeMultilineText(jsonNormalizedText || '')
+            : null,
+        fetch_metadata_json: pdfMetadata ? (pdfMetadata as any) : jsonMetadata ? (jsonMetadata as any) : undefined,
         status: 'queued',
       },
     });
@@ -1268,7 +1325,106 @@ class FundingIntakeService {
     });
   }
 
+  private async applyJsonArtifactsForFundingCall(job: any, fundingCallId: string, operator: IntakeOperator) {
+    const artifacts = readPreparedFundingJsonArtifacts(job.fetch_metadata_json);
+
+    if (artifacts.appliedFundingCallId === fundingCallId) {
+      return {
+        guidelineStatus: null,
+        guidelineRunId: null,
+        guidelineExtractionError: null,
+        templateStatus: null,
+        templateRunId: null,
+        templateAssetId: null,
+        templateExtractionError: null,
+        jsonGuidelineImported: false,
+        jsonTemplateImported: false,
+        jsonImportSkippedReason: 'already_applied',
+      };
+    }
+
+    let guidelineStatus: string | null = null;
+    let guidelineExtractionError: string | null = null;
+    let templateStatus: string | null = null;
+    let templateExtractionError: string | null = null;
+    let jsonGuidelineImported = false;
+    let jsonTemplateImported = false;
+
+    if (artifacts.guidelinePack) {
+      try {
+        const guidelineBundle = await fundingGuidelineService.updateGuideline(
+          fundingCallId,
+          artifacts.guidelinePack,
+          operator,
+          'Imported from JSON intake upload'
+        );
+        guidelineStatus = guidelineBundle?.guideline?.status || null;
+        jsonGuidelineImported = true;
+      } catch (error) {
+        guidelineExtractionError = error instanceof Error ? error.message : String(error);
+        console.error('[Funding Intake] JSON guideline import failed:', error);
+      }
+    }
+
+    if (artifacts.template) {
+      try {
+        const templateBundle = await fundingTemplateService.updateTemplate(
+          fundingCallId,
+          artifacts.template,
+          operator,
+          'Imported from JSON intake upload'
+        );
+        templateStatus = templateBundle?.template?.status || null;
+        jsonTemplateImported = true;
+      } catch (error) {
+        templateExtractionError = error instanceof Error ? error.message : String(error);
+        console.error('[Funding Intake] JSON template import failed:', error);
+      }
+    }
+
+    const metadata = readFetchMetadata(job.fetch_metadata_json);
+    await prisma.fundingIntakeJob.update({
+      where: { id: job.id },
+      data: {
+        fetch_metadata_json: ({
+          ...metadata,
+          json_artifacts_applied: {
+            funding_call_id: fundingCallId,
+            applied_at: new Date().toISOString(),
+            guideline_imported: jsonGuidelineImported,
+            template_imported: jsonTemplateImported,
+          },
+        } as any),
+      },
+    });
+
+    if (jsonGuidelineImported || jsonTemplateImported) {
+      await recordJobEvent(job.id, job.status, 'json_artifacts_imported', {
+        actorUserId: operator.userId,
+        previousStatus: job.status,
+        message: `Imported JSON artifacts:${jsonGuidelineImported ? ' guidelines' : ''}${jsonTemplateImported ? ' template' : ''}`,
+      });
+    }
+
+    return {
+      guidelineStatus,
+      guidelineRunId: null,
+      guidelineExtractionError,
+      templateStatus,
+      templateRunId: null,
+      templateAssetId: null,
+      templateExtractionError,
+      jsonGuidelineImported,
+      jsonTemplateImported,
+      jsonImportSkippedReason: !jsonGuidelineImported && !jsonTemplateImported ? 'no_json_artifacts' : null,
+    };
+  }
+
   private async runExtractAllForFundingCall(job: any, fundingCallId: string, operator: IntakeOperator) {
+    if (job.input_type === 'json') {
+      return this.applyJsonArtifactsForFundingCall(job, fundingCallId, operator);
+    }
+
     let guidelineStatus: string | null = null;
     let guidelineRunId: string | null = null;
     let guidelineExtractionError: string | null = null;
@@ -1414,7 +1570,7 @@ class FundingIntakeService {
       message: 'Draft funding call saved',
     });
 
-    const extractAllResult = extractAll
+    const extractAllResult = extractAll || details.job.input_type === 'json'
       ? await this.runExtractAllForFundingCall(details.job, fundingCall.id, operator)
       : {
           guidelineStatus: null,
@@ -1424,6 +1580,9 @@ class FundingIntakeService {
           templateRunId: null,
           templateAssetId: null,
           templateExtractionError: null,
+          jsonGuidelineImported: false,
+          jsonTemplateImported: false,
+          jsonImportSkippedReason: null,
         };
 
     return {
@@ -1431,7 +1590,7 @@ class FundingIntakeService {
       fundingCallId: fundingCall.id,
       requiredFieldsRemaining: [],
       duplicateResolutionState: details.duplicates.length > 0 ? 'resolved' : details.job.duplicate_status,
-      extractAllTriggered: extractAll,
+      extractAllTriggered: extractAll || details.job.input_type === 'json',
       ...extractAllResult,
     };
   }
@@ -1446,6 +1605,14 @@ class FundingIntakeService {
       let rawText = job.raw_text || '';
       let normalizedText = job.normalized_text || '';
       let fetchMetadata = job.fetch_metadata_json as Record<string, unknown> | null;
+      const submitterForLlm = await prisma.user.findUnique({
+        where: { id: job.submitted_by_user_id },
+        select: { id: true, email: true, roles: true, tenantId: true },
+      });
+      const llmContext = {
+        tenantId: submitterForLlm?.tenantId || null,
+        userId: submitterForLlm?.id || job.submitted_by_user_id,
+      };
 
       if (job.input_type === 'url') {
         await transitionJobStatus(jobId, 'fetching', {
@@ -1489,7 +1656,7 @@ class FundingIntakeService {
           message: 'Transcribing PDF source',
         });
 
-        const pdfExtraction = await extractCanonicalTextFromPdf(job.source_file_path);
+        const pdfExtraction = await extractCanonicalTextFromPdf(job.source_file_path, llmContext);
         rawText = pdfExtraction.rawText;
         normalizedText = pdfExtraction.normalizedText;
         fetchMetadata = {
@@ -1508,6 +1675,13 @@ class FundingIntakeService {
           fetchMetadataJson: fetchMetadata,
           message: 'PDF source transcribed successfully',
         });
+      } else if (job.input_type === 'json') {
+        await transitionJobStatus(jobId, 'extracting', {
+          startedAt: job.started_at || new Date(),
+          rawText,
+          normalizedText,
+          message: 'Processing JSON upload',
+        });
       } else {
         throw new Error('Unsupported intake input type');
       }
@@ -1516,17 +1690,47 @@ class FundingIntakeService {
         throw new Error('No source content available for extraction');
       }
 
-      const extractionResult = await extractFundingOpportunity(normalizedText);
+      const extractionResult = job.input_type === 'json'
+        ? (() => {
+            const parsed = parseFundingJsonUpload(rawText || normalizedText);
+            const prepared = prepareFundingJsonIntake(parsed);
+            fetchMetadata = {
+              ...(fetchMetadata || {}),
+              json_upload: {
+                ...((fetchMetadata as any)?.json_upload || {}),
+                ...prepared.metadata,
+              },
+              json_artifacts: {
+                grant_template_json: prepared.template || null,
+                guideline_pack_json: prepared.guidelinePack || null,
+              },
+            };
+            return {
+              payload: prepared.payload,
+              extractorModel: FUNDING_JSON_UPLOAD_EXTRACTOR_MODEL,
+              extractorVersion: FUNDING_JSON_UPLOAD_EXTRACTOR_VERSION,
+              promptVersion: prepared.metadata.prompt_version || FUNDING_JSON_UPLOAD_PROMPT_VERSION,
+              validationErrors: [],
+            };
+          })()
+        : await extractFundingOpportunity(normalizedText, llmContext);
       const latestState = await getJobForProcessing(jobId);
       if (!latestState || latestState.status === 'canceled') {
         return;
       }
 
+      if (job.input_type === 'json') {
+        await transitionJobStatus(jobId, 'extracting', {
+          fetchMetadataJson: fetchMetadata,
+          message: 'JSON payload normalized successfully',
+        });
+      }
+
       await createExtractionAttempt(jobId, extractionResult.payload, extractionResult);
-      const submitter = await prisma.user.findUnique({
+      const submitter = submitterForLlm || (await prisma.user.findUnique({
         where: { id: job.submitted_by_user_id },
         select: { id: true, email: true, roles: true },
-      });
+      }));
       const duplicateStatus = await computeDuplicateCandidates(
         jobId,
         extractionResult.payload,

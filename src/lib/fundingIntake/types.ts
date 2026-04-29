@@ -9,7 +9,7 @@ export type FundingIntakeJobStatus =
   | 'draft_created'
   | 'failed'
   | 'canceled';
-export type FundingInputType = 'url' | 'text' | 'pdf';
+export type FundingInputType = 'url' | 'text' | 'pdf' | 'json';
 export type FundingDuplicateMatchType =
   | 'same_source_url'
   | 'exact_fingerprint'
@@ -113,6 +113,12 @@ export interface IntakeSubmitInput {
     size: number;
     tempFilePath: string;
     checksum: string;
+  };
+  sourceJsonText?: string;
+  sourceJsonFile?: {
+    originalName: string;
+    mimeType: string;
+    size: number;
   };
   operatorNotes?: string;
 }

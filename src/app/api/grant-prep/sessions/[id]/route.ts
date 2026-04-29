@@ -12,6 +12,7 @@ import {
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
 import { isGrantPrepSessionReady } from '@/lib/grantPrep/sessionState'
+import { getGrantPrepPostLaunchImpact } from '@/lib/grants/prepImpact'
 
 export async function GET(
   request: NextRequest,
@@ -91,6 +92,11 @@ export async function GET(
         approvedGuidelineRevision: serverContext.draftingContext?.approvedGuidelineRevision || null,
         approvedTemplate: serverContext.draftingContext?.approvedTemplate || null,
       },
+      postLaunchImpact: await getGrantPrepPostLaunchImpact({
+        tenantId: auth.actor.tenantId,
+        grantSessionId: grantPrepSession.grant_session_id,
+        prepSessionId: grantPrepSession.id,
+      }),
     })
   } catch (error) {
     console.error('[Grant Prep Sessions] get error:', error)
