@@ -51,6 +51,18 @@ type SectionsResponse = {
 
 export type DraftingFilter = 'all' | 'app_draft' | 'team_draft' | 'evidence'
 
+type GrantReviewerRecommendation = {
+  sectionKey: string
+  priority: 'high' | 'medium' | 'low'
+  issue: string
+  recommendation: string
+  suggestedRemark: string
+  autoFixable: boolean
+  linkedRuleKeys?: string[]
+  reviewerSectionId?: string
+  reviewerSectionTitle?: string
+}
+
 interface GrantSectionDraftingStageProps {
   projectId: string
   grantId: string
@@ -149,6 +161,7 @@ export default function GrantSectionDraftingStage({
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [draftValues, setDraftValues] = useState<Record<string, string>>({})
   const [structuredValues, setStructuredValues] = useState<Record<string, string>>({})
+  const [reviewerRecommendations, setReviewerRecommendations] = useState<GrantReviewerRecommendation[]>([])
 
   const loadSections = useCallback(async () => {
     if (!authToken) return
@@ -188,6 +201,25 @@ export default function GrantSectionDraftingStage({
   useEffect(() => {
     void loadSections()
   }, [loadSections])
+
+  const loadReviewerRecommendations = useCallback(async () => {
+    if (!authToken) return
+
+    try {
+      const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/reviewer/recommendations`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+      const payload = await response.json().catch(() => ({})) as { recommendations?: GrantReviewerRecommendation[] }
+      if (!response.ok) return
+      setReviewerRecommendations(Array.isArray(payload.recommendations) ? payload.recommendations : [])
+    } catch {
+      // Recommendations are advisory; drafting stays available if this read fails.
+    }
+  }, [authToken, grantId, projectId])
+
+  useEffect(() => {
+    void loadReviewerRecommendations()
+  }, [loadReviewerRecommendations])
 
   useEffect(() => {
     if (!onSectionSelect || sections.length === 0) return
@@ -305,6 +337,7 @@ export default function GrantSectionDraftingStage({
           onSessionUpdated={onSessionUpdated}
           selectedSection={currentSection.sectionKey}
           onSectionSelect={onSectionSelect}
+          grantReviewerRecommendations={reviewerRecommendations}
         />
       </div>
     )

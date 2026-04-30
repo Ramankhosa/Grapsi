@@ -687,10 +687,10 @@ export default function SectionDetail() {
                 <span className="text-sm text-gray-600 mr-2">Score:</span>
                 <div className="rounded-full bg-gray-100 p-1">
                   <span className={`text-white font-medium px-3 py-1 rounded-full inline-block ${
-                    reviewJson.score >= 4 ? 'bg-green-500' :
-                    reviewJson.score >= 3 ? 'bg-yellow-500' : 'bg-red-500'
+                    reviewJson.score >= 8 ? 'bg-green-500' :
+                    reviewJson.score >= 6 ? 'bg-yellow-500' : 'bg-red-500'
                   }`}>
-                    {reviewJson.score?.toFixed(1) || "-"}
+                    {reviewJson.score?.toFixed(1) || "-"}/10
                   </span>
                 </div>
                 

@@ -81,10 +81,10 @@ Use doesNotSupport to state these are theoretical claims, not empirical proof.`,
 
 const DEPTH_INSTRUCTIONS: Record<Exclude<DeepAnalysisLabel, 'LIT_ONLY'>, string> = {
   DEEP_ANCHOR: `Extract 8-15 cards across all sections, balancing grounded findings, synthesis-ready metrics,
-methodological rigor, boundaries, and verbatim accuracy.`,
+methodological rigor, reviewer-facing proof points, boundaries, and verbatim accuracy.`,
   DEEP_SUPPORT: `Extract 3-6 focused cards mainly from methods/results. Prioritize grounded findings and methodology details.`,
   DEEP_STRESS_TEST: `Extract 4-8 cards from methods/results/discussion/limitations.
-Prioritize boundaries, contrasts, and methodological caveats.`,
+Prioritize boundaries, contrasts, risk signals, and methodological caveats that can strengthen a grant's risk response.`,
 };
 
 function normalizeArchetype(value: string | null | undefined): ReferenceArchetype {
@@ -121,7 +121,8 @@ const GRANT_EXTRACTION_INSTRUCTIONS = `For grant proposals, prioritize extractin
 - METHODOLOGY VALIDATION: evidence that the method or indicator works in comparable settings
 - GAP STATEMENTS: explicit limitations, barriers, or insufficiencies stated by the authors
 - POLICY OR FRAMEWORK REFERENCES: named strategies, priorities, or implementation frameworks
-Each card should preserve the specific fact a reviewer could cite, not just the paper's general contribution.`;
+Each card should preserve the specific fact a reviewer could cite, not just the paper's general contribution.
+Write claim as a reviewer-usable proof point. When the source includes limits or scope conditions, preserve them so the proposal does not overclaim.`;
 
 function formatGrantDimensionContext(
   blueprintDimensions: string[],

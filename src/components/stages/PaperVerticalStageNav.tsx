@@ -711,6 +711,23 @@ const STAGE_DEFINITIONS: StageDefinition[] = [
     getSubStages: getDraftSectionSubStages
   },
   {
+    key: 'REVIEWER',
+    label: 'Reviewer',
+    icon: BookOpen,
+    description: 'Map grant sections into the reviewer workspace',
+    weight: 10,
+    subStages: [
+      {
+        key: 'reviewer_mapping',
+        label: 'Reviewer Mapping',
+        icon: FileText,
+        description: 'Prepare mapped reviewer sections',
+        required: true,
+        getStatus: () => 'pending'
+      }
+    ]
+  },
+  {
     key: 'MANUSCRIPT_REVIEW',
     label: 'Review',
     icon: BookOpen,

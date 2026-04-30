@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 
 import { verifyJWT } from '@/lib/auth'
 import prisma from '@/lib/prisma'
+import { assertProjectCapability, ProjectAccessError } from '@/lib/project-access'
 
 type SessionLike = {
   user: {
@@ -73,4 +74,47 @@ export function requireReviewerSession(
   if (session?.user?.id) return true
   res.status(401).json({ error: 'Not authenticated' })
   return false
+}
+
+export async function requireReviewerCallAccess(
+  callId: string,
+  session: SessionLike,
+  res: NextApiResponse,
+  capability: 'read' | 'editContent' = 'read'
+) {
+  const call = await prisma.reviewerCall.findUnique({
+    where: { id: callId },
+    select: {
+      id: true,
+      user_id: true,
+      tenantId: true,
+      projectId: true,
+      grantSessionId: true,
+    },
+  })
+
+  if (!call) {
+    res.status(404).json({ error: 'Call not found' })
+    return null
+  }
+
+  if (call.user_id === session.user.id) {
+    return call
+  }
+
+  if (call.projectId && call.tenantId && session.user.tenantId === call.tenantId) {
+    try {
+      await assertProjectCapability(call.projectId, session.user.id, session.user.tenantId, capability)
+      return call
+    } catch (error) {
+      if (error instanceof ProjectAccessError) {
+        res.status(error.status).json({ error: error.message, code: error.code })
+        return null
+      }
+      throw error
+    }
+  }
+
+  res.status(403).json({ error: 'Not authorized to access this call' })
+  return null
 }

@@ -1,6 +1,11 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getServerSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
+import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService';
+import { hasMeaningfulSectionContent, parseReviewerScore } from '@/lib/reviewer/content';
 import prisma from '../../../../../../../lib/prisma';
 import { 
   reviewSection, 
@@ -41,21 +46,8 @@ export default async function handler(
   }
   
   try {
-    // Verify the call belongs to the user
-    const calls = await prisma.$queryRaw`
-      SELECT user_id FROM "reviewer_calls" 
-      WHERE id = ${callId}
-    `;
-    
-    const call = calls[0];
-    
-    if (!call) {
-      return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    if (call.user_id !== session.user.id) {
-      return res.status(403).json({ error: 'Not authorized to access this call' });
-    }
+    const callAccess = await requireReviewerCallAccess(callId, session, res, 'editContent');
+    if (!callAccess) return;
     
     // Get the section to review
     const sections = await prisma.$queryRaw`
@@ -76,19 +68,46 @@ export default async function handler(
     if (section.status !== 'draft') {
       return res.status(400).json({ error: 'Section has already been reviewed' });
     }
+
+    if (!hasMeaningfulSectionContent(section.user_input)) {
+      return res.status(400).json({
+        error: 'Section has no meaningful content to review',
+        code: 'SECTION_CONTENT_MISSING',
+        section: section.section_title,
+      });
+    }
     
     // Get the AI model to use from call record
     const callsWithModel = await prisma.$queryRaw`
-      SELECT "LLM_model_used", parsed_json, project_title FROM "reviewer_calls" 
+      SELECT "LLM_model_used", parsed_json, project_title, "manualRubricJson", "templateSnapshotJson", "rulesSource" FROM "reviewer_calls" 
       WHERE id = ${callId}
     `;
     
     // Always use Gemini 2.0 Flash regardless of what's stored in the database
     const model = 'G'; // Force Gemini for all reviews
-    const callData = callsWithModel[0].parsed_json;
+    const callData = callsWithModel[0].parsed_json || {};
+    const useTemplateBackedReviewer =
+      callsWithModel[0].rulesSource === 'template_manual'
+      || callData.rules_source === 'template_manual'
+      || Array.isArray(callData.template_sections);
+    const reviewerContextText = callData.reviewer_context_text || callData.call_summary || callData.agency_name || "Funding opportunity";
     const projectTitle = callsWithModel[0].project_title;
+
+    if (useTemplateBackedReviewer) {
+      const mappingJson = section.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
+      const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
+      const linksDeclareWorkflow = linkedSections.some((link: any) => typeof link.workflowMode === 'string');
+      const hasAppDraftLink = linkedSections.some((link: any) => String(link.workflowMode || 'app_draft') === 'app_draft');
+      if (linksDeclareWorkflow && !hasAppDraftLink) {
+        return res.status(400).json({
+          error: 'This reviewer section is not linked to app-draft content and will not be reviewed.',
+          code: 'NO_APP_DRAFT_CONTENT',
+          section: section.section_title,
+        });
+      }
+    }
     
-    console.log(`Using model: Gemini 2.0 Flash for review of ${section.section_title}`);
+    console.log(`Using ${useTemplateBackedReviewer ? 'configured Grant Reviewer full-review model' : 'legacy specialized reviewer model'} for review of ${section.section_title}`);
     
     // If this is a revision, get the previous section's review
     let previousSection = null;
@@ -235,7 +254,7 @@ export default async function handler(
       let reviewResult;
       // normalizedSectionTitle declared earlier
       
-      if (normalizedSectionTitle.includes('abstract')) {
+      if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('abstract')) {
         console.log('Using specialized Abstract review function with Gemini 2.0 Flash');
         
         // Check if this is a revision and get previous version data
@@ -250,7 +269,7 @@ export default async function handler(
         const abstractReview = await reviewerService.generateAbstractReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           previousVersion
         );
@@ -258,7 +277,7 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: abstractReview.section_score || 5.0,
+            score: parseReviewerScore(abstractReview.section_score),
             summary: abstractReview.section_summary || "No summary provided.",
             strengths: abstractReview.section_strengths || [],
             weaknesses: abstractReview.section_weaknesses || [],
@@ -268,7 +287,7 @@ export default async function handler(
           },
           isImprovement: abstractReview.improvement_over_previous || false
         };
-      } else if (normalizedSectionTitle.includes('introduction')) {
+      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('introduction')) {
         console.log('Using specialized Introduction review function with Gemini 2.0 Flash');
         
         const abstractSummary = relevantSummaries.find(s => 
@@ -286,7 +305,7 @@ export default async function handler(
         const introReview = await reviewerService.generateIntroductionReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           abstractSummary,
           previousVersion
@@ -295,7 +314,7 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: introReview.score || 5.0,
+            score: parseReviewerScore(introReview.score),
             summary: introReview.summary || "No summary provided.",
             strengths: introReview.strengths || [],
             weaknesses: introReview.weaknesses || [],
@@ -305,7 +324,7 @@ export default async function handler(
           },
           isImprovement: introReview.improvement_over_previous || false
         };
-      } else if (normalizedSectionTitle.includes('objective')) {
+      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('objective')) {
         console.log('Using specialized Objectives review function with Gemini 2.0 Flash');
         try {
           // Check if this is a revision and get previous version data
@@ -320,7 +339,7 @@ export default async function handler(
           const objectivesReview = await reviewerService.generateObjectivesReview(
             section.user_input,
             projectTitle,
-            callData.call_summary || callData.agency_name || "Funding opportunity",
+            reviewerContextText,
             'G', // Force Gemini for all reviews
             relevantSummaries,
             previousVersion
@@ -337,7 +356,7 @@ export default async function handler(
           // Convert to standard review format
           reviewResult = {
             review: {
-              score: objectivesReview.score || 5.0,
+              score: parseReviewerScore(objectivesReview.score),
               summary: objectivesReview.summary || "No summary provided.",
               strengths: objectivesReview.strengths || [],
               weaknesses: objectivesReview.weaknesses || [],
@@ -349,21 +368,9 @@ export default async function handler(
           };
         } catch (objectivesError) {
           console.error('Error generating objectives review:', objectivesError);
-          // Provide a fallback review
-          reviewResult = {
-            review: {
-              score: 5.0,
-              summary: "There was an error processing the objectives review. Please try again.",
-              strengths: ["Unable to analyze strengths due to processing error."],
-              weaknesses: ["Unable to analyze weaknesses due to processing error."],
-              suggestions: ["Please try regenerating this review."],
-              improvement_over_previous: false,
-              context_summary: "Not available"
-            },
-            isImprovement: false
-          };
+          throw objectivesError;
         }
-      } else if (normalizedSectionTitle.includes('literature')) {
+      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('literature')) {
         console.log('Using specialized Literature Review review function with Gemini 2.0 Flash');
         
         // Check if this is a revision and get previous version data
@@ -378,7 +385,7 @@ export default async function handler(
         const litReview = await reviewerService.generateLiteratureReviewReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           relevantSummaries,
           previousVersion
@@ -387,7 +394,7 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: litReview.score || 5.0,
+            score: parseReviewerScore(litReview.score),
             summary: litReview.summary || "No summary provided.",
             strengths: litReview.strengths || [],
             weaknesses: litReview.weaknesses || [],
@@ -397,7 +404,7 @@ export default async function handler(
           },
           isImprovement: litReview.improvement_over_previous || false
         };
-      } else if (normalizedSectionTitle.includes('method')) {
+      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('method')) {
         console.log('Using specialized Methodology review function with Gemini 2.0 Flash');
         
         // Check if this is a revision and get previous version data
@@ -412,7 +419,7 @@ export default async function handler(
         const methodReview = await reviewerService.generateMethodologyReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           relevantSummaries,
           previousVersion,
@@ -422,7 +429,7 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: methodReview.score || 5.0,
+            score: parseReviewerScore(methodReview.score),
             summary: methodReview.summary || "No summary provided.",
             strengths: methodReview.strengths || [],
             weaknesses: methodReview.weaknesses || [],
@@ -432,7 +439,7 @@ export default async function handler(
           },
           isImprovement: methodReview.improvement_over_previous || false
         };
-      } else if (normalizedSectionTitle.includes('timeline') || normalizedSectionTitle.includes('schedule')) {
+      } else if (!useTemplateBackedReviewer && (normalizedSectionTitle.includes('timeline') || normalizedSectionTitle.includes('schedule'))) {
         console.log('Using specialized Project Timeline review function with Gemini 2.0 Flash');
         
         // Check if this is a revision and get previous version data
@@ -447,7 +454,7 @@ export default async function handler(
         const timelineReview = await reviewerService.generateProjectTimelineReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           relevantSummaries,
           previousVersion,
@@ -457,7 +464,7 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: timelineReview.score || 5.0,
+            score: parseReviewerScore(timelineReview.score),
             summary: timelineReview.summary || "No summary provided.",
             strengths: timelineReview.strengths || [],
             weaknesses: timelineReview.weaknesses || [],
@@ -467,7 +474,7 @@ export default async function handler(
           },
           isImprovement: timelineReview.improvement_over_previous || false
         };
-      } else if (normalizedSectionTitle.includes('budget')) {
+      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('budget')) {
         console.log('Using specialized Budget Justification review function with Gemini 2.0 Flash');
         
         // Check if this is a revision and get previous version data
@@ -482,7 +489,7 @@ export default async function handler(
         const budgetReview = await reviewerService.generateBudgetJustificationReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           relevantSummaries,
           previousVersion,
@@ -492,17 +499,19 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: budgetReview.score || 5.0,
+            score: parseReviewerScore(budgetReview.score),
             summary: budgetReview.summary || "No summary provided.",
             strengths: budgetReview.strengths || [],
             weaknesses: budgetReview.weaknesses || [],
             suggestions: budgetReview.suggestions || [],
+            non_scoring_reminders: budgetReview.non_scoring_reminders || [],
+            supplementary_materials: budgetReview.supplementary_materials || [],
             improvement_over_previous: budgetReview.improvement_over_previous || false,
             context_summary: budgetReview.context_summary || "Not available"
           },
           isImprovement: budgetReview.improvement_over_previous || false
         };
-      } else if (normalizedSectionTitle.includes('outcome') || normalizedSectionTitle.includes('result')) {
+      } else if (!useTemplateBackedReviewer && (normalizedSectionTitle.includes('outcome') || normalizedSectionTitle.includes('result'))) {
         console.log('Using specialized Expected Outcomes review function with Gemini 2.0 Flash');
         
         // Check if this is a revision and get previous version data
@@ -517,7 +526,7 @@ export default async function handler(
         const outcomesReview = await reviewerService.generateExpectedOutcomesReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           relevantSummaries,
           previousVersion
@@ -526,7 +535,7 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: outcomesReview.score || 5.0,
+            score: parseReviewerScore(outcomesReview.score),
             summary: outcomesReview.summary || "No summary provided.",
             strengths: outcomesReview.strengths || [],
             weaknesses: outcomesReview.weaknesses || [],
@@ -536,7 +545,7 @@ export default async function handler(
           },
           isImprovement: outcomesReview.improvement_over_previous || false
         };
-      } else if (normalizedSectionTitle.includes('conclusion') || normalizedSectionTitle.includes('summary')) {
+      } else if (!useTemplateBackedReviewer && (normalizedSectionTitle.includes('conclusion') || normalizedSectionTitle.includes('summary'))) {
         console.log('Using specialized Conclusion review function with Gemini 2.0 Flash');
         
         // Check if this is a revision and get previous version data
@@ -551,7 +560,7 @@ export default async function handler(
         const conclusionReview = await reviewerService.generateConclusionReview(
           section.user_input,
           projectTitle,
-          callData.call_summary || callData.agency_name || "Funding opportunity",
+          reviewerContextText,
           'G', // Force Gemini for all reviews
           relevantSummaries,
           previousVersion
@@ -560,7 +569,7 @@ export default async function handler(
         // Convert to standard review format
         reviewResult = {
           review: {
-            score: conclusionReview.score || 5.0,
+            score: parseReviewerScore(conclusionReview.score),
             summary: conclusionReview.summary || "No summary provided.",
             strengths: conclusionReview.strengths || [],
             weaknesses: conclusionReview.weaknesses || [],
@@ -572,7 +581,7 @@ export default async function handler(
         };
       } else {
         // Use the generic review function for other sections
-        console.log('Using generic review function with Gemini 2.0 Flash');
+        console.log('Using configured Grant Reviewer full-review function');
         reviewResult = await reviewSection({
           section,
           previousSection,
@@ -582,7 +591,9 @@ export default async function handler(
             ...callData,
             project_title: projectTitle
           },
-          modelType: 'G' // Force Gemini 2.0 for all reviews
+          modelType: 'G',
+          requestHeaders: req.headers,
+          stageCode: 'GRANT_REVIEWER_FULL_REVIEW',
         });
       }
 
@@ -593,12 +604,15 @@ export default async function handler(
       if (!contextSummary || contextSummary === "Not Available") {
         // Generate a context summary if one wasn't included in the review
         try {
-          console.log(`Generating separate context summary for ${section.section_title} using Gemini 2.0 Flash`);
-          const contextSummaryService = new ContextSummaryService();
+          console.log(`Generating separate context summary for ${section.section_title} using Grant Reviewer context-summary model`);
+          const contextSummaryService = new ContextSummaryService({
+            requestHeaders: req.headers,
+            stageCode: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
+          });
           contextSummary = await contextSummaryService.generateContextSummary(
             section.section_title,
             section.user_input,
-            'G' // Force Gemini 2.0 for all context summaries
+            'G'
           );
         } catch (error) {
           console.error('Error generating context summary:', error);
@@ -614,6 +628,7 @@ export default async function handler(
         SET 
           ai_review_json = ${reviewResult.review},
           status = 'reviewed',
+          "sourceStale" = false,
           last_reviewed_at = CURRENT_TIMESTAMP,
           improvement_flag = ${reviewResult.isImprovement || null},
           context_summary = ${contextSummary}
@@ -674,6 +689,18 @@ export default async function handler(
       });
     } catch (reviewError) {
       console.error(`Error in AI review process for ${section.section_title}:`, reviewError);
+      if (isGeminiRateLimitErrorLike(reviewError)) {
+        const retryAfterMs = getGeminiRetryAfterMs(reviewError);
+        return res
+          .status(429)
+          .setHeader('Retry-After', String(Math.max(1, Math.ceil((retryAfterMs || 60000) / 1000))))
+          .json({
+            error: `Failed to review section: ${reviewError.message || 'Gemini rate limited'}`,
+            code: 'GEMINI_RATE_LIMITED',
+            retryAfterMs: retryAfterMs || 60000,
+            section: section.section_title
+          });
+      }
       return res.status(500).json({ 
         error: `Failed to review section: ${reviewError.message || 'Unknown error'}`,
         section: section.section_title

@@ -78,7 +78,8 @@ const FEATURE_LABELS: Record<string, string> = {
   FUNDING_DISCOVERY: 'Funding Call Ingestion',
   GRANT_PREP: 'Grant Prep & Blueprint',
   SEARCH_STRATEGY: 'Literature Review & Search Strategy',
-  GRANT_DRAFTING: 'Grant Writing'
+  GRANT_DRAFTING: 'Grant Writing',
+  GRANT_REVIEWER: 'Grant Reviewer'
 }
 
 // Stages that DO NOT use LLMs (excluded from LLM control)
@@ -127,6 +128,10 @@ const VISIBLE_STAGE_CODES_BY_FEATURE: Partial<Record<string, Set<string>>> = {
     'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY',
     'PAPER_MANUSCRIPT_IMPROVE',
     'PAPER_EXPORT_EXTRACTION',
+  ]),
+  GRANT_REVIEWER: new Set([
+    'GRANT_REVIEWER_CONTEXT_SUMMARY',
+    'GRANT_REVIEWER_FULL_REVIEW',
   ]),
 }
 
@@ -273,6 +278,20 @@ const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
       passLabel: 'Improve',
       title: 'Grant Draft Improvement',
       description: 'Cleanup, citation repair, and targeted quality improvements on existing grant sections.'
+    }
+  ],
+  GRANT_REVIEWER: [
+    {
+      code: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
+      passLabel: 'Summary',
+      title: 'Context Summary Generator',
+      description: 'Condenses mapped reviewer sections into compact context summaries for downstream review prompts.'
+    },
+    {
+      code: 'GRANT_REVIEWER_FULL_REVIEW',
+      passLabel: 'Full Review',
+      title: 'Full Grant Review',
+      description: 'Generates the full reviewer evaluation from mapped sections, template rules, manual rubric, and section reviews.'
     }
   ]
 }
@@ -504,6 +523,16 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     summary: 'Diagram repair and retry.',
     responsibility: 'Fixes invalid diagram syntax after generation failures.',
     tip: 'Use models with high syntax discipline for repair iterations.'
+  },
+  GRANT_REVIEWER_CONTEXT_SUMMARY: {
+    summary: 'Reviewer context summary generation.',
+    responsibility: 'Controls the model used to summarize mapped grant reviewer sections for linked-section and final-review context.',
+    tip: 'Use a reliable, low-latency model with strong compression and terminology preservation.'
+  },
+  GRANT_REVIEWER_FULL_REVIEW: {
+    summary: 'Full grant reviewer evaluation.',
+    responsibility: 'Controls the model used for the integrated or standalone reviewer final evaluation across mapped reviewer sections.',
+    tip: 'Use a high-reasoning, long-context model because this task applies template rules, manual rubric, and section-level findings together.'
   }
 }
 

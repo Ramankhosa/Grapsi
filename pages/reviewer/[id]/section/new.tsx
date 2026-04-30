@@ -591,7 +591,7 @@ export default function NewSection() {
                             {hasReview && latestSection.ai_review_json?.score && (
                               <div className="mt-2 text-sm">
                                 <span className="font-medium">Score: </span>
-                                <span className="text-blue-700">{latestSection.ai_review_json.score.toFixed(1)}/5</span>
+                                <span className="text-blue-700">{latestSection.ai_review_json.score.toFixed(1)}/10</span>
                               </div>
                             )}
                           </div>
@@ -883,7 +883,7 @@ export default function NewSection() {
                       <div className="bg-blue-50 p-4 rounded-md">
                         <div className="flex items-end">
                           <span className="text-3xl font-bold text-blue-700">{reviewJson.score?.toFixed(1) || 'N/A'}</span>
-                          <span className="text-gray-500 ml-1">/5</span>
+                          <span className="text-gray-500 ml-1">/10</span>
                         </div>
                         
                         {selectedSection.is_revision && reviewJson.improvement_over_previous && (

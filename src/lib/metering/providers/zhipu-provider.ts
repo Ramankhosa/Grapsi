@@ -5,6 +5,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { collectOpenAICompatibleChatCompletionStream } from './streaming-utils'
 
 export class ZhipuProvider implements LLMProvider {
   name = 'zhipu'
@@ -109,12 +110,26 @@ export class ZhipuProvider implements LLMProvider {
         )
       }
 
-      const response = await this.client.chat.completions.create({
+      const createParams = {
         model: actualModel,
         messages,
         max_tokens: maxTokens,
         temperature: request.parameters?.temperature ?? 0.7
-      })
+      }
+
+      if (request.stream?.onToken) {
+        return await collectOpenAICompatibleChatCompletionStream({
+          client: this.client,
+          createParams,
+          request,
+          providerName: this.name,
+          modelClass: modelToUse,
+          actualModel,
+          startedAt: startTime
+        })
+      }
+
+      const response = await this.client.chat.completions.create(createParams)
 
       const outputText = response.choices?.[0]?.message?.content || ''
       const usage = (response.usage || {}) as Record<string, any>

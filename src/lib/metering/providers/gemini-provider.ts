@@ -3,6 +3,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { emitLLMStreamToken, estimateTokensFromText, readStreamTokenNumber } from './streaming-utils'
 
 export class GeminiProvider implements LLMProvider {
   name = 'gemini'
@@ -216,6 +217,58 @@ export class GeminiProvider implements LLMProvider {
       } else {
         // Fallback to text-only prompt
         contentToGenerate = request.prompt || ''
+      }
+
+      if (request.stream?.onToken && typeof model.generateContentStream === 'function') {
+        const streamResult = await model.generateContentStream(contentToGenerate)
+        let output = ''
+
+        for await (const chunk of streamResult.stream as AsyncIterable<any>) {
+          const delta = typeof chunk?.text === 'function' ? chunk.text() : ''
+          if (delta) {
+            output += delta
+            await emitLLMStreamToken(request, delta, output, {
+              provider: this.name,
+              modelClass: requestedModel,
+              model: modelClass
+            })
+          }
+        }
+
+        const finalResponse = await streamResult.response
+        if (!output && typeof finalResponse?.text === 'function') {
+          output = finalResponse.text()
+        }
+
+        const usage =
+          finalResponse?.usageMetadata && typeof finalResponse.usageMetadata === 'object'
+            ? (finalResponse.usageMetadata as Record<string, unknown>)
+            : undefined
+        const inputTokens = readStreamTokenNumber(usage?.promptTokenCount) || request.inputTokens || 0
+        const outputTokens = readStreamTokenNumber(usage?.candidatesTokenCount) || estimateTokensFromText(output)
+        const thoughtTokens = this.extractThoughtTokens(usage)
+        const totalTokens = readStreamTokenNumber(usage?.totalTokenCount) || (inputTokens + outputTokens + thoughtTokens)
+
+        if (!output || output.trim().length === 0) {
+          const finishReason = finalResponse?.candidates?.[0]?.finishReason
+          throw new Error(`Gemini API returned empty streaming response (finishReason: ${finishReason || 'unknown'})`)
+        }
+
+        return {
+          output,
+          outputTokens,
+          modelClass: requestedModel,
+          metadata: {
+            provider: 'gemini',
+            inputTokens,
+            outputTokens,
+            thoughtTokens,
+            totalTokens,
+            finishReason: finalResponse?.candidates?.[0]?.finishReason,
+            usage,
+            streamed: true
+          }
+        }
       }
 
       // Add retry logic for network issues

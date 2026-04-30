@@ -39,6 +39,7 @@ interface OverallReview {
   major_strengths: string[];
   major_weaknesses: string[];
   cross_sectional_recommendations: string[];
+  supplementary_materials?: string[];
 }
 
 // Group sections by title and version
@@ -136,6 +137,23 @@ export default function FinalReview() {
     return String(content);
   };
 
+  const hasMeaningfulClientContent = (value: string) => {
+    const text = String(value || '')
+      .replace(/&nbsp;|&#160;/gi, ' ')
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return /[a-z0-9]/i.test(text);
+  };
+
+  const isScorableReviewedSection = (section: any) => {
+    if (section.status !== 'reviewed' || !hasMeaningfulClientContent(section.user_input)) return false;
+    const links = Array.isArray(section.mappingJson?.linkedSections) ? section.mappingJson.linkedSections : [];
+    const declaresWorkflow = links.some((link: any) => typeof link.workflowMode === 'string');
+    return !declaresWorkflow || links.some((link: any) => link.workflowMode === 'app_draft');
+  };
+
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/login');
@@ -187,9 +205,7 @@ export default function FinalReview() {
           };
         });
 
-        const allReviewedSections = processedSections.filter(
-          (section: any) => section.status === 'reviewed'
-        );
+        const allReviewedSections = processedSections.filter(isScorableReviewedSection);
         
         console.log('Filtered reviewed sections:', allReviewedSections);
         console.log('Is AI review JSON available?', allReviewedSections.map((s: any) => !!s.ai_review_json));
@@ -468,8 +484,17 @@ export default function FinalReview() {
     executive_summary: '',
     major_strengths: [],
     major_weaknesses: [],
-    cross_sectional_recommendations: []
+    cross_sectional_recommendations: [],
+    supplementary_materials: []
   };
+
+  const supplementaryMaterials = Array.from(new Set([
+    ...(Array.isArray(overallReview.supplementary_materials) ? overallReview.supplementary_materials : []),
+    ...sections.flatMap((section) => [
+      ...(Array.isArray(section.ai_review_json?.supplementary_materials) ? section.ai_review_json.supplementary_materials : []),
+      ...(Array.isArray(section.ai_review_json?.non_scoring_reminders) ? section.ai_review_json.non_scoring_reminders : []),
+    ]),
+  ].map((item) => String(item || '').trim()).filter(Boolean)));
 
   // Generate star rating based on score
   const getStarRating = (score: number, maxScore: number = 5) => {
@@ -1108,6 +1133,30 @@ export default function FinalReview() {
                 </ul>
               </div>
             </div>
+
+            {/* Recommended Supplementary Materials */}
+            {supplementaryMaterials.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+                  <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center mr-2">
+                    <FaFileExport className="text-white text-xs" />
+                  </div>
+                  Recommended Supplementary Materials
+                </h3>
+                <div className="bg-blue-50 rounded-md p-4">
+                  <ul className="space-y-2">
+                    {supplementaryMaterials.map((material, index) => (
+                      <li key={`supplementary-${index}`} className="flex">
+                        <FaCheck className="text-blue-500 mt-1 mr-2 flex-shrink-0" />
+                        <span className="text-gray-800">
+                          {renderSafely(material)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

@@ -38,6 +38,9 @@ export interface CitationAIMeta {
     comparison?: boolean;
   };
   relevanceScore?: number;
+  grantUtility?: string | null;
+  deepAnalysisRecommendation?: string | null;
+  deepAnalysisRationale?: string | null;
   analyzedAt?: string;
 }
 
@@ -1321,6 +1324,27 @@ class CitationService {
     const relevanceScore = Number(citationMeta.relevanceScore);
     if (Number.isFinite(relevanceScore)) {
       payload.relevanceScore = Math.max(0, Math.min(100, relevanceScore));
+    }
+
+    const grantUtility = clamp(citationMeta.grantUtility, 80);
+    if (grantUtility) {
+      payload.grantUtility = grantUtility.toUpperCase().replace(/[\s-]+/g, '_');
+    } else if (citationMeta.grantUtility === null) {
+      payload.grantUtility = null;
+    }
+
+    const deepAnalysisRecommendation = clamp(citationMeta.deepAnalysisRecommendation, 80);
+    if (deepAnalysisRecommendation) {
+      payload.deepAnalysisRecommendation = deepAnalysisRecommendation.toUpperCase();
+    } else if (citationMeta.deepAnalysisRecommendation === null) {
+      payload.deepAnalysisRecommendation = null;
+    }
+
+    const deepAnalysisRationale = clamp(citationMeta.deepAnalysisRationale, 280);
+    if (deepAnalysisRationale) {
+      payload.deepAnalysisRationale = deepAnalysisRationale;
+    } else if (citationMeta.deepAnalysisRationale === null) {
+      payload.deepAnalysisRationale = null;
     }
 
     const hasMetadata = Object.keys(payload).length > 0;

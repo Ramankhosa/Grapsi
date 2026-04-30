@@ -257,6 +257,7 @@ enum CallInputType {
   url
   file
   text
+  template
 }
 
 enum ReviewStatus {
@@ -275,6 +276,11 @@ enum SectionAssetType {
   METHODOLOGY
   TIMELINE
   BUDGET_JUSTIFICATION
+}
+
+enum ReviewerMode {
+  standalone
+  grant_integrated
 }
 
 // Service types for access control
@@ -1198,6 +1204,7 @@ model GrantSession {
   blueprint       GrantBlueprint?
   sectionDrafts   GrantSectionDraft[]
   structuredFieldResponses GrantStructuredFieldResponse[]
+  reviewerSectionGrantLinks ReviewerSectionGrantLink[]
 
   @@index([projectId, status])
   @@index([tenantId])
@@ -1349,6 +1356,7 @@ model GrantSectionDraft {
   tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   project              Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   structuredResponses  GrantStructuredFieldResponse[]
+  reviewerSectionGrantLinks ReviewerSectionGrantLink[]
 
   @@unique([grantSessionId, sectionKey], map: "grant_section_drafts_session_section_key_unique")
   @@index([blueprintId, sectionOrder])
@@ -1386,6 +1394,11 @@ model ReviewerCall {
   projectId             String?
   grantSessionId        String?
   fundingCallId         String?
+  reviewerMode          ReviewerMode      @default(standalone)
+  templateSnapshotJson  Json?
+  manualRubricJson      Json?
+  rulesSource           String            @default("template_manual")
+  sourceTemplateRevisionId String?
   project_title         String
   agency_name           String
   call_input_type       CallInputType
@@ -1403,12 +1416,15 @@ model ReviewerCall {
   share_token           String?           @unique
   user                  User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
   reviewer_sections     ReviewerSection[]
+  grant_section_links   ReviewerSectionGrantLink[]
 
   @@index([user_id])
   @@index([tenantId])
   @@index([projectId])
   @@index([grantSessionId])
   @@index([fundingCallId])
+  @@index([reviewerMode])
+  @@index([sourceTemplateRevisionId])
   @@map("reviewer_calls")
 }
 
@@ -1426,11 +1442,43 @@ model ReviewerSection {
   review_linked_context Boolean       @default(true)
   version               Int           @default(1)
   context_summary       String?       @db.Text
+  sourceHash            String?
+  sourceStale           Boolean       @default(false)
+  reviewerBucketKey     String?
+  mappingJson           Json?
   reviewer_call         ReviewerCall  @relation(fields: [call_id], references: [id], onDelete: Cascade)
+  grant_section_links   ReviewerSectionGrantLink[]
 
   @@index([call_id])
   @@index([call_id, section_title, version])
+  @@index([call_id, reviewerBucketKey])
+  @@index([sourceStale])
   @@map("reviewer_sections")
+}
+
+model ReviewerSectionGrantLink {
+  id                  String              @id @default(cuid())
+  reviewerSectionId   String
+  reviewerCallId      String
+  grantSessionId      String
+  grantSectionDraftId String?
+  grantSectionKey     String
+  grantSectionLabel   String
+  sourceContentHash   String
+  order               Int                 @default(0)
+  isActive            Boolean             @default(true)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  reviewerSection     ReviewerSection     @relation(fields: [reviewerSectionId], references: [id], onDelete: Cascade)
+  reviewerCall        ReviewerCall        @relation(fields: [reviewerCallId], references: [id], onDelete: Cascade)
+  grantSession        GrantSession        @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  grantSectionDraft   GrantSectionDraft?  @relation(fields: [grantSectionDraftId], references: [id], onDelete: SetNull)
+
+  @@index([reviewerCallId])
+  @@index([reviewerSectionId, order])
+  @@index([grantSessionId, grantSectionKey])
+  @@index([grantSectionDraftId])
+  @@map("reviewer_section_grant_links")
 }
 
 model ReviewAsset {

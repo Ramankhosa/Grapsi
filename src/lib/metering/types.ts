@@ -72,6 +72,7 @@ export interface LLMRequest {
   parameters?: Record<string, any>
   idempotencyKey?: string
   metadata?: Record<string, any>
+  stream?: LLMStreamOptions
 }
 
 export interface LLMResponse {
@@ -79,6 +80,18 @@ export interface LLMResponse {
   outputTokens: number
   modelClass: string
   metadata?: Record<string, any>
+}
+
+export interface LLMStreamToken {
+  delta: string
+  output: string
+  modelClass?: string
+  provider?: string
+  model?: string
+}
+
+export interface LLMStreamOptions {
+  onToken?: (token: LLMStreamToken) => void | Promise<void>
 }
 
 // === ENFORCEMENT DECISION TYPES ===

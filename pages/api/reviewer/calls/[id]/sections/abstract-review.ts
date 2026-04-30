@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import { hasMeaningfulSectionContent, parseReviewerScore } from '@/lib/reviewer/content';
 import prisma from '../../../../../../lib/prisma';
 import { ReviewerService } from '../../../../../../lib/services/reviewerService';
 
@@ -32,8 +33,11 @@ export default async function handler(
   // Get the abstract content from the request body
   const { abstractContent } = req.body;
   
-  if (!abstractContent) {
-    return res.status(400).json({ error: 'Abstract content is required' });
+  if (!hasMeaningfulSectionContent(abstractContent)) {
+    return res.status(400).json({
+      error: 'Abstract content is required',
+      code: 'SECTION_CONTENT_MISSING',
+    });
   }
   
   try {
@@ -84,6 +88,8 @@ export default async function handler(
       console.error('[Abstract Review] Invalid review generated:', abstractReview);
       return res.status(500).json({ error: 'Generated review is invalid' });
     }
+
+    abstractReview.section_score = parseReviewerScore(abstractReview.section_score);
     
     // Check if an abstract section already exists
     const existingSections = await prisma.$queryRaw`

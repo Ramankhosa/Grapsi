@@ -5,6 +5,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { emitLLMStreamToken, estimateTokensFromText, readStreamTokenNumber } from './streaming-utils'
 
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic'
@@ -179,12 +180,81 @@ export class AnthropicProvider implements LLMProvider {
       console.log(`[AnthropicProvider] Token limits: admin=${limits.maxTokensOut || 'not set'}, using=${maxTokens}`)
       console.log(`[AnthropicProvider] Request timeout=${timeoutMs}ms, maxRetries=${this.getMaxRetries()}`)
 
-      const response = await this.client.messages.create({
+      const createParams = {
         model: actualModel,
         max_tokens: maxTokens,
         messages,
         temperature: request.parameters?.temperature ?? 0.7
-      })
+      }
+
+      if (request.stream?.onToken && typeof this.client.messages?.stream === 'function') {
+        const stream = this.client.messages.stream(createParams)
+        let outputText = ''
+        let usage: Record<string, unknown> | undefined
+        let stopReason: unknown
+
+        for await (const event of stream as AsyncIterable<Record<string, any>>) {
+          if (event?.type === 'content_block_delta') {
+            const delta = String(event.delta?.text || '')
+            if (delta) {
+              outputText += delta
+              await emitLLMStreamToken(request, delta, outputText, {
+                provider: this.name,
+                modelClass: modelToUse,
+                model: actualModel
+              })
+            }
+          }
+
+          if (event?.type === 'message_delta') {
+            if (event.usage && typeof event.usage === 'object') {
+              usage = event.usage as Record<string, unknown>
+            }
+            stopReason = event.delta?.stop_reason || stopReason
+          }
+        }
+
+        const finalMessage = typeof stream.finalMessage === 'function'
+          ? await stream.finalMessage().catch(() => null)
+          : null
+
+        if (!outputText && Array.isArray(finalMessage?.content)) {
+          outputText = finalMessage.content
+            .filter((block: any) => block?.type === 'text')
+            .map((block: any) => String(block.text || ''))
+            .join('')
+        }
+
+        const finalUsage =
+          finalMessage?.usage && typeof finalMessage.usage === 'object'
+            ? (finalMessage.usage as Record<string, unknown>)
+            : usage
+        const inputTokens = readStreamTokenNumber(finalUsage?.input_tokens) || request.inputTokens || 0
+        const outputTokens = readStreamTokenNumber(finalUsage?.output_tokens) || estimateTokensFromText(outputText)
+        const thoughtTokens = this.extractThoughtTokens(finalUsage)
+        const totalTokens = readStreamTokenNumber(finalUsage?.total_tokens) || (inputTokens + outputTokens + thoughtTokens)
+        const latency = Date.now() - startTime
+
+        return {
+          output: outputText,
+          outputTokens,
+          modelClass: modelToUse,
+          metadata: {
+            provider: this.name,
+            model: actualModel,
+            inputTokens,
+            outputTokens,
+            thoughtTokens,
+            totalTokens,
+            latencyMs: latency,
+            stopReason: finalMessage?.stop_reason || stopReason,
+            usage: finalUsage,
+            streamed: true
+          }
+        }
+      }
+
+      const response = await this.client.messages.create(createParams)
 
       const outputText = response.content
         .filter((block: any) => block.type === 'text')

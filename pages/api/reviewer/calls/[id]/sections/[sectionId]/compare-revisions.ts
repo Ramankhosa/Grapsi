@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getServerSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../../../lib/prisma';
 import { ReviewerService } from '../../../../../../../lib/services/reviewerService';
 
@@ -31,19 +34,8 @@ export default async function handler(
   }
   
   try {
-    // Verify the call belongs to the user
-    const call = await prisma.reviewerCall.findUnique({
-      where: { id: callId },
-      select: { user_id: true }
-    });
-    
-    if (!call) {
-      return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    if (call.user_id !== session.user.id) {
-      return res.status(403).json({ error: 'Not authorized to access this call' });
-    }
+    const callAccess = await requireReviewerCallAccess(callId, session, res, 'editContent');
+    if (!callAccess) return;
     
     // Get the section to compare
     const section = await prisma.reviewerSection.findFirst({

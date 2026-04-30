@@ -1,0 +1,18 @@
+﻿[
+    {
+        "File":  "grapsi.custom.dump",
+        "Hash":  "85EAB117DADC3E80AC7CBF6D0465C8FE589F99D17D4838EAFEBEBDFCE3404B98"
+    },
+    {
+        "File":  "grapsi.plain.sql",
+        "Hash":  "7021A647326D712B9FE4F37D368C997C064910D9DA120862EDC39D2CBE8602A3"
+    },
+    {
+        "File":  "papsi.custom.dump",
+        "Hash":  "0D2B8A61F7BEE7B3FC1BF91F6CFCD8BCF20B58E7B9E65F2C4E5C23DF1853DE7E"
+    },
+    {
+        "File":  "papsi.plain.sql",
+        "Hash":  "FB873B8C48EE19112FFCBAF7B23C2D65FC32ABE42DBE985139C7DCBC2CB1074D"
+    }
+]

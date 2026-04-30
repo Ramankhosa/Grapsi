@@ -2,11 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   getReviewerSessionMock,
+  requireReviewerCallAccessMock,
+  createStandaloneReviewerCallMock,
   prismaMock,
   axiosMock,
 } = vi.hoisted(() => ({
   getReviewerSessionMock: vi.fn(),
+  requireReviewerCallAccessMock: vi.fn(),
+  createStandaloneReviewerCallMock: vi.fn(),
   prismaMock: {
+    fundingCall: {
+      findFirst: vi.fn(),
+    },
     reviewerCall: {
       findFirst: vi.fn(),
       findUnique: vi.fn(),
@@ -34,6 +41,11 @@ const {
 
 vi.mock('@/lib/reviewer-auth-api', () => ({
   getReviewerSession: getReviewerSessionMock,
+  requireReviewerCallAccess: requireReviewerCallAccessMock,
+}))
+
+vi.mock('@/lib/reviewer/template-bridge', () => ({
+  createStandaloneReviewerCall: createStandaloneReviewerCallMock,
 }))
 
 vi.mock('../../../lib/prisma', () => ({
@@ -76,53 +88,44 @@ describe('imported reviewer flows', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getReviewerSessionMock.mockResolvedValue({ user: { id: 'user-1' } })
+    requireReviewerCallAccessMock.mockResolvedValue({ id: 'call-1', user_id: 'user-1' })
   })
 
-  it('reuses parsed URL analysis without refetching or calling an LLM', async () => {
-    const { default: analyzeHandler } = await import(
-      '../../../pages/api/reviewer/calls/analyze'
+  it('creates standalone reviewer calls from an approved funding template', async () => {
+    const { default: callsHandler } = await import(
+      '../../../pages/api/reviewer/calls/index'
     )
-    const cachedJson = { title: 'Cached call', objectives: ['Reuse me'] }
 
-    prismaMock.reviewerCall.findFirst.mockResolvedValue({
-      id: 'cached-call',
-      parsed_json: cachedJson,
-      raw_text_backup: 'cached raw text',
+    getReviewerSessionMock.mockResolvedValue({ user: { id: 'user-1', tenantId: 'tenant-1' } })
+    prismaMock.fundingCall.findFirst.mockResolvedValue({ id: 'funding-1' })
+    createStandaloneReviewerCallMock.mockResolvedValue({
+      id: 'reviewer-call-1',
+      fundingCallId: 'funding-1',
+      call_input_type: 'template',
     })
-    prismaMock.reviewerCall.create.mockResolvedValue({ id: 'new-call' })
-
     const res = createMockRes()
-    await analyzeHandler(
+    await callsHandler(
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
         body: {
           project_title: 'Project',
-          agency_name: 'Agency',
-          call_input_type: 'url',
-          call_input_data: 'https://example.test/call',
+          fundingCallId: 'funding-1',
+          manualRubric: { evaluationCriteria: ['Fit'] },
         },
       } as any,
       res
     )
 
-    expect(res.status).toHaveBeenCalledWith(200)
-    expect(res.body).toEqual({
-      call_id: 'new-call',
-      status: 'completed',
-      cached: true,
+    expect(res.status).toHaveBeenCalledWith(201)
+    expect(res.body.call.id).toBe('reviewer-call-1')
+    expect(createStandaloneReviewerCallMock).toHaveBeenCalledWith({
+      userId: 'user-1',
+      tenantId: 'tenant-1',
+      fundingCallId: 'funding-1',
+      projectTitle: 'Project',
+      manualRubric: { evaluationCriteria: ['Fit'] },
+      seedSections: false,
     })
-    expect(axiosMock.get).not.toHaveBeenCalled()
-    expect(axiosMock.post).not.toHaveBeenCalled()
-    expect(prismaMock.reviewerCall.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          parsed_json: cachedJson,
-          raw_text_backup: 'cached raw text',
-          review_status: 'parsed',
-        }),
-      })
-    )
   })
 
   it('increments section versions for duplicate section titles', async () => {

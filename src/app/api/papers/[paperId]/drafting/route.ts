@@ -3972,6 +3972,14 @@ type GenerateSectionResult = {
 };
 
 type GenerationStatusEmitter = (phase: string, message: string) => Promise<void> | void;
+type GenerationTextDeltaEmitter = (payload: {
+  sectionKey: string;
+  delta: string;
+  text: string;
+  modelClass?: string;
+  provider?: string;
+  model?: string;
+}) => Promise<void> | void;
 
 type PaperReviewProgressEmitter = (payload: {
   reviewMode: 'quick' | 'section_by_section';
@@ -4062,7 +4070,8 @@ async function generateSection(
     requestHeaders: Record<string, string>;
     tenantContext?: TenantContext | null;
   },
-  emitStatus?: GenerationStatusEmitter
+  emitStatus?: GenerationStatusEmitter,
+  emitTextDelta?: GenerationTextDeltaEmitter
 ): Promise<GenerateSectionResult> {
   const { sessionId, session, user, paperTypeCode, payload, requestHeaders, tenantContext } = params;
   const sectionKey = normalizeSectionKey(payload.sectionKey);
@@ -4310,6 +4319,20 @@ async function generateSection(
       parameters: {
         temperature: payload.temperature,
       },
+      stream: emitTextDelta
+        ? {
+            onToken: async (token: { delta: string; output: string; modelClass?: string; provider?: string; model?: string }) => {
+              await emitTextDelta({
+                sectionKey,
+                delta: token.delta,
+                text: token.output,
+                modelClass: token.modelClass,
+                provider: token.provider,
+                model: token.model
+              });
+            }
+          }
+        : undefined,
       idempotencyKey: crypto.randomUUID(),
       metadata: {
         sessionId,
@@ -4893,7 +4916,7 @@ async function buildSectionPromptRuntimeBundle(params: {
         || (evidencePack.coverageAssignments?.length || 0) > 0
       )
     ) {
-      if (grantBacked && explicitGrantEvidenceBypass) {
+      if (explicitGrantEvidenceBypass) {
         useMappedEvidence = false;
         evidencePromptContext = {
           useMappedEvidence: false,
@@ -4908,6 +4931,7 @@ async function buildSectionPromptRuntimeBundle(params: {
           'No mapped evidence is available for this section',
           409,
           {
+            code: 'MAPPED_EVIDENCE_MISSING',
             error: 'No mapped evidence is available for this section',
             hint: 'Run AI Relevance & Blueprint Mapping (or re-import citations) so citations can be mapped to this section.',
             evidence: {
@@ -4952,10 +4976,14 @@ async function buildSectionPromptRuntimeBundle(params: {
     : null;
 
   if (grantDraftContextContract?.readiness.issues.length) {
+    const missingMappedEvidence = grantDraftContextContract.readiness.issues.some((issue) =>
+      /no mapped citation keys|mapped-evidence section/i.test(issue)
+    );
     throw new DraftingRequestError(
       'Grant evidence readiness failed',
       409,
       {
+        code: missingMappedEvidence ? 'MAPPED_EVIDENCE_MISSING' : 'GRANT_EVIDENCE_READINESS_FAILED',
         error: 'Grant evidence readiness failed',
         sectionKey: normalizedSectionKey,
         readiness: grantDraftContextContract.readiness,
@@ -7270,6 +7298,12 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
               at: new Date().toISOString()
             });
           };
+          const sendTextDelta: GenerationTextDeltaEmitter = async (payload) => {
+            send('text_delta', {
+              ...payload,
+              at: new Date().toISOString()
+            });
+          };
 
           await sendStatus('thinking', 'Analyzing mapped evidence and section guidance');
           const generated = await generateSection(
@@ -7282,7 +7316,8 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
               requestHeaders,
               tenantContext,
             },
-            sendStatus
+            sendStatus,
+            sendTextDelta
           );
 
           await sendStatus('compose', 'Preparing final draft for display');

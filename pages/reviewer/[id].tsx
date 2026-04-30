@@ -333,7 +333,7 @@ export default function ReviewerCallDetail() {
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
                   </svg>
-                  View Funding Call Analysis
+                  View Template Rules
                 </Link>
 
                 {/* Section List */}
@@ -514,12 +514,12 @@ export default function ReviewerCallDetail() {
                     <Link
                       href={`/reviewer/${id}/final-review-process`}
                       className={`inline-flex items-center px-4 py-2 rounded ${
-                        !sections.some(s => s.context_summary) 
+                        sections.length === 0
                           ? 'bg-gray-300 text-gray-500 pointer-events-none' 
                           : 'bg-teal-600 text-white hover:bg-teal-700'
                       }`}
                       onClick={e => {
-                        if (!sections.some(s => s.context_summary)) {
+                        if (sections.length === 0) {
                           e.preventDefault();
                         }
                       }}
@@ -598,7 +598,7 @@ export default function ReviewerCallDetail() {
                   <li>Generate context summaries for more accurate and connected reviews.</li>
                   <li>The advanced review process will check for consistency across sections.</li>
                   <li>The final review provides scores and actionable recommendations.</li>
-                  <li>Use the "View Funding Call Analysis" button to check the specific requirements.</li>
+                  <li>Use the "View Template Rules" button to check template limits and manual rubric items.</li>
                 </ul>
               </div>
             </div>

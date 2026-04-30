@@ -188,6 +188,43 @@ function toMappingStatus(suggestion: CitationAnalysis): PaperBlueprintMapping['m
   return 'MAPPED';
 }
 
+function hasGrantSpecificEvidence(reasoning: string, mappings: DimensionMapping[] | undefined): boolean {
+  const combined = [
+    reasoning,
+    ...(mappings || []).map(mapping => mapping.remark)
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return /\b\d[\d,.]*\s*(%|percent|million|billion|thousand|participants|patients|children|schools|sites|states|years|months|weeks)?\b/.test(combined)
+    || /\b(prevalence|incidence|burden|cost|baseline|gap|limitation|barrier|unmet|pilot|implementation|feasibility|validated|reliability|effect size|outcome|adoption|policy|framework|strategy|benchmark)\b/.test(combined);
+}
+
+function deriveMappingRecommendation(input: {
+  grantBacked: boolean;
+  rawRecommendation?: 'IMPORT' | 'MAYBE' | 'SKIP';
+  isRelevant: boolean;
+  relevanceScore: number;
+  reasoning: string;
+  dimensionMappings?: DimensionMapping[];
+}): 'IMPORT' | 'MAYBE' | 'SKIP' {
+  const mappings = Array.isArray(input.dimensionMappings) ? input.dimensionMappings : [];
+  const highMediumCount = mappings.filter(dm => dm.confidence === 'HIGH' || dm.confidence === 'MEDIUM').length;
+
+  if (!input.grantBacked) {
+    if (input.rawRecommendation) return input.rawRecommendation;
+    return highMediumCount >= 2 ? 'IMPORT' : highMediumCount >= 1 ? 'MAYBE' : 'SKIP';
+  }
+
+  const score = Math.min(100, Math.max(0, Number(input.relevanceScore) || 0));
+  const hasSpecificEvidence = hasGrantSpecificEvidence(input.reasoning, mappings);
+  if (!input.isRelevant || score < 45 || highMediumCount === 0) {
+    return 'SKIP';
+  }
+  if (hasSpecificEvidence && (score >= 75 || highMediumCount >= 2 || mappings.some(dm => dm.confidence === 'HIGH'))) {
+    return 'IMPORT';
+  }
+  return score >= 60 || input.rawRecommendation === 'MAYBE' ? 'MAYBE' : 'SKIP';
+}
+
 async function getSessionForUser(
   sessionId: string,
   user: { id: string; roles?: string[]; tenantId?: string | null }
@@ -202,6 +239,7 @@ function buildPrompt(
   papers: Array<{ id: string; title: string; abstract?: string | null; authors?: string[]; year?: number | null }>,
   blueprint: BlueprintWithSectionPlan
 ): string {
+  const grantBacked = isGrantBackedPaperTypeCode(blueprint.paperTypeCode);
   const paperList = papers.map((p, idx) => {
     const authorStr = p.authors?.slice(0, 3).join(', ') || 'Unknown';
     const yearStr = p.year ? ` (${p.year})` : '';
@@ -236,7 +274,9 @@ function buildPrompt(
 ${dimensions}`;
   }).join('\n\n');
 
-  return `You are a research assistant analyzing imported citations against a paper blueprint. Map each citation to the blueprint evidence pillars it supports. Treat each dimension as an evidence pillar: a searchable literature theme where papers can be attached, facts can be extracted, and section drafts can later cite those facts.
+  return `${grantBacked
+    ? 'You are a grant strategy analyst mapping imported citations to reviewer-facing grant evidence pillars.'
+    : 'You are a research assistant analyzing imported citations against a paper blueprint.'} Map each citation to the blueprint evidence pillars it supports. Treat each dimension as an evidence pillar: a searchable literature theme where papers can be attached, facts can be extracted, and section drafts can later cite those facts.
 
 RESEARCH OBJECTIVE:
 ${researchQuestion}
@@ -258,6 +298,7 @@ For each citation, identify which blueprint evidence pillars it supports:
 - Assign confidence: HIGH (directly addresses), MEDIUM (partially relevant), LOW (tangentially related)
 - A citation can map to multiple dimensions across different sections
 - Only map if there's concrete evidence in the title/abstract
+${grantBacked ? '- For grant templates, score persuasion value for a reviewer: one usable burden statistic, gap statement, validation result, feasibility precedent, impact metric, or policy anchor is stronger than broad topical similarity.\n- Use IMPORT only when the citation provides a reviewer-usable evidence asset; use MAYBE for weak, redundant, or background-only relevance.' : ''}
 
 Respond in the following JSON format ONLY (no markdown, no explanation outside JSON):
 {
@@ -445,24 +486,26 @@ function parseAndValidateLLMResponse(
       }
     }
     
-    // Determine recommendation
-    let recommendation: 'IMPORT' | 'MAYBE' | 'SKIP' | undefined;
-    if (suggestion.recommendation && ['IMPORT', 'MAYBE', 'SKIP'].includes(suggestion.recommendation)) {
-      recommendation = suggestion.recommendation;
-    } else if (dimensionMappings && dimensionMappings.length > 0) {
-      const highMediumCount = dimensionMappings.filter(
-        dm => dm.confidence === 'HIGH' || dm.confidence === 'MEDIUM'
-      ).length;
-      recommendation = highMediumCount >= 2 ? 'IMPORT' : highMediumCount >= 1 ? 'MAYBE' : 'SKIP';
-    } else {
-      recommendation = 'SKIP';
-    }
+    const isRelevant = suggestion.isRelevant !== false;
+    const relevanceScore = Math.min(100, Math.max(0, Number(suggestion.relevanceScore) || 50));
+    const reasoning = String(suggestion.reasoning || 'No reasoning provided').slice(0, 500);
+    const rawRecommendation = suggestion.recommendation && ['IMPORT', 'MAYBE', 'SKIP'].includes(suggestion.recommendation)
+      ? suggestion.recommendation
+      : undefined;
+    const recommendation = deriveMappingRecommendation({
+      grantBacked: isGrantBackedPaperTypeCode(blueprint.paperTypeCode),
+      rawRecommendation,
+      isRelevant,
+      relevanceScore,
+      reasoning,
+      dimensionMappings
+    });
     
     validatedSuggestions.push({
       paperId: suggestion.paperId,
-      isRelevant: suggestion.isRelevant !== false,
-      relevanceScore: Math.min(100, Math.max(0, Number(suggestion.relevanceScore) || 50)),
-      reasoning: String(suggestion.reasoning || 'No reasoning provided').slice(0, 500),
+      isRelevant,
+      relevanceScore,
+      reasoning,
       dimensionMappings,
       recommendation,
     });
@@ -502,12 +545,14 @@ function calculateBlueprintCoverage(
     for (const dimension of dimensions) {
       totalDimensions++;
       
+      // LOW mappings stay available for review, but they should not close an evidence gap.
       const matchingPapers: string[] = [];
       for (const suggestion of suggestions) {
         if (suggestion.dimensionMappings) {
           const hasMapping = suggestion.dimensionMappings.some(
             dm => dm.sectionKey === section.sectionKey && 
-                  dm.dimension.toLowerCase().trim() === dimension.toLowerCase().trim()
+                  dm.dimension.toLowerCase().trim() === dimension.toLowerCase().trim() &&
+                  (dm.confidence === 'HIGH' || dm.confidence === 'MEDIUM')
           );
           if (hasMapping) {
             matchingPapers.push(suggestion.paperId);

@@ -1,8 +1,20 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 import { ReviewerService, ReviewSummary } from '../../../../../lib/services/reviewerService';
+import { hasMeaningfulSectionContent, normalizeStringArray } from '@/lib/reviewer/content';
+
+function isScorableReviewedSection(section: any) {
+  if (section.status !== 'reviewed' || !hasMeaningfulSectionContent(section.user_input)) return false;
+  const mappingJson = section.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
+  const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
+  const linksDeclareWorkflow = linkedSections.some((link: any) => typeof link.workflowMode === 'string');
+  return !linksDeclareWorkflow || linkedSections.some((link: any) => String(link.workflowMode || '') === 'app_draft');
+}
 
 // Define types for the review JSON structure
 interface ReviewJson {
@@ -20,6 +32,7 @@ interface OverallReviewJson {
   major_strengths: string[];
   major_weaknesses: string[];
   cross_sectional_recommendations: string[];
+  supplementary_materials?: string[];
 }
 
 export default async function handler(
@@ -60,15 +73,8 @@ export default async function handler(
       return res.status(404).json({ error: 'Call not found' });
     }
     
-    // Verify this call belongs to the requesting user by getting user ID from email
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-      select: { id: true }
-    });
-    
-    if (!user || call.user_id !== user.id) {
-      return res.status(403).json({ error: 'Access denied. This call does not belong to you.' });
-    }
+    const callAccess = await requireReviewerCallAccess(id, session, res, req.method === 'GET' ? 'read' : 'editContent');
+    if (!callAccess) return;
 
     // Handle GET request - return existing final review
     if (req.method === 'GET') {
@@ -119,7 +125,8 @@ export default async function handler(
           executive_summary: '',
           major_strengths: [],
           major_weaknesses: [],
-          cross_sectional_recommendations: []
+          cross_sectional_recommendations: [],
+          supplementary_materials: []
         };
         
         let safeOverallReview: OverallReviewJson = defaultOverallReview;
@@ -137,7 +144,8 @@ export default async function handler(
               major_strengths: Array.isArray(reviewJson.major_strengths) ? reviewJson.major_strengths : [],
               major_weaknesses: Array.isArray(reviewJson.major_weaknesses) ? reviewJson.major_weaknesses : [],
               cross_sectional_recommendations: Array.isArray(reviewJson.cross_sectional_recommendations) ? 
-                                             reviewJson.cross_sectional_recommendations : []
+                                             reviewJson.cross_sectional_recommendations : [],
+              supplementary_materials: normalizeStringArray(reviewJson.supplementary_materials)
             };
           } catch (e) {
             console.error('Error parsing overall review JSON:', e);
@@ -170,7 +178,7 @@ export default async function handler(
         });
 
         // Filter to only include reviewed sections
-        const reviewedSections = sections.filter(section => section.status === 'reviewed');
+        const reviewedSections = sections.filter(isScorableReviewedSection);
 
         // Check if we have reviewed sections
         if (reviewedSections.length === 0) {
@@ -205,7 +213,7 @@ export default async function handler(
         let description = '';
         if (call.parsed_json && typeof call.parsed_json === 'object') {
           const parsedJson = call.parsed_json as any;
-          description = parsedJson.description || '';
+          description = parsedJson.reviewer_context_text || parsedJson.description || parsedJson.call_summary || '';
         }
 
         // Generate the overall review
@@ -244,7 +252,8 @@ export default async function handler(
             major_strengths: Array.isArray(overallReview.major_strengths) ? overallReview.major_strengths : [],
             major_weaknesses: Array.isArray(overallReview.major_weaknesses) ? overallReview.major_weaknesses : [],
             cross_sectional_recommendations: Array.isArray(overallReview.cross_sectional_recommendations) ? 
-                                           overallReview.cross_sectional_recommendations : []
+                                           overallReview.cross_sectional_recommendations : [],
+            supplementary_materials: normalizeStringArray(overallReview.supplementary_materials)
           };
 
           return res.status(200).json({

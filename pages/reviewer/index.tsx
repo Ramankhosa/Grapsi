@@ -11,6 +11,7 @@ type ReviewerCall = {
   id: string;
   project_title: string;
   agency_name: string;
+  reviewerMode?: string;
   review_status: string;
   created_at: string;
 };
@@ -144,10 +145,10 @@ export default function ReviewerDashboard() {
             <div className="bg-gray-50 p-4 rounded-md">
               <div className="flex items-center mb-2">
                 <div className="bg-green-500 text-white rounded-full w-6 h-6 flex items-center justify-center mr-2">1</div>
-                <h3 className="font-medium">Analyze the Call</h3>
+                <h3 className="font-medium">Select Template</h3>
               </div>
               <p className="text-sm text-gray-600">
-                Upload or paste a funding call to extract key requirements, eligibility criteria, and evaluation metrics.
+                Start from an approved funding-call template and optional manual reviewer rubric.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-md">
@@ -223,7 +224,7 @@ export default function ReviewerDashboard() {
                                 : "bg-red-100 text-red-800"
                             }`}
                           >
-                            {call.review_status === "parsed" ? "Analyzed" : 
+                            {call.review_status === "parsed" ? "Template ready" : 
                              call.review_status === "pending" ? "Pending" : "Failed"}
                           </span>
                           <span className="ml-4 text-sm text-gray-500">
@@ -262,7 +263,7 @@ export default function ReviewerDashboard() {
             <FaFileAlt className="mx-auto h-12 w-12 text-gray-300" />
             <h3 className="mt-2 text-lg font-medium text-gray-900">No projects yet</h3>
             <p className="mt-1 text-gray-500">
-              Click "Review New Project" to analyze a funding call.
+              Click "Review New Project" to start from an approved funding template.
             </p>
           </div>
         )}

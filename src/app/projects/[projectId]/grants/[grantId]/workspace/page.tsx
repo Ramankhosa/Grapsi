@@ -11,6 +11,7 @@ import {
 import GrantPrepPage from '../prep/page'
 import GrantBlueprintStageWrapper from '@/components/grants/GrantBlueprintStageWrapper'
 import { GrantPrepEmbedModeProvider } from '@/components/grantPrep/GrantPrepEmbedModeContext'
+import GrantReviewerStage from '@/components/grants/GrantReviewerStage'
 import GrantSectionDraftingStage from '@/components/grants/GrantSectionDraftingStage'
 import FullTextEvidenceExtractionStage from '@/components/stages/FullTextEvidenceExtractionStage'
 import LiteratureSearchStage from '@/components/stages/LiteratureSearchStage'
@@ -27,6 +28,7 @@ const STAGES = [
   { key: 'FULL_TEXT_EVIDENCE_EXTRACTION', label: 'Deep Analysis' },
   { key: 'FIGURE_PLANNER', label: 'Figure Planning' },
   { key: 'SECTION_DRAFTING', label: 'Section Drafting' },
+  { key: 'REVIEWER', label: 'Reviewer' },
 ] as const
 
 const WORKSPACE_NAV_COLLAPSED_KEY_PREFIX = 'grant-workspace-nav-collapsed'
@@ -552,6 +554,10 @@ export default function GrantWorkspacePage() {
         return null
       case 'SECTION_DRAFTING':
         return hasFrozenBlueprint ? null : 'Freeze the grant blueprint before continuing.'
+      case 'REVIEWER':
+        if (!hasFrozenBlueprint) return 'Freeze the grant blueprint before preparing the reviewer.'
+        if (draftedGrantContentCount <= 0) return 'Draft at least one grant section before preparing the reviewer.'
+        return null
       case 'FULL_TEXT_EVIDENCE_EXTRACTION':
         if (!hasFrozenBlueprint) return 'Freeze the grant blueprint before deep analysis.'
         if (!draftingSessionId) return 'Shadow drafting session is not available yet.'
@@ -562,7 +568,7 @@ export default function GrantWorkspacePage() {
       default:
         return null
     }
-  }, [citationsCount, deepCandidatesCount, draftingSessionId, hasBlueprint, hasFrozenBlueprint, workspace?.launchPreview?.canLaunch])
+  }, [citationsCount, deepCandidatesCount, draftedGrantContentCount, draftingSessionId, hasBlueprint, hasFrozenBlueprint, workspace?.launchPreview?.canLaunch])
 
   const handleNavigateToStage = useCallback(async (stageKey: string) => {
     const nextStage = stageKey as StageKey
@@ -656,6 +662,7 @@ export default function GrantWorkspacePage() {
           GRANTMENTOR: { label: 'GrantMentor', description: 'Grant prep and mentoring (call-aware)' },
           BLUEPRINT: { label: 'Blueprint', description: 'Define grant structure & dimensions' },
           FULL_TEXT_EVIDENCE_EXTRACTION: { label: 'Deep Analysis' },
+          REVIEWER: { label: 'Reviewer', description: 'Map draft sections into reviewer checks' },
         }}
         draftingSections={draftingSections}
         onNavigateToStage={handleNavigateToStage}
@@ -827,6 +834,16 @@ export default function GrantWorkspacePage() {
                 onSectionsUpdated={handleGrantSectionsUpdated}
                 sectionFilter={sectionFilter}
                 onSectionFilterChange={setSectionFilter}
+              />
+            ) : null}
+
+            {resolvedCurrentStage === 'REVIEWER' ? (
+              <GrantReviewerStage
+                projectId={projectId}
+                grantId={grantId}
+                authToken={token}
+                hasFrozenBlueprint={hasFrozenBlueprint}
+                draftedSectionCount={draftedGrantContentCount}
               />
             ) : null}
           </div>

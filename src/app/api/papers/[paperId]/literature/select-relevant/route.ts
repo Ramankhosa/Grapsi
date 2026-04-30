@@ -151,6 +151,18 @@ const REFERENCE_ARCHETYPE_VALUES = [
 type ReferenceArchetype = (typeof REFERENCE_ARCHETYPE_VALUES)[number];
 const REFERENCE_ARCHETYPE_SET = new Set<string>(REFERENCE_ARCHETYPE_VALUES);
 
+const GRANT_UTILITY_VALUES = [
+  'PROVES_NEED',
+  'SHOWS_GAP',
+  'VALIDATES_APPROACH',
+  'SUPPORTS_FEASIBILITY',
+  'QUANTIFIES_IMPACT',
+  'ESTABLISHES_PRECEDENT',
+  'POLICY_ALIGNMENT'
+] as const;
+type GrantUtility = (typeof GRANT_UTILITY_VALUES)[number];
+const GRANT_UTILITY_SET = new Set<string>(GRANT_UTILITY_VALUES);
+
 // Dimension mapping for blueprint integration
 interface DimensionMapping {
   sectionKey: string;
@@ -169,6 +181,7 @@ interface CitationMeta {
   claimTypesSupported: ClaimType[]; // Structured claim categories this paper can support
   evidenceBoundary: string | null;  // What should NOT be claimed from this paper
   positionalRelation: PositionalRelation;
+  grantUtility?: GrantUtility | null;
   usage: CitationUsage;
   referenceArchetype: ReferenceArchetype | null;
   archetypeSignal: string | null;
@@ -268,7 +281,7 @@ function normalizeAuthor(author?: string | null): string {
 }
 
 function toCitationMetaSnapshot(
-  suggestion: Pick<PaperRelevanceAnalysis, 'citationMeta' | 'relevanceScore'>
+  suggestion: Pick<PaperRelevanceAnalysis, 'citationMeta' | 'relevanceScore' | 'deepAnalysisRecommendation' | 'deepAnalysisRationale'>
 ): CitationMetaSnapshot | undefined {
   const meta = suggestion.citationMeta;
   if (!meta) {
@@ -297,6 +310,7 @@ function toCitationMetaSnapshot(
     evidenceBoundary: typeof meta.evidenceBoundary === 'string'
       ? meta.evidenceBoundary.slice(0, 400)
       : (meta.evidenceBoundary ?? null),
+    grantUtility: meta.grantUtility || null,
     positionalRelation: (() => {
       if (!meta.positionalRelation || typeof meta.positionalRelation !== 'object') {
         return undefined;
@@ -319,6 +333,10 @@ function toCitationMetaSnapshot(
       ? Math.max(0, Math.min(100, Number(suggestion.relevanceScore)))
       : undefined,
     analyzedAt: new Date().toISOString(),
+    deepAnalysisRecommendation: suggestion.deepAnalysisRecommendation,
+    deepAnalysisRationale: typeof suggestion.deepAnalysisRationale === 'string'
+      ? suggestion.deepAnalysisRationale.slice(0, 280)
+      : null,
     referenceArchetype: typeof meta.referenceArchetype === 'string'
       ? (REFERENCE_ARCHETYPE_SET.has(meta.referenceArchetype.toUpperCase())
         ? meta.referenceArchetype.toUpperCase()
@@ -763,6 +781,22 @@ function normalizeReferenceArchetype(value: unknown): ReferenceArchetype | null 
   return 'SYSTEM_ALGO_EVALUATION'; // safe default
 }
 
+function normalizeGrantUtility(value: unknown): GrantUtility | null {
+  if (typeof value !== 'string') return null;
+  const upper = value.trim().toUpperCase().replace(/[\s-]+/g, '_');
+  if (GRANT_UTILITY_SET.has(upper)) {
+    return upper as GrantUtility;
+  }
+  if (/\b(BURDEN|PREVALENCE|INCIDENCE|NEED|COST|BASELINE|URGENCY)\b/.test(upper)) return 'PROVES_NEED';
+  if (/\b(GAP|LIMITATION|BARRIER|UNMET|INSUFFICIENT|SHORTFALL)\b/.test(upper)) return 'SHOWS_GAP';
+  if (/\b(VALIDAT|RELIAB|MEASURE|METHOD|INDICATOR|BENCHMARK)\b/.test(upper)) return 'VALIDATES_APPROACH';
+  if (/\b(FEASIB|IMPLEMENT|PILOT|ADOPTION|DEPLOY|DELIVERY)\b/.test(upper)) return 'SUPPORTS_FEASIBILITY';
+  if (/\b(IMPACT|OUTCOME|EFFECT|IMPROV|REDUCT|INCREAS)\b/.test(upper)) return 'QUANTIFIES_IMPACT';
+  if (/\b(PRECEDENT|COMPAR|BASELINE|CURRENT_PRACTICE|ALTERNATIVE)\b/.test(upper)) return 'ESTABLISHES_PRECEDENT';
+  if (/\b(POLICY|STRATEGY|PRIORITY|FRAMEWORK|ROADMAP|MISSION)\b/.test(upper)) return 'POLICY_ALIGNMENT';
+  return null;
+}
+
 function normalizePositionalRelationLabel(value: unknown): PositionalRelationLabel | null {
   if (typeof value !== 'string') return null;
   const upper = value.trim().toUpperCase().replace(/[\s-]+/g, '_');
@@ -910,6 +944,90 @@ function deriveDeepAnalysisFields(input: {
   };
 }
 
+function hasGrantEvidenceSpecificity(
+  citationMeta: CitationMeta | undefined,
+  dimensionMappings: DimensionMapping[] | undefined,
+  reasoning: string
+): boolean {
+  const mappingText = (dimensionMappings || []).map(dm => dm.remark).join(' ');
+  const combined = [
+    reasoning,
+    citationMeta?.keyFindings,
+    citationMeta?.keyContribution,
+    citationMeta?.methodologicalApproach,
+    citationMeta?.limitationsOrGaps,
+    citationMeta?.evidenceBoundary,
+    mappingText
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return /\b\d[\d,.]*\s*(%|percent|million|billion|thousand|participants|patients|children|schools|sites|states|years|months|weeks)?\b/.test(combined)
+    || /\b(prevalence|incidence|burden|cost|baseline|gap|limitation|barrier|unmet|pilot|implementation|feasibility|validated|reliability|effect size|outcome|adoption|policy|framework|strategy|benchmark)\b/.test(combined);
+}
+
+function deriveGrantImportRecommendation(input: {
+  isRelevant: boolean;
+  relevanceScore: number;
+  rawRecommendation?: 'IMPORT' | 'MAYBE' | 'SKIP';
+  dimensionMappings?: DimensionMapping[];
+  citationMeta?: CitationMeta;
+  reasoning: string;
+  deepAnalysisRecommendation: DeepAnalysisRecommendation;
+}): 'IMPORT' | 'MAYBE' | 'SKIP' {
+  const score = Math.min(100, Math.max(0, Number(input.relevanceScore) || 0));
+  const mappings = Array.isArray(input.dimensionMappings) ? input.dimensionMappings : [];
+  const highMedCount = mappings.filter(dm => dm.confidence === 'HIGH' || dm.confidence === 'MEDIUM').length;
+  const hasHigh = mappings.some(dm => dm.confidence === 'HIGH');
+  const hasConfidentMapping = highMedCount > 0;
+  const hasSpecificEvidence = hasGrantEvidenceSpecificity(input.citationMeta, mappings, input.reasoning);
+  const stressSignalStrong = hasStressSignalStrong(input.citationMeta, input.reasoning);
+
+  if (!input.isRelevant || score < 45) {
+    return 'SKIP';
+  }
+
+  if (!hasConfidentMapping) {
+    return score >= 80 && hasSpecificEvidence ? 'MAYBE' : 'SKIP';
+  }
+
+  if (input.deepAnalysisRecommendation === 'DEEP_ANCHOR' && hasSpecificEvidence && (hasHigh || highMedCount >= 2)) {
+    return 'IMPORT';
+  }
+
+  if (input.deepAnalysisRecommendation === 'DEEP_STRESS_TEST' && stressSignalStrong && hasSpecificEvidence) {
+    return 'IMPORT';
+  }
+
+  if (hasSpecificEvidence && (score >= 75 || hasHigh || highMedCount >= 2)) {
+    return 'IMPORT';
+  }
+
+  if (input.rawRecommendation === 'IMPORT' && hasSpecificEvidence && score >= 65) {
+    return 'IMPORT';
+  }
+
+  if (score >= 60 || input.rawRecommendation === 'MAYBE') {
+    return 'MAYBE';
+  }
+
+  return 'SKIP';
+}
+
+function deriveImportRecommendation(input: {
+  grantBacked: boolean;
+  isRelevant: boolean;
+  relevanceScore: number;
+  rawRecommendation?: 'IMPORT' | 'MAYBE' | 'SKIP';
+  dimensionMappings?: DimensionMapping[];
+  citationMeta?: CitationMeta;
+  reasoning: string;
+  deepAnalysisRecommendation: DeepAnalysisRecommendation;
+}): 'IMPORT' | 'MAYBE' | 'SKIP' | undefined {
+  if (input.grantBacked) {
+    return deriveGrantImportRecommendation(input);
+  }
+  return input.rawRecommendation;
+}
+
 function buildAdvisoryShortlistSummary(
   suggestions: PaperRelevanceAnalysis[],
   maxSuggestions: number
@@ -998,7 +1116,8 @@ function normalizeSuggestionForOutput(
   const mappings = Array.isArray(suggestion?.dimensionMappings)
     ? suggestion.dimensionMappings.filter((dm: any) => dm?.sectionKey && dm?.dimension)
     : [];
-  const recommendation = blueprint
+  const grantBacked = isGrantBackedPaperTypeCode(blueprint?.paperTypeCode);
+  const rawRecommendation = blueprint
     ? (normalizeRecommendation(suggestion?.recommendation, mappings) || 'SKIP')
     : normalizeRecommendation(suggestion?.recommendation, mappings);
   const isRelevant = suggestion?.isRelevant !== false;
@@ -1007,12 +1126,22 @@ function normalizeSuggestionForOutput(
   const { deepAnalysisRecommendation, deepAnalysisRationale } = deriveDeepAnalysisFields({
     isRelevant,
     relevanceScore,
-    recommendation,
+    recommendation: rawRecommendation,
     dimensionMappings: mappings,
     citationMeta: suggestion?.citationMeta,
     reasoning,
     rawDeepAnalysisRecommendation: suggestion?.deepAnalysisRecommendation,
     rawDeepAnalysisRationale: suggestion?.deepAnalysisRationale
+  });
+  const recommendation = deriveImportRecommendation({
+    grantBacked,
+    isRelevant,
+    relevanceScore,
+    rawRecommendation,
+    dimensionMappings: mappings,
+    citationMeta: suggestion?.citationMeta,
+    reasoning,
+    deepAnalysisRecommendation
   });
 
   return {
@@ -1113,9 +1242,11 @@ ${sectionsText}
    - Only map if there's concrete evidence in the abstract
 
 8. RECOMMENDATION:
-   - "IMPORT" if paper maps to 2+ dimensions with HIGH/MEDIUM confidence
+${grantBacked ? `   - "IMPORT" only if the paper provides a reviewer-usable grant evidence asset for need, gap, approach validity, feasibility, impact, precedent, or policy fit
+   - "MAYBE" if it is relevant but weak, redundant, background-only, or needs full text before relying on it
+   - "SKIP" if it does not support a concrete grant claim, even when topically related` : `   - "IMPORT" if paper maps to 2+ dimensions with HIGH/MEDIUM confidence
    - "MAYBE" if paper maps to 1 dimension or has only LOW confidence mappings
-   - "SKIP" if paper doesn't map to any blueprint evidence pillars (but might still be useful for background)
+   - "SKIP" if paper doesn't map to any blueprint evidence pillars (but might still be useful for background)`}
 
 9. DEEP ANALYSIS RECOMMENDATION (WORTHINESS ONLY):
    Assign exactly one: DEEP_ANCHOR, DEEP_SUPPORT, DEEP_STRESS_TEST, LIT_ONLY
@@ -1154,7 +1285,7 @@ For each paper, determine:
    - QUANTIFIES_IMPACT: outcomes, effect sizes, or measurable results from related work
    - SUPPORTS_FEASIBILITY: analogous implementation success, pilot evidence, or delivery precedent
    - ESTABLISHES_PRECEDENT: comparative baseline, precedent, or policy/implementation case
-   Mention the strongest utility directly in your reasoning and dimension remarks.
+   Set citationMeta.grantUtility to the strongest single utility and mention that utility directly in your reasoning and dimension remarks.
 9. POSITIONAL RELATION to the research question:
    Assign exactly one: REINFORCES | CONTRADICTS | EXTENDS | QUALIFIES | TENSION
    - REINFORCES: Directly supports the proposal logic or evidence need
@@ -1241,6 +1372,7 @@ For each paper, determine:
         "limitationsOrGaps": "<what they didn't address, or null>",
         "claimTypesSupported": ["<BACKGROUND|GAP|METHOD|LIMITATION|DATASET|IMPLEMENTATION_CONSTRAINT>"],
         "evidenceBoundary": "<one sentence boundary on what this paper does NOT support, or null>",
+        "grantUtility": "<PROVES_NEED|SHOWS_GAP|VALIDATES_APPROACH|SUPPORTS_FEASIBILITY|QUANTIFIES_IMPACT|ESTABLISHES_PRECEDENT|POLICY_ALIGNMENT|null>",
         "positionalRelation": {
           "relation": "<REINFORCES|CONTRADICTS|EXTENDS|QUALIFIES|TENSION>",
           "rationale": "<one sentence explaining the positional relation>"
@@ -1319,7 +1451,8 @@ IMPORTANT CRITERIA:
 - Score papers by persuasion value for the proposal, not just topic similarity
 - In reasoning and dimension remarks, state the specific fact, statistic, limitation, outcome, or precedent that can be nailed to the selected evidence pillar and later injected into section drafts
 - For burden and gap dimensions, one concrete fact beats broad thematic similarity
-- For feasibility and method dimensions, recent analogous implementation evidence is especially valuable` : ''}
+- For feasibility and method dimensions, recent analogous implementation evidence is especially valuable
+- IMPORT only when a reviewer could use the paper as evidence for need, gap, approach validity, feasibility, impact, precedent, or policy fit. Use MAYBE for relevant but weak or redundant papers.` : ''}
 
 Respond in the following JSON format ONLY (no markdown, no explanation outside JSON):
 ${jsonSchema}
@@ -1431,6 +1564,7 @@ function parseAndValidateLLMResponse(
     const evidenceBoundary = typeof rawMeta.evidenceBoundary === 'string'
       ? rawMeta.evidenceBoundary.trim().slice(0, 400)
       : null;
+    const grantUtility = normalizeGrantUtility(rawMeta.grantUtility ?? suggestion.grantUtility);
     const rawPositionalRelation = rawMeta.positionalRelation && typeof rawMeta.positionalRelation === 'object'
       ? rawMeta.positionalRelation as Record<string, unknown>
       : {};
@@ -1477,6 +1611,7 @@ function parseAndValidateLLMResponse(
         relation: finalPositionalRelation,
         rationale: finalPositionalRationale
       },
+      grantUtility,
       usage: {
         introduction: Boolean(usage.introduction),
         literatureReview: Boolean(usage.literatureReview !== false), // Default true for relevant papers
@@ -1527,7 +1662,7 @@ function parseAndValidateLLMResponse(
       }
     }
     
-    const recommendation = blueprint
+    const rawRecommendation = blueprint
       ? (normalizeRecommendation(suggestion.recommendation, dimensionMappings) || 'SKIP')
       : undefined;
     const normalizedIsRelevant = suggestion.isRelevant !== false;
@@ -1536,12 +1671,22 @@ function parseAndValidateLLMResponse(
     const { deepAnalysisRecommendation, deepAnalysisRationale } = deriveDeepAnalysisFields({
       isRelevant: normalizedIsRelevant,
       relevanceScore: normalizedRelevanceScore,
-      recommendation,
+      recommendation: rawRecommendation,
       dimensionMappings,
       citationMeta,
       reasoning: normalizedReasoning,
       rawDeepAnalysisRecommendation: suggestion.deepAnalysisRecommendation,
       rawDeepAnalysisRationale: suggestion.deepAnalysisRationale
+    });
+    const recommendation = deriveImportRecommendation({
+      grantBacked: isGrantBackedPaperTypeCode(blueprint?.paperTypeCode),
+      isRelevant: normalizedIsRelevant,
+      relevanceScore: normalizedRelevanceScore,
+      rawRecommendation,
+      dimensionMappings,
+      citationMeta,
+      reasoning: normalizedReasoning,
+      deepAnalysisRecommendation
     });
 
     validatedSuggestions.push({
@@ -1597,13 +1742,15 @@ function calculateBlueprintCoverage(
     for (const dimension of dimensions) {
       totalDimensions++;
       
-      // Find papers that map to this dimension
+      // Find papers that map to this dimension with usable confidence.
+      // LOW mappings remain visible in detailed rows but should not close a grant evidence gap.
       const matchingPapers: string[] = [];
       for (const suggestion of suggestions) {
         if (suggestion.dimensionMappings) {
           const hasMapping = suggestion.dimensionMappings.some(
             dm => dm.sectionKey === section.sectionKey && 
-                  dm.dimension.toLowerCase().trim() === dimension.toLowerCase().trim()
+                  dm.dimension.toLowerCase().trim() === dimension.toLowerCase().trim() &&
+                  (dm.confidence === 'HIGH' || dm.confidence === 'MEDIUM')
           );
           if (hasMapping) {
             matchingPapers.push(suggestion.paperId);

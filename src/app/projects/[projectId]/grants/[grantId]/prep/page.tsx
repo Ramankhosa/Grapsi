@@ -106,10 +106,11 @@ function buildPostLaunchWarning(impact: PrepPostLaunchImpact | null, sessionStat
   return null;
 }
 
-export default function GrantPrepPage({
-  onWorkspaceLaunched,
-  postLaunchImpactOverride,
-}: GrantPrepPageProps = {}) {
+export default function GrantPrepPage(props: any) {
+  const {
+    onWorkspaceLaunched,
+    postLaunchImpactOverride,
+  } = props || {};
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();

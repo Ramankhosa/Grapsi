@@ -4,6 +4,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { collectOpenAICompatibleSSEStream } from './streaming-utils'
 
 const DEFAULT_OPENAI_TIMEOUT_MS = 30000
 // GPT-5 and o1 models use reasoning and produce longer outputs; they need a much
@@ -241,6 +242,86 @@ export class OpenAIProvider implements LLMProvider {
         }
       }
       
+      if (request.stream?.onToken) {
+        const streamRequestBody = {
+          ...requestBody,
+          stream: true,
+          stream_options: { include_usage: true }
+        }
+        let lastError: Error | null = null
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+          let responseStarted = false
+          const startedAt = Date.now()
+
+          try {
+            const response = await fetch(`${this.config.baseURL}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${this.config.apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(streamRequestBody),
+              signal: controller.signal
+            })
+
+            if (!response.ok) {
+              const errorText = await response.text()
+              const statusError = new Error(`OpenAI API error: ${response.status} ${errorText}`)
+              const canRetry = attempt < maxAttempts && RETRYABLE_HTTP_STATUS_CODES.has(response.status)
+
+              if (canRetry) {
+                console.warn(
+                  `[OpenAIProvider] Streaming attempt ${attempt}/${maxAttempts} returned status ${response.status}. Retrying...`
+                )
+                await this.waitBeforeRetry(attempt)
+                continue
+              }
+
+              throw statusError
+            }
+
+            responseStarted = true
+            const streamed = await collectOpenAICompatibleSSEStream({
+              response,
+              request,
+              providerName: 'openai',
+              modelClass: requestedModel,
+              actualModel: modelToUse,
+              startedAt,
+              metadata: {
+                modelUsed: modelToUse
+              }
+            })
+
+            if (!streamed.output.trim()) {
+              throw new Error('OpenAI API returned an empty streaming response')
+            }
+
+            return streamed
+          } catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error))
+
+            const canRetry = !responseStarted && attempt < maxAttempts && this.isRetryableNetworkError(lastError)
+            if (canRetry) {
+              console.warn(
+                `[OpenAIProvider] Streaming attempt ${attempt}/${maxAttempts} failed (${lastError.message}). Retrying...`
+              )
+              await this.waitBeforeRetry(attempt)
+              continue
+            }
+
+            throw lastError
+          } finally {
+            clearTimeout(timeoutId)
+          }
+        }
+
+        throw new Error(`OpenAI streaming API call failed after ${maxAttempts} attempts: ${lastError?.message || 'Unknown error'}`)
+      }
+
       let lastError: Error | null = null
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {

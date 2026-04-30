@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getServerSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 
 export default async function handler(
@@ -21,17 +24,8 @@ export default async function handler(
     return res.status(400).json({ error: 'Invalid call ID' });
   }
 
-  // Check if the call belongs to the logged-in user
-  const callExists = await prisma.reviewerCall.findFirst({
-    where: {
-      id: id as string,
-      user_id: session.user.id,
-    },
-  });
-  
-  if (!callExists) {
-    return res.status(404).json({ error: 'Call not found or you don\'t have permission' });
-  }
+  const callAccess = await requireReviewerCallAccess(id as string, session, res, req.method === 'GET' ? 'read' : 'editContent');
+  if (!callAccess) return;
 
   // Handle different HTTP methods
   if (req.method === 'GET') {

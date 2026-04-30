@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getServerSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 import { getSectionPosition } from '../../../../../lib/reviewerService';
 import axios from 'axios';
@@ -32,21 +35,8 @@ export default async function handler(
   }
   
   try {
-    // Verify the call belongs to the user
-    const calls = await prisma.$queryRaw`
-      SELECT user_id FROM "reviewer_calls" 
-      WHERE id = ${callId}
-    `;
-    
-    const call = calls[0];
-    
-    if (!call) {
-      return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    if (call.user_id !== session.user.id) {
-      return res.status(403).json({ error: 'Not authorized to access this call' });
-    }
+    const callAccess = await requireReviewerCallAccess(callId, session, res, 'editContent');
+    if (!callAccess) return;
     
     // Get the section to review
     const sections = await prisma.$queryRaw`
@@ -118,11 +108,16 @@ export default async function handler(
       }
       
       // Call the review endpoint
-      const apiUrl = `${req.headers.origin}/api/reviewer/calls/${callId}/sections/${sectionId}/review`;
+      const origin = req.headers.origin || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
+      const apiUrl = `${origin}/api/reviewer/calls/${callId}/sections/${sectionId}/review`;
+      const authHeader = Array.isArray(req.headers.authorization)
+        ? req.headers.authorization[0]
+        : req.headers.authorization;
       const response = await axios.post(apiUrl, {
         contextSectionIds: priorSectionSummaries.map(s => s.section_title)
       }, {
         headers: {
+          ...(authHeader ? { Authorization: authHeader } : {}),
           Cookie: req.headers.cookie || ''
         }
       });
@@ -135,7 +130,25 @@ export default async function handler(
         used_dependency_sections: priorSectionSummaries.map(s => s.section_title)
       });
     } catch (error) {
-      console.error('Error calling review API:', error);
+      console.error('Error calling review API:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message,
+      });
+      if (error.response?.status === 429) {
+        const retryAfterHeader = error.response.headers?.['retry-after'];
+        const retryAfterMs = Number(error.response.data?.retryAfterMs)
+          || (retryAfterHeader ? Number(retryAfterHeader) * 1000 : 60000);
+        return res
+          .status(429)
+          .setHeader('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))))
+          .json({
+            error: error.response.data?.error || 'Review model is rate limited',
+            code: 'GEMINI_RATE_LIMITED',
+            retryAfterMs,
+            section: section.section_title
+          });
+      }
       return res.status(500).json({ 
         error: 'Failed to review section with dependencies',
         details: error.message

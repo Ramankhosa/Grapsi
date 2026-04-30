@@ -16,12 +16,23 @@ const citationMetaSchema = z.object({
   methodologicalApproach: z.string().nullable().optional(),
   relevanceToResearch: z.string().optional(),
   limitationsOrGaps: z.string().nullable().optional(),
+  claimTypesSupported: z.array(z.string()).optional(),
+  evidenceBoundary: z.string().nullable().optional(),
+  positionalRelation: z.object({
+    relation: z.string().optional(),
+    rationale: z.string().optional()
+  }).optional(),
+  referenceArchetype: z.string().nullable().optional(),
+  archetypeSignal: z.string().nullable().optional(),
   usage: z.object({
     introduction: z.boolean().optional(),
     literatureReview: z.boolean().optional(),
     methodology: z.boolean().optional(),
     comparison: z.boolean().optional()
   }).optional(),
+  grantUtility: z.string().nullable().optional(),
+  deepAnalysisRecommendation: z.string().nullable().optional(),
+  deepAnalysisRationale: z.string().nullable().optional(),
   relevanceScore: z.number().optional()
 }).optional().nullable();
 
@@ -94,6 +105,21 @@ function toCitationMetaSnapshot(raw: any, fallbackRelevanceScore?: number): Cita
     return undefined;
   }
 
+  const claimTypeSet = new Set([
+    'BACKGROUND',
+    'GAP',
+    'METHOD',
+    'LIMITATION',
+    'DATASET',
+    'IMPLEMENTATION_CONSTRAINT'
+  ]);
+  const positionalRelationSet = new Set([
+    'REINFORCES',
+    'CONTRADICTS',
+    'EXTENDS',
+    'QUALIFIES',
+    'TENSION'
+  ]);
   const result: CitationMetaSnapshot = {};
   if (typeof raw.keyContribution === 'string' && raw.keyContribution.trim()) {
     result.keyContribution = raw.keyContribution.trim().slice(0, 400);
@@ -116,6 +142,24 @@ function toCitationMetaSnapshot(raw: any, fallbackRelevanceScore?: number): Cita
   } else if (raw.limitationsOrGaps === null) {
     result.limitationsOrGaps = null;
   }
+  if (Array.isArray(raw.claimTypesSupported)) {
+    const claimTypes = Array.from(
+      new Set(
+        raw.claimTypesSupported
+          .map((value: unknown) => String(value).trim().toUpperCase())
+          .filter((value: string) => claimTypeSet.has(value))
+      )
+    ).slice(0, 3) as NonNullable<CitationMetaSnapshot['claimTypesSupported']>;
+    if (claimTypes.length > 0) {
+      result.claimTypesSupported = claimTypes;
+    }
+  }
+  if (typeof raw.evidenceBoundary === 'string') {
+    const value = raw.evidenceBoundary.trim();
+    result.evidenceBoundary = value ? value.slice(0, 400) : null;
+  } else if (raw.evidenceBoundary === null) {
+    result.evidenceBoundary = null;
+  }
   if (raw.usage && typeof raw.usage === 'object') {
     result.usage = {
       introduction: Boolean(raw.usage.introduction),
@@ -124,10 +168,56 @@ function toCitationMetaSnapshot(raw: any, fallbackRelevanceScore?: number): Cita
       comparison: Boolean(raw.usage.comparison)
     };
   }
+  if (raw.positionalRelation && typeof raw.positionalRelation === 'object') {
+    const relationCandidate = typeof raw.positionalRelation.relation === 'string'
+      ? raw.positionalRelation.relation.trim().toUpperCase()
+      : '';
+    const rationaleCandidate = typeof raw.positionalRelation.rationale === 'string'
+      ? raw.positionalRelation.rationale.trim().slice(0, 300)
+      : '';
+    if (positionalRelationSet.has(relationCandidate) || rationaleCandidate) {
+      result.positionalRelation = {
+        relation: positionalRelationSet.has(relationCandidate)
+          ? relationCandidate as NonNullable<CitationMetaSnapshot['positionalRelation']>['relation']
+          : undefined,
+        rationale: rationaleCandidate || undefined
+      };
+    }
+  }
 
   const relevanceScore = Number(raw.relevanceScore ?? fallbackRelevanceScore);
   if (Number.isFinite(relevanceScore)) {
     result.relevanceScore = Math.max(0, Math.min(100, relevanceScore));
+  }
+  if (typeof raw.grantUtility === 'string') {
+    const value = raw.grantUtility.trim().toUpperCase().replace(/[\s-]+/g, '_');
+    result.grantUtility = value ? value.slice(0, 80) : null;
+  } else if (raw.grantUtility === null) {
+    result.grantUtility = null;
+  }
+  if (typeof raw.deepAnalysisRecommendation === 'string') {
+    const value = raw.deepAnalysisRecommendation.trim().toUpperCase();
+    result.deepAnalysisRecommendation = value ? value.slice(0, 80) : null;
+  } else if (raw.deepAnalysisRecommendation === null) {
+    result.deepAnalysisRecommendation = null;
+  }
+  if (typeof raw.deepAnalysisRationale === 'string') {
+    const value = raw.deepAnalysisRationale.trim();
+    result.deepAnalysisRationale = value ? value.slice(0, 280) : null;
+  } else if (raw.deepAnalysisRationale === null) {
+    result.deepAnalysisRationale = null;
+  }
+  if (typeof raw.referenceArchetype === 'string') {
+    const value = raw.referenceArchetype.trim().toUpperCase();
+    result.referenceArchetype = value ? value.slice(0, 80) : null;
+  } else if (raw.referenceArchetype === null) {
+    result.referenceArchetype = null;
+  }
+  if (typeof raw.archetypeSignal === 'string') {
+    const value = raw.archetypeSignal.trim();
+    result.archetypeSignal = value ? value.slice(0, 300) : null;
+  } else if (raw.archetypeSignal === null) {
+    result.archetypeSignal = null;
   }
   result.analyzedAt = new Date().toISOString();
 

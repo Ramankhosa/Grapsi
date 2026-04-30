@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { generateFromOpenAI } from '../openaiService';
 import { generateFromGemini, generateFromGeminiWithFiles } from '../geminiService';
+import { normalizeStringArray, parseReviewerScore } from '@/lib/reviewer/content';
 import axios from 'axios';
 
 export interface ReviewSummary {
@@ -75,7 +76,7 @@ Ensure all text values are properly escaped for JSON.`;
       
       // Ensure we have all expected fields
       return {
-        score: parseFloat(reviewJson.score) || 6.0,
+        score: parseReviewerScore(reviewJson.score),
         summary: reviewJson.summary || "No summary provided.",
         strengths: reviewJson.strengths || [],
         weaknesses: reviewJson.weaknesses || [],
@@ -84,14 +85,7 @@ Ensure all text values are properly escaped for JSON.`;
       };
     } catch (error) {
       console.error('Error parsing LLM response:', error);
-      return {
-        score: 6.0,
-        summary: "There was an error processing the review.",
-        strengths: [],
-        weaknesses: [],
-        recommendations: [],
-        suggestions: []
-      };
+      throw new Error('Failed to parse section review response');
     }
   }
 
@@ -226,25 +220,7 @@ IMPORTANT: You must respond ONLY with valid JSON following this exact format wit
       return reviewJson;
     } catch (error) {
       console.error('Error parsing abstract review:', error);
-      
-      // Return a fallback review structure
-      return {
-        section_title: "Abstract",
-        proposal_title: proposalTitle,
-        call_summary: callSummary,
-        section_score: 10.0,
-        score_breakdown: {
-          clarity_and_conciseness: 2.0,
-          problem_definition: 2.0,
-          objectives_and_scope: 2.0,
-          innovation_and_significance: 2.0,
-          alignment_with_call: 2.0
-        },
-        section_summary: "There was an error processing the abstract review. Please try again later.",
-        section_strengths: ["Unable to analyze strengths due to processing error."],
-        section_weaknesses: ["Unable to analyze weaknesses due to processing error."],
-        suggestions_for_improvement: ["Please try regenerating this review."]
-      };
+      throw new Error('Failed to parse abstract review response');
     }
   }
 
@@ -312,7 +288,7 @@ Return your analysis strictly as a JSON object with these keys. Do not include a
       
       // Ensure we have all expected fields with proper defaults
       return {
-        score: parseFloat(reviewJson.score) || originalReview.score || 3.0,
+        score: parseReviewerScore(reviewJson.score),
         improvement_summary: reviewJson.improvement_summary || "No improvement summary provided.",
         key_changes: reviewJson.key_changes || [],
         improvements: reviewJson.improvements || [],
@@ -322,15 +298,7 @@ Return your analysis strictly as a JSON object with these keys. Do not include a
       };
     } catch (error) {
       console.error('Error parsing LLM response:', error);
-      return {
-        score: originalReview.score || 3.0,
-        improvement_summary: "There was an error processing the revision comparison.",
-        key_changes: [],
-        improvements: [],
-        remaining_issues: [],
-        further_recommendations: [],
-        is_significant_improvement: false
-      };
+      throw new Error('Failed to parse revision comparison response');
     }
   }
 
@@ -370,6 +338,13 @@ The proposal consists of the following sections, each with its own review:
 Context Summary: ${section.context_summary || 'Not available'}
 Score: ${section.review_json.score || 'N/A'}
 Key Points: ${section.review_json.summary || 'Not available'}\n`;
+      const reminders = [
+        ...(Array.isArray(section.review_json.non_scoring_reminders) ? section.review_json.non_scoring_reminders : []),
+        ...(Array.isArray(section.review_json.supplementary_materials) ? section.review_json.supplementary_materials : []),
+      ].filter(Boolean);
+      if (reminders.length > 0) {
+        userPrompt += `Non-scoring supplementary reminders: ${reminders.join('; ')}\n`;
+      }
     });
 
     userPrompt += `\nBased on these section reviews, please provide a comprehensive overall evaluation with:
@@ -378,6 +353,7 @@ Key Points: ${section.review_json.summary || 'Not available'}\n`;
 3. Major strengths across the proposal (4-6 bullet points)
 4. Major weaknesses across the proposal (4-6 bullet points)
 5. Cross-sectional recommendations with examples, model responses, etc. for improvement (4-6 bullet points but can be more if needed)
+6. Recommended supplementary materials the user should arrange outside the reviewed draft (attachments, budget forms, CVs, support letters, ethics approvals, declarations, signatures, portal uploads). These are reminders only and must not reduce the score.
 
 Return your response strictly in JSON format with the following structure:
 
@@ -396,6 +372,10 @@ Return your response strictly in JSON format with the following structure:
   "cross_sectional_recommendations": [
     "Provide more detailed budget justification for equipment",
     "Revise timeline to be more realistic given the project complexity"
+  ],
+  "supplementary_materials": [
+    "Attach the completed budget workbook required by the funder",
+    "Include CVs or biosketches for key personnel"
   ]
 }`;
 
@@ -420,23 +400,16 @@ Return your response strictly in JSON format with the following structure:
       
       // Ensure we have all expected fields
       return {
-        overall_score: parseFloat(reviewJson.overall_score) || 6.0,
+        overall_score: parseReviewerScore(reviewJson.overall_score),
         executive_summary: reviewJson.executive_summary || "No executive summary provided.",
-        major_strengths: reviewJson.major_strengths || [],
-        major_weaknesses: reviewJson.major_weaknesses || [],
-        cross_sectional_recommendations: reviewJson.cross_sectional_recommendations || []
+        major_strengths: normalizeStringArray(reviewJson.major_strengths),
+        major_weaknesses: normalizeStringArray(reviewJson.major_weaknesses),
+        cross_sectional_recommendations: normalizeStringArray(reviewJson.cross_sectional_recommendations),
+        supplementary_materials: normalizeStringArray(reviewJson.supplementary_materials)
       };
     } catch (error) {
       console.error('Error parsing LLM response for overall review:', error);
-      
-      // Return a fallback review structure
-      return {
-        overall_score: 6.0,
-        executive_summary: "There was an error processing the overall review. Please try again later.",
-        major_strengths: ["The proposal has potential but needs revision."],
-        major_weaknesses: ["Unable to process detailed weaknesses due to technical error."],
-        cross_sectional_recommendations: ["Please regenerate this review for more detailed feedback."]
-      };
+      throw new Error('The reviewer model returned an invalid final review. Please retry.');
     }
   }
   
@@ -880,15 +853,7 @@ Return your response strictly in JSON format with the following structure:
       return reviewJson;
     } catch (error) {
       console.error('Error parsing introduction review:', error);
-      
-      // Return a fallback review structure
-      return {
-        score: 6.0,
-        summary: "There was an error processing the introduction review. Please try again later.",
-        strengths: ["Unable to analyze strengths due to processing error."],
-        weaknesses: ["Unable to analyze weaknesses due to processing error."],
-        suggestions: ["Please try regenerating this review."]
-      };
+      throw new Error('Failed to parse introduction review response');
     }
   }
 
@@ -1028,15 +993,7 @@ Return your response strictly in JSON format with the following structure:
       return reviewJson;
     } catch (error) {
       console.error('Error parsing objectives review:', error);
-      
-      // Return a fallback review structure
-      return {
-        score: 6.0,
-        summary: "There was an error processing the objectives review. Please try again later.",
-        strengths: ["Unable to analyze strengths due to processing error."],
-        weaknesses: ["Unable to analyze weaknesses due to processing error."],
-        suggestions: ["Please try regenerating this review."]
-      };
+      throw new Error('Failed to parse objectives review response');
     }
   }
 
@@ -1146,7 +1103,7 @@ Return your response strictly in JSON format with the following structure:
       // Ensure we have all expected fields and normalize the structure
       return {
         section: "Literature Review",
-        score: reviewJson.score || 5,
+        score: parseReviewerScore(reviewJson.score),
         summary: reviewJson.summary || "No summary provided.",
         strengths: reviewJson.strengths || [],
         weaknesses: reviewJson.weaknesses || [],
@@ -1154,14 +1111,7 @@ Return your response strictly in JSON format with the following structure:
       };
     } catch (error) {
       console.error('Error parsing LLM response for Literature Review:', error);
-      return {
-        section: "Literature Review",
-        score: 5,
-        summary: "There was an error processing the Literature Review.",
-        strengths: [],
-        weaknesses: [],
-        suggestions: []
-      };
+      throw new Error('Failed to parse literature review response');
     }
   }
 
@@ -1334,7 +1284,7 @@ Example of INCORRECT format (DO NOT USE):
       // Ensure we have all expected fields and normalize the structure
       return {
         section: "Methodology",
-        score: reviewJson.score || 5,
+        score: parseReviewerScore(reviewJson.score),
         summary: reviewJson.summary || "No summary provided.",
         strengths: reviewJson.strengths || [],
         weaknesses: reviewJson.weaknesses || [],
@@ -1342,14 +1292,7 @@ Example of INCORRECT format (DO NOT USE):
       };
     } catch (error) {
       console.error('Error parsing LLM response for Methodology review:', error);
-      return {
-        section: "Methodology",
-        score: 5,
-        summary: "There was an error processing the Methodology review.",
-        strengths: [],
-        weaknesses: [],
-        suggestions: []
-      };
+      throw new Error('Failed to parse methodology review response');
     }
   }
 
@@ -1468,7 +1411,7 @@ Return your response strictly in JSON format with the following structure:
       // Ensure we have all expected fields and normalize the structure
       return {
         section: "Project Timeline",
-        score: reviewJson.score || 5,
+        score: parseReviewerScore(reviewJson.score),
         summary: reviewJson.summary || "No summary provided.",
         strengths: reviewJson.strengths || [],
         weaknesses: reviewJson.weaknesses || [],
@@ -1476,14 +1419,7 @@ Return your response strictly in JSON format with the following structure:
       };
     } catch (error) {
       console.error('Error parsing LLM response for Project Timeline review:', error);
-      return {
-        section: "Project Timeline",
-        score: 5,
-        summary: "There was an error processing the Project Timeline review.",
-        strengths: [],
-        weaknesses: [],
-        suggestions: []
-      };
+      throw new Error('Failed to parse project timeline review response');
     }
   }
 
@@ -1544,11 +1480,13 @@ Assess the following aspects:
 2. **Appropriateness**: Are the requested funds appropriate for the proposed activities?
 3. **Cost-Effectiveness**: Does the budget demonstrate value for money and efficient use of resources?
 4. **Alignment with Activities**: Does the budget align with the proposed methodology and timeline?
-5. **Completeness**: Are all necessary budget categories included (personnel, equipment, travel, etc.)?
-6. **Compliance**: Does the budget comply with funding agency guidelines and restrictions?
+5. **Draft Justification Completeness**: Does the text justify the budget categories it actually discusses?
+6. **Compliance within Provided Draft**: Does the text respect funding agency restrictions that are assessable from the draft?
 7. **Resource Distribution**: Is there appropriate allocation across budget categories and project phases?
 ${methodologySummary ? `8. **Resource-Methodology Alignment**: Do the budgeted resources match the methodological needs?` : ''}
 ${timelineSummary ? `9. **Timeline Consistency**: Does the budget allocation align with the project timeline?` : ''}
+
+Score only the Budget Justification text and any attached assets supplied to this review. Do not reduce the score for missing separate budget workbooks, quotes, invoices, institutional approvals, signatures, portal forms, or other submission materials. Assume those supplementary materials will be arranged by the user and mention them only as reminders.
 
 ### Scoring Guidelines
 - Assign a score out of 10 using the following scale:
@@ -1569,7 +1507,9 @@ Return your response strictly in JSON format with the following structure:
   "summary": [1-2 paragraph evaluation],
   "strengths": [array of specific strengths],
   "weaknesses": [array of specific weaknesses],
-  "suggestions": [array of actionable suggestions]
+  "suggestions": [array of actionable suggestions],
+  "non_scoring_reminders": [array of non-scoring budget/submission reminders],
+  "supplementary_materials": [array of budget materials the user should arrange separately]
 }`;
 
     if (assetGoogleFileIds && assetGoogleFileIds.length > 0) {
@@ -1603,22 +1543,17 @@ Return your response strictly in JSON format with the following structure:
       // Ensure we have all expected fields and normalize the structure
       return {
         section: "Budget Justification",
-        score: reviewJson.score || 5,
+        score: parseReviewerScore(reviewJson.score),
         summary: reviewJson.summary || "No summary provided.",
-        strengths: reviewJson.strengths || [],
-        weaknesses: reviewJson.weaknesses || [],
-        suggestions: reviewJson.suggestions || []
+        strengths: normalizeStringArray(reviewJson.strengths),
+        weaknesses: normalizeStringArray(reviewJson.weaknesses),
+        suggestions: normalizeStringArray(reviewJson.suggestions),
+        non_scoring_reminders: normalizeStringArray(reviewJson.non_scoring_reminders),
+        supplementary_materials: normalizeStringArray(reviewJson.supplementary_materials)
       };
     } catch (error) {
       console.error('Error parsing LLM response for Budget Justification review:', error);
-      return {
-        section: "Budget Justification",
-        score: 5,
-        summary: "There was an error processing the Budget Justification review.",
-        strengths: [],
-        weaknesses: [],
-        suggestions: []
-      };
+      throw new Error('The reviewer model returned an invalid Budget Justification review. Please retry.');
     }
   }
 
@@ -1786,7 +1721,7 @@ Return your response strictly in JSON format with the following structure:
       // Ensure we have all expected fields and normalize the structure
       return {
         section: "Expected Outcomes",
-        score: reviewJson.score || 5,
+        score: parseReviewerScore(reviewJson.score),
         summary: reviewJson.summary || "No summary provided.",
         strengths: reviewJson.strengths || [],
         weaknesses: reviewJson.weaknesses || [],
@@ -1794,14 +1729,7 @@ Return your response strictly in JSON format with the following structure:
       };
     } catch (error) {
       console.error('Error parsing LLM response for Expected Outcomes review:', error);
-      return {
-        section: "Expected Outcomes",
-        score: 5,
-        summary: "There was an error processing the Expected Outcomes review.",
-        strengths: [],
-        weaknesses: [],
-        suggestions: []
-      };
+      throw new Error('Failed to parse expected outcomes review response');
     }
   }
 
@@ -1974,7 +1902,7 @@ Return your response strictly in JSON format with the following structure:
       // Ensure we have all expected fields and normalize the structure
       return {
         section: "Conclusion",
-        score: reviewJson.score || 5,
+        score: parseReviewerScore(reviewJson.score),
         summary: reviewJson.summary || "No summary provided.",
         strengths: reviewJson.strengths || [],
         weaknesses: reviewJson.weaknesses || [],
@@ -1982,14 +1910,7 @@ Return your response strictly in JSON format with the following structure:
       };
     } catch (error) {
       console.error('Error parsing LLM response for Conclusion review:', error);
-      return {
-        section: "Conclusion",
-        score: 5,
-        summary: "There was an error processing the Conclusion review.",
-        strengths: [],
-        weaknesses: [],
-        suggestions: []
-      };
+      throw new Error('Failed to parse conclusion review response');
     }
   }
 } 

@@ -2,6 +2,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../lib/prisma';
+import { createStandaloneReviewerCall } from '@/lib/reviewer/template-bridge';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Check authentication
@@ -46,25 +47,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // POST request - Create a new reviewer call
   else if (req.method === 'POST') {
     try {
-      const { project_title, agency_name, call_input_type, call_input_data } = req.body;
+      const { fundingCallId, project_title, manualRubric, seedSections } = req.body || {};
       
       // Validate required fields
-      if (!project_title || !agency_name || !call_input_type || !call_input_data) {
-        return res.status(400).json({ error: 'Missing required fields' });
+      if (!project_title || !fundingCallId) {
+        return res.status(400).json({ error: 'Project title and fundingCallId are required' });
+      }
+
+      const fundingCall = await prisma.fundingCall.findFirst({
+        where: {
+          id: String(fundingCallId),
+          OR: [
+            { visibility: 'GLOBAL_PUBLISHED' },
+            ...(session.user.tenantId ? [{ tenantId: session.user.tenantId }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+
+      if (!fundingCall) {
+        return res.status(404).json({ error: 'Funding call not found or not accessible' });
       }
       
-      // Create a new reviewer call
-      const newCall = await prisma.reviewerCall.create({
-        data: {
-          user_id: userId,
-          project_title,
-          agency_name,
-          call_input_type,
-          call_input_data,
-          parsed_json: {},
-          review_status: 'parsed',
-          LLM_model_used: 'unknown'
-        }
+      // Create a new reviewer call from the approved funding template.
+      const newCall = await createStandaloneReviewerCall({
+        userId,
+        tenantId: session.user.tenantId || null,
+        fundingCallId: String(fundingCallId),
+        projectTitle: String(project_title),
+        manualRubric,
+        seedSections: seedSections === true,
       });
       
       return res.status(201).json({ call: newCall });

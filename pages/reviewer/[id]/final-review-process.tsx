@@ -26,6 +26,37 @@ const SECTION_ORDER = [
   'Conclusion'
 ];
 
+const SECTION_REVIEW_BATCH_SIZE = 1;
+const SECTION_REVIEW_BATCH_DELAY_MS = 4000;
+const SECTION_REVIEW_MAX_ATTEMPTS = 3;
+const RATE_LIMIT_BUFFER_MS = 2000;
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function hasMeaningfulContent(value: unknown) {
+  const text = String(value || '')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /[a-z0-9]/i.test(text);
+}
+
+function getRetryAfterMs(error: any) {
+  const bodyValue = Number(error?.response?.data?.retryAfterMs);
+  if (Number.isFinite(bodyValue) && bodyValue > 0) return bodyValue;
+
+  const headerValue = Number(error?.response?.headers?.['retry-after']);
+  if (Number.isFinite(headerValue) && headerValue > 0) return headerValue * 1000;
+
+  return 60000;
+}
+
+function isReviewRateLimitError(error: any) {
+  return error?.response?.status === 429 || error?.response?.data?.code === 'GEMINI_RATE_LIMITED';
+}
+
 type SectionStatus = {
   id: string;
   title: string;
@@ -161,7 +192,7 @@ export default function FinalReviewProcess() {
       const fetchedSections = sectionsResponse.data.sections || [];
       
       // Initialize sections status
-      const initialSections = fetchedSections.map(section => ({
+      const initialSections = fetchedSections.filter(section => hasMeaningfulContent(section.user_input)).map(section => ({
         id: section.id,
         title: section.section_title,
         status: 'pending' as const,
@@ -184,9 +215,7 @@ export default function FinalReviewProcess() {
       setMissingSummaries(missingSummaryTitles);
       
       if (missingSummaryTitles.length > 0) {
-        addLog(`Warning: ${missingSummaryTitles.length} sections are missing context summaries.`);
-        setError(`${missingSummaryTitles.length} sections are missing context summaries. Please generate them before proceeding with the review process.`);
-        return;
+        addLog(`${missingSummaryTitles.length} sections are missing context summaries. They will be generated automatically for sections with content.`);
       }
       
       // Proceed to context summary generation phase (which should be quick since all summaries exist)
@@ -344,57 +373,86 @@ export default function FinalReviewProcess() {
         addLog('Force reviewing all sections, including those already reviewed.');
       }
       
-      // Process each section in order
-      for (let i = 0; i < sectionsToReview.length; i++) {
-        const section = sectionsToReview[i];
-        addLog(`Starting review for section: ${section.title}`);
-        
-        // Update section status
-        setSections(prev => 
-          prev.map(s => s.id === section.id ? { ...s, status: 'processing' } : s)
-        );
-        
-        try {
-          // Call the API to review this section with context dependencies
-          const response = await axios.post(
-            `/api/reviewer/calls/${id}/section-review-with-dependencies`,
-            { sectionId: section.id }
-          );
+      // Process sections in small batches after context summaries are available.
+      // Keep the default batch size at 1 because dependency context is ordered and Gemini
+      // can return provider-wide cooldowns that affect subsequent requests.
+      for (let batchStart = 0; batchStart < sectionsToReview.length; batchStart += SECTION_REVIEW_BATCH_SIZE) {
+        const batch = sectionsToReview.slice(batchStart, batchStart + SECTION_REVIEW_BATCH_SIZE);
+        addLog(`Starting review batch ${Math.floor(batchStart / SECTION_REVIEW_BATCH_SIZE) + 1} with ${batch.length} section(s).`);
+
+        for (const section of batch) {
+          addLog(`Starting review for section: ${section.title}`);
           
-          // Update section status with success
+          // Update section status
           setSections(prev => 
-            prev.map(s => s.id === section.id ? { 
-              ...s, 
-              status: 'completed',
-              context_summary: response.data.context_summary
-            } : s)
+            prev.map(s => s.id === section.id ? { ...s, status: 'processing' } : s)
           );
           
-          if (response.data.used_dependency_sections?.length > 0) {
-            addLog(`Completed review for section: ${section.title} (used context from: ${response.data.used_dependency_sections.join(', ')})`);
-          } else {
-            addLog(`Completed review for section: ${section.title} (no prior context used)`);
+          try {
+            let response;
+
+            for (let attempt = 1; attempt <= SECTION_REVIEW_MAX_ATTEMPTS; attempt++) {
+              try {
+                response = await axios.post(
+                  `/api/reviewer/calls/${id}/section-review-with-dependencies`,
+                  { sectionId: section.id }
+                );
+                break;
+              } catch (attemptError) {
+                if (isReviewRateLimitError(attemptError) && attempt < SECTION_REVIEW_MAX_ATTEMPTS) {
+                  const waitMs = getRetryAfterMs(attemptError) + RATE_LIMIT_BUFFER_MS;
+                  addLog(`Rate limit while reviewing ${section.title}. Waiting ${Math.ceil(waitMs / 1000)}s before retry ${attempt + 1}/${SECTION_REVIEW_MAX_ATTEMPTS}.`);
+                  await sleep(waitMs);
+                  continue;
+                }
+                throw attemptError;
+              }
+            }
+
+            if (!response) {
+              throw new Error('Review did not return a response');
+            }
+            
+            // Update section status with success
+            setSections(prev => 
+              prev.map(s => s.id === section.id ? { 
+                ...s, 
+                status: 'completed',
+                context_summary: response.data.context_summary
+              } : s)
+            );
+            
+            if (response.data.used_dependency_sections?.length > 0) {
+              addLog(`Completed review for section: ${section.title} (used context from: ${response.data.used_dependency_sections.join(', ')})`);
+            } else {
+              addLog(`Completed review for section: ${section.title} (no prior context used)`);
+            }
+            
+            reviewedCount++;
+            
+            // Calculate progress based on total sections (not just pending ones)
+            const reviewProgress = 50 + (reviewedCount / sectionsToReview.length) * 50;
+            setProgress(reviewProgress);
+            
+          } catch (error) {
+            console.error(`Error reviewing section ${section.id}:`, error);
+            
+            // Update section status with error
+            setSections(prev => 
+              prev.map(s => s.id === section.id ? { 
+                ...s, 
+                status: 'error',
+                message: 'Failed to review section with context' 
+              } : s)
+            );
+            
+            addLog(`Error reviewing section: ${section.title}`);
           }
-          
-          reviewedCount++;
-          
-          // Calculate progress based on total sections (not just pending ones)
-          const reviewProgress = 50 + (reviewedCount / sectionsToReview.length) * 50;
-          setProgress(reviewProgress);
-          
-        } catch (error) {
-          console.error(`Error reviewing section ${section.id}:`, error);
-          
-          // Update section status with error
-          setSections(prev => 
-            prev.map(s => s.id === section.id ? { 
-              ...s, 
-              status: 'error',
-              message: 'Failed to review section with context' 
-            } : s)
-          );
-          
-          addLog(`Error reviewing section: ${section.title}`);
+        }
+
+        if (batchStart + SECTION_REVIEW_BATCH_SIZE < sectionsToReview.length) {
+          addLog(`Batch complete. Waiting ${Math.ceil(SECTION_REVIEW_BATCH_DELAY_MS / 1000)}s before the next review batch.`);
+          await sleep(SECTION_REVIEW_BATCH_DELAY_MS);
         }
       }
       

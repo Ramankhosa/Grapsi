@@ -3,6 +3,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { collectOpenAICompatibleSSEStream } from './streaming-utils'
 
 export class GrokProvider implements LLMProvider {
   name = 'grok'
@@ -17,10 +18,23 @@ export class GrokProvider implements LLMProvider {
   async execute(request: LLMRequest, limits: EnforcementDecision): Promise<LLMResponse> {
     // Apply enforcement limits
     const maxTokens = limits.maxTokensOut || 4096
+    const startedAt = Date.now()
 
     try {
       // Note: This is a placeholder implementation
       // The actual Grok API endpoint and format need to be confirmed
+      const requestBody = {
+        model: this.config.model,
+        messages: [
+          {
+            role: 'user',
+            content: request.prompt || ''
+          }
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.7,
+      }
+
       const response = await fetch(`${this.config.baseURL}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -28,21 +42,25 @@ export class GrokProvider implements LLMProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: this.config.model,
-          messages: [
-            {
-              role: 'user',
-              content: request.prompt || ''
-            }
-          ],
-          max_tokens: maxTokens,
-          temperature: 0.7,
+          ...requestBody,
+          ...(request.stream?.onToken ? { stream: true } : {})
         }),
       })
 
       if (!response.ok) {
         const error = await response.text()
         throw new Error(`Grok API error: ${response.status} ${error}`)
+      }
+
+      if (request.stream?.onToken) {
+        return await collectOpenAICompatibleSSEStream({
+          response,
+          request,
+          providerName: 'grok',
+          modelClass: this.config.model,
+          actualModel: this.config.model,
+          startedAt
+        })
       }
 
       const data = await response.json()

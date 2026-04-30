@@ -12,13 +12,11 @@ import { FaArrowLeft, FaSpinner } from 'react-icons/fa';
 interface FormData {
   project_title: string;
   agency_name: string;
-  call_input_data: string;
 }
 
 interface ValidationErrors {
   project_title?: string;
   agency_name?: string;
-  call_input_data?: string;
 }
 
 export default function EditProjectDetails() {
@@ -31,7 +29,6 @@ export default function EditProjectDetails() {
   const [formData, setFormData] = useState<FormData>({
     project_title: '',
     agency_name: '',
-    call_input_data: '',
   });
   const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
 
@@ -48,7 +45,6 @@ export default function EditProjectDetails() {
         setFormData({
           project_title: call.project_title || '',
           agency_name: call.agency_name || '',
-          call_input_data: call.call_input_data || '',
         });
       } catch (err) {
         console.error('Failed to fetch project details:', err);
@@ -84,20 +80,6 @@ export default function EditProjectDetails() {
     }
   };
 
-  // Validate URL format
-  const validateUrl = (url: string) => {
-    // Simple URL validation - could be enhanced
-    try {
-      // Allow empty URLs
-      if (!url.trim()) return true;
-      
-      const parsedUrl = new URL(url);
-      return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
-    } catch (e) {
-      return false;
-    }
-  };
-
   // Form validation
   const validateForm = () => {
     const errors: ValidationErrors = {};
@@ -108,10 +90,6 @@ export default function EditProjectDetails() {
     
     if (!formData.agency_name.trim()) {
       errors.agency_name = 'Agency name is required';
-    }
-    
-    if (formData.call_input_data && !validateUrl(formData.call_input_data)) {
-      errors.call_input_data = 'Please enter a valid URL or leave empty';
     }
     
     setValidationErrors(errors);
@@ -243,27 +221,6 @@ export default function EditProjectDetails() {
                 <p className="mt-1 text-sm text-red-600">{validationErrors.agency_name}</p>
               )}
             </div>
-            
-            <div>
-              <label htmlFor="call_input_data" className="block text-sm font-medium text-gray-700 mb-1">
-                Funding URL
-              </label>
-              <input
-                type="text"
-                id="call_input_data"
-                name="call_input_data"
-                value={formData.call_input_data}
-                onChange={handleInputChange}
-                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:ring-green-500 focus:border-green-500 ${
-                  validationErrors.call_input_data ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="Enter funding URL (optional)"
-              />
-              {validationErrors.call_input_data && (
-                <p className="mt-1 text-sm text-red-600">{validationErrors.call_input_data}</p>
-              )}
-            </div>
-            
             <div className="pt-4 flex justify-end space-x-3 border-t border-gray-200">
               <Link
                 href={`/reviewer/${id}`}

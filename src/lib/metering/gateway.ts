@@ -214,6 +214,27 @@ export class LLMGateway {
       }
 
       // 8. Route to LLM provider with resolved model or default routing
+      const streamRequested = typeof llmRequest.stream?.onToken === 'function'
+      const streamSupportedByResolvedModel = requestedPrimaryModel
+        ? true
+        : modelResolution
+          ? modelResolution.supportsStreaming
+          : true
+      const executionRequest = streamRequested && !streamSupportedByResolvedModel
+        ? {
+            ...llmRequest,
+            stream: undefined,
+            metadata: {
+              ...llmRequest.metadata,
+              streamDisabledReason: 'model_does_not_support_streaming'
+            }
+          }
+        : llmRequest
+
+      if (streamRequested && !streamSupportedByResolvedModel) {
+        console.log(`[Gateway] Streaming disabled for ${selectedModel}: model registry marks supportsStreaming=false`)
+      }
+
       let response: LLMResponse
       
       if (modelResolution || requestedPrimaryModel) {
@@ -236,14 +257,14 @@ export class LLMGateway {
 
         // Use the resolved model with fallbacks
         response = await llmProviderRouter.routeWithModel(
-          llmRequest,
+          executionRequest,
           decision,
           selectedModel,
           fallbackModelCodes
         )
       } else {
         // Fall back to default priority-based routing
-        response = await llmProviderRouter.routeAndExecute(llmRequest, decision)
+        response = await llmProviderRouter.routeAndExecute(executionRequest, decision)
       }
 
       // 7. Record usage (metering for billing/quotas)

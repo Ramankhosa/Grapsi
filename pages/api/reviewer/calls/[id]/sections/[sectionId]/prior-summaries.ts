@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getServerSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../../../lib/prisma';
 import { SECTION_DEPENDENCIES } from '../../../../../../../lib/reviewerService';
 
@@ -31,21 +34,8 @@ export default async function handler(
   }
   
   try {
-    // Verify the call belongs to the user
-    const calls = await prisma.$queryRaw`
-      SELECT user_id FROM "reviewer_calls" 
-      WHERE id = ${callId}
-    `;
-    
-    const call = calls[0];
-    
-    if (!call) {
-      return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    if (call.user_id !== session.user.id) {
-      return res.status(403).json({ error: 'Not authorized to access this call' });
-    }
+    const callAccess = await requireReviewerCallAccess(callId, session, res, 'read');
+    if (!callAccess) return;
     
     // Get the section to find relevant dependencies
     const sections = await prisma.$queryRaw`

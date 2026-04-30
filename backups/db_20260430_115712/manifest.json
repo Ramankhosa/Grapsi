@@ -1,0 +1,22 @@
+﻿[
+    {
+        "Source":  "process",
+        "Host":  "localhost",
+        "Port":  5432,
+        "Database":  "papsi",
+        "CustomDump":  "C:\\Users\\raman\\Documents\\Grapsi\\backups\\db_20260430_115712\\papsi.custom.dump",
+        "CustomSizeMB":  0.77,
+        "PlainSql":  "C:\\Users\\raman\\Documents\\Grapsi\\backups\\db_20260430_115712\\papsi.plain.sql",
+        "PlainSizeMB":  1.47
+    },
+    {
+        "Source":  ".env",
+        "Host":  "localhost",
+        "Port":  5432,
+        "Database":  "grapsi",
+        "CustomDump":  "C:\\Users\\raman\\Documents\\Grapsi\\backups\\db_20260430_115712\\grapsi.custom.dump",
+        "CustomSizeMB":  2.87,
+        "PlainSql":  "C:\\Users\\raman\\Documents\\Grapsi\\backups\\db_20260430_115712\\grapsi.plain.sql",
+        "PlainSizeMB":  15.32
+    }
+]

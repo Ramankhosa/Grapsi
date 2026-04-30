@@ -59,6 +59,9 @@ export interface CitationMetaSnapshot {
   };
   relevanceScore?: number;
   analyzedAt?: string;
+  grantUtility?: string | null;
+  deepAnalysisRecommendation?: string | null;
+  deepAnalysisRationale?: string | null;
   referenceArchetype?: string | null;
   archetypeSignal?: string | null;
   positionalRelation?: {
@@ -897,6 +900,24 @@ Return ONLY the JSON array, no additional text or explanation.`;
     }
     if (typeof meta.analyzedAt === 'string' && meta.analyzedAt.trim()) {
       cleaned.analyzedAt = meta.analyzedAt;
+    }
+    if (typeof meta.grantUtility === 'string') {
+      const value = meta.grantUtility.trim().toUpperCase().replace(/[\s-]+/g, '_');
+      cleaned.grantUtility = value ? value.slice(0, 80) : null;
+    } else if (meta.grantUtility === null) {
+      cleaned.grantUtility = null;
+    }
+    if (typeof meta.deepAnalysisRecommendation === 'string') {
+      const value = meta.deepAnalysisRecommendation.trim().toUpperCase();
+      cleaned.deepAnalysisRecommendation = value ? value.slice(0, 80) : null;
+    } else if (meta.deepAnalysisRecommendation === null) {
+      cleaned.deepAnalysisRecommendation = null;
+    }
+    if (typeof meta.deepAnalysisRationale === 'string') {
+      const value = meta.deepAnalysisRationale.trim();
+      cleaned.deepAnalysisRationale = value ? value.slice(0, 280) : null;
+    } else if (meta.deepAnalysisRationale === null) {
+      cleaned.deepAnalysisRationale = null;
     }
     if (typeof meta.referenceArchetype === 'string') {
       const value = meta.referenceArchetype.trim();

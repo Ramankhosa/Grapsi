@@ -392,6 +392,15 @@ export default function LiteratureSearchStage({
       methodologicalApproach: string | null;
       relevanceToResearch: string;
       limitationsOrGaps: string | null;
+      claimTypesSupported?: string[];
+      evidenceBoundary?: string | null;
+      positionalRelation?: {
+        relation?: string;
+        rationale?: string;
+      };
+      referenceArchetype?: string | null;
+      archetypeSignal?: string | null;
+      grantUtility?: string | null;
       usage: {
         introduction: boolean;
         literatureReview: boolean;
@@ -1627,6 +1636,15 @@ export default function LiteratureSearchStage({
           methodologicalApproach: string | null;
           relevanceToResearch: string;
           limitationsOrGaps: string | null;
+          claimTypesSupported?: string[];
+          evidenceBoundary?: string | null;
+          positionalRelation?: {
+            relation?: string;
+            rationale?: string;
+          };
+          referenceArchetype?: string | null;
+          archetypeSignal?: string | null;
+          grantUtility?: string | null;
           usage: {
             introduction: boolean;
             literatureReview: boolean;
@@ -1862,8 +1880,16 @@ export default function LiteratureSearchStage({
                 methodologicalApproach: suggestionMeta.methodologicalApproach,
                 relevanceToResearch: suggestionMeta.relevanceToResearch,
                 limitationsOrGaps: suggestionMeta.limitationsOrGaps,
+                claimTypesSupported: suggestionMeta.claimTypesSupported,
+                evidenceBoundary: suggestionMeta.evidenceBoundary,
+                positionalRelation: suggestionMeta.positionalRelation,
+                referenceArchetype: suggestionMeta.referenceArchetype,
+                archetypeSignal: suggestionMeta.archetypeSignal,
+                grantUtility: suggestionMeta.grantUtility,
                 usage: suggestionMeta.usage,
-                relevanceScore: suggestion?.score
+                relevanceScore: suggestion?.score,
+                deepAnalysisRecommendation: suggestion?.deepAnalysisRecommendation,
+                deepAnalysisRationale: suggestion?.deepAnalysisRationale
               } : null,
               relevanceScore: suggestion?.score,
               recommendation: paperRecommendations.get(paper.id),
@@ -2686,8 +2712,16 @@ export default function LiteratureSearchStage({
             methodologicalApproach: citationMeta.methodologicalApproach,
             relevanceToResearch: citationMeta.relevanceToResearch,
             limitationsOrGaps: citationMeta.limitationsOrGaps,
+            claimTypesSupported: citationMeta.claimTypesSupported,
+            evidenceBoundary: citationMeta.evidenceBoundary,
+            positionalRelation: citationMeta.positionalRelation,
+            referenceArchetype: citationMeta.referenceArchetype,
+            archetypeSignal: citationMeta.archetypeSignal,
+            grantUtility: citationMeta.grantUtility,
             usage: citationMeta.usage,
-            relevanceScore: aiSuggestion?.score
+            relevanceScore: aiSuggestion?.score,
+            deepAnalysisRecommendation: aiSuggestion?.deepAnalysisRecommendation,
+            deepAnalysisRationale: aiSuggestion?.deepAnalysisRationale
           } : null
         })
       });

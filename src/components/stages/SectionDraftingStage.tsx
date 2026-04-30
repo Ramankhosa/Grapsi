@@ -56,7 +56,19 @@ interface SectionDraftingStageProps {
   selectedSection?: string;
   onSectionSelect?: (sectionKey: string) => void;
   onNavigateToStage?: (stageKey: string) => void;
+  grantReviewerRecommendations?: GrantReviewerRecommendation[];
 }
+
+type GrantReviewerRecommendation = {
+  sectionKey: string;
+  priority?: 'high' | 'medium' | 'low';
+  issue?: string;
+  recommendation?: string;
+  suggestedRemark?: string;
+  autoFixable?: boolean;
+  linkedRuleKeys?: string[];
+  reviewerSectionTitle?: string;
+};
 
 type SectionConfig = {
   keys: string[];
@@ -103,10 +115,33 @@ type SectionGenerationErrorEvent = {
   payload?: any;
 };
 
+type SectionGenerationTextDeltaEvent = {
+  sectionKey?: string;
+  delta?: string;
+  text?: string;
+  modelClass?: string;
+  provider?: string;
+  model?: string;
+  at?: string;
+};
+
 type SectionGenerationStreamResult = {
   ok: boolean;
   result: any | null;
   error: SectionGenerationErrorEvent | null;
+};
+
+type SectionGenerationResult = {
+  success: boolean;
+  content?: string;
+  error?: string;
+  data?: any;
+  status?: number;
+  cancelled?: boolean;
+};
+
+type RunSectionGenerationOptions = {
+  forceWithoutMappedEvidence?: boolean;
 };
 
 type ReferenceDraftSectionView = {
@@ -279,6 +314,7 @@ async function readSectionGenerationStream(
   response: Response,
   handlers: {
     onStatus: (payload: SectionGenerationStatusEvent) => void;
+    onTextDelta?: (payload: SectionGenerationTextDeltaEvent) => void;
     onError: (payload: SectionGenerationErrorEvent) => void;
     onResult: (payload: any) => void;
   }
@@ -294,6 +330,15 @@ async function readSectionGenerationStream(
   let resultPayload: any | null = null;
   let errorPayload: SectionGenerationErrorEvent | null = null;
 
+  const findEventBoundary = (value: string): { index: number; length: number } => {
+    const lf = value.indexOf('\n\n');
+    const crlf = value.indexOf('\r\n\r\n');
+    if (lf < 0 && crlf < 0) return { index: -1, length: 0 };
+    if (lf < 0) return { index: crlf, length: 4 };
+    if (crlf < 0) return { index: lf, length: 2 };
+    return lf < crlf ? { index: lf, length: 2 } : { index: crlf, length: 4 };
+  };
+
   const parseChunk = (chunk: string) => {
     const lines = chunk.split('\n');
     let event = 'message';
@@ -306,6 +351,7 @@ async function readSectionGenerationStream(
 
     const payload = JSON.parse(data.join('\n'));
     if (event === 'status') handlers.onStatus(payload);
+    if (event === 'text_delta') handlers.onTextDelta?.(payload);
     if (event === 'result') {
       resultPayload = payload;
       handlers.onResult(payload);
@@ -323,11 +369,11 @@ async function readSectionGenerationStream(
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary >= 0) {
-      parseChunk(buffer.slice(0, boundary));
-      buffer = buffer.slice(boundary + 2);
-      boundary = buffer.indexOf('\n\n');
+    let boundary = findEventBoundary(buffer);
+    while (boundary.index >= 0) {
+      parseChunk(buffer.slice(0, boundary.index));
+      buffer = buffer.slice(boundary.index + boundary.length);
+      boundary = findEventBoundary(buffer);
     }
   }
 
@@ -594,6 +640,34 @@ function normalizeSectionKey(sectionKey: string): string {
   return sectionKey.trim().toLowerCase().replace(/[\s-]+/g, '_');
 }
 
+function reviewerRecommendationId(item: GrantReviewerRecommendation, index: number): string {
+  return [
+    normalizeSectionKey(item.sectionKey || ''),
+    index,
+    String(item.issue || item.recommendation || item.suggestedRemark || '').slice(0, 80),
+  ].join(':');
+}
+
+const MISSING_MAPPED_EVIDENCE_CODE = 'MAPPED_EVIDENCE_MISSING';
+
+function isMissingMappedEvidenceResult(result: SectionGenerationResult | null | undefined): boolean {
+  if (!result) return false;
+  const data = result.data || {};
+  const readinessIssues = Array.isArray(data?.readiness?.issues)
+    ? data.readiness.issues.join(' ')
+    : '';
+  const searchable = [
+    result.error,
+    data?.error,
+    data?.message,
+    readinessIssues
+  ].map((value) => String(value || '')).join(' ');
+
+  return data?.code === MISSING_MAPPED_EVIDENCE_CODE
+    || /No mapped evidence is available for this section/i.test(searchable)
+    || /Mapped-evidence section has literature dimensions but no mapped citation keys/i.test(searchable);
+}
+
 const SINGLE_PASS_SECTION_KEYS = new Set(['abstract', 'conclusion']);
 const PASS1_EXCLUDED_SECTION_KEYS = new Set(['references', 'reference', 'bibliography']);
 
@@ -729,7 +803,7 @@ const AUTO_SAVE_DELAY = 3000;
 // ============================================================================
 
 export default function SectionDraftingStage({ 
-  sessionId, authToken, onSessionUpdated, onNavigateToStage, selectedSection 
+  sessionId, authToken, onSessionUpdated, onNavigateToStage, selectedSection, grantReviewerRecommendations = []
 }: SectionDraftingStageProps) {
   // Session State
   const [session, setSession] = useState<any>(null);
@@ -769,6 +843,7 @@ export default function SectionDraftingStage({
   const [showActivity, setShowActivity] = useState(true);
   const [debugSteps, setDebugSteps] = useState<GenerationDebugStep[]>([]);
   const [showHelpPanel, setShowHelpPanel] = useState(false);
+  const [selectedReviewerRecommendationIds, setSelectedReviewerRecommendationIds] = useState<Record<string, Record<string, boolean>>>({});
 
   // User Instructions (loaded from API)
   const [userInstructions, setUserInstructions] = useState<Record<string, UserInstruction>>({});
@@ -806,6 +881,17 @@ export default function SectionDraftingStage({
     () => ['IEEE', 'VANCOUVER'].includes((bibliographyStyle || '').toUpperCase()),
     [bibliographyStyle]
   );
+
+  const reviewerRecommendationsBySection = useMemo(() => {
+    const grouped: Record<string, GrantReviewerRecommendation[]> = {};
+    for (const item of grantReviewerRecommendations || []) {
+      const key = normalizeSectionKey(item.sectionKey || '');
+      if (!key) continue;
+      grouped[key] = grouped[key] || [];
+      grouped[key].push(item);
+    }
+    return grouped;
+  }, [grantReviewerRecommendations]);
 
   useEffect(() => {
     const normalizedSection = normalizeSectionKey(selectedSection || '');
@@ -2427,16 +2513,22 @@ export default function SectionDraftingStage({
   const runSectionGeneration = useCallback(async (
     action: 'generate_section' | 'regenerate_section',
     sectionKey: string,
-    instructions: string
-  ): Promise<{ success: boolean; content?: string; error?: string; data?: any }> => {
+    instructions: string,
+    options?: RunSectionGenerationOptions
+  ): Promise<SectionGenerationResult> => {
     const normalizedKey = normalizeSectionKey(sectionKey);
-    const useMappedEvidence = isMappedEvidenceEnabled(sectionKey);
+    const useMappedEvidence = options?.forceWithoutMappedEvidence
+      ? false
+      : isMappedEvidenceEnabled(sectionKey);
     const figureInjection = buildFigureInjectionPayload(sectionKey);
     const generationMode = isPass1EligibleForSection(sectionKey) ? 'two_pass' : 'topup_final';
 
     setShowActivity(true);
     setDebugSteps([]);
     setSectionStatusMessage(prev => ({ ...prev, [normalizedKey]: 'Starting generation...' }));
+    const previousContent = content[sectionKey] || '';
+    let receivedTextDelta = false;
+    let streamedText = '';
 
     try {
       const res = await fetch(`/api/papers/${sessionId}/drafting`, {
@@ -2447,6 +2539,7 @@ export default function SectionDraftingStage({
           sectionKey,
           instructions,
           useMappedEvidence,
+          allowGrantEvidenceBypass: options?.forceWithoutMappedEvidence === true,
           ...figureInjection,
           generationMode,
           autoCitationRepair: false,
@@ -2467,14 +2560,31 @@ export default function SectionDraftingStage({
               upsertGenerationStep(phase, message, 'running');
               setSectionStatusMessage(prev => ({ ...prev, [normalizedKey]: message }));
             },
+            onTextDelta: (payload) => {
+              const delta = typeof payload.delta === 'string' ? payload.delta : '';
+              const text = typeof payload.text === 'string' ? payload.text : `${streamedText}${delta}`;
+              if (!text && !delta) return;
+
+              streamedText = text;
+              receivedTextDelta = true;
+              upsertGenerationStep('llm_stream', 'Streaming draft text from the selected model', 'running');
+              setSectionStatusMessage(prev => ({ ...prev, [normalizedKey]: 'Streaming draft text...' }));
+              setContent(prev => ({ ...prev, [sectionKey]: streamedText }));
+            },
             onError: (payload) => {
               const message = String(payload?.message || 'Generation failed').trim() || 'Generation failed';
               failGenerationSteps(message);
               setSectionStatusMessage(prev => ({ ...prev, [normalizedKey]: message }));
+              if (receivedTextDelta) {
+                setContent(prev => ({ ...prev, [sectionKey]: previousContent }));
+              }
             },
-            onResult: () => {
+            onResult: (payload) => {
               completeGenerationSteps();
               setSectionStatusMessage(prev => ({ ...prev, [normalizedKey]: 'Finalizing section output...' }));
+              if (typeof payload?.content === 'string') {
+                setContent(prev => ({ ...prev, [sectionKey]: payload.content }));
+              }
             }
           }
         );
@@ -2486,6 +2596,9 @@ export default function SectionDraftingStage({
 
         const errorData = streamed.error?.payload || streamed.error || null;
         const { disallowedKeys: disallowed, unknownKeys: unknown } = setCitationValidationForSection(sectionKey, errorData);
+        if (receivedTextDelta) {
+          setContent(prev => ({ ...prev, [sectionKey]: previousContent }));
+        }
         const detailParts: string[] = [];
         if (disallowed.length > 0) {
           detailParts.push(`disallowed: ${disallowed.slice(0, 5).join(', ')}`);
@@ -2496,7 +2609,7 @@ export default function SectionDraftingStage({
         const details = detailParts.length ? ` (${detailParts.join(' | ')})` : '';
         const hint = typeof errorData?.hint === 'string' ? ` ${errorData.hint}` : '';
         const message = `${streamed.error?.message || errorData?.error || 'Generation failed'}${details}${hint}`;
-        return { success: false, error: message, data: errorData };
+        return { success: false, error: message, data: errorData, status: streamed.error?.status };
       }
 
       const data = await res.json();
@@ -2511,7 +2624,7 @@ export default function SectionDraftingStage({
         }
         const details = detailParts.length ? ` (${detailParts.join(' | ')})` : '';
         const hint = typeof data?.hint === 'string' ? ` ${data.hint}` : '';
-        return { success: false, error: `${data.error || 'Generation failed'}${details}${hint}`, data };
+        return { success: false, error: `${data.error || 'Generation failed'}${details}${hint}`, data, status: res.status };
       }
 
       if (data.content) {
@@ -2537,6 +2650,7 @@ export default function SectionDraftingStage({
     buildFigureInjectionPayload,
     clearCitationValidationForSection,
     completeGenerationSteps,
+    content,
     failGenerationSteps,
     isPass1EligibleForSection,
     isMappedEvidenceEnabled,
@@ -2547,15 +2661,62 @@ export default function SectionDraftingStage({
     usePersonaStyle
   ]);
 
-  const generateSingleSection = useCallback(async (sectionKey: string): Promise<{ success: boolean; content?: string; error?: string }> => {
+  const confirmGenerateWithoutMappedEvidence = useCallback((
+    sectionKey: string,
+    result: SectionGenerationResult
+  ): boolean => {
+    if (typeof window === 'undefined') return false;
+
+    const normalized = normalizeSectionKey(sectionKey);
+    const label = displayName[normalized] || formatSectionLabel(sectionKey);
+    const hint = typeof result.data?.hint === 'string'
+      ? `\n\n${result.data.hint}`
+      : '\n\nRun AI Relevance & Blueprint Mapping, or re-import citations, if you need citation-grounded drafting.';
+
+    return window.confirm(
+      `No mapped evidence is available for "${label}".\n\n` +
+      `Generating now will draft this section without section-mapped citations. Claims may need manual citation review afterwards.` +
+      `${hint}\n\nContinue without mapped evidence?`
+    );
+  }, []);
+
+  const runSectionGenerationWithEvidenceFallback = useCallback(async (
+    action: 'generate_section' | 'regenerate_section',
+    sectionKey: string,
+    instructions: string,
+    options?: RunSectionGenerationOptions
+  ): Promise<SectionGenerationResult> => {
+    const result = await runSectionGeneration(action, sectionKey, instructions, options);
+    if (options?.forceWithoutMappedEvidence || !isMissingMappedEvidenceResult(result)) {
+      return result;
+    }
+
+    const shouldContinue = confirmGenerateWithoutMappedEvidence(sectionKey, result);
+    if (!shouldContinue) {
+      showMsg('Generation cancelled. Mapped evidence is missing for this section.', 'warning');
+      return {
+        ...result,
+        success: false,
+        cancelled: true,
+        error: 'Generation cancelled'
+      };
+    }
+
+    const normalized = normalizeSectionKey(sectionKey);
+    const label = displayName[normalized] || formatSectionLabel(sectionKey);
+    showMsg(`Generating ${label} without mapped evidence.`, 'warning');
+    return runSectionGeneration(action, sectionKey, instructions, { forceWithoutMappedEvidence: true });
+  }, [confirmGenerateWithoutMappedEvidence, runSectionGeneration]);
+
+  const generateSingleSection = useCallback(async (sectionKey: string): Promise<SectionGenerationResult> => {
     try {
       const instr = userInstructions[sectionKey];
       const instructions = instr?.isActive !== false ? instr?.instruction || '' : '';
-      return await runSectionGeneration('generate_section', sectionKey, instructions);
+      return await runSectionGenerationWithEvidenceFallback('generate_section', sectionKey, instructions);
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
-  }, [runSectionGeneration, userInstructions]);
+  }, [runSectionGenerationWithEvidenceFallback, userInstructions]);
 
   const handleGenerate = useCallback(async (keys: string[]) => {
     if (loading) return;
@@ -2572,6 +2733,8 @@ export default function SectionDraftingStage({
         setSectionLoading(prev => ({ ...prev, [sectionKey]: false }));
         if (result.success && result.content) {
           generatedContent[sectionKey] = result.content;
+        } else if (result.cancelled) {
+          return;
         } else {
           throw new Error(`Failed: ${result.error}`);
         }
@@ -2608,6 +2771,7 @@ export default function SectionDraftingStage({
     setAutoModeRunning(true);
     setShowActivity(true);
     let successCount = 0;
+    let cancelledByUser = false;
     try {
       for (let i = 0; i < emptySections.length; i++) {
         if (autoModeCancelledRef.current) break;
@@ -2616,7 +2780,7 @@ export default function SectionDraftingStage({
         setCurrentKeys([sectionKey]);
         setSectionLoading(prev => ({ ...prev, [sectionKey]: true }));
         let result = await generateSingleSection(sectionKey);
-        if (!result.success && !autoModeCancelledRef.current) {
+        if (!result.success && !result.cancelled && !autoModeCancelledRef.current) {
           setSectionStatusMessage(prev => ({
             ...prev,
             [normalizeSectionKey(sectionKey)]: 'Retrying generation after an unsuccessful attempt...'
@@ -2629,6 +2793,9 @@ export default function SectionDraftingStage({
           setContent(prev => ({ ...prev, [sectionKey]: result.content! }));
           // REMOVED: Auto-switch to preview - stay in edit mode
           successCount++;
+        } else if (result.cancelled) {
+          cancelledByUser = true;
+          break;
         } else {
           showMsg(`Failed at ${displayName[sectionKey] || sectionKey}`, 'error');
           break;
@@ -2636,7 +2803,12 @@ export default function SectionDraftingStage({
         if (i < emptySections.length - 1 && !autoModeCancelledRef.current) await new Promise(r => setTimeout(r, 500));
       }
       await refreshSession();
-      showMsg(autoModeCancelledRef.current ? `Stopped. ${successCount} section(s) generated.` : `Complete! ${successCount} section(s) generated.`, autoModeCancelledRef.current ? 'warning' : 'success');
+      showMsg(
+        (autoModeCancelledRef.current || cancelledByUser)
+          ? `Stopped. ${successCount} section(s) generated.`
+          : `Complete! ${successCount} section(s) generated.`,
+        (autoModeCancelledRef.current || cancelledByUser) ? 'warning' : 'success'
+      );
     } catch (error) {
       showMsg(`Auto-generation failed`, 'error');
     } finally {
@@ -2653,7 +2825,7 @@ export default function SectionDraftingStage({
     setShowActivity(true);
     try {
       const remarks = instructionsOverride ?? regenRemarks[sectionKey] ?? '';
-      const result = await runSectionGeneration('regenerate_section', sectionKey, remarks);
+      const result = await runSectionGenerationWithEvidenceFallback('regenerate_section', sectionKey, remarks);
       const regeneratedContent = typeof result.content === 'string' ? result.content : '';
       if (result.success && regeneratedContent) {
         clearCitationValidationForSection(sectionKey);
@@ -2673,6 +2845,8 @@ export default function SectionDraftingStage({
         setRegenRemarks(prev => ({ ...(prev || {}), [sectionKey]: '' }));
         showMsg('Section regenerated', 'success');
         await refreshSession();
+      } else if (result.cancelled) {
+        return;
       } else {
         showMsg(result.error || 'Regeneration failed', 'error');
       }
@@ -2682,7 +2856,30 @@ export default function SectionDraftingStage({
       setSectionLoading(prev => ({ ...prev, [sectionKey]: false }));
       setCurrentKeys(null);
     }
-  }, [clearCitationValidationForSection, regenRemarks, refreshSession, runSectionGeneration]);
+  }, [clearCitationValidationForSection, regenRemarks, refreshSession, runSectionGenerationWithEvidenceFallback]);
+
+  const handleRegenerateWithReviewerRecommendations = useCallback((sectionKey: string) => {
+    const normalizedKey = normalizeSectionKey(sectionKey);
+    const recommendations = reviewerRecommendationsBySection[normalizedKey] || [];
+    const selectedMap = selectedReviewerRecommendationIds[normalizedKey] || {};
+    const selected = recommendations.filter((item, index) =>
+      selectedMap[reviewerRecommendationId(item, index)]
+    );
+    if (selected.length === 0) {
+      showMsg('Select at least one reviewer recommendation', 'warning');
+      return;
+    }
+
+    const instructions = [
+      'Revise this grant section to address the following reviewer recommendations.',
+      'Preserve accurate facts, existing citation anchors that still support surviving claims, and the section word/character budget.',
+      'Do not add attachments or procedural materials into this section unless the recommendation is explicitly about the section text.',
+      '',
+      ...selected.map((item, index) => `${index + 1}. ${item.suggestedRemark || item.recommendation || item.issue}`),
+    ].join('\n');
+
+    void handleRegenerateSection(sectionKey, instructions);
+  }, [handleRegenerateSection, reviewerRecommendationsBySection, selectedReviewerRecommendationIds, showMsg]);
 
   // ============================================================================
   // Citations & Bibliography
@@ -4245,6 +4442,59 @@ export default function SectionDraftingStage({
                             Structured draft complete for this section.
                           </div>
                         )}
+
+                        {(() => {
+                          const reviewerRecs = reviewerRecommendationsBySection[normalizedKey] || [];
+                          if (reviewerRecs.length === 0) return null;
+                          const selectedMap = selectedReviewerRecommendationIds[normalizedKey] || {};
+                          const selectedCount = reviewerRecs.filter((item, index) => selectedMap[reviewerRecommendationId(item, index)]).length;
+
+                          return (
+                            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <div className="text-xs font-semibold text-amber-900">Reviewer Recommendations</div>
+                                  <div className="text-[11px] text-amber-700">Select items to pass as regeneration remarks.</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRegenerateWithReviewerRecommendations(keyName)}
+                                  disabled={selectedCount === 0 || sectionLoading[keyName] || isWorking || autoModeRunning}
+                                  className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {sectionLoading[keyName] && <Loader2 className="h-3 w-3 animate-spin" />}
+                                  Regenerate with selected
+                                </button>
+                              </div>
+                              <div className="mt-2 space-y-1.5">
+                                {reviewerRecs.slice(0, 6).map((item, index) => {
+                                  const id = reviewerRecommendationId(item, index);
+                                  const checked = Boolean(selectedMap[id]);
+                                  return (
+                                    <label key={id} className="flex cursor-pointer items-start gap-2 rounded-md bg-white/70 px-2 py-1.5 text-xs text-slate-700">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => setSelectedReviewerRecommendationIds(prev => ({
+                                          ...prev,
+                                          [normalizedKey]: {
+                                            ...(prev[normalizedKey] || {}),
+                                            [id]: !checked,
+                                          },
+                                        }))}
+                                        className="mt-0.5 h-3.5 w-3.5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                                      />
+                                      <span>
+                                        <span className="mr-1 font-semibold uppercase text-amber-700">{item.priority || 'medium'}</span>
+                                        {item.recommendation || item.issue || item.suggestedRemark}
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         {(() => {
                           const referencedFigs = getReferencedFigures(content[keyName] || '');

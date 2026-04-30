@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import { hasMeaningfulSectionContent, parseReviewerScore } from '@/lib/reviewer/content';
 import prisma from '../../../../../../lib/prisma';
 import { ReviewerService } from '../../../../../../lib/services/reviewerService';
 
@@ -32,8 +33,11 @@ export default async function handler(
   // Get the introduction content from the request body
   const { introductionContent } = req.body;
   
-  if (!introductionContent) {
-    return res.status(400).json({ error: 'Introduction content is required' });
+  if (!hasMeaningfulSectionContent(introductionContent)) {
+    return res.status(400).json({
+      error: 'Introduction content is required',
+      code: 'SECTION_CONTENT_MISSING',
+    });
   }
   
   try {
@@ -89,6 +93,8 @@ export default async function handler(
       'G', // Force Gemini 2.0 Flash for all reviews
       abstractContextSummary
     );
+
+    introductionReview.score = parseReviewerScore(introductionReview.score);
     
     // Check if an introduction section already exists
     const existingSections = await prisma.$queryRaw`

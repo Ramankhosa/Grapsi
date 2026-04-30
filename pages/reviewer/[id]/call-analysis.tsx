@@ -146,7 +146,7 @@ export default function CallAnalysisPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Head>
-        <title>Funding Call Analysis - {call.project_title}</title>
+        <title>Template Rules - {call.project_title}</title>
         <meta
           name="description"
           content={`Funding call analysis for ${call.project_title}`}
@@ -160,7 +160,7 @@ export default function CallAnalysisPage() {
             <div>
               <h1 className="text-2xl font-bold text-white">{call.project_title}</h1>
               <p className="mt-1 text-blue-100">
-                Funding Call Analysis
+              Template Rules
               </p>
             </div>
             <Link 
@@ -178,7 +178,7 @@ export default function CallAnalysisPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="px-6 py-4 bg-blue-50 border-b border-blue-100">
-            <h2 className="text-xl font-semibold text-blue-900">Funding Call Analysis</h2>
+            <h2 className="text-xl font-semibold text-blue-900">Template & Manual Reviewer Rules</h2>
           </div>
           
           <div className="p-6">
@@ -205,9 +205,9 @@ export default function CallAnalysisPage() {
                     <td className="px-4 py-3 text-sm text-gray-900">{parsedData.submission_deadline || "Not specified"}</td>
                   </tr>
                   <tr>
-                    <td className="px-4 py-3 text-sm font-medium text-gray-700 bg-gray-50">Analyzed with</td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-700 bg-gray-50">Rule source</td>
                     <td className="px-4 py-3 text-sm text-gray-900">
-                      {call.LLM_model_used === "G" ? "Gemini" : call.LLM_model_used === "O" ? "OpenAI" : call.LLM_model_used}
+                      {parsedData.rules_source === "template_manual" ? "Approved template plus manual rubric" : call.LLM_model_used}
                     </td>
                   </tr>
                 </tbody>
@@ -242,7 +242,17 @@ export default function CallAnalysisPage() {
             <div className="mt-8">
               <h3 className="text-lg font-semibold mb-4">Evaluation Criteria</h3>
               <div className="bg-gray-50 rounded-md p-4">
-                <p className="text-gray-800 whitespace-pre-line">{parsedData.evaluation_criteria || "Not specified"}</p>
+                {Array.isArray(parsedData.evaluation_criteria) && parsedData.evaluation_criteria.length > 0 ? (
+                  <ul className="space-y-1 list-disc list-inside">
+                    {parsedData.evaluation_criteria.map((item, idx) => (
+                      <li key={idx} className="text-gray-800">{renderSafely(item)}</li>
+                    ))}
+                  </ul>
+                ) : typeof parsedData.evaluation_criteria === 'string' && parsedData.evaluation_criteria.trim() ? (
+                  <p className="text-gray-800 whitespace-pre-line">{parsedData.evaluation_criteria}</p>
+                ) : (
+                  <p className="text-gray-600 italic">Not specified</p>
+                )}
               </div>
             </div>
             
@@ -251,7 +261,7 @@ export default function CallAnalysisPage() {
               <div>
                 <h3 className="text-lg font-semibold mb-2 flex items-center">
                   <FaCheck className="text-green-500 mr-2" />
-                  Do's
+                  Must Address
                 </h3>
                 <div className="bg-green-50 rounded-md p-4">
                   {Array.isArray(parsedData.dos) && parsedData.dos.length > 0 ? (
@@ -269,7 +279,7 @@ export default function CallAnalysisPage() {
               <div>
                 <h3 className="text-lg font-semibold mb-2 flex items-center">
                   <FaTimes className="text-red-500 mr-2" />
-                  Don'ts
+                  Avoid
                 </h3>
                 <div className="bg-red-50 rounded-md p-4">
                   {Array.isArray(parsedData.donts) && parsedData.donts.length > 0 ? (
@@ -300,6 +310,36 @@ export default function CallAnalysisPage() {
                 )}
               </div>
             </div>
+
+            {Array.isArray(parsedData.format_rules) && parsedData.format_rules.length > 0 ? (
+              <div className="mt-8">
+                <h3 className="text-lg font-semibold mb-4">Format Rules</h3>
+                <div className="bg-gray-50 rounded-md p-4">
+                  <ul className="space-y-1 list-disc list-inside">
+                    {parsedData.format_rules.map((item, idx) => (
+                      <li key={idx} className="text-gray-800">{renderSafely(item)}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : null}
+
+            {Array.isArray(parsedData.template_sections) && parsedData.template_sections.length > 0 ? (
+              <div className="mt-8">
+                <h3 className="text-lg font-semibold mb-4">Template Reviewer Buckets</h3>
+                <div className="space-y-3">
+                  {parsedData.template_sections.map((section, idx) => (
+                    <div key={`${section.key || idx}`} className="rounded-md bg-gray-50 p-4">
+                      <div className="font-medium text-gray-900">{section.label}</div>
+                      <div className="mt-1 text-sm text-gray-600">{section.bucketLabel || section.bucketKey}</div>
+                      {section.reviewerGoal ? (
+                        <p className="mt-2 text-sm text-gray-800">{section.reviewerGoal}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </main>

@@ -1014,6 +1014,25 @@ async function main() {
       description: 'Extract structured formatting and submission-profile settings from templates, examples, or guidelines.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
       models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+
+    {
+      code: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
+      displayName: 'Context Summary Generator',
+      featureCode: 'GRANT_REVIEWER',
+      sortOrder: 1,
+      description: 'Generate compact LLM-consumable summaries for mapped grant reviewer sections.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
+    },
+    {
+      code: 'GRANT_REVIEWER_FULL_REVIEW',
+      displayName: 'Full Review',
+      featureCode: 'GRANT_REVIEWER',
+      sortOrder: 2,
+      description: 'Generate the full grant reviewer evaluation from mapped sections, template rules, and manual rubric context.',
+      tokenLimits: { maxTokensIn: 96000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
     }
   ];
 

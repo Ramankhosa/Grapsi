@@ -1,11 +1,42 @@
 // @ts-nocheck
+import crypto from 'crypto';
+
+import { llmGateway } from '@/lib/metering/gateway';
 import { generateFromOpenAI } from '../openaiService';
 import { generateFromGemini } from '../geminiService';
+
+const GRANT_REVIEWER_CONTEXT_SUMMARY_STAGE = 'GRANT_REVIEWER_CONTEXT_SUMMARY';
+const GRANT_REVIEWER_CONTEXT_SUMMARY_FALLBACK_MODEL = 'gemini-2.5-flash';
+
+function normalizeRequestHeaders(headers?: Record<string, string | string[] | undefined>) {
+  if (!headers) return null;
+  return Object.fromEntries(
+    Object.entries(headers)
+      .filter(([, value]) => typeof value === 'string' || Array.isArray(value))
+      .map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value as string])
+  );
+}
 
 /**
  * Service for generating and managing context summaries for proposal sections
  */
 export class ContextSummaryService {
+  private options: {
+    requestHeaders?: Record<string, string | string[] | undefined>;
+    tenantContext?: any;
+    stageCode?: string;
+    fallbackModelCode?: string;
+  };
+
+  constructor(options: {
+    requestHeaders?: Record<string, string | string[] | undefined>;
+    tenantContext?: any;
+    stageCode?: string;
+    fallbackModelCode?: string;
+  } = {}) {
+    this.options = options;
+  }
+
   /**
    * Generate a condensed context summary for a section
    * This summary is intended for LLM consumption, not human reading
@@ -377,6 +408,36 @@ Format as a condensed, keyword-rich summary (<200 tokens) optimized for LLM cons
     return this.executeContextSummaryGeneration(systemPrompt, userPrompt, sectionContent, modelType);
   }
 
+  private async executeViaConfiguredStage(prompt: string): Promise<string | null> {
+    const request = this.options.tenantContext
+      ? { tenantContext: this.options.tenantContext }
+      : this.options.requestHeaders
+        ? { headers: normalizeRequestHeaders(this.options.requestHeaders) || {} }
+        : null;
+
+    if (!request) return null;
+
+    const result = await llmGateway.executeLLMOperation(request, {
+      taskCode: 'GRANT_SECTION_GENERATE',
+      stageCode: this.options.stageCode || GRANT_REVIEWER_CONTEXT_SUMMARY_STAGE,
+      prompt,
+      inputTokens: Math.ceil(prompt.length / 4),
+      parameters: { temperature: 0.2 },
+      metadata: {
+        skipFeaturePolicy: true,
+        operation: 'grant_reviewer_context_summary',
+      },
+      idempotencyKey: `grant-reviewer-context-summary-${crypto.randomUUID()}`,
+    });
+
+    if (!result.success || !result.response?.output) {
+      console.warn('Configured context summary model failed; falling back to direct Gemini call:', result.error);
+      return null;
+    }
+
+    return result.response.output;
+  }
+
   /**
    * Common execution function for all context summary generators
    */
@@ -397,24 +458,25 @@ Return your output as a single condensed text summary without any additional for
     let responseText: string;
     
     try {
-      if (modelType === 'O') {
+      const gatewayPrompt = `${systemPrompt}\n\n${fullUserPrompt}`;
+      responseText = await this.executeViaConfiguredStage(gatewayPrompt);
+
+      if (!responseText && modelType === 'O') {
         // Use OpenAI
         try {
           responseText = await generateFromOpenAI(fullUserPrompt, 'gpt-4-turbo', systemPrompt);
         } catch (openAiError) {
           console.warn('Error using OpenAI model, falling back to Gemini:', openAiError);
-          // Fallback to Gemini if OpenAI fails
-          responseText = await generateFromGemini(systemPrompt + '\n\n' + fullUserPrompt, 'gemini-1.5-pro');
+          responseText = await generateFromGemini(
+            systemPrompt + '\n\n' + fullUserPrompt,
+            this.options.fallbackModelCode || GRANT_REVIEWER_CONTEXT_SUMMARY_FALLBACK_MODEL
+          );
         }
-      } else {
-        // Default to Gemini 1.5 Pro for better quality summaries
-        try {
-          responseText = await generateFromGemini(systemPrompt + '\n\n' + fullUserPrompt, 'gemini-1.5-pro');
-        } catch (geminiProError) {
-          console.warn('Error using Gemini 1.5 Pro, falling back to Gemini 2.0 Flash:', geminiProError);
-          // Fallback to Gemini 2.0 Flash if 1.5 Pro fails
-          responseText = await generateFromGemini(systemPrompt + '\n\n' + fullUserPrompt, 'gemini-2.0-flash');
-        }
+      } else if (!responseText) {
+        responseText = await generateFromGemini(
+          systemPrompt + '\n\n' + fullUserPrompt,
+          this.options.fallbackModelCode || GRANT_REVIEWER_CONTEXT_SUMMARY_FALLBACK_MODEL
+        );
       }
       
       // Clean up the response text

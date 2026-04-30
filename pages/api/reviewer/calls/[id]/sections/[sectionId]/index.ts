@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getServerSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../../../lib/prisma';
 
 export default async function handler(
@@ -23,26 +26,13 @@ export default async function handler(
     return res.status(400).json({ error: 'Call ID and Section ID are required' });
   }
   
-  // Verify the call belongs to the user
-  try {
-    const calls = await prisma.$queryRaw`
-      SELECT user_id FROM "reviewer_calls" 
-      WHERE id = ${callId}
-    `;
-    
-    const call = calls[0];
-    
-    if (!call) {
-      return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    if (call.user_id !== session.user.id) {
-      return res.status(403).json({ error: 'Not authorized to access this call' });
-    }
-  } catch (error) {
-    console.error('Error verifying call ownership:', error);
-    return res.status(500).json({ error: 'Failed to verify call ownership' });
-  }
+  const callAccess = await requireReviewerCallAccess(
+    callId,
+    session,
+    res,
+    req.method === 'GET' ? 'read' : 'editContent'
+  );
+  if (!callAccess) return;
   
   // Handle different HTTP methods
   if (req.method === 'GET') {

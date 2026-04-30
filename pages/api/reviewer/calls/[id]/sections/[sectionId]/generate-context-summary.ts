@@ -1,8 +1,12 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import {
+  getReviewerSession as getServerSession,
+  requireReviewerCallAccess,
+} from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../../../lib/prisma';
 import { ContextSummaryService } from '../../../../../../../lib/services/contextSummaryService';
+import { hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 
 export default async function handler(
   req: NextApiRequest,
@@ -31,9 +35,11 @@ export default async function handler(
   }
   
   try {
-    // Verify the call belongs to the user
+    const callAccess = await requireReviewerCallAccess(callId, session, res, 'editContent');
+    if (!callAccess) return;
+
     const calls = await prisma.$queryRaw`
-      SELECT user_id, "LLM_model_used" FROM "reviewer_calls" 
+      SELECT "LLM_model_used" FROM "reviewer_calls" 
       WHERE id = ${callId}
     `;
     
@@ -41,10 +47,6 @@ export default async function handler(
     
     if (!call) {
       return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    if (call.user_id !== session.user.id) {
-      return res.status(403).json({ error: 'Not authorized to access this call' });
     }
     
     // Get the section to generate a context summary for
@@ -60,12 +62,15 @@ export default async function handler(
     
     const section = sections[0];
     
-    if (!section.user_input) {
+    if (!hasMeaningfulSectionContent(section.user_input)) {
       return res.status(400).json({ error: 'Section has no content' });
     }
     
     const model = call.LLM_model_used || 'G'; // Default to Gemini if not specified
-    const contextSummaryService = new ContextSummaryService();
+    const contextSummaryService = new ContextSummaryService({
+      requestHeaders: req.headers,
+      stageCode: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
+    });
     
     // Generate context summary
     const contextSummary = await contextSummaryService.generateContextSummary(

@@ -6,6 +6,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { collectOpenAICompatibleChatCompletionStream } from './streaming-utils'
 
 export class DeepSeekProvider implements LLMProvider {
   name = 'deepseek'
@@ -132,6 +133,22 @@ export class DeepSeekProvider implements LLMProvider {
 
       if (Object.keys(extraBody).length > 0) {
         createParams.extra_body = extraBody
+      }
+
+      if (request.stream?.onToken) {
+        return await collectOpenAICompatibleChatCompletionStream({
+          client: this.client,
+          createParams,
+          request,
+          providerName: this.name,
+          modelClass: modelToUse,
+          actualModel,
+          startedAt: startTime,
+          metadata: {
+            reasoningEffort,
+            thinkingEnabled
+          }
+        })
       }
 
       const response = await this.client.chat.completions.create(createParams)
