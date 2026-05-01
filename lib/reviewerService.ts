@@ -540,14 +540,16 @@ You must be professional and precise. You do not guess — cite only what is pro
   // Format prior section summaries if available in a more structured manner
   let priorSummariesText = '';
   if (priorSectionSummaries && priorSectionSummaries.length > 0) {
-    priorSummariesText = `### CONTEXT FROM PREVIOUS SECTIONS:
+    priorSummariesText = `### NON-SCORING CONTEXT FROM RELATED SECTIONS
+Use these summaries only to understand continuity, cross-section commitments, and consistency checks. They are not evidence for scoring the current section. Do not penalize the current section for details that belong only in these other sections.
 
 ${priorSectionSummaries.map(s => `- **${s.section_title}**: ${s.context_summary}`).join('\n\n')}`;
   }
   
   // Include classic context summary if available (for backward compatibility)
   const contextSummaryText = contextSection?.context_summary && !priorSectionSummaries ? 
-    `### CONTEXT FROM PREVIOUS SECTION:
+    `### NON-SCORING CONTEXT FROM RELATED SECTION
+Use this summary only to understand continuity and consistency. It is not evidence for scoring the current section.
     
 - **${contextSection.section_title}**: ${contextSection.context_summary}` : '';
   
@@ -591,8 +593,10 @@ Respond with JSON in the following format:
   "section_recommendations": [{"sectionKey": "one of the linked section keys", "priority": "high|medium|low", "issue": "specific issue", "recommendation": "specific fix", "suggestedRemark": "instruction that can be passed to drafting regeneration", "autoFixable": true, "linkedRuleKeys": ["rule key or label"]}],
   "supplementary_materials": [(array of most important non-reviewed materials the user should prepare separately)],
   "improvement_over_previous": (true/false boolean),
-  "context_summary": (condensed summary of this section for future LLM use, < 200 tokens)
-}`;
+  "context_summary": (factual non-scoring continuity summary of this section for future LLM use, explicit facts/commitments only, < 200 tokens)
+}
+
+For section_recommendations, set autoFixable=true only when the fix can be handled by regenerating the linked section text. Set autoFixable=false for recommendations that require user decisions, attachments, institutional documents, external forms, missing data the model cannot invent, or cross-section coordination outside this section.`;
   } else {
     // For new section reviews
     userPrompt = `Review the following [${section.section_title}] section of a grant proposal titled "${projectTitle}". Provide a critical evaluation in structured JSON format.
@@ -632,8 +636,10 @@ Respond with JSON in the following format:
   "non_scoring_reminders": [(array of reminders from NON_SCORING_SUPPLEMENTARY_REQUIREMENTS)],
   "section_recommendations": [{"sectionKey": "one of the linked section keys", "priority": "high|medium|low", "issue": "specific issue", "recommendation": "specific fix", "suggestedRemark": "instruction that can be passed to drafting regeneration", "autoFixable": true, "linkedRuleKeys": ["rule key or label"]}],
   "supplementary_materials": [(array of most important non-reviewed materials the user should prepare separately)],
-  "context_summary": (condensed summary of this section for future LLM use, < 200 tokens)
-}`;
+  "context_summary": (factual non-scoring continuity summary of this section for future LLM use, explicit facts/commitments only, < 200 tokens)
+}
+
+For section_recommendations, set autoFixable=true only when the fix can be handled by regenerating the linked section text. Set autoFixable=false for recommendations that require user decisions, attachments, institutional documents, external forms, missing data the model cannot invent, or cross-section coordination outside this section.`;
   }
 
   // Choose the appropriate service based on modelType

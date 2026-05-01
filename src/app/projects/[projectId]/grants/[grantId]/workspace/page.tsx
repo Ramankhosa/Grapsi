@@ -815,6 +815,7 @@ export default function GrantWorkspacePage() {
                   sessionId={draftingSessionId}
                   authToken={token}
                   session={navSession}
+                  initialSelectedSectionKey={selectedSection}
                   onSessionUpdated={setShadowSession}
                 />
               ) : (

@@ -43,6 +43,14 @@ describe('chooseDiagramRenderer', () => {
     expect(decision.renderer).toBe('mermaid')
   })
 
+  it('uses Mermaid for timeline diagrams by default', () => {
+    const decision = chooseDiagramRenderer({
+      diagramType: 'timeline',
+      description: 'Grant workplan milestones and review gates by quarter.'
+    })
+    expect(decision.renderer).toBe('mermaid')
+  })
+
   it('uses Mermaid for Mermaid-like specs only after recent PlantUML failure', () => {
     const decision = chooseDiagramRenderer({
       diagramType: 'flowchart',

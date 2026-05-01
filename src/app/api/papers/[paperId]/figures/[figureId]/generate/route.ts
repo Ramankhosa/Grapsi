@@ -106,6 +106,11 @@ const generateSchema = z.object({
   }).optional(),
   suggestionMeta: z.object({
     relevantSection: z.string().optional(),
+    sourceSections: z.array(z.object({
+      sectionKey: z.string(),
+      label: z.string().optional()
+    })).optional(),
+    scopeMode: z.enum(['selected_sections', 'full_draft', 'focused_text']).optional(),
     figureRole: z.enum(['ORIENT', 'POSITION', 'EXPLAIN_METHOD', 'SHOW_RESULTS', 'INTERPRET']).optional(),
     sectionFitJustification: z.string().optional(),
     expectedByReviewers: z.boolean().optional(),
@@ -230,14 +235,14 @@ async function getSessionForUser(
 }
 
 /**
- * Build concise paper context string for LLM grounding.
- * This ensures generated figures are relevant to the paper, not generic.
+ * Build concise draft context string for LLM grounding.
+ * This ensures generated figures are relevant to the proposal/paper, not generic.
  */
 function buildPaperContext(session: any): string {
   const parts: string[] = [];
 
   const topic = session?.researchTopic;
-  if (topic?.title) parts.push(`Paper title: "${topic.title}"`);
+  if (topic?.title) parts.push(`Draft title: "${topic.title}"`);
   if (topic?.abstractDraft) {
     const abstract = topic.abstractDraft.length > 500
       ? topic.abstractDraft.slice(0, 500) + '...'
@@ -258,7 +263,7 @@ function buildPaperContext(session: any): string {
         return `[${s.sectionKey}] ${content}`;
       });
     if (sectionSnippets.length > 0) {
-      parts.push(`Key sections:\n${sectionSnippets.join('\n')}`);
+    parts.push(`Key draft sections:\n${sectionSnippets.join('\n')}`);
     }
   }
 
@@ -466,7 +471,7 @@ function wasRecentFailure(timestamp: unknown, withinHours: number = 24): boolean
 
 function codeLooksMermaid(code?: string | null): boolean {
   if (!code) return false;
-  return /(flowchart|graph\s+(TD|TB|BT|RL|LR)|sequenceDiagram|erDiagram|gantt|stateDiagram)/i.test(code);
+  return /(flowchart|graph\s+(TD|TB|BT|RL|LR)|sequenceDiagram|erDiagram|gantt|timeline|stateDiagram)/i.test(code);
 }
 
 function sanitizeAscii(input: string, keepNewlines: boolean = false): string {
@@ -661,7 +666,7 @@ async function inferFigureImageMetadata(params: {
   const suggestionMeta = params.suggestionMeta && typeof params.suggestionMeta === 'object'
     ? params.suggestionMeta
     : null;
-  const prompt = `You are extracting drafting-grade, evidence-safe metadata from a research-paper figure image.
+  const prompt = `You are extracting drafting-grade, evidence-safe metadata from a grant-proposal or research-paper figure image.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -672,7 +677,7 @@ Return ONLY valid JSON with this exact shape:
   "comparedGroups": ["up to 8 methods, classes, conditions, cohorts, panels, or groups being compared"],
   "numericHighlights": ["up to 8 exact values, ranges, counts, percentages, or ranks visibly readable in the figure"],
   "observedPatterns": ["up to 8 directly visible patterns, comparisons, gradients, peaks, lows, or ordering statements"],
-  "resultDetails": ["up to 8 drafting-ready observations that a Results section can safely report"],
+  "resultDetails": ["up to 8 drafting-ready observations that a results/evaluation section can safely report"],
   "methodologyDetails": ["up to 8 setup, workflow, architecture, or procedural details visible in the figure"],
   "discussionCues": ["up to 8 restrained interpretation cues, limitations, anomalies, or implications suggested by the visible figure"],
   "chartSignals": ["up to 8 directly visible trends or signals"],
@@ -686,11 +691,12 @@ Rules:
 - Keep every list item short, concrete, and drafting-usable.
 - If text or numbers are unreadable, return empty arrays rather than guessing.
 - "numericHighlights" must contain only visibly readable values or ranges.
-- "resultDetails" must be observation-only prose that a Results section can say safely.
+- "resultDetails" must be observation-only prose that a results/evaluation section can say safely.
 - "methodologyDetails" must focus on structure, components, steps, or setup visible in the figure.
 - "discussionCues" can mention anomalies, trade-offs, limitations, or interpretation directions only if visually grounded.
 - "claimsSupported" must stay strictly proportional to visible evidence.
-- "claimsToAvoid" should explicitly flag causal, statistical-significance, generalization, or performance claims not proven by the figure alone.
+- "claimsToAvoid" should explicitly flag causal, statistical-significance, generalization, funder-impact, cost-effectiveness, achieved-outcome, or performance claims not proven by the figure alone.
+- For grant-proposal figures, distinguish planned activities, targets, deliverables, and impact pathways from observed results.
 
 Figure metadata:
 - Title: ${cleanInferenceText(params.title, 160)}
@@ -834,7 +840,7 @@ export async function POST(
     let inferredImageMeta: FigureInferenceMeta | null = null;
     let resolvedChartInput: ReturnType<typeof resolveChartGenerationInput> | null = null;
 
-    // Build paper context for LLM grounding
+    // Build proposal/manuscript context for LLM grounding
     const paperContext = buildPaperContext(session);
 
     // Generate based on category
@@ -876,12 +882,12 @@ export async function POST(
           let groundedDescription = sanitizeAscii(
             data.description
               || chartEnrichment.whyThisFigure
-              || `Generate a publication-grade ${data.figureType} chart for the supplied research data focused on "${data.title}".`,
+              || `Generate a publication-grade ${data.figureType} chart for the supplied proposal/manuscript data focused on "${data.title}".`,
             true
           );
 
           if (paperContext) {
-            groundedDescription = `PAPER CONTEXT (use this to make the chart relevant to the research):\n${sanitizeAscii(paperContext, true)}\n\nFIGURE REQUEST:\n${groundedDescription}`;
+            groundedDescription = `DRAFT CONTEXT (use this to make the chart relevant to the proposal/manuscript):\n${sanitizeAscii(paperContext, true)}\n\nFIGURE REQUEST:\n${groundedDescription}`;
           }
           if (chartInput.source === 'request_text') {
             groundedDescription += '\n\nRAW DATA NOTE: Numeric series were parsed from the figure request text. Preserve those values exactly.';
@@ -889,7 +895,7 @@ export async function POST(
             groundedDescription += '\n\nRAW DATA NOTE: The request includes messy raw numeric content. Normalize it conservatively and use only values explicitly present in the request.';
           }
           if (chartEnrichment.relevantSection) {
-            groundedDescription += `\n\nTARGET SECTION: This chart belongs in the "${sanitizeAscii(String(chartEnrichment.relevantSection))}" section of the paper.`;
+            groundedDescription += `\n\nTARGET SECTION: This chart belongs in the "${sanitizeAscii(String(chartEnrichment.relevantSection))}" section of the proposal/manuscript.`;
           }
           if (chartEnrichment.whyThisFigure) {
             groundedDescription += `\nPURPOSE: ${sanitizeAscii(String(chartEnrichment.whyThisFigure))}`;
@@ -1029,12 +1035,12 @@ export async function POST(
 
             let groundedDescription = sanitizeAscii(data.description, true);
             if (paperContext) {
-              groundedDescription = `PAPER CONTEXT (create a diagram that reflects this research):\n${sanitizeAscii(paperContext, true)}\n\nFIGURE REQUEST:\n${groundedDescription}`;
+              groundedDescription = `DRAFT CONTEXT (create a diagram that reflects this proposal/manuscript):\n${sanitizeAscii(paperContext, true)}\n\nFIGURE REQUEST:\n${groundedDescription}`;
             }
             // Enrich with suggestion metadata so the LLM understands purpose and context
             const enrichmentMeta = data.suggestionMeta || inheritedSuggestionMeta;
             if (enrichmentMeta.relevantSection) {
-              groundedDescription += `\n\nTARGET SECTION: This figure belongs in the "${sanitizeAscii(String(enrichmentMeta.relevantSection))}" section of the paper.`;
+              groundedDescription += `\n\nTARGET SECTION: This figure belongs in the "${sanitizeAscii(String(enrichmentMeta.relevantSection))}" section of the proposal/manuscript.`;
             }
             if (enrichmentMeta.whyThisFigure) {
               groundedDescription += `\nPURPOSE: ${sanitizeAscii(String(enrichmentMeta.whyThisFigure))}`;
@@ -1146,15 +1152,15 @@ export async function POST(
           let groundedDescription = sanitizeAscii(
             data.description
               || statEnrichment.whyThisFigure
-              || `Generate a publication-grade ${data.figureType} statistical plot focused on "${data.title}".`,
+              || `Generate a publication-grade ${data.figureType} statistical plot for supplied proposal/manuscript data focused on "${data.title}".`,
             true
           );
 
           if (paperContext) {
-            groundedDescription = `PAPER CONTEXT (use this to make the plot relevant to the research):\n${sanitizeAscii(paperContext, true)}\n\nFIGURE REQUEST:\n${groundedDescription}`;
+            groundedDescription = `DRAFT CONTEXT (use this to make the plot relevant to the proposal/manuscript):\n${sanitizeAscii(paperContext, true)}\n\nFIGURE REQUEST:\n${groundedDescription}`;
           }
           if (statEnrichment.relevantSection) {
-            groundedDescription += `\n\nTARGET SECTION: This plot belongs in the "${sanitizeAscii(String(statEnrichment.relevantSection))}" section of the paper.`;
+            groundedDescription += `\n\nTARGET SECTION: This plot belongs in the "${sanitizeAscii(String(statEnrichment.relevantSection))}" section of the proposal/manuscript.`;
           }
           if (statEnrichment.whyThisFigure) {
             groundedDescription += `\nPURPOSE: ${sanitizeAscii(String(statEnrichment.whyThisFigure))}`;

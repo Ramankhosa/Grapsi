@@ -63,7 +63,7 @@ const PAPER_FIGURE_METADATA_OUTPUT_GUIDE = `{
   "comparedGroups": ["up to 8 groups, cohorts, methods, conditions, or curves being compared"],
   "numericHighlights": ["up to 8 exact values, ranges, counts, percentages, intervals, or ranks taken directly from the provided data"],
   "observedPatterns": ["up to 8 direct patterns or contrasts implied by the provided data"],
-  "resultDetails": ["up to 8 concise, result-safe observations that the Results section may report"],
+  "resultDetails": ["up to 8 concise, result/evaluation-safe observations that the draft may report"],
   "methodologyDetails": ["up to 8 setup or measurement details only if the plot structure itself makes them explicit"],
   "discussionCues": ["up to 8 restrained interpretation cues, caveats, or anomalies suggested by the data"],
   "chartSignals": ["up to 8 trend or distribution signals visible in the plot"],
@@ -167,9 +167,9 @@ function summarizeRawDataComplexity(rawDataText: string | null | undefined): str
   return notes
 }
 
-const STATISTICAL_PLOT_CODE_PROMPT = `You are an expert scientific visualization engineer.
+const STATISTICAL_PLOT_CODE_PROMPT = `You are an expert scientific visualization engineer for research manuscripts and grant proposals.
 
-Your task: write safe, publication-grade matplotlib/seaborn code for a paper figure request and return drafting-grade metadata in the same response.
+Your task: write safe, publication-grade matplotlib/seaborn code for a figure request and return drafting-grade metadata in the same response. For grant proposals, plot only explicit supplied values such as budgets, milestones, targets, outputs, evaluation indicators, or baseline/target data.
 
 RETURN FORMAT (STRICT):
 - Return ONLY valid JSON.
@@ -191,6 +191,7 @@ MATPLOTLIB EXECUTION RULES (HARD CONSTRAINTS):
 5. Do NOT render a top title on the image. Use the provided title only as semantic guidance. Axis labels, legends, grids, and annotations are allowed and should remain legible.
 6. Prefer a clean academic style: thin grid, clear labels, limited colors, legible ticks, tight layout.
 7. NEVER invent data. If structured data or pasted raw rows are provided, use only those values. If the request is ambiguous, choose the most conservative direct interpretation of the provided values.
+7a. Grant proposal claims such as "high impact", "improved outcomes", "cost-effective", or "significant benefit" are not plottable data unless exact numeric values are supplied.
 8. If the request includes raw CSV/TSV/JSON/table text, convert it into explicit Python literals inside the code before plotting.
 9. Keep code compact and deterministic. No randomness.
 10. Use only matplotlib/seaborn/numpy/statistics operations that are already available through the provided globals.
@@ -212,7 +213,7 @@ METADATA RULES:
 - Assume the final figure will render the axes, legends, labels, intervals, and annotations specified by your code.
 - "numericHighlights" must quote exact numbers, ranges, intervals, counts, or percentages from the provided data.
 - "observedPatterns", "resultDetails", and "claimsSupported" must stay conservative and strictly proportional to the supplied data.
-- "claimsToAvoid" must explicitly block causal, significance, generalization, or performance claims not proven by the data alone.
+- "claimsToAvoid" must explicitly block causal, significance, generalization, funder-impact, cost-effectiveness, or performance claims not proven by the data alone.
 
 USER REQUEST:
 `

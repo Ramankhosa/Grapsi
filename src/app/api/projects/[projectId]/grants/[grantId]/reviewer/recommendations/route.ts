@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import crypto from 'crypto'
 
 import { prisma } from '@/lib/prisma'
 import { requireProjectGrantActor } from '@/lib/grants/access'
@@ -32,14 +33,44 @@ function normalizePriority(value: unknown): 'high' | 'medium' | 'low' {
   return priority === 'high' || priority === 'low' ? priority : 'medium'
 }
 
-function normalizeRecommendation(item: any, validKeys: Set<string>, fallbackSectionKey?: string | null) {
+function normalizeStatus(value: unknown): 'pending' | 'resolved' | 'ignored' {
+  const status = String(value || '').trim().toLowerCase()
+  return status === 'resolved' || status === 'ignored' ? status : 'pending'
+}
+
+function recommendationId(item: {
+  reviewerSectionId?: string
+  sectionKey?: string
+  issue?: string
+  recommendation?: string
+  suggestedRemark?: string
+}) {
+  return crypto
+    .createHash('sha1')
+    .update([
+      item.reviewerSectionId || '',
+      normalizeKey(item.sectionKey),
+      String(item.issue || '').trim().toLowerCase(),
+      String(item.recommendation || '').trim().toLowerCase(),
+      String(item.suggestedRemark || '').trim().toLowerCase(),
+    ].join('|'))
+    .digest('hex')
+    .slice(0, 16)
+}
+
+function normalizeRecommendation(
+  item: any,
+  validKeys: Set<string>,
+  fallbackSectionKey?: string | null,
+  statusEntries?: Record<string, any>
+) {
   const sectionKey = String(item?.sectionKey || fallbackSectionKey || '').trim()
   if (!sectionKey || !validKeys.has(normalizeKey(sectionKey))) return null
 
   const recommendation = String(item?.recommendation || item?.suggestedRemark || item?.feedback || item?.issue || '').trim()
   if (!recommendation) return null
 
-  return {
+  const normalized = {
     sectionKey,
     priority: normalizePriority(item?.priority),
     issue: String(item?.issue || item?.feedback || recommendation).trim(),
@@ -50,11 +81,24 @@ function normalizeRecommendation(item: any, validKeys: Set<string>, fallbackSect
     reviewerSectionId: String(item?.reviewerSectionId || ''),
     reviewerSectionTitle: String(item?.reviewerSectionTitle || ''),
   }
+  const id = recommendationId(normalized)
+  const statusEntry = statusEntries?.[id] || {}
+
+  return {
+    id,
+    ...normalized,
+    actionable: normalized.autoFixable !== false && Boolean(normalized.suggestedRemark || normalized.recommendation),
+    status: normalizeStatus(statusEntry.status),
+    statusUpdatedAt: typeof statusEntry.updatedAt === 'string' ? statusEntry.updatedAt : null,
+  }
 }
 
 function extractSectionRecommendations(section: any, appDraftKeys: Set<string>) {
   const review = section.ai_review_json && typeof section.ai_review_json === 'object'
     ? section.ai_review_json as any
+    : {}
+  const statusEntries = review.recommendation_statuses && typeof review.recommendation_statuses === 'object'
+    ? review.recommendation_statuses as Record<string, any>
     : {}
   const links = Array.isArray(section.grant_section_links) ? section.grant_section_links : []
   const validSectionKeys: string[] = links
@@ -86,7 +130,7 @@ function extractSectionRecommendations(section: any, appDraftKeys: Set<string>) 
       ...item,
       reviewerSectionId: section.id,
       reviewerSectionTitle: section.section_title,
-    }, validKeys, fallbackKey))
+    }, validKeys, fallbackKey, statusEntries))
     .filter(Boolean)
 
   return uniqueByText(recommendations as any[])
@@ -172,7 +216,121 @@ export async function GET(
   return NextResponse.json({
     callId: call.id,
     recommendations,
+    actionableRecommendations: recommendations.filter((item: any) => item.actionable),
     recommendationsBySection,
     supplementaryMaterials,
+  })
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ projectId: string; grantId: string }> }
+) {
+  const { projectId, grantId } = await params
+  const actor = await requireProjectGrantActor(request, projectId, 'editContent')
+  if (actor instanceof NextResponse) return actor
+
+  const body = await request.json().catch(() => ({})) as {
+    updates?: Array<{ id?: string; reviewerSectionId?: string; status?: string }>
+  }
+  const updates = Array.isArray(body.updates) ? body.updates : []
+  if (updates.length === 0) {
+    return NextResponse.json({ message: 'No recommendation status updates provided' }, { status: 400 })
+  }
+
+  const workspace = await getGrantWorkspace({
+    grantSessionId: grantId,
+    tenantId: actor.tenantId,
+  })
+
+  if (!workspace || workspace.grantSession.projectId !== projectId || !workspace.blueprint) {
+    return NextResponse.json({ message: 'Grant workspace not found' }, { status: 404 })
+  }
+
+  const appDraftKeys = new Set(
+    (workspace.blueprint.sectionPlan || [])
+      .filter((section) => section.workflowMode === 'app_draft')
+      .map((section) => normalizeKey(section.sectionKey))
+  )
+
+  const call = await prisma.reviewerCall.findFirst({
+    where: {
+      grantSessionId: grantId,
+      reviewerMode: 'grant_integrated',
+    } as any,
+    include: {
+      reviewer_sections: {
+        where: { status: 'reviewed' },
+        include: {
+          grant_section_links: {
+            where: { isActive: true },
+            orderBy: { order: 'asc' },
+          },
+        },
+      },
+    },
+    orderBy: { updated_at: 'desc' },
+  })
+
+  if (!call) {
+    return NextResponse.json({ message: 'No reviewer call found' }, { status: 404 })
+  }
+
+  const sectionsById = new Map((call.reviewer_sections || []).map((section: any) => [section.id, section]))
+  const validRecommendations = new Map<string, any>()
+  for (const section of call.reviewer_sections || []) {
+    for (const recommendation of extractSectionRecommendations(section, appDraftKeys)) {
+      validRecommendations.set(recommendation.id, recommendation)
+    }
+  }
+
+  const now = new Date().toISOString()
+  const updatesBySection = new Map<string, Array<{ id: string; status: 'pending' | 'resolved' | 'ignored' }>>()
+
+  for (const update of updates) {
+    const id = String(update.id || '').trim()
+    const status = normalizeStatus(update.status)
+    const recommendation = validRecommendations.get(id)
+    if (!id || !recommendation || !recommendation.actionable) continue
+    if (update.reviewerSectionId && String(update.reviewerSectionId) !== recommendation.reviewerSectionId) continue
+
+    const sectionUpdates = updatesBySection.get(recommendation.reviewerSectionId) || []
+    sectionUpdates.push({ id, status })
+    updatesBySection.set(recommendation.reviewerSectionId, sectionUpdates)
+  }
+
+  if (updatesBySection.size === 0) {
+    return NextResponse.json({ message: 'No valid recommendation status updates found' }, { status: 400 })
+  }
+
+  for (const [sectionId, sectionUpdates] of updatesBySection.entries()) {
+    const section = sectionsById.get(sectionId) as any
+    if (!section) continue
+
+    const review = section.ai_review_json && typeof section.ai_review_json === 'object'
+      ? { ...(section.ai_review_json as any) }
+      : {}
+    const statuses = review.recommendation_statuses && typeof review.recommendation_statuses === 'object'
+      ? { ...(review.recommendation_statuses as Record<string, any>) }
+      : {}
+
+    for (const update of sectionUpdates) {
+      statuses[update.id] = {
+        status: update.status,
+        updatedAt: now,
+      }
+    }
+
+    review.recommendation_statuses = statuses
+
+    await prisma.reviewerSection.update({
+      where: { id: sectionId },
+      data: { ai_review_json: review } as any,
+    })
+  }
+
+  return NextResponse.json({
+    message: 'Recommendation statuses updated',
+    updated: Array.from(updatesBySection.values()).flat().length,
   })
 }

@@ -130,7 +130,7 @@ export async function inferPaperFigureImageMetadata(params: {
     ? params.suggestionMeta
     : null
 
-  const prompt = `You are extracting drafting-grade, evidence-safe metadata from a research-paper figure image.
+  const prompt = `You are extracting drafting-grade, evidence-safe metadata from a grant-proposal or research-paper figure image.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -141,7 +141,7 @@ Return ONLY valid JSON with this exact shape:
   "comparedGroups": ["up to 8 methods, classes, conditions, cohorts, panels, or groups being compared"],
   "numericHighlights": ["up to 8 exact values, ranges, counts, percentages, or ranks visibly readable in the figure"],
   "observedPatterns": ["up to 8 directly visible patterns, comparisons, gradients, peaks, lows, or ordering statements"],
-  "resultDetails": ["up to 8 drafting-ready observations that a Results section can safely report"],
+  "resultDetails": ["up to 8 drafting-ready observations that a results/evaluation section can safely report"],
   "methodologyDetails": ["up to 8 setup, workflow, architecture, or procedural details visible in the figure"],
   "discussionCues": ["up to 8 restrained interpretation cues, limitations, anomalies, or implications suggested by the visible figure"],
   "chartSignals": ["up to 8 directly visible trends or signals"],
@@ -155,11 +155,12 @@ Rules:
 - Keep every list item short, concrete, and drafting-usable.
 - If text or numbers are unreadable, return empty arrays rather than guessing.
 - "numericHighlights" must contain only visibly readable values or ranges.
-- "resultDetails" must be observation-only prose that a Results section can say safely.
+- "resultDetails" must be observation-only prose that a results/evaluation section can say safely.
 - "methodologyDetails" must focus on structure, components, steps, or setup visible in the figure.
 - "discussionCues" can mention anomalies, trade-offs, limitations, or interpretation directions only if visually grounded.
 - "claimsSupported" must stay strictly proportional to visible evidence.
-- "claimsToAvoid" should explicitly flag causal, statistical-significance, generalization, or performance claims not proven by the figure alone.
+- "claimsToAvoid" should explicitly flag causal, statistical-significance, generalization, funder-impact, cost-effectiveness, achieved-outcome, or performance claims not proven by the figure alone.
+- For grant-proposal figures, distinguish planned activities, targets, deliverables, and impact pathways from observed results.
 
 Figure metadata:
 - Title: ${cleanInferenceText(params.title, 180)}

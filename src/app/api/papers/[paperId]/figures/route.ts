@@ -31,6 +31,11 @@ const createSchema = z.object({
   status: z.enum(['PLANNED', 'GENERATING', 'GENERATED', 'FAILED']).optional(),
   suggestionMeta: z.object({
     relevantSection: z.string().optional().nullable(),
+    sourceSections: z.array(z.object({
+      sectionKey: z.string(),
+      label: z.string().optional()
+    })).optional().nullable(),
+    scopeMode: z.enum(['selected_sections', 'full_draft', 'focused_text']).optional().nullable(),
     figureRole: z.enum(['ORIENT', 'POSITION', 'EXPLAIN_METHOD', 'SHOW_RESULTS', 'INTERPRET']).optional().nullable(),
     sectionFitJustification: z.string().optional().nullable(),
     expectedByReviewers: z.boolean().optional().nullable(),

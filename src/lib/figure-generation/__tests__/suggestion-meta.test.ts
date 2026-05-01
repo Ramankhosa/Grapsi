@@ -88,4 +88,28 @@ describe('extractFigureSuggestionMeta', () => {
       expectedByReviewers: false
     });
   });
+
+  it('preserves source section scope metadata', () => {
+    const meta = extractFigureSuggestionMeta({
+      title: 'Workplan timeline',
+      description: 'Milestone sequence.',
+      category: 'DIAGRAM',
+      importance: 'recommended',
+      relevantSection: 'workplan',
+      sourceSections: [
+        { sectionKey: 'workplan', label: 'Workplan' },
+        { sectionKey: 'impact', label: 'Impact' }
+      ],
+      scopeMode: 'selected_sections'
+    });
+
+    expect(meta).toMatchObject({
+      relevantSection: 'workplan',
+      sourceSections: [
+        { sectionKey: 'workplan', label: 'Workplan' },
+        { sectionKey: 'impact', label: 'Impact' }
+      ],
+      scopeMode: 'selected_sections'
+    });
+  });
 });

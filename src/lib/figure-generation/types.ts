@@ -452,6 +452,8 @@ export interface FigureSuggestion {
   suggestedType?: string
   rendererPreference?: 'plantuml' | 'mermaid' | 'auto'
   relevantSection?: string      // Which paper section it relates to
+  sourceSections?: Array<{ sectionKey: string; label?: string }>
+  scopeMode?: 'selected_sections' | 'full_draft' | 'focused_text'
   figureRole?: FigureRole
   sectionFitJustification?: string
   expectedByReviewers?: boolean

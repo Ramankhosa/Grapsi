@@ -52,15 +52,25 @@ type SectionsResponse = {
 export type DraftingFilter = 'all' | 'app_draft' | 'team_draft' | 'evidence'
 
 type GrantReviewerRecommendation = {
+  id: string
   sectionKey: string
   priority: 'high' | 'medium' | 'low'
   issue: string
   recommendation: string
   suggestedRemark: string
   autoFixable: boolean
+  actionable?: boolean
+  status?: 'pending' | 'resolved' | 'ignored'
+  statusUpdatedAt?: string | null
   linkedRuleKeys?: string[]
   reviewerSectionId?: string
   reviewerSectionTitle?: string
+}
+
+type RecommendationStatusUpdate = {
+  id: string
+  reviewerSectionId?: string
+  status: 'pending' | 'resolved' | 'ignored'
 }
 
 interface GrantSectionDraftingStageProps {
@@ -221,6 +231,31 @@ export default function GrantSectionDraftingStage({
     void loadReviewerRecommendations()
   }, [loadReviewerRecommendations])
 
+  const updateReviewerRecommendationStatuses = useCallback(async (updates: RecommendationStatusUpdate[]) => {
+    if (!authToken || updates.length === 0) return
+
+    const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/reviewer/recommendations`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ updates }),
+    })
+    const payload = await response.json().catch(() => ({})) as { message?: string }
+    if (!response.ok) {
+      throw new Error(payload.message || 'Failed to update reviewer recommendation status')
+    }
+
+    const updatedAt = new Date().toISOString()
+    setReviewerRecommendations(prev => prev.map(item => {
+      const update = updates.find(next => next.id === item.id)
+      return update
+        ? { ...item, status: update.status, statusUpdatedAt: updatedAt }
+        : item
+    }))
+  }, [authToken, grantId, projectId])
+
   useEffect(() => {
     if (!onSectionSelect || sections.length === 0) return
     if (selectedSection && sections.some((section) => section.sectionKey === selectedSection)) return
@@ -338,6 +373,7 @@ export default function GrantSectionDraftingStage({
           selectedSection={currentSection.sectionKey}
           onSectionSelect={onSectionSelect}
           grantReviewerRecommendations={reviewerRecommendations}
+          onGrantReviewerRecommendationStatusChange={updateReviewerRecommendationStatuses}
         />
       </div>
     )

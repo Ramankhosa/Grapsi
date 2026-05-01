@@ -5,10 +5,10 @@
  * - Chart configurations (Chart.js) from natural language descriptions
  * - Mermaid diagram code from descriptions
  * - PlantUML code from descriptions
- * - AI-powered figure suggestions based on paper content
+ * - AI-powered figure suggestions based on proposal/manuscript content
  * 
  * Stage Codes (for Super Admin model configuration):
- * - PAPER_FIGURE_SUGGESTION: AI suggestions for figures based on paper content
+ * - PAPER_FIGURE_SUGGESTION: AI suggestions for figures based on proposal/manuscript content
  * - PAPER_CHART_GENERATOR: Generate Chart.js configs from descriptions/data
  * - PAPER_DIAGRAM_GENERATOR: Generate Mermaid/PlantUML code from descriptions
  */
@@ -36,6 +36,12 @@ import type {
 } from './types'
 import { normalizeFigurePreferences, type FigureSuggestionPreferences } from './preferences'
 import { chooseDiagramRenderer } from './diagram-renderer-policy'
+import {
+  normalizeScopeSectionKey,
+  type FigureSuggestionSectionScopeInput,
+  type FigureSuggestionScopeMode,
+  type FigureSuggestionSourceSection
+} from './section-scope'
 
 // =============================================================================
 // TYPES
@@ -145,10 +151,12 @@ export interface FigureSuggestionRequest {
   preferences?: Partial<FigureSuggestionPreferences>
   existingFigures?: Array<{ title: string; type: string }>
   maxSuggestions?: number
+  sectionScope?: FigureSuggestionSectionScopeInput
+  sourceSections?: FigureSuggestionSourceSection[]
 
   /**
    * When set, the suggestions are constrained to visualize THIS specific
-   * text excerpt only. The LLM will use broader paper context for grounding
+   * text excerpt only. The LLM will use broader proposal/manuscript context for grounding
    * but every suggestion must directly illustrate the focused content.
    */
   focusText?: string
@@ -176,15 +184,16 @@ export interface FigureSuggestionResult {
 // PROMPTS
 // =============================================================================
 
-const SECTION_AWARE_ACADEMIC_FIGURE_POLICY = `SECTION-AWARE ACADEMIC FIGURE POLICY (GLOBAL)
+const SECTION_AWARE_ACADEMIC_FIGURE_POLICY = `SECTION-AWARE ACADEMIC / GRANT FIGURE POLICY (GLOBAL)
 
-You must choose and generate figures that are academically appropriate for the paper's SECTION and STUDY TYPE.
-Do NOT optimize for "looks technical"; optimize for reviewer-expected rhetorical function:
-- Introduction: orient/motivate/preview approach
-- Literature Review: taxonomy/positioning/gaps
-- Methodology: reproducibility/pipeline/experimental design
-- Results: quantitative evidence/comparisons/ablations/error analysis
-- Discussion/Conclusion: interpretation/limitations/implications/boundary conditions
+You must choose and generate figures that fit the document type and the selected section's intent. The same engine serves research manuscripts and grant proposals.
+For grant proposals, optimize for funder confidence: feasibility, logic, risk control, workplan clarity, evaluation readiness, and impact pathway.
+For research papers, optimize for reviewer-expected rhetorical function:
+- Introduction / Proposal Need: orient, motivate, define problem and rationale
+- Literature / Background: taxonomy, positioning, gaps, state of the field
+- Methodology / Approach / Work Packages: reproducibility, feasibility, execution pathway, experimental design
+- Results / Evaluation / Outcomes: quantitative evidence only when data exists; otherwise evaluation logic, metrics plan, or outcome pathway
+- Discussion / Impact / Sustainability: interpretation, limitations, implications, beneficiaries, translation pathway
 
 FIGURE CATEGORIES (allowed outputs):
 A) DATA_CHART / STATISTICAL_PLOT (Chart.js)
@@ -192,7 +201,16 @@ B) DIAGRAM (PlantUML or Mermaid)
 C) ILLUSTRATED_FIGURE (infographic-style overview: icons + arrows + short labels; NOT UML syntax; NOT a plot)
 
 CRITICAL GROUNDING RULE:
-Every figure must be grounded in actual paper content. If data is missing, clearly request the exact data needed; if placeholders are permitted, they must be explicitly labeled as placeholders and must look plausible (no miracle trends).
+Every figure must be grounded in the supplied draft/proposal content. If quantitative data is missing, do not suggest or generate plots. Request the exact data needed and use DIAGRAM or ILLUSTRATED_FIGURE alternatives instead. Never invent placeholder series, aspirational metrics, miracle trends, or unsupported outcomes.
+
+GRANT PROPOSAL INTENT RULES:
+- Need/Problem/Significance: use a compact problem-to-opportunity map or rationale framework; avoid decorative advocacy graphics.
+- Objectives/Aims: use an aims-to-work-packages-to-deliverables framework, showing how each aim advances the funder objective.
+- Methodology/Approach/Work Packages: use flowchart/activity/pipeline diagrams that show feasible execution, dependencies, validation, and decision gates.
+- Workplan/Timeline/Milestones: prefer Mermaid timeline or gantt; show phases, milestones, dependencies, and review gates.
+- Evaluation/Outcomes: if numeric targets/data are explicit, charts are allowed; otherwise use an evaluation pathway linking activities -> outputs -> outcomes -> indicators.
+- Impact/Translation/Sustainability: use logic-model or outcome-pathway diagrams that connect beneficiaries, outputs, adoption route, and long-term impact.
+- Risk/Management/Ethics: use risk-control matrix, governance workflow, or decision pathway; avoid charts unless explicit risk scores are provided.
 
 SECTION FIT RULES (HARD CONSTRAINTS)
 1) INTRODUCTION:
@@ -209,12 +227,13 @@ SECTION FIT RULES (HARD CONSTRAINTS)
 - Allowed: flowchart/activity/pipeline, architecture/deployment, ER (if schema-central), sequence (protocol-central), optional ILLUSTRATED_FIGURE.
 - Default disallow: class/component unless framework/library structure is core contribution.
 
-4) RESULTS:
+4) RESULTS / EVALUATION / OUTCOMES:
 - HARD MIX: at least 70% of suggestions must be DATA_CHART or STATISTICAL_PLOT when quantitative evidence exists.
 - IF quantitative evidence is missing, suggest zero charts and provide DIAGRAM alternatives plus exact missing data fields in dataNeeded.
-- Allowed: comparisons, ablations, error analysis, sensitivity/boundary plots.
+- Allowed when data exists: comparisons, ablations, error analysis, sensitivity/boundary plots, target-vs-actual, budget/expenditure, output counts, indicator tables.
+- Grant fallback when data is missing: evaluation protocol, indicator logic, outcome pathway, or evidence collection plan.
 - HARD BAN: class/component/sequence/usecase/state; architecture-overview by default.
-- Placeholder realism: modest/noisy/plausible trends only unless dramatic jumps are explicitly claimed in paper text.
+- No placeholder trends. If real values are missing, do not produce a plot.
 
 5) DISCUSSION/CONCLUSION:
 - Allowed: error/failure/limits plots, implication/limitations DIAGRAMS, max 1 ILLUSTRATED_FIGURE summary.
@@ -222,6 +241,8 @@ SECTION FIT RULES (HARD CONSTRAINTS)
 
 DIAGRAM TYPE SELECTION RULES:
 - FLOWCHART/ACTIVITY/PIPELINE for process steps (default for Methodology).
+- TIMELINE/GANTT for grant workplans, phases, milestones, dependencies, review gates, and deliverables.
+- LOGIC MODEL / OUTCOME PATHWAY as flowchart for grant impact and evaluation sections.
 - SEQUENCE only when interaction protocol/time order is central.
 - CLASS/COMPONENT only for named software structure contribution.
 - ER only when data schema is central.
@@ -253,7 +274,7 @@ const PAPER_FIGURE_METADATA_OUTPUT_GUIDE = `{
   "comparedGroups": ["up to 8 methods, conditions, cohorts, categories, or series being compared"],
   "numericHighlights": ["up to 8 exact values, ranges, percentages, counts, or ranks taken directly from the supplied data"],
   "observedPatterns": ["up to 8 direct trends, contrasts, rankings, peaks, lows, or distributions implied by the supplied data"],
-  "resultDetails": ["up to 8 concise, result-safe observations the Results section may report"],
+  "resultDetails": ["up to 8 concise, result/evaluation-safe observations the draft may report"],
   "methodologyDetails": ["up to 8 setup details only if the chart structure itself makes them explicit"],
   "discussionCues": ["up to 8 restrained interpretation cues, anomalies, caveats, or implications suggested by the data"],
   "chartSignals": ["up to 8 direct chart signals such as upward trends, separation, clustering, spread, or imbalance"],
@@ -300,20 +321,20 @@ function summarizeChartPromptComplexity(request: ChartGenerationRequest): string
 
 const CHART_GENERATION_PROMPT = `${SECTION_AWARE_ACADEMIC_FIGURE_POLICY}
 
-You are an expert data visualization designer specializing in publication-quality academic figures.
+You are an expert data visualization designer specializing in publication-quality academic and grant-proposal figures.
 
-Your task: generate a valid Chart.js configuration object that produces an accurate, publication-ready chart and return drafting metadata in the same response.
+Your task: generate a valid Chart.js configuration object that produces an accurate, publication-ready chart and return drafting metadata in the same response. For grant proposals, charts must visualize real supplied numeric data such as targets, budgets, timelines, output counts, evaluation indicators, or baseline/target values.
 
 CRITICAL RULES:
 1. Return ONLY valid JSON. No markdown fences, no explanation, no comments in the JSON.
-2. NEVER invent or hallucinate data. Use only the exact numeric values and labels provided in the request. Do not fabricate placeholder series, placeholder labels, or synthetic results.
+2. NEVER invent or hallucinate data. Use only the exact numeric values and labels provided in the request. Do not fabricate placeholder series, placeholder labels, aspirational targets, synthetic outcomes, or funder-facing "example" results.
 2a. If the request includes raw CSV, TSV, JSON, x/y rows, pasted metrics, or lightly messy table text, normalize that content into the chart config using the exact values present in the request.
 2b. Preserve every provided category, row, series, point, and legend entry. Never drop, merge, downsample, reorder, or aggregate data unless the request explicitly asks for it.
 3. The chart MUST have:
    - Properly labeled axes with units where applicable (e.g., "Accuracy (%)", "Time (seconds)")
    - A legend with descriptive dataset labels
    - Colors from this academic palette: ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7"]
-3a. IMPORTANT FOR PAPER FIGURES: do NOT render a title above the chart. The paper title/caption is handled outside the image. Keep axis titles, but disable the in-chart top title.
+3a. IMPORTANT FOR DRAFT FIGURES: do NOT render a title above the chart. The figure title/caption is handled outside the image. Keep axis titles, but disable the in-chart top title.
 4. For bar charts: use semi-transparent fills (rgba with 0.8 opacity), solid borders
 5. For line charts: use solid lines (borderWidth: 2.5), small point radius (3-4px), no fill unless area chart
 6. For pie/doughnut: use the full 8-color palette, add percentage labels via datalabels plugin
@@ -327,6 +348,10 @@ CRITICAL RULES:
 13. If sectionType=results:
    - prioritize baseline vs proposed comparisons and uncertainty-ready layouts
    - avoid visually misleading scaling, clutter, or exaggerated contrast
+13a. If sectionType/evidence describes grant evaluation, outcomes, workplan, budget, or impact:
+   - chart only the explicit values supplied in the request
+   - distinguish baseline, target, requested funding, phase duration, output count, or indicator values without implying achieved results
+   - label proposed/target values as proposed or target, not observed outcomes
 14. If chartSpec is provided, follow chartSpec axis labels and field mappings exactly.
 15. Respect any DATA COMPLEXITY / PRESERVATION SIGNALS in the prompt. Adapt label rotation, orientation, font sizes, and legend placement to keep all supplied data visible.
 16. If labels are long or numerous, prefer horizontal bars or rotated ticks over truncation. If the plot is dense, simplify styling, not data.
@@ -374,7 +399,7 @@ USER REQUEST:
 
 const DIAGRAM_GENERATION_PROMPT = `${SECTION_AWARE_ACADEMIC_FIGURE_POLICY}
 
-You are an expert at creating compact, publication-quality Mermaid diagrams for academic papers. The output must render reliably on Kroki (Mermaid renderer).
+You are an expert at creating compact, publication-quality Mermaid diagrams for academic papers and grant proposals. The output must render reliably on Kroki (Mermaid renderer).
 
 OUTPUT RULES (STRICT):
 1) Return ONLY valid Mermaid code. No markdown fences, no explanations, no extra text.
@@ -396,6 +421,9 @@ OUTPUT RULES (STRICT):
 10) You will receive sectionType and paperGenre. Enforce section fit:
    - Results: never output class/component/sequence/usecase/state.
    - Methodology: prefer flowchart/activity/pipeline.
+   - Grant objectives/aims: prefer a framework flowchart linking aims, work packages, outputs, and outcomes.
+   - Grant workplan/timeline/milestones: prefer timeline or gantt.
+   - Grant evaluation/impact: prefer evaluation pathway, logic model, or outcome pathway unless explicit numeric data is being charted elsewhere.
    - Introduction: keep high-level only.
 11) Labels must be academic and neutral. Avoid marketing/hype words.
 12) If the request includes raw CSV, TSV, JSON, metrics, or pasted data rows, use that content to name entities, stages, comparisons, and relationships instead of ignoring it.
@@ -406,6 +434,7 @@ SUPPORTED DIAGRAM TYPES (Mermaid fallback):
 - state
 - er
 - gantt
+- timeline
 
 CANONICAL TEMPLATES (choose exactly ONE; fill placeholders only):
 
@@ -476,6 +505,13 @@ gantt
   Task A :a1, 2026-01-01, 10d
   Task B :a2, after a1, 7d
 
+[TEMPLATE 7: TIMELINE]
+timeline
+  title Workplan Milestones
+  Phase 1 : Setup
+  Phase 2 : Delivery
+  Phase 3 : Evaluation
+
 YOUR TASK:
 - You will receive a diagramType and a short user request describing what the diagram should show.
 - Choose exactly one template that matches diagramType:
@@ -484,6 +520,7 @@ YOUR TASK:
   * state     -> TEMPLATE 4
   * er        -> TEMPLATE 5
   * gantt     -> TEMPLATE 6
+  * timeline  -> TEMPLATE 7
 - Replace placeholder labels with compact, safe labels.
 - Ensure all IDs are unique and valid.
 - Add/remove nodes minimally to match the request while staying within compactness limits.
@@ -495,7 +532,7 @@ USER REQUEST:
 
 const PLANTUML_GENERATION_PROMPT = `${SECTION_AWARE_ACADEMIC_FIGURE_POLICY}
 
-You are an expert at creating compact, publication-quality PlantUML diagrams for top-tier academic papers (IEEE/ACM/Springer/Elsevier). You must optimize for space efficiency and Kroki compatibility.
+You are an expert at creating compact, publication-quality PlantUML diagrams for top-tier academic papers and grant proposals. You must optimize for space efficiency, funder/reviewer readability, and Kroki compatibility.
 
 OUTPUT RULES (STRICT):
 1) Return ONLY PlantUML code starting with @startuml and ending with @enduml.
@@ -516,6 +553,9 @@ OUTPUT RULES (STRICT):
 11) You will receive sectionType and paperGenre. Enforce section fit:
     - Results: never output class/component/sequence/usecase/state.
     - Methodology: prefer architecture/pipeline/activity; sequence only if protocol-centric.
+    - Grant objectives/aims: use architecture/pipeline-style frameworks that show aims, work packages, deliverables, and outcomes.
+    - Grant evaluation/impact: use logic-model or outcome-pathway flow, not unsupported performance charts.
+    - Grant management/risk/ethics: use governance workflow, responsibility flow, or risk-control diagram.
     - Introduction: high-level only (6-10 nodes).
 12) Use short academic labels only. No marketing adjectives.
 
@@ -784,39 +824,60 @@ USER REQUEST:
 
 const FIGURE_SUGGESTION_PROMPT = `${SECTION_AWARE_ACADEMIC_FIGURE_POLICY}
 
-You are a senior academic figure editor for peer-reviewed papers. You analyze research papers and recommend figures that are section-fit, reviewer-expected, grounded in the paper, and immediately renderable by our generators.
+You are a senior figure editor for grant proposals and peer-reviewed papers. You recommend figures that are section-fit, persuasive without hype, grounded in the selected draft content, and immediately renderable by our generators.
 
-Your job: suggest 5-8 specific, actionable figures grounded in actual paper content (or 2-4 under focus constraints).
+Your job: suggest 5-8 specific, actionable figures grounded in actual proposal/manuscript content (or 2-4 under focus constraints).
 
 CRITICAL RULES:
 1. Return ONLY a valid JSON array. No markdown fences, no explanation outside JSON.
-2. Every suggestion MUST be grounded in the provided PAPER CONTENT, explicitly referencing the relevant section and the concrete entities/variables/method steps described.
-3. Never output generic figure ideas. Tie each suggestion to this paper's claims, variables, entities, and methods.
+2. Every suggestion MUST be grounded in the provided DRAFT CONTENT, explicitly referencing the relevant section and the concrete aims, work packages, milestones, outcomes, entities, variables, or method steps described.
+3. Never output generic figure ideas. Tie each suggestion to this grant/proposal/paper's claims, objectives, activities, variables, entities, and methods.
 4. Respect the provided Paper Profile (paperGenre, studyType, dataAvailability) and section-fit rules.
 
+GRANT PROPOSAL MODE:
+4a. If the content mentions grant, funder, call, proposal, aims, objectives, work packages, milestones, deliverables, budget, evaluation, outcomes, impact, beneficiaries, sustainability, risk, ethics, or management, treat the section as a grant proposal section.
+4b. For grant content, prioritize persuasive but evidence-safe figures that make the funder believe the project is necessary, feasible, measurable, and impactful.
+4c. Understand the selected section's rhetorical job before suggesting figures:
+   - Need/significance: problem tree, gap-to-opportunity map, stakeholder/beneficiary map.
+   - Objectives/aims: aim-to-work-package framework, objective dependency map.
+   - Approach/work packages: execution flow, work-package dependency diagram, decision-gate workflow.
+   - Workplan/timeline/milestones: Mermaid timeline or gantt.
+   - Evaluation/outcomes: evaluation logic model, KPI/indicator pathway, outcome measurement plan.
+   - Impact/sustainability: impact pathway, theory-of-change, adoption/translation route.
+   - Risk/management/ethics: risk mitigation matrix or governance workflow.
+
 DATA AVAILABILITY HARD GATE (MUST FOLLOW):
-5. If the paper draft DOES NOT contain explicit quantitative values (numbers, metrics, tables, counts, distributions) AND the user has NOT provided data separately, then you MUST NOT suggest any DATA_CHART or STATISTICAL_PLOT figures.
+5. If the selected draft content DOES NOT contain explicit quantitative values (numbers tied to variables, metrics, budget lines, dates/durations, target values, tables, counts, or distributions) AND the user has NOT provided data separately, then you MUST NOT suggest any DATA_CHART or STATISTICAL_PLOT figures.
    - In this case, suggest only DIAGRAM and/or ILLUSTRATED_FIGURE alternatives.
    - Set "dataNeeded" to the exact missing data fields/columns required to enable plots later.
-   - Do NOT invent placeholder numeric values or pretend results exist.
-6. Only suggest DATA_CHART / STATISTICAL_PLOT when (a) the paper content includes quantitative results OR (b) the user explicitly provided data for plotting. When allowed, include a deterministic chartSpec with explicit axes and variable mapping.
+   - Do NOT invent placeholder numeric values, aspirational targets, synthetic benchmarks, or pretend results exist.
+   - Qualitative claims like "improve", "increase", "large impact", "significant", or "cost effective" are NOT data.
+6. Only suggest DATA_CHART / STATISTICAL_PLOT when (a) the selected content includes explicit numeric values to plot OR (b) the user explicitly provided data for plotting. When allowed, include a deterministic chartSpec with explicit axes and variable mapping.
 
 SECTION-FIT GOVERNANCE (hard):
-7. RESULTS section: when quantitative results exist, prioritize comparisons/ablations/error analysis plots; otherwise propose results-appropriate DIAGRAM alternatives (e.g., evaluation protocol schematic, error taxonomy diagram) and request missing data in dataNeeded.
-8. METHODOLOGY: include at least one DIAGRAM explaining the method pipeline (reviewer-expected).
+7. RESULTS/EVALUATION/OUTCOMES section: when quantitative results or target values exist, prioritize honest comparisons, target-vs-baseline, budget allocation, workplan duration, or indicator charts; otherwise propose DIAGRAM alternatives (evaluation protocol, outcome pathway, evidence collection plan) and request missing data in dataNeeded.
+8. METHODOLOGY/APPROACH/WORK PACKAGES: include at least one DIAGRAM explaining execution flow, feasibility, dependencies, or validation gates.
 9. LITERATURE_REVIEW: prefer taxonomy maps, PRISMA-like flow, evidence maps (DIAGRAM), and trends only if quantitative evidence counts exist.
 10. INTRODUCTION/DISCUSSION: allow ONE ILLUSTRATED_FIGURE only if it clarifies real-world usage or conceptual framing; keep text minimal.
+
+GRANT-SUITABLE DIAGRAM GUIDANCE:
+- Timeline, workplan, milestone, and project-schedule sections: prefer Mermaid timeline or gantt diagrams.
+- Methodology, approach, and work-package sections: prefer flowchart/activity diagrams that show executable work.
+- Objectives, aims, and specific-aim sections: prefer flowchart/framework diagrams connecting aims to methods and outputs.
+- Evaluation and outcomes sections: use charts only when numeric data exists; otherwise use an evaluation pathway diagram.
+- Impact and significance sections: prefer outcome-pathway or logic-model diagrams.
+- Risk, governance, management, ethics, and stakeholder sections: prefer matrix/workflow diagrams showing mitigation, responsibility, and review loops.
 
 DIAGRAM RENDERER POLICY:
 11. For every DIAGRAM suggestion include rendererPreference ("plantuml" or "mermaid") with this policy:
    - Prefer plantuml for UML-ish diagrams (class/component/usecase/state/activity/sequence) and architecture/deployment/topology/system overview/pipeline.
-   - Use mermaid only for simple gantt or simple er when appropriate.
+   - Use mermaid for simple timeline, gantt, or simple er when appropriate.
 
 DETERMINISTIC SPEC REQUIREMENT (hard):
 12. category must be one of: DATA_CHART, STATISTICAL_PLOT, DIAGRAM, ILLUSTRATED_FIGURE.
 13. suggestedType must be one of:
    - Charts: bar, line, pie, scatter, radar, doughnut
-   - Diagrams: flowchart, sequence, architecture, class, component, usecase, state, activity, er, gantt
+   - Diagrams: flowchart, sequence, architecture, class, component, usecase, state, activity, er, gantt, timeline
    - Illustrated: sketch-auto, sketch-guided
 14. For DATA_CHART / STATISTICAL_PLOT suggestions: include chartSpec with explicit axes + variable mapping and a placeholderPolicy ONLY if real data is present (see Rule 5-6).
 15. For DIAGRAM suggestions: include diagramSpec with deterministic nodes/edges plus constraints:
@@ -843,24 +904,24 @@ GOVERNANCE FIELDS (required for every suggestion):
 
 IMPORTANCE GUIDELINES:
 - required: expected by reviewers (e.g., methodology pipeline, results comparisons when data exists)
-- recommended: significantly strengthens the paper
+- recommended: significantly strengthens the proposal/manuscript
 - optional: useful but not essential
 
 OUTPUT FORMAT (return ONLY JSON array):
 [
   {
     "title": "Specific figure title",
-    "description": "50-150 words, implementation-ready, grounded in paper content",
+    "description": "50-150 words, implementation-ready, grounded in proposal/manuscript content",
     "category": "DATA_CHART|STATISTICAL_PLOT|DIAGRAM|ILLUSTRATED_FIGURE",
-    "suggestedType": "bar|line|...|flowchart|...|sketch-auto|sketch-guided",
+    "suggestedType": "bar|line|...|flowchart|timeline|...|sketch-auto|sketch-guided",
     "rendererPreference": "plantuml|mermaid (DIAGRAM only)",
-    "relevantSection": "introduction|literature_review|methodology|results|discussion|conclusion",
+    "relevantSection": "selected section key when a Source Scope is provided; otherwise introduction|literature_review|methodology|results|discussion|conclusion",
     "figureRole": "ORIENT|POSITION|EXPLAIN_METHOD|SHOW_RESULTS|INTERPRET",
     "sectionFitJustification": "One sentence",
     "expectedByReviewers": true,
     "importance": "required|recommended|optional",
     "dataNeeded": "Exact variables/columns needed (or 'None (conceptual/method figure)')",
-    "whyThisFigure": "One sentence why this strengthens the paper",
+    "whyThisFigure": "One sentence why this strengthens the proposal/manuscript",
     "renderSpec": {
       "kind": "chart|diagram|illustration",
       "chartSpec": {},
@@ -922,15 +983,15 @@ OUTPUT FORMAT (return ONLY JSON array):
   }
 ]
 
-PAPER CONTENT:
+DRAFT CONTENT:
 \`\`\`
 `
 
 /**
  * Additional prompt block injected when the user has selected/focused on a
  * specific text excerpt. This constrains every suggestion to directly
- * illustrate the focused content while still using the broader paper
- * context for grounding (correct terminology, related variables, etc.).
+ * illustrate the focused content while still using the broader proposal or
+ * paper context for grounding (correct terminology, related variables, etc.).
  */
 function buildFocusTextBlock(
   focusText: string,
@@ -939,7 +1000,7 @@ function buildFocusTextBlock(
   focusHints?: { entities?: string[]; metrics?: string[]; verbs?: string[] }
 ): string {
   const modeLabel = focusMode === 'selection'
-    ? 'The user has selected the following excerpt from their paper'
+    ? 'The user has selected the following excerpt from their draft'
     : 'The user wants figures specifically for the following content'
   const sectionHint = focusSection ? ` (from the "${focusSection}" section)` : ''
   const entities = (focusHints?.entities || []).slice(0, 10)
@@ -967,10 +1028,10 @@ ${hintsBlock}
 
 STRICT RULES FOR THIS FOCUSED REQUEST:
 1. EVERY suggestion MUST directly visualize, explain, or showcase the content in the excerpt above.
-2. Do NOT suggest figures for other parts of the paper - only for the focused text.
-3. Use broader paper context only for terminology/grounding. Every figure must still target this excerpt.
+2. Do NOT suggest figures for other parts of the proposal/manuscript - only for the focused text.
+3. Use broader proposal/manuscript context only for terminology/grounding. Every figure must still target this excerpt.
 4. If the excerpt describes a process or workflow -> suggest a flowchart/activity diagram.
-5. If the excerpt contains comparisons, numbers, or measurements -> suggest charts.
+5. If the excerpt contains explicit numeric data, measurements, targets, budgets, dates, or counts -> charts may be suggested; otherwise do not suggest plots.
 6. If the excerpt describes relationships or structures -> suggest architecture/class/ER only when section-fit allows.
 7. If the excerpt is conceptual or theoretical -> suggest an ILLUSTRATED_FIGURE.
 8. Suggest 2-4 figures only.
@@ -1268,13 +1329,53 @@ function normalizeSectionType(value?: string): SectionType {
   const raw = sanitizeAscii((value || '').toLowerCase().trim())
   if (!raw) return 'methodology'
   if (raw.includes('intro')) return 'introduction'
+  if (/\b(objective|objectives|aim|aims|specific_aims|goal|goals|need|rationale)\b/.test(raw)) return 'introduction'
   if (raw.includes('literature') || raw.includes('related work') || raw.includes('background')) return 'literature_review'
-  if (raw.includes('method')) return 'methodology'
-  if (raw.includes('result') || raw.includes('evaluation') || raw.includes('experiment')) return 'results'
-  if (raw.includes('discussion')) return 'discussion'
+  if (raw.includes('method') || /\b(workplan|work_plan|work package|work_package|timeline|milestone|milestones|project plan|activity plan|implementation|approach)\b/.test(raw)) return 'methodology'
+  if (raw.includes('result') || raw.includes('evaluation') || raw.includes('experiment') || /\b(outcome|outcomes|deliverable|deliverables|success criteria|kpi|indicator|indicators)\b/.test(raw)) return 'results'
+  if (raw.includes('discussion') || /\b(impact|significance|translation|benefit|benefits|logic model|sustainability)\b/.test(raw)) return 'discussion'
   if (raw.includes('conclusion') || raw.includes('future work')) return 'conclusion'
   if (raw.includes('selected')) return 'selected_content'
   return 'methodology'
+}
+
+function getSourceSectionLabel(sectionKey: string | undefined, sourceSections?: FigureSuggestionSourceSection[]): string | undefined {
+  const normalized = normalizeScopeSectionKey(sectionKey)
+  if (!normalized) return undefined
+  return sourceSections?.find((section) => normalizeScopeSectionKey(section.sectionKey) === normalized)?.label
+}
+
+function normalizeSuggestionGovernanceSection(
+  relevantSection?: string,
+  sourceSections?: FigureSuggestionSourceSection[]
+): SectionType {
+  const label = getSourceSectionLabel(relevantSection, sourceSections)
+  return normalizeSectionType([relevantSection, label].filter(Boolean).join(' '))
+}
+
+function resolveActualRelevantSection(
+  rawRelevantSection: string | undefined,
+  request: FigureSuggestionRequest,
+  index: number
+): string {
+  const sourceSections = request.sourceSections || []
+  if (request.focusText?.trim()) {
+    return request.focusSection || rawRelevantSection || sourceSections[0]?.sectionKey || 'selected_content'
+  }
+
+  if (request.sectionScope?.mode === 'selected_sections' && sourceSections.length > 0) {
+    const lookup = new Map<string, string>()
+    for (const section of sourceSections) {
+      const normalizedKey = normalizeScopeSectionKey(section.sectionKey)
+      if (normalizedKey) lookup.set(normalizedKey, section.sectionKey)
+      const normalizedLabel = normalizeScopeSectionKey(section.label)
+      if (normalizedLabel) lookup.set(normalizedLabel, section.sectionKey)
+    }
+    const matched = lookup.get(normalizeScopeSectionKey(rawRelevantSection))
+    return matched || sourceSections[index % sourceSections.length]?.sectionKey || sourceSections[0].sectionKey
+  }
+
+  return rawRelevantSection || 'methodology'
 }
 
 function defaultFigureRole(section: SectionType): FigureRole {
@@ -1375,7 +1476,7 @@ function buildFallbackChartSpec(
       allowed: false,
       label: 'Sample Data (replace with actual values)',
       shape: 'modest_gain',
-      rangeHint: 'Use real observed metric ranges from the paper.'
+      rangeHint: 'Use real observed or explicitly proposed metric ranges from the draft.'
     }
   }
 }
@@ -1659,13 +1760,16 @@ function scoreSuggestionSection(sectionKey: string, content: string): number {
   if (/\b(method|approach|workflow|pipeline|protocol|implementation|design|plan|strategy|work_plan|work_package)\b/.test(rawKey)) {
     score = Math.max(score, 92)
   }
+  if (/\b(workplan|timeline|milestone|milestones|project_plan|gantt|work_package)\b/.test(rawKey)) {
+    score = Math.max(score, 92)
+  }
   if (/\b(result|outcome|deliverable|evaluation|validation|benchmark|milestone|success)\b/.test(rawKey)) {
     score = Math.max(score, 90)
   }
   if (/\b(impact|significance|translation|benefit|risk|limitation)\b/.test(rawKey)) {
     score = Math.max(score, 62)
   }
-  if (/\b(budget|resource|personnel|team|timeline|ethic|governance|management|compliance)\b/.test(rawKey)) {
+  if (/\b(budget|resource|personnel|team|ethic|governance|management|compliance)\b/.test(rawKey)) {
     score = Math.min(score, 28)
   }
   if (/\b\d+(?:\.\d+)?\b/.test(content)) {
@@ -1774,6 +1878,7 @@ function hasQuantitativeEvidence(request: FigureSuggestionRequest): boolean {
 
 function detectPaperGenre(text: string): string {
   const source = sanitizeAscii(text.toLowerCase())
+  if (/\b(grant|proposal|funder|funding call|work package|workpackage|milestone|deliverable|impact pathway|logic model|specific aim|aims|budget|sustainability|beneficiaries)\b/.test(source)) return 'grant_proposal'
   if (/\b(neural|transformer|llm|deep learning|machine learning|classification|regression|benchmark)\b/.test(source)) return 'ml_ai'
   if (/\b(software|repository|module|framework|codebase|api|microservice)\b/.test(source)) return 'systems_se'
   if (/\b(education|classroom|student|learning outcomes|curriculum)\b/.test(source)) return 'education'
@@ -1908,7 +2013,7 @@ function validateSuggestion(
     context.groundingLexicon
   )
   if (overlap < 2) {
-    issues.push({ code: 'GROUNDING', reason: 'Suggestion has weak overlap with paper entities/metrics.' })
+    issues.push({ code: 'GROUNDING', reason: 'Suggestion has weak overlap with draft entities/metrics.' })
   }
   if (!suggestion.dataNeeded || !suggestion.dataNeeded.trim()) {
     issues.push({ code: 'GROUNDING', reason: 'dataNeeded is required and must specify exact variables or fields.' })
@@ -2020,7 +2125,7 @@ function buildSectionAwareFallbackSuggestion(
         suggestedType: 'bar',
         relevantSection: sectionText,
         figureRole: role,
-        sectionFitJustification: 'Results sections require quantitative evidence and direct comparisons.',
+        sectionFitJustification: 'Results/evaluation sections require quantitative evidence for charts and direct comparisons.',
         expectedByReviewers: true,
         importance: baseImportance,
         dataNeeded: source.dataNeeded || 'Per-method metric values across datasets/runs, including baseline and proposed variants.',
@@ -2068,7 +2173,7 @@ function buildSectionAwareFallbackSuggestion(
       rendererPreference: 'plantuml',
       relevantSection: sectionText,
       figureRole: role,
-      sectionFitJustification: 'Methodology requires reproducible step-by-step process visualization.',
+      sectionFitJustification: 'Methodology/approach sections require clear step-by-step process visualization.',
       expectedByReviewers: true,
       importance: baseImportance,
       dataNeeded: source.dataNeeded || 'Method stages, inputs/outputs of each stage, and control/validation transitions.',
@@ -2202,6 +2307,7 @@ type CanonicalMermaidTemplateType =
   | 'state'
   | 'er'
   | 'gantt'
+  | 'timeline'
 
 type MermaidFlowchartVariant = 'pipeline' | 'topology'
 
@@ -2232,7 +2338,8 @@ function normalizeMermaidTemplateType(
     sequence: 'sequence',
     state: 'state',
     er: 'er',
-    gantt: 'gantt'
+    gantt: 'gantt',
+    timeline: 'timeline'
   }
   if (direct[raw]) {
     return {
@@ -2250,7 +2357,6 @@ function normalizeMermaidTemplateType(
     class: 'flowchart',
     component: 'flowchart',
     usecase: 'flowchart',
-    timeline: 'gantt',
     mindmap: 'flowchart',
     plantuml: 'flowchart'
   }
@@ -2357,6 +2463,8 @@ function mermaidMatchesTemplateType(code: string, templateType: CanonicalMermaid
   switch (templateType) {
     case 'gantt':
       return /(^|\n)gantt\b/.test(normalized)
+    case 'timeline':
+      return /(^|\n)timeline\b/.test(normalized)
     case 'sequence':
       return /(^|\n)sequenceDiagram\b/.test(normalized)
     case 'state':
@@ -2490,7 +2598,7 @@ function validateMermaidCode(code: string): { valid: boolean; code: string; erro
   // Check it starts with a valid Mermaid declaration
   const validStarts = [
     'flowchart', 'sequenceDiagram', 'stateDiagram-v2', 'stateDiagram',
-    'erDiagram', 'gantt'
+    'erDiagram', 'gantt', 'timeline'
   ]
 
   const hasValidStart = validStarts.some(start => cleaned.startsWith(start) || cleaned.includes('\n' + start))
@@ -2988,8 +3096,14 @@ export async function generateFigureSuggestions(
     const preferences = normalizeFigurePreferences(request.preferences)
     const paperProfile = inferPaperProfile(request)
     const quantitativeDataAvailable = paperProfile.dataAvailability === 'provided' || hasQuantitativeEvidence(request)
+    const isFocused = !!request.focusText?.trim()
+    const suggestionScopeMode: FigureSuggestionScopeMode = isFocused
+      ? 'focused_text'
+      : request.sectionScope?.mode === 'selected_sections'
+        ? 'selected_sections'
+        : 'full_draft'
 
-    // Build paper context
+    // Build proposal/manuscript context
     let paperContext = ''
 
     if (request.paperTitle) {
@@ -3008,11 +3122,23 @@ export async function generateFigureSuggestions(
       paperContext += `Dataset / Data Availability: ${request.datasetDescription}\n\n`
     }
 
-    paperContext += `Paper Profile:\n`
+    paperContext += `Document Profile:\n`
     paperContext += `- paperGenre: ${paperProfile.paperGenre}\n`
     paperContext += `- studyType: ${paperProfile.studyType}\n`
     paperContext += `- dataAvailability: ${paperProfile.dataAvailability}\n\n`
     paperContext += `- quantitativeEvidenceDetected: ${quantitativeDataAvailable ? 'yes' : 'no'}\n\n`
+
+    if (request.sourceSections && request.sourceSections.length > 0) {
+      paperContext += 'Figure Suggestion Source Scope:\n'
+      paperContext += `- mode: ${suggestionScopeMode}\n`
+      paperContext += `- selectedSections: ${request.sourceSections.map((section) => (
+        section.label
+          ? `${section.sectionKey} (${section.label})`
+          : section.sectionKey
+      )).join(', ')}\n`
+      paperContext += '- Scope rule: suggestions must be grounded only in the listed source sections; set relevantSection to one of those exact section keys.\n'
+      paperContext += '- Grant guidance: timeline/workplan/milestones -> timeline or gantt; methodology/work packages -> flowchart or activity; objectives/aims -> framework flowchart; evaluation/outcomes -> chart only with numeric data, otherwise evaluation pathway; impact -> outcome or logic-model diagram.\n\n'
+    }
 
     if (request.sections) {
       const sectionContext = buildSuggestionSectionsContext(request.sections)
@@ -3066,14 +3192,13 @@ export async function generateFigureSuggestions(
     }
 
     // When focusText is provided, cap suggestions to 2-4 and inject the focus constraint
-    const isFocused = !!request.focusText?.trim()
     const maxSuggestions = isFocused
       ? Math.min(request.maxSuggestions || 4, 4)
       : (request.maxSuggestions || 8)
     paperContext += `\n\nProvide up to ${maxSuggestions} figure suggestions.`
 
-    // Inject the focus constraint block between the system prompt and paper context
-    // so the LLM sees: system rules → focus constraint → paper content
+    // Inject the focus constraint block between the system prompt and draft context
+    // so the LLM sees: system rules -> focus constraint -> draft content
     let fullPrompt: string
     if (isFocused) {
       const focusBlock = buildFocusTextBlock(
@@ -3124,7 +3249,9 @@ export async function generateFigureSuggestions(
     }
 
     const groundingLexicon = buildGroundingLexicon(request)
-    const focusedSection = request.focusSection ? normalizeSectionType(request.focusSection) : undefined
+    const focusedSection = request.focusSection
+      ? normalizeSuggestionGovernanceSection(request.focusSection, request.sourceSections)
+      : undefined
     const isValidImportance = (value?: string): value is 'required' | 'recommended' | 'optional' => (
       value === 'required' || value === 'recommended' || value === 'optional'
     )
@@ -3132,12 +3259,13 @@ export async function generateFigureSuggestions(
       .filter(s => s.title && s.description && s.category)
       .map((s, index) => {
         const category = coerceFigureCategory(s.category as unknown as string)
+        const actualRelevantSection = resolveActualRelevantSection(s.relevantSection, request, index)
         const section = isFocused
-          ? (focusedSection || 'selected_content')
-          : normalizeSectionType(s.relevantSection)
+          ? (focusedSection || normalizeSuggestionGovernanceSection(actualRelevantSection, request.sourceSections) || 'selected_content')
+          : normalizeSuggestionGovernanceSection(actualRelevantSection, request.sourceSections)
         const importance = isValidImportance(s.importance) ? s.importance : (section === 'methodology' || section === 'results' ? 'required' : 'recommended')
         const sanitizedTitle = sanitizeAscii(s.title).slice(0, 120).trim() || `Figure ${index + 1}`
-        const sanitizedDescription = sanitizeAscii(s.description, true).slice(0, 1200).trim() || 'Diagram based on paper content'
+        const sanitizedDescription = sanitizeAscii(s.description, true).slice(0, 1200).trim() || 'Diagram based on draft content'
         const suggestedType = sanitizeAscii((s.suggestedType || '').trim().toLowerCase()).slice(0, 40) || undefined
         const incomingRenderSpec = (s as any).renderSpec && typeof (s as any).renderSpec === 'object'
           ? (s as any).renderSpec
@@ -3148,7 +3276,9 @@ export async function generateFigureSuggestions(
           description: sanitizedDescription,
           category,
           suggestedType,
-          relevantSection: section,
+          relevantSection: actualRelevantSection,
+          sourceSections: request.sourceSections,
+          scopeMode: suggestionScopeMode,
           figureRole: normalizeFigureRole((s as any).figureRole, section),
           sectionFitJustification: (s as any).sectionFitJustification
             ? sanitizeAscii((s as any).sectionFitJustification, true).slice(0, 220)
@@ -3165,7 +3295,7 @@ export async function generateFigureSuggestions(
             : 'Specify exact variables/columns required to render this figure.',
           whyThisFigure: s.whyThisFigure
             ? sanitizeAscii(s.whyThisFigure, true).slice(0, 220)
-            : `This figure improves reader understanding of the ${section} claims.`,
+            : `This figure improves reviewer understanding of the ${section} claims or proposal logic.`,
           paperProfile,
           renderSpec: undefined
         }
@@ -3240,11 +3370,18 @@ export async function generateFigureSuggestions(
     const postValidated: FigureSuggestion[] = []
     for (let i = 0; i < validSuggestions.length; i++) {
       let candidate = validSuggestions[i]
-      const section = normalizeSectionType(candidate.relevantSection)
+      const actualRelevantSection = resolveActualRelevantSection(candidate.relevantSection, request, i)
+      candidate.relevantSection = actualRelevantSection
+      candidate.sourceSections = request.sourceSections
+      candidate.scopeMode = suggestionScopeMode
+      const section = normalizeSuggestionGovernanceSection(actualRelevantSection, request.sourceSections)
       let issues = validateSuggestion(candidate, { section, groundingLexicon, quantitativeDataAvailable })
 
       if (issues.length > 0) {
         candidate = buildSectionAwareFallbackSuggestion(candidate, section, i, { quantitativeDataAvailable })
+        candidate.relevantSection = actualRelevantSection
+        candidate.sourceSections = request.sourceSections
+        candidate.scopeMode = suggestionScopeMode
         candidate.paperProfile = paperProfile
         if (candidate.category === 'DIAGRAM') {
           candidate.diagramSpec = sanitizeDiagramSpec(candidate.diagramSpec) || buildFallbackSpecFromDescription(candidate.description, candidate.title)
@@ -3283,7 +3420,7 @@ export async function generateFigureSuggestions(
     const illustratedLimited: FigureSuggestion[] = []
     const illustratedSeenBySection = new Set<string>()
     for (const item of postValidated) {
-      const section = normalizeSectionType(item.relevantSection)
+      const section = normalizeSuggestionGovernanceSection(item.relevantSection, request.sourceSections)
       const cappedSection = section === 'introduction' || section === 'literature_review' || section === 'discussion' || section === 'conclusion'
       if (item.category === 'ILLUSTRATED_FIGURE' && cappedSection) {
         const key = section
@@ -3296,9 +3433,12 @@ export async function generateFigureSuggestions(
     postValidated.push(...illustratedLimited)
 
     // Enforce methodology pipeline requirement when methodology content exists.
-    const hasMethodologyContent = Object.keys(request.sections || {}).some(key => normalizeSectionType(key) === 'methodology')
+    const methodologySourceKey = (request.sourceSections || [])
+      .find((section) => normalizeSuggestionGovernanceSection(section.sectionKey, request.sourceSections) === 'methodology')
+      ?.sectionKey
+    const hasMethodologyContent = Object.keys(request.sections || {}).some(key => normalizeSuggestionGovernanceSection(key, request.sourceSections) === 'methodology')
     const hasMethodPipeline = postValidated.some(item => (
-      normalizeSectionType(item.relevantSection) === 'methodology' &&
+      normalizeSuggestionGovernanceSection(item.relevantSection, request.sourceSections) === 'methodology' &&
       item.category === 'DIAGRAM' &&
       /\b(flowchart|activity|architecture|pipeline)\b/.test((item.suggestedType || '').toLowerCase())
     ))
@@ -3308,9 +3448,12 @@ export async function generateFigureSuggestions(
         description: 'End-to-end method flow with deterministic stages and transitions.',
         category: 'DIAGRAM',
         suggestedType: 'flowchart',
-        relevantSection: 'methodology',
+        relevantSection: methodologySourceKey || 'methodology',
         importance: 'required'
       } as FigureSuggestion, 'methodology', postValidated.length, { quantitativeDataAvailable })
+      fallbackMethod.relevantSection = methodologySourceKey || 'methodology'
+      fallbackMethod.sourceSections = request.sourceSections
+      fallbackMethod.scopeMode = suggestionScopeMode
       fallbackMethod.paperProfile = paperProfile
       postValidated.push(fallbackMethod)
     }
@@ -3318,7 +3461,7 @@ export async function generateFigureSuggestions(
     // Enforce results mix: >=70% charts/statistical plots within results suggestions.
     const resultsIndexes = postValidated
       .map((item, idx) => ({ item, idx }))
-      .filter(entry => normalizeSectionType(entry.item.relevantSection) === 'results')
+      .filter(entry => normalizeSuggestionGovernanceSection(entry.item.relevantSection, request.sourceSections) === 'results')
       .map(entry => entry.idx)
     if (resultsIndexes.length > 0 && quantitativeDataAvailable) {
       const isResultsChart = (item: FigureSuggestion) => item.category === 'DATA_CHART' || item.category === 'STATISTICAL_PLOT'
@@ -3328,7 +3471,11 @@ export async function generateFigureSuggestions(
       for (const idx of resultsIndexes) {
         if (chartCount >= requiredCharts) break
         if (isResultsChart(postValidated[idx])) continue
+        const actualRelevantSection = postValidated[idx].relevantSection
         postValidated[idx] = buildSectionAwareFallbackSuggestion(postValidated[idx], 'results', idx, { quantitativeDataAvailable })
+        postValidated[idx].relevantSection = actualRelevantSection
+        postValidated[idx].sourceSections = request.sourceSections
+        postValidated[idx].scopeMode = suggestionScopeMode
         postValidated[idx].paperProfile = paperProfile
         chartCount += 1
       }
@@ -3336,24 +3483,42 @@ export async function generateFigureSuggestions(
       for (const idx of resultsIndexes) {
         const item = postValidated[idx]
         if (item.category === 'DATA_CHART' || item.category === 'STATISTICAL_PLOT') {
+          const actualRelevantSection = item.relevantSection
           postValidated[idx] = buildSectionAwareFallbackSuggestion(item, 'results', idx, { quantitativeDataAvailable })
+          postValidated[idx].relevantSection = actualRelevantSection
+          postValidated[idx].sourceSections = request.sourceSections
+          postValidated[idx].scopeMode = suggestionScopeMode
           postValidated[idx].paperProfile = paperProfile
         }
       }
     }
 
     const finalSuggestions = postValidated.slice(0, maxSuggestions)
+    const pickActualSectionForFallback = (index: number, preferredSection: SectionType): string => {
+      if (request.focusSection) return request.focusSection
+      const sourceSections = request.sourceSections || []
+      if (sourceSections.length === 0) return preferredSection
+      const matchingSource = sourceSections.find((section) => (
+        normalizeSuggestionGovernanceSection(section.sectionKey, sourceSections) === preferredSection
+      ))
+      return matchingSource?.sectionKey || sourceSections[index % sourceSections.length]?.sectionKey || preferredSection
+    }
+
     if (isFocused && finalSuggestions.length < 2) {
       while (finalSuggestions.length < Math.min(2, maxSuggestions)) {
         const section = focusedSection || 'selected_content'
+        const actualSection = pickActualSectionForFallback(finalSuggestions.length, section)
         const fallback = buildSectionAwareFallbackSuggestion({
           title: `Focused Figure ${finalSuggestions.length + 1}`,
           description: 'Focused fallback suggestion generated for selected excerpt.',
           category: 'DIAGRAM',
           suggestedType: 'flowchart',
-          relevantSection: section,
+          relevantSection: actualSection,
           importance: 'recommended'
         } as FigureSuggestion, section, finalSuggestions.length, { quantitativeDataAvailable })
+        fallback.relevantSection = actualSection
+        fallback.sourceSections = request.sourceSections
+        fallback.scopeMode = suggestionScopeMode
         fallback.paperProfile = paperProfile
         finalSuggestions.push(fallback)
       }
@@ -3362,14 +3527,18 @@ export async function generateFigureSuggestions(
       const fallbackSections: SectionType[] = ['introduction', 'methodology', 'results', 'results', 'discussion']
       for (let i = finalSuggestions.length; i < Math.min(5, maxSuggestions); i++) {
         const section = fallbackSections[i] || 'methodology'
+        const actualSection = pickActualSectionForFallback(i, section)
         const fallback = buildSectionAwareFallbackSuggestion({
           title: `Fallback Figure ${i + 1}`,
           description: `Fallback suggestion for ${section}.`,
           category: section === 'results' ? 'DATA_CHART' : 'DIAGRAM',
           suggestedType: section === 'results' ? 'bar' : 'flowchart',
-          relevantSection: section,
+          relevantSection: actualSection,
           importance: section === 'results' || section === 'methodology' ? 'required' : 'recommended'
         } as FigureSuggestion, section, i, { quantitativeDataAvailable })
+        fallback.relevantSection = actualSection
+        fallback.sourceSections = request.sourceSections
+        fallback.scopeMode = suggestionScopeMode
         fallback.paperProfile = paperProfile
         finalSuggestions.push(fallback)
       }
@@ -3380,9 +3549,12 @@ export async function generateFigureSuggestions(
         description: 'Fallback reproducibility pipeline generated due validation failures.',
         category: 'DIAGRAM',
         suggestedType: 'flowchart',
-        relevantSection: 'methodology',
+        relevantSection: pickActualSectionForFallback(0, 'methodology'),
         importance: 'required'
       } as FigureSuggestion, 'methodology', 0, { quantitativeDataAvailable })
+      emergency.relevantSection = pickActualSectionForFallback(0, 'methodology')
+      emergency.sourceSections = request.sourceSections
+      emergency.scopeMode = suggestionScopeMode
       emergency.paperProfile = paperProfile
       finalSuggestions.push(emergency)
     }
@@ -3390,9 +3562,16 @@ export async function generateFigureSuggestions(
     // Final normalization pass: enforce no-data chart gate and ensure renderSpec payloads.
     for (let i = 0; i < finalSuggestions.length; i++) {
       const suggestion = finalSuggestions[i]
-      const section = normalizeSectionType(suggestion.relevantSection)
+      const actualRelevantSection = resolveActualRelevantSection(suggestion.relevantSection, request, i)
+      suggestion.relevantSection = actualRelevantSection
+      suggestion.sourceSections = request.sourceSections
+      suggestion.scopeMode = suggestionScopeMode
+      const section = normalizeSuggestionGovernanceSection(actualRelevantSection, request.sourceSections)
       if (!quantitativeDataAvailable && (suggestion.category === 'DATA_CHART' || suggestion.category === 'STATISTICAL_PLOT')) {
         finalSuggestions[i] = buildSectionAwareFallbackSuggestion(suggestion, section, i, { quantitativeDataAvailable })
+        finalSuggestions[i].relevantSection = actualRelevantSection
+        finalSuggestions[i].sourceSections = request.sourceSections
+        finalSuggestions[i].scopeMode = suggestionScopeMode
         finalSuggestions[i].paperProfile = paperProfile
       } else {
         if (suggestion.category === 'ILLUSTRATED_FIGURE') {

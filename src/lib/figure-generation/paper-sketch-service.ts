@@ -1,11 +1,11 @@
 /**
  * Paper Sketch Generation Service
  * 
- * Handles AI-powered sketch/illustration generation for research paper figures
+ * Handles AI-powered sketch/illustration generation for research paper and grant proposal figures
  * using Gemini image generation models.
  * 
  * Supports three modes:
- * - SUGGEST: AI generates based on paper context (abstract, sections)
+ * - SUGGEST: AI generates based on draft context (abstract, proposal sections)
  * - GUIDED: User provides specific instructions
  * - REFINE: User uploads an image (hand-drawn or existing) for AI refinement
  */
@@ -142,7 +142,7 @@ async function buildPaperContextBundle(
   if (!prisma || !prisma.draftingSession) {
     console.error('[PaperSketchService] Prisma client not initialized')
     return {
-      paperTitle: 'Research Paper',
+      paperTitle: 'Research Draft',
       abstract: '',
       sectionContent: '',
       methodology: '',
@@ -187,7 +187,7 @@ async function buildPaperContextBundle(
     }
 
     return {
-      paperTitle: researchTopic?.title || 'Research Paper',
+      paperTitle: researchTopic?.title || 'Research Draft',
       abstract: researchTopic?.abstractDraft || '',
       sectionContent: sections.join('\n\n'),
       methodology: methodology.join('\n'),
@@ -196,7 +196,7 @@ async function buildPaperContextBundle(
   } catch (err) {
     console.error('[PaperSketchService] Failed to build context:', err)
     return {
-      paperTitle: 'Research Paper',
+      paperTitle: 'Research Draft',
       abstract: '',
       sectionContent: '',
       methodology: '',
@@ -400,7 +400,7 @@ function buildStyleModeGuidance(style: string): string {
     default:
       return [
         '- Style mode ACADEMIC: restrained, reviewer-friendly, balanced, and conservative in color, typography, and composition.',
-        '- Aim for the calm, authoritative look of a final journal figure rather than a conference poster or marketing graphic.',
+        '- Aim for the calm, authoritative look of a final journal/proposal figure rather than a conference poster or marketing graphic.',
         '- Keep the composition elegant, disciplined, and easy to parse in a manuscript layout.'
       ].join('\n')
   }
@@ -413,8 +413,9 @@ export function buildJournalQualityStandards(style: string, directives: Illustra
 
   return [
     'JOURNAL-GRADE QUALITY BAR (HARD):',
-    '- The image must look like a final accepted paper figure, not a draft, marketing graphic, poster, or slide.',
-    '- Communicate one dominant scientific message immediately; every element must support that message.',
+    '- The image must look like a final accepted paper or grant-proposal figure, not a draft, marketing graphic, poster, or slide.',
+    '- Communicate one dominant scientific or funder-facing message immediately; every element must support that message.',
+    '- For grant proposal contexts, emphasize feasibility, necessity, evaluation logic, workplan clarity, risk control, or impact pathway without hype.',
     '- Use a strict alignment grid with even gutters, consistent spacing, and deliberate grouping of related elements.',
     '- Keep stroke weights, corner radii, arrowheads, icon style, and visual rhythm consistent across the entire figure.',
     '- Create clear visual hierarchy: primary pathway or contribution darkest/most prominent, secondary context lighter and quieter.',
@@ -430,7 +431,7 @@ export function buildJournalQualityStandards(style: string, directives: Illustra
     `- Composition mode: ${compositionPolicy.layoutMode || 'auto'}, equalPanels=${String(compositionPolicy.equalPanels ?? false)}, noTextOutsidePanels=${String(compositionPolicy.noTextOutsidePanels ?? false)}.`,
     `- Palette mode: ${stylePolicy.paletteMode || 'academic_muted'} with semantically consistent accents only.`,
     buildStyleModeGuidance(style),
-    '- Before finalizing, self-check: would this look credible in a Nature, IEEE, Elsevier, or Springer paper without manual redesign?'
+    '- Before finalizing, self-check: would this look credible to a grant review panel or in a Nature, IEEE, Elsevier, or Springer paper without manual redesign?'
   ].join('\n')
 }
 
@@ -448,7 +449,7 @@ function buildSystemPrompt(
   const stylePolicy = d.stylePolicy || {}
 
   const commonRules = `GLOBAL STYLE RULES:
-- Publication-grade scientific illustration for Q1 journals (Nature, IEEE, Elsevier, Springer)
+- Publication-grade scientific illustration for grant proposals and Q1 journals (Nature, IEEE, Elsevier, Springer)
 - Clean vector-style rendering with precise geometric shapes and sharp edges
 - White or very light background; no photorealism, no 3D effects, no clip art
 - Muted academic color palette: navy (#1F77B4), orange (#F28E2B), teal (#2CA02C), slate (#4E4E4E), coral (#E15759)
@@ -458,6 +459,7 @@ function buildSystemPrompt(
 - If a figure title/focus is provided, use it only to guide composition and content. Never draw that title as text on the image.
 - Use the same visual language across the whole figure: one icon family, one stroke system, one spacing rhythm, one annotation style
 - Favor elegant scientific restraint over visual novelty; the result should feel editorial, deliberate, and camera-ready
+- For grant proposal contexts, make the visual persuasive through clarity of logic, feasibility, measurable pathway, and impact route; do not use sales-style imagery or unsupported outcome claims
 - Aspect ratio target: ${d.aspectRatio}; fill >= ${d.fillCanvasPercentMin}%, whitespace <= ${d.whitespaceMaxPercent}%
 - Text: max ${textPolicy.maxLabelsTotal} labels, max ${textPolicy.maxWordsPerLabel} words per label, no all-caps
 - Generate ONLY an image with no accompanying text explanation`
@@ -466,7 +468,7 @@ function buildSystemPrompt(
   const qualityBar = buildJournalQualityStandards(style, d)
 
   const genrePrompts: Record<string, string> = {
-    'METHOD_BLOCK': `You are an expert scientific illustrator generating a METHOD_BLOCK figure for a research paper.
+    'METHOD_BLOCK': `You are an expert scientific illustrator generating a METHOD_BLOCK figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -480,9 +482,10 @@ GENRE-SPECIFIC RULES:
 - Use consistent block sizing; slight variations allowed for emphasis
 - Annotation arrows or dashed lines for optional/feedback paths
 - No people, no scenario illustrations; purely schematic
-- Pattern: Input -> Processing stages -> Output/Evaluation`,
+- Pattern for papers: Input -> Processing stages -> Output/Evaluation
+- Pattern for grants: Need -> Aim -> Work packages -> Deliverables -> Evaluation/Impact`,
 
-    'SCENARIO_STORYBOARD': `You are an expert scientific illustrator generating a SCENARIO_STORYBOARD figure for a research paper.
+    'SCENARIO_STORYBOARD': `You are an expert scientific illustrator generating a SCENARIO_STORYBOARD figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -495,9 +498,10 @@ GENRE-SPECIFIC RULES:
 - One short label per panel (2-3 words max)
 - Panels separated by thin vertical dividers or subtle spacing
 - Show temporal/causal flow from left to right
-- No decorative elements; functional illustration only`,
+- No decorative elements; functional illustration only
+- For grants, depict beneficiary/use-case journey only when the selected section describes stakeholders or implementation context`,
 
-    'NEURAL_ARCHITECTURE': `You are an expert scientific illustrator generating a NEURAL_ARCHITECTURE figure for a deep learning research paper.
+    'NEURAL_ARCHITECTURE': `You are an expert scientific illustrator generating a NEURAL_ARCHITECTURE figure for a deep learning proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -514,7 +518,7 @@ GENRE-SPECIFIC RULES:
 - Maintain architectural accuracy: layer ordering, connection patterns, and data flow must be correct
 - This is a technical schematic, not an artistic rendering`,
 
-    'EXPERIMENTAL_SETUP': `You are an expert scientific illustrator generating an EXPERIMENTAL_SETUP figure for a research paper.
+    'EXPERIMENTAL_SETUP': `You are an expert scientific illustrator generating an EXPERIMENTAL_SETUP figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -531,7 +535,7 @@ GENRE-SPECIFIC RULES:
 - Include dimensions, distances, or configuration parameters where relevant
 - No photorealistic equipment; use clean schematic symbols`,
 
-    'DATA_PIPELINE': `You are an expert scientific illustrator generating a DATA_PIPELINE figure for a research paper.
+    'DATA_PIPELINE': `You are an expert scientific illustrator generating a DATA_PIPELINE figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -541,13 +545,13 @@ GENRE-SPECIFIC RULES:
 - Show an end-to-end data processing pipeline as a horizontal strip
 - Each stage is a rounded rectangle with a short label and optional icon
 - Show data transformations between stages with labeled arrows (e.g., "filter", "encode", "aggregate")
-- Include sample counts, data dimensions, or percentages at key points
+- Include sample counts, data dimensions, target outputs, or percentages only when explicitly provided
 - Use color to distinguish pipeline phases: collection (blue), preprocessing (orange), analysis (green), output (gray)
 - Show parallel branches where processing splits and merges
 - Include data format indicators (CSV, JSON, tensor shapes) at stage boundaries
 - Highlight the key transformation steps that are novel or methodologically important`,
 
-    'COMPARISON_MATRIX': `You are an expert scientific illustrator generating a COMPARISON_MATRIX figure for a research paper.
+    'COMPARISON_MATRIX': `You are an expert scientific illustrator generating a COMPARISON_MATRIX figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -563,7 +567,7 @@ GENRE-SPECIFIC RULES:
 - Can also show side-by-side visual comparisons of outputs with labeled panels
 - Focus on making the comparison instantly readable and scannable`,
 
-    'PROCESS_MECHANISM': `You are an expert scientific illustrator generating a PROCESS_MECHANISM figure for a research paper.
+    'PROCESS_MECHANISM': `You are an expert scientific illustrator generating a PROCESS_MECHANISM figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -579,7 +583,7 @@ GENRE-SPECIFIC RULES:
 - Use color to distinguish different substances, signals, or phases in the process
 - Suitable for biological pathways, chemical reactions, signal processing chains, or physical phenomena`,
 
-    'SYSTEM_INTERACTION': `You are an expert scientific illustrator generating a SYSTEM_INTERACTION figure for a research paper.
+    'SYSTEM_INTERACTION': `You are an expert scientific illustrator generating a SYSTEM_INTERACTION figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -595,7 +599,7 @@ GENRE-SPECIFIC RULES:
 - Show both request and response paths where bidirectional
 - Maintain a clean topology that reflects the actual system architecture`,
 
-    'CONCEPTUAL_FRAMEWORK': `You are an expert scientific illustrator generating a CONCEPTUAL_FRAMEWORK figure for a research paper.
+    'CONCEPTUAL_FRAMEWORK': `You are an expert scientific illustrator generating a CONCEPTUAL_FRAMEWORK figure for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
@@ -611,20 +615,21 @@ GENRE-SPECIFIC RULES:
 - Maintain academic rigor: every arrow represents a theorized relationship
 - Suitable for theoretical papers, systematic reviews, or framework proposals`,
 
-    'GRAPHICAL_ABSTRACT': `You are an expert scientific illustrator generating a GRAPHICAL_ABSTRACT for a research paper.
+    'GRAPHICAL_ABSTRACT': `You are an expert scientific illustrator generating a GRAPHICAL_ABSTRACT for a grant proposal or research paper.
 
 ${commonRules}
 ${canvasRules}
 ${qualityBar}
 
 GENRE-SPECIFIC RULES:
-- Create a single wide-format visual summary of the entire paper
-- Layout: left third shows the problem/input, center shows the method/approach, right third shows results/impact
+- Create a single wide-format visual summary of the selected proposal/manuscript scope
+- Layout for papers: left third shows the problem/input, center shows the method/approach, right third shows results/impact
+- Layout for grants: left third shows need/opportunity, center shows aims/work packages, right third shows deliverables/evaluation/impact pathway
 - Use a mix of simplified icons, small charts/graphs, and short text labels
-- Include the key finding or metric prominently (e.g., "92% accuracy", "3x faster")
+- Include key findings, targets, or metrics only if explicitly provided in the draft context
 - Keep the visual flow clearly left-to-right with connecting arrows
 - Use the full academic color palette for visual distinction between sections
-- Must be self-explanatory: a reader should understand the paper's contribution at a glance
+- Must be self-explanatory: a reader should understand the proposal logic or paper contribution at a glance
 - No dense text; every element serves a communicative purpose`
   }
 
@@ -704,9 +709,9 @@ function buildSuggestModePrompt(
   title?: string
 ): string {
   return `
-Based on this research paper context, create a render-ready academic figure:
+Based on this grant proposal or research manuscript context, create a render-ready academic figure:
 
-PAPER TITLE: ${context.paperTitle}
+DRAFT TITLE: ${context.paperTitle}
 
 ABSTRACT:
 ${context.abstract || 'Not provided'}
@@ -724,9 +729,10 @@ ${buildCanvasComplianceRules(effective.directives)}
 
 Create a clean, professional output that:
 1. Strictly follows the genre and render directives above
-2. Maps to real paper entities (input -> method -> output -> evaluation where applicable)
+2. Maps to real draft entities (for papers: input -> method -> output -> evaluation; for grants: need -> aims -> work packages -> deliverables -> evaluation/impact)
 3. Uses minimal text (no microtext)
 4. Uses the provided figure title only as semantic guidance and never renders that title, figure numbering, or caption text on the image
+5. If the context is grant-like, make feasibility, funder alignment, measurable evaluation, or impact logic visually clear without unsupported numeric claims
 `.trim()
 }
 
@@ -750,8 +756,8 @@ ${buildGenreReminder(effective.genre)}
 ${buildIllustrationSpecBlock(effective)}
 ${buildCanvasComplianceRules(effective.directives)}
 
-PAPER CONTEXT (for grounding):
-- Paper: ${context.paperTitle}
+DRAFT CONTEXT (for grounding):
+- Draft: ${context.paperTitle}
 - Abstract: ${context.abstract?.substring(0, 300) || 'Not provided'}...
 
 Apply user intent only if it does not violate genre/render directives.
@@ -771,13 +777,13 @@ function buildRefineModePrompt(
   const instructions = modificationRequest || userPrompt || 'Refine this sketch for academic publication'
 
   return `
-Refine and improve the provided image/sketch for use in a research paper.
+Refine and improve the provided image/sketch for use in a grant proposal or research paper.
 
 REFINEMENT INSTRUCTIONS:
 ${instructions}
 
-PAPER CONTEXT:
-- Paper: ${context.paperTitle}
+DRAFT CONTEXT:
+- Draft: ${context.paperTitle}
 - Topic: ${context.abstract?.substring(0, 200) || 'Academic research'}
 
 ${buildGenreReminder(effective.genre)}

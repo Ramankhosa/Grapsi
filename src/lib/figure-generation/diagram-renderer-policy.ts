@@ -54,7 +54,7 @@ export function chooseDiagramRenderer(input: DiagramRendererPolicyInput): Diagra
   const heavySyntax = hasHeavyPunctuationOrMath(text)
   const recentMermaidFailure = !!input.hasRecentMermaidFailure
   const recentPlantUMLFailure = !!input.hasRecentPlantUMLFailure
-  const mermaidLikeSpec = !!input.specLooksMermaidLike || /\b(subgraph|flowchart|sequencediagram|erdiagram|statediagram|gantt)\b/.test(text)
+  const mermaidLikeSpec = !!input.specLooksMermaidLike || /\b(subgraph|flowchart|sequencediagram|erdiagram|statediagram|gantt|timeline)\b/.test(text)
 
   if (requestsMermaidExplicitly(text, rendererPreference)) {
     return {
@@ -72,10 +72,10 @@ export function chooseDiagramRenderer(input: DiagramRendererPolicyInput): Diagra
     }
   }
 
-  if (diagramType === 'gantt') {
+  if (diagramType === 'gantt' || diagramType === 'timeline') {
     return {
       renderer: 'mermaid',
-      reason: 'Gantt diagrams are Mermaid-native and should stay on the Mermaid path.',
+      reason: 'Timeline and Gantt diagrams are Mermaid-native and should stay on the Mermaid path.',
       plantUMLRequired: false
     }
   }

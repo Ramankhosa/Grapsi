@@ -2,11 +2,13 @@
 import crypto from 'crypto';
 
 import { llmGateway } from '@/lib/metering/gateway';
+import { extractMeaningfulText, hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 import { generateFromOpenAI } from '../openaiService';
 import { generateFromGemini } from '../geminiService';
 
 const GRANT_REVIEWER_CONTEXT_SUMMARY_STAGE = 'GRANT_REVIEWER_CONTEXT_SUMMARY';
 const GRANT_REVIEWER_CONTEXT_SUMMARY_FALLBACK_MODEL = 'gemini-2.5-flash';
+const CONTEXT_SUMMARY_MAX_CHARS = 1600;
 
 function normalizeRequestHeaders(headers?: Record<string, string | string[] | undefined>) {
   if (!headers) return null;
@@ -46,6 +48,10 @@ export class ContextSummaryService {
     sectionContent: string,
     modelType: 'O' | 'G' = 'G' // Default to Gemini
   ): Promise<string> {
+    if (!hasMeaningfulSectionContent(sectionContent)) {
+      throw new Error('Section has no meaningful content for context summary generation');
+    }
+
     // Choose the appropriate summary generator based on section title
     const normalizedTitle = sectionTitle.trim().toLowerCase();
     
@@ -450,10 +456,25 @@ Format as a condensed, keyword-rich summary (<200 tokens) optimized for LLM cons
     // Add the section content to the user prompt
     const fullUserPrompt = `${userPrompt}
 
-Section Content:
-${sectionContent}
+Universal constraints for this context summary:
+- Purpose: provide non-scoring continuity context for later section reviews.
+- Extract only facts, commitments, numbers, names, methods, deliverables, dependencies, and constraints explicitly present in the section.
+- Do not infer missing proposal content. Do not add generic grant advice. Do not critique, score, or recommend changes.
+- Do not include attachment, signature, portal upload, CV, ethics approval, or budget workbook reminders unless the section text itself explicitly states them.
+- Mark important uncertain items as "not stated" only when they are directly relevant to later sections; do not create a long missing-information checklist.
+- Preserve concrete amounts, dates, durations, sample sizes, named methods, named partners, and deliverables.
+- Keep the summary under 220 tokens and ${CONTEXT_SUMMARY_MAX_CHARS} characters.
 
-Return your output as a single condensed text summary without any additional formatting or explanations. Do not include JSON keys or any other formatting.`;
+Return exactly these compact labeled lines, omitting a line if there is no explicit information for it:
+Facts: ...
+Commitments: ...
+Dependencies: ...
+Open assumptions: ...
+
+Section Content:
+${extractMeaningfulText(sectionContent)}
+
+Return only the context summary.`;
 
     let responseText: string;
     
@@ -479,6 +500,10 @@ Return your output as a single condensed text summary without any additional for
         );
       }
       
+      if (!responseText || !responseText.trim()) {
+        throw new Error('Context summary model returned an empty response');
+      }
+
       // Clean up the response text
       // Remove any markdown formatting that might be present
       const cleanedText = responseText
@@ -486,14 +511,22 @@ Return your output as a single condensed text summary without any additional for
         .replace(/```\s*$/g, '')             // Remove ending code block marker
         .replace(/^context_summary:?\s*/i, '') // Remove any "context_summary:" prefix
         .trim();
+
+      if (!cleanedText) {
+        throw new Error('Context summary model returned an empty summary');
+      }
+
+      const boundedText = cleanedText.length > CONTEXT_SUMMARY_MAX_CHARS
+        ? `${cleanedText.slice(0, CONTEXT_SUMMARY_MAX_CHARS - 3).trim()}...`
+        : cleanedText;
       
       // Log the context summary for debugging
-      console.log(`Generated context summary: ${cleanedText.substring(0, 50)}...`);
+      console.log(`Generated context summary: ${boundedText.substring(0, 50)}...`);
       
-      return cleanedText;
+      return boundedText;
     } catch (error) {
       console.error('Error generating context summary:', error);
-      return 'Context summary generation failed. Please review the section content directly.';
+      throw error;
     }
   }
 }

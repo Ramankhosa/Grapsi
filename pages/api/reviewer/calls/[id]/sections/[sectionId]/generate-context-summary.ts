@@ -8,6 +8,18 @@ import prisma from '../../../../../../../lib/prisma';
 import { ContextSummaryService } from '../../../../../../../lib/services/contextSummaryService';
 import { hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 
+function isUsableContextSummary(value: unknown): boolean {
+  const text = String(value || '').trim();
+  return Boolean(text) && text !== 'Not Available' && !/generation failed/i.test(text);
+}
+
+function hasAppDraftReviewerLink(section: any): boolean {
+  const mappingJson = section?.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
+  const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
+  const declaresWorkflow = linkedSections.some((link: any) => typeof link?.workflowMode === 'string');
+  return !declaresWorkflow || linkedSections.some((link: any) => String(link?.workflowMode || 'app_draft') === 'app_draft');
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -29,6 +41,7 @@ export default async function handler(
   // Get the call ID and section ID from the URL
   const callId = req.query.id as string;
   const sectionId = req.query.sectionId as string;
+  const forceRegenerate = req.body?.forceRegenerate === true;
   
   if (!callId || !sectionId) {
     return res.status(400).json({ error: 'Call ID and Section ID are required' });
@@ -51,7 +64,7 @@ export default async function handler(
     
     // Get the section to generate a context summary for
     const sections = await prisma.$queryRaw`
-      SELECT id, section_title, user_input
+      SELECT id, section_title, user_input, context_summary, "mappingJson"
       FROM "reviewer_sections" 
       WHERE id = ${sectionId} AND call_id = ${callId}
     `;
@@ -61,9 +74,28 @@ export default async function handler(
     }
     
     const section = sections[0];
+
+    if (!hasAppDraftReviewerLink(section)) {
+      return res.status(400).json({
+        error: 'This reviewer section is not linked to app-draft content and does not need a context summary.',
+        code: 'NO_APP_DRAFT_CONTENT',
+      });
+    }
     
     if (!hasMeaningfulSectionContent(section.user_input)) {
-      return res.status(400).json({ error: 'Section has no content' });
+      return res.status(400).json({
+        error: 'Section has no meaningful content',
+        code: 'SECTION_CONTENT_MISSING',
+      });
+    }
+
+    if (!forceRegenerate && isUsableContextSummary(section.context_summary)) {
+      return res.status(200).json({
+        message: 'Existing context summary reused',
+        section_title: section.section_title,
+        context_summary: section.context_summary,
+        reused: true,
+      });
     }
     
     const model = call.LLM_model_used || 'G'; // Default to Gemini if not specified

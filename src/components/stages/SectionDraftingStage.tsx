@@ -8,6 +8,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Loader2, 
   AlertCircle,
+  CheckCheck,
+  CircleSlash,
   RefreshCw,
   Image as ImageIcon,
   X,
@@ -57,17 +59,29 @@ interface SectionDraftingStageProps {
   onSectionSelect?: (sectionKey: string) => void;
   onNavigateToStage?: (stageKey: string) => void;
   grantReviewerRecommendations?: GrantReviewerRecommendation[];
+  onGrantReviewerRecommendationStatusChange?: (updates: RecommendationStatusUpdate[]) => Promise<void>;
 }
 
 type GrantReviewerRecommendation = {
+  id?: string;
   sectionKey: string;
   priority?: 'high' | 'medium' | 'low';
   issue?: string;
   recommendation?: string;
   suggestedRemark?: string;
   autoFixable?: boolean;
+  actionable?: boolean;
+  status?: 'pending' | 'resolved' | 'ignored';
+  statusUpdatedAt?: string | null;
   linkedRuleKeys?: string[];
+  reviewerSectionId?: string;
   reviewerSectionTitle?: string;
+};
+
+type RecommendationStatusUpdate = {
+  id: string;
+  reviewerSectionId?: string;
+  status: 'pending' | 'resolved' | 'ignored';
 };
 
 type SectionConfig = {
@@ -641,11 +655,83 @@ function normalizeSectionKey(sectionKey: string): string {
 }
 
 function reviewerRecommendationId(item: GrantReviewerRecommendation, index: number): string {
+  if (item.id) return item.id;
   return [
     normalizeSectionKey(item.sectionKey || ''),
     index,
     String(item.issue || item.recommendation || item.suggestedRemark || '').slice(0, 80),
   ].join(':');
+}
+
+function reviewerRecommendationText(item: GrantReviewerRecommendation): string {
+  return String(item.recommendation || item.suggestedRemark || item.issue || 'Reviewer recommendation').trim();
+}
+
+function isHandledReviewerRecommendation(item: GrantReviewerRecommendation): boolean {
+  return item.status === 'resolved' || item.status === 'ignored';
+}
+
+function reviewerRecommendationStatusLabel(status?: GrantReviewerRecommendation['status']): string {
+  if (status === 'resolved') return 'Executed';
+  if (status === 'ignored') return 'Ignored';
+  return 'Pending';
+}
+
+function reviewerRecommendationStatusClasses(status?: GrantReviewerRecommendation['status']): string {
+  if (status === 'resolved') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (status === 'ignored') return 'border-slate-200 bg-slate-50 text-slate-600';
+  return 'border-amber-200 bg-amber-50 text-amber-700';
+}
+
+function ReviewerRecommendationStatusIcon({
+  recommendation,
+  onOpen,
+}: {
+  recommendation: GrantReviewerRecommendation;
+  onOpen: () => void;
+}) {
+  const status = recommendation.status || 'pending';
+  const statusLabel = reviewerRecommendationStatusLabel(status);
+  const recommendationText = reviewerRecommendationText(recommendation);
+  const isResolved = status === 'resolved';
+
+  return (
+    <div className="group/reviewer-status relative">
+      <button
+        type="button"
+        title={`${statusLabel}: ${recommendationText}`}
+        aria-label={`${statusLabel} reviewer recommendation`}
+        onClick={onOpen}
+        className={`inline-flex h-7 w-7 items-center justify-center rounded-full border bg-white shadow-sm transition-colors ${
+          isResolved
+            ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+            : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+        }`}
+      >
+        {isResolved ? <CheckCheck className="h-4 w-4" /> : <CircleSlash className="h-4 w-4" />}
+      </button>
+      <div className="pointer-events-none absolute bottom-full right-0 z-40 mb-2 hidden w-72 max-w-[calc(100vw-3rem)] rounded-lg border border-slate-200 bg-white p-3 text-left text-xs text-slate-700 shadow-xl group-hover/reviewer-status:block group-focus-within/reviewer-status:block">
+        <div className="flex items-center justify-between gap-2">
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${reviewerRecommendationStatusClasses(status)}`}>
+            {statusLabel}
+          </span>
+          {recommendation.priority && (
+            <span className="text-[10px] font-semibold uppercase text-slate-400">
+              {recommendation.priority}
+            </span>
+          )}
+        </div>
+        {recommendation.reviewerSectionTitle && (
+          <div className="mt-2 font-semibold text-slate-900">
+            {recommendation.reviewerSectionTitle}
+          </div>
+        )}
+        <div className="mt-2 leading-5">
+          {recommendationText}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const MISSING_MAPPED_EVIDENCE_CODE = 'MAPPED_EVIDENCE_MISSING';
@@ -803,7 +889,13 @@ const AUTO_SAVE_DELAY = 3000;
 // ============================================================================
 
 export default function SectionDraftingStage({ 
-  sessionId, authToken, onSessionUpdated, onNavigateToStage, selectedSection, grantReviewerRecommendations = []
+  sessionId,
+  authToken,
+  onSessionUpdated,
+  onNavigateToStage,
+  selectedSection,
+  grantReviewerRecommendations = [],
+  onGrantReviewerRecommendationStatusChange,
 }: SectionDraftingStageProps) {
   // Session State
   const [session, setSession] = useState<any>(null);
@@ -844,6 +936,7 @@ export default function SectionDraftingStage({
   const [debugSteps, setDebugSteps] = useState<GenerationDebugStep[]>([]);
   const [showHelpPanel, setShowHelpPanel] = useState(false);
   const [selectedReviewerRecommendationIds, setSelectedReviewerRecommendationIds] = useState<Record<string, Record<string, boolean>>>({});
+  const [reviewerRecommendationDetail, setReviewerRecommendationDetail] = useState<GrantReviewerRecommendation | null>(null);
 
   // User Instructions (loaded from API)
   const [userInstructions, setUserInstructions] = useState<Record<string, UserInstruction>>({});
@@ -885,6 +978,7 @@ export default function SectionDraftingStage({
   const reviewerRecommendationsBySection = useMemo(() => {
     const grouped: Record<string, GrantReviewerRecommendation[]> = {};
     for (const item of grantReviewerRecommendations || []) {
+      if (item.actionable === false || item.autoFixable === false) continue;
       const key = normalizeSectionKey(item.sectionKey || '');
       if (!key) continue;
       grouped[key] = grouped[key] || [];
@@ -2845,25 +2939,70 @@ export default function SectionDraftingStage({
         setRegenRemarks(prev => ({ ...(prev || {}), [sectionKey]: '' }));
         showMsg('Section regenerated', 'success');
         await refreshSession();
+        return true;
       } else if (result.cancelled) {
-        return;
+        return false;
       } else {
         showMsg(result.error || 'Regeneration failed', 'error');
+        return false;
       }
     } catch {
       showMsg('Regeneration failed', 'error');
+      return false;
     } finally {
       setSectionLoading(prev => ({ ...prev, [sectionKey]: false }));
       setCurrentKeys(null);
     }
   }, [clearCitationValidationForSection, regenRemarks, refreshSession, runSectionGenerationWithEvidenceFallback]);
 
-  const handleRegenerateWithReviewerRecommendations = useCallback((sectionKey: string) => {
+  const handleReviewerRecommendationStatusChange = useCallback(async (
+    recommendations: GrantReviewerRecommendation[],
+    status: 'resolved' | 'ignored'
+  ) => {
+    const updates = recommendations
+      .filter(item => item.id)
+      .map(item => ({
+        id: item.id!,
+        reviewerSectionId: item.reviewerSectionId,
+        status,
+      }));
+
+    if (updates.length === 0) return;
+    if (!onGrantReviewerRecommendationStatusChange) {
+      showMsg('Recommendation status could not be saved in this view', 'warning');
+      return;
+    }
+
+    await onGrantReviewerRecommendationStatusChange(updates);
+  }, [onGrantReviewerRecommendationStatusChange, showMsg]);
+
+  const handleIgnoreReviewerRecommendation = useCallback(async (
+    sectionKey: string,
+    recommendation: GrantReviewerRecommendation
+  ) => {
+    try {
+      await handleReviewerRecommendationStatusChange([recommendation], 'ignored');
+      const normalizedKey = normalizeSectionKey(sectionKey);
+      const id = reviewerRecommendationId(recommendation, 0);
+      setSelectedReviewerRecommendationIds(prev => ({
+        ...prev,
+        [normalizedKey]: {
+          ...(prev[normalizedKey] || {}),
+          [id]: false,
+        },
+      }));
+      showMsg('Recommendation ignored', 'success');
+    } catch {
+      showMsg('Failed to ignore recommendation', 'error');
+    }
+  }, [handleReviewerRecommendationStatusChange, showMsg]);
+
+  const handleRegenerateWithReviewerRecommendations = useCallback(async (sectionKey: string) => {
     const normalizedKey = normalizeSectionKey(sectionKey);
     const recommendations = reviewerRecommendationsBySection[normalizedKey] || [];
     const selectedMap = selectedReviewerRecommendationIds[normalizedKey] || {};
     const selected = recommendations.filter((item, index) =>
-      selectedMap[reviewerRecommendationId(item, index)]
+      item.status !== 'resolved' && item.status !== 'ignored' && selectedMap[reviewerRecommendationId(item, index)]
     );
     if (selected.length === 0) {
       showMsg('Select at least one reviewer recommendation', 'warning');
@@ -2878,8 +3017,26 @@ export default function SectionDraftingStage({
       ...selected.map((item, index) => `${index + 1}. ${item.suggestedRemark || item.recommendation || item.issue}`),
     ].join('\n');
 
-    void handleRegenerateSection(sectionKey, instructions);
-  }, [handleRegenerateSection, reviewerRecommendationsBySection, selectedReviewerRecommendationIds, showMsg]);
+    const regenerated = await handleRegenerateSection(sectionKey, instructions);
+    if (!regenerated) return;
+
+    try {
+      await handleReviewerRecommendationStatusChange(selected, 'resolved');
+      setSelectedReviewerRecommendationIds(prev => ({
+        ...prev,
+        [normalizedKey]: {},
+      }));
+      showMsg('Recommendation marked as applied', 'success');
+    } catch {
+      showMsg('Section regenerated, but recommendation status was not updated', 'warning');
+    }
+  }, [
+    handleRegenerateSection,
+    handleReviewerRecommendationStatusChange,
+    reviewerRecommendationsBySection,
+    selectedReviewerRecommendationIds,
+    showMsg,
+  ]);
 
   // ============================================================================
   // Citations & Bibliography
@@ -3592,6 +3749,22 @@ export default function SectionDraftingStage({
 
   // Total word count
   const totalWordCount = useMemo(() => Object.values(content).reduce((acc, c) => acc + computeWordCount(c), 0), [content]);
+  const availableFigureSectionContexts = useMemo(() => {
+    const activeSections = sectionConfigs || fallbackSections;
+    const seen = new Set<string>();
+    return activeSections
+      .flatMap((section) => section.keys)
+      .filter((sectionKey) => {
+        if (!sectionKey || seen.has(sectionKey)) return false;
+        seen.add(sectionKey);
+        return Boolean((content[sectionKey] || '').trim());
+      })
+      .map((sectionKey) => ({
+        sectionKey,
+        label: displayName[sectionKey] || formatSectionLabel(sectionKey),
+        content: content[sectionKey] || ''
+      }));
+  }, [content, sectionConfigs]);
   const formatDateTime = useCallback((value: string | null | undefined) => {
     if (!value) return 'Not available';
     const date = new Date(value);
@@ -3657,6 +3830,66 @@ export default function SectionDraftingStage({
           </div>
         </div>
       )}
+
+      <AnimatePresence>
+        {reviewerRecommendationDetail && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="w-full max-w-lg rounded-lg border border-amber-200 bg-white p-4 shadow-xl"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase text-amber-700">
+                    {reviewerRecommendationDetail.status === 'resolved'
+                      ? 'Recommendation Executed'
+                      : reviewerRecommendationDetail.status === 'ignored'
+                        ? 'Recommendation Ignored'
+                        : 'Reviewer Recommendation'}
+                  </div>
+                  <h3 className="mt-1 text-sm font-semibold text-slate-900">
+                    {reviewerRecommendationDetail.reviewerSectionTitle || formatSectionLabel(reviewerRecommendationDetail.sectionKey || '')}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReviewerRecommendationDetail(null)}
+                  className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-3 space-y-3 text-sm text-slate-700">
+                {reviewerRecommendationDetail.issue && (
+                  <div>
+                    <div className="text-xs font-semibold text-slate-500">Issue</div>
+                    <p className="mt-1 whitespace-pre-wrap">{reviewerRecommendationDetail.issue}</p>
+                  </div>
+                )}
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Recommendation</div>
+                  <p className="mt-1 whitespace-pre-wrap">
+                    {reviewerRecommendationDetail.recommendation || reviewerRecommendationDetail.suggestedRemark}
+                  </p>
+                </div>
+                {reviewerRecommendationDetail.suggestedRemark && (
+                  <div>
+                    <div className="text-xs font-semibold text-slate-500">Regeneration Remark</div>
+                    <p className="mt-1 whitespace-pre-wrap">{reviewerRecommendationDetail.suggestedRemark}</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Minimal Document Header */}
       <div className="max-w-[850px] mx-auto pt-6 px-8 mb-2">
@@ -4073,12 +4306,16 @@ export default function SectionDraftingStage({
                     const hasFigureOptions = sortedFigures.length > 0;
                     const recommendedFigureIds = getRecommendedFigureIds(keyName);
                     const recommendedFigureCount = recommendedFigureIds.length;
+                    const reviewerRecs = reviewerRecommendationsBySection[normalizedKey] || [];
+                    const reviewerRecRows = reviewerRecs.map((item, index) => ({ item, index }));
+                    const pendingReviewerRecRows = reviewerRecRows.filter(({ item }) => !isHandledReviewerRecommendation(item));
+                    const handledReviewerRecRows = reviewerRecRows.filter(({ item }) => isHandledReviewerRecommendation(item));
 
                     return (
                       <div
                         key={keyName}
                         data-section-anchor={normalizedKey}
-                        className="section-wrapper group/section relative"
+                        className={`section-wrapper group/section relative ${handledReviewerRecRows.length > 0 ? 'pb-9 pr-10' : ''}`}
                       >
                         {section.keys.length > 1 && (
                           <h4
@@ -4329,6 +4566,18 @@ export default function SectionDraftingStage({
                           />
                         </div>
 
+                        {handledReviewerRecRows.length > 0 && (
+                          <div className="absolute bottom-1 right-1 z-20 flex max-w-[calc(100%-0.5rem)] flex-wrap-reverse justify-end gap-1">
+                            {handledReviewerRecRows.map(({ item, index }) => (
+                              <ReviewerRecommendationStatusIcon
+                                key={reviewerRecommendationId(item, index)}
+                                recommendation={item}
+                                onOpen={() => setReviewerRecommendationDetail(item)}
+                              />
+                            ))}
+                          </div>
+                        )}
+
                         {!isWorking && !dimensionState.started && !hasDraftContent && (
                           <div className="mt-2 flex items-center gap-2 text-xs opacity-60 transition-opacity duration-200 hover:opacity-100">
                             <button
@@ -4444,17 +4693,21 @@ export default function SectionDraftingStage({
                         )}
 
                         {(() => {
-                          const reviewerRecs = reviewerRecommendationsBySection[normalizedKey] || [];
-                          if (reviewerRecs.length === 0) return null;
+                          if (pendingReviewerRecRows.length === 0) return null;
                           const selectedMap = selectedReviewerRecommendationIds[normalizedKey] || {};
-                          const selectedCount = reviewerRecs.filter((item, index) => selectedMap[reviewerRecommendationId(item, index)]).length;
+                          const visibleReviewerRecRows = pendingReviewerRecRows.slice(0, 8);
+                          const selectedCount = pendingReviewerRecRows.filter(({ item, index }) =>
+                            selectedMap[reviewerRecommendationId(item, index)]
+                          ).length;
 
                           return (
                             <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
                                   <div className="text-xs font-semibold text-amber-900">Reviewer Recommendations</div>
-                                  <div className="text-[11px] text-amber-700">Select items to pass as regeneration remarks.</div>
+                                  <div className="text-[11px] text-amber-700">
+                                    Select actionable items to pass as regeneration remarks.
+                                  </div>
                                 </div>
                                 <button
                                   type="button"
@@ -4467,28 +4720,60 @@ export default function SectionDraftingStage({
                                 </button>
                               </div>
                               <div className="mt-2 space-y-1.5">
-                                {reviewerRecs.slice(0, 6).map((item, index) => {
+                                {visibleReviewerRecRows.map(({ item, index }) => {
                                   const id = reviewerRecommendationId(item, index);
                                   const checked = Boolean(selectedMap[id]);
+                                  const status = item.status || 'pending';
+                                  const isResolved = status === 'resolved';
+                                  const isIgnored = status === 'ignored';
                                   return (
-                                    <label key={id} className="flex cursor-pointer items-start gap-2 rounded-md bg-white/70 px-2 py-1.5 text-xs text-slate-700">
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() => setSelectedReviewerRecommendationIds(prev => ({
-                                          ...prev,
-                                          [normalizedKey]: {
-                                            ...(prev[normalizedKey] || {}),
-                                            [id]: !checked,
-                                          },
-                                        }))}
-                                        className="mt-0.5 h-3.5 w-3.5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-                                      />
-                                      <span>
+                                    <div key={id} className={`flex items-start gap-2 rounded-md bg-white/70 px-2 py-1.5 text-xs ${isResolved || isIgnored ? 'text-slate-500' : 'text-slate-700'}`}>
+                                      {isResolved ? (
+                                        <button
+                                          type="button"
+                                          title="Recommendation Applied"
+                                          onClick={() => setReviewerRecommendationDetail(item)}
+                                          className="mt-0.5 inline-flex h-4 w-4 items-center justify-center text-[#a9824a] hover:text-[#7a5a2e]"
+                                        >
+                                          <CheckCheck className="h-3.5 w-3.5" />
+                                        </button>
+                                      ) : isIgnored ? (
+                                        <button
+                                          type="button"
+                                          title="Recommendation Ignored"
+                                          onClick={() => setReviewerRecommendationDetail(item)}
+                                          className="mt-0.5 inline-flex h-4 w-4 items-center justify-center text-slate-400 hover:text-slate-600"
+                                        >
+                                          <CircleSlash className="h-3.5 w-3.5" />
+                                        </button>
+                                      ) : (
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={() => setSelectedReviewerRecommendationIds(prev => ({
+                                            ...prev,
+                                            [normalizedKey]: {
+                                              ...(prev[normalizedKey] || {}),
+                                              [id]: !checked,
+                                            },
+                                          }))}
+                                          className="mt-0.5 h-3.5 w-3.5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                                        />
+                                      )}
+                                      <span className="min-w-0 flex-1">
                                         <span className="mr-1 font-semibold uppercase text-amber-700">{item.priority || 'medium'}</span>
                                         {item.recommendation || item.issue || item.suggestedRemark}
                                       </span>
-                                    </label>
+                                      {!isResolved && !isIgnored && (
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleIgnoreReviewerRecommendation(keyName, item)}
+                                          className="shrink-0 rounded border border-amber-200 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100"
+                                        >
+                                          Ignore
+                                        </button>
+                                      )}
+                                    </div>
                                   );
                                 })}
                               </div>
@@ -4877,6 +5162,7 @@ export default function SectionDraftingStage({
         authToken={authToken}
         currentSection={focusedSection || undefined}
         currentContent={focusedSection ? content[focusedSection] : undefined}
+        availableSectionContexts={availableFigureSectionContexts}
         figures={figures}
         citations={citations}
         onInsertFigure={handleInsertFigure}

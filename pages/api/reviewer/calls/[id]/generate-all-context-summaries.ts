@@ -8,6 +8,18 @@ import prisma from '../../../../../lib/prisma';
 import { ContextSummaryService } from '../../../../../lib/services/contextSummaryService';
 import { hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 
+function isUsableContextSummary(value: unknown): boolean {
+  const text = String(value || '').trim();
+  return Boolean(text) && text !== 'Not Available' && !/generation failed/i.test(text);
+}
+
+function hasAppDraftReviewerLink(section: any): boolean {
+  const mappingJson = section?.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
+  const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
+  const declaresWorkflow = linkedSections.some((link: any) => typeof link?.workflowMode === 'string');
+  return !declaresWorkflow || linkedSections.some((link: any) => String(link?.workflowMode || 'app_draft') === 'app_draft');
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -30,7 +42,7 @@ export default async function handler(
   const callId = req.query.id as string;
   
   // Check if we should force regeneration of all summaries
-  const forceRegenerate = req.body.forceRegenerate === true;
+  const forceRegenerate = req.body?.forceRegenerate === true;
   
   if (!callId) {
     return res.status(400).json({ error: 'Call ID is required' });
@@ -53,7 +65,7 @@ export default async function handler(
     
     // Get all sections for this call that have content
     const sections = await prisma.$queryRaw`
-      SELECT id, section_title, user_input
+      SELECT id, section_title, user_input, context_summary, "mappingJson"
       FROM "reviewer_sections" 
       WHERE call_id = ${callId}
       AND user_input IS NOT NULL AND user_input != ''
@@ -72,6 +84,16 @@ export default async function handler(
     // Process each section
     const results = [];
     for (const section of sections as any[]) {
+      if (!hasAppDraftReviewerLink(section)) {
+        results.push({
+          id: section.id,
+          title: section.section_title,
+          status: 'skipped',
+          error: 'Section is not linked to app-draft content'
+        });
+        continue;
+      }
+
       if (!hasMeaningfulSectionContent(section.user_input)) {
         results.push({
           id: section.id,
@@ -81,6 +103,17 @@ export default async function handler(
         });
         continue;
       }
+
+      if (!forceRegenerate && isUsableContextSummary(section.context_summary)) {
+        results.push({
+          id: section.id,
+          title: section.section_title,
+          status: 'existing',
+          context_summary: section.context_summary
+        });
+        continue;
+      }
+
       try {
         // Generate context summary
         const contextSummary = await contextSummaryService.generateContextSummary(
@@ -118,7 +151,7 @@ export default async function handler(
     return res.status(200).json({ 
       message: 'Context summaries processed',
       processed_count: results.length,
-      success_count: results.filter(r => r.status === 'success').length,
+      success_count: results.filter(r => r.status === 'success' || r.status === 'existing').length,
       results: results
     });
     

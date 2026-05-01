@@ -10,6 +10,13 @@ import {
   DEFAULT_FIGURE_SUGGESTION_PREFERENCES,
   type FigureSuggestionPreferences
 } from '@/lib/figure-generation/preferences';
+import {
+  buildFigureSuggestionSectionScopeError,
+  normalizeScopeSectionKey,
+  resolveFigureSuggestionSectionScope,
+  type FigureSuggestionScopeMode,
+  type FigureSuggestionSourceSection
+} from '@/lib/figure-generation/section-scope';
 
 export const runtime = 'nodejs';
 
@@ -28,6 +35,8 @@ interface CachedSuggestionItem {
   suggestedType?: string;
   rendererPreference?: string;
   relevantSection?: string;
+  sourceSections?: FigureSuggestionSourceSection[];
+  scopeMode?: FigureSuggestionScopeMode;
   figureRole?: string;
   sectionFitJustification?: string;
   expectedByReviewers?: boolean;
@@ -51,6 +60,10 @@ interface SuggestionCache {
   generatedAt: string;
   usedLLM: boolean;
   preferences?: unknown;
+  sectionScope?: {
+    mode: FigureSuggestionScopeMode;
+    sourceSections?: FigureSuggestionSourceSection[];
+  };
   items: CachedSuggestionItem[];
 }
 
@@ -60,10 +73,25 @@ type FocusHints = {
   verbs?: string[];
 };
 
+type SuggestBlueprintContext = {
+  thesisStatement?: string;
+  centralObjective?: string;
+  keyContributions?: string[];
+  sectionPlan?: Array<{
+    sectionKey: string;
+    mustCover?: string[];
+    mustAvoid?: string[];
+  }>;
+};
+
 const suggestSchema = z.object({
   paperTitle: z.string().optional(),
   paperAbstract: z.string().optional(),
   sections: z.record(z.string()).optional(),
+  sectionScope: z.object({
+    mode: z.enum(['selected_sections', 'full_draft']),
+    sectionKeys: z.array(z.string().max(200)).max(20).optional()
+  }).optional(),
   researchType: z.string().optional(),
   datasetDescription: z.string().optional(),
   blueprint: z.object({
@@ -158,7 +186,7 @@ function extractSectionMap(session: any, overrideSections?: Record<string, strin
   return (session?.annexureDrafts?.[0] as any)?.extraSections || {};
 }
 
-function extractBlueprintContext(session: any) {
+function extractBlueprintContext(session: any): SuggestBlueprintContext | undefined {
   const blueprint = session?.paperBlueprint;
   if (!blueprint) {
     return undefined;
@@ -177,6 +205,86 @@ function extractBlueprintContext(session: any) {
         mustAvoid: Array.isArray(section.mustAvoid) ? section.mustAvoid : []
       }))
   };
+}
+
+function extractSectionLabelMap(session: any): Record<string, string> {
+  const labels: Record<string, string> = {};
+
+  if (Array.isArray(session?.paperSections)) {
+    for (const section of session.paperSections) {
+      const sectionKey = String(section?.sectionKey || '').trim();
+      if (!sectionKey) continue;
+      const label = String(section?.displayName || section?.title || section?.label || '').trim();
+      if (label) labels[sectionKey] = label;
+    }
+  }
+
+  const sectionPlan = Array.isArray(session?.paperBlueprint?.sectionPlan)
+    ? session.paperBlueprint.sectionPlan
+    : [];
+  for (const section of sectionPlan) {
+    const sectionKey = String(section?.sectionKey || '').trim();
+    if (!sectionKey) continue;
+    const label = String(section?.displayLabel || section?.label || section?.title || section?.displayName || '').trim();
+    if (label) labels[sectionKey] = label;
+  }
+
+  const extraSections = session?.annexureDrafts?.[0]?.extraSections;
+  if (extraSections && typeof extraSections === 'object') {
+    for (const sectionKey of Object.keys(extraSections)) {
+      if (!labels[sectionKey]) labels[sectionKey] = sectionKey;
+    }
+  }
+
+  return labels;
+}
+
+function filterBlueprintContextForScope(
+  blueprint: SuggestBlueprintContext | undefined,
+  sourceSections: FigureSuggestionSourceSection[],
+  mode: 'selected_sections' | 'full_draft'
+): SuggestBlueprintContext | undefined {
+  if (!blueprint || mode !== 'selected_sections' || sourceSections.length === 0) {
+    return blueprint;
+  }
+
+  const selectedKeys = new Set(sourceSections.map((section) => normalizeScopeSectionKey(section.sectionKey)));
+  return {
+    ...blueprint,
+    sectionPlan: blueprint.sectionPlan?.filter((section) => selectedKeys.has(normalizeScopeSectionKey(section.sectionKey))) || []
+  };
+}
+
+function applyScopeMetadataToSuggestions(
+  suggestions: FigureSuggestion[],
+  sourceSections: FigureSuggestionSourceSection[],
+  scopeMode: FigureSuggestionScopeMode
+): FigureSuggestion[] {
+  const sectionLookup = new Map<string, string>();
+  for (const source of sourceSections) {
+    const normalizedKey = normalizeScopeSectionKey(source.sectionKey);
+    if (normalizedKey) sectionLookup.set(normalizedKey, source.sectionKey);
+    const normalizedLabel = normalizeScopeSectionKey(source.label);
+    if (normalizedLabel) sectionLookup.set(normalizedLabel, source.sectionKey);
+  }
+
+  return suggestions.map((suggestion, index) => {
+    let relevantSection = suggestion.relevantSection;
+    if ((scopeMode === 'selected_sections' || scopeMode === 'focused_text') && sourceSections.length > 0) {
+      const matchedSection = sectionLookup.get(normalizeScopeSectionKey(relevantSection));
+      relevantSection = matchedSection || suggestion.relevantSection;
+      if (scopeMode === 'selected_sections' && !matchedSection) {
+        relevantSection = sourceSections[index % sourceSections.length]?.sectionKey || relevantSection;
+      }
+    }
+
+    return {
+      ...suggestion,
+      relevantSection,
+      sourceSections,
+      scopeMode
+    };
+  });
 }
 
 function dedupeList(values: string[], limit: number): string[] {
@@ -337,6 +445,31 @@ export async function POST(
       type: (f.nodes as any)?.figureType || 'unknown'
     }));
 
+    const paperTitle = data.paperTitle || session.researchTopic?.title || '';
+    const paperAbstract = data.paperAbstract || session.researchTopic?.abstractDraft || '';
+    const allSections = extractSectionMap(session, data.sections);
+    const sectionScope = resolveFigureSuggestionSectionScope(
+      allSections,
+      data.sectionScope,
+      extractSectionLabelMap(session)
+    );
+    const scopeError = buildFigureSuggestionSectionScopeError(sectionScope);
+    if (scopeError) {
+      return NextResponse.json({ error: scopeError }, { status: 400 });
+    }
+
+    const sections = sectionScope.sections;
+    const researchType = data.researchType || session.paperType?.name || 'research article';
+    const datasetDescription = data.datasetDescription || session.researchTopic?.datasetDescription || '';
+    const paperBlueprint = filterBlueprintContextForScope(
+      data.blueprint || extractBlueprintContext(session),
+      sectionScope.sourceSections,
+      sectionScope.mode
+    );
+    const scopeMode: FigureSuggestionScopeMode = data.focusText?.trim()
+      ? 'focused_text'
+      : sectionScope.mode;
+
     let suggestions: import('@/lib/figure-generation/types').FigureSuggestion[];
     let llmMetadata: { tokensUsed?: number; model?: string } = {};
 
@@ -349,14 +482,6 @@ export async function POST(
       request.headers.forEach((value, key) => {
         requestHeaders[key] = value;
       });
-
-      // Extract paper content from session if not provided
-      const paperTitle = data.paperTitle || session.researchTopic?.title || '';
-      const paperAbstract = data.paperAbstract || session.researchTopic?.abstractDraft || '';
-      const sections = extractSectionMap(session, data.sections);
-      const researchType = data.researchType || session.paperType?.name || 'research article';
-      const datasetDescription = data.datasetDescription || session.researchTopic?.datasetDescription || '';
-      const paperBlueprint = data.blueprint || extractBlueprintContext(session);
 
       const isFocused = !!data.focusText?.trim();
       const focusHints = isFocused
@@ -373,6 +498,11 @@ export async function POST(
           preferences,
           existingFigures: existingFigureList,
           maxSuggestions: isFocused ? 4 : 8,
+          sectionScope: data.sectionScope || {
+            mode: sectionScope.mode,
+            sectionKeys: sectionScope.sourceSections.map((item) => item.sectionKey)
+          },
+          sourceSections: sectionScope.sourceSections,
           // Focus fields – when present, the LLM constrains suggestions to this excerpt
           focusText: data.focusText,
           focusSection: data.focusSection,
@@ -398,9 +528,6 @@ export async function POST(
       }
     } else {
       // Use rule-based suggestions
-      const paperTitle = data.paperTitle || session.researchTopic?.title || '';
-      const paperAbstract = data.paperAbstract || session.researchTopic?.abstractDraft || '';
-      const sections = extractSectionMap(session, data.sections);
       suggestions = generateRuleBasedSuggestions(
         paperTitle,
         paperAbstract,
@@ -411,6 +538,8 @@ export async function POST(
 
     // ── Persist suggestions to session cache ─────────────────────────
     // Each suggestion gets a stable UUID so the UI can track status.
+    suggestions = applyScopeMetadataToSuggestions(suggestions, sectionScope.sourceSections, scopeMode);
+
     const cachedItems: CachedSuggestionItem[] = suggestions.map((s, idx) => ({
       id: `sug-${Date.now()}-${idx}`,
       status: 'pending' as CachedSuggestionStatus,
@@ -422,6 +551,8 @@ export async function POST(
       suggestedType: s.suggestedType,
       rendererPreference: s.rendererPreference,
       relevantSection: s.relevantSection,
+      sourceSections: s.sourceSections,
+      scopeMode: s.scopeMode,
       figureRole: (s as any).figureRole,
       sectionFitJustification: (s as any).sectionFitJustification,
       expectedByReviewers: (s as any).expectedByReviewers,
@@ -445,6 +576,10 @@ export async function POST(
       generatedAt: new Date().toISOString(),
       usedLLM: !!llmMetadata.model,
       preferences,
+      sectionScope: {
+        mode: scopeMode,
+        sourceSections: sectionScope.sourceSections
+      },
       items: cachedItems
     };
 
@@ -461,6 +596,7 @@ export async function POST(
       meta: {
         usedLLM: !!llmMetadata.model,
         preferences,
+        sectionScope: cache.sectionScope,
         ...llmMetadata
       }
     });
@@ -777,7 +913,8 @@ export async function GET(
         cached: true,
         generatedAt: cache.generatedAt,
         usedLLM: cache.usedLLM,
-        preferences: cache.preferences
+        preferences: cache.preferences,
+        sectionScope: cache.sectionScope
       }
     });
   } catch (err) {

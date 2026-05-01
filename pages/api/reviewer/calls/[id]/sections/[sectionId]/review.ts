@@ -19,6 +19,13 @@ import { ReviewerService } from '../../../../../../../lib/services/reviewerServi
 
 // Export SECTION_ORDER and getSectionPosition from reviewerService.ts
 
+function hasAppDraftReviewerLink(section: any): boolean {
+  const mappingJson = section?.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
+  const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
+  const declaresWorkflow = linkedSections.some((link: any) => typeof link?.workflowMode === 'string');
+  return !declaresWorkflow || linkedSections.some((link: any) => String(link?.workflowMode || 'app_draft') === 'app_draft');
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -137,19 +144,18 @@ export default async function handler(
     
     // Check if context section IDs were specified in the request
     let contextSectionIds = [];
-    if (req.body.contextSectionIds && Array.isArray(req.body.contextSectionIds)) {
+    const hasExplicitContextSectionIds = req.body.contextSectionIds && Array.isArray(req.body.contextSectionIds);
+    if (hasExplicitContextSectionIds) {
       contextSectionIds = req.body.contextSectionIds;
       console.log(`Using context from specified sections: ${contextSectionIds.join(', ')}`);
     } else {
-      // Get dependencies based on section type
-      contextSectionIds = SECTION_DEPENDENCIES[section.section_title] || [];
-      console.log(`Using context from dependency model: ${contextSectionIds.join(', ')}`);
+      console.log('Using context from available reviewed app-draft summaries');
     }
     
     // Fetch available context summaries
-    if (contextSectionIds.length > 0) {
+    if (hasExplicitContextSectionIds && contextSectionIds.length > 0) {
       const contextSections = await prisma.$queryRaw`
-        SELECT id, section_title, context_summary
+        SELECT id, section_title, context_summary, "mappingJson"
         FROM "reviewer_sections" 
         WHERE call_id = ${callId} 
         AND section_title = ANY(${contextSectionIds}::text[])
@@ -158,7 +164,7 @@ export default async function handler(
       
       if (Array.isArray(contextSections) && contextSections.length > 0) {
         for (const cs of contextSections) {
-          if (cs.context_summary) {
+          if (cs.context_summary && hasAppDraftReviewerLink(cs)) {
             priorSectionSummaries.push({
               section_title: cs.section_title,
               context_summary: cs.context_summary
@@ -168,6 +174,29 @@ export default async function handler(
       }
       
       console.log(`Found ${priorSectionSummaries.length} prior section summaries for context`);
+    } else if (!hasExplicitContextSectionIds) {
+      const contextSections = await prisma.$queryRaw`
+        SELECT id, section_title, context_summary, "mappingJson"
+        FROM "reviewer_sections" 
+        WHERE call_id = ${callId} 
+        AND id != ${sectionId}
+        AND status = 'reviewed'
+        AND context_summary IS NOT NULL
+        ORDER BY last_reviewed_at ASC
+      `;
+
+      if (Array.isArray(contextSections) && contextSections.length > 0) {
+        for (const cs of contextSections) {
+          if (cs.context_summary && hasAppDraftReviewerLink(cs)) {
+            priorSectionSummaries.push({
+              section_title: cs.section_title,
+              context_summary: cs.context_summary
+            });
+          }
+        }
+      }
+
+      console.log(`Found ${priorSectionSummaries.length} available app-draft summaries for context`);
     }
     
     // Filter the summaries to find relevant ones for this section title
@@ -179,16 +208,21 @@ export default async function handler(
       if (section.review_linked_context) {
         // Get most recently reviewed section
         const contextSectionResult = await prisma.$queryRaw`
-          SELECT id, section_title, context_summary
+          SELECT id, section_title, context_summary, "mappingJson"
           FROM "reviewer_sections" 
           WHERE call_id = ${callId} 
           AND id != ${sectionId} 
           AND status = 'reviewed'
+          AND context_summary IS NOT NULL
           ORDER BY last_reviewed_at DESC
           LIMIT 1
         `;
         
-        if (Array.isArray(contextSectionResult) && contextSectionResult.length > 0) {
+        if (
+          Array.isArray(contextSectionResult)
+          && contextSectionResult.length > 0
+          && hasAppDraftReviewerLink(contextSectionResult[0])
+        ) {
           contextSection = contextSectionResult[0];
           console.log(`Using fallback context section: ${contextSection.section_title}`);
         }

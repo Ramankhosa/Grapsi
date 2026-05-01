@@ -6,6 +6,8 @@ export type FigureSuggestionTransportMeta = Partial<Pick<
   FigureSuggestion,
   | 'rendererPreference'
   | 'relevantSection'
+  | 'sourceSections'
+  | 'scopeMode'
   | 'figureRole'
   | 'sectionFitJustification'
   | 'expectedByReviewers'
@@ -39,6 +41,8 @@ export type FigureSuggestionTransport = FigureSuggestionTransportMeta & Pick<
 const FIGURE_SUGGESTION_META_KEYS: Array<keyof FigureSuggestionTransportMeta> = [
   'rendererPreference',
   'relevantSection',
+  'sourceSections',
+  'scopeMode',
   'figureRole',
   'sectionFitJustification',
   'expectedByReviewers',

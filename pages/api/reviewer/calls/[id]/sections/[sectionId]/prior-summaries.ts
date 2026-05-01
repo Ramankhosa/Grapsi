@@ -5,7 +5,7 @@ import {
   requireReviewerCallAccess,
 } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../../../lib/prisma';
-import { SECTION_DEPENDENCIES } from '../../../../../../../lib/reviewerService';
+import { filterRelevantContextSummaries } from '../../../../../../../lib/reviewerService';
 
 export default async function handler(
   req: NextApiRequest,
@@ -50,9 +50,6 @@ export default async function handler(
     
     const section = sections[0];
     
-    // Get dependencies based on section type
-    const contextSectionIds = SECTION_DEPENDENCIES[section.section_title] || [];
-    
     // If this is a revision, also get the previous version's context summary
     let summaries = [];
     
@@ -80,25 +77,27 @@ export default async function handler(
       }
     }
     
-    // Get context summaries for dependencies
-    if (contextSectionIds.length > 0) {
-      const contextSections = await prisma.$queryRaw`
-        SELECT id, section_title, context_summary, version, last_reviewed_at
-        FROM "reviewer_sections" 
-        WHERE call_id = ${callId} 
-        AND section_title = ANY(${contextSectionIds}::text[])
-        AND context_summary IS NOT NULL
-      `;
-      
-      if (Array.isArray(contextSections) && contextSections.length > 0) {
-        for (const cs of contextSections) {
-          summaries.push({
-            section_title: cs.section_title,
-            context_summary: cs.context_summary,
-            version: cs.version,
-            last_reviewed_at: cs.last_reviewed_at
-          });
-        }
+    // Get relevant context summaries for dependencies. Fetch broadly, then use the
+    // same semantic dependency filter as the reviewer prompt path.
+    const contextSections = await prisma.$queryRaw`
+      SELECT id, section_title, context_summary, version, last_reviewed_at
+      FROM "reviewer_sections" 
+      WHERE call_id = ${callId} 
+      AND id != ${sectionId}
+      AND status = 'reviewed'
+      AND context_summary IS NOT NULL
+      ORDER BY last_reviewed_at ASC
+    `;
+
+    if (Array.isArray(contextSections) && contextSections.length > 0) {
+      const relevant = filterRelevantContextSummaries(section.section_title, contextSections);
+      for (const cs of relevant) {
+        summaries.push({
+          section_title: cs.section_title,
+          context_summary: cs.context_summary,
+          version: cs.version,
+          last_reviewed_at: cs.last_reviewed_at
+        });
       }
     }
     

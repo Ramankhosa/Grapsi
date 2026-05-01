@@ -74,6 +74,8 @@ interface PaperFigurePlannerStageProps {
   authToken: string | null;
   onSessionUpdated?: (session: any) => void;
   session?: any;
+  selectedSection?: string;
+  initialSelectedSectionKey?: string | null;
 }
 
 type FigureCategory = 'DATA_CHART' | 'DIAGRAM' | 'STATISTICAL_PLOT' | 'ILLUSTRATED_FIGURE' | 'ILLUSTRATION' | 'SKETCH' | 'CUSTOM';
@@ -121,6 +123,15 @@ type FigureSuggestionItem = FigureSuggestionTransport & {
   id: string;
   category: FigureCategory;
   status?: SuggestionStatus;
+};
+
+type SuggestionScopeMode = 'selected_sections' | 'full_draft';
+
+type FigureSourceSectionOption = {
+  sectionKey: string;
+  label: string;
+  content: string;
+  wordCount: number;
 };
 
 // Figure types with descriptions and visual examples
@@ -361,11 +372,62 @@ function getSectionMapFromSession(session: any): Record<string, string> {
   return session?.annexureDrafts?.[0]?.extraSections || {};
 }
 
+function formatSourceSectionLabel(sectionKey: string): string {
+  return String(sectionKey || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Untitled Section';
+}
+
+function countSourceSectionWords(content: string): number {
+  const text = String(content || '').replace(/<[^>]*>/g, ' ').trim();
+  return text ? text.split(/\s+/).filter(Boolean).length : 0;
+}
+
+function getSectionOptionsFromSession(session: any): FigureSourceSectionOption[] {
+  const sections = getSectionMapFromSession(session);
+  const labels: Record<string, string> = {};
+
+  if (Array.isArray(session?.paperSections)) {
+    for (const section of session.paperSections) {
+      const sectionKey = String(section?.sectionKey || '').trim();
+      if (!sectionKey) continue;
+      const label = String(section?.displayName || section?.title || section?.label || '').trim();
+      if (label) labels[sectionKey] = label;
+    }
+  }
+
+  const sectionPlan = Array.isArray(session?.paperBlueprint?.sectionPlan)
+    ? session.paperBlueprint.sectionPlan
+    : [];
+  for (const section of sectionPlan) {
+    const sectionKey = String(section?.sectionKey || '').trim();
+    if (!sectionKey) continue;
+    const label = String(section?.displayLabel || section?.label || section?.title || section?.displayName || '').trim();
+    if (label) labels[sectionKey] = label;
+  }
+
+  return Object.entries(sections)
+    .map(([sectionKey, content]) => {
+      const cleaned = String(content || '').trim();
+      return {
+        sectionKey,
+        label: labels[sectionKey] || formatSourceSectionLabel(sectionKey),
+        content: cleaned,
+        wordCount: countSourceSectionWords(cleaned)
+      };
+    })
+    .filter((section) => section.content.length > 0);
+}
+
 export default function PaperFigurePlannerStage({ 
   sessionId, 
   authToken, 
   onSessionUpdated,
-  session 
+  session,
+  selectedSection,
+  initialSelectedSectionKey
 }: PaperFigurePlannerStageProps) {
   const { showToast } = useToast();
   const [figures, setFigures] = useState<FigurePlan[]>([]);
@@ -377,6 +439,9 @@ export default function PaperFigurePlannerStage({
   const [suggestions, setSuggestions] = useState<FigureSuggestionItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestionPreferences, setSuggestionPreferences] = useState<FigureSuggestionPreferences>(DEFAULT_FIGURE_SUGGESTION_PREFERENCES);
+  const [suggestionScopeMode, setSuggestionScopeMode] = useState<SuggestionScopeMode>('selected_sections');
+  const [selectedSuggestionSectionKeys, setSelectedSuggestionSectionKeys] = useState<string[]>([]);
+  const [showSectionScopeDropdown, setShowSectionScopeDropdown] = useState(false);
   const [isGeneratingBatch, setIsGeneratingBatch] = useState(false);
   const [isApplyingSuggestionBatch, setIsApplyingSuggestionBatch] = useState(false);
   const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<string[]>([]);
@@ -521,6 +586,44 @@ export default function PaperFigurePlannerStage({
 
   const selectedType = FIGURE_OPTIONS.find(t => t.value === figureType);
   const normalizePrefs = useCallback(() => normalizeFigurePreferences(suggestionPreferences), [suggestionPreferences]);
+  const suggestionSectionOptions = useMemo(() => getSectionOptionsFromSession(session), [session]);
+  const selectedSuggestionSectionSet = useMemo(() => new Set(selectedSuggestionSectionKeys), [selectedSuggestionSectionKeys]);
+  const selectedSuggestionSectionOptions = useMemo(() => {
+    if (suggestionScopeMode === 'full_draft') return suggestionSectionOptions;
+    return suggestionSectionOptions.filter((section) => selectedSuggestionSectionSet.has(section.sectionKey));
+  }, [selectedSuggestionSectionSet, suggestionScopeMode, suggestionSectionOptions]);
+  const suggestionScopeLabel = useMemo(() => {
+    if (suggestionScopeMode === 'full_draft') return 'Full draft';
+    if (selectedSuggestionSectionOptions.length === 0) return 'Choose sections';
+    if (selectedSuggestionSectionOptions.length === 1) return selectedSuggestionSectionOptions[0].label;
+    const firstTwo = selectedSuggestionSectionOptions.slice(0, 2).map((section) => section.label).join(', ');
+    const extra = selectedSuggestionSectionOptions.length - 2;
+    return extra > 0 ? `${firstTwo} +${extra}` : firstTwo;
+  }, [selectedSuggestionSectionOptions, suggestionScopeMode]);
+
+  useEffect(() => {
+    if (suggestionScopeMode !== 'selected_sections' || suggestionSectionOptions.length === 0) return;
+    setSelectedSuggestionSectionKeys((current) => {
+      const validKeys = new Set(suggestionSectionOptions.map((section) => section.sectionKey));
+      const stillValid = current.filter((key) => validKeys.has(key));
+      if (stillValid.length > 0) return stillValid;
+
+      const preferredKey = initialSelectedSectionKey || selectedSection;
+      const preferred = preferredKey
+        ? suggestionSectionOptions.find((section) => section.sectionKey === preferredKey)
+        : undefined;
+      return [preferred?.sectionKey || suggestionSectionOptions[0].sectionKey];
+    });
+  }, [initialSelectedSectionKey, selectedSection, suggestionScopeMode, suggestionSectionOptions]);
+
+  const toggleSuggestionSectionKey = useCallback((sectionKey: string) => {
+    setSelectedSuggestionSectionKeys((current) => {
+      if (current.includes(sectionKey)) {
+        return current.filter((key) => key !== sectionKey);
+      }
+      return [...current, sectionKey];
+    });
+  }, []);
 
   const suggestionSections = useMemo(() => {
     const values = new Set<string>();
@@ -719,6 +822,20 @@ export default function PaperFigurePlannerStage({
       if (ctx.timestamp && Date.now() - ctx.timestamp > 5 * 60 * 1000) return;
       if (ctx.sourceText) {
         const isSelection = ctx.focusMode === 'selection';
+        const contextOptions = getSectionOptionsFromSession(session);
+        const contextKeys = Array.isArray(ctx.selectedSectionKeys)
+          ? ctx.selectedSectionKeys.filter((key: unknown): key is string => typeof key === 'string' && key.trim().length > 0)
+          : (ctx.sourceSection ? [ctx.sourceSection] : []);
+        const contextScopeMode: SuggestionScopeMode = ctx.sectionScope?.mode === 'full_draft'
+          ? 'full_draft'
+          : 'selected_sections';
+        const contextSections = contextScopeMode === 'selected_sections'
+          ? contextOptions.filter((section) => contextKeys.includes(section.sectionKey))
+          : contextOptions;
+        setSuggestionScopeMode(contextScopeMode);
+        if (contextScopeMode === 'selected_sections' && contextSections.length > 0) {
+          setSelectedSuggestionSectionKeys(contextSections.map((section) => section.sectionKey));
+        }
         // Show a toast so the user knows why the suggestions panel opened
         showToast({
           type: 'info',
@@ -733,6 +850,16 @@ export default function PaperFigurePlannerStage({
         setShowSuggestions(true);
         setSuggestionsRequested(true);
         setLoadingSuggestions(true);
+        const requestSections = contextScopeMode === 'full_draft'
+          ? getSectionMapFromSession(session)
+          : contextSections.length > 0
+            ? contextSections.reduce<Record<string, string>>((acc, section) => {
+                acc[section.sectionKey] = section.content;
+                return acc;
+              }, {})
+            : (ctx.sourceSection && ctx.sourceText
+                ? { [ctx.sourceSection]: ctx.sourceText.slice(0, 4000) }
+                : undefined);
         // Trigger the suggest API with focus mode so suggestions
         // are constrained to the carried-over text
         fetch(`/api/papers/${sessionId}/figures/suggest`, {
@@ -743,6 +870,10 @@ export default function PaperFigurePlannerStage({
           },
           body: JSON.stringify({
             useLLM: true,
+            sections: requestSections,
+            sectionScope: contextScopeMode === 'selected_sections' && contextSections.length > 0
+              ? { mode: 'selected_sections', sectionKeys: contextSections.map((section) => section.sectionKey) }
+              : { mode: 'full_draft' },
             preferences: { outputMix: 'balanced', detailLevel: 'moderate' },
             focusText: ctx.sourceText.slice(0, 4000),
             focusSection: ctx.sourceSection || undefined,
@@ -976,6 +1107,23 @@ export default function PaperFigurePlannerStage({
     const requestState = startCancelableRequest('Generating AI suggestions', 180000);
     try {
       const paperSections = getSectionMapFromSession(session);
+      const selectedSections = suggestionScopeMode === 'selected_sections'
+        ? selectedSuggestionSectionOptions
+        : suggestionSectionOptions;
+      if (suggestionScopeMode === 'selected_sections' && selectedSections.length === 0) {
+        showToast({
+          type: 'warning',
+          title: 'Choose source sections',
+          message: 'Select at least one non-empty section before asking for figure suggestions.'
+        });
+        return;
+      }
+      const scopedSections = suggestionScopeMode === 'selected_sections'
+        ? selectedSections.reduce<Record<string, string>>((acc, section) => {
+            acc[section.sectionKey] = section.content;
+            return acc;
+          }, {})
+        : paperSections;
       const normalizedPrefs = normalizePrefs();
       const blueprint = session?.paperBlueprint
         ? {
@@ -997,7 +1145,10 @@ export default function PaperFigurePlannerStage({
           paperTitle: session?.researchTopic?.title || '',
           paperAbstract: session?.researchTopic?.abstractDraft || '',
           datasetDescription: session?.researchTopic?.datasetDescription || '',
-          sections: paperSections,
+          sections: scopedSections,
+          sectionScope: suggestionScopeMode === 'selected_sections'
+            ? { mode: 'selected_sections', sectionKeys: selectedSections.map((section) => section.sectionKey) }
+            : { mode: 'full_draft' },
           blueprint,
           preferences: normalizedPrefs,
           useLLM: true
@@ -2324,6 +2475,64 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                 </Button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                <div className="relative text-xs text-slate-600 space-y-1">
+                  <span className="block">Source sections</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowSectionScopeDropdown((open) => !open)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-700 flex items-center justify-between gap-2"
+                  >
+                    <span className="truncate">{suggestionScopeLabel}</span>
+                    <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  </button>
+                  {showSectionScopeDropdown && (
+                    <div className="absolute z-40 mt-1 w-full min-w-[260px] rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                      <div className="grid grid-cols-2 gap-1 mb-2">
+                        <button
+                          type="button"
+                          onClick={() => setSuggestionScopeMode('selected_sections')}
+                          className={`rounded-lg px-2 py-1.5 text-xs font-medium ${suggestionScopeMode === 'selected_sections' ? 'bg-amber-100 text-amber-800' : 'text-slate-600 hover:bg-slate-50'}`}
+                        >
+                          Selected
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSuggestionScopeMode('full_draft')}
+                          className={`rounded-lg px-2 py-1.5 text-xs font-medium ${suggestionScopeMode === 'full_draft' ? 'bg-amber-100 text-amber-800' : 'text-slate-600 hover:bg-slate-50'}`}
+                        >
+                          Full draft
+                        </button>
+                      </div>
+                      {suggestionScopeMode === 'selected_sections' && (
+                        <div className="max-h-56 overflow-y-auto space-y-1">
+                          {suggestionSectionOptions.length === 0 ? (
+                            <p className="px-2 py-2 text-xs text-slate-500">No non-empty draft sections found.</p>
+                          ) : (
+                            suggestionSectionOptions.map((section) => {
+                              const checked = selectedSuggestionSectionSet.has(section.sectionKey);
+                              return (
+                                <button
+                                  key={section.sectionKey}
+                                  type="button"
+                                  onClick={() => toggleSuggestionSectionKey(section.sectionKey)}
+                                  className="w-full rounded-lg px-2 py-2 text-left hover:bg-slate-50 flex items-start gap-2"
+                                >
+                                  <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-300 text-transparent'}`}>
+                                    <Check className="w-3 h-3" />
+                                  </span>
+                                  <span className="min-w-0">
+                                    <span className="block truncate text-xs font-medium text-slate-700">{section.label}</span>
+                                    <span className="block text-[10px] text-slate-400">{section.wordCount} words</span>
+                                  </span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <label className="text-xs text-slate-600 space-y-1">
                   <span className="block">Style preset</span>
                   <select
