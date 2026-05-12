@@ -74,11 +74,49 @@ export interface DiagramConstraints {
   noDuplicateNodeLabels?: boolean
 }
 
+export type SectionLabelVisualIntent =
+  | 'workplan_timeline'
+  | 'method_workflow'
+  | 'deliverable_map'
+  | 'evaluation_logic'
+  | 'problem_opportunity'
+  | 'aims_framework'
+  | 'impact_pathway'
+  | 'risk_governance'
+  | 'evidence_taxonomy'
+  | 'results_chart'
+  | 'section_specific'
+
+export interface SectionLabelEvidence {
+  sectionKey: string
+  label?: string
+  interpretedIntent?: SectionLabelVisualIntent
+  reason?: string
+}
+
+export interface DiagramWorkplanTask {
+  idHint: string
+  label: string
+  startMonth?: number
+  endMonth?: number
+  dependsOn?: string[]
+  milestone?: boolean
+  group?: string
+}
+
 export interface DiagramStructuredSpec {
   layout?: 'LR' | 'TD'
+  visualIntent?: SectionLabelVisualIntent | string
+  composition?: 'grouped_lr' | 'swimlane' | 'matrix' | 'roadmap' | 'logic_model' | 'gantt' | 'hub_spoke' | 'short_procedure' | string
   nodes?: DiagramSpecNode[]
   edges?: DiagramSpecEdge[]
   groups?: DiagramSpecGroup[]
+  workplanSpec?: {
+    timeScale?: 'relative_months' | 'calendar_dates'
+    totalMonths?: number
+    tasks?: DiagramWorkplanTask[]
+    milestones?: DiagramWorkplanTask[]
+  }
   constraints?: DiagramConstraints
   splitSuggestion?: string
 }
@@ -391,6 +429,7 @@ export type FigureProvider =
   | 'quickchart'
   | 'kroki'
   | 'plantuml'
+  | 'local_svg'
   | 'python_matplotlib'
   | 'gemini'
   | 'manual_upload'
@@ -453,6 +492,9 @@ export interface FigureSuggestion {
   rendererPreference?: 'plantuml' | 'mermaid' | 'auto'
   relevantSection?: string      // Which paper section it relates to
   sourceSections?: Array<{ sectionKey: string; label?: string }>
+  sourceText?: string           // Exact selected section/excerpt used to create the suggestion
+  focusText?: string            // Backward-compatible alias for highlighted text workflows
+  sectionLabelEvidence?: SectionLabelEvidence[]
   scopeMode?: 'selected_sections' | 'full_draft' | 'focused_text'
   figureRole?: FigureRole
   sectionFitJustification?: string

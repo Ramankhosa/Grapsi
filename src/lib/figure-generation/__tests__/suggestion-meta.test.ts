@@ -89,6 +89,38 @@ describe('extractFigureSuggestionMeta', () => {
     });
   });
 
+  it('drops invalid empty sketch-only enum metadata from non-sketch suggestions', () => {
+    const meta = extractFigureSuggestionMeta({
+      title: 'Method flow',
+      description: 'Pipeline overview',
+      category: 'DIAGRAM',
+      suggestedType: 'flowchart',
+      sketchStyle: '' as never,
+      sketchMode: '' as never,
+      sketchPrompt: ''
+    });
+
+    expect(meta).toBeUndefined();
+  });
+
+  it('preserves valid sketch metadata for illustrated suggestions', () => {
+    const meta = extractFigureSuggestionMeta({
+      title: 'Concept overview',
+      description: 'Illustrated conceptual summary',
+      category: 'ILLUSTRATED_FIGURE',
+      suggestedType: 'sketch-auto',
+      sketchStyle: 'conceptual',
+      sketchMode: 'SUGGEST',
+      sketchPrompt: 'Clean conceptual academic illustration'
+    });
+
+    expect(meta).toEqual({
+      sketchStyle: 'conceptual',
+      sketchPrompt: 'Clean conceptual academic illustration',
+      sketchMode: 'SUGGEST'
+    });
+  });
+
   it('preserves source section scope metadata', () => {
     const meta = extractFigureSuggestionMeta({
       title: 'Workplan timeline',
@@ -96,6 +128,9 @@ describe('extractFigureSuggestionMeta', () => {
       category: 'DIAGRAM',
       importance: 'recommended',
       relevantSection: 'workplan',
+      sectionLabelEvidence: [
+        { sectionKey: 'workplan', label: 'Project Timeline', interpretedIntent: 'workplan_timeline' }
+      ],
       sourceSections: [
         { sectionKey: 'workplan', label: 'Workplan' },
         { sectionKey: 'impact', label: 'Impact' }
@@ -105,6 +140,9 @@ describe('extractFigureSuggestionMeta', () => {
 
     expect(meta).toMatchObject({
       relevantSection: 'workplan',
+      sectionLabelEvidence: [
+        { sectionKey: 'workplan', label: 'Project Timeline', interpretedIntent: 'workplan_timeline' }
+      ],
       sourceSections: [
         { sectionKey: 'workplan', label: 'Workplan' },
         { sectionKey: 'impact', label: 'Impact' }

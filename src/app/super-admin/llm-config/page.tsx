@@ -519,11 +519,6 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     responsibility: 'Classifies literature and evidence into archetypes for downstream extraction and mapping logic.',
     tip: 'Reliable classification is more important than creative output.'
   },
-  PAPER_DIAGRAM_REPAIR: {
-    summary: 'Diagram repair and retry.',
-    responsibility: 'Fixes invalid diagram syntax after generation failures.',
-    tip: 'Use models with high syntax discipline for repair iterations.'
-  },
   GRANT_REVIEWER_CONTEXT_SUMMARY: {
     summary: 'Reviewer context summary generation.',
     responsibility: 'Controls the model used to summarize mapped grant reviewer sections for linked-section and final-review context.',

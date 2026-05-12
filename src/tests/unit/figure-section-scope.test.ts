@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildFigureSuggestionSectionScopeError,
+  buildSingleFigureSuggestionSectionScopeError,
   resolveFigureSuggestionSectionScope
 } from '@/lib/figure-generation/section-scope'
 
@@ -24,6 +25,24 @@ describe('figure suggestion section scope', () => {
       { sectionKey: 'impact', label: 'Impact' }
     ])
     expect(buildFigureSuggestionSectionScopeError(resolved)).toBeUndefined()
+    expect(buildSingleFigureSuggestionSectionScopeError(resolved)).toBe('Select exactly one source section before requesting figure suggestions.')
+  })
+
+  it('allows the one-section figure suggestion contract', () => {
+    const resolved = resolveFigureSuggestionSectionScope(
+      {
+        methodology: 'Workflow and implementation plan.',
+        impact: 'Impact pathway and expected outcomes.'
+      },
+      { mode: 'selected_sections', sectionKeys: ['methodology'] },
+      { methodology: 'Methodology' }
+    )
+
+    expect(resolved.mode).toBe('selected_sections')
+    expect(Object.keys(resolved.sections)).toEqual(['methodology'])
+    expect(resolved.sourceSections).toEqual([{ sectionKey: 'methodology', label: 'Methodology' }])
+    expect(buildFigureSuggestionSectionScopeError(resolved)).toBeUndefined()
+    expect(buildSingleFigureSuggestionSectionScopeError(resolved)).toBeUndefined()
   })
 
   it('keeps full draft behavior by including every non-empty section', () => {

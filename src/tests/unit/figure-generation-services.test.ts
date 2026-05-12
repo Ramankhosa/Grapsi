@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildAcademicChartConfig } from '../../lib/figure-generation/quickchart-service'
+import { validateChartConfig } from '../../lib/figure-generation/llm-figure-service'
 import {
   figureDataToPythonSpec,
   isPublicationGradePythonPlotType,
@@ -55,6 +56,40 @@ describe('figure generation services', () => {
     expect(config.options?.scales?.y?.title?.text).toBe('Accuracy (%)')
     expect(config.data.datasets[0].borderWidth).toBe(2.4)
     expect(config.data.datasets[0].backgroundColor).toBeTruthy()
+  })
+
+  it('repairs missing Cartesian chart axes and scale defaults', () => {
+    const validation = validateChartConfig({
+      type: 'bar',
+      data: {
+        labels: ['Phase 1', 'Phase 2'],
+        datasets: [{ label: 'Duration (months)', data: [12, 18] }],
+      },
+      options: {},
+    })
+
+    expect(validation.valid).toBe(true)
+    expect(validation.config?.options?.scales?.x?.title?.display).toBe(true)
+    expect(validation.config?.options?.scales?.x?.title?.text).toBe('Category / Time')
+    expect(validation.config?.options?.scales?.y?.title?.display).toBe(true)
+    expect(validation.config?.options?.scales?.y?.title?.text).toBe('Duration (months)')
+    expect(validation.config?.options?.scales?.y?.beginAtZero).toBe(true)
+  })
+
+  it('fills missing academic chart axis titles during QuickChart merge', () => {
+    const config = buildAcademicChartConfig({
+      type: 'line',
+      data: {
+        labels: ['M1', 'M2'],
+        datasets: [{ label: 'Outputs completed', data: [2, 5] }],
+      },
+      options: {},
+    })
+
+    expect(config.options?.scales?.x?.title?.display).toBe(true)
+    expect(config.options?.scales?.x?.title?.text).toBe('Category / Time')
+    expect(config.options?.scales?.y?.title?.display).toBe(true)
+    expect(config.options?.scales?.y?.title?.text).toBe('Outputs completed')
   })
 
   it('maps ROC curve data to the Python renderer spec', () => {

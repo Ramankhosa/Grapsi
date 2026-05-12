@@ -97,6 +97,19 @@ describe('llm plot service', () => {
     expect(validation.error).toMatch(/title/i)
   })
 
+  it('rejects plot code without visible axis labels', () => {
+    const validation = validateCustomPythonPlotCode("ax.plot([1, 2], [3, 4])\nax.grid(True)")
+
+    expect(validation.valid).toBe(false)
+    expect(validation.error).toMatch(/axis labels/i)
+  })
+
+  it('accepts plot code with explicit axis labels', () => {
+    const validation = validateCustomPythonPlotCode("ax.plot([1, 2], [3, 4])\nax.set_xlabel('Project month')\nax.set_ylabel('Deliverables')\nax.grid(True)")
+
+    expect(validation.valid).toBe(true)
+  })
+
   it('preserves scatter point objects during chart validation', () => {
     const validation = validateChartConfig({
       type: 'scatter',

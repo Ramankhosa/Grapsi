@@ -163,3 +163,17 @@ export function buildFigureSuggestionSectionScopeError(
 
   return 'Selected source sections could not be used for figure suggestions.'
 }
+
+export function buildSingleFigureSuggestionSectionScopeError(
+  resolution: FigureSuggestionSectionScopeResolution
+): string | undefined {
+  if (resolution.mode !== 'selected_sections') {
+    return undefined
+  }
+
+  if (resolution.requestedSectionKeys.length > 1 || resolution.sourceSections.length > 1) {
+    return 'Select exactly one source section before requesting figure suggestions.'
+  }
+
+  return undefined
+}

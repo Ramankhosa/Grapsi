@@ -34,6 +34,10 @@ import crypto from 'crypto'
 
 const KROKI_BASE_URL = process.env.KROKI_BASE_URL || 'https://kroki.io'
 const PLANTUML_BASE_URL = process.env.PLANTUML_BASE_URL || 'https://www.plantuml.com/plantuml'
+const DIAGRAM_RENDER_TIMEOUT_MS = Math.max(
+  5000,
+  Number.parseInt(process.env.DIAGRAM_RENDER_TIMEOUT_MS || process.env.KROKI_TIMEOUT_MS || '60000', 10) || 60000
+)
 
 function shortHash(input: string): string {
   return crypto.createHash('sha256').update(input).digest('hex').slice(0, 12)
@@ -259,7 +263,7 @@ export async function generateMermaidDiagram(
 
     // Add timeout to prevent hanging on external API
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+    const timeout = setTimeout(() => controller.abort(), DIAGRAM_RENDER_TIMEOUT_MS)
 
     let response: Response
     try {
@@ -275,7 +279,7 @@ export async function generateMermaidDiagram(
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
         return {
           success: false,
-          error: 'Diagram generation timed out after 30 seconds',
+          error: `Diagram generation timed out after ${Math.round(DIAGRAM_RENDER_TIMEOUT_MS / 1000)} seconds`,
           errorCode: 'TIMEOUT',
           provider: 'kroki'
         }
@@ -361,7 +365,7 @@ export async function generatePlantUMLDiagram(
 
     // Add timeout for external API call
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30000)
+    const timeout = setTimeout(() => controller.abort(), DIAGRAM_RENDER_TIMEOUT_MS)
     
     let response: Response
     try {
@@ -376,7 +380,7 @@ export async function generatePlantUMLDiagram(
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
         return {
           success: false,
-          error: 'Kroki request timed out after 30 seconds',
+          error: `Kroki request timed out after ${Math.round(DIAGRAM_RENDER_TIMEOUT_MS / 1000)} seconds`,
           errorCode: 'TIMEOUT',
           provider: 'kroki',
           apiCallDuration: Date.now() - startTime
@@ -447,14 +451,14 @@ async function generateViaProxy(
 
     // Add timeout for external API call
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30000)
+    const timeout = setTimeout(() => controller.abort(), DIAGRAM_RENDER_TIMEOUT_MS)
     
     let response: Response
     try {
       response = await fetch(url, { signal: controller.signal })
     } catch (fetchError) {
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        return { success: false, error: 'PlantUML request timed out', provider: 'plantuml' }
+        return { success: false, error: `PlantUML request timed out after ${Math.round(DIAGRAM_RENDER_TIMEOUT_MS / 1000)} seconds`, provider: 'plantuml' }
       }
       throw fetchError
     } finally {

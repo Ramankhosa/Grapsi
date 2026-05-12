@@ -37,6 +37,7 @@ import {
 import { scheduleStoredPaperFigureMetadataRefresh } from '@/lib/figure-generation/paper-figure-metadata-refresh';
 import { generatePaperSketch } from '@/lib/figure-generation/paper-sketch-service';
 import { resolvePaperFigureImageUrl } from '@/lib/figure-generation/paper-figure-image';
+import { buildScopedPaperContext } from '@/lib/figure-generation/paper-context';
 import { llmGateway } from '@/lib/metering/gateway';
 import type { TaskCode } from '@prisma/client';
 import fs from 'fs/promises';
@@ -50,6 +51,31 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown>
     : null;
 }
+
+const SKETCH_STYLE_VALUES = ['academic', 'scientific', 'conceptual', 'technical'] as const;
+const SKETCH_MODE_VALUES = ['SUGGEST', 'GUIDED'] as const;
+const FIGURE_GENRE_VALUES = [
+  'METHOD_BLOCK',
+  'SCENARIO_STORYBOARD',
+  'CONCEPTUAL_FRAMEWORK',
+  'GRAPHICAL_ABSTRACT',
+  'NEURAL_ARCHITECTURE',
+  'EXPERIMENTAL_SETUP',
+  'DATA_PIPELINE',
+  'COMPARISON_MATRIX',
+  'PROCESS_MECHANISM',
+  'SYSTEM_INTERACTION'
+] as const;
+const emptyOptionalEnum = <T extends readonly [string, ...string[]]>(values: T) => z.preprocess(
+  (value) => {
+    if (value === null) return undefined;
+    return typeof value === 'string' && value.trim() === '' ? undefined : value;
+  },
+  z.enum(values).optional()
+);
+const sketchStyleSchema = emptyOptionalEnum(SKETCH_STYLE_VALUES);
+const sketchModeSchema = emptyOptionalEnum(SKETCH_MODE_VALUES);
+const figureGenreSchema = emptyOptionalEnum(FIGURE_GENRE_VALUES);
 
 const generateSchema = z.object({
   figureType: z.string(),
@@ -110,6 +136,14 @@ const generateSchema = z.object({
       sectionKey: z.string(),
       label: z.string().optional()
     })).optional(),
+    sourceText: z.string().max(5000).optional(),
+    focusText: z.string().max(5000).optional(),
+    sectionLabelEvidence: z.array(z.object({
+      sectionKey: z.string(),
+      label: z.string().optional(),
+      interpretedIntent: z.string().optional(),
+      reason: z.string().optional()
+    })).optional(),
     scopeMode: z.enum(['selected_sections', 'full_draft', 'focused_text']).optional(),
     figureRole: z.enum(['ORIENT', 'POSITION', 'EXPLAIN_METHOD', 'SHOW_RESULTS', 'INTERPRET']).optional(),
     sectionFitJustification: z.string().optional(),
@@ -120,6 +154,8 @@ const generateSchema = z.object({
     rendererPreference: z.enum(['plantuml', 'mermaid', 'auto']).optional(),
     diagramSpec: z.object({
       layout: z.enum(['LR', 'TD']).optional(),
+      visualIntent: z.string().optional(),
+      composition: z.string().optional(),
       nodes: z.array(z.object({
         idHint: z.string(),
         label: z.string(),
@@ -136,8 +172,10 @@ const generateSchema = z.object({
         nodeIds: z.array(z.string()).optional(),
         description: z.string().optional()
       })).optional(),
+      workplanSpec: z.any().optional(),
+      constraints: z.any().optional(),
       splitSuggestion: z.string().optional()
-    }).optional(),
+    }).passthrough().optional(),
     chartSpec: z.object({
       chartType: z.string().optional(),
       xAxisLabel: z.string().optional(),
@@ -173,7 +211,7 @@ const generateSchema = z.object({
       steps: z.array(z.string()).optional(),
       captionDraft: z.string().optional(),
       splitSuggestion: z.string().optional(),
-      figureGenre: z.enum(['METHOD_BLOCK', 'SCENARIO_STORYBOARD', 'CONCEPTUAL_FRAMEWORK', 'GRAPHICAL_ABSTRACT', 'NEURAL_ARCHITECTURE', 'EXPERIMENTAL_SETUP', 'DATA_PIPELINE', 'COMPARISON_MATRIX', 'PROCESS_MECHANISM', 'SYSTEM_INTERACTION']).optional(),
+      figureGenre: figureGenreSchema,
       renderDirectives: z.object({
         aspectRatio: z.string().optional(),
         fillCanvasPercentMin: z.number().optional(),
@@ -192,7 +230,7 @@ const generateSchema = z.object({
       diagramSpec: z.any().optional(),
       illustrationSpecV2: z.any().optional()
     }).optional(),
-    figureGenre: z.enum(['METHOD_BLOCK', 'SCENARIO_STORYBOARD', 'CONCEPTUAL_FRAMEWORK', 'GRAPHICAL_ABSTRACT', 'NEURAL_ARCHITECTURE', 'EXPERIMENTAL_SETUP', 'DATA_PIPELINE', 'COMPARISON_MATRIX', 'PROCESS_MECHANISM', 'SYSTEM_INTERACTION']).optional(),
+    figureGenre: figureGenreSchema,
     renderDirectives: z.object({
       aspectRatio: z.string().optional(),
       fillCanvasPercentMin: z.number().optional(),
@@ -207,9 +245,9 @@ const generateSchema = z.object({
       dataAvailability: z.enum(['provided', 'partial', 'none'])
     }).optional(),
     // Sketch/illustration-specific fields
-    sketchStyle: z.enum(['academic', 'scientific', 'conceptual', 'technical']).optional(),
+    sketchStyle: sketchStyleSchema,
     sketchPrompt: z.string().optional(),
-    sketchMode: z.enum(['SUGGEST', 'GUIDED']).optional()
+    sketchMode: sketchModeSchema
   }).optional(),
   // Whether to use LLM for code generation
   useLLM: z.boolean().optional().default(true)
@@ -227,47 +265,15 @@ async function getSessionForUser(
     include: {
       researchTopic: true,
       paperBlueprint: true,
+      annexureDrafts: {
+        orderBy: { version: 'desc' },
+        take: 1
+      },
       paperSections: {
         orderBy: { updatedAt: 'desc' }
       }
     }
   });
-}
-
-/**
- * Build concise draft context string for LLM grounding.
- * This ensures generated figures are relevant to the proposal/paper, not generic.
- */
-function buildPaperContext(session: any): string {
-  const parts: string[] = [];
-
-  const topic = session?.researchTopic;
-  if (topic?.title) parts.push(`Draft title: "${topic.title}"`);
-  if (topic?.abstractDraft) {
-    const abstract = topic.abstractDraft.length > 500
-      ? topic.abstractDraft.slice(0, 500) + '...'
-      : topic.abstractDraft;
-    parts.push(`Abstract: ${abstract}`);
-  }
-
-  const blueprint = session?.paperBlueprint;
-  if (blueprint?.thesisStatement) parts.push(`Thesis: ${blueprint.thesisStatement}`);
-  if (blueprint?.centralObjective) parts.push(`Objective: ${blueprint.centralObjective}`);
-
-  if (Array.isArray(session?.paperSections)) {
-    const sectionSnippets = session.paperSections
-      .filter((s: any) => s?.sectionKey && s?.content)
-      .slice(0, 4) // Limit to avoid token bloat
-      .map((s: any) => {
-        const content = s.content.length > 300 ? s.content.slice(0, 300) + '...' : s.content;
-        return `[${s.sectionKey}] ${content}`;
-      });
-    if (sectionSnippets.length > 0) {
-    parts.push(`Key draft sections:\n${sectionSnippets.join('\n')}`);
-    }
-  }
-
-  return parts.length > 0 ? parts.join('\n\n') : '';
 }
 
 function buildStructuredChartData(
@@ -487,7 +493,7 @@ function sanitizeLabel(input: string): string {
     .replace(/\s+/g, ' ')
     .trim();
   const words = cleaned.split(' ').filter(Boolean).slice(0, 6);
-  return (words.join(' ').slice(0, 28).trim() || 'Node');
+  return (words.join(' ').slice(0, 42).trim() || 'Node');
 }
 
 function sanitizeAlias(input: string, index: number): string {
@@ -538,10 +544,142 @@ function normalizeDiagramSpec(spec?: DiagramStructuredSpec | null): DiagramStruc
 
   return {
     layout: spec.layout === 'LR' ? 'LR' : 'TD',
+    visualIntent: typeof (spec as any).visualIntent === 'string' ? sanitizeAscii((spec as any).visualIntent).slice(0, 48) : undefined,
+    composition: typeof (spec as any).composition === 'string' ? sanitizeAscii((spec as any).composition).slice(0, 48) : undefined,
     nodes,
     edges,
     groups,
+    workplanSpec: (spec as any).workplanSpec && typeof (spec as any).workplanSpec === 'object'
+      ? (spec as any).workplanSpec
+      : undefined,
+    constraints: (spec as any).constraints && typeof (spec as any).constraints === 'object'
+      ? (spec as any).constraints
+      : undefined,
     splitSuggestion: spec.splitSuggestion ? sanitizeAscii(spec.splitSuggestion).slice(0, 140) : undefined
+  };
+}
+
+function escapeSvgText(input: string): string {
+  return sanitizeAscii(input || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function wrapSvgWords(label: string, wordsPerLine: number = 3): string[] {
+  const words = sanitizeLabel(label).split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  for (let i = 0; i < words.length; i += wordsPerLine) {
+    lines.push(words.slice(i, i + wordsPerLine).join(' '));
+  }
+  return lines.length > 0 ? lines.slice(0, 2) : ['Node'];
+}
+
+function renderLocalDiagramSvg(
+  spec: DiagramStructuredSpec,
+  title: string,
+  generatedCode?: string
+): FigureGenerationResult {
+  const nodes = (spec.nodes || []).slice(0, 15);
+  const groups = Array.from(new Set(nodes.map((node) => node.group || 'Flow')));
+  const layout = spec.layout === 'TD' ? 'TD' : 'LR';
+  const groupWidth = 230;
+  const rowHeight = 92;
+  const margin = 42;
+  const headerHeight = title ? 62 : 34;
+  const maxRows = Math.max(1, ...groups.map((group) => nodes.filter((node) => (node.group || 'Flow') === group).length));
+  const width = layout === 'LR'
+    ? Math.max(720, groups.length * groupWidth + margin * 2)
+    : Math.max(760, maxRows * groupWidth + margin * 2);
+  const height = layout === 'LR'
+    ? Math.max(360, headerHeight + maxRows * rowHeight + margin)
+    : Math.max(360, headerHeight + groups.length * (rowHeight + 62) + margin);
+
+  const positions = new Map<string, { x: number; y: number; w: number; h: number }>();
+  const body: string[] = [];
+  body.push(`<rect x="0" y="0" width="${width}" height="${height}" fill="#FFFFFF"/>`);
+  if (title) {
+    body.push(`<text x="${width / 2}" y="30" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#111111">${escapeSvgText(sanitizeLabel(title))}</text>`);
+  }
+
+  const colors = ['#EEF5FF', '#FFF2E8', '#F3F4F6', '#F8FAFC'];
+  groups.forEach((group, groupIndex) => {
+    const groupNodes = nodes.filter((node) => (node.group || 'Flow') === group);
+    if (layout === 'LR') {
+      const gx = margin + groupIndex * groupWidth;
+      const gy = headerHeight;
+      const gh = Math.max(190, groupNodes.length * rowHeight + 42);
+      body.push(`<rect x="${gx}" y="${gy}" width="${groupWidth - 22}" height="${gh}" rx="8" fill="${colors[groupIndex % colors.length]}" stroke="#CBD5E1" stroke-width="1.5"/>`);
+      body.push(`<text x="${gx + 14}" y="${gy + 24}" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#334155">${escapeSvgText(group)}</text>`);
+      groupNodes.forEach((node, nodeIndex) => {
+        const x = gx + 24;
+        const y = gy + 44 + nodeIndex * rowHeight;
+        const w = groupWidth - 70;
+        const h = 54;
+        positions.set(node.idHint, { x, y, w, h });
+        body.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="#FFFFFF" stroke="#5A5A5A" stroke-width="1.4"/>`);
+        wrapSvgWords(node.label).forEach((line, lineIndex, arr) => {
+          const dy = y + h / 2 + (lineIndex - (arr.length - 1) / 2) * 15 + 5;
+          body.push(`<text x="${x + w / 2}" y="${dy}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#111111">${escapeSvgText(line)}</text>`);
+        });
+      });
+    } else {
+      const gx = margin;
+      const gy = headerHeight + groupIndex * (rowHeight + 62);
+      body.push(`<rect x="${gx}" y="${gy}" width="${width - margin * 2}" height="${rowHeight + 34}" rx="8" fill="${colors[groupIndex % colors.length]}" stroke="#CBD5E1" stroke-width="1.5"/>`);
+      body.push(`<text x="${gx + 14}" y="${gy + 24}" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#334155">${escapeSvgText(group)}</text>`);
+      groupNodes.forEach((node, nodeIndex) => {
+        const x = gx + 24 + nodeIndex * groupWidth;
+        const y = gy + 40;
+        const w = 170;
+        const h = 54;
+        positions.set(node.idHint, { x, y, w, h });
+        body.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="#FFFFFF" stroke="#5A5A5A" stroke-width="1.4"/>`);
+        wrapSvgWords(node.label).forEach((line, lineIndex, arr) => {
+          const dy = y + h / 2 + (lineIndex - (arr.length - 1) / 2) * 15 + 5;
+          body.push(`<text x="${x + w / 2}" y="${dy}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#111111">${escapeSvgText(line)}</text>`);
+        });
+      });
+    }
+  });
+
+  const edgeLines: string[] = [];
+  const edges = (spec.edges || []).slice(0, 24);
+  const drawableEdges: Array<{ fromHint: string; toHint: string; label?: string; type?: 'solid' | 'dashed' | 'async' }> = edges.length > 0
+    ? edges
+    : nodes.slice(0, -1).map((node, index) => ({ fromHint: node.idHint, toHint: nodes[index + 1].idHint, type: 'solid' as const }));
+
+  drawableEdges.forEach((edge) => {
+    const from = positions.get(edge.fromHint);
+    const to = positions.get(edge.toHint);
+    if (!from || !to) return;
+    const x1 = layout === 'LR' ? from.x + from.w : from.x + from.w / 2;
+    const y1 = layout === 'LR' ? from.y + from.h / 2 : from.y + from.h;
+    const x2 = layout === 'LR' ? to.x : to.x + to.w / 2;
+    const y2 = layout === 'LR' ? to.y + to.h / 2 : to.y;
+    const dash = edge.type === 'dashed' || edge.type === 'async' ? ' stroke-dasharray="5 4"' : '';
+    edgeLines.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#1F77B4" stroke-width="1.8"${dash} marker-end="url(#arrow)"/>`);
+    if (edge.label) {
+      edgeLines.push(`<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#334155">${escapeSvgText(sanitizeLabel(edge.label))}</text>`);
+    }
+  });
+
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeSvgText(title || 'Generated diagram')}">`,
+    '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1F77B4"/></marker></defs>',
+    ...body,
+    ...edgeLines,
+    '</svg>'
+  ].join('\n');
+
+  return {
+    success: true,
+    imageBase64: Buffer.from(svg, 'utf8').toString('base64'),
+    format: 'svg',
+    fileSize: Buffer.byteLength(svg),
+    provider: 'local_svg',
+    generatedCode: generatedCode || svg
   };
 }
 
@@ -832,7 +970,7 @@ export async function POST(
     const persistedPrompt = getPaperFigureGenerationPrompt(meta, figurePlan.description || '');
     const persistedCaption = getPaperFigureCaption(meta, figurePlan.description || '');
     let rendererDecisionMeta: { renderer: 'plantuml' | 'mermaid'; reason: string } | null = null;
-    let finalDiagramRenderer: 'plantuml' | 'mermaid' | null = null;
+    let finalDiagramRenderer: string | null = null;
     let mermaidRenderFailed = false;
     let plantUMLRenderFailed = false;
     let mermaidRenderError: string | null = null;
@@ -841,7 +979,8 @@ export async function POST(
     let resolvedChartInput: ReturnType<typeof resolveChartGenerationInput> | null = null;
 
     // Build proposal/manuscript context for LLM grounding
-    const paperContext = buildPaperContext(session);
+    const effectiveSuggestionMetaForContext = asObjectRecord(data.suggestionMeta) || asObjectRecord(meta.suggestionMeta);
+    const paperContext = buildScopedPaperContext(session, effectiveSuggestionMetaForContext);
 
     // Generate based on category
     switch (data.category) {
@@ -852,7 +991,7 @@ export async function POST(
           const chartInput = resolveChartGenerationInput(
             data.figureType,
             chartPayload as Record<string, any> | null | undefined,
-            data.description || chartEnrichment?.dataNeeded || chartEnrichment?.whyThisFigure || null,
+            data.description || null,
             data.title
           );
           resolvedChartInput = chartInput;
@@ -901,7 +1040,7 @@ export async function POST(
             groundedDescription += `\nPURPOSE: ${sanitizeAscii(String(chartEnrichment.whyThisFigure))}`;
           }
           if (chartEnrichment.dataNeeded) {
-            groundedDescription += `\nDATA TO VISUALIZE: ${sanitizeAscii(String(chartEnrichment.dataNeeded))}`;
+            groundedDescription += `\nMISSING OR REQUIRED DATA FIELDS (do not invent values): ${sanitizeAscii(String(chartEnrichment.dataNeeded))}`;
           }
           if (data.modificationRequest) {
             groundedDescription += `\n\nUSER MODIFICATION REQUEST (apply these changes):\n${sanitizeAscii(data.modificationRequest, true)}`;
@@ -975,6 +1114,7 @@ export async function POST(
             specLooksMermaidLike: codeLooksMermaid(data.code) || /\bsubgraph\b/i.test(data.description || '')
           });
           rendererDecisionMeta = { renderer: rendererDecision.renderer, reason: rendererDecision.reason };
+          let attemptedDiagramCode: string | undefined;
 
           const renderMermaidWithTracking = async (rawCode: string): Promise<FigureGenerationResult> => {
             const mermaidResult = await generateFromMermaidCode(rawCode, {
@@ -1000,7 +1140,7 @@ export async function POST(
             };
 
             for (let attempt = 0; attempt < 2; attempt++) {
-              const renderResult = await generateFromPlantUMLCode(currentCode, { format: 'svg', useProxy: false });
+              const renderResult = await generateFromPlantUMLCode(currentCode, { format: 'svg', useProxy: true });
               if (renderResult.success) {
                 renderResult.generatedCode = currentCode;
                 finalDiagramRenderer = 'plantuml';
@@ -1009,6 +1149,10 @@ export async function POST(
               lastRenderResult = renderResult;
               plantUMLRenderFailed = true;
               plantUMLRenderError = renderResult.error || 'PlantUML render failed';
+
+              if (attempt >= 1) {
+                break;
+              }
 
               const repair = await repairDiagramCode(
                 {
@@ -1042,11 +1186,16 @@ export async function POST(
             if (enrichmentMeta.relevantSection) {
               groundedDescription += `\n\nTARGET SECTION: This figure belongs in the "${sanitizeAscii(String(enrichmentMeta.relevantSection))}" section of the proposal/manuscript.`;
             }
+            if (Array.isArray(enrichmentMeta.sectionLabelEvidence) && enrichmentMeta.sectionLabelEvidence.length > 0) {
+              groundedDescription += `\nSECTION LABEL EVIDENCE:\n${enrichmentMeta.sectionLabelEvidence.map((entry: any) => (
+                `- ${sanitizeAscii(String(entry.sectionKey || 'section'))}: "${sanitizeAscii(String(entry.label || entry.sectionKey || ''))}" -> ${sanitizeAscii(String(entry.interpretedIntent || 'section_specific'))}`
+              )).join('\n')}`;
+            }
             if (enrichmentMeta.whyThisFigure) {
               groundedDescription += `\nPURPOSE: ${sanitizeAscii(String(enrichmentMeta.whyThisFigure))}`;
             }
             if (enrichmentMeta.dataNeeded) {
-              groundedDescription += `\nDATA/CONTENT TO VISUALIZE: ${sanitizeAscii(String(enrichmentMeta.dataNeeded))}`;
+              groundedDescription += `\nMISSING DETAILS TO REQUEST (do not invent diagram content from this): ${sanitizeAscii(String(enrichmentMeta.dataNeeded))}`;
             }
             if (data.modificationRequest) {
               groundedDescription += `\n\nUSER MODIFICATION REQUEST (apply these changes):\n${sanitizeAscii(data.modificationRequest, true)}`;
@@ -1061,6 +1210,9 @@ export async function POST(
                 figureRole: enrichmentMeta.figureRole as any,
                 paperGenre: enrichmentMeta.paperProfile?.paperGenre,
                 diagramSpec,
+                sectionLabelEvidence: Array.isArray(enrichmentMeta.sectionLabelEvidence)
+                  ? enrichmentMeta.sectionLabelEvidence
+                  : undefined,
                 rendererPreference: rendererDecision.renderer,
                 hasRecentMermaidFailure: recentMermaidFailure,
                 hasRecentPlantUMLFailure: recentPlantUMLFailure,
@@ -1074,6 +1226,7 @@ export async function POST(
             if (llmResult.success && llmResult.code) {
               llmMetadata = { tokensUsed: llmResult.tokensUsed, model: llmResult.model };
               const isPlantUML = llmResult.code.includes('@startuml') || llmResult.diagramType === 'plantuml';
+              attemptedDiagramCode = llmResult.code;
 
               if (isPlantUML) {
                 result = await renderPlantUMLWithRecovery(llmResult.code);
@@ -1092,6 +1245,7 @@ export async function POST(
               };
             }
           } else if (data.code) {
+            attemptedDiagramCode = data.code;
             if (data.code.includes('@startuml') || data.figureType === 'plantuml') {
               result = await renderPlantUMLWithRecovery(data.code);
             } else if (codeLooksMermaid(data.code)) {
@@ -1107,6 +1261,12 @@ export async function POST(
               error: 'Publication-grade diagram generation requires either an AI prompt or explicit diagram code. Generic fallback diagrams are disabled.',
               errorCode: 'INVALID_DATA'
             };
+          }
+
+          if ((!result.success || !result.imageBase64) && diagramSpec) {
+            console.warn(`[PaperFigures] Remote diagram render failed (${result.error || 'unknown error'}); using local SVG fallback.`);
+            result = renderLocalDiagramSvg(diagramSpec, data.title, attemptedDiagramCode);
+            finalDiagramRenderer = 'local_svg';
           }
         }
         break;
@@ -1166,7 +1326,7 @@ export async function POST(
             groundedDescription += `\nPURPOSE: ${sanitizeAscii(String(statEnrichment.whyThisFigure))}`;
           }
           if (statEnrichment.dataNeeded) {
-            groundedDescription += `\nDATA TO VISUALIZE: ${sanitizeAscii(String(statEnrichment.dataNeeded))}`;
+            groundedDescription += `\nMISSING OR REQUIRED DATA FIELDS (do not invent values): ${sanitizeAscii(String(statEnrichment.dataNeeded))}`;
           }
           if (data.modificationRequest) {
             groundedDescription += `\n\nUSER MODIFICATION REQUEST (apply these changes):\n${sanitizeAscii(data.modificationRequest, true)}`;
@@ -1182,7 +1342,7 @@ export async function POST(
             studyType: statEnrichment.paperProfile?.studyType,
             chartSpec: statEnrichment.chartSpec,
             structuredData: data.data as Record<string, any> | null | undefined,
-            rawDataText: data.description || statEnrichment?.dataNeeded || statEnrichment?.whyThisFigure || null,
+            rawDataText: data.description || null,
             journal: mapThemeToPythonJournal(resolvedTheme),
           }, requestHeaders);
 

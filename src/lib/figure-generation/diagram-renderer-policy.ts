@@ -80,6 +80,14 @@ export function chooseDiagramRenderer(input: DiagramRendererPolicyInput): Diagra
     }
   }
 
+  if (diagramType === 'flowchart' && !recentMermaidFailure && !heavySyntax) {
+    return {
+      renderer: 'mermaid',
+      reason: 'Flowchart requests use Mermaid so ordinary process flows stay vertical and do not get remapped to PlantUML architecture templates.',
+      plantUMLRequired: false
+    }
+  }
+
   const plantUMLRequired = umlIntent || systemIntent || recentMermaidFailure || heavySyntax
   if (plantUMLRequired) {
     if (recentMermaidFailure) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
@@ -20,6 +21,31 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+const SKETCH_STYLE_VALUES = ['academic', 'scientific', 'conceptual', 'technical'] as const;
+const SKETCH_MODE_VALUES = ['SUGGEST', 'GUIDED'] as const;
+const FIGURE_GENRE_VALUES = [
+  'METHOD_BLOCK',
+  'SCENARIO_STORYBOARD',
+  'CONCEPTUAL_FRAMEWORK',
+  'GRAPHICAL_ABSTRACT',
+  'NEURAL_ARCHITECTURE',
+  'EXPERIMENTAL_SETUP',
+  'DATA_PIPELINE',
+  'COMPARISON_MATRIX',
+  'PROCESS_MECHANISM',
+  'SYSTEM_INTERACTION'
+] as const;
+const emptyOptionalEnum = <T extends readonly [string, ...string[]]>(values: T) => z.preprocess(
+  (value) => {
+    if (value === null) return undefined;
+    return typeof value === 'string' && value.trim() === '' ? undefined : value;
+  },
+  z.enum(values).optional()
+);
+const sketchStyleSchema = emptyOptionalEnum(SKETCH_STYLE_VALUES);
+const sketchModeSchema = emptyOptionalEnum(SKETCH_MODE_VALUES);
+const figureGenreSchema = emptyOptionalEnum(FIGURE_GENRE_VALUES);
+
 const createSchema = z.object({
   title: z.string().min(1),
   caption: z.string().optional().default(''),
@@ -35,6 +61,14 @@ const createSchema = z.object({
       sectionKey: z.string(),
       label: z.string().optional()
     })).optional().nullable(),
+    sourceText: z.string().max(5000).optional().nullable(),
+    focusText: z.string().max(5000).optional().nullable(),
+    sectionLabelEvidence: z.array(z.object({
+      sectionKey: z.string(),
+      label: z.string().optional(),
+      interpretedIntent: z.string().optional(),
+      reason: z.string().optional()
+    })).optional().nullable(),
     scopeMode: z.enum(['selected_sections', 'full_draft', 'focused_text']).optional().nullable(),
     figureRole: z.enum(['ORIENT', 'POSITION', 'EXPLAIN_METHOD', 'SHOW_RESULTS', 'INTERPRET']).optional().nullable(),
     sectionFitJustification: z.string().optional().nullable(),
@@ -45,6 +79,8 @@ const createSchema = z.object({
     rendererPreference: z.enum(['plantuml', 'mermaid', 'auto']).optional().nullable(),
     diagramSpec: z.object({
       layout: z.enum(['LR', 'TD']).optional(),
+      visualIntent: z.string().optional(),
+      composition: z.string().optional(),
       nodes: z.array(z.object({
         idHint: z.string(),
         label: z.string(),
@@ -61,8 +97,10 @@ const createSchema = z.object({
         nodeIds: z.array(z.string()).optional(),
         description: z.string().optional()
       })).optional(),
+      workplanSpec: z.any().optional(),
+      constraints: z.any().optional(),
       splitSuggestion: z.string().optional()
-    }).optional().nullable(),
+    }).passthrough().optional().nullable(),
     chartSpec: z.object({
       chartType: z.string().optional(),
       xAxisLabel: z.string().optional(),
@@ -113,7 +151,7 @@ const createSchema = z.object({
       steps: z.array(z.string()).optional(),
       captionDraft: z.string().optional(),
       splitSuggestion: z.string().optional(),
-      figureGenre: z.enum(['METHOD_BLOCK', 'SCENARIO_STORYBOARD', 'CONCEPTUAL_FRAMEWORK', 'GRAPHICAL_ABSTRACT', 'NEURAL_ARCHITECTURE', 'EXPERIMENTAL_SETUP', 'DATA_PIPELINE', 'COMPARISON_MATRIX', 'PROCESS_MECHANISM', 'SYSTEM_INTERACTION']).optional(),
+      figureGenre: figureGenreSchema,
       renderDirectives: z.object({
         aspectRatio: z.string().optional(),
         fillCanvasPercentMin: z.number().optional(),
@@ -147,7 +185,7 @@ const createSchema = z.object({
       diagramSpec: z.any().optional(),
       illustrationSpecV2: z.any().optional()
     }).optional().nullable(),
-    figureGenre: z.enum(['METHOD_BLOCK', 'SCENARIO_STORYBOARD', 'CONCEPTUAL_FRAMEWORK', 'GRAPHICAL_ABSTRACT', 'NEURAL_ARCHITECTURE', 'EXPERIMENTAL_SETUP', 'DATA_PIPELINE', 'COMPARISON_MATRIX', 'PROCESS_MECHANISM', 'SYSTEM_INTERACTION']).optional().nullable(),
+    figureGenre: figureGenreSchema,
     renderDirectives: z.object({
       aspectRatio: z.string().optional(),
       fillCanvasPercentMin: z.number().optional(),
@@ -162,9 +200,9 @@ const createSchema = z.object({
       dataAvailability: z.enum(['provided', 'partial', 'none'])
     }).optional().nullable(),
     // Sketch/illustration-specific fields
-    sketchStyle: z.enum(['academic', 'scientific', 'conceptual', 'technical']).optional().nullable(),
+    sketchStyle: sketchStyleSchema,
     sketchPrompt: z.string().optional().nullable(),
-    sketchMode: z.enum(['SUGGEST', 'GUIDED']).optional().nullable()
+    sketchMode: sketchModeSchema
   }).optional().nullable()
 });
 
@@ -321,7 +359,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
         figureNo: nextFigureNo,
         title: data.title,
         description: initialCaption || '',
-        nodes: meta,
+        nodes: meta as unknown as Prisma.InputJsonValue,
         edges: []
       }
     });

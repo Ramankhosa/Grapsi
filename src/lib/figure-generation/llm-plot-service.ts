@@ -190,6 +190,8 @@ MATPLOTLIB EXECUTION RULES (HARD CONSTRAINTS):
 4. The code must fully render the requested plot on ax.
 5. Do NOT render a top title on the image. Use the provided title only as semantic guidance. Axis labels, legends, grids, and annotations are allowed and should remain legible.
 6. Prefer a clean academic style: thin grid, clear labels, limited colors, legible ticks, tight layout.
+6a. Every rendered plot must set visible axis labels with units when available using ax.set_xlabel(...) and ax.set_ylabel(...), except only when the visual has no meaningful Cartesian axes.
+6b. Cartesian/workplan plots must show readable major ticks and a light grid. Relative grant timelines must use an explicit project-month x-axis; exact dates are allowed only when supplied.
 7. NEVER invent data. If structured data or pasted raw rows are provided, use only those values. If the request is ambiguous, choose the most conservative direct interpretation of the provided values.
 7a. Grant proposal claims such as "high impact", "improved outcomes", "cost-effective", or "significant benefit" are not plottable data unless exact numeric values are supplied.
 8. If the request includes raw CSV/TSV/JSON/table text, convert it into explicit Python literals inside the code before plotting.
@@ -658,6 +660,12 @@ export function validateCustomPythonPlotCode(code: string): { valid: boolean; co
 
   if (!/\b(ax|plt|sns)\./.test(cleaned)) {
     return { valid: false, code: cleaned, error: 'Plot code must draw using ax, plt, or sns.' }
+  }
+
+  const setsXAxis = /\b(?:ax\.set_xlabel\s*\(|ax\.set\s*\([^)]*xlabel\s*=)/s.test(cleaned)
+  const setsYAxis = /\b(?:ax\.set_ylabel\s*\(|ax\.set\s*\([^)]*ylabel\s*=)/s.test(cleaned)
+  if (!setsXAxis || !setsYAxis) {
+    return { valid: false, code: cleaned, error: 'Plot code must set visible x-axis and y-axis labels.' }
   }
 
   return { valid: true, code: cleaned }

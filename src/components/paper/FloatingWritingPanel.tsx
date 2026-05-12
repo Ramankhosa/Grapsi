@@ -825,8 +825,7 @@ export default function FloatingWritingPanel({
   const [showSmartSuggest, setShowSmartSuggest] = useState(false);
   const [smartSuggestions, setSmartSuggestions] = useState<SmartFigureMeta[]>([]);
   const [loadingSmartSuggest, setLoadingSmartSuggest] = useState(false);
-  const [figureScopeMode, setFigureScopeMode] = useState<'selected_sections' | 'full_draft'>('selected_sections');
-  const [selectedFigureScopeSectionKeys, setSelectedFigureScopeSectionKeys] = useState<string[]>([]);
+  const [selectedFigureScopeSectionKey, setSelectedFigureScopeSectionKey] = useState('');
   const [showFigureScopeDropdown, setShowFigureScopeDropdown] = useState(false);
   const [generatingSmartFigure, setGeneratingSmartFigure] = useState<string | null>(null); // track which suggestion is being generated
 
@@ -870,38 +869,26 @@ export default function FloatingWritingPanel({
     return Array.from(byKey.values());
   }, [availableSectionContexts, currentContent, currentSection]);
 
-  const selectedFigureScopeSectionSet = useMemo(() => new Set(selectedFigureScopeSectionKeys), [selectedFigureScopeSectionKeys]);
-  const selectedFigureScopeSections = useMemo(() => {
-    if (figureScopeMode === 'full_draft') return figureSectionContexts;
-    return figureSectionContexts.filter((section) => selectedFigureScopeSectionSet.has(section.sectionKey));
-  }, [figureScopeMode, figureSectionContexts, selectedFigureScopeSectionSet]);
+  const selectedFigureScopeSection = useMemo(() => (
+    figureSectionContexts.find((section) => section.sectionKey === selectedFigureScopeSectionKey)
+  ), [figureSectionContexts, selectedFigureScopeSectionKey]);
   const figureScopeLabel = useMemo(() => {
-    if (figureScopeMode === 'full_draft') return 'Full draft';
-    if (selectedFigureScopeSections.length === 0) return 'Choose sections';
-    if (selectedFigureScopeSections.length === 1) return selectedFigureScopeSections[0].label;
-    return `${selectedFigureScopeSections.length} sections`;
-  }, [figureScopeMode, selectedFigureScopeSections]);
+    return selectedFigureScopeSection?.label || 'Choose section';
+  }, [selectedFigureScopeSection]);
 
   useEffect(() => {
-    if (figureScopeMode !== 'selected_sections' || figureSectionContexts.length === 0) return;
-    setSelectedFigureScopeSectionKeys((current) => {
-      const validKeys = new Set(figureSectionContexts.map((section) => section.sectionKey));
-      const stillValid = current.filter((key) => validKeys.has(key));
-      if (stillValid.length > 0) return stillValid;
+    if (figureSectionContexts.length === 0) {
+      setSelectedFigureScopeSectionKey('');
+      return;
+    }
+    setSelectedFigureScopeSectionKey((current) => {
+      if (figureSectionContexts.some((section) => section.sectionKey === current)) return current;
       const currentContext = currentSection
         ? figureSectionContexts.find((section) => section.sectionKey === currentSection)
         : undefined;
-      return [currentContext?.sectionKey || figureSectionContexts[0].sectionKey];
+      return currentContext?.sectionKey || figureSectionContexts[0].sectionKey;
     });
-  }, [currentSection, figureScopeMode, figureSectionContexts]);
-
-  const toggleFigureScopeSection = useCallback((sectionKey: string) => {
-    setSelectedFigureScopeSectionKeys((current) => (
-      current.includes(sectionKey)
-        ? current.filter((key) => key !== sectionKey)
-        : [...current, sectionKey]
-    ));
-  }, []);
+  }, [currentSection, figureSectionContexts]);
   
   // Custom instructions for text actions
   const [customInstructions, setCustomInstructions] = useState('');
@@ -1049,24 +1036,15 @@ export default function FloatingWritingPanel({
     if (!authToken || !sessionId) return;
 
     const hasSelection = !!selectedText?.text?.trim();
-    const scopedSections = figureScopeMode === 'full_draft'
-      ? figureSectionContexts
-      : selectedFigureScopeSections;
-    if (!hasSelection && scopedSections.length === 0) return;
+    const scopedSection = selectedFigureScopeSection;
+    if (!scopedSection) return;
 
     const sourceText = hasSelection
       ? selectedText!.text
-      : scopedSections.map((section) => section.content).join('\n\n');
-    const sectionMap = scopedSections.reduce<Record<string, string>>((acc, section) => {
-      acc[section.sectionKey] = section.content.slice(0, 4000);
-      return acc;
-    }, {});
-    const effectiveScopeMode = figureScopeMode === 'selected_sections' && scopedSections.length === 0
-      ? 'full_draft'
-      : figureScopeMode;
-    const sectionScope = effectiveScopeMode === 'selected_sections'
-      ? { mode: 'selected_sections' as const, sectionKeys: scopedSections.map((section) => section.sectionKey) }
-      : { mode: 'full_draft' as const };
+      : scopedSection.content;
+    const sectionMap = {
+      [scopedSection.sectionKey]: scopedSection.content.slice(0, 4000)
+    };
 
     setLoadingSmartSuggest(true);
     setShowSmartSuggest(true);
@@ -1079,14 +1057,14 @@ export default function FloatingWritingPanel({
           Authorization: `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          // Still send the section content for broader grounding context
-          sections: Object.keys(sectionMap).length > 0 ? sectionMap : undefined,
-          sectionScope,
+          sections: sectionMap,
+          sectionScope: { mode: 'selected_sections', sectionKeys: [scopedSection.sectionKey] },
+          maxSuggestions: 1,
           useLLM: true,
           preferences: { outputMix: 'balanced', detailLevel: 'moderate' },
           // Focus fields — the LLM will constrain all suggestions to this text
           focusText: hasSelection ? sourceText.slice(0, 4000) : undefined,
-          focusSection: hasSelection ? (currentSection || scopedSections[0]?.sectionKey) : undefined,
+          focusSection: hasSelection ? (currentSection || scopedSection.sectionKey) : undefined,
           focusMode: hasSelection ? 'selection' : undefined
         })
       });
@@ -1105,9 +1083,10 @@ export default function FloatingWritingPanel({
           importance: s.importance || 'optional',
           suggestedType: s.suggestedType || 'flowchart',
           ...suggestionMeta,
-          relevantSection: suggestionMeta?.relevantSection || currentSection,
-          sourceSection: scopedSections.map((section) => section.sectionKey).join(', ') || currentSection,
-          sourceText: sourceText.slice(0, 500)
+          relevantSection: suggestionMeta?.relevantSection || scopedSection.sectionKey,
+          sourceSections: suggestionMeta?.sourceSections || [{ sectionKey: scopedSection.sectionKey, label: scopedSection.label }],
+          sourceSection: scopedSection.sectionKey,
+          sourceText: sourceText.slice(0, 5000)
         };
       });
       setSmartSuggestions(items);
@@ -1121,9 +1100,7 @@ export default function FloatingWritingPanel({
     authToken,
     sessionId,
     selectedText,
-    figureScopeMode,
-    figureSectionContexts,
-    selectedFigureScopeSections,
+    selectedFigureScopeSection,
     currentSection
   ]);
 
@@ -1189,21 +1166,16 @@ export default function FloatingWritingPanel({
   const handleOpenInFigurePlanner = useCallback(() => {
     if (!onNavigateToStage) return;
     const hasSelection = !!selectedText?.text?.trim();
-    const scopedSections = figureScopeMode === 'full_draft'
-      ? figureSectionContexts
-      : selectedFigureScopeSections;
-    const effectiveScopeMode = figureScopeMode === 'selected_sections' && scopedSections.length === 0
-      ? 'full_draft'
-      : figureScopeMode;
+    const scopedSection = selectedFigureScopeSection;
     // Store context in sessionStorage so the Figure Planner can pick it up
     const context = {
-      sourceSection: currentSection,
-      sourceText: (hasSelection ? selectedText!.text : (scopedSections.map((section) => section.content).join('\n\n') || currentContent || '')).slice(0, 4000),
+      sourceSection: scopedSection?.sectionKey || currentSection,
+      sourceText: (hasSelection ? selectedText!.text : (scopedSection?.content || currentContent || '')).slice(0, 4000),
       focusMode: hasSelection ? 'selection' : 'section',
-      selectedSectionKeys: scopedSections.map((section) => section.sectionKey),
-      sectionScope: effectiveScopeMode === 'selected_sections'
-        ? { mode: 'selected_sections', sectionKeys: scopedSections.map((section) => section.sectionKey) }
-        : { mode: 'full_draft' },
+      selectedSectionKeys: scopedSection ? [scopedSection.sectionKey] : [],
+      sectionScope: scopedSection
+        ? { mode: 'selected_sections', sectionKeys: [scopedSection.sectionKey] }
+        : undefined,
       timestamp: Date.now()
     };
     try {
@@ -1216,9 +1188,7 @@ export default function FloatingWritingPanel({
     selectedText,
     currentContent,
     sessionId,
-    figureScopeMode,
-    figureSectionContexts,
-    selectedFigureScopeSections
+    selectedFigureScopeSection
   ]);
 
   const canOpenBibliographyPanel = Boolean(onOpenBibliographyPanel || onNavigateToStage);
@@ -2015,52 +1985,37 @@ export default function FloatingWritingPanel({
                           </button>
                           {showFigureScopeDropdown && (
                             <div className="absolute z-40 mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
-                              <div className="grid grid-cols-2 gap-1 mb-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setFigureScopeMode('selected_sections')}
-                                  className={`rounded-lg px-2 py-1.5 text-[11px] font-medium ${figureScopeMode === 'selected_sections' ? 'bg-amber-100 text-amber-800' : 'text-slate-600 hover:bg-slate-50'}`}
-                                >
-                                  Sections
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setFigureScopeMode('full_draft')}
-                                  className={`rounded-lg px-2 py-1.5 text-[11px] font-medium ${figureScopeMode === 'full_draft' ? 'bg-amber-100 text-amber-800' : 'text-slate-600 hover:bg-slate-50'}`}
-                                >
-                                  Full draft
-                                </button>
+                              <div className="max-h-44 overflow-y-auto space-y-1">
+                                {figureSectionContexts.length === 0 ? (
+                                  <p className="px-2 py-2 text-[11px] text-slate-500">No drafted sections yet.</p>
+                                ) : (
+                                  figureSectionContexts.map((section) => {
+                                    const checked = selectedFigureScopeSection?.sectionKey === section.sectionKey;
+                                    return (
+                                      <button
+                                        key={section.sectionKey}
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedFigureScopeSectionKey(section.sectionKey);
+                                          setShowFigureScopeDropdown(false);
+                                        }}
+                                        className="w-full rounded-lg px-2 py-1.5 text-left hover:bg-slate-50 flex items-center gap-2"
+                                      >
+                                        <span className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-300 text-transparent'}`}>
+                                          <Check className="w-3 h-3" />
+                                        </span>
+                                        <span className="truncate text-[11px] text-slate-700">{section.label}</span>
+                                      </button>
+                                    );
+                                  })
+                                )}
                               </div>
-                              {figureScopeMode === 'selected_sections' && (
-                                <div className="max-h-44 overflow-y-auto space-y-1">
-                                  {figureSectionContexts.length === 0 ? (
-                                    <p className="px-2 py-2 text-[11px] text-slate-500">No drafted sections yet.</p>
-                                  ) : (
-                                    figureSectionContexts.map((section) => {
-                                      const checked = selectedFigureScopeSectionSet.has(section.sectionKey);
-                                      return (
-                                        <button
-                                          key={section.sectionKey}
-                                          type="button"
-                                          onClick={() => toggleFigureScopeSection(section.sectionKey)}
-                                          className="w-full rounded-lg px-2 py-1.5 text-left hover:bg-slate-50 flex items-center gap-2"
-                                        >
-                                          <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-300 text-transparent'}`}>
-                                            <Check className="w-3 h-3" />
-                                          </span>
-                                          <span className="truncate text-[11px] text-slate-700">{section.label}</span>
-                                        </button>
-                                      );
-                                    })
-                                  )}
-                                </div>
-                              )}
                             </div>
                           )}
                         </div>
                         <button
                           onClick={handleSmartFigureSuggest}
-                          disabled={loadingSmartSuggest || (!selectedText?.text && selectedFigureScopeSections.length === 0)}
+                          disabled={loadingSmartSuggest || !selectedFigureScopeSection}
                           className="w-full p-3 rounded-xl border-2 border-dashed border-amber-200 hover:border-amber-400 hover:bg-amber-50 transition-colors flex items-center justify-center gap-2 text-sm text-amber-600 hover:text-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {loadingSmartSuggest ? (
@@ -2070,9 +2025,7 @@ export default function FloatingWritingPanel({
                           )}
                           {selectedText?.text
                             ? `Suggest Figures for Selection (${selectedText.text.length} chars)`
-                            : selectedFigureScopeSections.length > 1 || figureScopeMode === 'full_draft'
-                              ? 'AI Suggest Figures for Context'
-                              : 'AI Suggest Figures for This Section'}
+                            : 'AI Suggest Figure for This Section'}
                         </button>
 
                         {/* Inline Smart Suggestions */}

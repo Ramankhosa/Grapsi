@@ -26,13 +26,16 @@ import type {
   FigureSuggestion,
   DiagramStructuredSpec,
   ChartStructuredSpec,
+  DiagramWorkplanTask,
   IllustrationStructuredSpec,
   IllustrationStructuredSpecV2,
   IllustrationFigureGenre,
   IllustrationRenderDirectives,
   FigureRenderSpec,
   FigureRole,
-  PaperProfile
+  PaperProfile,
+  SectionLabelEvidence,
+  SectionLabelVisualIntent
 } from './types'
 import { normalizeFigurePreferences, type FigureSuggestionPreferences } from './preferences'
 import { chooseDiagramRenderer } from './diagram-renderer-policy'
@@ -115,6 +118,7 @@ export interface DiagramGenerationRequest {
   elements?: string[] // Optional list of elements to include
   style?: 'default' | 'forest' | 'dark' | 'neutral'
   diagramSpec?: DiagramStructuredSpec
+  sectionLabelEvidence?: SectionLabelEvidence[]
   rendererPreference?: 'plantuml' | 'mermaid' | 'auto'
   hasRecentMermaidFailure?: boolean
   hasRecentPlantUMLFailure?: boolean
@@ -206,11 +210,14 @@ Every figure must be grounded in the supplied draft/proposal content. If quantit
 GRANT PROPOSAL INTENT RULES:
 - Need/Problem/Significance: use a compact problem-to-opportunity map or rationale framework; avoid decorative advocacy graphics.
 - Objectives/Aims: use an aims-to-work-packages-to-deliverables framework, showing how each aim advances the funder objective.
-- Methodology/Approach/Work Packages: use flowchart/activity/pipeline diagrams that show feasible execution, dependencies, validation, and decision gates.
+- Methodology/Approach/Work Packages: use vertical flowchart/activity diagrams that show feasible execution, dependencies, validation, and decision gates.
 - Workplan/Timeline/Milestones: prefer Mermaid timeline or gantt; show phases, milestones, dependencies, and review gates.
 - Evaluation/Outcomes: if numeric targets/data are explicit, charts are allowed; otherwise use an evaluation pathway linking activities -> outputs -> outcomes -> indicators.
 - Impact/Translation/Sustainability: use logic-model or outcome-pathway diagrams that connect beneficiaries, outputs, adoption route, and long-term impact.
 - Risk/Management/Ethics: use risk-control matrix, governance workflow, or decision pathway; avoid charts unless explicit risk scores are provided.
+- Grant diagrams must follow grant-writing logic: need/problem -> objectives/aims -> activities/work packages -> outputs/deliverables -> outcomes/impact, with evaluation indicators, risks, assumptions, or review gates only when present in the selected text.
+- Distinguish outputs, outcomes, and long-term impact. Do not turn planned activities into achieved results, and do not claim impact or effectiveness unless the selected content explicitly supports it.
+- For funder readability, make feasibility, measurability, responsibility, and decision points visible when they are described. Prefer grant terms already present in the draft over generic process labels.
 
 SECTION FIT RULES (HARD CONSTRAINTS)
 1) INTRODUCTION:
@@ -240,13 +247,31 @@ SECTION FIT RULES (HARD CONSTRAINTS)
 - Default disallow: class diagrams unless maintainability/extensibility discussion explicitly requires them.
 
 DIAGRAM TYPE SELECTION RULES:
-- FLOWCHART/ACTIVITY/PIPELINE for process steps (default for Methodology).
+- FLOWCHART/ACTIVITY/PIPELINE for process steps (default for Methodology). Use top-to-bottom/TD orientation for ordinary process flowcharts unless the user explicitly asks for a horizontal roadmap or system architecture.
 - TIMELINE/GANTT for grant workplans, phases, milestones, dependencies, review gates, and deliverables.
 - LOGIC MODEL / OUTCOME PATHWAY as flowchart for grant impact and evaluation sections.
 - SEQUENCE only when interaction protocol/time order is central.
 - CLASS/COMPONENT only for named software structure contribution.
 - ER only when data schema is central.
 - ARCHITECTURE/DEPLOYMENT only for system papers, high-level unless detailed methodology requires.
+
+SECTION LABEL ROUTING RULES:
+- You will receive each source section as { sectionKey, llmLabel, content }. Treat llmLabel as first-class intent evidence, not display decoration.
+- Interpret labels before choosing figure types:
+  * Timeline, Workplan, Milestones, Project Duration, Schedule -> GANTT or timeline with visible time scale.
+  * Methodology, Approach, Implementation Plan, Work Packages -> grouped workflow, swimlane pipeline, or execution pathway.
+  * Deliverables, Outputs, Milestones -> deliverable dependency map or Gantt overlay.
+  * Evaluation, Outcomes, KPIs, Indicators -> evaluation logic model, indicator pathway, or chart only if numeric values exist.
+  * Need, Problem, Rationale, Significance -> problem-to-opportunity map or gap-to-solution roadmap.
+  * Objectives, Aims, Goals -> aim-to-work-package framework.
+  * Impact, Sustainability, Beneficiaries, Stakeholders -> adoption/impact pathway.
+  * Risk, Governance, Ethics, Management -> risk-control matrix or governance workflow.
+- For selected section combinations, synthesize one cross-section visual when useful:
+  * Methodology + Deliverables + Timeline -> Gantt/workplan with phases, deliverables, dependencies, milestones, and review gates.
+  * Need + Objectives + Methodology -> problem-to-solution roadmap.
+  * Methodology + Evaluation -> activity-to-indicator pathway.
+  * Impact + Sustainability + Stakeholders -> adoption/impact pathway.
+- Every suggestion must include sectionLabelEvidence: exact sectionKey + exact llmLabel + interpretedIntent for the labels that drove the visual choice.
 
 ILLUSTRATED_FIGURE RULES:
 - Academic infographic overview, not art.
@@ -257,7 +282,11 @@ ILLUSTRATED_FIGURE RULES:
 - Must map to inputs -> method -> outputs -> evaluation if present.
 
 BUDGET & SPEC DISCIPLINE:
-- Diagrams: nodes <= 12 (hard max 15), edges <= 18. If larger, split Fig X(a)/X(b).
+- Diagrams: target 6-12 source-grounded nodes for flowcharts and 10-15 nodes only when the selected content actually supports synthesis; hard max nodes <= 15, edges <= 24. If larger, split Fig X(a)/X(b).
+- Node labels may be 3-5 words when needed for clarity; avoid one-word generic labels unless the domain term is already precise.
+- For flowchart/activity requests, prefer a vertical top-to-bottom sequence with branch diamonds only when branch conditions are explicit in the selected text.
+- Use grouped LR layouts, swimlanes, matrices, roadmaps, or timelines only when the selected content explicitly describes parallel workstreams, architecture, roadmap phases, or a timeline.
+- Never use generic labels such as Input Stage, Processing Stage, Validation Stage, Output Stage, Node A, Step One, or Step Two unless those exact phrases appear in the selected text.
 - Every DIAGRAM must have deterministic diagramSpec.
 - Every ILLUSTRATED_FIGURE must have deterministic illustrationSpec.
 - Every DATA_CHART must define exact axes and data mapping.
@@ -332,6 +361,8 @@ CRITICAL RULES:
 2b. Preserve every provided category, row, series, point, and legend entry. Never drop, merge, downsample, reorder, or aggregate data unless the request explicitly asks for it.
 3. The chart MUST have:
    - Properly labeled axes with units where applicable (e.g., "Accuracy (%)", "Time (seconds)")
+   - Visible ticks, readable scale intervals, and light grid lines for every Cartesian chart
+   - Scale/domain policy that fits the data: bars/counts/budgets start at zero; deltas/correlations may use bounded nonzero domains when justified by the supplied values
    - A legend with descriptive dataset labels
    - Colors from this academic palette: ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7"]
 3a. IMPORTANT FOR DRAFT FIGURES: do NOT render a title above the chart. The figure title/caption is handled outside the image. Keep axis titles, but disable the in-chart top title.
@@ -353,9 +384,10 @@ CRITICAL RULES:
    - distinguish baseline, target, requested funding, phase duration, output count, or indicator values without implying achieved results
    - label proposed/target values as proposed or target, not observed outcomes
 14. If chartSpec is provided, follow chartSpec axis labels and field mappings exactly.
-15. Respect any DATA COMPLEXITY / PRESERVATION SIGNALS in the prompt. Adapt label rotation, orientation, font sizes, and legend placement to keep all supplied data visible.
+15. Respect any DATA COMPLEXITY / PRESERVATION SIGNALS in the prompt. Adapt label rotation, orientation, font sizes, tick density, and legend placement to keep all supplied data visible.
 16. If labels are long or numerous, prefer horizontal bars or rotated ticks over truncation. If the plot is dense, simplify styling, not data.
 17. If values span positive and negative ranges, do not force an artificial zero baseline that distorts the comparison.
+18. For Gantt/workplan-like chart requests, use a clear project-month scale for relative timelines and real calendar dates only when exact dates are supplied.
 
 METADATA RULES:
 - Return a top-level "metadata" object with this exact shape: ${PAPER_FIGURE_METADATA_OUTPUT_GUIDE}
@@ -399,19 +431,19 @@ USER REQUEST:
 
 const DIAGRAM_GENERATION_PROMPT = `${SECTION_AWARE_ACADEMIC_FIGURE_POLICY}
 
-You are an expert at creating compact, publication-quality Mermaid diagrams for academic papers and grant proposals. The output must render reliably on Kroki (Mermaid renderer).
+You are an expert at creating balanced, publication-quality Mermaid diagrams for academic papers and grant proposals. The output must render reliably on Kroki (Mermaid renderer) while avoiding flat generic diagrams.
 
 OUTPUT RULES (STRICT):
 1) Return ONLY valid Mermaid code. No markdown fences, no explanations, no extra text.
 2) Use ONLY Kroki-compatible Mermaid syntax. Avoid experimental or newer features.
-3) Keep diagrams compact: target 8-12 nodes (15 max). Keep subgraphs 2-3 (4 max). Avoid deep nesting.
-4) Labels must be short and safe: 2-4 words, max 28 characters, ASCII only; use letters/digits/spaces/hyphen only.
+3) Keep diagrams readable, not cramped: target 10-15 nodes when synthesizing proposal sections. Keep subgraphs 3-5 when useful. Avoid deep nesting.
+4) Labels must be short and safe: 3-5 words, max 42 characters, ASCII only; use letters/digits/spaces/hyphen only.
    - Avoid parentheses, brackets, commas, colons, math symbols in labels.
 5) IDs must be valid and stable:
    - IDs must match: ^[A-Za-z][A-Za-z0-9_]*$
    - IDs must be unique.
    - Do not use single-letter IDs unless unavoidable; prefer short meaningful IDs (ingest, preprocess, model).
-6) Prefer left-to-right layouts for pipelines/architectures/topology unless explicitly requested otherwise.
+6) Prefer left-to-right grouped layouts for pipelines/architectures/topology unless the request clearly describes a short linear procedure.
 7) Do NOT chain arrows on one line if it causes ambiguity. Prefer one edge per line.
 8) Do NOT add Mermaid init directives, themes, or CSS. Styling is handled externally.
 9) TEMPLATE RULE: You MUST choose exactly ONE canonical template below that matches diagramType and ONLY fill/adjust its placeholders.
@@ -427,6 +459,12 @@ OUTPUT RULES (STRICT):
    - Introduction: keep high-level only.
 11) Labels must be academic and neutral. Avoid marketing/hype words.
 12) If the request includes raw CSV, TSV, JSON, metrics, or pasted data rows, use that content to name entities, stages, comparisons, and relationships instead of ignoring it.
+13) Use Section Label Evidence when provided. Labels like Workplan, Deliverables, Evaluation Plan, Impact Pathway, and Risk Governance determine the diagram family even if the section key is generic.
+14) Do NOT output a single top-down node chain unless Section Label Evidence says the source is a short linear procedure.
+15) For gantt:
+    - Include title, dateFormat YYYY-MM-DD, axisFormat, section groups, milestones, and dependency ordering.
+    - If exact calendar dates are supplied, use them.
+    - If only Month 1 / M1 / Year 1 style timing is supplied, use a relative project-month scale and make the title say "Relative project month scale"; do not present synthetic dates as real project dates.
 
 SUPPORTED DIAGRAM TYPES (Mermaid fallback):
 - flowchart (default for non-UML process/architecture)
@@ -438,23 +476,18 @@ SUPPORTED DIAGRAM TYPES (Mermaid fallback):
 
 CANONICAL TEMPLATES (choose exactly ONE; fill placeholders only):
 
-[TEMPLATE 1: FLOWCHART / ARCHITECTURE (PIPELINE)]
-flowchart LR
-  subgraph Input
-    dataSources[Data Sources]
-    ingestion[Ingestion]
-    dataSources --> ingestion
-  end
-  subgraph Core
-    preprocess[Preprocess]
-    model[Model]
-    preprocess --> model
-  end
-  subgraph Output
-    results[Results]
-  end
-  ingestion --> preprocess
-  model --> results
+[TEMPLATE 1: FLOWCHART (VERTICAL PROCESS)]
+flowchart TD
+  sourceStep["Source-grounded step"]
+  nextStep["Next source action"]
+  checkPoint{"Explicit decision gate"}
+  outcome["Source-grounded outcome"]
+  revision["Revision or follow-up"]
+  sourceStep --> nextStep
+  nextStep --> checkPoint
+  checkPoint -->|Yes| outcome
+  checkPoint -->|No| revision
+  revision --> nextStep
 
 [TEMPLATE 2: FLOWCHART / TOPOLOGY (HUB AND SPOKE)]
 flowchart LR
@@ -500,7 +533,9 @@ erDiagram
 
 [TEMPLATE 6: GANTT]
 gantt
+  title Relative project month scale
   dateFormat YYYY-MM-DD
+  axisFormat %b %Y
   section Work
   Task A :a1, 2026-01-01, 10d
   Task B :a2, after a1, 7d
@@ -521,10 +556,14 @@ YOUR TASK:
   * er        -> TEMPLATE 5
   * gantt     -> TEMPLATE 6
   * timeline  -> TEMPLATE 7
-- Replace placeholder labels with compact, safe labels.
+- Replace placeholder labels with readable, safe labels.
 - Ensure all IDs are unique and valid.
-- Add/remove nodes minimally to match the request while staying within compactness limits.
+- Add/remove nodes minimally to match the request while staying within readability limits.
 - Keep edge labels minimal; omit unless essential.
+- For ordinary flowchart/process/workflow requests, use flowchart TD and a vertical top-to-bottom path.
+- Use flowchart LR only for topology, architecture, system overview, or explicitly horizontal roadmap requests.
+- Use concrete nouns/actions from the selected draft content. Do not use generic filler labels such as Node A, Step One, Input Stage, Processing Stage, Validation Stage, or Output Stage unless those exact phrases appear in the selected draft.
+- If the selected draft content is thin, make a smaller faithful flowchart instead of inventing unrelated stages.
 - Output only Mermaid code.
 
 USER REQUEST:
@@ -532,34 +571,37 @@ USER REQUEST:
 
 const PLANTUML_GENERATION_PROMPT = `${SECTION_AWARE_ACADEMIC_FIGURE_POLICY}
 
-You are an expert at creating compact, publication-quality PlantUML diagrams for top-tier academic papers and grant proposals. You must optimize for space efficiency, funder/reviewer readability, and Kroki compatibility.
+You are an expert at creating balanced, publication-quality PlantUML diagrams for top-tier academic papers and grant proposals. You must optimize for funder/reviewer readability, section-fit persuasion, and Kroki compatibility.
 
 OUTPUT RULES (STRICT):
 1) Return ONLY PlantUML code starting with @startuml and ending with @enduml.
 2) No markdown fences, no explanations, no extra text.
 3) Always include the exact GLOBAL COMPACT STYLE block provided below (verbatim) after @startuml.
 4) Use ONLY the allowed palette and styling rules below. Do not invent new colors.
-5) Keep diagrams compact: target 8-12 nodes (15 max). Keep groups/packages/nodes 2-3 (4 max). Avoid deep nesting.
-6) Labels must be short and safe: 2-4 words, max 28 characters, ASCII only; use letters/digits/spaces/hyphen only.
+5) Keep diagrams readable, not cramped: target 10-15 nodes for proposal synthesis. Keep groups/packages 3-5 when useful. Avoid deep nesting.
+6) Labels must be short and safe: 3-5 words, max 42 characters, ASCII only; use letters/digits/spaces/hyphen only.
    - Avoid parentheses, brackets, commas, colons, math symbols in labels.
    - Keep edge labels 0-2 words (optional; only if essential).
-7) Prefer left-to-right layouts for pipelines/architectures/topology/deployment unless explicitly requested otherwise.
+7) For flowchart/process/workflow requests, prefer top-to-bottom vertical layout. Use left-to-right grouped layouts only for explicit architecture, topology, deployment, roadmap, or parallel workstream requests.
 8) Do NOT chain arrows on one line (never write: A --> B --> C). Always write one edge per line.
 9) Avoid advanced PlantUML features that may break on Kroki (no sprites, no includes, no external files, no macros).
 10) TEMPLATE RULE: You MUST choose exactly ONE canonical template below that matches diagramType and ONLY fill/adjust its placeholders.
     - Do NOT mix templates.
     - Do NOT introduce syntax beyond what appears in the chosen template.
-    - If the request is under-specified, use a minimal template with generic nodes.
+    - If the request is under-specified, use a minimal source-grounded template. Do not use generic Input/Process/Output filler.
 11) You will receive sectionType and paperGenre. Enforce section fit:
     - Results: never output class/component/sequence/usecase/state.
-    - Methodology: prefer architecture/pipeline/activity; sequence only if protocol-centric.
-    - Grant objectives/aims: use architecture/pipeline-style frameworks that show aims, work packages, deliverables, and outcomes.
+    - Methodology: prefer vertical flowchart/activity; sequence only if protocol-centric; architecture only if the selected text explicitly describes a system structure.
+    - Grant objectives/aims: use a vertical flowchart/framework linking aims, work packages, deliverables, and outcomes.
     - Grant evaluation/impact: use logic-model or outcome-pathway flow, not unsupported performance charts.
     - Grant management/risk/ethics: use governance workflow, responsibility flow, or risk-control diagram.
     - Introduction: high-level only (6-10 nodes).
 12) Use short academic labels only. No marketing adjectives.
+13) Use Section Label Evidence when provided. Labels like Workplan, Deliverables, Evaluation Plan, Impact Pathway, and Risk Governance determine the diagram family even if the section key is generic.
+14) Do NOT remap ordinary flowchart requests into architecture packages. Use vertical source-grounded steps unless the selected text explicitly asks for architecture, topology, roadmap, or parallel workstreams.
 
 SUPPORTED DIAGRAM TYPES (PlantUML-first):
+- flowchart (vertical process; use activity template)
 - architecture (default for system overviews)
 - topology (network/service interaction as compact architecture)
 - deployment (edge/cloud/on-prem nodes)
@@ -810,13 +852,16 @@ YOUR TASK:
 - You will receive a diagramType and a short user request describing what the diagram should show.
 - Choose exactly one template that matches diagramType:
   * architecture -> TEMPLATE 1
+  * flowchart    -> TEMPLATE 4
   * topology     -> TEMPLATE 2
   * deployment   -> TEMPLATE 3
   * activity     -> TEMPLATE 4
   * sequence     -> TEMPLATE 5
   * class        -> TEMPLATE 6
-- Replace placeholder labels and IDs with compact, safe labels and IDs.
-- Add/remove nodes minimally to match the request while staying within the compactness limits.
+- Replace placeholder labels and IDs with readable, safe labels and IDs.
+- Add/remove nodes minimally to match the request while staying within the readability limits.
+- For grant/proposal sections, use the section's actual grant-writing job: need -> objective -> activity -> deliverable/output -> outcome/impact. Prefer Gantt/timeline for workplans, evaluation pathways for indicators, impact pathways for sustainability, and governance workflows for risk/ethics.
+- For ordinary flowchart requests, use TEMPLATE 4 as a vertical activity flow. Do not use TEMPLATE 1 packages unless the selected text explicitly describes a system architecture, topology, deployment, or parallel architecture-like workstreams.
 - Keep all rules above.
 
 USER REQUEST:
@@ -867,11 +912,13 @@ GRANT-SUITABLE DIAGRAM GUIDANCE:
 - Evaluation and outcomes sections: use charts only when numeric data exists; otherwise use an evaluation pathway diagram.
 - Impact and significance sections: prefer outcome-pathway or logic-model diagrams.
 - Risk, governance, management, ethics, and stakeholder sections: prefer matrix/workflow diagrams showing mitigation, responsibility, and review loops.
+- Do not choose a generic vertical flowchart when the LLM-generated section labels point to a richer workplan, deliverable map, evaluation pathway, impact pathway, or governance figure.
 
 DIAGRAM RENDERER POLICY:
 11. For every DIAGRAM suggestion include rendererPreference ("plantuml" or "mermaid") with this policy:
-   - Prefer plantuml for UML-ish diagrams (class/component/usecase/state/activity/sequence) and architecture/deployment/topology/system overview/pipeline.
-   - Use mermaid for simple timeline, gantt, or simple er when appropriate.
+   - Use mermaid for ordinary flowchart/process/workflow diagrams so they render as vertical source-grounded flows.
+   - Use mermaid for timeline, gantt, and simple er when appropriate.
+   - Prefer plantuml for UML-ish diagrams (class/component/usecase/state/activity/sequence) and architecture/deployment/topology/system overview/pipeline only when the selected content explicitly describes that structure.
 
 DETERMINISTIC SPEC REQUIREMENT (hard):
 12. category must be one of: DATA_CHART, STATISTICAL_PLOT, DIAGRAM, ILLUSTRATED_FIGURE.
@@ -881,7 +928,9 @@ DETERMINISTIC SPEC REQUIREMENT (hard):
    - Illustrated: sketch-auto, sketch-guided
 14. For DATA_CHART / STATISTICAL_PLOT suggestions: include chartSpec with explicit axes + variable mapping and a placeholderPolicy ONLY if real data is present (see Rule 5-6).
 15. For DIAGRAM suggestions: include diagramSpec with deterministic nodes/edges plus constraints:
-   - nodesMax <= 12, edgesMax <= 18, nodeLabelMaxWords <= 3, noDuplicateNodeLabels=true.
+   - nodesMax <= 15, edgesMax <= 24, nodeLabelMaxWords <= 5, noDuplicateNodeLabels=true.
+   - Include visualIntent and composition when the section label implies workplan_timeline, method_workflow, deliverable_map, evaluation_logic, problem_opportunity, aims_framework, impact_pathway, risk_governance, evidence_taxonomy, or results_chart.
+   - Include workplanSpec for timeline/gantt/workplan suggestions using relative_months unless exact calendar dates exist.
 16. For ILLUSTRATED_FIGURE suggestions: include illustrationSpecV2 with:
    - figureGenre: METHOD_BLOCK|SCENARIO_STORYBOARD|CONCEPTUAL_FRAMEWORK|GRAPHICAL_ABSTRACT|NEURAL_ARCHITECTURE|EXPERIMENTAL_SETUP|DATA_PIPELINE|COMPARISON_MATRIX|PROCESS_MECHANISM|SYSTEM_INTERACTION
    - Choose the most specific genre:
@@ -898,9 +947,10 @@ DETERMINISTIC SPEC REQUIREMENT (hard):
 
 GOVERNANCE FIELDS (required for every suggestion):
 18. Include:
-   - figureRole: ORIENT | POSITION | EXPLAIN_METHOD | SHOW_RESULTS | INTERPRET
-   - sectionFitJustification: one sentence for section appropriateness
-   - expectedByReviewers: boolean
+    - figureRole: ORIENT | POSITION | EXPLAIN_METHOD | SHOW_RESULTS | INTERPRET
+    - sectionFitJustification: one sentence for section appropriateness
+    - expectedByReviewers: boolean
+    - sectionLabelEvidence: exact sectionKey + exact llmLabel + interpretedIntent for the section labels that drove the recommendation
 
 IMPORTANCE GUIDELINES:
 - required: expected by reviewers (e.g., methodology pipeline, results comparisons when data exists)
@@ -916,6 +966,7 @@ OUTPUT FORMAT (return ONLY JSON array):
     "suggestedType": "bar|line|...|flowchart|timeline|...|sketch-auto|sketch-guided",
     "rendererPreference": "plantuml|mermaid (DIAGRAM only)",
     "relevantSection": "selected section key when a Source Scope is provided; otherwise introduction|literature_review|methodology|results|discussion|conclusion",
+    "sectionLabelEvidence": [{ "sectionKey": "exact_section_key", "label": "exact LLM-generated label", "interpretedIntent": "workplan_timeline|method_workflow|deliverable_map|evaluation_logic|problem_opportunity|aims_framework|impact_pathway|risk_governance|evidence_taxonomy|results_chart|section_specific", "reason": "Brief label-routing reason" }],
     "figureRole": "ORIENT|POSITION|EXPLAIN_METHOD|SHOW_RESULTS|INTERPRET",
     "sectionFitJustification": "One sentence",
     "expectedByReviewers": true,
@@ -949,10 +1000,13 @@ OUTPUT FORMAT (return ONLY JSON array):
 
     "diagramSpec": {
       "layout": "LR|TD",
+      "visualIntent": "workplan_timeline|method_workflow|deliverable_map|evaluation_logic|problem_opportunity|aims_framework|impact_pathway|risk_governance|evidence_taxonomy|results_chart|section_specific",
+      "composition": "grouped_lr|swimlane|matrix|roadmap|logic_model|gantt|hub_spoke|short_procedure",
       "nodes": [{ "idHint": "nodeA", "label": "Node A", "group": "Input" }],
       "edges": [{ "fromHint": "nodeA", "toHint": "nodeB", "label": "flows", "type": "solid" }],
       "groups": [{ "name": "Input", "nodeIds": ["nodeA"], "enclosesNodeIds": ["nodeA"] }],
-      "constraints": { "nodesMax": 12, "edgesMax": 18, "nodeLabelMaxWords": 3, "noDuplicateNodeLabels": true },
+      "workplanSpec": { "timeScale": "relative_months|calendar_dates", "totalMonths": 36, "tasks": [{ "idHint": "phase1", "label": "Documentation Phase", "startMonth": 1, "endMonth": 12, "group": "Year 1" }], "milestones": [{ "idHint": "m1", "label": "Corpus validated", "startMonth": 12, "milestone": true }] },
+      "constraints": { "nodesMax": 15, "edgesMax": 24, "nodeLabelMaxWords": 5, "noDuplicateNodeLabels": true },
       "splitSuggestion": "Optional split when too complex"
     },
 
@@ -990,8 +1044,7 @@ DRAFT CONTENT:
 /**
  * Additional prompt block injected when the user has selected/focused on a
  * specific text excerpt. This constrains every suggestion to directly
- * illustrate the focused content while still using the broader proposal or
- * paper context for grounding (correct terminology, related variables, etc.).
+ * illustrate the focused content only.
  */
 function buildFocusTextBlock(
   focusText: string,
@@ -1029,7 +1082,7 @@ ${hintsBlock}
 STRICT RULES FOR THIS FOCUSED REQUEST:
 1. EVERY suggestion MUST directly visualize, explain, or showcase the content in the excerpt above.
 2. Do NOT suggest figures for other parts of the proposal/manuscript - only for the focused text.
-3. Use broader proposal/manuscript context only for terminology/grounding. Every figure must still target this excerpt.
+3. Do NOT use or infer from broader proposal/manuscript context. If information is not in this excerpt, mark it as needed rather than inventing it.
 4. If the excerpt describes a process or workflow -> suggest a flowchart/activity diagram.
 5. If the excerpt contains explicit numeric data, measurements, targets, budgets, dates, or counts -> charts may be suggested; otherwise do not suggest plots.
 6. If the excerpt describes relationships or structures -> suggest architecture/class/ER only when section-fit allows.
@@ -1146,8 +1199,9 @@ function extractJSON(raw: string): string {
 }
 
 const MAX_SPEC_NODES = 15
-const DEFAULT_SPEC_NODES = 12
-const MAX_SPEC_EDGES = 18
+const DEFAULT_SPEC_NODES = 15
+const MAX_SPEC_EDGES = 24
+const DEFAULT_NODE_LABEL_WORDS = 5
 
 function sanitizeAscii(input: string, keepNewlines: boolean = false): string {
   const normalized = (input || '').normalize('NFKD')
@@ -1161,8 +1215,8 @@ function sanitizeDiagramLabel(input: string): string {
     .replace(/["'`[\]{}()<>:,;]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  const words = cleaned.split(' ').filter(Boolean).slice(0, 3)
-  const clipped = words.join(' ').slice(0, 28).trim()
+  const words = cleaned.split(' ').filter(Boolean).slice(0, DEFAULT_NODE_LABEL_WORDS)
+  const clipped = words.join(' ').slice(0, 42).trim()
   return clipped || 'Node'
 }
 
@@ -1177,6 +1231,68 @@ function sanitizeAlias(input: string, index: number): string {
   if (!/^[a-zA-Z]/.test(alias)) alias = `n${alias}`
   alias = alias.slice(0, 24)
   return alias || `node${index + 1}`
+}
+
+const SECTION_LABEL_INTENTS: SectionLabelVisualIntent[] = [
+  'workplan_timeline',
+  'method_workflow',
+  'deliverable_map',
+  'evaluation_logic',
+  'problem_opportunity',
+  'aims_framework',
+  'impact_pathway',
+  'risk_governance',
+  'evidence_taxonomy',
+  'results_chart',
+  'section_specific'
+]
+
+function sanitizeVisualIntent(input: unknown): SectionLabelVisualIntent | undefined {
+  const raw = sanitizeAscii(String(input || '')).toLowerCase().trim().replace(/[\s-]+/g, '_')
+  return SECTION_LABEL_INTENTS.includes(raw as SectionLabelVisualIntent)
+    ? raw as SectionLabelVisualIntent
+    : undefined
+}
+
+function sanitizeWorkplanTask(input: any, index: number): DiagramWorkplanTask | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const idHint = sanitizeAlias(input.idHint || input.id || input.label || `task${index + 1}`, index)
+  const label = sanitizeDiagramLabel(input.label || input.title || idHint)
+  if (!label) return undefined
+  const startMonth = Number(input.startMonth)
+  const endMonth = Number(input.endMonth)
+  const dependsOn = Array.isArray(input.dependsOn)
+    ? input.dependsOn.slice(0, 5).map((item: unknown, idx: number) => sanitizeAlias(String(item || ''), idx)).filter(Boolean)
+    : undefined
+  return {
+    idHint,
+    label,
+    startMonth: Number.isFinite(startMonth) ? Math.max(1, Math.round(startMonth)) : undefined,
+    endMonth: Number.isFinite(endMonth) ? Math.max(1, Math.round(endMonth)) : undefined,
+    dependsOn,
+    milestone: typeof input.milestone === 'boolean' ? input.milestone : undefined,
+    group: input.group ? sanitizeDiagramLabel(input.group).slice(0, 30) : undefined
+  }
+}
+
+function sanitizeWorkplanSpec(input: any): DiagramStructuredSpec['workplanSpec'] | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const timeScale = input.timeScale === 'calendar_dates' ? 'calendar_dates' : 'relative_months'
+  const totalMonths = Number(input.totalMonths)
+  const tasks = Array.isArray(input.tasks)
+    ? input.tasks.slice(0, 18).map((task: unknown, index: number) => sanitizeWorkplanTask(task, index)).filter((task: DiagramWorkplanTask | undefined): task is DiagramWorkplanTask => !!task)
+    : undefined
+  const milestones = Array.isArray(input.milestones)
+    ? input.milestones.slice(0, 12).map((task: unknown, index: number) => sanitizeWorkplanTask(task, index)).filter((task: DiagramWorkplanTask | undefined): task is DiagramWorkplanTask => !!task)
+    : undefined
+
+  if (!tasks?.length && !milestones?.length && !Number.isFinite(totalMonths)) return undefined
+  return {
+    timeScale,
+    totalMonths: Number.isFinite(totalMonths) ? Math.max(1, Math.min(120, Math.round(totalMonths))) : undefined,
+    tasks,
+    milestones
+  }
 }
 
 function sanitizeDiagramSpec(spec?: DiagramStructuredSpec | null): DiagramStructuredSpec | undefined {
@@ -1226,13 +1342,16 @@ function sanitizeDiagramSpec(spec?: DiagramStructuredSpec | null): DiagramStruct
 
   return {
     layout,
+    visualIntent: sanitizeVisualIntent((spec as any).visualIntent),
+    composition: sanitizeAscii(String((spec as any).composition || '')).replace(/\s+/g, '_').slice(0, 48) || undefined,
     nodes: nodes.slice(0, DEFAULT_SPEC_NODES),
     edges,
     groups,
+    workplanSpec: sanitizeWorkplanSpec((spec as any).workplanSpec),
     constraints: {
       nodesMax: Math.min(MAX_SPEC_NODES, Math.max(1, Number((spec as any)?.constraints?.nodesMax || DEFAULT_SPEC_NODES))),
       edgesMax: Math.min(MAX_SPEC_EDGES, Math.max(1, Number((spec as any)?.constraints?.edgesMax || MAX_SPEC_EDGES))),
-      nodeLabelMaxWords: Math.min(6, Math.max(1, Number((spec as any)?.constraints?.nodeLabelMaxWords || 3))),
+      nodeLabelMaxWords: Math.min(6, Math.max(1, Number((spec as any)?.constraints?.nodeLabelMaxWords || DEFAULT_NODE_LABEL_WORDS))),
       noDuplicateNodeLabels: typeof (spec as any)?.constraints?.noDuplicateNodeLabels === 'boolean'
         ? (spec as any).constraints.noDuplicateNodeLabels
         : true
@@ -1243,7 +1362,147 @@ function sanitizeDiagramSpec(spec?: DiagramStructuredSpec | null): DiagramStruct
 
 function buildSpecPromptBlock(spec?: DiagramStructuredSpec): string {
   if (!spec) return 'StructuredSpec: none'
-  return `StructuredSpec:\n${JSON.stringify(spec, null, 2)}`
+  const nodeCount = spec.nodes?.length || 0
+  const edgeCount = spec.edges?.length || 0
+  let block = 'STRUCTURAL CONTRACT (MUST FOLLOW):\n'
+  block += 'The user approved the following diagram structure. You MUST include ALL nodes and edges below.\n'
+  if (nodeCount > 0) {
+    block += `Required nodes (${nodeCount}): ${(spec.nodes || []).map(n => `"${n.label}"`).join(', ')}\n`
+  }
+  if (edgeCount > 0) {
+    block += `Required edges (${edgeCount}): ${(spec.edges || []).map(e => `${e.fromHint} -> ${e.toHint}${e.label ? ` [${e.label}]` : ''}`).join(', ')}\n`
+  }
+  if (spec.layout) block += `Layout: ${spec.layout}\n`
+  if (spec.composition) block += `Composition: ${spec.composition}\n`
+  if (spec.groups?.length) block += `Groups: ${spec.groups.map(g => g.name).join(', ')}\n`
+  if (spec.workplanSpec) block += `Workplan: ${spec.workplanSpec.totalMonths} months, ${spec.workplanSpec.tasks?.length || 0} tasks\n`
+  block += '\nFull spec:\n' + JSON.stringify(spec, null, 2)
+  return block
+}
+
+function buildCompactSpecPromptBlock(spec?: DiagramStructuredSpec): string {
+  if (!spec) return 'StructuredSpec: none'
+  const compact = {
+    layout: spec.layout || 'LR',
+    visualIntent: spec.visualIntent,
+    composition: spec.composition,
+    nodes: (spec.nodes || []).slice(0, 10).map((node) => ({
+      id: node.idHint,
+      label: node.label,
+      group: node.group
+    })),
+    edges: (spec.edges || []).slice(0, 14).map((edge) => ({
+      from: edge.fromHint,
+      to: edge.toHint,
+      label: edge.label,
+      type: edge.type
+    }))
+  }
+  return `StructuredSpecCompact: ${JSON.stringify(compact)}`
+}
+
+function compactPlantUMLForRepair(code: string): string {
+  const cleaned = sanitizeAscii(code || '', true)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+  if (cleaned.length <= 1600) return cleaned
+  const start = cleaned.slice(0, 1100)
+  const end = cleaned.slice(-350)
+  return `${start}\n' ... truncated for repair prompt ...\n${end}`
+}
+
+function buildDeterministicPlantUMLFromSpec(
+  spec: DiagramStructuredSpec,
+  title?: string
+): string {
+  const nodes = (spec.nodes || []).slice(0, 12)
+  const seen = new Set<string>()
+  const aliasById = new Map<string, string>()
+  const aliases = nodes.map((node, index) => {
+    const base = sanitizeAlias(node.idHint || node.label || `node${index + 1}`, index)
+    let alias = base
+    let suffix = 2
+    while (seen.has(alias)) {
+      alias = `${base.slice(0, 20)}${suffix}`
+      suffix += 1
+    }
+    seen.add(alias)
+    aliasById.set(node.idHint, alias)
+    return alias
+  })
+
+  const nodeLines = nodes.map((node, index) => ({
+    alias: aliases[index],
+    label: sanitizeDiagramLabel(node.label || node.idHint || `Node ${index + 1}`),
+    group: node.group ? sanitizeDiagramLabel(node.group).slice(0, 30) : 'Flow'
+  }))
+
+  const groups = new Map<string, typeof nodeLines>()
+  for (const node of nodeLines) {
+    const groupName = node.group || 'Flow'
+    const bucket = groups.get(groupName) || []
+    bucket.push(node)
+    groups.set(groupName, bucket)
+  }
+
+  const colors = ['#EEF5FF', '#FFF2E8', '#F3F4F6']
+  const lines: string[] = [
+    '@startuml',
+    'skinparam backgroundColor #FFFFFF',
+    'skinparam shadowing false',
+    'skinparam dpi 180',
+    'skinparam Padding 6',
+    'skinparam roundcorner 12',
+    'skinparam defaultFontName "Helvetica"',
+    'skinparam defaultFontSize 13',
+    'skinparam ArrowColor #1F77B4',
+    'skinparam ArrowThickness 1',
+    'skinparam LineColor #3A3A3A',
+    'skinparam BoxPadding 5',
+    'skinparam NodeSpacing 16',
+    'skinparam RankSpacing 20',
+    'skinparam RectangleBackgroundColor #FBFBFC',
+    'skinparam RectangleBorderColor #5A5A5A',
+    'skinparam PackageBackgroundColor #F3F4F6',
+    'skinparam PackageBorderColor #7A7A7A',
+    '',
+    spec.layout === 'TD' ? 'top to bottom direction' : 'left to right direction',
+    ''
+  ]
+
+  if (title) {
+    lines.push(`title ${sanitizeDiagramLabel(title)}`, '')
+  }
+
+  Array.from(groups.entries()).forEach(([groupName, groupNodes], index) => {
+    const color = colors[index % colors.length]
+    lines.push(`package "${sanitizeDiagramLabel(groupName)}" ${color} {`)
+    for (const node of groupNodes) {
+      lines.push(`  rectangle "${node.label}" as ${node.alias}`)
+    }
+    lines.push('}', '')
+  })
+
+  const explicitEdges = (spec.edges || [])
+    .slice(0, 18)
+    .map((edge) => {
+      const from = aliasById.get(edge.fromHint)
+      const to = aliasById.get(edge.toHint)
+      if (!from || !to || from === to) return null
+      const arrow = edge.type === 'dashed' || edge.type === 'async' ? '..>' : '-->'
+      const label = edge.label ? ` : ${sanitizeDiagramLabel(edge.label).slice(0, 18)}` : ''
+      return `${from} ${arrow} ${to}${label}`
+    })
+    .filter((line): line is string => Boolean(line))
+
+  const edges = explicitEdges.length > 0
+    ? explicitEdges
+    : aliases.slice(0, -1).map((alias, index) => `${alias} --> ${aliases[index + 1]}`)
+
+  lines.push(...edges, '@enduml')
+  return lines.join('\n')
 }
 
 /**
@@ -1297,31 +1556,91 @@ function buildSketchPromptFromIllustrationSpecV2(
   ].join(' ')
 }
 
-function buildFallbackSpecFromDescription(description: string, title?: string): DiagramStructuredSpec {
+function extractFallbackSpecSource(description: string): string {
+  const selectedMatch = description.match(/Selected draft content only:\s*([\s\S]*?)(?:\s+FIGURE REQUEST:|$)/i)
+  if (selectedMatch?.[1]?.trim()) return selectedMatch[1]
+
+  const draftMatch = description.match(/DRAFT CONTEXT[\s\S]*?:\s*([\s\S]*?)(?:\s+FIGURE REQUEST:|$)/i)
+  if (draftMatch?.[1]?.trim()) return draftMatch[1]
+
+  return description
+}
+
+export function buildFallbackSpecFromDescription(description: string, title?: string): DiagramStructuredSpec {
   const baseNodes = [
-    { idHint: 'inputStage', label: 'Input Stage', group: 'Input' },
-    { idHint: 'processingStage', label: 'Processing Stage', group: 'Processing' },
-    { idHint: 'validationStage', label: 'Validation Stage', group: 'Processing' },
-    { idHint: 'outputStage', label: 'Output Stage', group: 'Output' }
+    { idHint: 'evidenceNeed', label: 'Evidence Need', group: 'Need' },
+    { idHint: 'plannedActivities', label: 'Planned Activities', group: 'Work' },
+    { idHint: 'reviewGate', label: 'Review Gate', group: 'Evaluation' },
+    { idHint: 'expectedOutputs', label: 'Expected Outputs', group: 'Outputs' }
   ]
+  const source = sanitizeAscii(extractFallbackSpecSource(description || ''), true)
+    .replace(/FIGURE REQUEST:/gi, ' ')
+    .replace(/DRAFT CONTEXT/gi, ' ')
+    .replace(/Selected draft content only:/gi, ' ')
+  const actionPhrases = (source.match(/\b(?:assess|identify|collect|document|validate|train|deploy|monitor|evaluate|review|analyze|synthesize|map|survey|mobilize|implement|adapt|test|ingest|verify|publish|disseminate|coordinate)\b[^.\n;:]{0,70}/gi) || [])
+    .map((phrase) => sanitizeDiagramLabel(phrase))
+    .filter((phrase) => !/^Node$/i.test(phrase))
+  const uniquePhrases = Array.from(new Set(actionPhrases.map((phrase) => phrase.toLowerCase())))
+    .map((key) => actionPhrases.find((phrase) => phrase.toLowerCase() === key)!)
+    .slice(0, 6)
+  const sentencePhrases = source
+    .split(/[\n.;]+/)
+    .map((sentence) => sanitizeDiagramLabel(sentence))
+    .filter((label) => label.split(/\s+/).length >= 2)
+    .filter((label) => !/^(create|generate|figure|diagram|flowchart|draft context|selected draft|user request)\b/i.test(label))
+    .filter((label) => !/\b(input stage|processing stage|validation stage|output stage|node|step one|step two)\b/i.test(label))
+  const uniqueSentencePhrases = Array.from(new Set(sentencePhrases.map((phrase) => phrase.toLowerCase())))
+    .map((key) => sentencePhrases.find((phrase) => phrase.toLowerCase() === key)!)
+    .slice(0, 6)
+  const sourceGroundedPhrases = uniquePhrases.length >= 3
+    ? uniquePhrases
+    : uniqueSentencePhrases.length >= 3
+      ? uniqueSentencePhrases
+      : []
+
+  if (sourceGroundedPhrases.length >= 3) {
+    const nodes = sourceGroundedPhrases.map((label, index) => ({
+      idHint: `step${index + 1}`,
+      label,
+      group: 'Flow'
+    }))
+    return sanitizeDiagramSpec({
+      layout: 'TD',
+      visualIntent: 'method_workflow',
+      composition: 'short_procedure',
+      nodes,
+      edges: nodes.slice(1).map((node, index) => ({
+        fromHint: nodes[index].idHint,
+        toHint: node.idHint,
+        type: 'solid' as const
+      })),
+      groups: [{ name: 'Selected Flow', nodeIds: nodes.map((node) => node.idHint) }],
+      constraints: { nodesMax: 15, edgesMax: 24, nodeLabelMaxWords: DEFAULT_NODE_LABEL_WORDS, noDuplicateNodeLabels: true }
+    }) as DiagramStructuredSpec
+  }
+
   const titleNode = title
     ? { idHint: 'context', label: sanitizeDiagramLabel(title), group: 'Input' }
     : null
 
   return sanitizeDiagramSpec({
-    layout: 'LR',
+    layout: 'TD',
+    visualIntent: 'method_workflow',
+    composition: 'short_procedure',
     nodes: titleNode ? [titleNode, ...baseNodes] : baseNodes,
     edges: [
-      ...(titleNode ? [{ fromHint: 'context', toHint: 'inputStage', label: 'context', type: 'solid' as const }] : []),
-      { fromHint: 'inputStage', toHint: 'processingStage', label: 'feeds', type: 'solid' },
-      { fromHint: 'processingStage', toHint: 'validationStage', label: 'checks', type: 'solid' },
-      { fromHint: 'validationStage', toHint: 'outputStage', label: 'outputs', type: 'solid' }
+      ...(titleNode ? [{ fromHint: 'context', toHint: 'evidenceNeed', label: 'context', type: 'solid' as const }] : []),
+      { fromHint: 'evidenceNeed', toHint: 'plannedActivities', label: 'drives', type: 'solid' },
+      { fromHint: 'plannedActivities', toHint: 'reviewGate', label: 'checks', type: 'solid' },
+      { fromHint: 'reviewGate', toHint: 'expectedOutputs', label: 'outputs', type: 'solid' }
     ],
     groups: [
-      { name: 'Input', nodeIds: titleNode ? ['context', 'inputStage'] : ['inputStage'] },
-      { name: 'Processing', nodeIds: ['processingStage', 'validationStage'] },
-      { name: 'Output', nodeIds: ['outputStage'] }
-    ]
+      { name: 'Need', nodeIds: titleNode ? ['context', 'evidenceNeed'] : ['evidenceNeed'] },
+      { name: 'Work', nodeIds: ['plannedActivities'] },
+      { name: 'Evaluation', nodeIds: ['reviewGate'] },
+      { name: 'Outputs', nodeIds: ['expectedOutputs'] }
+    ],
+    constraints: { nodesMax: 15, edgesMax: 24, nodeLabelMaxWords: DEFAULT_NODE_LABEL_WORDS, noDuplicateNodeLabels: true }
   }) as DiagramStructuredSpec
 }
 
@@ -1331,7 +1650,7 @@ function normalizeSectionType(value?: string): SectionType {
   if (raw.includes('intro')) return 'introduction'
   if (/\b(objective|objectives|aim|aims|specific_aims|goal|goals|need|rationale)\b/.test(raw)) return 'introduction'
   if (raw.includes('literature') || raw.includes('related work') || raw.includes('background')) return 'literature_review'
-  if (raw.includes('method') || /\b(workplan|work_plan|work package|work_package|timeline|milestone|milestones|project plan|activity plan|implementation|approach)\b/.test(raw)) return 'methodology'
+  if (raw.includes('method') || /\b(workplan|work_plan|work package|work_package|timeline|milestone|milestones|project plan|project duration|activity plan|implementation|approach|deliverable|deliverables|schedule)\b/.test(raw)) return 'methodology'
   if (raw.includes('result') || raw.includes('evaluation') || raw.includes('experiment') || /\b(outcome|outcomes|deliverable|deliverables|success criteria|kpi|indicator|indicators)\b/.test(raw)) return 'results'
   if (raw.includes('discussion') || /\b(impact|significance|translation|benefit|benefits|logic model|sustainability)\b/.test(raw)) return 'discussion'
   if (raw.includes('conclusion') || raw.includes('future work')) return 'conclusion'
@@ -1741,9 +2060,174 @@ function normalizeSuggestionSectionText(content: string): string {
     .trim()
 }
 
-function scoreSuggestionSection(sectionKey: string, content: string): number {
-  const rawKey = sanitizeAscii(sectionKey || '').toLowerCase()
-  const normalizedSection = normalizeSectionType(sectionKey)
+export function inferVisualIntentFromSectionLabel(
+  sectionKey: string,
+  label?: string,
+  content?: string
+): SectionLabelVisualIntent {
+  const labelText = sanitizeAscii(label || '').toLowerCase()
+  const keyText = sanitizeAscii(sectionKey || '').toLowerCase()
+  const contentText = sanitizeAscii(content || '').toLowerCase().slice(0, 900)
+  const primary = `${labelText} ${keyText}`.trim()
+  const source = `${primary} ${contentText}`
+
+  if (/\b(deliverable|deliverables|output|outputs)\b/.test(primary)) return 'deliverable_map'
+  if (/\b(timeline|work\s*plan|workplan|schedule|project duration|duration|gantt|milestone|milestones|quarter|month\s*\d+|phase)\b/.test(primary)) return 'workplan_timeline'
+  if (/\b(methodology|method|approach|implementation plan|implementation|work package|work packages|workpackage|workflow|pipeline|activity plan|execution plan)\b/.test(primary)) return 'method_workflow'
+  if (/\b(evaluation|outcome|outcomes|kpi|kpis|indicator|indicators|monitoring|success criteria|validation|assessment)\b/.test(primary)) return 'evaluation_logic'
+  if (/\b(need|problem|rationale|significance|gap|background|context|challenge)\b/.test(primary)) return 'problem_opportunity'
+  if (/\b(objective|objectives|aim|aims|specific aims|goal|goals)\b/.test(primary)) return 'aims_framework'
+  if (/\b(impact|sustainability|beneficiary|beneficiaries|stakeholder|stakeholders|adoption|translation|scale|scalability)\b/.test(primary)) return 'impact_pathway'
+  if (/\b(risk|risks|governance|ethics|management|monitoring committee|responsibility|compliance|mitigation)\b/.test(primary)) return 'risk_governance'
+  if (/\b(literature|review|related work|state of the art|taxonomy|evidence|prior work)\b/.test(primary)) return 'evidence_taxonomy'
+  if (/\b(result|results|budget|cost|baseline|target|metric|metrics|table|quantitative)\b/.test(primary)) return 'results_chart'
+
+  if (/\b(timeline|workplan|milestone|deliverable|methodology|evaluation|impact|risk|objective|problem|literature|result)\b/.test(source)) {
+    return inferVisualIntentFromSectionLabel(sectionKey, label || keyText)
+  }
+
+  return 'section_specific'
+}
+
+function sectionLabelIntentReason(intent: SectionLabelVisualIntent): string {
+  switch (intent) {
+    case 'workplan_timeline': return 'Label indicates time, milestones, duration, or workplan sequencing.'
+    case 'method_workflow': return 'Label indicates methodology, implementation, work packages, or execution flow.'
+    case 'deliverable_map': return 'Label indicates deliverables, outputs, or milestone deliverables.'
+    case 'evaluation_logic': return 'Label indicates evaluation, outcomes, KPIs, indicators, or validation.'
+    case 'problem_opportunity': return 'Label indicates need, problem, rationale, significance, or gap framing.'
+    case 'aims_framework': return 'Label indicates objectives, aims, goals, or specific aims.'
+    case 'impact_pathway': return 'Label indicates impact, sustainability, beneficiaries, stakeholders, or adoption.'
+    case 'risk_governance': return 'Label indicates risk, governance, ethics, management, or mitigation.'
+    case 'evidence_taxonomy': return 'Label indicates literature, background, prior work, or evidence taxonomy.'
+    case 'results_chart': return 'Label indicates results, numeric targets, budgets, metrics, or quantitative evidence.'
+    default: return 'Label does not map to a specialized visual intent; use content-specific judgment.'
+  }
+}
+
+export function buildSectionLabelEvidenceForSources(
+  sourceSections: FigureSuggestionSourceSection[] = [],
+  sections: Record<string, string> = {}
+): SectionLabelEvidence[] {
+  const sources: FigureSuggestionSourceSection[] = sourceSections.length > 0
+    ? sourceSections
+    : Object.keys(sections).map((sectionKey): FigureSuggestionSourceSection => ({ sectionKey }))
+
+  return sources
+    .filter((section) => !!String(section.sectionKey || '').trim())
+    .map((section) => {
+      const content = sections[section.sectionKey] || ''
+      const interpretedIntent = inferVisualIntentFromSectionLabel(section.sectionKey, section.label, content)
+      return {
+        sectionKey: section.sectionKey,
+        label: section.label,
+        interpretedIntent,
+        reason: sectionLabelIntentReason(interpretedIntent)
+      }
+    })
+}
+
+export function summarizeSectionLabelCombinations(evidence: SectionLabelEvidence[] = []): string[] {
+  const intents = new Set(evidence.map((entry) => entry.interpretedIntent).filter(Boolean))
+  const labels = evidence.map((entry) => `${entry.sectionKey}${entry.label ? ` (${entry.label})` : ''}`).join(', ')
+  const summaries: string[] = []
+
+  if (intents.has('method_workflow') && intents.has('deliverable_map') && intents.has('workplan_timeline')) {
+    summaries.push(`Methodology + Deliverables + Timeline labels detected across ${labels}; prefer a Gantt/workplan figure with phases, deliverables, milestones, dependencies, and review gates.`)
+  }
+  if ((intents.has('problem_opportunity') || intents.has('aims_framework')) && intents.has('method_workflow')) {
+    summaries.push(`Need/Objectives + Methodology labels detected across ${labels}; prefer a problem-to-solution roadmap or aim-to-work-package framework.`)
+  }
+  if (intents.has('method_workflow') && intents.has('evaluation_logic')) {
+    summaries.push(`Methodology + Evaluation labels detected across ${labels}; prefer an activity-to-indicator pathway linking work packages to outputs and measurement indicators.`)
+  }
+  if (intents.has('impact_pathway')) {
+    const impactLabels = evidence
+      .filter((entry) => entry.interpretedIntent === 'impact_pathway')
+      .map((entry) => entry.label || entry.sectionKey)
+      .join(', ')
+    if (/\b(impact|sustainability|stakeholder|beneficiar|adoption|translation)\b/i.test(impactLabels)) {
+      summaries.push(`Impact/Sustainability/Stakeholder labels detected (${impactLabels}); prefer an adoption or impact pathway over a generic flowchart.`)
+    }
+  }
+
+  return summaries
+}
+
+function buildSectionLabelPromptBlock(
+  sourceSections: FigureSuggestionSourceSection[] = [],
+  sections: Record<string, string> = {}
+): string {
+  const evidence = buildSectionLabelEvidenceForSources(sourceSections, sections)
+  if (evidence.length === 0) return ''
+
+  const rows = evidence.map((entry) => (
+    `- sectionKey="${entry.sectionKey}"; llmLabel="${entry.label || entry.sectionKey}"; interpretedIntent=${entry.interpretedIntent}; routingReason="${entry.reason}"`
+  ))
+  const combinations = summarizeSectionLabelCombinations(evidence)
+
+  return [
+    'Section Label Interpretation (use before choosing figure types):',
+    ...rows,
+    combinations.length > 0 ? 'Combined Label Signals:' : '',
+    ...combinations.map((item) => `- ${item}`),
+    'Planner rule: every suggestion must include sectionLabelEvidence with the exact llmLabel values that drove the visual choice.'
+  ].filter(Boolean).join('\n')
+}
+
+function sanitizeSectionLabelEvidence(
+  input: unknown,
+  request: FigureSuggestionRequest,
+  relevantSection?: string
+): SectionLabelEvidence[] {
+  const sourceEvidence = buildSectionLabelEvidenceForSources(request.sourceSections || [], request.sections || {})
+  const labelByKey = new Map(sourceEvidence.map((entry) => [normalizeScopeSectionKey(entry.sectionKey), entry]))
+  const relevantKey = normalizeScopeSectionKey(relevantSection)
+  const requested = Array.isArray(input) ? input : []
+  const sanitized: SectionLabelEvidence[] = requested
+    .slice(0, 8)
+    .flatMap((entry: any): SectionLabelEvidence[] => {
+      if (!entry || typeof entry !== 'object') return []
+      const sectionKey = sanitizeAscii(String(entry.sectionKey || '')).trim()
+      if (!sectionKey) return []
+      const matched = labelByKey.get(normalizeScopeSectionKey(sectionKey))
+      const label = matched?.label || sanitizeAscii(String(entry.label || '')).slice(0, 120) || undefined
+      const interpretedIntent = sanitizeVisualIntent(entry.interpretedIntent) || matched?.interpretedIntent || inferVisualIntentFromSectionLabel(sectionKey, label)
+      return [{
+        sectionKey: matched?.sectionKey || sectionKey,
+        label,
+        interpretedIntent,
+        reason: matched?.reason || sanitizeAscii(String(entry.reason || '')).slice(0, 180) || sectionLabelIntentReason(interpretedIntent)
+      }]
+    })
+
+  if (sanitized.length > 0) return sanitized
+  if (relevantKey) {
+    const matched = labelByKey.get(relevantKey)
+    if (matched) return [matched]
+  }
+  return sourceEvidence.slice(0, Math.min(4, sourceEvidence.length))
+}
+
+function ensureSectionLabelEvidence(
+  suggestion: FigureSuggestion,
+  request: FigureSuggestionRequest,
+  relevantSection?: string
+): FigureSuggestion {
+  return {
+    ...suggestion,
+    sectionLabelEvidence: sanitizeSectionLabelEvidence(
+      (suggestion as any).sectionLabelEvidence,
+      request,
+      relevantSection || suggestion.relevantSection
+    )
+  }
+}
+
+function scoreSuggestionSection(sectionKey: string, content: string, label?: string): number {
+  const rawKey = sanitizeAscii(`${sectionKey || ''} ${label || ''}`).toLowerCase()
+  const normalizedSection = normalizeSectionType(rawKey)
+  const labelIntent = inferVisualIntentFromSectionLabel(sectionKey, label, content)
 
   let score = 45
   if (normalizedSection === 'selected_content') score = 100
@@ -1772,6 +2256,12 @@ function scoreSuggestionSection(sectionKey: string, content: string): number {
   if (/\b(budget|resource|personnel|team|ethic|governance|management|compliance)\b/.test(rawKey)) {
     score = Math.min(score, 28)
   }
+  if (labelIntent === 'workplan_timeline' || labelIntent === 'method_workflow' || labelIntent === 'deliverable_map' || labelIntent === 'evaluation_logic') {
+    score = Math.max(score, 92)
+  }
+  if (labelIntent === 'impact_pathway' || labelIntent === 'problem_opportunity' || labelIntent === 'aims_framework') {
+    score = Math.max(score, 80)
+  }
   if (/\b\d+(?:\.\d+)?\b/.test(content)) {
     score += 4
   }
@@ -1779,36 +2269,50 @@ function scoreSuggestionSection(sectionKey: string, content: string): number {
   return score
 }
 
-function buildSuggestionSectionsContext(sections?: Record<string, string>): string {
+function buildSuggestionSectionsContext(
+  sections?: Record<string, string>,
+  sourceSections: FigureSuggestionSourceSection[] = []
+): string {
   if (!sections) return ''
+  const labelLookup = new Map<string, string | undefined>()
+  for (const section of sourceSections) {
+    labelLookup.set(normalizeScopeSectionKey(section.sectionKey), section.label)
+  }
 
-  const rankedSections = Object.entries(sections)
-    .map(([sectionKey, content], index) => {
+  type SuggestionSectionContextEntry = {
+    sectionKey: string
+    originalIndex: number
+    score: number
+    sectionLimit: number
+    sectionLabel: string | undefined
+    visualIntent: SectionLabelVisualIntent
+    content: string
+  }
+
+  const rankedSections: SuggestionSectionContextEntry[] = Object.entries(sections)
+    .flatMap(([sectionKey, content], index): SuggestionSectionContextEntry[] => {
       const normalizedContent = normalizeSuggestionSectionText(content)
-      if (!normalizedContent) return null
+      if (!normalizedContent) return []
 
-      const score = scoreSuggestionSection(sectionKey, normalizedContent)
+      const sectionLabel = labelLookup.get(normalizeScopeSectionKey(sectionKey))
+      const visualIntent = inferVisualIntentFromSectionLabel(sectionKey, sectionLabel, normalizedContent)
+      const score = scoreSuggestionSection(sectionKey, normalizedContent, sectionLabel)
       const sectionLimit = score >= 92
         ? 1400
         : score >= 78
           ? 1100
           : 800
 
-      return {
+      return [{
         sectionKey,
         originalIndex: index,
         score,
         sectionLimit,
+        sectionLabel,
+        visualIntent,
         content: normalizedContent
-      }
+      }]
     })
-    .filter((section): section is {
-      sectionKey: string
-      originalIndex: number
-      score: number
-      sectionLimit: number
-      content: string
-    } => Boolean(section))
     .sort((left, right) => {
       if (right.score !== left.score) return right.score - left.score
       return left.originalIndex - right.originalIndex
@@ -1849,7 +2353,7 @@ function buildSuggestionSectionsContext(sections?: Record<string, string>): stri
   let sectionBlock = 'Sections:\n'
 
   for (const section of orderedSections) {
-    sectionBlock += `\n--- ${section.sectionKey} ---\n${section.content}\n`
+    sectionBlock += `\n--- sectionKey: ${section.sectionKey}; llmLabel: ${section.sectionLabel || section.sectionKey}; visualIntent: ${section.visualIntent} ---\n${section.content}\n`
   }
 
   const omittedCount = rankedSections.length - orderedSections.length
@@ -1957,7 +2461,7 @@ function estimateGroundingOverlap(text: string, lexicon: Set<string>): number {
   return overlap
 }
 
-type ValidationIssueCode = 'SECTION_FIT' | 'GROUNDING' | 'SPEC_COMPLETENESS' | 'COMPLEXITY' | 'DATA_GATE'
+type ValidationIssueCode = 'SECTION_FIT' | 'GROUNDING' | 'SPEC_COMPLETENESS' | 'COMPLEXITY' | 'DATA_GATE' | 'GRANT_GENRE_GATE'
 
 interface SuggestionValidationIssue {
   code: ValidationIssueCode
@@ -1970,6 +2474,7 @@ function validateSuggestion(
     section: SectionType
     groundingLexicon: Set<string>
     quantitativeDataAvailable: boolean
+    paperGenre?: string
   }
 ): SuggestionValidationIssue[] {
   const issues: SuggestionValidationIssue[] = []
@@ -1999,6 +2504,13 @@ function validateSuggestion(
     const genre = sanitizeIllustrationFigureGenre((suggestion.illustrationSpecV2 as any)?.figureGenre || suggestion.figureGenre)
     if (genre && genre !== 'METHOD_BLOCK') {
       issues.push({ code: 'SECTION_FIT', reason: 'Methodology illustrations must use METHOD_BLOCK genre.' })
+    }
+  }
+
+  // VR-1c Grant genre gate
+  if (context.paperGenre === 'grant_proposal' && category === 'DIAGRAM') {
+    if (/\b(class|component|usecase|use.?case|state|mindmap)\b/.test(type)) {
+      issues.push({ code: 'GRANT_GENRE_GATE', reason: `Diagram type "${type}" is not appropriate for grant proposals. Use flowchart, activity, gantt, timeline, or architecture instead.` })
     }
   }
 
@@ -2049,10 +2561,8 @@ function validateSuggestion(
   // VR-4 Complexity
   const nodeCount = suggestion.diagramSpec?.nodes?.length || 0
   const edgeCount = suggestion.diagramSpec?.edges?.length || 0
-  if (nodeCount > 15 || edgeCount > 18) {
+  if (nodeCount > MAX_SPEC_NODES || edgeCount > MAX_SPEC_EDGES) {
     issues.push({ code: 'COMPLEXITY', reason: `diagramSpec exceeds hard limits (nodes=${nodeCount}, edges=${edgeCount}).` })
-  } else if ((nodeCount > 12 || edgeCount > 18) && !suggestion.diagramSpec?.splitSuggestion) {
-    issues.push({ code: 'COMPLEXITY', reason: 'diagramSpec exceeds compact budget without splitSuggestion.' })
   }
   if (category === 'ILLUSTRATED_FIGURE' && suggestion.illustrationSpec) {
     const panelCount = suggestion.illustrationSpec.panelCount || suggestion.illustrationSpec.panels?.length || 0
@@ -2070,9 +2580,9 @@ function validateSuggestion(
     if (duplicate) {
       issues.push({ code: 'COMPLEXITY', reason: 'diagramSpec contains duplicate node labels; labels must be unique.' })
     }
-    const overWord = (suggestion.diagramSpec.nodes || []).find(node => (sanitizeAscii(node.label || '').trim().split(/\s+/).filter(Boolean).length > 3))
+    const overWord = (suggestion.diagramSpec.nodes || []).find(node => (sanitizeAscii(node.label || '').trim().split(/\s+/).filter(Boolean).length > DEFAULT_NODE_LABEL_WORDS))
     if (overWord) {
-      issues.push({ code: 'COMPLEXITY', reason: 'diagramSpec node labels must be <= 3 words.' })
+      issues.push({ code: 'COMPLEXITY', reason: `diagramSpec node labels must be <= ${DEFAULT_NODE_LABEL_WORDS} words.` })
     }
   }
   if (category === 'ILLUSTRATED_FIGURE' && suggestion.illustrationSpecV2) {
@@ -2281,6 +2791,110 @@ function buildSectionAwareFallbackSuggestion(
   })
 }
 
+function inferTotalMonthsFromSections(sections: Record<string, string> = {}): number {
+  const source = sanitizeAscii(Object.values(sections).join('\n')).toLowerCase()
+  const monthMatch = source.match(/\b(?:month|months|m)\s*[-–]?\s*(\d{1,3})\b/g)
+  const values = (monthMatch || [])
+    .map((item) => Number((item.match(/\d{1,3}/) || [])[0]))
+    .filter((value) => Number.isFinite(value) && value > 0)
+  const durationMatch = source.match(/\b(\d{1,3})\s*(?:month|months)\b/)
+  if (durationMatch) values.push(Number(durationMatch[1]))
+  const yearMatch = source.match(/\b(\d)\s*(?:year|years)\b/)
+  if (yearMatch) values.push(Number(yearMatch[1]) * 12)
+  return values.length > 0 ? Math.min(120, Math.max(...values)) : 36
+}
+
+export function buildWorkplanCombinationSuggestion(
+  request: FigureSuggestionRequest,
+  evidence: SectionLabelEvidence[]
+): FigureSuggestion | null {
+  const intents = new Set(evidence.map((entry) => entry.interpretedIntent))
+  if (!(intents.has('method_workflow') && intents.has('deliverable_map') && intents.has('workplan_timeline'))) {
+    return null
+  }
+
+  const totalMonths = inferTotalMonthsFromSections(request.sections || {})
+  const timelineSection = evidence.find((entry) => entry.interpretedIntent === 'workplan_timeline')
+  const methodSection = evidence.find((entry) => entry.interpretedIntent === 'method_workflow')
+  const deliverableSection = evidence.find((entry) => entry.interpretedIntent === 'deliverable_map')
+  const relevantSection = timelineSection?.sectionKey || methodSection?.sectionKey || deliverableSection?.sectionKey || 'methodology'
+  const taskOneEnd = Math.max(3, Math.round(totalMonths / 3))
+  const taskTwoEnd = Math.max(taskOneEnd + 1, Math.round((totalMonths * 2) / 3))
+  const diagramSpec: DiagramStructuredSpec = {
+    layout: 'LR',
+    visualIntent: 'workplan_timeline',
+    composition: 'gantt',
+    nodes: [
+      { idHint: 'phase1', label: 'Mobilization Setup', group: 'Phase 1' },
+      { idHint: 'phase2', label: 'Implementation Delivery', group: 'Phase 2' },
+      { idHint: 'phase3', label: 'Evaluation Scale Up', group: 'Phase 3' },
+      { idHint: 'deliverables', label: 'Deliverable Releases', group: 'Outputs' },
+      { idHint: 'reviewGates', label: 'Review Gates', group: 'Governance' }
+    ],
+    edges: [
+      { fromHint: 'phase1', toHint: 'phase2', label: 'enables', type: 'solid' },
+      { fromHint: 'phase2', toHint: 'phase3', label: 'feeds', type: 'solid' },
+      { fromHint: 'phase2', toHint: 'deliverables', label: 'produces', type: 'solid' },
+      { fromHint: 'reviewGates', toHint: 'phase3', label: 'checks', type: 'dashed' }
+    ],
+    groups: [
+      { name: 'Phase 1', nodeIds: ['phase1'] },
+      { name: 'Phase 2', nodeIds: ['phase2'] },
+      { name: 'Phase 3', nodeIds: ['phase3'] },
+      { name: 'Outputs', nodeIds: ['deliverables'] },
+      { name: 'Governance', nodeIds: ['reviewGates'] }
+    ],
+    workplanSpec: {
+      timeScale: 'relative_months',
+      totalMonths,
+      tasks: [
+        { idHint: 'phase1', label: 'Mobilization Setup', startMonth: 1, endMonth: taskOneEnd, group: 'Phase 1' },
+        { idHint: 'phase2', label: 'Implementation Delivery', startMonth: Math.max(1, taskOneEnd - 1), endMonth: taskTwoEnd, dependsOn: ['phase1'], group: 'Phase 2' },
+        { idHint: 'phase3', label: 'Evaluation Scale Up', startMonth: Math.max(1, taskTwoEnd - 1), endMonth: totalMonths, dependsOn: ['phase2'], group: 'Phase 3' }
+      ],
+      milestones: [
+        { idHint: 'gate1', label: 'First Review Gate', startMonth: taskOneEnd, milestone: true, group: 'Governance' },
+        { idHint: 'gate2', label: 'Deliverables Validated', startMonth: taskTwoEnd, milestone: true, group: 'Outputs' },
+        { idHint: 'gate3', label: 'Final Impact Review', startMonth: totalMonths, milestone: true, group: 'Evaluation' }
+      ]
+    },
+    constraints: {
+      nodesMax: MAX_SPEC_NODES,
+      edgesMax: MAX_SPEC_EDGES,
+      nodeLabelMaxWords: DEFAULT_NODE_LABEL_WORDS,
+      noDuplicateNodeLabels: true
+    }
+  }
+
+  const suggestion: FigureSuggestion = {
+    title: 'Workplan Gantt and Deliverable Milestones',
+    description: 'Cross-section workplan figure synthesized from the methodology, deliverables, and timeline labels. It should show project phases on a relative month scale, explicit deliverable milestones, dependencies between implementation and evaluation, and review gates for funder-facing feasibility.',
+    category: 'DIAGRAM',
+    suggestedType: 'gantt',
+    rendererPreference: 'mermaid',
+    relevantSection,
+    sourceSections: request.sourceSections,
+    sectionLabelEvidence: evidence.filter((entry) => (
+      entry.interpretedIntent === 'method_workflow' ||
+      entry.interpretedIntent === 'deliverable_map' ||
+      entry.interpretedIntent === 'workplan_timeline'
+    )),
+    figureRole: 'EXPLAIN_METHOD',
+    sectionFitJustification: 'The selected section labels jointly indicate methodology, deliverables, and timeline, so a Gantt/workplan is the most section-fit synthesis.',
+    expectedByReviewers: true,
+    dataNeeded: 'Phase durations by project month, deliverable due months, dependency links, and review gate timing from the methodology, deliverables, and timeline sections.',
+    whyThisFigure: 'It turns separate narrative sections into a funder-readable execution plan with schedule, outputs, and dependencies.',
+    importance: 'required',
+    diagramSpec,
+    renderSpec: {
+      kind: 'diagram',
+      diagramSpec
+    }
+  }
+
+  return suggestion
+}
+
 function cleanPlantUMLResponse(raw: string): string {
   let cleaned = raw.trim()
   const pumlBlockMatch = cleaned.match(/```(?:plantuml|puml)?\s*\n?([\s\S]*?)```/i)
@@ -2309,9 +2923,9 @@ type CanonicalMermaidTemplateType =
   | 'gantt'
   | 'timeline'
 
-type MermaidFlowchartVariant = 'pipeline' | 'topology'
+type MermaidFlowchartVariant = 'process' | 'topology'
 
-function normalizeMermaidTemplateType(
+export function normalizeMermaidTemplateType(
   input?: string,
   description?: string
 ): {
@@ -2328,7 +2942,7 @@ function normalizeMermaidTemplateType(
     return {
       inputType: 'unspecified',
       templateType: 'flowchart',
-      flowchartVariant: topologyLike ? 'topology' : 'pipeline',
+      flowchartVariant: topologyLike ? 'topology' : 'process',
       compatibilityNote: 'No diagram type provided; defaulted to flowchart fallback template.'
     }
   }
@@ -2345,7 +2959,7 @@ function normalizeMermaidTemplateType(
     return {
       inputType: raw,
       templateType: direct[raw],
-      flowchartVariant: direct[raw] === 'flowchart' ? (topologyLike ? 'topology' : 'pipeline') : undefined
+      flowchartVariant: direct[raw] === 'flowchart' ? (topologyLike ? 'topology' : 'process') : undefined
     }
   }
 
@@ -2367,7 +2981,7 @@ function normalizeMermaidTemplateType(
       inputType: raw,
       templateType: mapped,
       flowchartVariant: mapped === 'flowchart'
-        ? ((raw === 'topology' || topologyLike) ? 'topology' : 'pipeline')
+        ? ((raw === 'topology' || topologyLike) ? 'topology' : 'process')
         : undefined,
       compatibilityNote: `Mapped legacy diagramType "${raw}" to Mermaid fallback template "${mapped}".`
     }
@@ -2376,7 +2990,7 @@ function normalizeMermaidTemplateType(
   return {
     inputType: raw,
     templateType: 'flowchart',
-    flowchartVariant: topologyLike ? 'topology' : 'pipeline',
+    flowchartVariant: topologyLike ? 'topology' : 'process',
     compatibilityNote: `Unknown diagramType "${raw}" defaulted to Mermaid flowchart fallback template.`
   }
 }
@@ -2389,7 +3003,7 @@ type CanonicalPlantUMLTemplateType =
   | 'sequence'
   | 'class'
 
-function normalizePlantUMLTemplateType(input?: string): {
+export function normalizePlantUMLTemplateType(input?: string): {
   inputType: string
   templateType: CanonicalPlantUMLTemplateType
   compatibilityNote?: string
@@ -2480,6 +3094,65 @@ function mermaidMatchesTemplateType(code: string, templateType: CanonicalMermaid
 /**
  * Validate and repair a Chart.js configuration from LLM output
  */
+function deepEnsureObject(target: any, key: string): any {
+  if (!target[key] || typeof target[key] !== 'object' || Array.isArray(target[key])) {
+    target[key] = {}
+  }
+  return target[key]
+}
+
+function ensureScaleTitle(scale: any, text: string): void {
+  const title = deepEnsureObject(scale, 'title')
+  title.display = true
+  title.text = typeof title.text === 'string' && title.text.trim() ? title.text : text
+  title.font = {
+    ...(title.font || {}),
+    size: Number(title.font?.size) || 13
+  }
+}
+
+function ensureCartesianChartScales(config: any): void {
+  const cartesianTypes = ['bar', 'horizontalBar', 'line', 'scatter', 'area', 'bubble']
+  if (!cartesianTypes.includes(config.type)) return
+
+  config.options = config.options && typeof config.options === 'object' ? config.options : {}
+  const scales = deepEnsureObject(config.options, 'scales')
+  const xScale = deepEnsureObject(scales, 'x')
+  const yScale = deepEnsureObject(scales, 'y')
+  const firstDatasetLabel = sanitizeAscii(String(config.data?.datasets?.[0]?.label || '')).trim()
+  const valueLabel = firstDatasetLabel || 'Value'
+  const xTitle = config.type === 'scatter' || config.type === 'bubble'
+    ? 'X value'
+    : config.type === 'horizontalBar'
+      ? valueLabel
+      : 'Category / Time'
+  const yTitle = config.type === 'scatter' || config.type === 'bubble'
+    ? 'Y value'
+    : config.type === 'horizontalBar'
+      ? 'Category'
+      : valueLabel
+
+  ensureScaleTitle(xScale, xTitle)
+  ensureScaleTitle(yScale, yTitle)
+
+  for (const scale of [xScale, yScale]) {
+    const grid = deepEnsureObject(scale, 'grid')
+    grid.display = grid.display !== false
+    grid.color = grid.color || '#E5E7EB'
+    const ticks = deepEnsureObject(scale, 'ticks')
+    ticks.display = ticks.display !== false
+    ticks.font = {
+      ...(ticks.font || {}),
+      size: Number(ticks.font?.size) || 11
+    }
+  }
+
+  const valueScale = config.type === 'horizontalBar' ? xScale : yScale
+  if (config.type === 'bar' || config.type === 'horizontalBar') {
+    valueScale.beginAtZero = valueScale.beginAtZero !== false
+  }
+}
+
 export function validateChartConfig(config: any): { valid: boolean; config?: any; error?: string } {
   if (!config || typeof config !== 'object') {
     return { valid: false, error: 'Config is not an object' }
@@ -2565,6 +3238,7 @@ export function validateChartConfig(config: any): { valid: boolean; config?: any
   if (!config.options || typeof config.options !== 'object') {
     config.options = {}
   }
+  ensureCartesianChartScales(config)
   if (!config.options.plugins || typeof config.options.plugins !== 'object') {
     config.options.plugins = {}
   }
@@ -2847,9 +3521,14 @@ export async function generateMermaidCode(
       if (request.paperGenre) {
         userRequest += `\nPaper genre: ${sanitizeAscii(request.paperGenre).slice(0, 80)}`
       }
+      if (request.sectionLabelEvidence?.length) {
+        userRequest += `\n\nSection Label Evidence (use this to choose layout, not just content):\n${request.sectionLabelEvidence.map((entry) => (
+          `- sectionKey="${sanitizeAscii(entry.sectionKey)}"; llmLabel="${sanitizeAscii(entry.label || entry.sectionKey)}"; interpretedIntent=${entry.interpretedIntent || 'section_specific'}`
+        )).join('\n')}`
+      }
 
       if (templateSelection.templateType === 'flowchart') {
-        userRequest += `\n\nFlowchart variant: ${templateSelection.flowchartVariant || 'pipeline'}`
+        userRequest += `\n\nFlowchart variant: ${templateSelection.flowchartVariant || 'process'}`
       }
 
       if (templateSelection.compatibilityNote) {
@@ -2966,6 +3645,11 @@ export async function generatePlantUMLCode(
       if (request.paperGenre) {
         userRequest += `\nPaper genre: ${sanitizeAscii(request.paperGenre).slice(0, 80)}`
       }
+      if (request.sectionLabelEvidence?.length) {
+        userRequest += `\n\nSection Label Evidence (use this to choose layout, not just content):\n${request.sectionLabelEvidence.map((entry) => (
+          `- sectionKey="${sanitizeAscii(entry.sectionKey)}"; llmLabel="${sanitizeAscii(entry.label || entry.sectionKey)}"; interpretedIntent=${entry.interpretedIntent || 'section_specific'}`
+        )).join('\n')}`
+      }
 
       if (templateSelection.compatibilityNote) {
         userRequest += `\n\nCompatibility mapping: ${templateSelection.compatibilityNote}`
@@ -3047,24 +3731,26 @@ export async function repairDiagramCode(
   },
   requestHeaders: Record<string, string>
 ): Promise<DiagramGenerationResult> {
+  let fallbackCode = ''
   try {
     const spec = sanitizeDiagramSpec(input.diagramSpec) || buildFallbackSpecFromDescription(input.description || '', input.title)
+    fallbackCode = buildDeterministicPlantUMLFromSpec(spec, input.title)
     const templateSelection = normalizePlantUMLTemplateType(input.diagramType as string | undefined)
     const payload = [
       `DiagramTypeInput: ${input.diagramType || 'unspecified'}`,
       `DiagramTypeTemplate: ${templateSelection.templateType}`,
       templateSelection.compatibilityNote ? `CompatibilityMapping: ${templateSelection.compatibilityNote}` : '',
       input.title ? `Title: ${sanitizeDiagramLabel(input.title)}` : '',
-      input.description ? `Description: ${sanitizeAscii(input.description, true).slice(0, 800)}` : '',
-      `KrokiError: ${sanitizeAscii(input.errorMessage || '').slice(0, 600)}`,
-      `BrokenCode:\n${sanitizeAscii(input.brokenCode || '', true).slice(0, 3000)}`,
-      buildSpecPromptBlock(spec)
+      input.description ? `Description: ${sanitizeAscii(input.description, true).slice(0, 260)}` : '',
+      `KrokiError: ${sanitizeAscii(input.errorMessage || '').slice(0, 320)}`,
+      `BrokenCode:\n${compactPlantUMLForRepair(input.brokenCode || '')}`,
+      buildCompactSpecPromptBlock(spec)
     ].filter(Boolean).join('\n\n')
 
     const fullPrompt = DIAGRAM_REPAIR_PROMPT + payload
     const { response, tokensUsed, model } = await callLLM(
       fullPrompt,
-      'PAPER_DIAGRAM_REPAIR',
+      'PAPER_DIAGRAM_GENERATOR',
       requestHeaders,
       {
         diagramType: input.diagramType || 'plantuml',
@@ -3082,17 +3768,134 @@ export async function repairDiagramCode(
       diagramSpec: spec
     }
   } catch (error) {
+    if (fallbackCode) {
+      return {
+        success: true,
+        code: fallbackCode,
+        diagramType: 'plantuml',
+        tokensUsed: 0,
+        model: 'local-spec-fallback'
+      }
+    }
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Diagram repair failed'
     }
   }
 }
+
+function resolveStrictFocusSourceSection(request: FigureSuggestionRequest): FigureSuggestionSourceSection {
+  const focusSection = sanitizeAscii(String(request.focusSection || '')).trim()
+  const normalizedFocus = normalizeScopeSectionKey(focusSection)
+  const sourceSections = request.sourceSections || []
+
+  if (normalizedFocus) {
+    const matched = sourceSections.find((section) => (
+      normalizeScopeSectionKey(section.sectionKey) === normalizedFocus ||
+      normalizeScopeSectionKey(section.label) === normalizedFocus
+    ))
+    if (matched) return matched
+    return { sectionKey: focusSection, label: focusSection }
+  }
+
+  if (request.sectionScope?.mode === 'selected_sections') {
+    if (sourceSections.length === 1) return sourceSections[0]
+    const requestedKey = request.sectionScope.sectionKeys?.[0]
+    if (requestedKey) return { sectionKey: requestedKey }
+  }
+
+  return sourceSections[0] || { sectionKey: 'selected_content', label: 'Selected content' }
+}
+
+function resolveStrictSourceSections(request: FigureSuggestionRequest): FigureSuggestionSourceSection[] {
+  const focusText = request.focusText?.trim()
+  if (focusText) return [resolveStrictFocusSourceSection(request)]
+
+  if (request.sectionScope?.mode !== 'selected_sections') {
+    return request.sourceSections || []
+  }
+
+  if (request.sourceSections && request.sourceSections.length > 0) {
+    return request.sourceSections
+  }
+
+  return (request.sectionScope.sectionKeys || [])
+    .map((sectionKey) => sanitizeAscii(String(sectionKey || '')).trim())
+    .filter(Boolean)
+    .map((sectionKey) => ({ sectionKey }))
+}
+
+function filterSectionsForStrictSources(
+  sections: Record<string, string> | undefined,
+  sourceSections: FigureSuggestionSourceSection[],
+  requestedKeys: string[] = []
+): Record<string, string> | undefined {
+  if (!sections) return undefined
+
+  const allowedKeys = new Set<string>()
+  for (const source of sourceSections) {
+    const normalizedKey = normalizeScopeSectionKey(source.sectionKey)
+    if (normalizedKey) allowedKeys.add(normalizedKey)
+    const normalizedLabel = normalizeScopeSectionKey(source.label)
+    if (normalizedLabel) allowedKeys.add(normalizedLabel)
+  }
+  for (const key of requestedKeys) {
+    const normalizedKey = normalizeScopeSectionKey(key)
+    if (normalizedKey) allowedKeys.add(normalizedKey)
+  }
+
+  if (allowedKeys.size === 0) return {}
+
+  return Object.entries(sections).reduce<Record<string, string>>((acc, [sectionKey, content]) => {
+    const normalizedKey = normalizeScopeSectionKey(sectionKey)
+    if (allowedKeys.has(normalizedKey)) {
+      acc[sectionKey] = content
+    }
+    return acc
+  }, {})
+}
+
+export function buildStrictSourceOnlyFigureSuggestionRequest(
+  request: FigureSuggestionRequest
+): FigureSuggestionRequest {
+  const focusText = request.focusText?.trim()
+  const isStrictSourceOnly = !!focusText || request.sectionScope?.mode === 'selected_sections'
+  if (!isStrictSourceOnly) return request
+
+  const sourceSections = resolveStrictSourceSections(request)
+  const sections = focusText
+    ? { [sourceSections[0]?.sectionKey || 'selected_content']: focusText.slice(0, 5000) }
+    : filterSectionsForStrictSources(
+        request.sections,
+        sourceSections,
+        request.sectionScope?.sectionKeys || []
+      )
+
+  return {
+    ...request,
+    paperTitle: undefined,
+    paperAbstract: undefined,
+    researchType: undefined,
+    datasetDescription: undefined,
+    paperBlueprint: undefined,
+    existingFigures: [],
+    sections,
+    sourceSections,
+    sectionScope: sourceSections.length > 0
+      ? {
+          mode: 'selected_sections',
+          sectionKeys: sourceSections.map((section) => section.sectionKey)
+        }
+      : request.sectionScope
+  }
+}
+
 export async function generateFigureSuggestions(
   request: FigureSuggestionRequest,
   requestHeaders: Record<string, string>
 ): Promise<FigureSuggestionResult> {
   try {
+    request = buildStrictSourceOnlyFigureSuggestionRequest(request)
     const preferences = normalizeFigurePreferences(request.preferences)
     const paperProfile = inferPaperProfile(request)
     const quantitativeDataAvailable = paperProfile.dataAvailability === 'provided' || hasQuantitativeEvidence(request)
@@ -3128,6 +3931,13 @@ export async function generateFigureSuggestions(
     paperContext += `- dataAvailability: ${paperProfile.dataAvailability}\n\n`
     paperContext += `- quantitativeEvidenceDetected: ${quantitativeDataAvailable ? 'yes' : 'no'}\n\n`
 
+    if (suggestionScopeMode !== 'full_draft') {
+      paperContext += 'STRICT SOURCE-ONLY MODE:\n'
+      paperContext += '- Only the selected source text below may be used for figure ideas, labels, entities, metrics, milestones, and diagram nodes.\n'
+      paperContext += '- Do not infer missing context from the title, abstract, other sections, existing figures, or general domain knowledge.\n'
+      paperContext += '- If a useful figure needs data or details not present in the selected source text, state those missing fields in dataNeeded instead of inventing them.\n\n'
+    }
+
     if (request.sourceSections && request.sourceSections.length > 0) {
       paperContext += 'Figure Suggestion Source Scope:\n'
       paperContext += `- mode: ${suggestionScopeMode}\n`
@@ -3140,8 +3950,20 @@ export async function generateFigureSuggestions(
       paperContext += '- Grant guidance: timeline/workplan/milestones -> timeline or gantt; methodology/work packages -> flowchart or activity; objectives/aims -> framework flowchart; evaluation/outcomes -> chart only with numeric data, otherwise evaluation pathway; impact -> outcome or logic-model diagram.\n\n'
     }
 
+    if (paperProfile.paperGenre === 'grant_proposal') {
+      paperContext += 'GRANT DIAGRAM TYPE OVERRIDE (hard):\n'
+      paperContext += '- For DIAGRAM suggestions, suggestedType MUST be one of: flowchart, activity, architecture, gantt, timeline.\n'
+      paperContext += '- Do NOT suggest: class, component, usecase, state, sequence, mindmap, er -- these are not appropriate for grant proposals unless the proposal explicitly describes software class structure or database schema.\n'
+      paperContext += '- Prefer: flowchart for methodology/approach, gantt or timeline for workplan/milestones, activity for work-package execution, architecture only for system/framework grants.\n\n'
+    }
+
+    const sectionLabelPromptBlock = buildSectionLabelPromptBlock(request.sourceSections || [], request.sections || {})
+    if (sectionLabelPromptBlock) {
+      paperContext += `${sectionLabelPromptBlock}\n\n`
+    }
+
     if (request.sections) {
-      const sectionContext = buildSuggestionSectionsContext(request.sections)
+      const sectionContext = buildSuggestionSectionsContext(request.sections, request.sourceSections || [])
       if (sectionContext) {
         paperContext += sectionContext
       }
@@ -3278,6 +4100,7 @@ export async function generateFigureSuggestions(
           suggestedType,
           relevantSection: actualRelevantSection,
           sourceSections: request.sourceSections,
+          sectionLabelEvidence: sanitizeSectionLabelEvidence((s as any).sectionLabelEvidence, request, actualRelevantSection),
           scopeMode: suggestionScopeMode,
           figureRole: normalizeFigureRole((s as any).figureRole, section),
           sectionFitJustification: (s as any).sectionFitJustification
@@ -3313,9 +4136,9 @@ export async function generateFigureSuggestions(
           normalized.diagramSpec = {
             ...normalized.diagramSpec,
             constraints: {
-              nodesMax: 12,
-              edgesMax: 18,
-              nodeLabelMaxWords: 3,
+              nodesMax: MAX_SPEC_NODES,
+              edgesMax: MAX_SPEC_EDGES,
+              nodeLabelMaxWords: DEFAULT_NODE_LABEL_WORDS,
               noDuplicateNodeLabels: true
             }
           }
@@ -3375,7 +4198,7 @@ export async function generateFigureSuggestions(
       candidate.sourceSections = request.sourceSections
       candidate.scopeMode = suggestionScopeMode
       const section = normalizeSuggestionGovernanceSection(actualRelevantSection, request.sourceSections)
-      let issues = validateSuggestion(candidate, { section, groundingLexicon, quantitativeDataAvailable })
+      let issues = validateSuggestion(candidate, { section, groundingLexicon, quantitativeDataAvailable, paperGenre: paperProfile.paperGenre })
 
       if (issues.length > 0) {
         candidate = buildSectionAwareFallbackSuggestion(candidate, section, i, { quantitativeDataAvailable })
@@ -3406,7 +4229,7 @@ export async function generateFigureSuggestions(
           candidate.sketchPrompt = candidate.sketchPrompt || buildSketchPromptFromIllustrationSpecV2(candidate.title, candidate.illustrationSpecV2, candidate.sketchStyle)
         }
         candidate.renderSpec = buildRenderSpecForSuggestion(candidate)
-        issues = validateSuggestion(candidate, { section, groundingLexicon, quantitativeDataAvailable })
+        issues = validateSuggestion(candidate, { section, groundingLexicon, quantitativeDataAvailable, paperGenre: paperProfile.paperGenre })
       }
 
       if (issues.length > 0) {
@@ -3456,6 +4279,12 @@ export async function generateFigureSuggestions(
       fallbackMethod.scopeMode = suggestionScopeMode
       fallbackMethod.paperProfile = paperProfile
       postValidated.push(fallbackMethod)
+    }
+
+    const sectionLabelEvidence = buildSectionLabelEvidenceForSources(request.sourceSections || [], request.sections || {})
+    const workplanCombination = !isFocused ? buildWorkplanCombinationSuggestion(request, sectionLabelEvidence) : null
+    if (workplanCombination && !postValidated.some(item => item.category === 'DIAGRAM' && item.suggestedType === 'gantt')) {
+      postValidated.unshift(workplanCombination)
     }
 
     // Enforce results mix: >=70% charts/statistical plots within results suggestions.
@@ -3565,12 +4394,14 @@ export async function generateFigureSuggestions(
       const actualRelevantSection = resolveActualRelevantSection(suggestion.relevantSection, request, i)
       suggestion.relevantSection = actualRelevantSection
       suggestion.sourceSections = request.sourceSections
+      suggestion.sectionLabelEvidence = sanitizeSectionLabelEvidence(suggestion.sectionLabelEvidence, request, actualRelevantSection)
       suggestion.scopeMode = suggestionScopeMode
       const section = normalizeSuggestionGovernanceSection(actualRelevantSection, request.sourceSections)
       if (!quantitativeDataAvailable && (suggestion.category === 'DATA_CHART' || suggestion.category === 'STATISTICAL_PLOT')) {
         finalSuggestions[i] = buildSectionAwareFallbackSuggestion(suggestion, section, i, { quantitativeDataAvailable })
         finalSuggestions[i].relevantSection = actualRelevantSection
         finalSuggestions[i].sourceSections = request.sourceSections
+        finalSuggestions[i].sectionLabelEvidence = sanitizeSectionLabelEvidence(finalSuggestions[i].sectionLabelEvidence, request, actualRelevantSection)
         finalSuggestions[i].scopeMode = suggestionScopeMode
         finalSuggestions[i].paperProfile = paperProfile
       } else {

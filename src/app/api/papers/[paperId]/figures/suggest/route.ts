@@ -12,6 +12,7 @@ import {
 } from '@/lib/figure-generation/preferences';
 import {
   buildFigureSuggestionSectionScopeError,
+  buildSingleFigureSuggestionSectionScopeError,
   normalizeScopeSectionKey,
   resolveFigureSuggestionSectionScope,
   type FigureSuggestionScopeMode,
@@ -36,6 +37,9 @@ interface CachedSuggestionItem {
   rendererPreference?: string;
   relevantSection?: string;
   sourceSections?: FigureSuggestionSourceSection[];
+  sourceText?: string;
+  focusText?: string;
+  sectionLabelEvidence?: unknown;
   scopeMode?: FigureSuggestionScopeMode;
   figureRole?: string;
   sectionFitJustification?: string;
@@ -67,6 +71,42 @@ interface SuggestionCache {
   items: CachedSuggestionItem[];
 }
 
+const VALID_SKETCH_STYLES = new Set(['academic', 'scientific', 'conceptual', 'technical']);
+const VALID_SKETCH_MODES = new Set(['SUGGEST', 'GUIDED']);
+const VALID_FIGURE_GENRES = new Set([
+  'METHOD_BLOCK',
+  'SCENARIO_STORYBOARD',
+  'CONCEPTUAL_FRAMEWORK',
+  'GRAPHICAL_ABSTRACT',
+  'NEURAL_ARCHITECTURE',
+  'EXPERIMENTAL_SETUP',
+  'DATA_PIPELINE',
+  'COMPARISON_MATRIX',
+  'PROCESS_MECHANISM',
+  'SYSTEM_INTERACTION'
+]);
+
+function isIllustrationSuggestion(s: Pick<FigureSuggestion, 'category' | 'suggestedType'>): boolean {
+  const category = String(s.category || '').toUpperCase();
+  const suggestedType = String(s.suggestedType || '').toLowerCase();
+  return category === 'ILLUSTRATED_FIGURE'
+    || category === 'ILLUSTRATION'
+    || category === 'SKETCH'
+    || suggestedType.startsWith('sketch');
+}
+
+function normalizeSketchStyle(value: unknown): string | undefined {
+  return typeof value === 'string' && VALID_SKETCH_STYLES.has(value) ? value : undefined;
+}
+
+function normalizeSketchMode(value: unknown): string | undefined {
+  return typeof value === 'string' && VALID_SKETCH_MODES.has(value) ? value : undefined;
+}
+
+function normalizeFigureGenre(value: unknown): string | undefined {
+  return typeof value === 'string' && VALID_FIGURE_GENRES.has(value) ? value : undefined;
+}
+
 type FocusHints = {
   entities?: string[];
   metrics?: string[];
@@ -92,6 +132,7 @@ const suggestSchema = z.object({
     mode: z.enum(['selected_sections', 'full_draft']),
     sectionKeys: z.array(z.string().max(200)).max(20).optional()
   }).optional(),
+  maxSuggestions: z.number().int().min(1).max(8).optional(),
   researchType: z.string().optional(),
   datasetDescription: z.string().optional(),
   blueprint: z.object({
@@ -255,6 +296,23 @@ function filterBlueprintContextForScope(
   };
 }
 
+function resolveFocusedSourceSection(
+  sourceSections: FigureSuggestionSourceSection[],
+  focusSection?: string
+): FigureSuggestionSourceSection {
+  const normalizedFocus = normalizeScopeSectionKey(focusSection);
+  if (normalizedFocus) {
+    const matched = sourceSections.find((section) => (
+      normalizeScopeSectionKey(section.sectionKey) === normalizedFocus ||
+      normalizeScopeSectionKey(section.label) === normalizedFocus
+    ));
+    if (matched) return matched;
+    return { sectionKey: String(focusSection || 'selected_content'), label: String(focusSection || 'Selected content') };
+  }
+
+  return sourceSections[0] || { sectionKey: 'selected_content', label: 'Selected content' };
+}
+
 function applyScopeMetadataToSuggestions(
   suggestions: FigureSuggestion[],
   sourceSections: FigureSuggestionSourceSection[],
@@ -282,6 +340,7 @@ function applyScopeMetadataToSuggestions(
       ...suggestion,
       relevantSection,
       sourceSections,
+      sectionLabelEvidence: suggestion.sectionLabelEvidence,
       scopeMode
     };
   });
@@ -457,18 +516,39 @@ export async function POST(
     if (scopeError) {
       return NextResponse.json({ error: scopeError }, { status: 400 });
     }
+    const singleSectionScopeError = buildSingleFigureSuggestionSectionScopeError(sectionScope);
+    if (singleSectionScopeError) {
+      return NextResponse.json({ error: singleSectionScopeError }, { status: 400 });
+    }
 
-    const sections = sectionScope.sections;
-    const researchType = data.researchType || session.paperType?.name || 'research article';
-    const datasetDescription = data.datasetDescription || session.researchTopic?.datasetDescription || '';
-    const paperBlueprint = filterBlueprintContextForScope(
-      data.blueprint || extractBlueprintContext(session),
-      sectionScope.sourceSections,
-      sectionScope.mode
-    );
-    const scopeMode: FigureSuggestionScopeMode = data.focusText?.trim()
+    const focusText = data.focusText?.trim();
+    const focusSourceSection = focusText
+      ? resolveFocusedSourceSection(sectionScope.sourceSections, data.focusSection)
+      : null;
+    const sourceSections = focusSourceSection ? [focusSourceSection] : sectionScope.sourceSections;
+    const sections = focusText
+      ? { [focusSourceSection?.sectionKey || 'selected_content']: focusText.slice(0, 5000) }
+      : sectionScope.sections;
+    const strictSourceOnly = !!focusText || sectionScope.mode === 'selected_sections';
+    const researchType = strictSourceOnly ? undefined : (data.researchType || session.paperType?.name || 'research article');
+    const datasetDescription = strictSourceOnly ? '' : (data.datasetDescription || session.researchTopic?.datasetDescription || '');
+    const paperBlueprint = strictSourceOnly
+      ? undefined
+      : filterBlueprintContextForScope(
+          data.blueprint || extractBlueprintContext(session),
+          sourceSections,
+          sectionScope.mode
+        );
+    const scopedPaperTitle = strictSourceOnly ? '' : paperTitle;
+    const scopedPaperAbstract = strictSourceOnly ? '' : paperAbstract;
+    const scopedExistingFigureList = strictSourceOnly ? [] : existingFigureList;
+    const scopeMode: FigureSuggestionScopeMode = focusText
       ? 'focused_text'
       : sectionScope.mode;
+    const requestedMaxSuggestions = data.maxSuggestions || (sectionScope.mode === 'selected_sections' ? 1 : scopeMode === 'focused_text' ? 4 : 8);
+    const maxSuggestions = sectionScope.mode === 'selected_sections'
+      ? 1
+      : Math.min(requestedMaxSuggestions, scopeMode === 'focused_text' ? 4 : 8);
 
     let suggestions: import('@/lib/figure-generation/types').FigureSuggestion[];
     let llmMetadata: { tokensUsed?: number; model?: string } = {};
@@ -489,23 +569,23 @@ export async function POST(
         : undefined;
       const llmResult = await generateFigureSuggestions(
         {
-          paperTitle,
-          paperAbstract,
+          paperTitle: scopedPaperTitle,
+          paperAbstract: scopedPaperAbstract,
           sections,
           researchType,
           datasetDescription,
           paperBlueprint,
           preferences,
-          existingFigures: existingFigureList,
-          maxSuggestions: isFocused ? 4 : 8,
+          existingFigures: scopedExistingFigureList,
+          maxSuggestions,
           sectionScope: data.sectionScope || {
             mode: sectionScope.mode,
-            sectionKeys: sectionScope.sourceSections.map((item) => item.sectionKey)
+            sectionKeys: sourceSections.map((item) => item.sectionKey)
           },
-          sourceSections: sectionScope.sourceSections,
+          sourceSections,
           // Focus fields – when present, the LLM constrains suggestions to this excerpt
-          focusText: data.focusText,
-          focusSection: data.focusSection,
+          focusText,
+          focusSection: focusSourceSection?.sectionKey || data.focusSection,
           focusMode: data.focusMode,
           focusHints
         },
@@ -520,8 +600,8 @@ export async function POST(
         // Fall back to rule-based suggestions
         console.log('[PaperFigures] LLM failed, using rule-based suggestions:', llmResult.error);
         suggestions = generateRuleBasedSuggestions(
-          paperTitle,
-          paperAbstract,
+          scopedPaperTitle,
+          scopedPaperAbstract,
           sections,
           session
         );
@@ -529,8 +609,8 @@ export async function POST(
     } else {
       // Use rule-based suggestions
       suggestions = generateRuleBasedSuggestions(
-        paperTitle,
-        paperAbstract,
+        scopedPaperTitle,
+        scopedPaperAbstract,
         sections,
         session
       );
@@ -538,39 +618,52 @@ export async function POST(
 
     // ── Persist suggestions to session cache ─────────────────────────
     // Each suggestion gets a stable UUID so the UI can track status.
-    suggestions = applyScopeMetadataToSuggestions(suggestions, sectionScope.sourceSections, scopeMode);
+    suggestions = applyScopeMetadataToSuggestions(suggestions, sourceSections, scopeMode).slice(0, maxSuggestions);
 
-    const cachedItems: CachedSuggestionItem[] = suggestions.map((s, idx) => ({
-      id: `sug-${Date.now()}-${idx}`,
-      status: 'pending' as CachedSuggestionStatus,
-      usedByFigureId: null,
-      usedAt: null,
-      title: s.title,
-      description: s.description,
-      category: s.category,
-      suggestedType: s.suggestedType,
-      rendererPreference: s.rendererPreference,
-      relevantSection: s.relevantSection,
-      sourceSections: s.sourceSections,
-      scopeMode: s.scopeMode,
-      figureRole: (s as any).figureRole,
-      sectionFitJustification: (s as any).sectionFitJustification,
-      expectedByReviewers: (s as any).expectedByReviewers,
-      importance: s.importance,
-      dataNeeded: s.dataNeeded,
-      whyThisFigure: s.whyThisFigure,
-      renderSpec: (s as any).renderSpec,
-      chartSpec: (s as any).chartSpec,
-      diagramSpec: s.diagramSpec,
-      illustrationSpec: (s as any).illustrationSpec,
-      illustrationSpecV2: (s as any).illustrationSpecV2,
-      figureGenre: (s as any).figureGenre,
-      renderDirectives: (s as any).renderDirectives,
-      paperProfile: (s as any).paperProfile,
-      sketchStyle: s.sketchStyle,
-      sketchPrompt: s.sketchPrompt,
-      sketchMode: s.sketchMode
-    }));
+    const cachedItems: CachedSuggestionItem[] = suggestions.map((s, idx) => {
+      const keepIllustrationMeta = isIllustrationSuggestion(s);
+      const sourceSectionKey = sourceSections[0]?.sectionKey;
+      const selectedSourceText = focusText
+        || (sourceSectionKey ? sections[sourceSectionKey] : undefined)
+        || Object.values(sections)[0]
+        || '';
+      const persistedSourceText = String(selectedSourceText || '').trim().slice(0, 5000) || undefined;
+
+      return {
+        id: `sug-${Date.now()}-${idx}`,
+        status: 'pending' as CachedSuggestionStatus,
+        usedByFigureId: null,
+        usedAt: null,
+        title: s.title,
+        description: s.description,
+        category: s.category,
+        suggestedType: s.suggestedType,
+        rendererPreference: s.rendererPreference,
+        relevantSection: s.relevantSection,
+        sourceSections: s.sourceSections,
+        sourceText: persistedSourceText,
+        focusText: focusText || undefined,
+        sectionLabelEvidence: (s as any).sectionLabelEvidence,
+        scopeMode: s.scopeMode,
+        figureRole: (s as any).figureRole,
+        sectionFitJustification: (s as any).sectionFitJustification,
+        expectedByReviewers: (s as any).expectedByReviewers,
+        importance: s.importance,
+        dataNeeded: s.dataNeeded,
+        whyThisFigure: s.whyThisFigure,
+        renderSpec: (s as any).renderSpec,
+        chartSpec: (s as any).chartSpec,
+        diagramSpec: s.diagramSpec,
+        illustrationSpec: keepIllustrationMeta ? (s as any).illustrationSpec : undefined,
+        illustrationSpecV2: keepIllustrationMeta ? (s as any).illustrationSpecV2 : undefined,
+        figureGenre: keepIllustrationMeta ? normalizeFigureGenre((s as any).figureGenre) : undefined,
+        renderDirectives: keepIllustrationMeta ? (s as any).renderDirectives : undefined,
+        paperProfile: (s as any).paperProfile,
+        sketchStyle: keepIllustrationMeta ? normalizeSketchStyle(s.sketchStyle) : undefined,
+        sketchPrompt: keepIllustrationMeta ? s.sketchPrompt : undefined,
+        sketchMode: keepIllustrationMeta ? normalizeSketchMode(s.sketchMode) : undefined
+      };
+    });
 
     const cache: SuggestionCache = {
       generatedAt: new Date().toISOString(),
@@ -578,7 +671,7 @@ export async function POST(
       preferences,
       sectionScope: {
         mode: scopeMode,
-        sourceSections: sectionScope.sourceSections
+        sourceSections
       },
       items: cachedItems
     };

@@ -817,6 +817,7 @@ export default function GrantWorkspacePage() {
                   session={navSession}
                   initialSelectedSectionKey={selectedSection}
                   onSessionUpdated={setShadowSession}
+                  isGrantMode
                 />
               ) : (
                 <div className="p-6 text-sm text-slate-600">Shadow drafting session is not available yet.</div>

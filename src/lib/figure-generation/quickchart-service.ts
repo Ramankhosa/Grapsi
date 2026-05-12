@@ -120,6 +120,63 @@ function normalizeConfigType(type: string | undefined): DataChartType {
   return 'bar'
 }
 
+function ensureScaleObject(parent: any, key: string): any {
+  if (!parent[key] || typeof parent[key] !== 'object' || Array.isArray(parent[key])) {
+    parent[key] = {}
+  }
+  return parent[key]
+}
+
+function ensureVisibleScaleTitle(scale: any, fallbackText: string): void {
+  const title = ensureScaleObject(scale, 'title')
+  title.display = true
+  title.text = typeof title.text === 'string' && title.text.trim() ? title.text : fallbackText
+  title.font = {
+    ...(title.font || {}),
+    size: Number(title.font?.size) || ACADEMIC_DEFAULTS.labelFontSize
+  }
+}
+
+function ensureCartesianScaleDefaults(config: QuickChartConfig): void {
+  const chartType = normalizeConfigType(config.type)
+  if (!['bar', 'horizontalBar', 'line', 'scatter', 'bubble', 'area'].includes(chartType)) return
+
+  config.options = config.options || {}
+  const scales = ensureScaleObject(config.options, 'scales')
+  const xScale = ensureScaleObject(scales, 'x')
+  const yScale = ensureScaleObject(scales, 'y')
+  const firstDatasetLabel = config.data?.datasets?.[0]?.label || 'Value'
+
+  ensureVisibleScaleTitle(
+    xScale,
+    chartType === 'scatter' || chartType === 'bubble'
+      ? 'X value'
+      : chartType === 'horizontalBar'
+        ? firstDatasetLabel
+        : 'Category / Time'
+  )
+  ensureVisibleScaleTitle(
+    yScale,
+    chartType === 'scatter' || chartType === 'bubble'
+      ? 'Y value'
+      : chartType === 'horizontalBar'
+        ? 'Category'
+        : firstDatasetLabel
+  )
+
+  for (const scale of [xScale, yScale]) {
+    const ticks = ensureScaleObject(scale, 'ticks')
+    ticks.display = ticks.display !== false
+    ticks.font = {
+      ...(ticks.font || {}),
+      size: Number(ticks.font?.size) || ACADEMIC_DEFAULTS.tickFontSize
+    }
+    const grid = ensureScaleObject(scale, 'grid')
+    grid.display = grid.display !== false
+    grid.color = grid.color || '#E5E7EB'
+  }
+}
+
 export function buildAcademicChartConfig(
   config: QuickChartConfig,
   options?: {
@@ -153,6 +210,8 @@ export function buildAcademicChartConfig(
 
   if (['pie', 'doughnut', 'radar', 'polarArea'].includes(merged.type) && merged.options?.scales) {
     delete merged.options.scales
+  } else {
+    ensureCartesianScaleDefaults(merged)
   }
 
   return merged

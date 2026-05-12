@@ -76,6 +76,7 @@ interface PaperFigurePlannerStageProps {
   session?: any;
   selectedSection?: string;
   initialSelectedSectionKey?: string | null;
+  isGrantMode?: boolean;
 }
 
 type FigureCategory = 'DATA_CHART' | 'DIAGRAM' | 'STATISTICAL_PLOT' | 'ILLUSTRATED_FIGURE' | 'ILLUSTRATION' | 'SKETCH' | 'CUSTOM';
@@ -110,10 +111,9 @@ type FigurePlan = {
 };
 
 type GenerationFeedback = {
-  kind: 'single' | 'sketch' | 'batch' | 'modify';
+  kind: 'single' | 'sketch' | 'modify';
   category?: FigureCategory;
   title?: string;
-  count?: number;
   startedAt: number;
 };
 
@@ -125,13 +125,16 @@ type FigureSuggestionItem = FigureSuggestionTransport & {
   status?: SuggestionStatus;
 };
 
-type SuggestionScopeMode = 'selected_sections' | 'full_draft';
-
 type FigureSourceSectionOption = {
   sectionKey: string;
   label: string;
   content: string;
   wordCount: number;
+};
+
+type FigureSourceSectionMeta = {
+  sectionKey: string;
+  label?: string;
 };
 
 // Figure types with descriptions and visual examples
@@ -299,8 +302,6 @@ const SUGGESTION_SECTION_FILTER_ALL = '__all__';
 
 function getGenerationHeading(feedback: GenerationFeedback): string {
   switch (feedback.kind) {
-    case 'batch':
-      return `Generating ${feedback.count || 0} figures`
     case 'modify':
       return feedback.title ? `Updating "${feedback.title}"` : 'Updating figure'
     case 'sketch':
@@ -334,14 +335,6 @@ function getGenerationMessages(feedback: GenerationFeedback): string[] {
               'Preparing the figure instructions and routing them to the correct rendering service.',
               'Rendering the final output and storing it in your figure list.',
             ];
-
-  if (feedback.kind === 'batch') {
-    return [
-      'Batch request received. The backend is working through the selected figures one by one.',
-      'Each figure is being generated and saved as soon as it completes.',
-      'Larger plots and sketches can take longer, but the request is still active.',
-    ];
-  }
 
   if (feedback.kind === 'modify') {
     return [
@@ -421,15 +414,101 @@ function getSectionOptionsFromSession(session: any): FigureSourceSectionOption[]
     .filter((section) => section.content.length > 0);
 }
 
+function normalizeLocalSectionKey(value?: string | null): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+    .replace(/[^a-z0-9_]+/g, '');
+}
+
+function findSectionOption(
+  options: FigureSourceSectionOption[],
+  sectionKey?: string | null
+): FigureSourceSectionOption | undefined {
+  const normalized = normalizeLocalSectionKey(sectionKey);
+  if (!normalized) return undefined;
+  return options.find((section) => (
+    normalizeLocalSectionKey(section.sectionKey) === normalized ||
+    normalizeLocalSectionKey(section.label) === normalized
+  ));
+}
+
+function resolveDefaultSectionKey(
+  options: FigureSourceSectionOption[],
+  preferredKeys: Array<string | null | undefined>
+): string {
+  for (const key of preferredKeys) {
+    const option = findSectionOption(options, key);
+    if (option) return option.sectionKey;
+  }
+  return options[0]?.sectionKey || '';
+}
+
+function toSourceSectionMeta(section?: FigureSourceSectionOption | FigureSourceSectionMeta | null): FigureSourceSectionMeta | null {
+  const sectionKey = String(section?.sectionKey || '').trim();
+  if (!sectionKey) return null;
+  const label = String(section?.label || '').trim();
+  return label ? { sectionKey, label } : { sectionKey };
+}
+
+function getSuggestionSourceSectionMeta(suggestion: FigureSuggestionItem): FigureSourceSectionMeta | null {
+  const sources = Array.isArray(suggestion.sourceSections) ? suggestion.sourceSections : [];
+  const relevantSection = String(suggestion.relevantSection || '').trim();
+  const normalizedRelevant = normalizeLocalSectionKey(relevantSection);
+  const matchedSource = normalizedRelevant
+    ? sources.find((section) => (
+        normalizeLocalSectionKey(section.sectionKey) === normalizedRelevant ||
+        normalizeLocalSectionKey(section.label) === normalizedRelevant
+      ))
+    : undefined;
+  return toSourceSectionMeta(matchedSource || (relevantSection ? { sectionKey: relevantSection } : sources[0]));
+}
+
+function buildSingleSectionFigureMeta(
+  sourceSection: FigureSourceSectionMeta | null,
+  baseMeta?: FigureSuggestionMeta | null
+): FigureSuggestionMeta | undefined {
+  const base = baseMeta ? { ...baseMeta } : {};
+  if (!sourceSection) {
+    return Object.keys(base).length > 0 ? base : undefined;
+  }
+
+  const normalizedSource = normalizeLocalSectionKey(sourceSection.sectionKey);
+  const sectionLabelEvidence = Array.isArray(base.sectionLabelEvidence)
+    ? base.sectionLabelEvidence.filter((entry) => (
+        normalizeLocalSectionKey(entry.sectionKey) === normalizedSource ||
+        normalizeLocalSectionKey(entry.label) === normalizedSource
+      ))
+    : undefined;
+
+  const nextMeta: FigureSuggestionMeta = {
+    ...base,
+    relevantSection: sourceSection.sectionKey,
+    sourceSections: [sourceSection],
+    scopeMode: 'selected_sections'
+  };
+
+  if (sectionLabelEvidence) {
+    nextMeta.sectionLabelEvidence = sectionLabelEvidence;
+  }
+
+  return nextMeta;
+}
+
 export default function PaperFigurePlannerStage({ 
   sessionId, 
   authToken, 
   onSessionUpdated,
   session,
   selectedSection,
-  initialSelectedSectionKey
+  initialSelectedSectionKey,
+  isGrantMode = false
 }: PaperFigurePlannerStageProps) {
   const { showToast } = useToast();
+
+  const GRANT_BANNED_DIAGRAM_TYPES = new Set(['class', 'sequence', 'er']);
+
   const [figures, setFigures] = useState<FigurePlan[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [generating, setGenerating] = useState<string | null>(null);
@@ -439,12 +518,10 @@ export default function PaperFigurePlannerStage({
   const [suggestions, setSuggestions] = useState<FigureSuggestionItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestionPreferences, setSuggestionPreferences] = useState<FigureSuggestionPreferences>(DEFAULT_FIGURE_SUGGESTION_PREFERENCES);
-  const [suggestionScopeMode, setSuggestionScopeMode] = useState<SuggestionScopeMode>('selected_sections');
-  const [selectedSuggestionSectionKeys, setSelectedSuggestionSectionKeys] = useState<string[]>([]);
+  const [selectedSuggestionSectionKey, setSelectedSuggestionSectionKey] = useState('');
+  const [selectedFigureSectionKey, setSelectedFigureSectionKey] = useState('');
   const [showSectionScopeDropdown, setShowSectionScopeDropdown] = useState(false);
-  const [isGeneratingBatch, setIsGeneratingBatch] = useState(false);
-  const [isApplyingSuggestionBatch, setIsApplyingSuggestionBatch] = useState(false);
-  const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<string[]>([]);
+  const [showFigureSectionDropdown, setShowFigureSectionDropdown] = useState(false);
   const [sectionFilter, setSectionFilter] = useState<string>(SUGGESTION_SECTION_FILTER_ALL);
   const [categoryFilter, setCategoryFilter] = useState<string>(SUGGESTION_SECTION_FILTER_ALL);
   const [importanceFilter, setImportanceFilter] = useState<string>(SUGGESTION_SECTION_FILTER_ALL);
@@ -532,20 +609,6 @@ export default function PaperFigurePlannerStage({
     });
   }, [showToast]);
 
-  const getBatchFailureMessage = useCallback((results: any[]): string => {
-    const failures = results.filter((entry: any) => entry?.success === false);
-    if (failures.length === 0) return '';
-    const titleList = failures
-      .map((entry: any) => entry?.title)
-      .filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0)
-      .slice(0, 3);
-    const suffix = failures.length > titleList.length ? ` and ${failures.length - titleList.length} more` : '';
-    if (titleList.length > 0) {
-      return `Failed: ${titleList.join(', ')}${suffix}.`;
-    }
-    return `${failures.length} figure(s) failed.`;
-  }, []);
-
   const scrollToFiguresBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     if (typeof window === 'undefined') return;
     window.requestAnimationFrame(() => {
@@ -587,43 +650,32 @@ export default function PaperFigurePlannerStage({
   const selectedType = FIGURE_OPTIONS.find(t => t.value === figureType);
   const normalizePrefs = useCallback(() => normalizeFigurePreferences(suggestionPreferences), [suggestionPreferences]);
   const suggestionSectionOptions = useMemo(() => getSectionOptionsFromSession(session), [session]);
-  const selectedSuggestionSectionSet = useMemo(() => new Set(selectedSuggestionSectionKeys), [selectedSuggestionSectionKeys]);
-  const selectedSuggestionSectionOptions = useMemo(() => {
-    if (suggestionScopeMode === 'full_draft') return suggestionSectionOptions;
-    return suggestionSectionOptions.filter((section) => selectedSuggestionSectionSet.has(section.sectionKey));
-  }, [selectedSuggestionSectionSet, suggestionScopeMode, suggestionSectionOptions]);
+  const selectedSuggestionSectionOption = useMemo(
+    () => findSectionOption(suggestionSectionOptions, selectedSuggestionSectionKey),
+    [selectedSuggestionSectionKey, suggestionSectionOptions]
+  );
+  const selectedFigureSectionOption = useMemo(
+    () => findSectionOption(suggestionSectionOptions, selectedFigureSectionKey),
+    [selectedFigureSectionKey, suggestionSectionOptions]
+  );
   const suggestionScopeLabel = useMemo(() => {
-    if (suggestionScopeMode === 'full_draft') return 'Full draft';
-    if (selectedSuggestionSectionOptions.length === 0) return 'Choose sections';
-    if (selectedSuggestionSectionOptions.length === 1) return selectedSuggestionSectionOptions[0].label;
-    const firstTwo = selectedSuggestionSectionOptions.slice(0, 2).map((section) => section.label).join(', ');
-    const extra = selectedSuggestionSectionOptions.length - 2;
-    return extra > 0 ? `${firstTwo} +${extra}` : firstTwo;
-  }, [selectedSuggestionSectionOptions, suggestionScopeMode]);
+    return selectedSuggestionSectionOption?.label || 'Choose a section';
+  }, [selectedSuggestionSectionOption]);
+  const figureSourceLabel = useMemo(() => {
+    return selectedFigureSectionOption?.label || 'Choose a section';
+  }, [selectedFigureSectionOption]);
+  const sourceSectionRequired = suggestionSectionOptions.length > 0;
+  const sourceSectionReady = !sourceSectionRequired || !!selectedFigureSectionOption;
+  const selectedFigureSourceMeta = useMemo(
+    () => toSourceSectionMeta(selectedFigureSectionOption),
+    [selectedFigureSectionOption]
+  );
 
   useEffect(() => {
-    if (suggestionScopeMode !== 'selected_sections' || suggestionSectionOptions.length === 0) return;
-    setSelectedSuggestionSectionKeys((current) => {
-      const validKeys = new Set(suggestionSectionOptions.map((section) => section.sectionKey));
-      const stillValid = current.filter((key) => validKeys.has(key));
-      if (stillValid.length > 0) return stillValid;
-
-      const preferredKey = initialSelectedSectionKey || selectedSection;
-      const preferred = preferredKey
-        ? suggestionSectionOptions.find((section) => section.sectionKey === preferredKey)
-        : undefined;
-      return [preferred?.sectionKey || suggestionSectionOptions[0].sectionKey];
-    });
-  }, [initialSelectedSectionKey, selectedSection, suggestionScopeMode, suggestionSectionOptions]);
-
-  const toggleSuggestionSectionKey = useCallback((sectionKey: string) => {
-    setSelectedSuggestionSectionKeys((current) => {
-      if (current.includes(sectionKey)) {
-        return current.filter((key) => key !== sectionKey);
-      }
-      return [...current, sectionKey];
-    });
-  }, []);
+    const defaultKey = resolveDefaultSectionKey(suggestionSectionOptions, [selectedSection, initialSelectedSectionKey]);
+    setSelectedSuggestionSectionKey((current) => findSectionOption(suggestionSectionOptions, current)?.sectionKey || defaultKey);
+    setSelectedFigureSectionKey((current) => findSectionOption(suggestionSectionOptions, current)?.sectionKey || defaultKey);
+  }, [initialSelectedSectionKey, selectedSection, suggestionSectionOptions]);
 
   const suggestionSections = useMemo(() => {
     const values = new Set<string>();
@@ -642,12 +694,6 @@ export default function PaperFigurePlannerStage({
       return true;
     });
   }, [suggestions, sectionFilter, categoryFilter, importanceFilter]);
-
-  const selectedSuggestions = useMemo(() => {
-    const selected = new Set(selectedSuggestionIds);
-    // Exclude already-used suggestions from batch operations
-    return suggestions.filter((item) => selected.has(item.id) && item.status !== 'used' && item.status !== 'dismissed');
-  }, [suggestions, selectedSuggestionIds]);
 
   const updatePreference = <K extends keyof FigureSuggestionPreferences>(
     key: K,
@@ -695,8 +741,6 @@ export default function PaperFigurePlannerStage({
         const cached = parseSuggestionsFromApi(data.suggestions).filter((s) => s.status !== 'dismissed');
         setSuggestions(cached);
         setSuggestionsRequested(true);
-        // Auto-select only pending suggestions
-        setSelectedSuggestionIds(cached.filter(s => s.status !== 'used' && s.status !== 'dismissed').map(s => s.id));
       }
     } catch (err) {
       console.error('Failed to load cached suggestions:', err);
@@ -735,37 +779,7 @@ export default function PaperFigurePlannerStage({
   /** Discard a suggestion the user does not want to use */
   const dismissSuggestion = useCallback((suggestionId: string) => {
     setSuggestions(prev => prev.filter(s => s.id !== suggestionId));
-    setSelectedSuggestionIds(prev => prev.filter(id => id !== suggestionId));
     persistSuggestionStatuses([{ id: suggestionId, status: 'dismissed', usedByFigureId: null }]);
-  }, [persistSuggestionStatuses]);
-
-  /** Discard all currently selected pending suggestions */
-  const dismissSelectedSuggestions = useCallback(() => {
-    if (selectedSuggestions.length === 0) return;
-    const ids = selectedSuggestions.map(s => s.id);
-    setSuggestions(prev => prev.filter(s => !ids.includes(s.id)));
-    setSelectedSuggestionIds(prev => prev.filter(id => !ids.includes(id)));
-    persistSuggestionStatuses(ids.map((id) => ({ id, status: 'dismissed' as SuggestionStatus, usedByFigureId: null })));
-  }, [persistSuggestionStatuses, selectedSuggestions]);
-
-  /** Mark multiple suggestions as used (for batch operations) */
-  const markSuggestionsUsedBatch = useCallback((entries: Array<{ suggestionTitle: string; figureId: string }>) => {
-    setSuggestions(prev => {
-      const titleToFigure = new Map(entries.map(e => [e.suggestionTitle.toLowerCase(), e.figureId]));
-      const updates: Array<{ id: string; status: SuggestionStatus; usedByFigureId: string }> = [];
-      const next = prev.map(s => {
-        const figId = titleToFigure.get(s.title.toLowerCase());
-        if (figId && s.status !== 'used') {
-          updates.push({ id: s.id, status: 'used', usedByFigureId: figId });
-          return { ...s, status: 'used' as SuggestionStatus, usedByFigureId: figId, usedAt: new Date().toISOString() };
-        }
-        return s;
-      });
-      if (updates.length > 0) {
-        persistSuggestionStatuses(updates);
-      }
-      return next;
-    });
   }, [persistSuggestionStatuses]);
 
   /** When a figure is deleted, revert its linked suggestion back to pending */
@@ -823,18 +837,16 @@ export default function PaperFigurePlannerStage({
       if (ctx.sourceText) {
         const isSelection = ctx.focusMode === 'selection';
         const contextOptions = getSectionOptionsFromSession(session);
-        const contextKeys = Array.isArray(ctx.selectedSectionKeys)
+        const contextKeys: string[] = Array.isArray(ctx.selectedSectionKeys)
           ? ctx.selectedSectionKeys.filter((key: unknown): key is string => typeof key === 'string' && key.trim().length > 0)
-          : (ctx.sourceSection ? [ctx.sourceSection] : []);
-        const contextScopeMode: SuggestionScopeMode = ctx.sectionScope?.mode === 'full_draft'
-          ? 'full_draft'
-          : 'selected_sections';
-        const contextSections = contextScopeMode === 'selected_sections'
-          ? contextOptions.filter((section) => contextKeys.includes(section.sectionKey))
-          : contextOptions;
-        setSuggestionScopeMode(contextScopeMode);
-        if (contextScopeMode === 'selected_sections' && contextSections.length > 0) {
-          setSelectedSuggestionSectionKeys(contextSections.map((section) => section.sectionKey));
+          : (typeof ctx.sourceSection === 'string' && ctx.sourceSection.trim() ? [ctx.sourceSection] : []);
+        const contextSection =
+          contextKeys.map((key) => findSectionOption(contextOptions, key)).find(Boolean) ||
+          findSectionOption(contextOptions, ctx.sourceSection) ||
+          contextOptions[0];
+        if (contextSection) {
+          setSelectedSuggestionSectionKey(contextSection.sectionKey);
+          setSelectedFigureSectionKey(contextSection.sectionKey);
         }
         // Show a toast so the user knows why the suggestions panel opened
         showToast({
@@ -850,16 +862,16 @@ export default function PaperFigurePlannerStage({
         setShowSuggestions(true);
         setSuggestionsRequested(true);
         setLoadingSuggestions(true);
-        const requestSections = contextScopeMode === 'full_draft'
-          ? getSectionMapFromSession(session)
-          : contextSections.length > 0
-            ? contextSections.reduce<Record<string, string>>((acc, section) => {
-                acc[section.sectionKey] = section.content;
-                return acc;
-              }, {})
-            : (ctx.sourceSection && ctx.sourceText
-                ? { [ctx.sourceSection]: ctx.sourceText.slice(0, 4000) }
-                : undefined);
+        const requestSections = contextSection
+          ? { [contextSection.sectionKey]: contextSection.content }
+          : (ctx.sourceSection && ctx.sourceText
+              ? { [ctx.sourceSection]: ctx.sourceText.slice(0, 4000) }
+              : undefined);
+        const requestSectionKey = contextSection?.sectionKey || ctx.sourceSection;
+        if (!requestSectionKey) {
+          setLoadingSuggestions(false);
+          return;
+        }
         // Trigger the suggest API with focus mode so suggestions
         // are constrained to the carried-over text
         fetch(`/api/papers/${sessionId}/figures/suggest`, {
@@ -871,9 +883,8 @@ export default function PaperFigurePlannerStage({
           body: JSON.stringify({
             useLLM: true,
             sections: requestSections,
-            sectionScope: contextScopeMode === 'selected_sections' && contextSections.length > 0
-              ? { mode: 'selected_sections', sectionKeys: contextSections.map((section) => section.sectionKey) }
-              : { mode: 'full_draft' },
+            sectionScope: { mode: 'selected_sections', sectionKeys: [requestSectionKey] },
+            maxSuggestions: 1,
             preferences: { outputMix: 'balanced', detailLevel: 'moderate' },
             focusText: ctx.sourceText.slice(0, 4000),
             focusSection: ctx.sourceSection || undefined,
@@ -885,7 +896,6 @@ export default function PaperFigurePlannerStage({
             if (data.suggestions) {
               const nextSuggestions = parseSuggestionsFromApi(data.suggestions).filter((s) => s.status !== 'dismissed');
               setSuggestions(nextSuggestions);
-              setSelectedSuggestionIds(nextSuggestions.filter(s => s.status !== 'used' && s.status !== 'dismissed').map(s => s.id));
             }
           })
           .catch(err => console.error('[FigurePlanner] Cross-stage suggest error:', err))
@@ -901,13 +911,22 @@ export default function PaperFigurePlannerStage({
   // manual action is consistent across charts, plots, and diagrams.
   const handleCreate = async () => {
     if (!authToken || !title.trim()) return;
+    if (!sourceSectionReady) {
+      showToast({
+        type: 'warning',
+        title: 'Choose source section',
+        message: 'Select one draft section before generating a figure.'
+      });
+      return;
+    }
     
     const shouldAutoGenerate = true;
     const wasFromSuggestion = !!pendingSuggestionMeta;
     const originSuggestionId = pendingSuggestionId;
+    const effectiveSuggestionMeta = buildSingleSectionFigureMeta(selectedFigureSourceMeta, pendingSuggestionMeta);
     setIsCreating(true);
     try {
-      const initialCaption = getPaperFigureCaptionSeed({ suggestionMeta: pendingSuggestionMeta || null });
+      const initialCaption = getPaperFigureCaptionSeed({ suggestionMeta: effectiveSuggestionMeta || null });
       const response = await fetch(`/api/papers/${sessionId}/figures`, {
         method: 'POST',
         headers: {
@@ -923,7 +942,7 @@ export default function PaperFigurePlannerStage({
           notes: '',
           figureNo: nextFigureNo,
           status: 'PLANNED',
-          suggestionMeta: pendingSuggestionMeta || undefined
+          suggestionMeta: effectiveSuggestionMeta || undefined
         })
       });
       
@@ -1098,7 +1117,7 @@ export default function PaperFigurePlannerStage({
     }
   };
 
-  // Get AI suggestions - called only when user explicitly clicks "Let AI Suggest"
+  // Get AI suggestions - called only when user explicitly clicks "Generate Suggestions"
   const handleGetSuggestions = async () => {
     if (!authToken) return;
     setLoadingSuggestions(true);
@@ -1106,33 +1125,19 @@ export default function PaperFigurePlannerStage({
     
     const requestState = startCancelableRequest('Generating AI suggestions', 180000);
     try {
-      const paperSections = getSectionMapFromSession(session);
-      const selectedSections = suggestionScopeMode === 'selected_sections'
-        ? selectedSuggestionSectionOptions
-        : suggestionSectionOptions;
-      if (suggestionScopeMode === 'selected_sections' && selectedSections.length === 0) {
+      const selectedSection = selectedSuggestionSectionOption;
+      if (!selectedSection) {
         showToast({
           type: 'warning',
-          title: 'Choose source sections',
-          message: 'Select at least one non-empty section before asking for figure suggestions.'
+          title: 'Choose source section',
+          message: 'Select one non-empty section before asking for figure suggestions.'
         });
         return;
       }
-      const scopedSections = suggestionScopeMode === 'selected_sections'
-        ? selectedSections.reduce<Record<string, string>>((acc, section) => {
-            acc[section.sectionKey] = section.content;
-            return acc;
-          }, {})
-        : paperSections;
+      const scopedSections = {
+        [selectedSection.sectionKey]: selectedSection.content
+      };
       const normalizedPrefs = normalizePrefs();
-      const blueprint = session?.paperBlueprint
-        ? {
-            thesisStatement: session.paperBlueprint.thesisStatement || '',
-            centralObjective: session.paperBlueprint.centralObjective || '',
-            keyContributions: session.paperBlueprint.keyContributions || [],
-            sectionPlan: session.paperBlueprint.sectionPlan || []
-          }
-        : undefined;
 
       const response = await fetch(`/api/papers/${sessionId}/figures/suggest`, {
         method: 'POST',
@@ -1142,15 +1147,10 @@ export default function PaperFigurePlannerStage({
           Authorization: `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          paperTitle: session?.researchTopic?.title || '',
-          paperAbstract: session?.researchTopic?.abstractDraft || '',
-          datasetDescription: session?.researchTopic?.datasetDescription || '',
           sections: scopedSections,
-          sectionScope: suggestionScopeMode === 'selected_sections'
-            ? { mode: 'selected_sections', sectionKeys: selectedSections.map((section) => section.sectionKey) }
-            : { mode: 'full_draft' },
-          blueprint,
+          sectionScope: { mode: 'selected_sections', sectionKeys: [selectedSection.sectionKey] },
           preferences: normalizedPrefs,
+          maxSuggestions: 1,
           useLLM: true
         })
       });
@@ -1159,8 +1159,6 @@ export default function PaperFigurePlannerStage({
       if (response.ok) {
         const nextSuggestions: FigureSuggestionItem[] = parseSuggestionsFromApi(data.suggestions || []).filter((s) => s.status !== 'dismissed');
         setSuggestions(nextSuggestions);
-        // Auto-select only pending suggestions
-        setSelectedSuggestionIds(nextSuggestions.filter(s => s.status !== 'used' && s.status !== 'dismissed').map((item) => item.id));
         setSectionFilter(SUGGESTION_SECTION_FILTER_ALL);
         setCategoryFilter(SUGGESTION_SECTION_FILTER_ALL);
         setImportanceFilter(SUGGESTION_SECTION_FILTER_ALL);
@@ -1192,15 +1190,21 @@ export default function PaperFigurePlannerStage({
 
   // Apply suggestion – tracks the suggestion ID so we can mark it as used after figure creation
   const applySuggestion = (suggestion: FigureSuggestionItem) => {
+    const sourceMeta = getSuggestionSourceSectionMeta(suggestion);
+    const sourceOption = findSectionOption(suggestionSectionOptions, sourceMeta?.sectionKey);
+    const normalizedSource = toSourceSectionMeta(sourceOption || sourceMeta);
     setTitle(suggestion.title);
     setDescription(suggestion.description);
     setFigureType(suggestion.suggestedType || 'flowchart');
     setCategory(suggestion.category || 'DIAGRAM');
+    if (sourceOption) {
+      setSelectedFigureSectionKey(sourceOption.sectionKey);
+    }
     if ((suggestion.category === 'SKETCH') || (suggestion.category === 'ILLUSTRATED_FIGURE') || suggestion.suggestedType?.startsWith('sketch')) {
       setSketchStyle(resolveSketchStyleFromPreferences(normalizePrefs()));
     }
     setPendingSuggestionId(suggestion.id);
-    setPendingSuggestionMeta(extractFigureSuggestionMeta(suggestion) || null);
+    setPendingSuggestionMeta(buildSingleSectionFigureMeta(normalizedSource, extractFigureSuggestionMeta(suggestion)) || null);
     setShowSuggestions(false);
   };
 
@@ -1387,15 +1391,17 @@ Please regenerate the figure incorporating the user's feedback and corrections.
     setCategory(option.category as FigureCategory);
     setShowTypeDropdown(false);
 
-    if (option.genre) {
-      setPendingSuggestionMeta({
-        figureGenre: option.genre,
-        sketchMode: 'GUIDED',
-        sketchStyle: sketchStyle,
-      });
-    } else {
-      setPendingSuggestionMeta(null);
-    }
+    setPendingSuggestionMeta((current) => {
+      const nextMeta = option.genre
+        ? {
+            ...(current || {}),
+            figureGenre: option.genre,
+            sketchMode: 'GUIDED' as const,
+            sketchStyle,
+          }
+        : current;
+      return nextMeta ? (buildSingleSectionFigureMeta(selectedFigureSourceMeta, nextMeta) || null) : null;
+    });
 
     if (!option.value.startsWith('sketch-')) {
       setSketchUploadFile(null);
@@ -1417,6 +1423,14 @@ Please regenerate the figure incorporating the user's feedback and corrections.
   // Generate sketch using AI
   const handleGenerateSketch = async () => {
     if (!authToken || !title.trim()) return;
+    if (!sourceSectionReady) {
+      showToast({
+        type: 'warning',
+        title: 'Choose source section',
+        message: 'Select one draft section before generating an illustration.'
+      });
+      return;
+    }
     
     // Resolve sketch mode: ILLUSTRATED_FIGURE genres always use GUIDED,
     // free-form sketches derive from the figureType suffix (auto/guided/refine).
@@ -1446,6 +1460,7 @@ Please regenerate the figure incorporating the user's feedback and corrections.
     try {
       const selectedOption = FIGURE_OPTIONS.find(o => o.value === figureType);
       const genre = selectedOption?.genre || pendingSuggestionMeta?.figureGenre || undefined;
+      const effectiveSuggestionMeta = buildSingleSectionFigureMeta(selectedFigureSourceMeta, pendingSuggestionMeta);
 
       const body: any = {
         mode: sketchMode,
@@ -1453,7 +1468,7 @@ Please regenerate the figure incorporating the user's feedback and corrections.
         userPrompt: description,
         style: sketchStyle,
         ...(genre && { figureGenre: genre }),
-        ...(pendingSuggestionMeta && { suggestionMeta: pendingSuggestionMeta }),
+        ...(effectiveSuggestionMeta && { suggestionMeta: effectiveSuggestionMeta }),
       };
       
       // Add uploaded image for REFINE mode
@@ -1502,199 +1517,6 @@ Please regenerate the figure incorporating the user's feedback and corrections.
     }
   };
 
-  const toggleSuggestionSelection = (suggestion: FigureSuggestionItem) => {
-    if (suggestion.status === 'used' || suggestion.status === 'dismissed') return;
-    const suggestionId = suggestion.id;
-    setSelectedSuggestionIds((prev) => (
-      prev.includes(suggestionId)
-        ? prev.filter((id) => id !== suggestionId)
-        : [...prev, suggestionId]
-    ));
-  };
-
-  const toggleSelectAllFiltered = () => {
-    // Exclude already-used suggestions from select-all toggle
-    const selectableIds = filteredSuggestions
-      .filter(s => s.status !== 'used' && s.status !== 'dismissed')
-      .map((item) => item.id);
-    const selected = new Set(selectedSuggestionIds);
-    const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
-
-    if (allSelected) {
-      setSelectedSuggestionIds((prev) => prev.filter((id) => !selectableIds.includes(id)));
-      return;
-    }
-
-    setSelectedSuggestionIds((prev) => Array.from(new Set([...prev, ...selectableIds])));
-  };
-
-  const handleGenerateAll = async () => {
-    if (!authToken || isGeneratingBatch) return;
-    const pending = figures.filter((f) => f.status === 'PLANNED' || f.status === 'FAILED');
-    if (pending.length === 0) return;
-
-    setIsGeneratingBatch(true);
-    setGenerationFeedback({
-      kind: 'batch',
-      count: pending.length,
-      startedAt: Date.now()
-    });
-    const requestState = startCancelableRequest(`Generating ${pending.length} figures`, 180000);
-    try {
-      const response = await fetch(`/api/papers/${sessionId}/figures/batch`, {
-        method: 'POST',
-        signal: requestState.controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          mode: 'generateExisting',
-          figureIds: pending.map((figure) => figure.id),
-          preferences: normalizePrefs(),
-          useLLM: true,
-          continueOnError: true
-        })
-      });
-
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || 'Batch generation failed');
-      }
-
-      await loadFigures();
-      scrollToFiguresBottom();
-      const results = Array.isArray(data.results) ? data.results : [];
-      const generated = Number(data.generated || results.filter((entry: any) => entry?.success === true).length);
-      const failed = Number(data.failed || results.filter((entry: any) => entry?.success === false).length);
-      if (failed > 0) {
-        showToast({
-          type: 'warning',
-          title: `Generated ${generated}/${generated + failed} figures`,
-          message: getBatchFailureMessage(results)
-        });
-      } else {
-        showToast({
-          type: 'success',
-          title: `Generated ${generated} figure${generated === 1 ? '' : 's'}`,
-          message: 'Batch generation completed successfully.'
-        });
-      }
-    } catch (error) {
-      if (isAbortError(error)) {
-        showToast({
-          type: requestState.timedOut ? 'warning' : 'info',
-          title: requestState.timedOut ? 'Batch generation timed out' : 'Batch generation canceled',
-          message: requestState.timedOut
-            ? 'The batch request took longer than 180 seconds and was canceled.'
-            : 'The batch request was canceled.'
-        });
-      } else {
-        console.error('Batch generation failed:', error);
-        showToast({
-          type: 'error',
-          title: 'Batch generation failed',
-          message: error instanceof Error ? error.message : 'Unexpected error'
-        });
-      }
-    } finally {
-      finishCancelableRequest(requestState);
-      setIsGeneratingBatch(false);
-      setGenerationFeedback(null);
-    }
-  };
-
-  const handleCreateAndGenerateFromSuggestions = async () => {
-    if (!authToken || isApplyingSuggestionBatch) return;
-    if (selectedSuggestions.length === 0) return;
-
-    setIsApplyingSuggestionBatch(true);
-    setGenerationFeedback({
-      kind: 'batch',
-      count: selectedSuggestions.length,
-      startedAt: Date.now()
-    });
-    const requestState = startCancelableRequest(`Creating and generating ${selectedSuggestions.length} suggestions`, 180000);
-    try {
-      const response = await fetch(`/api/papers/${sessionId}/figures/batch`, {
-        method: 'POST',
-        signal: requestState.controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          mode: 'createAndGenerateFromSuggestions',
-          suggestions: selectedSuggestions.map((item) => ({
-            title: item.title,
-            description: item.description,
-            category: item.category,
-            suggestedType: item.suggestedType,
-            ...extractFigureSuggestionMeta(item)
-          })),
-          preferences: normalizePrefs(),
-          useLLM: true,
-          continueOnError: true
-        })
-      });
-
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to generate selected suggestions');
-      }
-
-      await loadFigures();
-      scrollToFiguresBottom();
-      const results = Array.isArray(data.results) ? data.results : [];
-      const generated = Number(data.generated || results.filter((entry: any) => entry?.success === true).length);
-      const failed = Number(data.failed || results.filter((entry: any) => entry?.success === false).length);
-
-      // Mark all batch-processed suggestions as used, linking them to created figures
-      const batchUsedEntries: Array<{ suggestionTitle: string; figureId: string }> = results
-        .filter((r: any) => r?.figureId && r?.title)
-        .map((r: any) => ({ suggestionTitle: r.title, figureId: r.figureId }));
-      if (batchUsedEntries.length > 0) {
-        markSuggestionsUsedBatch(batchUsedEntries);
-      }
-
-      if (failed > 0) {
-        showToast({
-          type: 'warning',
-          title: `Generated ${generated}/${generated + failed} figures`,
-          message: getBatchFailureMessage(results)
-        });
-      } else {
-        showToast({
-          type: 'success',
-          title: `Generated ${generated} figure${generated === 1 ? '' : 's'}`,
-          message: 'All selected suggestions were generated.'
-        });
-      }
-      setShowSuggestions(false);
-    } catch (error) {
-      if (isAbortError(error)) {
-        showToast({
-          type: requestState.timedOut ? 'warning' : 'info',
-          title: requestState.timedOut ? 'Suggestion batch timed out' : 'Suggestion batch canceled',
-          message: requestState.timedOut
-            ? 'The batch request took longer than 180 seconds and was canceled.'
-            : 'The batch request was canceled.'
-        });
-      } else {
-        console.error('Suggestion batch failed:', error);
-        showToast({
-          type: 'error',
-          title: 'Suggestion batch failed',
-          message: error instanceof Error ? error.message : 'Unexpected error'
-        });
-      }
-    } finally {
-      finishCancelableRequest(requestState);
-      setIsApplyingSuggestionBatch(false);
-      setGenerationFeedback(null);
-    }
-  };
-
   const plannedFigures = figures.filter(f => f.status === 'PLANNED' || f.status === 'FAILED');
   const generatedFigures = figures.filter(f => f.status === 'GENERATED');
 
@@ -1720,7 +1542,7 @@ Please regenerate the figure incorporating the user's feedback and corrections.
               className="gap-2 border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300"
             >
               <Sparkles className="w-4 h-4" />
-              Suggest Figures/Charts From My Data
+              Suggest Figures
             </Button>
           </div>
           
@@ -1905,7 +1727,7 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                         <div className="px-3 py-2 bg-violet-50 border-b border-violet-100 sticky top-0 z-10">
                           <span className="text-xs font-semibold text-violet-600 uppercase tracking-wider">Diagrams</span>
                         </div>
-                        {FIGURE_OPTIONS.filter(o => o.category === 'DIAGRAM').map((option) => (
+                        {FIGURE_OPTIONS.filter(o => o.category === 'DIAGRAM' && !(isGrantMode && GRANT_BANNED_DIAGRAM_TYPES.has(o.value))).map((option) => (
                           <button
                             key={option.value}
                             onClick={() => selectType(option)}
@@ -1986,6 +1808,69 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                     </motion.div>
                   )}
                 </AnimatePresence>
+              </div>
+
+              {/* Source Section Selector */}
+              <div className="relative">
+                <div className="mb-2 flex items-center justify-between px-1">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Source Section</p>
+                    <p className="mt-1 text-xs text-slate-500">Use one draft section to keep generation focused and token-efficient.</p>
+                  </div>
+                  {pendingSuggestionId && (
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                      Locked to suggestion
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={!!pendingSuggestionId || suggestionSectionOptions.length === 0}
+                  onClick={() => setShowFigureSectionDropdown((open) => !open)}
+                  className="group w-full rounded-2xl border border-slate-200/80 bg-white px-4 py-3 text-left shadow-sm transition-all hover:border-blue-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <span className="block truncate font-medium text-slate-800">
+                        {suggestionSectionOptions.length === 0 ? 'No drafted sections found' : figureSourceLabel}
+                      </span>
+                      {selectedFigureSectionOption && (
+                        <span className="text-xs text-slate-500">{selectedFigureSectionOption.wordCount} words</span>
+                      )}
+                    </div>
+                    <ChevronDown className={`h-5 w-5 shrink-0 text-slate-400 transition-transform group-hover:text-slate-600 ${showFigureSectionDropdown ? 'rotate-180' : ''}`} />
+                  </div>
+                </button>
+                {showFigureSectionDropdown && !pendingSuggestionId && (
+                  <div className="absolute left-0 right-0 z-20 mt-2 max-h-72 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl">
+                    {suggestionSectionOptions.length === 0 ? (
+                      <p className="px-3 py-3 text-sm text-slate-500">No non-empty draft sections found.</p>
+                    ) : (
+                      suggestionSectionOptions.map((section) => {
+                        const checked = selectedFigureSectionOption?.sectionKey === section.sectionKey;
+                        return (
+                          <button
+                            key={section.sectionKey}
+                            type="button"
+                            onClick={() => {
+                              setSelectedFigureSectionKey(section.sectionKey);
+                              setShowFigureSectionDropdown(false);
+                            }}
+                            className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50"
+                          >
+                            <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${checked ? 'border-blue-500 bg-blue-500 text-white' : 'border-slate-300 text-transparent'}`}>
+                              <Check className="h-3 w-3" />
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium text-slate-800">{section.label}</span>
+                              <span className="block text-xs text-slate-400">{section.wordCount} words</span>
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Title */}
@@ -2136,7 +2021,7 @@ Please regenerate the figure incorporating the user's feedback and corrections.
               {(figureType.startsWith('sketch-') || category === 'ILLUSTRATED_FIGURE') ? (
                 <Button 
                   onClick={handleGenerateSketch}
-                  disabled={isGeneratingSketch || !title.trim() || (figureType === 'sketch-refine' && !sketchUploadFile)}
+                  disabled={isGeneratingSketch || !title.trim() || !sourceSectionReady || (figureType === 'sketch-refine' && !sketchUploadFile)}
                   className={`w-full h-12 rounded-xl text-white font-medium shadow-lg ${
                     category === 'ILLUSTRATED_FIGURE'
                       ? 'bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 shadow-orange-500/25'
@@ -2158,7 +2043,7 @@ Please regenerate the figure incorporating the user's feedback and corrections.
               ) : (
                 <Button 
                   onClick={handleCreate}
-                  disabled={isCreating || !title.trim()}
+                  disabled={isCreating || !title.trim() || !sourceSectionReady}
                   className={`w-full h-12 rounded-xl text-white font-medium shadow-lg ${
                     pendingSuggestionMeta
                       ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 shadow-amber-500/25'
@@ -2278,8 +2163,8 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                         </div>
                         
                         {/* Content */}
-                        <div className="flex-1 p-4 flex items-center justify-between">
-                          <div className="min-w-0">
+                        <div className="min-w-0 flex-1 p-4 flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
                               <span className="text-xs font-medium text-slate-400">Fig. {figure.figureNo}</span>
                               <div className={`w-1.5 h-1.5 rounded-full ${
@@ -2289,8 +2174,18 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                                 'bg-slate-300'
                               }`} />
                             </div>
-                            <h4 className="font-medium text-slate-900 truncate">{figure.title}</h4>
-                            <p className="text-sm text-slate-500 truncate">{figure.caption}</p>
+                            <h4
+                              className="font-medium text-slate-900 truncate"
+                              title={figure.title}
+                            >
+                              {figure.title}
+                            </h4>
+                            <p
+                              className="text-sm text-slate-500 truncate"
+                              title={figure.caption || undefined}
+                            >
+                              {figure.caption}
+                            </p>
                             {isGenerating && activeGenerationMessage && (
                               <p className="mt-1 max-w-xl text-xs text-blue-600">
                                 {activeGenerationMessage}
@@ -2299,7 +2194,7 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                           </div>
                           
                           {/* Actions - always visible for every status */}
-                          <div className="flex items-center gap-1 ml-4">
+                          <div className="flex shrink-0 items-center gap-1">
                             {/* Generate / Regenerate / Retry - always available */}
                             {figure.status === 'PLANNED' ? (
                               <Button
@@ -2414,25 +2309,6 @@ Please regenerate the figure incorporating the user's feedback and corrections.
               </AnimatePresence>
               <div ref={figureListEndRef} className="h-px" />
             </div>
-            
-            {/* Generate All Button */}
-            {plannedFigures.length > 1 && (
-              <div className="flex justify-center pt-4">
-                <Button
-                  variant="outline"
-                  onClick={handleGenerateAll}
-                  disabled={!!generating || isGeneratingBatch}
-                  className="rounded-xl gap-2"
-                >
-                  {isGeneratingBatch ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Wand2 className="w-4 h-4" />
-                  )}
-                  Generate All ({plannedFigures.length})
-                </Button>
-              </div>
-            )}
           </div>
         )}
 
@@ -2451,290 +2327,269 @@ Please regenerate the figure incorporating the user's feedback and corrections.
 
       {/* AI Suggestions Dialog */}
       <Dialog open={showSuggestions} onOpenChange={setShowSuggestions}>
-        <DialogContent className="max-w-5xl bg-white border-0 shadow-2xl rounded-2xl">
+        <DialogContent className="max-w-3xl bg-white border-0 shadow-2xl rounded-2xl">
           <DialogHeader className="pb-4 border-b border-slate-100">
             <DialogTitle className="flex items-center gap-2 text-xl">
               <Sparkles className="w-5 h-5 text-amber-500" />
-              Suggest Figures and Charts From Your Data
+              Suggest Figures
             </DialogTitle>
           </DialogHeader>
 
-          <div className="py-4 max-h-[75vh] overflow-y-auto space-y-5">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-semibold text-slate-700">Preference Profile</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleGetSuggestions}
-                  disabled={loadingSuggestions}
-                  className="gap-2"
-                >
-                  {loadingSuggestions ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  {suggestionsRequested ? 'Refresh Suggestions' : 'Let AI Suggest'}
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <div className="py-4 max-h-[75vh] overflow-y-auto space-y-4">
+            <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">Choose source</p>
+                  <p className="text-xs text-slate-500 mt-1">Select the one draft section the AI should inspect before recommending a figure.</p>
+                </div>
+
                 <div className="relative text-xs text-slate-600 space-y-1">
-                  <span className="block">Source sections</span>
+                  <span className="block font-medium">Source section</span>
                   <button
                     type="button"
                     onClick={() => setShowSectionScopeDropdown((open) => !open)}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-700 flex items-center justify-between gap-2"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-left text-sm text-slate-700 flex items-center justify-between gap-2"
                   >
                     <span className="truncate">{suggestionScopeLabel}</span>
                     <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
                   </button>
                   {showSectionScopeDropdown && (
-                    <div className="absolute z-40 mt-1 w-full min-w-[260px] rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
-                      <div className="grid grid-cols-2 gap-1 mb-2">
-                        <button
-                          type="button"
-                          onClick={() => setSuggestionScopeMode('selected_sections')}
-                          className={`rounded-lg px-2 py-1.5 text-xs font-medium ${suggestionScopeMode === 'selected_sections' ? 'bg-amber-100 text-amber-800' : 'text-slate-600 hover:bg-slate-50'}`}
-                        >
-                          Selected
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSuggestionScopeMode('full_draft')}
-                          className={`rounded-lg px-2 py-1.5 text-xs font-medium ${suggestionScopeMode === 'full_draft' ? 'bg-amber-100 text-amber-800' : 'text-slate-600 hover:bg-slate-50'}`}
-                        >
-                          Full draft
-                        </button>
+                    <div className="absolute z-40 mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                      <div className="max-h-56 overflow-y-auto space-y-1">
+                        {suggestionSectionOptions.length === 0 ? (
+                          <p className="px-2 py-2 text-xs text-slate-500">No non-empty draft sections found.</p>
+                        ) : (
+                          suggestionSectionOptions.map((section) => {
+                            const checked = selectedSuggestionSectionOption?.sectionKey === section.sectionKey;
+                            return (
+                              <button
+                                key={section.sectionKey}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedSuggestionSectionKey(section.sectionKey);
+                                  setShowSectionScopeDropdown(false);
+                                }}
+                                className="w-full rounded-lg px-2 py-2 text-left hover:bg-slate-50 flex items-start gap-2"
+                              >
+                                <span className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-300 text-transparent'}`}>
+                                  <Check className="w-3 h-3" />
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block truncate text-xs font-medium text-slate-700">{section.label}</span>
+                                  <span className="block text-[10px] text-slate-400">{section.wordCount} words</span>
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
                       </div>
-                      {suggestionScopeMode === 'selected_sections' && (
-                        <div className="max-h-56 overflow-y-auto space-y-1">
-                          {suggestionSectionOptions.length === 0 ? (
-                            <p className="px-2 py-2 text-xs text-slate-500">No non-empty draft sections found.</p>
-                          ) : (
-                            suggestionSectionOptions.map((section) => {
-                              const checked = selectedSuggestionSectionSet.has(section.sectionKey);
-                              return (
-                                <button
-                                  key={section.sectionKey}
-                                  type="button"
-                                  onClick={() => toggleSuggestionSectionKey(section.sectionKey)}
-                                  className="w-full rounded-lg px-2 py-2 text-left hover:bg-slate-50 flex items-start gap-2"
-                                >
-                                  <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-300 text-transparent'}`}>
-                                    <Check className="w-3 h-3" />
-                                  </span>
-                                  <span className="min-w-0">
-                                    <span className="block truncate text-xs font-medium text-slate-700">{section.label}</span>
-                                    <span className="block text-[10px] text-slate-400">{section.wordCount} words</span>
-                                  </span>
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Style preset</span>
-                  <select
-                    value={suggestionPreferences.stylePreset}
-                    onChange={(e) => updatePreference('stylePreset', e.target.value as FigureSuggestionPreferences['stylePreset'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.stylePreset.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Output mix</span>
-                  <select
-                    value={suggestionPreferences.outputMix}
-                    onChange={(e) => updatePreference('outputMix', e.target.value as FigureSuggestionPreferences['outputMix'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.outputMix.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Chart preference</span>
-                  <select
-                    value={suggestionPreferences.chartPreference}
-                    onChange={(e) => updatePreference('chartPreference', e.target.value as FigureSuggestionPreferences['chartPreference'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.chartPreference.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Diagram preference</span>
-                  <select
-                    value={suggestionPreferences.diagramPreference}
-                    onChange={(e) => updatePreference('diagramPreference', e.target.value as FigureSuggestionPreferences['diagramPreference'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.diagramPreference.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Visual tone</span>
-                  <select
-                    value={suggestionPreferences.visualTone}
-                    onChange={(e) => updatePreference('visualTone', e.target.value as FigureSuggestionPreferences['visualTone'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.visualTone.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Color mode</span>
-                  <select
-                    value={suggestionPreferences.colorMode}
-                    onChange={(e) => updatePreference('colorMode', e.target.value as FigureSuggestionPreferences['colorMode'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.colorMode.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Detail level</span>
-                  <select
-                    value={suggestionPreferences.detailLevel}
-                    onChange={(e) => updatePreference('detailLevel', e.target.value as FigureSuggestionPreferences['detailLevel'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.detailLevel.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Annotation density</span>
-                  <select
-                    value={suggestionPreferences.annotationDensity}
-                    onChange={(e) => updatePreference('annotationDensity', e.target.value as FigureSuggestionPreferences['annotationDensity'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.annotationDensity.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Target audience</span>
-                  <select
-                    value={suggestionPreferences.targetAudience}
-                    onChange={(e) => updatePreference('targetAudience', e.target.value as FigureSuggestionPreferences['targetAudience'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.targetAudience.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-600 space-y-1">
-                  <span className="block">Strictness</span>
-                  <select
-                    value={suggestionPreferences.strictness}
-                    onChange={(e) => updatePreference('strictness', e.target.value as FigureSuggestionPreferences['strictness'])}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                  >
-                    {PREFERENCE_OPTIONS.strictness.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
+
+                <Button
+                  onClick={handleGetSuggestions}
+                  disabled={loadingSuggestions || !selectedSuggestionSectionOption}
+                  className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl"
+                >
+                  {loadingSuggestions ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                  {suggestionsRequested ? 'Refresh Suggestions' : 'Generate Suggestions'}
+                </Button>
               </div>
-            </div>
+
+              <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                <summary className="cursor-pointer text-sm font-medium text-slate-700">Advanced options</summary>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Style preset</span>
+                    <select
+                      value={suggestionPreferences.stylePreset}
+                      onChange={(e) => updatePreference('stylePreset', e.target.value as FigureSuggestionPreferences['stylePreset'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.stylePreset.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Output mix</span>
+                    <select
+                      value={suggestionPreferences.outputMix}
+                      onChange={(e) => updatePreference('outputMix', e.target.value as FigureSuggestionPreferences['outputMix'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.outputMix.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Chart preference</span>
+                    <select
+                      value={suggestionPreferences.chartPreference}
+                      onChange={(e) => updatePreference('chartPreference', e.target.value as FigureSuggestionPreferences['chartPreference'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.chartPreference.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Diagram preference</span>
+                    <select
+                      value={suggestionPreferences.diagramPreference}
+                      onChange={(e) => updatePreference('diagramPreference', e.target.value as FigureSuggestionPreferences['diagramPreference'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.diagramPreference.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Visual tone</span>
+                    <select
+                      value={suggestionPreferences.visualTone}
+                      onChange={(e) => updatePreference('visualTone', e.target.value as FigureSuggestionPreferences['visualTone'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.visualTone.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Color mode</span>
+                    <select
+                      value={suggestionPreferences.colorMode}
+                      onChange={(e) => updatePreference('colorMode', e.target.value as FigureSuggestionPreferences['colorMode'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.colorMode.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Detail level</span>
+                    <select
+                      value={suggestionPreferences.detailLevel}
+                      onChange={(e) => updatePreference('detailLevel', e.target.value as FigureSuggestionPreferences['detailLevel'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.detailLevel.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Annotation density</span>
+                    <select
+                      value={suggestionPreferences.annotationDensity}
+                      onChange={(e) => updatePreference('annotationDensity', e.target.value as FigureSuggestionPreferences['annotationDensity'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.annotationDensity.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Target audience</span>
+                    <select
+                      value={suggestionPreferences.targetAudience}
+                      onChange={(e) => updatePreference('targetAudience', e.target.value as FigureSuggestionPreferences['targetAudience'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.targetAudience.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 space-y-1">
+                    <span className="block">Strictness</span>
+                    <select
+                      value={suggestionPreferences.strictness}
+                      onChange={(e) => updatePreference('strictness', e.target.value as FigureSuggestionPreferences['strictness'])}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      {PREFERENCE_OPTIONS.strictness.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </details>
+            </section>
 
             <div className="rounded-xl border border-slate-200 p-4">
-              {/* Before user triggers AI - show call-to-action */}
               {!suggestionsRequested && !loadingSuggestions ? (
-                <div className="py-12 text-center space-y-4">
+                <div className="py-10 text-center space-y-3">
                   <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-100 to-amber-50 flex items-center justify-center mx-auto">
                     <Lightbulb className="w-8 h-8 text-amber-500" />
                   </div>
                   <div>
-                    <p className="text-slate-700 font-medium text-base">Ready to Analyze Your Paper</p>
+                    <p className="text-slate-700 font-medium text-base">Ready to generate suggestions</p>
                     <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                      Configure your preferences above, then click &ldquo;Let AI Suggest&rdquo; to analyze your paper content and recommend relevant figures and charts.
-                    </p>
-                    <p className="text-xs text-slate-400 mt-2 max-w-md mx-auto">
-                      Or use the &ldquo;New Figure&rdquo; form below the dialog to create figures manually with full control.
+                      Choose one source section above, then generate the best figure idea for it.
                     </p>
                   </div>
-                  <Button
-                    onClick={handleGetSuggestions}
-                    className="gap-2 bg-amber-600 hover:bg-amber-700 text-white px-8 py-3 text-base rounded-xl shadow-lg shadow-amber-500/25"
-                  >
-                    <Sparkles className="w-5 h-5" />
-                    Let AI Suggest
-                  </Button>
                 </div>
               ) : (
                 <>
-                  {/* Filters - only visible once suggestions have been requested */}
-                  <div className="flex flex-wrap items-center gap-3 mb-3">
-                    <label className="text-xs text-slate-600">
-                      <span className="block mb-1">Section filter</span>
-                      <select
-                        value={sectionFilter}
-                        onChange={(e) => setSectionFilter(e.target.value)}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                      >
-                        <option value={SUGGESTION_SECTION_FILTER_ALL}>All sections</option>
-                        {suggestionSections.map((section) => (
-                          <option key={section} value={section}>{section}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs text-slate-600">
-                      <span className="block mb-1">Category filter</span>
-                      <select
-                        value={categoryFilter}
-                        onChange={(e) => setCategoryFilter(e.target.value)}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                      >
-                        <option value={SUGGESTION_SECTION_FILTER_ALL}>All categories</option>
-                        {Object.keys(CATEGORY_COLORS).map((value) => (
-                          <option key={value} value={value}>{value.replace('_', ' ')}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs text-slate-600">
-                      <span className="block mb-1">Importance filter</span>
-                      <select
-                        value={importanceFilter}
-                        onChange={(e) => setImportanceFilter(e.target.value)}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                      >
-                        <option value={SUGGESTION_SECTION_FILTER_ALL}>All priorities</option>
-                        <option value="required">Required</option>
-                        <option value="recommended">Recommended</option>
-                        <option value="optional">Optional</option>
-                      </select>
-                    </label>
-                    <Button size="sm" variant="outline" onClick={toggleSelectAllFiltered} className="mt-5">
-                      {filteredSuggestions.filter(s => s.status !== 'used' && s.status !== 'dismissed').length > 0 &&
-                      filteredSuggestions.filter(s => s.status !== 'used' && s.status !== 'dismissed').every((item) => selectedSuggestionIds.includes(item.id))
-                        ? 'Deselect filtered'
-                        : 'Select pending'}
-                    </Button>
-                  </div>
+                  {!loadingSuggestions && suggestions.length > 0 && (
+                    <details className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-slate-700">Filter results</summary>
+                      <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <label className="text-xs text-slate-600">
+                          <span className="block mb-1">Section</span>
+                          <select
+                            value={sectionFilter}
+                            onChange={(e) => setSectionFilter(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value={SUGGESTION_SECTION_FILTER_ALL}>All sections</option>
+                            {suggestionSections.map((section) => (
+                              <option key={section} value={section}>{section}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-xs text-slate-600">
+                          <span className="block mb-1">Category</span>
+                          <select
+                            value={categoryFilter}
+                            onChange={(e) => setCategoryFilter(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value={SUGGESTION_SECTION_FILTER_ALL}>All categories</option>
+                            {Object.keys(CATEGORY_COLORS).map((value) => (
+                              <option key={value} value={value}>{value.replace('_', ' ')}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-xs text-slate-600">
+                          <span className="block mb-1">Priority</span>
+                          <select
+                            value={importanceFilter}
+                            onChange={(e) => setImportanceFilter(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value={SUGGESTION_SECTION_FILTER_ALL}>All priorities</option>
+                            <option value="required">Required</option>
+                            <option value="recommended">Recommended</option>
+                            <option value="optional">Optional</option>
+                          </select>
+                        </label>
+                      </div>
+                    </details>
+                  )}
 
                   {loadingSuggestions ? (
                     <div className="py-12 text-center">
                       <Loader2 className="w-8 h-8 animate-spin text-amber-500 mx-auto mb-3" />
-                      <p className="text-slate-600">Analyzing your paper and blueprint context...</p>
+                      <p className="text-slate-600">Analyzing the selected section only...</p>
                     </div>
                   ) : filteredSuggestions.length === 0 ? (
                     <div className="py-12 text-center">
@@ -2745,7 +2600,6 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                   ) : (
                     <div className="space-y-3">
                       {filteredSuggestions.map((suggestion) => {
-                        const isSelected = selectedSuggestionIds.includes(suggestion.id);
                         const isUsed = suggestion.status === 'used';
                         const isDismissed = suggestion.status === 'dismissed';
                         const importanceTone = suggestion.importance === 'required'
@@ -2753,21 +2607,49 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                           : suggestion.importance === 'recommended'
                             ? 'border-blue-200 text-blue-700'
                             : 'border-slate-200 text-slate-600';
+                        const sourceSummary = Array.isArray(suggestion.sourceSections) && suggestion.sourceSections.length > 0
+                          ? suggestion.sourceSections.map((section) => section.label || section.sectionKey).join(', ')
+                          : suggestion.relevantSection;
+                        const labelEvidence = Array.isArray(suggestion.sectionLabelEvidence) && suggestion.sectionLabelEvidence.length > 0
+                          ? suggestion.sectionLabelEvidence
+                              .map((entry) => `${entry.label || entry.sectionKey}${entry.interpretedIntent ? ` (${entry.interpretedIntent})` : ''}`)
+                              .join(', ')
+                          : '';
+                        const diagramSummary = suggestion.diagramSpec
+                          ? [
+                              (suggestion.diagramSpec as any).visualIntent,
+                              (suggestion.diagramSpec as any).composition,
+                              (suggestion.diagramSpec as any).layout
+                            ].filter(Boolean).join(' / ')
+                          : '';
+                        const chartSummary = suggestion.chartSpec
+                          ? [
+                              (suggestion.chartSpec as any).chartType,
+                              (suggestion.chartSpec as any).xAxisLabel,
+                              (suggestion.chartSpec as any).yAxisLabel
+                            ].filter(Boolean).join(' / ')
+                          : '';
+                        const hasDetails = Boolean(
+                          suggestion.whyThisFigure ||
+                          suggestion.dataNeeded ||
+                          suggestion.sectionFitJustification ||
+                          sourceSummary ||
+                          labelEvidence ||
+                          suggestion.rendererPreference ||
+                          suggestion.suggestedType ||
+                          suggestion.figureRole ||
+                          typeof suggestion.expectedByReviewers === 'boolean' ||
+                          diagramSummary ||
+                          chartSummary ||
+                          suggestion.figureGenre
+                        );
 
                         return (
                           <div
                             key={suggestion.id}
-                            className={`rounded-xl border p-4 transition-all ${CATEGORY_ACCENTS[suggestion.category]} ${isSelected ? 'ring-2 ring-amber-300' : ''} ${isUsed ? 'opacity-60' : ''} ${isDismissed ? 'opacity-40' : ''}`}
+                            className={`rounded-xl border p-4 transition-all ${CATEGORY_ACCENTS[suggestion.category]} ${isUsed ? 'opacity-60' : ''} ${isDismissed ? 'opacity-40' : ''}`}
                           >
                             <div className="flex items-start gap-3">
-                              <button
-                                type="button"
-                                onClick={() => !isUsed && !isDismissed && toggleSuggestionSelection(suggestion)}
-                                disabled={isUsed}
-                                className={`mt-1 h-5 w-5 rounded border flex items-center justify-center ${isSelected ? 'bg-amber-500 border-amber-500' : 'bg-white border-slate-300'} ${isUsed ? 'cursor-not-allowed' : ''}`}
-                              >
-                                {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
-                              </button>
                               <div className="flex-1 min-w-0">
                                 <div className="flex flex-wrap items-center gap-2 mb-1">
                                   <Badge className={`${CATEGORY_COLORS[suggestion.category]} text-white text-[10px]`}>
@@ -2794,11 +2676,26 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                                 </div>
                                 <h4 className={`font-medium ${isUsed ? 'text-slate-500 line-through' : 'text-slate-900'}`}>{suggestion.title}</h4>
                                 <p className="text-sm text-slate-600 mt-1">{suggestion.description}</p>
-                                {suggestion.dataNeeded && (
-                                  <p className="text-xs text-slate-500 mt-2">Data needed: {suggestion.dataNeeded}</p>
-                                )}
-                                {suggestion.whyThisFigure && (
-                                  <p className="text-xs text-slate-500 mt-1">Why: {suggestion.whyThisFigure}</p>
+                                {hasDetails && (
+                                  <details className="mt-3 rounded-lg border border-white/70 bg-white/70 p-2">
+                                    <summary className="cursor-pointer text-xs font-medium text-slate-600">Details</summary>
+                                    <div className="mt-2 space-y-1.5 text-xs text-slate-600">
+                                      {suggestion.whyThisFigure && <p><span className="font-medium text-slate-700">Why:</span> {suggestion.whyThisFigure}</p>}
+                                      {suggestion.dataNeeded && <p><span className="font-medium text-slate-700">Data needed:</span> {suggestion.dataNeeded}</p>}
+                                      {suggestion.sectionFitJustification && <p><span className="font-medium text-slate-700">Section fit:</span> {suggestion.sectionFitJustification}</p>}
+                                      {sourceSummary && <p><span className="font-medium text-slate-700">Source:</span> {sourceSummary}</p>}
+                                      {labelEvidence && <p><span className="font-medium text-slate-700">Label evidence:</span> {labelEvidence}</p>}
+                                      {suggestion.suggestedType && <p><span className="font-medium text-slate-700">Suggested type:</span> {suggestion.suggestedType}</p>}
+                                      {suggestion.rendererPreference && <p><span className="font-medium text-slate-700">Renderer:</span> {suggestion.rendererPreference}</p>}
+                                      {suggestion.figureRole && <p><span className="font-medium text-slate-700">Role:</span> {suggestion.figureRole}</p>}
+                                      {typeof suggestion.expectedByReviewers === 'boolean' && (
+                                        <p><span className="font-medium text-slate-700">Reviewer expected:</span> {suggestion.expectedByReviewers ? 'Yes' : 'No'}</p>
+                                      )}
+                                      {diagramSummary && <p><span className="font-medium text-slate-700">Diagram spec:</span> {diagramSummary}</p>}
+                                      {chartSummary && <p><span className="font-medium text-slate-700">Chart spec:</span> {chartSummary}</p>}
+                                      {suggestion.figureGenre && <p><span className="font-medium text-slate-700">Genre:</span> {suggestion.figureGenre}</p>}
+                                    </div>
+                                  </details>
                                 )}
                               </div>
                               {isUsed ? (
@@ -2828,42 +2725,6 @@ Please regenerate the figure incorporating the user's feedback and corrections.
                   )}
                 </>
               )}
-            </div>
-
-            <div className="sticky bottom-0 bg-white pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-slate-600">
-                {selectedSuggestions.length} selected for batch creation and generation
-                {suggestions.some(s => s.status === 'used') && (
-                  <span className="ml-2 text-green-600">
-                    ({suggestions.filter(s => s.status === 'used').length} already used)
-                  </span>
-                )}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={dismissSelectedSuggestions}
-                  disabled={selectedSuggestions.length === 0 || isApplyingSuggestionBatch}
-                  className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-                >
-                  Discard Selected
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setSelectedSuggestionIds([])}
-                  disabled={selectedSuggestionIds.length === 0 || isApplyingSuggestionBatch}
-                >
-                  Clear Selection
-                </Button>
-                <Button
-                  onClick={handleCreateAndGenerateFromSuggestions}
-                  disabled={selectedSuggestions.length === 0 || isApplyingSuggestionBatch}
-                  className="gap-2 bg-amber-600 hover:bg-amber-700 text-white"
-                >
-                  {isApplyingSuggestionBatch ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  Accept Batch and Generate
-                </Button>
-              </div>
             </div>
           </div>
         </DialogContent>
