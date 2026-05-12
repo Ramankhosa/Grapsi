@@ -11,6 +11,7 @@ import {
   CheckCheck,
   CircleSlash,
   RefreshCw,
+  Download,
   Image as ImageIcon,
   X,
   Eye,
@@ -60,6 +61,13 @@ interface SectionDraftingStageProps {
   onNavigateToStage?: (stageKey: string) => void;
   grantReviewerRecommendations?: GrantReviewerRecommendation[];
   onGrantReviewerRecommendationStatusChange?: (updates: RecommendationStatusUpdate[]) => Promise<void>;
+  draftExportAction?: {
+    label?: string;
+    helperText?: string;
+    error?: string | null;
+    exporting?: boolean;
+    onExport: () => Promise<void> | void;
+  };
 }
 
 type GrantReviewerRecommendation = {
@@ -896,6 +904,7 @@ export default function SectionDraftingStage({
   selectedSection,
   grantReviewerRecommendations = [],
   onGrantReviewerRecommendationStatusChange,
+  draftExportAction,
 }: SectionDraftingStageProps) {
   // Session State
   const [session, setSession] = useState<any>(null);
@@ -1921,6 +1930,7 @@ export default function SectionDraftingStage({
       if (res.ok) {
         clearCitationValidationForSection(sectionKey);
         setPendingChanges(prev => { const next = new Set(prev); next.delete(sectionKey); return next; });
+        return true;
       } else if (res.status === 422) {
         setCitationValidationForSection(sectionKey, data);
       }
@@ -1929,6 +1939,7 @@ export default function SectionDraftingStage({
     } finally {
       setSaving(prev => ({ ...prev, [sectionKey]: false }));
     }
+    return false;
   }, [sessionId, authToken, clearCitationValidationForSection, setCitationValidationForSection]);
 
   const handleContentChange = useCallback((sectionKey: string, newContent: string) => {
@@ -1962,6 +1973,38 @@ export default function SectionDraftingStage({
       saveSection(sectionKey, content[sectionKey] || '');
     }
   }, [pendingChanges, content, saveSection]);
+
+  const flushPendingSaves = useCallback(async () => {
+    const pendingKeys = Array.from(pendingChanges);
+    if (pendingKeys.length === 0) return true;
+
+    pendingKeys.forEach((sectionKey) => {
+      if (autoSaveTimers.current[sectionKey]) {
+        clearTimeout(autoSaveTimers.current[sectionKey]);
+        delete autoSaveTimers.current[sectionKey];
+      }
+    });
+
+    const results = await Promise.all(
+      pendingKeys.map((sectionKey) => saveSection(sectionKey, content[sectionKey] || ''))
+    );
+    return results.every(Boolean);
+  }, [content, pendingChanges, saveSection]);
+
+  const handleDraftExportClick = useCallback(async () => {
+    if (!draftExportAction || draftExportAction.exporting) return;
+    const saved = await flushPendingSaves();
+    if (!saved) {
+      showMsg('Save pending section changes before exporting', 'error');
+      return;
+    }
+
+    try {
+      await draftExportAction.onExport();
+    } catch {
+      // The parent export action owns the detailed inline error message.
+    }
+  }, [draftExportAction, flushPendingSaves]);
 
   // ============================================================================
   // Dimension Flow Drafting
@@ -3904,6 +3947,34 @@ export default function SectionDraftingStage({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {draftExportAction && (
+              <div className="text-right">
+                <Tooltip content={draftExportAction.helperText || 'Export Word'} position="bottom">
+                  <button
+                    type="button"
+                    onClick={() => void handleDraftExportClick()}
+                    disabled={Boolean(draftExportAction.exporting)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {draftExportAction.exporting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Download className="h-3 w-3" />
+                    )}
+                    {draftExportAction.exporting ? 'Exporting...' : (draftExportAction.label || 'Export Word')}
+                  </button>
+                </Tooltip>
+                {draftExportAction.error ? (
+                  <div className="mt-1 max-w-[280px] text-xs text-rose-600">
+                    {draftExportAction.error}
+                  </div>
+                ) : draftExportAction.helperText ? (
+                  <div className="mt-1 max-w-[280px] text-xs text-slate-500">
+                    {draftExportAction.helperText}
+                  </div>
+                ) : null}
+              </div>
+            )}
             {autoModeRunning && autoModeProgress && (
               <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-100 text-xs">
                 <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />

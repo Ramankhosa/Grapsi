@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
+  Download,
   Loader2,
   Save,
 } from 'lucide-react'
@@ -121,6 +122,40 @@ export function hasSectionContent(section: GrantSection) {
   return hasStructuredResponse(section)
 }
 
+function hasPreparedStructuredExportContent(value: unknown): boolean {
+  if (value === null || typeof value === 'undefined') return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value !== 'object') return true
+
+  const record = value as Record<string, unknown>
+  if (Array.isArray(record.items)) {
+    return record.items.some((item) => {
+      const row = item && typeof item === 'object' && !Array.isArray(item)
+        ? item as Record<string, unknown>
+        : {}
+      return Boolean(row.completed)
+        || Boolean(row.checked)
+        || Boolean(row.done)
+        || String(row.notes || row.comment || row.response || row.value || '').trim().length > 0
+    })
+  }
+
+  if (Array.isArray(record.rows)) return record.rows.length > 0
+
+  return Object.entries(record).some(([key, entry]) => {
+    if (key === 'columns' || key === 'currency') return false
+    if (Array.isArray(entry)) return entry.length > 0
+    if (entry && typeof entry === 'object') return Object.keys(entry as Record<string, unknown>).length > 0
+    return String(entry || '').trim().length > 0
+  })
+}
+
+function hasPreparedExportContent(section: GrantSection) {
+  if (isNarrativeSection(section)) return sectionWordCount(section) > 0
+  return hasPreparedStructuredExportContent(section.structuredResponses?.[0]?.responseJson)
+}
+
 function statusLabel(section: GrantSection) {
   if (section.status === 'REVIEWED' || section.status === 'COMPLETED') return 'Reviewed'
   if (hasSectionContent(section)) return 'Draft in progress'
@@ -172,6 +207,8 @@ export default function GrantSectionDraftingStage({
   const [draftValues, setDraftValues] = useState<Record<string, string>>({})
   const [structuredValues, setStructuredValues] = useState<Record<string, string>>({})
   const [reviewerRecommendations, setReviewerRecommendations] = useState<GrantReviewerRecommendation[]>([])
+  const [exportingDraft, setExportingDraft] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const loadSections = useCallback(async () => {
     if (!authToken) return
@@ -294,29 +331,34 @@ export default function GrantSectionDraftingStage({
     }
   }, [authToken, draftingSessionId, onSessionUpdated])
 
-  const saveSection = useCallback(async (section: GrantSection) => {
-    if (!authToken) return
+  const persistSection = useCallback(async (section: GrantSection, markReviewed: boolean) => {
+    if (!authToken) throw new Error('You must be signed in to save grant sections')
 
+    const body =
+      section.sectionType === 'narrative' || section.sectionType === 'short_answer'
+        ? { content: draftValues[section.sectionKey] || '', markReviewed }
+        : { structuredData: JSON.parse(structuredValues[section.sectionKey] || '{}'), markReviewed }
+
+    const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/sections/${section.sectionKey}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(body),
+    })
+    const payload = await response.json().catch(() => ({})) as { message?: string }
+    if (!response.ok) {
+      throw new Error(payload.message || 'Failed to save grant section')
+    }
+
+    return payload
+  }, [authToken, draftValues, grantId, projectId, structuredValues])
+
+  const saveSection = useCallback(async (section: GrantSection) => {
     try {
       setSavingKey(section.sectionKey)
-      const body =
-        section.sectionType === 'narrative' || section.sectionType === 'short_answer'
-          ? { content: draftValues[section.sectionKey] || '', markReviewed: true }
-          : { structuredData: JSON.parse(structuredValues[section.sectionKey] || '{}'), markReviewed: true }
-
-      const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/sections/${section.sectionKey}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify(body),
-      })
-      const payload = await response.json().catch(() => ({})) as { message?: string }
-      if (!response.ok) {
-        throw new Error(payload.message || 'Failed to save grant section')
-      }
-
+      await persistSection(section, true)
       await loadSections()
       await refreshShadowSession()
     } catch (nextError) {
@@ -324,7 +366,70 @@ export default function GrantSectionDraftingStage({
     } finally {
       setSavingKey(null)
     }
-  }, [authToken, draftValues, grantId, loadSections, projectId, refreshShadowSession, structuredValues])
+  }, [loadSections, persistSection, refreshShadowSession])
+
+  const hasLocalGrantSectionChange = useCallback((section: GrantSection) => {
+    if (isNarrativeSection(section)) {
+      return (draftValues[section.sectionKey] || '') !== (section.content || '')
+    }
+    return (structuredValues[section.sectionKey] || '{}') !== structuredJson(section)
+  }, [draftValues, structuredValues])
+
+  const persistLocalGrantSectionChanges = useCallback(async () => {
+    const changedSections = sections.filter((section) =>
+      !isPaperBackedSection(section) && hasLocalGrantSectionChange(section)
+    )
+    if (changedSections.length === 0) return
+
+    for (const section of changedSections) {
+      await persistSection(section, false)
+    }
+    await loadSections()
+  }, [hasLocalGrantSectionChange, loadSections, persistSection, sections])
+
+  const downloadFile = useCallback((blob: Blob, filename: string) => {
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    window.URL.revokeObjectURL(url)
+  }, [])
+
+  const exportDraftWord = useCallback(async () => {
+    if (!authToken) return
+
+    try {
+      setExportingDraft(true)
+      setExportError(null)
+      await persistLocalGrantSectionChanges()
+
+      const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/export?mode=draft`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { message?: string; issues?: string[] }
+        const issueText = Array.isArray(payload.issues) && payload.issues.length > 0
+          ? ` ${payload.issues.slice(0, 3).join(' ')}`
+          : ''
+        throw new Error(`${payload.message || 'Failed to export Word document'}${issueText}`.trim())
+      }
+
+      const disposition = response.headers.get('Content-Disposition') || ''
+      const match = /filename="?([^";]+)"?/i.exec(disposition)
+      downloadFile(await response.blob(), match?.[1] || `grant-proposal_${grantId}.docx`)
+    } catch (nextError) {
+      setExportError(nextError instanceof Error ? nextError.message : 'Failed to export Word document')
+    } finally {
+      setExportingDraft(false)
+    }
+  }, [authToken, downloadFile, grantId, persistLocalGrantSectionChanges, projectId])
+
+  const draftExportSummary = useMemo(() => {
+    const notPrepared = sections.filter((section) => !hasPreparedExportContent(section)).length
+    const suffix = notPrepared === 1 ? '1 not prepared yet' : `${notPrepared} not prepared yet`
+    return `Includes all ${sections.length || 0} sections; ${suffix}`
+  }, [sections])
 
   if (loading) {
     return (
@@ -374,6 +479,13 @@ export default function GrantSectionDraftingStage({
           onSectionSelect={onSectionSelect}
           grantReviewerRecommendations={reviewerRecommendations}
           onGrantReviewerRecommendationStatusChange={updateReviewerRecommendationStatuses}
+          draftExportAction={{
+            label: 'Export Word',
+            helperText: draftExportSummary,
+            error: exportError,
+            exporting: exportingDraft,
+            onExport: exportDraftWord,
+          }}
         />
       </div>
     )
@@ -429,7 +541,24 @@ export default function GrantSectionDraftingStage({
               {savingKey === currentSection.sectionKey ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               Save Section
             </button>
+            <div className="text-right">
+              <button
+                type="button"
+                onClick={() => void exportDraftWord()}
+                disabled={savingKey !== null || exportingDraft}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {exportingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {exportingDraft ? 'Exporting...' : 'Export Word'}
+              </button>
+              <div className="mt-1 text-xs text-slate-500">{draftExportSummary}</div>
+            </div>
           </div>
+          {exportError ? (
+            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              {exportError}
+            </div>
+          ) : null}
 
           {isNarrative ? (
             <textarea

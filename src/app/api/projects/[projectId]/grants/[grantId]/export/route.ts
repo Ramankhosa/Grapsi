@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireProjectGrantActor } from '@/lib/grants/access'
-import { renderGrantSectionForExport } from '@/lib/grants/drafting'
+import { buildGrantProposalDocxSections } from '@/lib/grants/export'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 import { validateGrantFinalExportReadiness } from '@/lib/grants/draftContextContract'
 import { buildPaperDocxBuffer } from '@/lib/export/paper-docx-export'
@@ -9,11 +9,23 @@ import { buildPaperDocxBuffer } from '@/lib/export/paper-docx-export'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+function sanitizeFilenamePart(value: string) {
+  return String(value || 'grant-proposal')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'grant-proposal'
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
+  const exportMode = request.nextUrl.searchParams.get('mode')?.toLowerCase() === 'draft'
+    ? 'draft'
+    : 'final'
   const actor = await requireProjectGrantActor(request, projectId, 'read')
   if (actor instanceof NextResponse) {
     return actor
@@ -28,34 +40,32 @@ export async function GET(
       return NextResponse.json({ message: 'Grant workspace not found' }, { status: 404 })
     }
 
-    const readiness = validateGrantFinalExportReadiness({
-      sections: workspace.blueprint.sectionDrafts.map((section) => ({
-        sectionKey: section.sectionKey,
-        label: section.label,
-        workflowMode: (section as { workflowMode?: string | null }).workflowMode || null,
-        required: section.required,
-        content: section.content,
-        status: section.status,
-        isStale: (section as { isStale?: boolean | null }).isStale || false,
-        validationReport: (section as { validationReport?: unknown }).validationReport,
-        grantComplianceReport: (section as { grantComplianceReport?: any }).grantComplianceReport || null,
-      })),
-    })
-    if (!readiness.ok) {
-      return NextResponse.json(
-        {
-          message: 'Grant draft is not ready for export',
-          issues: readiness.issues,
-        },
-        { status: 409 }
-      )
+    if (exportMode === 'final') {
+      const readiness = validateGrantFinalExportReadiness({
+        sections: workspace.blueprint.sectionDrafts.map((section) => ({
+          sectionKey: section.sectionKey,
+          label: section.label,
+          workflowMode: (section as { workflowMode?: string | null }).workflowMode || null,
+          required: section.required,
+          content: section.content,
+          status: section.status,
+          isStale: (section as { isStale?: boolean | null }).isStale || false,
+          validationReport: (section as { validationReport?: unknown }).validationReport,
+          grantComplianceReport: (section as { grantComplianceReport?: any }).grantComplianceReport || null,
+        })),
+      })
+      if (!readiness.ok) {
+        return NextResponse.json(
+          {
+            message: 'Grant draft is not ready for export',
+            issues: readiness.issues,
+          },
+          { status: 409 }
+        )
+      }
     }
 
-    const sections = workspace.blueprint.sectionDrafts.map((section) => ({
-      key: section.sectionKey,
-      title: section.label,
-      content: renderGrantSectionForExport(section),
-    }))
+    const { sections } = buildGrantProposalDocxSections(workspace.blueprint.sectionDrafts)
 
     const buffer = await buildPaperDocxBuffer({
       title: workspace.grantSession.project.name,
@@ -76,7 +86,7 @@ export async function GET(
     return new NextResponse(buffer as BodyInit, {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'Content-Disposition': `attachment; filename="grant_${grantId}.docx"`,
+        'Content-Disposition': `attachment; filename="grant-proposal_${sanitizeFilenamePart(workspace.grantSession.project.name)}_${sanitizeFilenamePart(grantId)}.docx"`,
       },
     })
   } catch (error) {

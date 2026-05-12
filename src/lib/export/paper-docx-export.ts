@@ -2,7 +2,13 @@ export interface PaperDocxSection {
   key: string;
   title: string;
   content: string;
+  blocks?: PaperDocxBlock[];
 }
+
+export type PaperDocxBlock =
+  | { type: 'paragraph'; text: string }
+  | { type: 'bullets'; items: string[] }
+  | { type: 'table'; headers: string[]; rows: string[][] };
 
 export interface PaperDocxFigure {
   figureNo: number;
@@ -51,6 +57,10 @@ export async function buildPaperDocxBuffer(input: PaperDocxExportInput): Promise
     Header,
     PageNumber,
     SectionType,
+    Table,
+    TableRow,
+    TableCell,
+    WidthType,
   } = docx as any;
 
   const fontFamily = input.formatting.fontFamily;
@@ -145,13 +155,18 @@ export async function buildPaperDocxBuffer(input: PaperDocxExportInput): Promise
       })
     );
 
-    splitIntoParagraphs(section.content).forEach(text => {
-      children.push(
-        new Paragraph({
-          children: [new TextRun({ text, font: fontFamily, size: fontSizeHalfPt })],
-          style: 'bodyStyle'
-        })
-      );
+    const sectionBlocks = section.blocks && section.blocks.length > 0
+      ? section.blocks
+      : textToParagraphBlocks(section.content);
+    appendDocxBlocks(children, sectionBlocks, {
+      Paragraph,
+      TextRun,
+      Table,
+      TableRow,
+      TableCell,
+      WidthType,
+      fontFamily,
+      fontSizeHalfPt,
     });
   });
 
@@ -323,6 +338,118 @@ function splitIntoParagraphs(content: string): string[] {
   const normalized = content.replace(/\r\n/g, '\n').trim();
   if (!normalized) return [''];
   return normalized.split(/\n{2,}/).map(block => block.replace(/\n+/g, ' ').trim()).filter(Boolean);
+}
+
+function textToParagraphBlocks(content: string): PaperDocxBlock[] {
+  return splitIntoParagraphs(content).map(text => ({ type: 'paragraph', text }));
+}
+
+function appendDocxBlocks(
+  children: any[],
+  blocks: PaperDocxBlock[],
+  context: {
+    Paragraph: any;
+    TextRun: any;
+    Table: any;
+    TableRow: any;
+    TableCell: any;
+    WidthType: any;
+    fontFamily: string;
+    fontSizeHalfPt: number;
+  },
+) {
+  for (const block of blocks) {
+    if (block.type === 'paragraph') {
+      appendParagraph(children, block.text, context);
+    } else if (block.type === 'bullets') {
+      const items = block.items.map(item => String(item || '').trim()).filter(Boolean);
+      if (items.length === 0) {
+        appendParagraph(children, '', context);
+      }
+      items.forEach(item => {
+        children.push(
+          new context.Paragraph({
+            children: [new context.TextRun({ text: item, font: context.fontFamily, size: context.fontSizeHalfPt })],
+            style: 'bodyStyle',
+            bullet: { level: 0 },
+          })
+        );
+      });
+    } else if (block.type === 'table') {
+      const headers = block.headers.map(header => String(header || '').trim()).filter(Boolean);
+      const rows = block.rows
+        .map(row => row.map(cell => String(cell || '').trim()))
+        .filter(row => row.some(Boolean));
+      if (headers.length === 0 || rows.length === 0) {
+        continue;
+      }
+      children.push(buildDocxTable({ ...context, headers, rows }));
+      children.push(new context.Paragraph({ text: '', style: 'bodyStyle' }));
+    }
+  }
+}
+
+function appendParagraph(
+  children: any[],
+  text: string,
+  context: {
+    Paragraph: any;
+    TextRun: any;
+    fontFamily: string;
+    fontSizeHalfPt: number;
+  },
+) {
+  splitIntoParagraphs(text).forEach(paragraphText => {
+    children.push(
+      new context.Paragraph({
+        children: [new context.TextRun({ text: paragraphText, font: context.fontFamily, size: context.fontSizeHalfPt })],
+        style: 'bodyStyle'
+      })
+    );
+  });
+}
+
+function buildDocxTable(context: {
+  Table: any;
+  TableRow: any;
+  TableCell: any;
+  Paragraph: any;
+  TextRun: any;
+  WidthType: any;
+  fontFamily: string;
+  fontSizeHalfPt: number;
+  headers: string[];
+  rows: string[][];
+}) {
+  const makeCell = (text: string, bold = false) => new context.TableCell({
+    children: [
+      new context.Paragraph({
+        children: [
+          new context.TextRun({
+            text,
+            bold,
+            font: context.fontFamily,
+            size: context.fontSizeHalfPt,
+          }),
+        ],
+      }),
+    ],
+  });
+
+  return new context.Table({
+    width: {
+      size: 100,
+      type: context.WidthType.PERCENTAGE,
+    },
+    rows: [
+      new context.TableRow({
+        children: context.headers.map(header => makeCell(header, true)),
+      }),
+      ...context.rows.map(row => new context.TableRow({
+        children: context.headers.map((_, index) => makeCell(row[index] || '')),
+      })),
+    ],
+  });
 }
 
 function splitBibliography(bibliography: string): string[] {
