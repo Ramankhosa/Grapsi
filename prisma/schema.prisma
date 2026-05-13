@@ -498,8 +498,30 @@ model User {
   researcher_profile                 ResearcherProfile?
   researcher_notification_preference ResearcherNotificationPreference?
   researcher_saved_research_areas    ResearcherSavedResearchArea[]
+  research_area_taxonomy_uploads     ResearchAreaTaxonomyUpload[] @relation("ResearchAreaTaxonomyUploadImporter")
+  platform_role_assignments          PlatformTeamRoleAssignment[] @relation("PlatformRoleAssignmentUser")
+  platform_role_assignments_assigned PlatformTeamRoleAssignment[] @relation("PlatformRoleAssignmentAssigner")
 
   @@map("users")
+}
+
+model PlatformTeamRoleAssignment {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  roleCode         String   @map("role_code")
+  assignedByUserId String?  @map("assigned_by_user_id")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user       User  @relation("PlatformRoleAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedBy User? @relation("PlatformRoleAssignmentAssigner", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, roleCode], map: "platform_team_role_assignments_user_role_key")
+  @@index([userId, isActive], map: "idx_platform_team_role_assignments_user_active")
+  @@index([roleCode, isActive], map: "idx_platform_team_role_assignments_role_active")
+  @@index([assignedByUserId], map: "idx_platform_team_role_assignments_assigned_by")
+  @@map("platform_team_role_assignments")
 }
 
 // Email verification tokens for new users
@@ -852,6 +874,7 @@ model FundingCall {
   grantSessions               GrantSession[]
   grantPrepSessions           GrantPrepSession[]
   grantBlueprints             GrantBlueprint[]
+  research_area_taxonomies    FundingCallResearchAreaTaxonomy[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -1674,26 +1697,98 @@ model ResearcherNotificationPreference {
 }
 
 model ResearcherSavedResearchArea {
-  id                String                 @id @default(cuid())
-  user_id           String
-  label             String
-  research_area     String
-  keywords          String[]               @default([])
-  disciplines       String[]               @default([])
-  is_default        Boolean                @default(false)
-  use_for_alerts    Boolean                @default(true)
-  normalized_text   String?
-  content_hash      String?
-  embedding         Unsupported("vector")?
-  embedding_version String?
-  created_at        DateTime               @default(now())
-  updated_at        DateTime               @updatedAt
-  user              User                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id                   String                 @id @default(cuid())
+  user_id              String
+  taxonomy_area_id     String?
+  taxonomy_level1_code String?
+  taxonomy_level1_name String?
+  taxonomy_level2_code String?
+  taxonomy_level2_name String?
+  label                String
+  research_area        String
+  keywords             String[]               @default([])
+  disciplines          String[]               @default([])
+  is_default           Boolean                @default(false)
+  use_for_alerts       Boolean                @default(true)
+  normalized_text      String?
+  content_hash         String?
+  embedding            Unsupported("vector")?
+  embedding_version    String?
+  created_at           DateTime               @default(now())
+  updated_at           DateTime               @updatedAt
+  user                 User                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  taxonomy_area        ResearchAreaTaxonomyArea? @relation(fields: [taxonomy_area_id], references: [id], onDelete: SetNull)
 
   @@index([user_id], map: "idx_researcher_saved_research_areas_user_id")
   @@index([user_id, is_default], map: "idx_researcher_saved_research_areas_default")
+  @@index([taxonomy_area_id], map: "idx_researcher_saved_research_areas_taxonomy_area")
+  @@index([taxonomy_level1_code, taxonomy_level2_code], map: "idx_researcher_saved_research_areas_taxonomy_codes")
   @@index([embedding])
   @@map("researcher_saved_research_areas")
+}
+
+model ResearchAreaTaxonomyUpload {
+  id                String   @id @default(cuid())
+  source_name       String   @default("OECD FORD")
+  original_filename String?
+  row_count         Int      @default(0)
+  active_row_count  Int      @default(0)
+  status            String   @default("ACTIVE")
+  uploaded_by       String
+  notes             String?
+  created_at        DateTime @default(now())
+  activated_at      DateTime?
+  archived_at       DateTime?
+  uploadedBy        User     @relation("ResearchAreaTaxonomyUploadImporter", fields: [uploaded_by], references: [id], onDelete: Restrict)
+  areas             ResearchAreaTaxonomyArea[]
+
+  @@index([status], map: "idx_research_area_taxonomy_uploads_status")
+  @@index([created_at], map: "idx_research_area_taxonomy_uploads_created")
+  @@map("research_area_taxonomy_uploads")
+}
+
+model ResearchAreaTaxonomyArea {
+  id                    String   @id @default(cuid())
+  upload_id             String
+  level1_code           String
+  level1_name           String
+  level2_code           String   @default("")
+  level2_name           String   @default("")
+  description           String?
+  aliases               String[] @default([])
+  sort_order            Int?
+  is_active             Boolean  @default(true)
+  created_at            DateTime @default(now())
+  upload                ResearchAreaTaxonomyUpload @relation(fields: [upload_id], references: [id], onDelete: Cascade)
+  saved_research_areas  ResearcherSavedResearchArea[]
+  funding_call_mappings FundingCallResearchAreaTaxonomy[]
+
+  @@unique([upload_id, level1_code, level2_code], map: "research_area_taxonomy_areas_upload_level_codes_key")
+  @@index([upload_id, is_active], map: "idx_research_area_taxonomy_areas_upload_active")
+  @@index([level1_code], map: "idx_research_area_taxonomy_areas_level1_code")
+  @@index([level2_code], map: "idx_research_area_taxonomy_areas_level2_code")
+  @@map("research_area_taxonomy_areas")
+}
+
+model FundingCallResearchAreaTaxonomy {
+  id                   String   @id @default(cuid())
+  funding_call_id      String
+  taxonomy_area_id     String
+  taxonomy_level1_code String?
+  taxonomy_level1_name String?
+  taxonomy_level2_code String?
+  taxonomy_level2_name String?
+  source               String   @default("manual")
+  confidence           Float?
+  created_at           DateTime @default(now())
+  funding_call         FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  taxonomy_area        ResearchAreaTaxonomyArea @relation(fields: [taxonomy_area_id], references: [id], onDelete: Cascade)
+
+  @@unique([funding_call_id, taxonomy_area_id], map: "funding_call_research_area_taxonomies_call_area_key")
+  @@index([funding_call_id], map: "idx_funding_call_research_area_taxonomies_call")
+  @@index([taxonomy_area_id], map: "idx_funding_call_research_area_taxonomies_area")
+  @@index([taxonomy_level1_code, taxonomy_level2_code], map: "idx_funding_call_research_area_taxonomies_codes")
+  @@map("funding_call_research_area_taxonomies")
 }
 
 enum ApplicantCategory {

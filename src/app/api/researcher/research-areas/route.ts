@@ -7,6 +7,7 @@ import { researcherProfileService } from '@/lib/services/researcherProfileServic
 export const runtime = 'nodejs'
 
 const requestSchema = z.object({
+  taxonomyAreaId: z.string().nullable().optional(),
   label: z.string().max(120),
   researchArea: z.string().max(300),
   keywords: z.array(z.string().max(120)).max(40).default([]),

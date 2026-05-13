@@ -556,11 +556,16 @@ async function ensureGrantSessionAnchor(input: {
   });
 
   if (existing) {
+    const shouldResetToPrep =
+      existing.status === 'SETUP' ||
+      existing.status === 'PREP_OPTIONAL' ||
+      existing.fundingCallId !== input.fundingCallId;
+
     return prisma.grantSession.update({
       where: { id: existing.id },
       data: {
         fundingCallId: input.fundingCallId,
-        status: 'PREP_OPTIONAL',
+        ...(shouldResetToPrep ? { status: 'PREP_OPTIONAL' } : {}),
         updatedByUserId: input.userId,
       },
     });
@@ -590,7 +595,7 @@ export async function createOrReuseGrantPrepSession(input: {
   restart?: boolean;
 }) {
   const normalizedEngagementMode = normalizeGrantPrepEngagementMode(input.engagementMode);
-  const linkedGrantSession = input.fundingCallId
+  let linkedGrantSession = input.fundingCallId
     ? await ensureGrantSessionAnchor({
       projectId: input.projectId,
       tenantId: input.tenantId,
@@ -600,11 +605,25 @@ export async function createOrReuseGrantPrepSession(input: {
     : null;
 
   const context = await resolveGrantPrepContext(input.projectId, input.user);
-  const resolveWorkspaceLaunchUrl = (grantSessionId: string | null, prepStatus?: string | null) =>
+  const effectiveFundingCallId = input.fundingCallId || context.fundingCallId;
+  if (!linkedGrantSession && effectiveFundingCallId) {
+    linkedGrantSession = await ensureGrantSessionAnchor({
+      projectId: input.projectId,
+      tenantId: input.tenantId,
+      userId: input.user.id,
+      fundingCallId: effectiveFundingCallId,
+    });
+  }
+  const resolveWorkspaceLaunchUrl = (
+    grantSessionId: string | null,
+    prepStatus?: string | null,
+    grantStatus?: string | null
+  ) =>
     buildGrantWorkspaceUrl({
       projectId: input.projectId,
       grantSessionId,
       prepStatus,
+      grantStatus,
     });
   const resolvePrepUrl = (grantSessionId: string | null, sessionId: string) =>
     grantSessionId
@@ -626,7 +645,11 @@ export async function createOrReuseGrantPrepSession(input: {
 
   if (existingSession && !input.restart) {
     const effectiveGrantSessionId = linkedGrantSession?.id || existingSession.grant_session_id || null;
-    const launchUrl = resolveWorkspaceLaunchUrl(effectiveGrantSessionId, existingSession.status);
+    const launchUrl = resolveWorkspaceLaunchUrl(
+      effectiveGrantSessionId,
+      existingSession.status,
+      linkedGrantSession?.status
+    );
     let hydrated = null;
 
     if (
@@ -639,7 +662,7 @@ export async function createOrReuseGrantPrepSession(input: {
           engagement_mode: normalizedEngagementMode,
           grant_session_id: effectiveGrantSessionId,
           papsi_launch_url: launchUrl,
-          ...(input.fundingCallId ? { funding_call_id: input.fundingCallId } : {}),
+          ...(effectiveFundingCallId ? { funding_call_id: effectiveFundingCallId } : {}),
         },
         include: {
           messages: {
@@ -711,11 +734,11 @@ export async function createOrReuseGrantPrepSession(input: {
       tenantId: input.tenantId,
       project_id: input.projectId,
       user_id: input.user.id,
-      funding_call_id: context.fundingCallId,
+      funding_call_id: effectiveFundingCallId,
       grant_session_id: linkedGrantSession?.id || null,
       template_revision_id: context.templateRevisionId,
       guideline_revision_id: context.guidelineRevisionId,
-      papsi_launch_url: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null, 'active'),
+      papsi_launch_url: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null, 'active', linkedGrantSession?.status),
       ...persistence,
       status: 'active',
     },
@@ -736,7 +759,7 @@ export async function createOrReuseGrantPrepSession(input: {
     reused: false,
     context,
     grantSessionId: linkedGrantSession?.id || null,
-    launchUrl: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null, 'active'),
+    launchUrl: resolveWorkspaceLaunchUrl(linkedGrantSession?.id || null, 'active', linkedGrantSession?.status),
     prepUrl: resolvePrepUrl(linkedGrantSession?.id || null, createdSession.id),
   };
 }

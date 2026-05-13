@@ -21,6 +21,7 @@ const filterSchema = z.object({
   residencyRequirements: z.array(z.string()).max(20).optional(),
   applicationLanguages: z.array(z.string()).max(20).optional(),
   sponsorTypes: z.array(z.string()).max(20).optional(),
+  taxonomyAreaIds: z.array(z.string()).max(50).optional(),
   deadlineFrom: z.string().optional(),
   deadlineTo: z.string().optional(),
   rollingOnly: z.boolean().optional(),

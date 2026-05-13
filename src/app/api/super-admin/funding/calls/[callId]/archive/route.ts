@@ -9,6 +9,7 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
   const auth = await requireFundingActor(request, {
     allowPlatform: true,
     requireWriteSuperAdmin: true,
+    requiredPlatformPermission: 'funding.publisher.write',
   })
   if ('response' in auth) {
     return auth.response

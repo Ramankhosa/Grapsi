@@ -492,7 +492,13 @@ export default function FundingGuidelineWorkspacePage() {
   const [sourcePdf, setSourcePdf] = useState<File | null>(null);
 
   const userRoles = user?.roles || [];
-  const isFundingOperator = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
+  const platformPermissions = user?.platformPermissions || [];
+  const isFundingOperator =
+    userRoles.includes('SUPER_ADMIN') ||
+    userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    platformPermissions.includes('platform.support.read') ||
+    platformPermissions.includes('funding.operations.write') ||
+    platformPermissions.includes('funding.publisher.write');
 
   useEffect(() => {
     if (!isLoading && !user) {

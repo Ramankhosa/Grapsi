@@ -37,8 +37,68 @@ export interface ResearcherProfileRecord {
   orcidUrl: string;
 }
 
+export interface ResearchAreaTaxonomyUploadSummary {
+  id: string;
+  sourceName: string;
+  originalFilename: string | null;
+  rowCount: number;
+  activeRowCount: number;
+  status: string;
+  createdAt: string;
+  activatedAt: string | null;
+  archivedAt: string | null;
+}
+
+export interface ResearchAreaTaxonomyAreaRecord {
+  id: string;
+  uploadId: string;
+  level1Code: string;
+  level1Name: string;
+  level2Code: string;
+  level2Name: string;
+  description: string;
+  aliases: string[];
+  sortOrder: number | null;
+  isActive: boolean;
+}
+
+export interface ResearchAreaTaxonomyGroup {
+  level1Code: string;
+  level1Name: string;
+  areas: ResearchAreaTaxonomyAreaRecord[];
+}
+
+export interface ResearchAreaTaxonomyPayload {
+  upload: ResearchAreaTaxonomyUploadSummary | null;
+  areas: ResearchAreaTaxonomyAreaRecord[];
+  groups: ResearchAreaTaxonomyGroup[];
+  hasActiveTaxonomy: boolean;
+}
+
+export interface FundingCallResearchAreaTaxonomyRecord {
+  id: string;
+  fundingCallId: string;
+  taxonomyAreaId: string;
+  level1Code: string;
+  level1Name: string;
+  level2Code: string;
+  level2Name: string;
+  source: string;
+  confidence: number | null;
+  createdAt: string;
+}
+
+export interface ResearcherSavedResearchAreaTaxonomy {
+  areaId: string | null;
+  level1Code: string;
+  level1Name: string;
+  level2Code: string;
+  level2Name: string;
+}
+
 export interface ResearcherSavedResearchAreaRecord {
   id: string;
+  taxonomy: ResearcherSavedResearchAreaTaxonomy | null;
   label: string;
   researchArea: string;
   keywords: string[];
@@ -64,5 +124,6 @@ export interface ResearcherFinderContext {
     query: { researchArea: string };
     filters: RecommendationSearchFilters;
     sourceLabel: string | null;
+    taxonomy: ResearcherSavedResearchAreaTaxonomy | null;
   } | null;
 }

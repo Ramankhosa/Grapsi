@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { authenticateUser } from '@/lib/auth-middleware'
 import { assertProjectCapability, ProjectAccessError } from '@/lib/project-access'
+import { buildGrantProjectOpenUrl } from '@/lib/grants/workspaceNavigation'
 import { prisma } from '@/lib/prisma'
 
 function buildAccessErrorResponse(error: unknown) {
@@ -53,6 +54,37 @@ export async function GET(
             createdAt: 'desc',
           },
         },
+        grantSessions: {
+          orderBy: {
+            updatedAt: 'desc',
+          },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            fundingCallId: true,
+            updatedAt: true,
+          },
+        },
+        grantPrepSessions: {
+          where: {
+            status: {
+              not: 'archived',
+            },
+          },
+          orderBy: {
+            updated_at: 'desc',
+          },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            grant_session_id: true,
+            funding_call_id: true,
+            overall_readiness: true,
+            updated_at: true,
+          },
+        },
       },
     })
 
@@ -60,9 +92,21 @@ export async function GET(
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
+    const latestGrantSession = project.grantSessions[0] ?? null
+    const latestGrantPrepSession = project.grantPrepSessions[0] ?? null
+
     return NextResponse.json({
       project: {
         ...project,
+        latestGrantSession,
+        latestGrantPrepSession,
+        grantOpenUrl: project.projectType === 'GRANT'
+          ? buildGrantProjectOpenUrl({
+              projectId: project.id,
+              prepSession: latestGrantPrepSession,
+              grantSession: latestGrantSession,
+            })
+          : null,
         accessLevel: access.accessLevel,
         isOwner: access.isOwner,
       },

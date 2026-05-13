@@ -445,6 +445,7 @@ export function normalizeRecommendationSearchRequest(
     applicationLanguages:
       normalizeApplicationLanguageList(clampArray(filters.applicationLanguages || [], 20)) || [],
     sponsorTypes: normalizeSponsorTypeList(clampArray(filters.sponsorTypes || [], 20)) || [],
+    taxonomyAreaIds: clampArray(filters.taxonomyAreaIds || [], 50),
     deadlineFrom: normalizeDateString(filters.deadlineFrom) || '',
     deadlineTo: normalizeDateString(filters.deadlineTo) || '',
     rollingOnly: Boolean(filters.rollingOnly),
@@ -540,6 +541,7 @@ export function summarizeFilters(filters: RecommendationSearchFilters): string {
     filters.institutionTypes?.length ? `institutionTypes=${filters.institutionTypes.length}` : '',
     filters.careerStages?.length ? `careerStages=${filters.careerStages.length}` : '',
     filters.sponsorTypes?.length ? `sponsorTypes=${filters.sponsorTypes.length}` : '',
+    filters.taxonomyAreaIds?.length ? `taxonomyAreaIds=${filters.taxonomyAreaIds.length}` : '',
     filters.deadlineFrom ? 'deadlineFrom=1' : '',
     filters.deadlineTo ? 'deadlineTo=1' : '',
     filters.rollingOnly ? 'rollingOnly=1' : '',

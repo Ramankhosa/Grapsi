@@ -627,7 +627,13 @@ export default function FundingTemplatePage() {
   const [busyState, setBusyState] = useState<'idle' | 'create' | 'save' | 'approve' | 'asset' | 'extract' | 'apply'>('idle');
 
   const userRoles = user?.roles || [];
-  const isFundingOperator = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
+  const platformPermissions = user?.platformPermissions || [];
+  const isFundingOperator =
+    userRoles.includes('SUPER_ADMIN') ||
+    userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    platformPermissions.includes('platform.support.read') ||
+    platformPermissions.includes('funding.operations.write') ||
+    platformPermissions.includes('funding.publisher.write');
 
   const selectedRun = useMemo(() => bundle?.runs.find((run) => run.id === selectedRunId) || null, [bundle, selectedRunId]);
   const latestExtractionRun = useMemo(() => getPreferredRun(bundle), [bundle]);

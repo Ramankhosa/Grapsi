@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyJWT } from '@/lib/auth'
+import { getUserPlatformPermissionCodes } from '@/lib/services/platformTeamRoleService'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,13 +35,21 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Return user info from JWT claims (no database hit for performance)
+    let platformPermissions: string[] = []
+    try {
+      platformPermissions = await getUserPlatformPermissionCodes(payload.sub)
+    } catch (permissionError) {
+      console.error('Whoami platform permission lookup failed:', permissionError)
+    }
+
+    // Return user info from JWT claims plus current platform app permissions.
     return NextResponse.json({
       user_id: payload.sub,
       email: payload.email,
       tenant_id: payload.tenant_id,
       roles: payload.roles,
-      ati_id: payload.ati_id
+      ati_id: payload.ati_id,
+      platformPermissions
     }, { status: 200 })
 
   } catch (error) {

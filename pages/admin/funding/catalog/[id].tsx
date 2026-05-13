@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -6,6 +6,11 @@ import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
 import FundingWorkspaceTabs from '@/components/FundingWorkspaceTabs';
 import { BOOLEAN_FIELD_KEYS, FUNDING_FIELD_DEFINITIONS, NUMERIC_FIELD_KEYS } from '@/lib/fundingIntake/constants';
+import type {
+  FundingCallResearchAreaTaxonomyRecord,
+  ResearchAreaTaxonomyGroup,
+  ResearchAreaTaxonomyPayload,
+} from '@/lib/researcherProfile/types';
 
 type CatalogDetails = {
   call: {
@@ -60,9 +65,26 @@ export default function FundingCatalogDetailPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [acting, setActing] = useState(false);
+  const [taxonomy, setTaxonomy] = useState<ResearchAreaTaxonomyPayload | null>(null);
+  const [taxonomyMappings, setTaxonomyMappings] = useState<FundingCallResearchAreaTaxonomyRecord[]>([]);
+  const [selectedTaxonomyAreaIds, setSelectedTaxonomyAreaIds] = useState<string[]>([]);
+  const [taxonomySaving, setTaxonomySaving] = useState(false);
 
   const userRoles = user?.roles || [];
-  const isFundingOperator = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
+  const platformPermissions = user?.platformPermissions || [];
+  const isFundingOperator =
+    userRoles.includes('SUPER_ADMIN') ||
+    userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    platformPermissions.includes('platform.support.read') ||
+    platformPermissions.includes('funding.operations.write') ||
+    platformPermissions.includes('funding.publisher.write');
+  const isFundingWriter =
+    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.operations.write');
+  const isFundingPublisher =
+    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.publisher.write');
+  const taxonomyAreaById = useMemo(() => {
+    return new Map((taxonomy?.areas || []).map((area) => [area.id, area]));
+  }, [taxonomy]);
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -86,13 +108,40 @@ export default function FundingCatalogDetailPage() {
     }
 
     try {
-      const response = await fetch(`/api/admin/funding/calls/${id}`);
+      const [response, taxonomyResponse, mappingsResponse] = await Promise.all([
+        fetch(`/api/admin/funding/calls/${id}`),
+        fetch('/api/super-admin/research-area-taxonomy'),
+        fetch(`/api/admin/funding/calls/${id}/research-area-taxonomy`),
+      ]);
+
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || 'Failed to load funding call');
       }
       setDetails(data);
       setDraftValues(data.draftValues || {});
+
+      if (taxonomyResponse.ok) {
+        const taxonomyData = await taxonomyResponse.json();
+        setTaxonomy({
+          upload: taxonomyData.upload || null,
+          areas: taxonomyData.areas || [],
+          groups: taxonomyData.groups || [],
+          hasActiveTaxonomy: Boolean(taxonomyData.hasActiveTaxonomy),
+        });
+      } else {
+        setTaxonomy(null);
+      }
+
+      if (mappingsResponse.ok) {
+        const mappingData = await mappingsResponse.json();
+        const mappings = Array.isArray(mappingData.mappings) ? mappingData.mappings : [];
+        setTaxonomyMappings(mappings);
+        setSelectedTaxonomyAreaIds(mappings.map((mapping: FundingCallResearchAreaTaxonomyRecord) => mapping.taxonomyAreaId));
+      } else {
+        setTaxonomyMappings([]);
+        setSelectedTaxonomyAreaIds([]);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to load funding call');
     } finally {
@@ -108,6 +157,10 @@ export default function FundingCatalogDetailPage() {
 
   async function handleSave() {
     if (!id) {
+      return;
+    }
+    if (!isFundingWriter) {
+      toast.error('Funding operations write access required.');
       return;
     }
 
@@ -136,6 +189,10 @@ export default function FundingCatalogDetailPage() {
     if (!id) {
       return;
     }
+    if (!isFundingPublisher) {
+      toast.error('Funding publishing access required.');
+      return;
+    }
 
     setActing(true);
     try {
@@ -157,6 +214,76 @@ export default function FundingCatalogDetailPage() {
       toast.error(error instanceof Error ? error.message : `Failed to ${action} funding call`);
     } finally {
       setActing(false);
+    }
+  }
+
+  function getTaxonomyAreaLabel(areaId: string) {
+    const area = taxonomyAreaById.get(areaId);
+    if (area) {
+      return [area.level1Name, area.level2Name || area.level2Code].filter(Boolean).join(' / ');
+    }
+
+    const mapping = taxonomyMappings.find((item) => item.taxonomyAreaId === areaId);
+    if (mapping) {
+      return [mapping.level1Name, mapping.level2Name || mapping.level2Code].filter(Boolean).join(' / ');
+    }
+
+    return areaId;
+  }
+
+  function toggleTaxonomyArea(areaId: string) {
+    setSelectedTaxonomyAreaIds((current) =>
+      current.includes(areaId)
+        ? current.filter((idValue) => idValue !== areaId)
+        : [...current, areaId]
+    );
+  }
+
+  function toggleTaxonomyGroup(group: ResearchAreaTaxonomyGroup) {
+    const activeAreaIds = group.areas.filter((area) => area.isActive).map((area) => area.id);
+    if (activeAreaIds.length === 0) {
+      return;
+    }
+
+    setSelectedTaxonomyAreaIds((current) => {
+      const currentSet = new Set(current);
+      const allSelected = activeAreaIds.every((areaId) => currentSet.has(areaId));
+      if (allSelected) {
+        return current.filter((areaId) => !activeAreaIds.includes(areaId));
+      }
+      return Array.from(new Set([...current, ...activeAreaIds]));
+    });
+  }
+
+  function countSelectedInGroup(group: ResearchAreaTaxonomyGroup) {
+    const selected = new Set(selectedTaxonomyAreaIds);
+    return group.areas.filter((area) => area.isActive && selected.has(area.id)).length;
+  }
+
+  async function handleSaveTaxonomyMappings() {
+    if (!id) {
+      return;
+    }
+
+    setTaxonomySaving(true);
+    try {
+      const response = await fetch(`/api/admin/funding/calls/${id}/research-area-taxonomy`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taxonomyAreaIds: selectedTaxonomyAreaIds }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.details || data.error || 'Failed to save research taxonomy mappings');
+      }
+      const mappings = Array.isArray(data.mappings) ? data.mappings : [];
+      setTaxonomyMappings(mappings);
+      setSelectedTaxonomyAreaIds(mappings.map((mapping: FundingCallResearchAreaTaxonomyRecord) => mapping.taxonomyAreaId));
+      toast.success('Research taxonomy mappings updated');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save research taxonomy mappings');
+    } finally {
+      setTaxonomySaving(false);
     }
   }
 
@@ -219,7 +346,7 @@ export default function FundingCatalogDetailPage() {
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || acting}
+              disabled={!isFundingWriter || saving || acting}
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Changes'}
@@ -227,7 +354,7 @@ export default function FundingCatalogDetailPage() {
             <button
               type="button"
               onClick={() => handleAction('publish')}
-              disabled={saving || acting}
+              disabled={!isFundingPublisher || saving || acting}
               className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
               {acting ? 'Working...' : 'Publish'}
@@ -235,7 +362,7 @@ export default function FundingCatalogDetailPage() {
             <button
               type="button"
               onClick={() => handleAction('archive')}
-              disabled={saving || acting}
+              disabled={!isFundingPublisher || saving || acting}
               className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
               Archive
@@ -243,7 +370,7 @@ export default function FundingCatalogDetailPage() {
             <button
               type="button"
               onClick={() => handleAction('reject')}
-              disabled={saving || acting}
+              disabled={!isFundingPublisher || saving || acting}
               className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
               Reject
@@ -301,6 +428,114 @@ export default function FundingCatalogDetailPage() {
                   </div>
                 )}
               </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Research taxonomy</h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Manually tag this call with Level 1 and Level 2 research areas for Finder directory filtering.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveTaxonomyMappings}
+                  disabled={!isFundingWriter || taxonomySaving}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {taxonomySaving ? 'Saving...' : 'Save Tags'}
+                </button>
+              </div>
+
+              {!isFundingWriter ? (
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  Viewer accounts can inspect taxonomy tags but cannot update them.
+                </div>
+              ) : null}
+
+              {!taxonomy?.hasActiveTaxonomy ? (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  No active research taxonomy is available. Upload one from the superadmin research areas page first.
+                </div>
+              ) : (
+                <div className="mt-5 space-y-4">
+                  {selectedTaxonomyAreaIds.length > 0 ? (
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Selected tags</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {selectedTaxonomyAreaIds.map((areaId) => (
+                          <button
+                            key={areaId}
+                            type="button"
+                            onClick={() => toggleTaxonomyArea(areaId)}
+                            disabled={!isFundingWriter}
+                            className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-900 disabled:cursor-not-allowed"
+                          >
+                            {getTaxonomyAreaLabel(areaId)} x
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">
+                      No taxonomy tags selected for this funding call.
+                    </div>
+                  )}
+
+                  <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
+                    {(taxonomy.groups || []).map((group) => {
+                      const activeAreas = group.areas.filter((area) => area.isActive);
+                      const selectedCount = countSelectedInGroup(group);
+                      const allSelected = activeAreas.length > 0 && selectedCount === activeAreas.length;
+
+                      if (activeAreas.length === 0) {
+                        return null;
+                      }
+
+                      return (
+                        <div key={`${group.level1Code}-${group.level1Name}`} className="rounded-xl border border-slate-200 p-3">
+                          <label className="flex cursor-pointer items-start gap-3">
+                            <input
+                              type="checkbox"
+                              checked={allSelected}
+                              onChange={() => toggleTaxonomyGroup(group)}
+                              disabled={!isFundingWriter}
+                              className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600"
+                            />
+                            <span className="min-w-0">
+                              <span className="block text-sm font-semibold text-slate-900">
+                                {group.level1Name}
+                              </span>
+                              <span className="mt-1 block text-xs text-slate-500">
+                                Level 1 {group.level1Code} - {selectedCount} of {activeAreas.length} Level 2 selected
+                              </span>
+                            </span>
+                          </label>
+
+                          <div className="mt-3 space-y-2 pl-7">
+                            {activeAreas.map((area) => (
+                              <label key={area.id} className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-1.5 hover:bg-slate-50">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedTaxonomyAreaIds.includes(area.id)}
+                                  onChange={() => toggleTaxonomyArea(area.id)}
+                                  disabled={!isFundingWriter}
+                                  className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600"
+                                />
+                                <span className="min-w-0">
+                                  <span className="block text-sm text-slate-800">{area.level2Name || area.level2Code}</span>
+                                  <span className="block text-xs text-slate-500">Level 2 {area.level2Code}</span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

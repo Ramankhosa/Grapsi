@@ -1,13 +1,17 @@
-import type { FundingActor } from '@/lib/funding/access'
+import { actorHasPlatformPermission, actorHasPlatformReadAccess, type FundingActor } from '@/lib/funding/access'
 
 import type { IntakeOperator } from './types'
 
 function mapOperatorRole(actor: FundingActor): IntakeOperator['role'] | null {
-  if (actor.isSuperAdminWriter) {
+  if (
+    actor.isSuperAdminWriter ||
+    actorHasPlatformPermission(actor, 'funding.operations.write') ||
+    actorHasPlatformPermission(actor, 'funding.publisher.write')
+  ) {
     return 'ADMIN'
   }
 
-  if (actor.isSuperAdmin) {
+  if (actor.isSuperAdmin || actorHasPlatformReadAccess(actor)) {
     return 'CURATOR'
   }
 

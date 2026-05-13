@@ -23,6 +23,7 @@ const filterSchema: z.ZodType<RecommendationSearchFilters> = z.object({
   residencyRequirements: z.array(z.string()).optional(),
   applicationLanguages: z.array(z.string()).optional(),
   sponsorTypes: z.array(z.string()).optional(),
+  taxonomyAreaIds: z.array(z.string()).optional(),
   deadlineFrom: z.string().optional(),
   deadlineTo: z.string().optional(),
   rollingOnly: z.boolean().optional(),

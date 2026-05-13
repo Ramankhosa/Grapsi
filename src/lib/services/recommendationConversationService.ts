@@ -406,6 +406,7 @@ const INFERRED_CONFIRMATION_FILTER_KEYS: Array<keyof RecommendationSearchFilters
   'residencyRequirements',
   'applicationLanguages',
   'sponsorTypes',
+  'taxonomyAreaIds',
   'deadlineFrom',
   'deadlineTo',
   'rollingOnly',
@@ -426,6 +427,7 @@ const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> 
   residencyRequirements: 'Residency',
   applicationLanguages: 'Application languages',
   sponsorTypes: 'Sponsor types',
+  taxonomyAreaIds: 'Research taxonomy',
   deadlineFrom: 'Deadline window',
   deadlineTo: 'Deadline window',
   rollingOnly: 'Rolling only',
@@ -491,6 +493,7 @@ function describeActiveFilters(
     'citizenshipRequirements',
     'residencyRequirements',
     'applicationLanguages',
+    'taxonomyAreaIds',
     'geographyScope',
     'funderCountries',
     'deadlineFrom',
@@ -597,6 +600,8 @@ function filterValueExplicitlyRequested(
       return filters.sponsorTypes.every((value) => messageMatchesAliasedValue(normalizedMessage, value, SPONSOR_TYPE_ALIASES));
     case 'applicationLanguages':
       return filters.applicationLanguages.every((value) => normalizedMessage.includes(normalizeKey(value)));
+    case 'taxonomyAreaIds':
+      return false;
     case 'deadlineFrom':
     case 'deadlineTo': {
       const patch = extractDeadlinePatch(message);
@@ -766,7 +771,15 @@ function buildOrchestratorContext(params: {
     if (p.keywords.length > 0) profileLines.push(`Keywords: ${p.keywords.join(', ')}`);
     if (p.applicationLanguages.length > 0) profileLines.push(`Languages: ${p.applicationLanguages.join(', ')}`);
     if (areas.length > 0) {
-      profileLines.push(`Saved research areas: ${areas.map((a) => a.label || a.researchArea).join(', ')}`);
+      const savedAreaContext = areas
+        .slice(0, 8)
+        .map((area) => {
+          const taxonomyPath = [area.taxonomy?.level1Name, area.taxonomy?.level2Name].filter(Boolean).join(' / ');
+          return [area.label || area.researchArea, taxonomyPath ? `classification: ${taxonomyPath}` : '', area.researchArea]
+            .filter(Boolean)
+            .join(' - ');
+        });
+      profileLines.push(`Saved research areas: ${savedAreaContext.join('; ')}`);
     }
     if (profileLines.length > 0) {
       sections.push(`RESEARCHER PROFILE:\n${profileLines.join('\n')}`);
@@ -1172,6 +1185,7 @@ export class RecommendationConversationService {
     if (Array.isArray(filterPatch.careerStages)) cleaned.careerStages = normalizeCareerStageList(filterPatch.careerStages) || [];
     if (Array.isArray(filterPatch.applicationLanguages)) cleaned.applicationLanguages = normalizeApplicationLanguageList(filterPatch.applicationLanguages) || [];
     if (Array.isArray(filterPatch.sponsorTypes)) cleaned.sponsorTypes = normalizeSponsorTypeList(filterPatch.sponsorTypes) || [];
+    if (Array.isArray(filterPatch.taxonomyAreaIds)) cleaned.taxonomyAreaIds = filterPatch.taxonomyAreaIds.map((value) => normalizeWhitespace(String(value || ''))).filter(Boolean);
     if (Array.isArray(filterPatch.citizenshipRequirements)) cleaned.citizenshipRequirements = filterPatch.citizenshipRequirements.map((value) => normalizeWhitespace(String(value || ''))).filter(Boolean);
     if (Array.isArray(filterPatch.residencyRequirements)) cleaned.residencyRequirements = filterPatch.residencyRequirements.map((value) => normalizeWhitespace(String(value || ''))).filter(Boolean);
     if (typeof filterPatch.deadlineFrom === 'string') cleaned.deadlineFrom = filterPatch.deadlineFrom;

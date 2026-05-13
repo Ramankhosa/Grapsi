@@ -103,7 +103,7 @@ export async function POST(
           session: sessionResult.session,
           grantSessionId: sessionResult.grantSessionId || null,
           // Launch directly into the unified pipeline with GrantMentor as stage 1.
-          launchUrl: sessionResult.launchUrl || `/projects/${project.id}/grants/${sessionResult.session.id}/prep`,
+          launchUrl: sessionResult.launchUrl || null,
           prepUrl: sessionResult.prepUrl || `/projects/${project.id}/grants/${sessionResult.session.id}/prep`,
         },
         { status: 201 }

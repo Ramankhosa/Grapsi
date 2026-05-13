@@ -72,9 +72,9 @@ export default function GrantPrepTopBar({
         {/* Left: breadcrumb */}
         <div className="flex items-center gap-2 min-w-0">
           <Link
-            href={`/projects/${session.project.id}/grants`}
+            href="/projects"
             className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-            title="Back to project"
+            title="Back to projects"
           >
             <HiChevronLeft className="h-5 w-5" />
           </Link>

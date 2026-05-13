@@ -681,11 +681,11 @@ export default function GrantWorkspacePage() {
             <div className="min-w-0">
               <button
                 type="button"
-                onClick={() => router.push(`/projects/${projectId}/grants`)}
+                onClick={() => router.push('/projects')}
                 className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900"
               >
                 <ChevronLeft className="h-4 w-4" />
-                Back to Grants
+                Back to Projects
               </button>
               <h1 className="mt-2 truncate text-xl font-semibold text-slate-900">
                 {workspace.grantSession.project.name || 'Grant Workspace'}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { stagePdfUpload } from '@/lib/fundingIntake/appRouterUpload'
-import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
+import { requireFundingOperatorRequest, requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
 
 export const runtime = 'nodejs'
@@ -18,7 +18,7 @@ const intakeSubmitSchema = z.object({
 const MAX_JSON_UPLOAD_BYTES = 5 * 1024 * 1024
 
 export async function GET(request: NextRequest) {
-  const auth = await requireFundingOperatorRequest(request)
+  const auth = await requireFundingReadOperatorRequest(request)
   if ('response' in auth) {
     return auth.response
   }

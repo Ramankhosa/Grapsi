@@ -66,8 +66,17 @@ export default function FundingIntakeAdminPage() {
   const [actioningJobId, setActioningJobId] = useState<string | null>(null);
 
   const userRoles = user?.roles || [];
-  const canReadFundingIntake = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
-  const canWriteFundingIntake = userRoles.includes('SUPER_ADMIN');
+  const platformPermissions = user?.platformPermissions || [];
+  const canReadFundingIntake =
+    userRoles.includes('SUPER_ADMIN') ||
+    userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    platformPermissions.includes('platform.support.read') ||
+    platformPermissions.includes('funding.operations.write') ||
+    platformPermissions.includes('funding.publisher.write');
+  const canWriteFundingIntake =
+    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.operations.write');
+  const canPublishFunding =
+    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.publisher.write');
 
   const activeJobs = useMemo(
     () => jobs.filter((job) => ['queued', 'fetching', 'extracting'].includes(job.status)),
@@ -122,7 +131,7 @@ export default function FundingIntakeAdminPage() {
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canWriteFundingIntake) {
-      toast.error('Write access required. You have viewer-only access.');
+      toast.error('Funding operations write access required.');
       return;
     }
     setSubmitting(true);
@@ -175,7 +184,7 @@ export default function FundingIntakeAdminPage() {
 
   async function handleJobAction(jobId: string, action: 'retry' | 'cancel') {
     if (!canWriteFundingIntake) {
-      toast.error('Write access required. You have viewer-only access.');
+      toast.error('Funding operations write access required.');
       return;
     }
     try {
@@ -201,8 +210,8 @@ export default function FundingIntakeAdminPage() {
       return;
     }
 
-    if (!canWriteFundingIntake) {
-      toast.error('Write access required. You have viewer-only access.');
+    if (!canPublishFunding) {
+      toast.error('Funding publishing access required.');
       return;
     }
 
@@ -320,7 +329,7 @@ export default function FundingIntakeAdminPage() {
             <h2 className="text-lg font-semibold text-slate-900">Submit intake source</h2>
             {!canWriteFundingIntake && (
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Viewer access is read-only. Only SUPER_ADMIN users can create or modify intake jobs.
+                Viewer access is read-only. Funding operations access is required to create or modify intake jobs.
               </div>
             )}
             <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
@@ -598,7 +607,7 @@ export default function FundingIntakeAdminPage() {
                             <button
                               type="button"
                               onClick={() => handleArchiveLinkedCall(job)}
-                              disabled={!canWriteFundingIntake || actioningJobId !== null}
+                              disabled={!canPublishFunding || actioningJobId !== null}
                               className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {actioningJobId === `${job.id}:archive` ? 'Archiving...' : 'Archive Call'}

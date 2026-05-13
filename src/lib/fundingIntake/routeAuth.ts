@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import type { FundingActor } from '@/lib/funding/access'
-import { requireFundingActor } from '@/lib/funding/access'
+import { actorHasPlatformReadAccess, requireFundingActor } from '@/lib/funding/access'
 import type { Prisma } from '@/lib/prisma-generated'
 
 import { toFundingOperator } from './auth'
@@ -27,10 +27,27 @@ export async function requireFundingImporterRequest(request: NextRequest): Promi
   return { actor: auth.actor, operator }
 }
 
+export async function requireFundingReadOperatorRequest(request: NextRequest): Promise<AuthResult> {
+  const auth = await requireFundingActor(request, { allowPlatform: true })
+  if ('response' in auth) {
+    return auth
+  }
+
+  const operator = toFundingOperator(auth.actor)
+  if (!operator || operator.role === 'USER') {
+    return {
+      response: NextResponse.json({ message: 'Forbidden: platform funding access required' }, { status: 403 }),
+    }
+  }
+
+  return { actor: auth.actor, operator }
+}
+
 export async function requireFundingOperatorRequest(request: NextRequest): Promise<AuthResult> {
   const auth = await requireFundingActor(request, {
     allowPlatform: true,
     requireWriteSuperAdmin: true,
+    requiredPlatformPermission: 'funding.operations.write',
   })
   if ('response' in auth) {
     return auth
@@ -46,8 +63,28 @@ export async function requireFundingOperatorRequest(request: NextRequest): Promi
   return { actor: auth.actor, operator }
 }
 
+export async function requireFundingPublisherRequest(request: NextRequest): Promise<AuthResult> {
+  const auth = await requireFundingActor(request, {
+    allowPlatform: true,
+    requireWriteSuperAdmin: true,
+    requiredPlatformPermission: 'funding.publisher.write',
+  })
+  if ('response' in auth) {
+    return auth
+  }
+
+  const operator = toFundingOperator(auth.actor)
+  if (!operator || operator.role === 'USER') {
+    return {
+      response: NextResponse.json({ message: 'Forbidden: funding publisher role required' }, { status: 403 }),
+    }
+  }
+
+  return { actor: auth.actor, operator }
+}
+
 export function buildFundingCallAccessWhere(actor: FundingActor): Prisma.FundingCallWhereInput {
-  if (actor.isSuperAdmin) {
+  if (actorHasPlatformReadAccess(actor)) {
     return {}
   }
 

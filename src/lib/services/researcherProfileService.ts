@@ -7,6 +7,7 @@ import type {
   ResearcherProfilePayload,
   ResearcherProfileRecord,
   ResearcherSavedResearchAreaRecord,
+  ResearcherSavedResearchAreaTaxonomy,
 } from '../researcherProfile/types';
 import {
   normalizeApplicationLanguageList,
@@ -18,9 +19,10 @@ import {
 } from '../recommendations/utils';
 import type { RecommendationSearchFilters } from '../recommendations/types';
 import { EmbeddingService } from './embeddingService';
+import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
 
 const embeddingService = new EmbeddingService();
-export const RESEARCH_AREA_EMBEDDING_VERSION = 'research-area-v1';
+export const RESEARCH_AREA_EMBEDDING_VERSION = 'research-area-v2-taxonomy';
 
 export interface ResearchAreaEmbeddingCoverage {
   total: number;
@@ -99,9 +101,43 @@ function normalizeProfileRecord(user: { name?: string | null; email?: string | n
   };
 }
 
+type SavedResearchAreaRow = {
+  id: string;
+  taxonomy_area_id: string | null;
+  taxonomy_level1_code: string | null;
+  taxonomy_level1_name: string | null;
+  taxonomy_level2_code: string | null;
+  taxonomy_level2_name: string | null;
+  label: string;
+  research_area: string;
+  keywords: string[];
+  disciplines: string[];
+  is_default: boolean;
+  use_for_alerts: boolean;
+  normalized_text: string | null;
+  embedding_version: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+function serializeResearchAreaTaxonomy(record: Partial<SavedResearchAreaRow>): ResearcherSavedResearchAreaTaxonomy | null {
+  if (!record.taxonomy_area_id && !record.taxonomy_level1_name && !record.taxonomy_level2_name) {
+    return null;
+  }
+
+  return {
+    areaId: record.taxonomy_area_id || null,
+    level1Code: emptyString(record.taxonomy_level1_code),
+    level1Name: emptyString(record.taxonomy_level1_name),
+    level2Code: emptyString(record.taxonomy_level2_code),
+    level2Name: emptyString(record.taxonomy_level2_name),
+  };
+}
+
 function serializeResearchArea(record: any): ResearcherSavedResearchAreaRecord {
   return {
     id: record.id,
+    taxonomy: serializeResearchAreaTaxonomy(record),
     label: record.label,
     researchArea: record.research_area,
     keywords: normalizeTextArray(record.keywords),
@@ -115,13 +151,20 @@ function serializeResearchArea(record: any): ResearcherSavedResearchAreaRecord {
   };
 }
 
-function buildResearchAreaNormalizedText(input: {
+export function buildResearchAreaNormalizedText(input: {
+  taxonomy?: ResearcherSavedResearchAreaTaxonomy | null;
   label: string;
   researchArea: string;
   keywords: string[];
   disciplines: string[];
 }) {
   return [
+    input.taxonomy?.level1Name
+      ? `research field level 1: ${input.taxonomy.level1Name}${input.taxonomy.level1Code ? ` (${input.taxonomy.level1Code})` : ''}`
+      : '',
+    input.taxonomy?.level2Name
+      ? `research field level 2: ${input.taxonomy.level2Name}${input.taxonomy.level2Code ? ` (${input.taxonomy.level2Code})` : ''}`
+      : '',
     normalizeWhitespace(input.label),
     normalizeWhitespace(input.researchArea),
     input.keywords.length ? `keywords: ${input.keywords.join(', ')}` : '',
@@ -133,6 +176,30 @@ function buildResearchAreaNormalizedText(input: {
 
 function buildContentHash(normalizedText: string) {
   return crypto.createHash('sha256').update(normalizedText).digest('hex');
+}
+
+async function querySavedResearchAreas(userId: string): Promise<SavedResearchAreaRow[]> {
+  return prisma.$queryRaw<SavedResearchAreaRow[]>(Prisma.sql`
+    SELECT id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name, taxonomy_level2_code, taxonomy_level2_name,
+           label, research_area, keywords, disciplines, is_default, use_for_alerts, normalized_text, embedding_version,
+           created_at, updated_at
+    FROM researcher_saved_research_areas
+    WHERE user_id = ${userId}
+    ORDER BY is_default DESC, updated_at DESC
+  `);
+}
+
+async function querySavedResearchAreaById(areaId: string): Promise<SavedResearchAreaRow | null> {
+  const rows = await prisma.$queryRaw<SavedResearchAreaRow[]>(Prisma.sql`
+    SELECT id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name, taxonomy_level2_code, taxonomy_level2_name,
+           label, research_area, keywords, disciplines, is_default, use_for_alerts, normalized_text, embedding_version,
+           created_at, updated_at
+    FROM researcher_saved_research_areas
+    WHERE id = ${areaId}
+    LIMIT 1
+  `);
+
+  return rows[0] || null;
 }
 
 function buildProfileDefaultFilters(profile: ResearcherProfileRecord): RecommendationSearchFilters {
@@ -286,10 +353,7 @@ export class ResearcherProfileService {
   }
 
   async listResearchAreas(userId: string): Promise<ResearcherSavedResearchAreaRecord[]> {
-    const areas = await prisma.researcherSavedResearchArea.findMany({
-      where: { user_id: userId },
-      orderBy: [{ is_default: 'desc' }, { updated_at: 'desc' }],
-    });
+    const areas = await querySavedResearchAreas(userId);
 
     return areas.map(serializeResearchArea);
   }
@@ -298,6 +362,7 @@ export class ResearcherProfileService {
     userId: string,
     input: {
       id?: string;
+      taxonomyAreaId?: string | null;
       label: string;
       researchArea: string;
       keywords?: string[];
@@ -308,20 +373,45 @@ export class ResearcherProfileService {
   ): Promise<ResearcherSavedResearchAreaRecord> {
     const normalizedKeywords = normalizeTextArray(input.keywords);
     const normalizedDisciplines = normalizeTextArray(input.disciplines);
-    const normalizedText = buildResearchAreaNormalizedText({
-      label: input.label,
-      researchArea: input.researchArea,
-      keywords: normalizedKeywords,
-      disciplines: normalizedDisciplines,
-    });
-    const contentHash = buildContentHash(normalizedText);
-
+    const taxonomyProvided = Object.prototype.hasOwnProperty.call(input, 'taxonomyAreaId');
     const existing = input.id
       ? await prisma.researcherSavedResearchArea.findFirst({
           where: { id: input.id, user_id: userId },
           select: { id: true, content_hash: true, embedding_version: true },
         })
       : null;
+    if (input.id && !existing) {
+      throw new Error('Saved research area not found');
+    }
+    const existingSavedArea = existing ? await querySavedResearchAreaById(existing.id) : null;
+    let taxonomy: ResearcherSavedResearchAreaTaxonomy | null = null;
+
+    if (input.taxonomyAreaId) {
+      const taxonomyArea = await researchAreaTaxonomyService.getActiveAreaById(input.taxonomyAreaId);
+      if (!taxonomyArea) {
+        throw new Error('Selected research area classification is no longer active. Please choose another classification.');
+      }
+      taxonomy = {
+        areaId: taxonomyArea.id,
+        level1Code: taxonomyArea.level1Code,
+        level1Name: taxonomyArea.level1Name,
+        level2Code: taxonomyArea.level2Code,
+        level2Name: taxonomyArea.level2Name,
+      };
+    } else if (!taxonomyProvided && existingSavedArea) {
+      taxonomy = serializeResearchAreaTaxonomy(existingSavedArea);
+    } else if (!input.id && await researchAreaTaxonomyService.hasActiveTaxonomy()) {
+      throw new Error('Please choose a Level 1 and Level 2 research area classification before saving.');
+    }
+
+    const normalizedText = buildResearchAreaNormalizedText({
+      taxonomy,
+      label: input.label,
+      researchArea: input.researchArea,
+      keywords: normalizedKeywords,
+      disciplines: normalizedDisciplines,
+    });
+    const contentHash = buildContentHash(normalizedText);
 
     const area = await prisma.$transaction(async (tx) => {
       if (input.isDefault) {
@@ -332,7 +422,7 @@ export class ResearcherProfileService {
       }
 
       if (existing) {
-        return tx.researcherSavedResearchArea.update({
+        const updated = await tx.researcherSavedResearchArea.update({
           where: { id: existing.id },
           data: {
             label: normalizeWhitespace(input.label),
@@ -345,9 +435,19 @@ export class ResearcherProfileService {
             content_hash: contentHash,
           },
         });
+        await tx.$executeRaw(Prisma.sql`
+          UPDATE researcher_saved_research_areas
+          SET taxonomy_area_id = ${taxonomy?.areaId || null},
+              taxonomy_level1_code = ${taxonomy?.level1Code || null},
+              taxonomy_level1_name = ${taxonomy?.level1Name || null},
+              taxonomy_level2_code = ${taxonomy?.level2Code || null},
+              taxonomy_level2_name = ${taxonomy?.level2Name || null}
+          WHERE id = ${existing.id}
+        `);
+        return updated;
       }
 
-      return tx.researcherSavedResearchArea.create({
+      const created = await tx.researcherSavedResearchArea.create({
         data: {
           user_id: userId,
           label: normalizeWhitespace(input.label),
@@ -360,6 +460,16 @@ export class ResearcherProfileService {
           content_hash: contentHash,
         },
       });
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE researcher_saved_research_areas
+        SET taxonomy_area_id = ${taxonomy?.areaId || null},
+            taxonomy_level1_code = ${taxonomy?.level1Code || null},
+            taxonomy_level1_name = ${taxonomy?.level1Name || null},
+            taxonomy_level2_code = ${taxonomy?.level2Code || null},
+            taxonomy_level2_name = ${taxonomy?.level2Name || null}
+        WHERE id = ${created.id}
+      `);
+      return created;
     });
 
     const shouldRegenerateEmbedding =
@@ -387,7 +497,7 @@ export class ResearcherProfileService {
       }
     }
 
-    const refreshed = await prisma.researcherSavedResearchArea.findUnique({ where: { id: area.id } });
+    const refreshed = await querySavedResearchAreaById(area.id);
     if (!refreshed) {
       throw new Error('Failed to load saved research area');
     }
@@ -424,6 +534,7 @@ export class ResearcherProfileService {
             useForAlerts: true,
             normalizedText: profile.profile.researchAreas[0],
             embeddingVersion: null,
+            taxonomy: null,
             createdAt: '',
             updatedAt: '',
           }
@@ -431,9 +542,10 @@ export class ResearcherProfileService {
 
     const profileDefaultContext = defaultArea
       ? {
-          query: { researchArea: defaultArea.researchArea },
+          query: { researchArea: defaultArea.normalizedText || defaultArea.researchArea },
           filters: buildProfileDefaultFilters(profile.profile),
           sourceLabel: defaultArea.label,
+          taxonomy: defaultArea.taxonomy,
         }
       : null;
 
@@ -480,16 +592,17 @@ export class ResearcherProfileService {
   }
 
   async backfillResearchAreaEmbeddings(limit = 25): Promise<EmbeddingBackfillResult> {
-    const candidates = await prisma.researcherSavedResearchArea.findMany({
-      where: {
-        OR: [
-          { embedding_version: null },
-          { embedding_version: { not: RESEARCH_AREA_EMBEDDING_VERSION } },
-        ],
-      },
-      orderBy: [{ updated_at: 'desc' }],
-      take: Math.max(1, Math.min(limit, 100)),
-    });
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const candidates = await prisma.$queryRaw<SavedResearchAreaRow[]>(Prisma.sql`
+      SELECT id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name, taxonomy_level2_code, taxonomy_level2_name,
+             label, research_area, keywords, disciplines, is_default, use_for_alerts, normalized_text, embedding_version,
+             created_at, updated_at
+      FROM researcher_saved_research_areas
+      WHERE embedding_version IS NULL
+         OR embedding_version <> ${RESEARCH_AREA_EMBEDDING_VERSION}
+      ORDER BY updated_at DESC
+      LIMIT ${safeLimit}
+    `);
 
     const result: EmbeddingBackfillResult = {
       processed: candidates.length,
@@ -500,7 +613,13 @@ export class ResearcherProfileService {
 
     for (const area of candidates) {
       try {
-        const normalizedText = normalizeWhitespace(area.normalized_text || area.research_area || area.label || '');
+        const normalizedText = buildResearchAreaNormalizedText({
+          taxonomy: serializeResearchAreaTaxonomy(area),
+          label: area.label,
+          researchArea: area.research_area,
+          keywords: normalizeTextArray(area.keywords),
+          disciplines: normalizeTextArray(area.disciplines),
+        }) || normalizeWhitespace(area.normalized_text || area.research_area || area.label || '');
         if (!normalizedText) {
           throw new Error('Saved research area has no text to embed');
         }
@@ -513,7 +632,9 @@ export class ResearcherProfileService {
         await prisma.$executeRaw`
           UPDATE researcher_saved_research_areas
           SET embedding = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)},
-              embedding_version = ${RESEARCH_AREA_EMBEDDING_VERSION}
+              embedding_version = ${RESEARCH_AREA_EMBEDDING_VERSION},
+              normalized_text = ${normalizedText},
+              content_hash = ${buildContentHash(normalizedText)}
           WHERE id = ${area.id}
         `;
 

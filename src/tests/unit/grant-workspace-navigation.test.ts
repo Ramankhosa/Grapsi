@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildGrantProjectOpenUrl,
   buildGrantWorkspaceUrl,
+  resolveGrantWorkspaceStage,
+  resolveGrantWorkspaceStageForGrantStatus,
   resolveGrantWorkspaceStageForPrepStatus,
   withGrantWorkspaceStage,
 } from '@/lib/grants/workspaceNavigation'
@@ -13,6 +16,31 @@ describe('grant workspace navigation', () => {
     expect(resolveGrantWorkspaceStageForPrepStatus('ready')).toBe('GRANTMENTOR')
     expect(resolveGrantWorkspaceStageForPrepStatus('launched')).toBe('BLUEPRINT')
     expect(resolveGrantWorkspaceStageForPrepStatus('handed_off')).toBe('BLUEPRINT')
+  })
+
+  it('maps grant session statuses onto the unified workspace stages', () => {
+    expect(resolveGrantWorkspaceStageForGrantStatus('BLUEPRINT')).toBe('BLUEPRINT')
+    expect(resolveGrantWorkspaceStageForGrantStatus('DRAFTING')).toBe('SECTION_DRAFTING')
+    expect(resolveGrantWorkspaceStageForGrantStatus('REVIEW')).toBe('REVIEWER')
+    expect(resolveGrantWorkspaceStageForGrantStatus('PREP_OPTIONAL')).toBeNull()
+    expect(resolveGrantWorkspaceStageForGrantStatus('SETUP')).toBeNull()
+  })
+
+  it('prefers concrete grant workspace progress over prep status', () => {
+    expect(resolveGrantWorkspaceStage({
+      prepStatus: 'launched',
+      grantStatus: 'DRAFTING',
+    })).toBe('SECTION_DRAFTING')
+
+    expect(resolveGrantWorkspaceStage({
+      prepStatus: 'active',
+      grantStatus: 'REVIEW',
+    })).toBe('REVIEWER')
+
+    expect(resolveGrantWorkspaceStage({
+      prepStatus: 'active',
+      grantStatus: 'PREP_OPTIONAL',
+    })).toBe('GRANTMENTOR')
   })
 
   it('builds canonical workspace links for pre-launch and launched sessions', () => {
@@ -27,6 +55,72 @@ describe('grant workspace navigation', () => {
       grantSessionId: 'grant-1',
       prepStatus: 'launched',
     })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
+
+    expect(buildGrantWorkspaceUrl({
+      projectId: 'project-1',
+      grantSessionId: 'grant-1',
+      prepStatus: 'launched',
+      grantStatus: 'DRAFTING',
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
+  })
+
+  it('builds grant project open URLs from latest prep and grant metadata', () => {
+    expect(buildGrantProjectOpenUrl({
+      projectId: 'project-1',
+      prepSession: {
+        status: 'active',
+        grant_session_id: 'grant-1',
+      },
+      grantSession: null,
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=GRANTMENTOR')
+
+    expect(buildGrantProjectOpenUrl({
+      projectId: 'project-1',
+      prepSession: {
+        status: 'launched',
+        grant_session_id: 'grant-1',
+      },
+      grantSession: {
+        id: 'grant-1',
+        status: 'BLUEPRINT',
+      },
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
+
+    expect(buildGrantProjectOpenUrl({
+      projectId: 'project-1',
+      prepSession: {
+        status: 'launched',
+        grant_session_id: 'grant-1',
+      },
+      grantSession: {
+        id: 'grant-1',
+        status: 'REVIEW',
+      },
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=REVIEWER')
+
+    expect(buildGrantProjectOpenUrl({
+      projectId: 'project-1',
+      prepSession: null,
+      grantSession: null,
+    })).toBeNull()
+
+    expect(buildGrantProjectOpenUrl({
+      projectId: 'project-1',
+      prepSession: null,
+      grantSession: {
+        id: 'grant-1',
+        status: 'PREP_OPTIONAL',
+      },
+    })).toBeNull()
+
+    expect(buildGrantProjectOpenUrl({
+      projectId: 'project-1',
+      prepSession: null,
+      grantSession: {
+        id: 'grant-1',
+        status: 'DRAFTING',
+      },
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
   })
 
   it('replaces an existing workspace stage query parameter', () => {

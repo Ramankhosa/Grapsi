@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
+import { requireFundingPublisherRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingCatalogService } from '@/lib/services/fundingCatalogService'
 
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireFundingOperatorRequest(request)
+  const auth = await requireFundingPublisherRequest(request)
   if ('response' in auth) {
     return auth.response
   }

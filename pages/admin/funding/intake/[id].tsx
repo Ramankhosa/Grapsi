@@ -342,8 +342,17 @@ export default function FundingIntakeJobPage() {
   const [deletingJob, setDeletingJob] = useState(false);
 
   const userRoles = user?.roles || [];
-  const canReadFundingIntake = userRoles.includes('SUPER_ADMIN') || userRoles.includes('SUPER_ADMIN_VIEWER');
-  const canWriteFundingIntake = userRoles.includes('SUPER_ADMIN');
+  const platformPermissions = user?.platformPermissions || [];
+  const canReadFundingIntake =
+    userRoles.includes('SUPER_ADMIN') ||
+    userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    platformPermissions.includes('platform.support.read') ||
+    platformPermissions.includes('funding.operations.write') ||
+    platformPermissions.includes('funding.publisher.write');
+  const canWriteFundingIntake =
+    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.operations.write');
+  const canPublishFunding =
+    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.publisher.write');
   const callId = details?.call?.id || details?.job.linked_funding_call_id || linkedCallOverrideId || null;
   const isActiveJob = useMemo(
     () => details && ['queued', 'fetching', 'extracting'].includes(details.job.status),
@@ -365,8 +374,8 @@ export default function FundingIntakeJobPage() {
       ),
     [callId, details, draftValues, hasPendingDuplicates]
   );
-  const canWorkOnGuidelines = Boolean(callId || canAutoCreateDraft);
-  const canWorkOnTemplates = Boolean(callId || canAutoCreateDraft);
+  const canWorkOnGuidelines = canWriteFundingIntake && Boolean(callId || canAutoCreateDraft);
+  const canWorkOnTemplates = canWriteFundingIntake && Boolean(callId || canAutoCreateDraft);
   const intakeTemplateAssetIds = useMemo(
     () =>
       (details?.template?.assets || [])
@@ -1035,8 +1044,8 @@ export default function FundingIntakeJobPage() {
   }
 
   async function handleCallAction(action: 'publish' | 'archive' | 'reject') {
-    if (!canWriteFundingIntake) {
-      toast.error('Write access required. You have viewer-only access.');
+    if (!canPublishFunding) {
+      toast.error('Funding publishing access required.');
       return;
     }
 
@@ -1123,7 +1132,7 @@ export default function FundingIntakeJobPage() {
             </p>
             {!canWriteFundingIntake && (
               <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Viewer access is read-only. Only SUPER_ADMIN users can create, update, or publish intake jobs.
+                Viewer access is read-only. Funding operations access is required for intake edits, and publishing access is required for publish/archive actions.
               </div>
             )}
           </div>
@@ -1135,7 +1144,7 @@ export default function FundingIntakeJobPage() {
               <button
                 type="button"
                 onClick={() => handleCallAction('archive')}
-                disabled={!canWriteFundingIntake || callBusy !== null}
+                disabled={!canPublishFunding || callBusy !== null}
                 className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {callBusy === 'archive' ? 'Archiving...' : 'Archive Published Call'}
@@ -1985,7 +1994,7 @@ export default function FundingIntakeJobPage() {
                 <button
                   type="button"
                   onClick={() => handleCallAction('publish')}
-                  disabled={!canWriteFundingIntake || !callId || callBusy !== null || !details.publishReadiness?.ready}
+                  disabled={!canPublishFunding || !callId || callBusy !== null || !details.publishReadiness?.ready}
                   className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {callBusy === 'publish' ? 'Publishing...' : 'Publish'}
@@ -1993,7 +2002,7 @@ export default function FundingIntakeJobPage() {
                 <button
                   type="button"
                   onClick={() => handleCallAction('archive')}
-                  disabled={!canWriteFundingIntake || !callId || callBusy !== null}
+                  disabled={!canPublishFunding || !callId || callBusy !== null}
                   className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {callBusy === 'archive' ? 'Archiving...' : 'Archive'}
@@ -2001,7 +2010,7 @@ export default function FundingIntakeJobPage() {
                 <button
                   type="button"
                   onClick={() => handleCallAction('reject')}
-                  disabled={!canWriteFundingIntake || !callId || callBusy !== null}
+                  disabled={!canPublishFunding || !callId || callBusy !== null}
                   className="rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {callBusy === 'reject' ? 'Rejecting...' : 'Reject'}

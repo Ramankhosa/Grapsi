@@ -34,8 +34,13 @@ export default function SuperAdminFundingPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
   const isSuperAdmin = useMemo(
-    () => user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER'),
-    [user?.roles]
+    () =>
+      user?.roles?.includes('SUPER_ADMIN') ||
+      user?.roles?.includes('SUPER_ADMIN_VIEWER') ||
+      user?.platformPermissions?.includes('platform.support.read') ||
+      user?.platformPermissions?.includes('funding.operations.write') ||
+      user?.platformPermissions?.includes('funding.publisher.write'),
+    [user?.platformPermissions, user?.roles]
   )
 
   useEffect(() => {

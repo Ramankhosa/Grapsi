@@ -14,6 +14,7 @@ type PrepSession = {
   engagement_mode: string
   overall_readiness: number
   updated_at: string
+  grant_session_id?: string | null
   papsi_launch_url?: string | null
 }
 
@@ -79,6 +80,15 @@ export default function ProjectGrantsPage() {
 
   async function startGrantPrep(selectedFundingCallId?: string | null) {
     try {
+      const effectiveFundingCallId =
+        selectedFundingCallId ||
+        fundingCallId ||
+        grantSessions.find((session) => session.fundingCallId)?.fundingCallId ||
+        null
+      if (!effectiveFundingCallId) {
+        throw new Error('This grant project needs a linked funding call before GrantMentor can open.')
+      }
+
       setCreating(true)
       const response = await fetch(`/api/projects/${projectId}/grants`, {
         method: 'POST',
@@ -88,7 +98,7 @@ export default function ProjectGrantsPage() {
         },
         body: JSON.stringify({
           engagementMode: 'expert',
-          fundingCallId: selectedFundingCallId || fundingCallId || null,
+          fundingCallId: effectiveFundingCallId,
         }),
       })
 
@@ -97,11 +107,11 @@ export default function ProjectGrantsPage() {
         throw new Error(data.message || 'Failed to start grant prep')
       }
 
-      router.push(
-        data.launchUrl ||
-        data.prepUrl ||
-        `/projects/${projectId}/grants/${data.session.id}/prep`
-      )
+      if (!data.launchUrl) {
+        throw new Error('This grant project needs a linked funding call before GrantMentor can open.')
+      }
+
+      router.push(data.launchUrl)
     } catch (error) {
       console.error('Failed to create grant prep session:', error)
       alert(error instanceof Error ? error.message : 'Failed to create grant prep session')
@@ -110,35 +120,9 @@ export default function ProjectGrantsPage() {
     }
   }
 
-  async function startGrantPrepFromWorkspace(grantSessionId: string, selectedFundingCallId?: string | null) {
-    try {
-      setCreatingForGrant(grantSessionId)
-      const response = await fetch(`/api/projects/${projectId}/grants`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
-        },
-        body: JSON.stringify({
-          engagementMode: 'expert',
-          fundingCallId: selectedFundingCallId || fundingCallId || null,
-        }),
-      })
-      const data = await response.json()
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to open grant prep')
-      }
-      router.push(
-        data.launchUrl ||
-        data.prepUrl ||
-        `/projects/${projectId}/grants/${grantSessionId}/workspace?stage=GRANTMENTOR`
-      )
-    } catch (error) {
-      console.error('Failed to open grant prep:', error)
-      alert(error instanceof Error ? error.message : 'Failed to open grant prep')
-    } finally {
-      setCreatingForGrant(null)
-    }
+  async function startGrantPrepFromWorkspace(grantSessionId: string) {
+    setCreatingForGrant(grantSessionId)
+    router.push(`/projects/${projectId}/grants/${grantSessionId}/workspace?stage=GRANTMENTOR`)
   }
 
   return (
@@ -199,7 +183,10 @@ export default function ProjectGrantsPage() {
                   {sessions.map((session) => (
                     <div key={session.id} className="rounded-2xl border border-slate-200 bg-white p-5 transition hover:border-ai-blue-300 hover:shadow-sm">
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <Link href={`/projects/${projectId}/grants/${session.id}/prep`} className="flex-1">
+                        <Link
+                          href={session.papsi_launch_url || `/projects/${projectId}/grants`}
+                          className="flex-1"
+                        >
                           <div className="text-sm font-medium text-slate-900">{session.id}</div>
                           <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
                             <span className="rounded-full bg-slate-100 px-2 py-1 uppercase">{session.status}</span>
@@ -255,7 +242,7 @@ export default function ProjectGrantsPage() {
                           </Link>
                           <button
                             type="button"
-                            onClick={() => void startGrantPrepFromWorkspace(grantSession.id, grantSession.fundingCallId)}
+                            onClick={() => void startGrantPrepFromWorkspace(grantSession.id)}
                             disabled={creatingForGrant === grantSession.id}
                             className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                           >

@@ -21,6 +21,7 @@ function resolveWorkspaceLaunchUrl(input: {
   projectId: string
   grantSessionId?: string | null
   prepStatus?: string | null
+  grantStatus?: string | null
 }) {
   return buildGrantWorkspaceUrl(input)
 }
@@ -64,6 +65,7 @@ async function resolveProjectGrantPrepSession(input: {
           projectId: input.projectId,
           grantSessionId: grantSession.id,
           prepStatus: directPrepSession.status,
+          grantStatus: grantSession.status,
         }))
     ) {
       directPrepSession = await prisma.grantPrepSession.update({
@@ -74,6 +76,7 @@ async function resolveProjectGrantPrepSession(input: {
             projectId: input.projectId,
             grantSessionId: grantSession.id,
             prepStatus: directPrepSession.status,
+            grantStatus: grantSession.status,
           }),
         },
         include: {
@@ -168,6 +171,7 @@ async function resolveProjectGrantPrepSession(input: {
             projectId: input.projectId,
             grantSessionId: grantSession.id,
             prepStatus: grantPrepSession.status,
+            grantStatus: grantSession.status,
           }),
         },
         include: {

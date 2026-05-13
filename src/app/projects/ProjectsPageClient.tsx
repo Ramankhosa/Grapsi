@@ -22,6 +22,9 @@ interface Project {
   id: string
   name: string
   projectType?: 'PATENT' | 'GRANT'
+  grantOpenUrl?: string | null
+  latestGrantSession?: { id: string; status?: string; fundingCallId?: string | null } | null
+  latestGrantPrepSession?: { id: string; status?: string; funding_call_id?: string | null } | null
   createdAt: string
   patents?: { id: string; title?: string; status?: string }[]
   collaborators?: { id: string; user: { name: string; email: string } }[]
@@ -77,10 +80,13 @@ export default function ProjectsPage() {
     }
   }
 
-  const startGrantPrepForProject = async (projectId: string) => {
-    if (!fundingCallId) return
-
+  const startGrantPrepForProject = async (projectId: string, selectedFundingCallId?: string | null) => {
     try {
+      const effectiveFundingCallId = selectedFundingCallId || fundingCallId
+      if (!effectiveFundingCallId) {
+        throw new Error('This grant project needs a linked funding call before GrantMentor can open.')
+      }
+
       setCreatingGrantPrepFor(projectId)
       const response = await fetch(`/api/projects/${projectId}/grants`, {
         method: 'POST',
@@ -89,7 +95,7 @@ export default function ProjectsPage() {
           'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`,
         },
         body: JSON.stringify({
-          fundingCallId,
+          fundingCallId: effectiveFundingCallId,
           engagementMode: 'expert',
         }),
       })
@@ -99,17 +105,34 @@ export default function ProjectsPage() {
         throw new Error(data.message || 'Failed to start grant prep')
       }
 
-      router.push(
-        data.launchUrl ||
-        data.prepUrl ||
-        `/projects/${projectId}/grants/${data.session.id}/prep`
-      )
+      if (!data.launchUrl) {
+        throw new Error('This grant project needs a linked funding call before GrantMentor can open.')
+      }
+
+      router.push(data.launchUrl)
     } catch (error) {
       console.error('Failed to start grant prep:', error)
       alert(error instanceof Error ? error.message : 'Failed to start grant prep')
     } finally {
       setCreatingGrantPrepFor(null)
     }
+  }
+
+  const openProject = async (project: Project) => {
+    if (project.projectType !== 'GRANT') {
+      router.push(`/projects/${project.id}`)
+      return
+    }
+
+    if (project.grantOpenUrl) {
+      router.push(project.grantOpenUrl)
+      return
+    }
+
+    await startGrantPrepForProject(
+      project.id,
+      project.latestGrantPrepSession?.funding_call_id || project.latestGrantSession?.fundingCallId || null
+    )
   }
 
   if (authLoading || isLoading) {
@@ -355,12 +378,15 @@ export default function ProjectsPage() {
                           <span>{creatingGrantPrepFor === project.id ? 'Starting...' : 'Start Grant Prep'}</span>
                         </button>
                       ) : null}
-                      <Link href={`/projects/${project.id}`}>
-                        <button className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-xl transition-all duration-200 group-hover:shadow-lg">
-                          <span>Open Project</span>
-                          <ChevronRight className="w-4 h-4 opacity-0 -ml-2 group-hover:opacity-100 group-hover:ml-0 transition-all duration-200" />
-                        </button>
-                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => void openProject(project)}
+                        disabled={creatingGrantPrepFor === project.id}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-xl transition-all duration-200 group-hover:shadow-lg disabled:opacity-60"
+                      >
+                        <span>{creatingGrantPrepFor === project.id ? 'Opening...' : 'Open Project'}</span>
+                        <ChevronRight className="w-4 h-4 opacity-0 -ml-2 group-hover:opacity-100 group-hover:ml-0 transition-all duration-200" />
+                      </button>
                     </div>
                   </div>
                 </div>

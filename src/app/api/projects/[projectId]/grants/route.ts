@@ -95,16 +95,30 @@ export async function GET(
     }),
   ])
 
+  const grantSessionById = new Map(grantSessions.map((session) => [session.id, session]))
+  const grantSessionByFundingCallId = new Map(
+    grantSessions
+      .filter((session) => session.fundingCallId)
+      .map((session) => [session.fundingCallId, session])
+  )
+
   return NextResponse.json({
-    prepSessions: prepSessions.map((session) => ({
-      ...serializeGrantPrepSession(session),
-      papsi_launch_url:
-        buildGrantWorkspaceUrl({
+    prepSessions: prepSessions.map((session) => {
+      const linkedGrantSession =
+        (session.grant_session_id ? grantSessionById.get(session.grant_session_id) : null) ||
+        (session.funding_call_id ? grantSessionByFundingCallId.get(session.funding_call_id) : null) ||
+        null
+
+      return {
+        ...serializeGrantPrepSession(session),
+        papsi_launch_url: buildGrantWorkspaceUrl({
           projectId,
-          grantSessionId: session.grant_session_id,
+          grantSessionId: linkedGrantSession?.id || session.grant_session_id,
           prepStatus: session.status,
-        }) || session.papsi_launch_url,
-    })),
+          grantStatus: linkedGrantSession?.status,
+        }),
+      }
+    }),
     grantSessions,
   })
 }

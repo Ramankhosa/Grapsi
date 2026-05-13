@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import type { PlatformPermissionCode } from '@/lib/platformTeamRoles'
+import { getUserPlatformPermissionCodes } from '@/lib/services/platformTeamRoleService'
 
 export interface FundingActor {
   id: string
@@ -10,10 +12,24 @@ export interface FundingActor {
   tenantId: string | null
   isSuperAdmin: boolean
   isSuperAdminWriter: boolean
+  platformPermissions: PlatformPermissionCode[]
 }
 
 function hasRole(actor: { roles: string[] }, role: string) {
   return actor.roles.includes(role)
+}
+
+export function actorHasPlatformPermission(actor: FundingActor, permissionCode: PlatformPermissionCode) {
+  return actor.isSuperAdminWriter || actor.platformPermissions.includes(permissionCode)
+}
+
+export function actorHasPlatformReadAccess(actor: FundingActor) {
+  return (
+    actor.isSuperAdmin ||
+    actor.platformPermissions.includes('platform.support.read') ||
+    actor.platformPermissions.includes('funding.operations.write') ||
+    actor.platformPermissions.includes('funding.publisher.write')
+  )
 }
 
 export async function requireFundingActor(
@@ -21,6 +37,7 @@ export async function requireFundingActor(
   options?: {
     allowPlatform?: boolean
     requireWriteSuperAdmin?: boolean
+    requiredPlatformPermission?: PlatformPermissionCode
   }
 ): Promise<{ actor: FundingActor; user: any } | { response: NextResponse }> {
   const { user, error } = await authenticateUser(request)
@@ -31,6 +48,12 @@ export async function requireFundingActor(
     }
   }
 
+  let platformPermissions: PlatformPermissionCode[] = []
+  try {
+    platformPermissions = await getUserPlatformPermissionCodes(user.id)
+  } catch (permissionError) {
+    console.error('[FundingAccess] Platform permission lookup failed:', permissionError)
+  }
   const actor: FundingActor = {
     id: user.id,
     email: user.email,
@@ -38,9 +61,15 @@ export async function requireFundingActor(
     tenantId: user.tenantId ?? null,
     isSuperAdmin: hasRole(user, 'SUPER_ADMIN') || hasRole(user, 'SUPER_ADMIN_VIEWER'),
     isSuperAdminWriter: hasRole(user, 'SUPER_ADMIN'),
+    platformPermissions,
   }
 
-  if (!actor.tenantId && !actor.isSuperAdmin) {
+  const hasRequiredPlatformPermission = options?.requiredPlatformPermission
+    ? actor.platformPermissions.includes(options.requiredPlatformPermission)
+    : false
+  const hasPlatformRoleAccess = options?.allowPlatform && actor.platformPermissions.length > 0
+
+  if (!actor.tenantId && !actor.isSuperAdmin && !hasPlatformRoleAccess) {
     return {
       response: NextResponse.json(
         {
@@ -53,10 +82,27 @@ export async function requireFundingActor(
     }
   }
 
-  if (options?.requireWriteSuperAdmin && !actor.isSuperAdminWriter) {
+  if (
+    options?.requireWriteSuperAdmin &&
+    !actor.isSuperAdminWriter &&
+    !hasRequiredPlatformPermission
+  ) {
     return {
       response: NextResponse.json(
-        { error: 'Super admin write access required', message: 'Super admin write access required' },
+        { error: 'Platform write access required', message: 'Platform write access required' },
+        { status: 403 }
+      ),
+    }
+  }
+
+  if (
+    options?.requiredPlatformPermission &&
+    !actor.isSuperAdminWriter &&
+    !hasRequiredPlatformPermission
+  ) {
+    return {
+      response: NextResponse.json(
+        { error: 'Platform permission required', message: 'Platform permission required' },
         { status: 403 }
       ),
     }
@@ -64,7 +110,7 @@ export async function requireFundingActor(
 
   // Super admins must not be constrained by tenant-level feature access controls.
   // Many platform operators are linked to a tenant record for other product areas.
-  if (actor.isSuperAdmin) {
+  if (actor.isSuperAdmin || hasPlatformRoleAccess) {
     if (!actor.tenantId && !options?.allowPlatform) {
       return {
         response: NextResponse.json(
@@ -120,11 +166,11 @@ export function assertVisibilityAccess(
     return null
   }
 
-  if (!actor.isSuperAdminWriter) {
+  if (!actorHasPlatformPermission(actor, 'funding.operations.write')) {
     return NextResponse.json(
       {
-        error: 'Only super admins can create or moderate global funding calls',
-        message: 'Only super admins can create or moderate global funding calls',
+        error: 'Funding operations write access required',
+        message: 'Funding operations write access required',
         code: 'SUPER_ADMIN_REQUIRED',
       },
       { status: 403 }

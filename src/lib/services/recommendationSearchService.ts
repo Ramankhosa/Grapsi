@@ -40,6 +40,7 @@ const LOW_CONFIDENCE_THRESHOLD = 0.35;
 const RESEARCH_AREA_ENRICHMENT_MODEL = 'gemini-2.0-flash-lite';
 const QUERY_ENRICHMENT_CACHE_VERSION = 'v1';
 const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilters>> = [
+  ['taxonomyAreaIds'],
   ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages'],
   ['hostCountries', 'eligibleRegions', 'geographyScope', 'funderCountries'],
   ['eligibleCountries'],
@@ -73,6 +74,10 @@ function sqlLowerTextArray(values: string[]) {
   return Prisma.sql`ARRAY[${Prisma.join(values.map((value) => Prisma.sql`${value.toLowerCase()}`))}]::text[]`;
 }
 
+function sqlTextArray(values: string[]) {
+  return Prisma.sql`ARRAY[${Prisma.join(values.map((value) => Prisma.sql`${value}`))}]::text[]`;
+}
+
 function combineConditions(conditions: Prisma.Sql[]) {
   return conditions.reduce((combined, condition, index) => {
     if (index === 0) {
@@ -96,6 +101,39 @@ function buildArrayAnyCondition(columnName: string, values: string[]) {
 function buildScalarAnyCondition(columnName: string, values: string[]) {
   const lowered = sqlLowerTextArray(values.map((value) => normalizeKey(value)));
   return Prisma.sql`LOWER(COALESCE(${Prisma.raw(columnName)}, '')) = ANY(${lowered})`;
+}
+
+function buildTaxonomyAreaCondition(areaIds: string[]) {
+  const ids = sqlTextArray(areaIds);
+  return Prisma.sql`
+    EXISTS (
+      SELECT 1
+      FROM funding_call_research_area_taxonomies taxonomy_filter
+      WHERE taxonomy_filter.funding_call_id = funding_calls.id
+        AND taxonomy_filter.taxonomy_area_id = ANY(${ids})
+    )
+  `;
+}
+
+function buildFundingCallTextSearchCondition(fullTextQuery: string) {
+  return Prisma.sql`(
+    ts_document @@ websearch_to_tsquery('english', ${fullTextQuery})
+    OR EXISTS (
+      SELECT 1
+      FROM funding_call_research_area_taxonomies taxonomy_text
+      WHERE taxonomy_text.funding_call_id = funding_calls.id
+        AND to_tsvector(
+          'english',
+          CONCAT_WS(
+            ' ',
+            taxonomy_text.taxonomy_level1_code,
+            taxonomy_text.taxonomy_level1_name,
+            taxonomy_text.taxonomy_level2_code,
+            taxonomy_text.taxonomy_level2_name
+          )
+        ) @@ websearch_to_tsquery('english', ${fullTextQuery})
+    )
+  )`;
 }
 
 function buildAccessCondition(access?: RecommendationAccessScope) {
@@ -181,6 +219,10 @@ function buildBaseConditions(
 
   if (filters.sponsorTypes.length > 0) {
     conditions.push(buildScalarAnyCondition('sponsor_type', filters.sponsorTypes));
+  }
+
+  if (filters.taxonomyAreaIds.length > 0) {
+    conditions.push(buildTaxonomyAreaCondition(filters.taxonomyAreaIds));
   }
 
   if (filters.applicationLanguages.length > 0) {
@@ -474,6 +516,7 @@ function cloneFilters(filters: Required<RecommendationSearchFilters>): Required<
     residencyRequirements: [...filters.residencyRequirements],
     applicationLanguages: [...filters.applicationLanguages],
     sponsorTypes: [...filters.sponsorTypes],
+    taxonomyAreaIds: [...filters.taxonomyAreaIds],
   };
 }
 
@@ -494,6 +537,7 @@ function clearFilterKey(
     case 'residencyRequirements':
     case 'applicationLanguages':
     case 'sponsorTypes':
+    case 'taxonomyAreaIds':
       filters[key] = [] as never;
       break;
     case 'deadlineFrom':
@@ -1002,7 +1046,7 @@ Rules:
           0::float AS "semanticSimilarity",
           ts_rank_cd(ts_document, websearch_to_tsquery('english', ${queryText})) AS "textRank"
         FROM funding_calls
-        WHERE ts_document @@ websearch_to_tsquery('english', ${queryText})
+        WHERE ${buildFundingCallTextSearchCondition(queryText)}
           AND ${combineConditions(baseConditions)}
         ORDER BY "textRank" DESC
         LIMIT ${FULLTEXT_CANDIDATE_LIMIT}
@@ -1098,14 +1142,22 @@ Rules:
       filters: request.filters,
     });
     const baseConditions = buildBaseConditions(normalized, false, request.access);
-    const where = combineConditions(baseConditions);
     const hasQuery = Boolean(request.query?.trim()) && Boolean(normalized.normalizedQuery.fullTextQuery);
+    const where = combineConditions([
+      ...baseConditions,
+      hasQuery ? buildFundingCallTextSearchCondition(normalized.normalizedQuery.fullTextQuery) : Prisma.sql`TRUE`,
+    ]);
 
-    const textFilter = hasQuery
-      ? Prisma.sql`ts_document @@ websearch_to_tsquery('english', ${normalized.normalizedQuery.fullTextQuery}) AND`
-      : Prisma.sql``;
-
-    type FacetRow = { dimension: string; value: string; count: number };
+    type FacetRow = {
+      dimension: string;
+      value: string;
+      label: string | null;
+      level1Code: string | null;
+      level1Name: string | null;
+      level2Code: string | null;
+      level2Name: string | null;
+      count: number;
+    };
     const FACET_LIMIT = 30;
 
     const [totalRow, facetRows] = await Promise.all([
@@ -1113,69 +1165,100 @@ Rules:
         Prisma.sql`
           SELECT COUNT(*)::int AS count
           FROM funding_calls
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
         `
       ),
       prisma.$queryRaw<FacetRow[]>(Prisma.sql`
         SELECT * FROM (
-          SELECT 'researchArea' AS dimension, val AS value, COUNT(*)::int AS count
+          SELECT
+            'taxonomyArea' AS dimension,
+            taxonomy.taxonomy_area_id AS value,
+            COALESCE(
+              NULLIF(CONCAT_WS(' / ', NULLIF(taxonomy.taxonomy_level1_name, ''), NULLIF(taxonomy.taxonomy_level2_name, '')), ''),
+              taxonomy.taxonomy_area_id
+            ) AS label,
+            taxonomy.taxonomy_level1_code AS "level1Code",
+            taxonomy.taxonomy_level1_name AS "level1Name",
+            taxonomy.taxonomy_level2_code AS "level2Code",
+            taxonomy.taxonomy_level2_name AS "level2Name",
+            COUNT(*)::int AS count
+          FROM funding_calls
+          INNER JOIN funding_call_research_area_taxonomies taxonomy
+            ON taxonomy.funding_call_id = funding_calls.id
+          WHERE ${where}
+          GROUP BY taxonomy.taxonomy_area_id, taxonomy.taxonomy_level1_code, taxonomy.taxonomy_level1_name,
+                   taxonomy.taxonomy_level2_code, taxonomy.taxonomy_level2_name
+          ORDER BY count DESC LIMIT ${FACET_LIMIT}
+        ) tx
+        UNION ALL
+        SELECT * FROM (
+          SELECT 'researchArea' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls, unnest(disciplines) AS val
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
           GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) ra
         UNION ALL
         SELECT * FROM (
-          SELECT 'country' AS dimension, val AS value, COUNT(*)::int AS count
+          SELECT 'country' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls, unnest(eligible_countries) AS val
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
           GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) co
         UNION ALL
         SELECT * FROM (
-          SELECT 'fundingKind' AS dimension, val AS value, COUNT(*)::int AS count
+          SELECT 'fundingKind' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls, unnest(funding_kinds) AS val
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
           GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) fk
         UNION ALL
         SELECT * FROM (
-          SELECT 'careerStage' AS dimension, val AS value, COUNT(*)::int AS count
+          SELECT 'careerStage' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls, unnest(career_stages) AS val
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
           GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) cs
         UNION ALL
         SELECT * FROM (
-          SELECT 'discipline' AS dimension, val AS value, COUNT(*)::int AS count
+          SELECT 'discipline' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls, unnest(disciplines) AS val
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
           GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) ds
         UNION ALL
         SELECT * FROM (
-          SELECT 'sponsorType' AS dimension, sponsor_type AS value, COUNT(*)::int AS count
+          SELECT 'sponsorType' AS dimension, sponsor_type AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls
-          WHERE sponsor_type IS NOT NULL AND ${textFilter} ${where}
+          WHERE sponsor_type IS NOT NULL AND ${where}
           GROUP BY sponsor_type ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) sp
         UNION ALL
         SELECT * FROM (
-          SELECT 'region' AS dimension, val AS value, COUNT(*)::int AS count
+          SELECT 'region' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls, unnest(eligible_regions) AS val
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
           GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) rg
         UNION ALL
         SELECT * FROM (
-          SELECT 'institutionType' AS dimension, val AS value, COUNT(*)::int AS count
+          SELECT 'institutionType' AS dimension, val AS value, NULL::text AS label, NULL::text AS "level1Code",
+                 NULL::text AS "level1Name", NULL::text AS "level2Code", NULL::text AS "level2Name", COUNT(*)::int AS count
           FROM funding_calls, unnest(institution_types) AS val
-          WHERE ${textFilter} ${where}
+          WHERE ${where}
           GROUP BY val ORDER BY count DESC LIMIT ${FACET_LIMIT}
         ) it
       `),
     ]);
 
     const facets: Record<DirectoryFacetDimension, DirectoryFacetItem[]> = {
+      taxonomyArea: [],
       researchArea: [],
       country: [],
       fundingKind: [],
@@ -1189,7 +1272,15 @@ Rules:
     for (const row of facetRows) {
       const dim = row.dimension as DirectoryFacetDimension;
       if (facets[dim] && row.value) {
-        facets[dim].push({ value: row.value, count: row.count });
+        facets[dim].push({
+          value: row.value,
+          label: row.label || undefined,
+          level1Code: row.level1Code || undefined,
+          level1Name: row.level1Name || undefined,
+          level2Code: row.level2Code || undefined,
+          level2Name: row.level2Name || undefined,
+          count: row.count,
+        });
       }
     }
 
@@ -1208,26 +1299,20 @@ Rules:
     });
     const baseConditions = buildBaseConditions(normalized, false, request.access);
     const hasQuery = Boolean(rawQuery) && Boolean(normalized.normalizedQuery.fullTextQuery);
+    const where = combineConditions([
+      ...baseConditions,
+      hasQuery ? buildFundingCallTextSearchCondition(normalized.normalizedQuery.fullTextQuery) : Prisma.sql`TRUE`,
+    ]);
     const page = Math.max(request.page || 1, 1);
     const pageSize = normalized.filters.limit;
-    const offset = (page - 1) * pageSize;
 
-    const countRows = hasQuery
-      ? await prisma.$queryRaw<Array<{ count: number }>>(
-          Prisma.sql`
-            SELECT COUNT(*)::int AS count
-            FROM funding_calls
-            WHERE ts_document @@ websearch_to_tsquery('english', ${normalized.normalizedQuery.fullTextQuery})
-              AND ${combineConditions(baseConditions)}
-          `
-        )
-      : await prisma.$queryRaw<Array<{ count: number }>>(
-          Prisma.sql`
-            SELECT COUNT(*)::int AS count
-            FROM funding_calls
-            WHERE ${combineConditions(baseConditions)}
-          `
-        );
+    const countRows = await prisma.$queryRaw<Array<{ count: number }>>(
+      Prisma.sql`
+        SELECT COUNT(*)::int AS count
+        FROM funding_calls
+        WHERE ${where}
+      `
+    );
 
     const totalResults = countRows[0]?.count || 0;
     const totalPages = Math.max(1, Math.ceil(totalResults / pageSize));
@@ -1242,8 +1327,7 @@ Rules:
               0::float AS "semanticSimilarity",
               ts_rank_cd(ts_document, websearch_to_tsquery('english', ${normalized.normalizedQuery.fullTextQuery})) AS "textRank"
             FROM funding_calls
-            WHERE ts_document @@ websearch_to_tsquery('english', ${normalized.normalizedQuery.fullTextQuery})
-              AND ${combineConditions(baseConditions)}
+            WHERE ${where}
             ORDER BY ${
               normalized.filters.sort === 'deadline_soonest'
                 ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, "textRank" DESC, scheme_title ASC`
@@ -1260,7 +1344,7 @@ Rules:
               0::float AS "semanticSimilarity",
               0::float AS "textRank"
             FROM funding_calls
-            WHERE ${combineConditions(baseConditions)}
+            WHERE ${where}
             ORDER BY ${
               normalized.filters.sort === 'deadline_soonest'
                 ? Prisma.sql`COALESCE(close_date, expiration_date) ASC NULLS LAST, "updatedAt" DESC NULLS LAST, scheme_title ASC`

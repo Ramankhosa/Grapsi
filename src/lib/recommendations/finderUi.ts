@@ -18,6 +18,7 @@ const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> 
   residencyRequirements: 'Residency',
   applicationLanguages: 'Application languages',
   sponsorTypes: 'Sponsor types',
+  taxonomyAreaIds: 'Research taxonomy',
   deadlineFrom: 'Deadline window',
   deadlineTo: 'Deadline window',
   rollingOnly: 'Rolling only',
@@ -40,6 +41,7 @@ function cloneRequiredFilters(filters: Required<RecommendationSearchFilters>): R
     residencyRequirements: [...filters.residencyRequirements],
     applicationLanguages: [...filters.applicationLanguages],
     sponsorTypes: [...filters.sponsorTypes],
+    taxonomyAreaIds: [...filters.taxonomyAreaIds],
   };
 }
 
@@ -169,6 +171,16 @@ function pushUniquePrompt(prompts: string[], seen: Set<string>, value: string | 
   prompts.push(prompt);
 }
 
+function formatSavedAreaTopic(context: ResearcherFinderContext | null) {
+  const area = context?.researchAreas?.[0];
+  if (!area) return '';
+  const taxonomyPath = [
+    area.taxonomy?.level1Name,
+    area.taxonomy?.level2Name,
+  ].filter(Boolean).join(' / ');
+  return taxonomyPath || area.label?.trim() || area.researchArea?.trim() || '';
+}
+
 export function buildFinderConversationStarters(context: ResearcherFinderContext | null): string[] {
   const prompts: string[] = [];
   const seen = new Set<string>();
@@ -178,6 +190,7 @@ export function buildFinderConversationStarters(context: ResearcherFinderContext
   const countryOfResidence = context?.profile.countryOfResidence?.trim() || '';
   const careerStage = context?.profile.careerStage?.trim() || '';
   const primaryTopic =
+    formatSavedAreaTopic(context) ||
     savedResearchAreas[0]?.label?.trim() ||
     savedResearchAreas[0]?.researchArea?.trim() ||
     profileResearchAreas[0]?.trim() ||

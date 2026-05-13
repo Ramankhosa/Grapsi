@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { buildGrantProjectOpenUrl } from '@/lib/grants/workspaceNavigation'
 import type { ProjectCapability, ProjectAccessCapabilities, ProjectAccessLevel } from '@/types/project-access'
 
 export class ProjectAccessError extends Error {
@@ -149,6 +150,37 @@ export async function listAccessibleProjects(userId: string, tenantId?: string |
           createdAt: true,
         },
       },
+      grantSessions: {
+        orderBy: {
+          updatedAt: 'desc',
+        },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          fundingCallId: true,
+          updatedAt: true,
+        },
+      },
+      grantPrepSessions: {
+        where: {
+          status: {
+            not: 'archived',
+          },
+        },
+        orderBy: {
+          updated_at: 'desc',
+        },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          grant_session_id: true,
+          funding_call_id: true,
+          overall_readiness: true,
+          updated_at: true,
+        },
+      },
       _count: {
         select: {
           patents: true,
@@ -182,9 +214,20 @@ export async function listAccessibleProjects(userId: string, tenantId?: string |
     const isOwner = project.userId === userId
     const collaborator = project.collaborators.find((entry) => entry.userId === userId) ?? null
     const accessLevel = isOwner ? 'owner' : (mapCollaboratorRoleToAccessLevel(collaborator?.role) ?? 'viewer')
+    const latestGrantSession = project.grantSessions[0] ?? null
+    const latestGrantPrepSession = project.grantPrepSessions[0] ?? null
 
     return {
       ...project,
+      latestGrantSession,
+      latestGrantPrepSession,
+      grantOpenUrl: project.projectType === 'GRANT'
+        ? buildGrantProjectOpenUrl({
+            projectId: project.id,
+            prepSession: latestGrantPrepSession,
+            grantSession: latestGrantSession,
+          })
+        : null,
       accessLevel,
       isOwner,
     }

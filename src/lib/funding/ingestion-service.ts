@@ -26,7 +26,7 @@ import type {
   NormalizedFundingFacts,
 } from '@/types/funding'
 
-import type { FundingActor } from './access'
+import { actorHasPlatformPermission, actorHasPlatformReadAccess, type FundingActor } from './access'
 import {
   buildFundingFingerprint,
   canonicalizeSourceUrl,
@@ -98,11 +98,11 @@ function inputTypeFromSourceType(sourceType: FundingSourceType): FundingImportIn
 }
 
 function hasSuperAdminRead(actor: FundingActor) {
-  return actor.roles.includes('SUPER_ADMIN') || actor.roles.includes('SUPER_ADMIN_VIEWER')
+  return actorHasPlatformReadAccess(actor)
 }
 
 function hasSuperAdminWrite(actor: FundingActor) {
-  return actor.roles.includes('SUPER_ADMIN')
+  return actorHasPlatformPermission(actor, 'funding.publisher.write')
 }
 
 function coerceFacts(value: Prisma.JsonValue | null | undefined) {

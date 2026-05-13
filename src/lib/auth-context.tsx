@@ -10,6 +10,7 @@ export interface User {
   tenant_id: string | null
   roles: ('SUPER_ADMIN' | 'SUPER_ADMIN_VIEWER' | 'OWNER' | 'ADMIN' | 'MANAGER' | 'ANALYST' | 'VIEWER')[]
   ati_id: string | null
+  platformPermissions?: string[]
 }
 
 interface AuthContextType {

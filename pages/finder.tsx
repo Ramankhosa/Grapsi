@@ -62,6 +62,7 @@ const defaultFilters: Required<RecommendationSearchFilters> = {
   residencyRequirements: [],
   applicationLanguages: [],
   sponsorTypes: [],
+  taxonomyAreaIds: [],
   deadlineFrom: '',
   deadlineTo: '',
   rollingOnly: false,
@@ -123,6 +124,7 @@ function countActiveFilters(filters: RecommendationSearchFilters): number {
     'geographyScope', 'eligibleCountries', 'eligibleRegions', 'hostCountries',
     'funderCountries', 'fundingKinds', 'institutionTypes', 'careerStages',
     'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages', 'sponsorTypes',
+    'taxonomyAreaIds',
   ];
   for (const key of arrayKeys) {
     const val = filters[key];
@@ -147,6 +149,23 @@ function getActiveFilterSummary(filters: RecommendationSearchFilters): string[] 
   if (f.deadlineFrom || f.deadlineTo) parts.push('Deadline range');
   if (f.rollingOnly) parts.push('Rolling only');
   return parts;
+}
+
+type FinderSavedResearchArea = ResearcherFinderContext['researchAreas'][number];
+type DirectorySelection = { dimension: DirectoryFacetDimension; value: string; label?: string };
+
+function formatSavedResearchAreaTaxonomy(area: FinderSavedResearchArea) {
+  if (!area.taxonomy?.level1Name && !area.taxonomy?.level2Name) return '';
+  return [
+    area.taxonomy.level1Name,
+    area.taxonomy.level2Name || 'General',
+  ].filter(Boolean).join(' / ');
+}
+
+function buildSavedResearchAreaQueryText(area: FinderSavedResearchArea) {
+  if (area.normalizedText?.trim()) return area.normalizedText;
+  const taxonomyPath = formatSavedResearchAreaTaxonomy(area);
+  return [taxonomyPath, area.researchArea].filter(Boolean).join(' | ');
 }
 
 export default function FinderPage() {
@@ -184,7 +203,7 @@ export default function FinderPage() {
   const [manualLastUndoFilters, setManualLastUndoFilters] = useState<Required<RecommendationSearchFilters> | null>(null);
   const [directoryFacets, setDirectoryFacets] = useState<DirectoryFacetResponse | null>(null);
   const [directoryFacetsLoading, setDirectoryFacetsLoading] = useState(false);
-  const [directorySelections, setDirectorySelections] = useState<Array<{ dimension: DirectoryFacetDimension; value: string }>>([]);
+  const [directorySelections, setDirectorySelections] = useState<DirectorySelection[]>([]);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingTurn, setPendingTurn] = useState<PendingTurnState | null>(null);
@@ -331,7 +350,7 @@ export default function FinderPage() {
   }
 
   function buildFiltersFromSelections(
-    selections: Array<{ dimension: DirectoryFacetDimension; value: string }>,
+    selections: DirectorySelection[],
     baseFilters: Required<RecommendationSearchFilters>
   ): { query: string; filters: Required<RecommendationSearchFilters> } {
     const filters = { ...baseFilters };
@@ -339,6 +358,9 @@ export default function FinderPage() {
 
     for (const sel of selections) {
       switch (sel.dimension) {
+        case 'taxonomyArea':
+          filters.taxonomyAreaIds = [...(filters.taxonomyAreaIds || []), sel.value];
+          break;
         case 'researchArea':
         case 'discipline':
           queryParts.push(sel.value);
@@ -368,7 +390,7 @@ export default function FinderPage() {
   }
 
   async function loadDirectoryFacets(
-    selections: Array<{ dimension: DirectoryFacetDimension; value: string }> = directorySelections,
+    selections: DirectorySelection[] = directorySelections,
     extraQuery = manualQuery
   ) {
     setDirectoryFacetsLoading(true);
@@ -389,7 +411,7 @@ export default function FinderPage() {
   }
 
   async function loadDirectoryWithSelections(
-    selections: Array<{ dimension: DirectoryFacetDimension; value: string }>,
+    selections: DirectorySelection[],
     searchQuery = manualQuery,
     nextPage = 1
   ) {
@@ -533,10 +555,10 @@ export default function FinderPage() {
     await loadManualDirectory(manualActiveQuery || manualQuery, manualFilters, page);
   }
 
-  async function handleSelectFacet(dimension: DirectoryFacetDimension, value: string) {
+  async function handleSelectFacet(dimension: DirectoryFacetDimension, value: string, label?: string) {
     const exists = directorySelections.some((s) => s.dimension === dimension && s.value === value);
     if (exists) return;
-    const next = [...directorySelections, { dimension, value }];
+    const next = [...directorySelections, { dimension, value, label }];
     setDirectorySelections(next);
     await loadDirectoryWithSelections(next, manualQuery, 1);
   }
@@ -1138,10 +1160,15 @@ export default function FinderPage() {
                               <button
                                 key={area.id}
                                 type="button"
-                                onClick={() => handleAttachResearchContext(area.label, area.researchArea, 'Saved Research Area')}
+                                onClick={() => handleAttachResearchContext(area.label, buildSavedResearchAreaQueryText(area), 'Saved Research Area')}
                                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50"
                               >
                                 <div className="font-semibold text-slate-900">{area.label}</div>
+                                {formatSavedResearchAreaTaxonomy(area) ? (
+                                  <div className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-800">
+                                    {formatSavedResearchAreaTaxonomy(area)}
+                                  </div>
+                                ) : null}
                                 <div className="mt-1 line-clamp-2 text-slate-600">{area.researchArea}</div>
                               </button>
                             ))

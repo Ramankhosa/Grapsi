@@ -23,10 +23,17 @@ export default function FundingCallDetailPage({
   const { token, user, isLoading: authLoading } = useAuth()
   const router = useRouter()
   const isSuperAdmin = useMemo(
-    () => user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER'),
-    [user?.roles]
+    () =>
+      user?.roles?.includes('SUPER_ADMIN') ||
+      user?.roles?.includes('SUPER_ADMIN_VIEWER') ||
+      user?.platformPermissions?.includes('platform.support.read') ||
+      user?.platformPermissions?.includes('funding.publisher.write'),
+    [user?.platformPermissions, user?.roles]
   )
-  const isSuperAdminWriter = useMemo(() => user?.roles?.includes('SUPER_ADMIN'), [user?.roles])
+  const isSuperAdminWriter = useMemo(
+    () => Boolean(user?.roles?.includes('SUPER_ADMIN') || user?.platformPermissions?.includes('funding.publisher.write')),
+    [user?.platformPermissions, user?.roles]
+  )
 
   const [call, setCall] = useState<FundingCallDetail | null>(null)
   const [loading, setLoading] = useState(true)

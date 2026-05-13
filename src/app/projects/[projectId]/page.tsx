@@ -57,6 +57,9 @@ interface Project {
   id: string
   name: string
   projectType?: 'PATENT' | 'GRANT'
+  grantOpenUrl?: string | null
+  latestGrantSession?: { id: string; status?: string; fundingCallId?: string | null } | null
+  latestGrantPrepSession?: { id: string; status?: string; funding_call_id?: string | null } | null
   createdAt: string
   applicantProfile?: ApplicantProfile
   collaborators?: Collaborator[]
@@ -93,7 +96,48 @@ export default function ProjectDashboardPage() {
 
           if (response.ok) {
             const data = await response.json()
-            setProject(data.project)
+            const nextProject = data.project as Project
+            setProject(nextProject)
+
+            if (nextProject.projectType === 'GRANT') {
+              if (nextProject.grantOpenUrl) {
+                router.replace(nextProject.grantOpenUrl)
+                return
+              }
+
+              const effectiveFundingCallId =
+                nextProject.latestGrantPrepSession?.funding_call_id ||
+                nextProject.latestGrantSession?.fundingCallId ||
+                null
+              if (!effectiveFundingCallId) {
+                alert('This grant project needs a linked funding call before GrantMentor can open.')
+                router.replace('/projects')
+                return
+              }
+
+              const grantResponse = await fetch(`/api/projects/${projectId}/grants`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+                },
+                body: JSON.stringify({
+                  fundingCallId: effectiveFundingCallId,
+                  engagementMode: 'expert',
+                }),
+              })
+              const grantData = await grantResponse.json().catch(() => ({}))
+              if (!grantResponse.ok || !grantData.launchUrl) {
+                alert(
+                  grantData.message ||
+                  'This grant project needs a linked funding call before GrantMentor can open.'
+                )
+                router.replace('/projects')
+                return
+              }
+              router.replace(grantData.launchUrl)
+              return
+            }
           } else if (response.status === 404) {
             router.push('/dashboard')
           } else {

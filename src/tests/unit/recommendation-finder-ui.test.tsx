@@ -204,6 +204,7 @@ describe('finder trust recovery UI', () => {
       researchAreas: [
         {
           id: 'area-1',
+          taxonomy: null,
           label: 'AI for Healthcare',
           researchArea: 'AI for healthcare diagnostics',
           keywords: ['machine learning'],

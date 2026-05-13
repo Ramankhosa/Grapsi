@@ -21,6 +21,7 @@ export interface RecommendationSearchFilters {
   residencyRequirements?: string[];
   applicationLanguages?: string[];
   sponsorTypes?: string[];
+  taxonomyAreaIds?: string[];
   deadlineFrom?: string;
   deadlineTo?: string;
   rollingOnly?: boolean;
@@ -181,6 +182,7 @@ export interface RecommendationDirectoryResponse {
 }
 
 export type DirectoryFacetDimension =
+  | 'taxonomyArea'
   | 'researchArea'
   | 'country'
   | 'fundingKind'
@@ -192,6 +194,11 @@ export type DirectoryFacetDimension =
 
 export interface DirectoryFacetItem {
   value: string;
+  label?: string;
+  level1Code?: string;
+  level1Name?: string;
+  level2Code?: string;
+  level2Name?: string;
   count: number;
 }
 

@@ -464,7 +464,7 @@ export default function GrantPrepPage(props: any) {
           axiosConfig()
         );
         toast.success('Grant Prep archived');
-        router.push(`/projects/${sessionData.project.id}/grants`);
+        router.push('/projects');
       } catch (error) {
         toast.error(
           axios.isAxiosError(error) && error.response?.data?.message
@@ -477,7 +477,7 @@ export default function GrantPrepPage(props: any) {
     }
 
     setConfirmAction(null);
-  }, [confirmAction, sessionData?.id, sessionData?.project?.id, hydrateSession, router]);
+  }, [confirmAction, sessionData?.id, hydrateSession, router]);
 
   // EC-11: cooldown only on success
   const sendMessage = useCallback(async (contentOverride?: string) => {

@@ -27,9 +27,19 @@ export default function FundingImportsPage({
   const { token, user, isLoading: authLoading } = useAuth()
   const router = useRouter()
   const isSuperAdmin = useMemo(
-    () => user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER'),
-    [user?.roles]
+    () =>
+      user?.roles?.includes('SUPER_ADMIN') ||
+      user?.roles?.includes('SUPER_ADMIN_VIEWER') ||
+      user?.platformPermissions?.includes('platform.support.read') ||
+      user?.platformPermissions?.includes('funding.operations.write') ||
+      user?.platformPermissions?.includes('funding.publisher.write'),
+    [user?.platformPermissions, user?.roles]
   )
+  const canCreateGlobalImport = useMemo(
+    () => Boolean(user?.roles?.includes('SUPER_ADMIN') || user?.platformPermissions?.includes('funding.operations.write')),
+    [user?.platformPermissions, user?.roles]
+  )
+  const canSubmitImport = !requireSuperAdmin || canCreateGlobalImport
 
   const [jobs, setJobs] = useState<FundingImportJobView[]>([])
   const [calls, setCalls] = useState<FundingCallSummary[]>([])
@@ -108,7 +118,7 @@ export default function FundingImportsPage({
   }, [fetchData, token])
 
   const submitImport = async () => {
-    if (!token) {
+    if (!token || !canSubmitImport) {
       return
     }
 
@@ -253,13 +263,13 @@ export default function FundingImportsPage({
                 value={visibility}
                 onChange={(event) => setVisibility(event.target.value as FundingVisibility)}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                disabled={!isSuperAdmin}
+                disabled={!canCreateGlobalImport}
               >
                 <option value="TENANT_PRIVATE">Tenant Private</option>
                 <option value="GLOBAL_PUBLISHED">Global Catalog</option>
               </select>
-              {!isSuperAdmin ? (
-                <p className="text-xs text-slate-500">Global imports are reserved for super admins.</p>
+              {!canCreateGlobalImport ? (
+                <p className="text-xs text-slate-500">Global imports require funding operations access.</p>
               ) : null}
             </div>
 
@@ -304,7 +314,7 @@ export default function FundingImportsPage({
                 <button
                   type="button"
                   onClick={() => submitImport()}
-                  disabled={submitting}
+                  disabled={submitting || !canSubmitImport || (visibility === 'GLOBAL_PUBLISHED' && !canCreateGlobalImport)}
                   className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                   {submitting ? 'Importing...' : 'Start Import'}

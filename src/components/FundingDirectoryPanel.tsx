@@ -23,9 +23,11 @@ type BrowseCategory = DirectoryFacetDimension | null;
 interface ActiveSelection {
   dimension: DirectoryFacetDimension;
   value: string;
+  label?: string;
 }
 
 const CATEGORY_META: Record<DirectoryFacetDimension, { label: string; icon: React.ReactNode }> = {
+  taxonomyArea: { label: 'Research Taxonomy', icon: <FaLayerGroup /> },
   researchArea: { label: 'Research Area', icon: <FaFlask /> },
   country: { label: 'Country', icon: <FaGlobeAmericas /> },
   fundingKind: { label: 'Funding Type', icon: <FaHandHoldingUsd /> },
@@ -37,7 +39,7 @@ const CATEGORY_META: Record<DirectoryFacetDimension, { label: string; icon: Reac
 };
 
 const DIMENSION_ORDER: DirectoryFacetDimension[] = [
-  'researchArea', 'country', 'fundingKind', 'careerStage',
+  'taxonomyArea', 'researchArea', 'country', 'fundingKind', 'careerStage',
   'discipline', 'sponsorType', 'region', 'institutionType',
 ];
 
@@ -64,7 +66,7 @@ interface FundingDirectoryPanelProps {
   onQueryChange: (value: string) => void;
   onRunSearch: () => void;
   onClearQuery: () => void;
-  onSelectFacet: (dimension: DirectoryFacetDimension, value: string) => void;
+  onSelectFacet: (dimension: DirectoryFacetDimension, value: string, label?: string) => void;
   onRemoveFacet: (dimension: DirectoryFacetDimension, value: string) => void;
   onClearAllSelections: () => void;
   onPreviousPage: () => void;
@@ -250,7 +252,7 @@ export default function FundingDirectoryPanel({
     const items = facets?.facets[dim] || [];
     if (!facetSearch.trim()) return items;
     const q = facetSearch.toLowerCase();
-    return items.filter((item) => item.value.toLowerCase().includes(q));
+    return items.filter((item) => `${item.label || ''} ${item.value}`.toLowerCase().includes(q));
   }
 
   function countSelectionsForDimension(dim: DirectoryFacetDimension) {
@@ -312,7 +314,7 @@ export default function FundingDirectoryPanel({
                 key={`${sel.dimension}-${sel.value}`}
                 className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 py-1 pl-3 pr-1.5 text-xs font-semibold text-emerald-900"
               >
-                <span className="text-emerald-600">{CATEGORY_META[sel.dimension].label}:</span> {sel.value}
+                <span className="text-emerald-600">{CATEGORY_META[sel.dimension].label}:</span> {sel.label || sel.value}
                 <button
                   type="button"
                   onClick={() => onRemoveFacet(sel.dimension, sel.value)}
@@ -396,18 +398,19 @@ export default function FundingDirectoryPanel({
               <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
                 {getFilteredFacetItems(openCategory).map((item) => {
                   const selected = isSelected(openCategory, item.value);
+                  const displayValue = item.label || item.value;
                   return (
                     <button
                       key={item.value}
                       type="button"
-                      onClick={() => selected ? onRemoveFacet(openCategory, item.value) : onSelectFacet(openCategory, item.value)}
+                      onClick={() => selected ? onRemoveFacet(openCategory, item.value) : onSelectFacet(openCategory, item.value, displayValue)}
                       className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
                         selected
                           ? 'bg-emerald-600 text-white shadow-sm'
                           : 'border border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50'
                       }`}
                     >
-                      {item.value}
+                      {displayValue}
                       <span className={`text-[10px] ${selected ? 'text-emerald-200' : 'text-slate-400'}`}>
                         ({item.count})
                       </span>

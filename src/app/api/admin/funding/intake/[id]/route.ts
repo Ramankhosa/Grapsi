@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
+import { requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
 
 export const runtime = 'nodejs'
@@ -9,7 +9,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const auth = await requireFundingOperatorRequest(request)
+  const auth = await requireFundingReadOperatorRequest(request)
   if ('response' in auth) {
     return auth.response
   }
