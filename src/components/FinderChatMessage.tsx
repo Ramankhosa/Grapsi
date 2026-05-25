@@ -192,6 +192,12 @@ export default function FinderChatMessage({
                     </div>
                   ) : null}
 
+                  {result.profileMatch?.reasons.length ? (
+                    <div className="mt-3 rounded-[18px] border border-violet-100 bg-violet-50 px-3 py-3 text-sm leading-6 text-violet-950">
+                      <span className="font-semibold">Preference match:</span> {result.profileMatch.reasons.slice(0, 3).join(' | ')}
+                    </div>
+                  ) : null}
+
                   <div className="mt-3 flex flex-wrap gap-2">
                     {amount ? (
                       <span className="rounded-full border border-white bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700">

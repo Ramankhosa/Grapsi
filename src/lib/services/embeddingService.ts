@@ -1,8 +1,21 @@
 import axios from 'axios';
+import {
+  estimateTokensFromText,
+  recordStandaloneLLMUsage,
+} from '@/lib/metering/llm-usage';
 
 interface EmbeddingResponse {
   embedding: number[];
   error?: string;
+}
+
+export interface EmbeddingUsageContext {
+  tenantId?: string | null;
+  userId?: string | null;
+  taskCode?: string | null;
+  stageCode?: string | null;
+  operation?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface EmbeddingServiceHealth {
@@ -110,7 +123,7 @@ export class EmbeddingService {
    * @param text - The text to generate embeddings for
    * @returns A promise resolving to the embedding vector
    */
-  async generateEmbedding(text: string): Promise<EmbeddingResponse> {
+  async generateEmbedding(text: string, usageContext?: EmbeddingUsageContext): Promise<EmbeddingResponse> {
     if (!this.apiKey) {
       return { 
         embedding: [], 
@@ -156,6 +169,28 @@ export class EmbeddingService {
       }
 
       this.registerSuccess();
+
+      if (usageContext?.tenantId) {
+        await recordStandaloneLLMUsage({
+          tenantId: usageContext.tenantId,
+          userId: usageContext.userId || undefined,
+          featureCode: 'FUNDING_DISCOVERY',
+          taskCode: usageContext.taskCode || 'FUNDING_CHAT',
+          operation: usageContext.operation || 'embedding',
+          stageCode: usageContext.stageCode || 'EMBEDDING',
+          modelClass: this.modelName,
+          inputTokens: estimateTokensFromText(text),
+          outputTokens: 0,
+          thoughtTokens: 0,
+          metadata: {
+            module: 'funding',
+            action: usageContext.operation || 'embedding',
+            outputDimensionality: this.outputDimensionality,
+            textLength: text.length,
+            ...usageContext.metadata,
+          },
+        });
+      }
       
       return { embedding };
     } catch (error) {
@@ -175,8 +210,8 @@ export class EmbeddingService {
    * @param texts - Array of texts to generate embeddings for
    * @returns A promise resolving to an array of embedding vectors
    */
-  async generateBatchEmbeddings(texts: string[]): Promise<EmbeddingResponse[]> {
-    return Promise.all(texts.map(text => this.generateEmbedding(text)));
+  async generateBatchEmbeddings(texts: string[], usageContext?: EmbeddingUsageContext): Promise<EmbeddingResponse[]> {
+    return Promise.all(texts.map(text => this.generateEmbedding(text, usageContext)));
   }
   
   /**
@@ -185,7 +220,7 @@ export class EmbeddingService {
    * @param fields - Object containing different text fields to embed
    * @returns A promise resolving to the combined embedding
    */
-  async generateFieldEmbeddings(fields: Record<string, string | string[]>): Promise<EmbeddingResponse> {
+  async generateFieldEmbeddings(fields: Record<string, string | string[]>, usageContext?: EmbeddingUsageContext): Promise<EmbeddingResponse> {
     // Concatenate fields into a single text with field markers
     let combinedText = '';
     
@@ -197,6 +232,6 @@ export class EmbeddingService {
       }
     }
     
-    return this.generateEmbedding(combinedText);
+    return this.generateEmbedding(combinedText, usageContext);
   }
 } 

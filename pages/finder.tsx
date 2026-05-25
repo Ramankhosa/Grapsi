@@ -13,11 +13,13 @@ import {
   FaSignOutAlt,
   FaTimes,
   FaTrash,
+  FaUserCircle,
 } from 'react-icons/fa';
 import FinderActiveFilterBar from '@/components/FinderActiveFilterBar';
 import FinderChatMessage from '@/components/FinderChatMessage';
 import FinderPendingFilterConfirmationBar from '@/components/FinderPendingFilterConfirmationBar';
 import FinderPendingTurnMessage from '@/components/FinderPendingTurnMessage';
+import FinderPreferencesPanel, { type FinderPreferenceValues } from '@/components/FinderPreferencesPanel';
 import FinderStrictFilterRecoveryNotice from '@/components/FinderStrictFilterRecoveryNotice';
 // FinderConversationSidebar removed from layout — single-conversation UX
 // import FinderConversationSidebar from '@/components/FinderConversationSidebar';
@@ -76,7 +78,7 @@ const defaultFilters: Required<RecommendationSearchFilters> = {
 const manualDefaultFilters: Required<RecommendationSearchFilters> = {
   ...defaultFilters,
   limit: 8,
-  sort: 'deadline_soonest',
+  sort: 'best_match',
 };
 
 type AttachedQueryContext = {
@@ -175,6 +177,11 @@ export default function FinderPage() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [finderTab, setFinderTab] = useState<FinderTab>('manual');
+  const [preferences, setPreferences] = useState<FinderPreferenceValues>({
+    useEligibilityProfile: false,
+    usePublicationContext: false,
+  });
+  const [preferencesPanelOpen, setPreferencesPanelOpen] = useState(false);
   const [conversations, setConversations] = useState<RecommendationConversationSummary[]>([]);
   const [conversation, setConversation] = useState<RecommendationConversationDetail | null>(null);
   const [finderContext, setFinderContext] = useState<ResearcherFinderContext | null>(null);
@@ -231,7 +238,10 @@ export default function FinderPage() {
     return conversation.runs.find((run) => run.id === conversation.lastRunId) || conversation.runs[conversation.runs.length - 1] || null;
   }, [conversation]);
 
-  const starterPrompts = useMemo(() => buildFinderConversationStarters(finderContext), [finderContext]);
+  const starterPrompts = useMemo(
+    () => buildFinderConversationStarters(preferences.useEligibilityProfile ? finderContext : null),
+    [finderContext, preferences.useEligibilityProfile]
+  );
 
   const latestAssistantMessageId = useMemo(() => {
     if (!conversation) return null;
@@ -320,7 +330,12 @@ export default function FinderPage() {
       .catch(() => undefined);
   }, [authFetch, user]);
 
-  async function loadManualDirectory(nextQuery = manualQuery, nextFilters = manualFilters, nextPage = manualPage) {
+  async function loadManualDirectory(
+    nextQuery = manualQuery,
+    nextFilters = manualFilters,
+    nextPage = manualPage,
+    nextPreferences = preferences
+  ) {
     setManualLoading(true);
     setError(null);
     try {
@@ -331,6 +346,8 @@ export default function FinderPage() {
           query: nextQuery,
           page: nextPage,
           filters: nextFilters,
+          useEligibilityProfile: nextPreferences.useEligibilityProfile,
+          usePublicationContext: nextPreferences.usePublicationContext,
         }),
       });
       setManualResults(response.results);
@@ -413,12 +430,13 @@ export default function FinderPage() {
   async function loadDirectoryWithSelections(
     selections: DirectorySelection[],
     searchQuery = manualQuery,
-    nextPage = 1
+    nextPage = 1,
+    nextPreferences = preferences
   ) {
     const { query: selQuery, filters } = buildFiltersFromSelections(selections, manualDefaultFilters);
     const combinedQuery = [searchQuery, selQuery].filter(Boolean).join(' ');
     await Promise.all([
-      loadManualDirectory(combinedQuery, filters, nextPage),
+      loadManualDirectory(combinedQuery, filters, nextPage, nextPreferences),
       loadDirectoryFacets(selections, searchQuery),
     ]);
   }
@@ -583,6 +601,13 @@ export default function FinderPage() {
     await loadDirectoryWithSelections(directorySelections, '', 1);
   }
 
+  async function handlePreferenceChange(value: FinderPreferenceValues) {
+    setPreferences(value);
+    if (finderTab === 'manual') {
+      await loadDirectoryWithSelections(directorySelections, manualQuery, 1, value);
+    }
+  }
+
   async function handleDirectoryNextPage() {
     if (!manualHasNextPage) return;
     await loadManualDirectory(manualActiveQuery || manualQuery, manualFilters, manualPage + 1);
@@ -626,6 +651,8 @@ export default function FinderPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...payload,
+          useEligibilityProfile: preferences.useEligibilityProfile,
+          usePublicationContext: preferences.usePublicationContext,
           clientTurnId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         }),
       });
@@ -698,6 +725,11 @@ export default function FinderPage() {
       const previousFilters = conversation.currentFilters;
       const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(authFetch, `/api/recommendations/conversations/${conversation.id}/reset-filters`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          useEligibilityProfile: preferences.useEligibilityProfile,
+          usePublicationContext: preferences.usePublicationContext,
+        }),
       });
       setLastUndoFilters(previousFilters);
       updateConversationFromResponse(response.conversation);
@@ -716,7 +748,11 @@ export default function FinderPage() {
       const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(authFetch, `/api/recommendations/conversations/${conversation.id}/confirm-filters`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm }),
+        body: JSON.stringify({
+          confirm,
+          useEligibilityProfile: preferences.useEligibilityProfile,
+          usePublicationContext: preferences.usePublicationContext,
+        }),
       });
       if (confirm) setLastUndoFilters(previousFilters);
       updateConversationFromResponse(response.conversation);
@@ -819,6 +855,9 @@ export default function FinderPage() {
 
   const savedResearchAreas = finderContext?.researchAreas || [];
   const profileResearchAreas = finderContext?.profile.researchAreas || [];
+  const activePreferenceCount =
+    (preferences.useEligibilityProfile ? 1 : 0) +
+    (preferences.usePublicationContext ? 1 : 0);
 
   if (isLoading || loadingList) {
     return (
@@ -940,6 +979,8 @@ export default function FinderPage() {
             activeSelections={directorySelections}
             onOpenAdvancedFilters={() => setManualFilterDrawerOpen(true)}
             onBeginWriting={(result) => handleBeginWritingFromCall(result.id)}
+            preferences={preferences}
+            onChangePreferences={handlePreferenceChange}
           />
         ) : (
           <div className="space-y-5">
@@ -965,6 +1006,21 @@ export default function FinderPage() {
                     <h2 className="mt-2 text-2xl font-semibold text-slate-950">{conversation?.title || 'Funding Conversation'}</h2>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPreferencesPanelOpen((open) => !open)}
+                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition-colors ${
+                        activePreferenceCount > 0
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800'
+                      }`}
+                    >
+                      <FaUserCircle />
+                      My Preferences
+                      <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] tracking-normal">
+                        {activePreferenceCount > 0 ? `${activePreferenceCount} on` : 'off'}
+                      </span>
+                    </button>
                     {loadingConversation ? (
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                         Loading...
@@ -1003,6 +1059,15 @@ export default function FinderPage() {
               </div>
 
               {/* Active filter awareness strip — always visible when filters are on */}
+              {preferencesPanelOpen ? (
+                <div className="border-b border-emerald-100 bg-white px-6 py-4">
+                  <FinderPreferencesPanel
+                    preferences={preferences}
+                    onChange={handlePreferenceChange}
+                  />
+                </div>
+              ) : null}
+
               {conversation && countActiveFilters(conversation.currentFilters) > 0 ? (
                 <div className="flex items-center gap-3 border-b border-amber-200/60 bg-amber-50/80 px-6 py-2.5">
                   <FaExclamationTriangle className="shrink-0 text-xs text-amber-600" />

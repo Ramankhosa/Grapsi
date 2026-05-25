@@ -72,10 +72,19 @@ export interface FundingTemplateBudgetCategory {
   sourceAnchors: FundingTemplateSourceAnchor[];
 }
 
+export interface FundingTemplateBudgetColumn {
+  key: string;
+  label: string;
+  kind?: string | null;
+  required?: boolean;
+  sourceAnchors: FundingTemplateSourceAnchor[];
+}
+
 export interface FundingTemplateBudget {
   required: boolean;
   yearWise: boolean;
   workflowMode: GrantWorkflowMode;
+  columns?: FundingTemplateBudgetColumn[];
   categories: FundingTemplateBudgetCategory[];
   caps?: Record<string, JsonValue> | null;
   justificationNotes?: string | null;

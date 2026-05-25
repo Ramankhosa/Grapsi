@@ -8,9 +8,10 @@ import {
 } from '@/lib/recommendations/constants'
 import { checkRateLimit } from '@/lib/recommendations/rateLimit'
 import { requireRecommendationUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
-import type { RecommendationDirectoryRequest } from '@/lib/recommendations/types'
+import type { RecommendationDirectoryRequest, RecommendationPreferenceFlags, RecommendationProfileSnapshot } from '@/lib/recommendations/types'
 import { summarizeFilters, validateNormalizedControlledFilters } from '@/lib/recommendations/utils'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
+import { buildRecommendationPreferenceSnapshot } from '@/lib/services/researcherProfileService'
 
 export const runtime = 'nodejs'
 
@@ -42,6 +43,9 @@ const requestSchema = z.object({
   query: z.string().max(300).optional(),
   page: z.number().int().min(1).optional(),
   filters: filterSchema,
+  useProfileContext: z.boolean().optional(),
+  useEligibilityProfile: z.boolean().optional(),
+  usePublicationContext: z.boolean().optional(),
 })
 
 function getRequestIp(request: NextRequest) {
@@ -84,10 +88,28 @@ export async function POST(request: NextRequest) {
       hasQuery: Boolean(parsed.query?.trim()),
     })
 
+    const preferences: RecommendationPreferenceFlags = {
+      useEligibilityProfile: parsed.useEligibilityProfile === true || parsed.useProfileContext === true,
+      usePublicationContext: parsed.usePublicationContext === true,
+    }
+
+    let profileContext: RecommendationProfileSnapshot | null = null
+    if (preferences.useEligibilityProfile || preferences.usePublicationContext) {
+      try {
+        profileContext = await buildRecommendationPreferenceSnapshot(auth.userId, preferences)
+      } catch {
+        profileContext = null
+      }
+    }
+
     const result = await recommendationSearchService.browseDirectory({
       query: parsed.query,
       page: parsed.page,
       access: toRecommendationAccessScope(auth.actor),
+      profileContext,
+      useProfileContext: Boolean(profileContext),
+      useEligibilityProfile: preferences.useEligibilityProfile,
+      usePublicationContext: preferences.usePublicationContext,
       filters: {
         ...parsed.filters,
         limit: parsed.filters?.limit || 8,

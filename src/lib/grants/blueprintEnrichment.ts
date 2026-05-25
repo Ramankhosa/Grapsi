@@ -55,6 +55,7 @@ export interface GrantBlueprintEnrichmentContext {
   globalCaptureSummary?: string[]
   focusAreas?: string[]
   capturedKeywords?: string[]
+  prepEvidence?: GrantPrepEvidenceItem[]
   prepEvidenceBySection?: Record<string, GrantPrepEvidenceItem[]>
   stageStates?: GrantPrepStageStates | null
   guidelinePack?: GuidelinePackDocument | null
@@ -721,7 +722,10 @@ function prepEvidenceText(item: GrantPrepEvidenceItem): string {
 function getAllPromptablePrepEvidence(context: GrantBlueprintEnrichmentContext): GrantPrepEvidenceItem[] {
   return dedupePrepEvidence(
     filterPromptablePrepEvidence(
-      Object.values(context.prepEvidenceBySection || {}).flatMap((items) => items || [])
+      [
+        ...(context.prepEvidence || []),
+        ...Object.values(context.prepEvidenceBySection || {}).flatMap((items) => items || []),
+      ]
     )
   )
 }
@@ -774,12 +778,16 @@ function collectPromotedPrepEvidence(
   context: GrantBlueprintEnrichmentContext,
   semantic: GrantSectionSemantic
 ): GrantPrepEvidenceItem[] {
-  if (!shouldPromotePrepEvidence(section, semantic)) return []
-
   const relevantStageKeys = new Set(resolveRelevantPrepStageKeys(section, semantic))
   if (relevantStageKeys.size === 0) return []
 
+  const allowBroadPromotion = shouldPromotePrepEvidence(section, semantic)
   const scored = getAllPromptablePrepEvidence(context)
+    .filter((item) =>
+      allowBroadPromotion ||
+      !Array.isArray(item.sectionKeys) ||
+      item.sectionKeys.length === 0
+    )
     .map((item) => ({
       item,
       score: scorePrepEvidenceForSection(item, section, semantic, relevantStageKeys),
@@ -862,7 +870,6 @@ function buildRelatedPrepAwareness(
   semantic: GrantSectionSemantic,
   authoritativeEvidence: GrantPrepEvidenceItem[] = []
 ): GrantPrepPromptBundle | null {
-  const prepEvidenceBySection = context.prepEvidenceBySection || {}
   const excludedKeys = new Set(
     dedupeStrings([section.sectionKey, section.sourceTemplatePointer || '']).map((key) => key.toLowerCase())
   )
@@ -873,9 +880,12 @@ function buildRelatedPrepAwareness(
 
   const relatedEvidence = dedupePrepEvidence(
     filterPromptablePrepEvidence(
-      Object.entries(prepEvidenceBySection).flatMap(([key, items]) => {
-        if (excludedKeys.has(String(key || '').trim().toLowerCase())) return []
-        return items.filter((item) =>
+      getAllPromptablePrepEvidence(context).filter((item) => {
+        const itemSectionKeys = item.sectionKeys || []
+        if (itemSectionKeys.some((key) => excludedKeys.has(String(key || '').trim().toLowerCase()))) {
+          return false
+        }
+        return (
           relevantStageKeys.has(item.stageKey)
           && !authoritativeEvidenceKeys.has(prepEvidenceKey(item))
         )

@@ -522,6 +522,44 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[0].grantSectionComplianceContract?.prepEvidence[0]?.status).toBe('covered');
   });
 
+  it('promotes unmapped global prep evidence into semantically matching app draft sections', () => {
+    const sections: GrantBlueprintPlanSection[] = [
+      makeSection({
+        sectionKey: 'technical_plan',
+        label: 'Technical Plan',
+        purpose: 'Explain the execution methodology, validation approach, milestones, and delivery readiness.',
+        reviewerIntent: 'Show implementation feasibility.',
+      }),
+    ];
+
+    const enriched = enrichGrantBlueprintSections(sections, {
+      projectTitle: 'Cyber Centre of Excellence',
+      fundingCallTitle: 'MeitY Cyber CoE Call',
+      prepEvidence: [
+        {
+          stageKey: 'methodology',
+          pointKey: 'school_recruitment',
+          label: 'Participant recruitment',
+          sourceTemplatePointer: null,
+          sectionKeys: [],
+          keywords: ['40 schools', 'district partnerships'],
+          thrustLinkage: [],
+          factBullets: ['The project will recruit 40 schools through existing district partnerships.'],
+          ruleNotes: [],
+          confidence: 0.91,
+          captureBasis: ['user_confirmed'],
+          status: 'covered',
+        },
+      ],
+      prepEvidenceBySection: {},
+    });
+
+    expect(enriched[0].grantSemantic).toBe('methodology');
+    expect(enriched[0].prepContextBlock?.bullets.join(' ')).toContain('40 schools');
+    expect(enriched[0].authoritativePrepBundle?.keywords).toContain('district partnerships');
+    expect(enriched[0].grantSectionComplianceContract?.prepEvidence).toHaveLength(1);
+  });
+
   it('sends enriched prep evidence and rule contracts into the LLM blueprint prompt', async () => {
     const mockedGateway = vi.mocked(llmGateway.executeLLMOperation);
     mockedGateway.mockResolvedValueOnce({

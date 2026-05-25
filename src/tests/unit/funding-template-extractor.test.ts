@@ -62,4 +62,39 @@ describe('funding template extractor coercion', () => {
     expect(normalized.sections.find((item) => item.label === 'Objectives of Proposed CoE')?.templateIntent).toBe('objectives')
     expect(normalized.sections.find((item) => item.label === 'Summary of the Proposal')?.templateIntent).toBe('summary')
   })
+
+  it('normalizes budget table columns, categories, and non-UUID source anchors', () => {
+    const normalized = normalizeGrantTemplate(coerceTemplateShape({
+      budgetTable: {
+        required: true,
+        yearWise: true,
+        columns: [
+          { label: 'Budget Head', sourceAnchors: [{ asset_id: 'cm_template_asset_1' }] },
+          { label: 'Year 1 Amount' },
+          { label: 'Justification' },
+        ],
+        categories: [
+          {
+            label: 'Equipment',
+            cap: 'Up to 30%',
+            notes: 'Only project-specific equipment.',
+            sourceAnchors: [{ asset_id: 'cm_template_asset_1', quote: 'Equipment' }],
+          },
+        ],
+        sourceAnchors: [{ asset_id: 'cm_template_asset_1' }],
+      },
+    }))
+
+    expect(normalized.budget?.columns?.map((column) => column.key)).toEqual([
+      'budget_head',
+      'year_1_amount',
+      'justification',
+    ])
+    expect(normalized.budget?.columns?.[0].kind).toBe('category')
+    expect(normalized.budget?.categories).toMatchObject([
+      { key: 'equipment', label: 'Equipment', cap: 'Up to 30%' },
+    ])
+    expect(normalized.budget?.sourceAnchors[0].asset_id).toBe('cm_template_asset_1')
+    expect(normalized.budget?.categories[0].sourceAnchors[0].asset_id).toBe('cm_template_asset_1')
+  })
 })

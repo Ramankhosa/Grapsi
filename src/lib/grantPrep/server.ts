@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import type { GrantPrepSession } from '@prisma/client';
 import { prisma } from '../prisma';
-import type { FundingCallContext } from '../fundingContext';
+import type { FundingCallContext, ProjectFundingContextBinding } from '../fundingContext';
 import { fundingGuidelineService } from '../fundingGuidelines/service';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { resolveProjectFundingContext } from '../fundingContext';
@@ -230,7 +230,17 @@ function buildV2GrantPrepContext(input: {
   });
 }
 
-export async function loadGrantPrepProject(projectId: string, tenantId?: string | null) {
+export async function loadGrantPrepProject(
+  projectId: string,
+  tenantId?: string | null,
+  binding?: ProjectFundingContextBinding
+) {
+  const grantSessionWhere = binding?.grantSessionId
+    ? { id: binding.grantSessionId }
+    : binding?.fundingCallId
+      ? { fundingCallId: binding.fundingCallId }
+      : {};
+
   return prisma.project.findFirst({
     where: {
       id: projectId,
@@ -241,6 +251,7 @@ export async function loadGrantPrepProject(projectId: string, tenantId?: string 
       name: true,
       tenantId: true,
       grantSessions: {
+        where: grantSessionWhere,
         orderBy: {
           updatedAt: 'desc',
         },
@@ -257,15 +268,16 @@ export async function loadGrantPrepProject(projectId: string, tenantId?: string 
 
 export async function resolveGrantPrepContext(
   projectId: string,
-  user: { id: string; email?: string | null; tenantId?: string | null }
+  user: { id: string; email?: string | null; tenantId?: string | null },
+  binding?: ProjectFundingContextBinding
 ) {
-  const project = await loadGrantPrepProject(projectId, user.tenantId);
+  const project = await loadGrantPrepProject(projectId, user.tenantId, binding);
   if (!project) {
     throw new Error('Project not found');
   }
 
-  const fundingContext = await resolveProjectFundingContext(projectId, user);
-  const linkedFundingCallId = project.grantSessions[0]?.fundingCallId || null;
+  const fundingContext = await resolveProjectFundingContext(projectId, user, binding);
+  const linkedFundingCallId = fundingContext.id || project.grantSessions[0]?.fundingCallId || null;
   const draftingContext = linkedFundingCallId
     ? await fundingGuidelineService.getDraftingContext(linkedFundingCallId)
     : null;
@@ -545,27 +557,47 @@ async function ensureGrantSessionAnchor(input: {
   userId: string;
   fundingCallId: string;
 }) {
-  const existing = await prisma.grantSession.findFirst({
+  const existingForCall = await prisma.grantSession.findFirst({
     where: {
       projectId: input.projectId,
       tenantId: input.tenantId,
+      fundingCallId: input.fundingCallId,
     },
     orderBy: {
       updatedAt: 'desc',
     },
   });
 
-  if (existing) {
-    const shouldResetToPrep =
-      existing.status === 'SETUP' ||
-      existing.status === 'PREP_OPTIONAL' ||
-      existing.fundingCallId !== input.fundingCallId;
-
+  if (existingForCall) {
+    const shouldResetToPrep = existingForCall.status === 'SETUP' || existingForCall.status === 'PREP_OPTIONAL';
     return prisma.grantSession.update({
-      where: { id: existing.id },
+      where: { id: existingForCall.id },
+      data: {
+        ...(shouldResetToPrep ? { status: 'PREP_OPTIONAL' } : {}),
+        updatedByUserId: input.userId,
+      },
+    });
+  }
+
+  const reusablePrepSession = await prisma.grantSession.findFirst({
+    where: {
+      projectId: input.projectId,
+      tenantId: input.tenantId,
+      status: {
+        in: ['SETUP', 'PREP_OPTIONAL'],
+      },
+    },
+    orderBy: {
+      updatedAt: 'desc',
+    },
+  });
+
+  if (reusablePrepSession) {
+    return prisma.grantSession.update({
+      where: { id: reusablePrepSession.id },
       data: {
         fundingCallId: input.fundingCallId,
-        ...(shouldResetToPrep ? { status: 'PREP_OPTIONAL' } : {}),
+        status: 'PREP_OPTIONAL',
         updatedByUserId: input.userId,
       },
     });
@@ -604,16 +636,6 @@ export async function createOrReuseGrantPrepSession(input: {
     })
     : null;
 
-  const context = await resolveGrantPrepContext(input.projectId, input.user);
-  const effectiveFundingCallId = input.fundingCallId || context.fundingCallId;
-  if (!linkedGrantSession && effectiveFundingCallId) {
-    linkedGrantSession = await ensureGrantSessionAnchor({
-      projectId: input.projectId,
-      tenantId: input.tenantId,
-      userId: input.user.id,
-      fundingCallId: effectiveFundingCallId,
-    });
-  }
   const resolveWorkspaceLaunchUrl = (
     grantSessionId: string | null,
     prepStatus?: string | null,
@@ -629,19 +651,45 @@ export async function createOrReuseGrantPrepSession(input: {
     grantSessionId
       ? `/projects/${input.projectId}/grants/${grantSessionId}/prep`
       : `/projects/${input.projectId}/grants/${sessionId}/prep`;
-  const existingSession = await prisma.grantPrepSession.findFirst({
-    where: {
-      project_id: input.projectId,
-      user_id: input.user.id,
-      tenantId: input.tenantId,
-      status: {
-        not: 'archived',
-      },
+  const existingSessionWhere = {
+    project_id: input.projectId,
+    user_id: input.user.id,
+    tenantId: input.tenantId,
+    status: {
+      not: 'archived' as const,
     },
+    ...(linkedGrantSession
+      ? {
+          OR: [
+            { grant_session_id: linkedGrantSession.id },
+            { funding_call_id: linkedGrantSession.fundingCallId },
+          ],
+        }
+      : input.fundingCallId
+        ? { funding_call_id: input.fundingCallId }
+        : {}),
+  };
+  const existingSession = await prisma.grantPrepSession.findFirst({
+    where: existingSessionWhere,
     orderBy: {
       updated_at: 'desc',
     },
   });
+
+  const contextBinding = {
+    grantSessionId: linkedGrantSession?.id || (!input.restart ? existingSession?.grant_session_id || null : null),
+    fundingCallId: input.fundingCallId || (!input.restart ? existingSession?.funding_call_id || null : null),
+  };
+  const context = await resolveGrantPrepContext(input.projectId, input.user, contextBinding);
+  const effectiveFundingCallId = input.fundingCallId || context.fundingCallId || existingSession?.funding_call_id || null;
+  if (!linkedGrantSession && effectiveFundingCallId) {
+    linkedGrantSession = await ensureGrantSessionAnchor({
+      projectId: input.projectId,
+      tenantId: input.tenantId,
+      userId: input.user.id,
+      fundingCallId: effectiveFundingCallId,
+    });
+  }
 
   if (existingSession && !input.restart) {
     const effectiveGrantSessionId = linkedGrantSession?.id || existingSession.grant_session_id || null;
@@ -713,7 +761,7 @@ export async function createOrReuseGrantPrepSession(input: {
     });
   }
 
-    const warning = buildGrantPrepModeWarning(context.mode, context.fundingContext.warning);
+  const warning = buildGrantPrepModeWarning(context.mode, context.fundingContext.warning);
   const grantPrepContext = buildDefaultGrantPrepContext({
     mode: context.mode,
     engagementMode: normalizedEngagementMode,

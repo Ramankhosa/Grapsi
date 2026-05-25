@@ -298,7 +298,7 @@ For each citation, identify which blueprint evidence pillars it supports:
 - Assign confidence: HIGH (directly addresses), MEDIUM (partially relevant), LOW (tangentially related)
 - A citation can map to multiple dimensions across different sections
 - Only map if there's concrete evidence in the title/abstract
-${grantBacked ? '- For grant templates, score persuasion value for a reviewer: one usable burden statistic, gap statement, validation result, feasibility precedent, impact metric, or policy anchor is stronger than broad topical similarity.\n- Use IMPORT only when the citation provides a reviewer-usable evidence asset; use MAYBE for weak, redundant, or background-only relevance.' : ''}
+${grantBacked ? '- For grant templates, score persuasion value for a reviewer: one usable need or burden statistic, gap statement, validation result, feasibility precedent, impact metric, comparable precedent, policy-fit anchor, or evidence boundary is stronger than broad topical similarity.\n- Use IMPORT only when the citation provides a reviewer-usable evidence asset; use MAYBE for weak, redundant, or background-only relevance.' : ''}
 
 Respond in the following JSON format ONLY (no markdown, no explanation outside JSON):
 {

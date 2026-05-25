@@ -311,7 +311,7 @@ export default function CitationManager({
         <Input
           value={query}
           onChange={event => setQuery(event.target.value)}
-          placeholder="Search citations"
+          placeholder="Search Grant Citations"
           className="max-w-sm"
         />
         <div className="flex items-center gap-1">
@@ -352,7 +352,7 @@ export default function CitationManager({
 
       <div className="grid gap-3">
         {filtered.length === 0 && (
-          <div className="text-sm text-gray-500">No citations to display.</div>
+          <div className="text-sm text-gray-500">No Grant Citations to display.</div>
         )}
         {filtered.map(citation => {
           const hasAbstract = citation.abstract && citation.abstract.length > 50

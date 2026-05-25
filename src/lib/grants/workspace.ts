@@ -45,6 +45,10 @@ import type { GuidelinePackDocument } from '@/lib/fundingGuidelines/types'
 import { normalizeGuidelinePack } from '@/lib/fundingGuidelines/utils'
 import type { GrantTemplateDocument, FundingTemplateItem } from '@/lib/fundingTemplates/types'
 import { normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
+import {
+  buildBudgetStructuredScaffold,
+  buildBudgetTemplateFromFundingBudget,
+} from '@/lib/grants/budgetTemplate'
 import type { TenantContext } from '@/lib/metering'
 import { blueprintService, type BlueprintFreezeReadiness } from '@/lib/services/blueprint-service'
 import type {
@@ -214,6 +218,7 @@ function normalizeCompiledSection(
     ...(section.relatedPrepAwareness ? { relatedPrepAwareness: section.relatedPrepAwareness } : {}),
     ...(section.grantRuleProfile ? { grantRuleProfile: section.grantRuleProfile } : {}),
     ...(section.grantTemplateGuidance ? { grantTemplateGuidance: section.grantTemplateGuidance } : {}),
+    ...(section.budgetTemplate ? { budgetTemplate: section.budgetTemplate } : {}),
     ...(section.grantSectionComplianceContract ? { grantSectionComplianceContract: section.grantSectionComplianceContract } : {}),
     ...(section.grantComplianceReport ? { grantComplianceReport: section.grantComplianceReport } : {}),
     ...(section.reviewerReadinessReport ? { reviewerReadinessReport: section.reviewerReadinessReport } : {}),
@@ -226,6 +231,31 @@ function compiledTemplateHasWorkflowModes(value: CompiledGrantTemplate | null | 
     && Array.isArray(value.sections)
     && value.sections.every((section) => normalizeGrantWorkflowMode((section as CompiledGrantTemplateSection).workflowMode) === (section as CompiledGrantTemplateSection).workflowMode)
   )
+}
+
+function documentRequiresBudgetTemplate(document: GrantTemplateDocument) {
+  return Boolean(
+    document.budget
+    && (
+      document.budget.required
+      || document.budget.categories.length > 0
+      || (document.budget.columns || []).length > 0
+    )
+  )
+}
+
+function compiledTemplateHasBudgetTemplate(value: CompiledGrantTemplate | null | undefined) {
+  const budgetSection = value?.sections?.find((section) =>
+    section.sectionType === 'budget_rows' || section.templateIntent === 'budget'
+  )
+  return !budgetSection || Boolean(budgetSection.budgetTemplate)
+}
+
+function compiledTemplateMatchesBudgetTemplateSupport(
+  value: CompiledGrantTemplate | null | undefined,
+  document: GrantTemplateDocument
+) {
+  return !documentRequiresBudgetTemplate(document) || compiledTemplateHasBudgetTemplate(value)
 }
 
 function compileGrantTemplateDocument(input: {
@@ -309,7 +339,15 @@ function compileGrantTemplateDocument(input: {
     pushItem(question, question.label || 'Response', 'short_answer')
   }
 
-  if (input.document.budget && (input.document.budget.required || input.document.budget.categories.length > 0)) {
+  if (
+    input.document.budget
+    && (
+      input.document.budget.required
+      || input.document.budget.categories.length > 0
+      || (input.document.budget.columns || []).length > 0
+    )
+  ) {
+    const budgetTemplate = buildBudgetTemplateFromFundingBudget(input.document.budget)
     order += 1
     sections.push({
       sectionKey: 'budget',
@@ -330,6 +368,7 @@ function compileGrantTemplateDocument(input: {
       templateIntentConfidence: 1,
       mustCover: input.document.budget.categories.map((category) => category.label),
       mustAvoid: [],
+      budgetTemplate,
       grantTemplateGuidance: {
         pointer: 'budget',
         guidanceText: input.document.budget.justificationNotes ? [input.document.budget.justificationNotes] : [],
@@ -428,14 +467,16 @@ async function resolveApprovedTemplateForSession(input: {
       },
     })
     if (revision) {
+      const document = normalizeGrantTemplate(revision.grant_template_json)
       const compiled = isCompiledGrantTemplate(revision.compiledGrantTemplateJson)
         && compiledTemplateHasWorkflowModes(revision.compiledGrantTemplateJson)
+        && compiledTemplateMatchesBudgetTemplateSupport(revision.compiledGrantTemplateJson, document)
         ? revision.compiledGrantTemplateJson
         : compileGrantTemplateDocument({
             fundingCallId: input.fundingCallId,
             templateRevisionId: revision.id,
             guidelineRevisionId: input.guidelineRevisionId,
-            document: normalizeGrantTemplate(revision.grant_template_json),
+            document,
           })
 
       return {
@@ -467,14 +508,16 @@ async function resolveApprovedTemplateForSession(input: {
   }
 
   const templateRevisionId = `${template.id}:current:${template.current_revision_no}`
+  const document = normalizeGrantTemplate(template.grant_template_json)
   const compiled = isCompiledGrantTemplate(template.compiledGrantTemplateJson)
     && compiledTemplateHasWorkflowModes(template.compiledGrantTemplateJson)
+    && compiledTemplateMatchesBudgetTemplateSupport(template.compiledGrantTemplateJson, document)
     ? template.compiledGrantTemplateJson
     : compileGrantTemplateDocument({
         fundingCallId: input.fundingCallId,
         templateRevisionId,
         guidelineRevisionId: input.guidelineRevisionId,
-        document: normalizeGrantTemplate(template.grant_template_json),
+        document,
       })
 
   return {
@@ -526,13 +569,15 @@ async function resolveCompiledTemplateForGrantBlueprint(input: {
     : null
 
   if (storedCompiled && compiledTemplateHasWorkflowModes(storedCompiled)) {
-    return storedCompiled
+    if (compiledTemplateHasBudgetTemplate(storedCompiled)) {
+      return storedCompiled
+    }
   }
 
   try {
     const resolved = await resolveApprovedTemplateForSession({
       fundingCallId: input.blueprint.fundingCallId,
-      templateRevisionId: null,
+      templateRevisionId: input.blueprint.sourceTemplateRevisionId,
       guidelineRevisionId: input.blueprint.sourceGuidelineRevisionId,
     })
     return resolved.compiledTemplate
@@ -564,6 +609,9 @@ function buildSeededContext(
           keywords: point.capture?.keywords || [],
         }))
     )
+  const completedEvidence = (payload.prepEvidence || [])
+    .filter((item) => item.status === 'covered')
+    .slice(0, 8)
 
   const bulletLines = [
     payload.project.title ? `Project: ${payload.project.title}` : null,
@@ -578,6 +626,13 @@ function buildSeededContext(
     payload.fundingCall.focusAreas.length > 0 ? `Focus areas: ${payload.fundingCall.focusAreas.join(', ')}` : null,
     payload.globalKeywords.length > 0 ? `Global keywords: ${payload.globalKeywords.join(', ')}` : null,
     section.mustCover.length > 0 ? `This section must cover: ${section.mustCover.join('; ')}` : null,
+    ...completedEvidence.map((item) => {
+      const facts = item.factBullets.length > 0
+        ? item.factBullets.slice(0, 2).join(' ; ')
+        : item.keywords.slice(0, 5).join(', ')
+      const notes = item.ruleNotes.length > 0 ? ` Rule note: ${item.ruleNotes[0]}` : ''
+      return facts ? `${item.label}: ${facts}.${notes}` : null
+    }),
     ...completedCaptures.slice(0, 8).map(
       (capture) => `${capture.stageTitle} - ${capture.pointLabel}: ${capture.keywords.join(', ')}`
     ),
@@ -628,6 +683,7 @@ export function buildBlueprintPlanFromCompiledTemplate(
       ...(section.relatedPrepAwareness ? { relatedPrepAwareness: section.relatedPrepAwareness } : {}),
       ...(section.grantRuleProfile ? { grantRuleProfile: section.grantRuleProfile } : {}),
       ...(section.grantTemplateGuidance ? { grantTemplateGuidance: section.grantTemplateGuidance } : {}),
+      ...(section.budgetTemplate ? { budgetTemplate: section.budgetTemplate } : {}),
       ...(section.grantSectionComplianceContract ? { grantSectionComplianceContract: section.grantSectionComplianceContract } : {}),
       ...(section.grantComplianceReport ? { grantComplianceReport: section.grantComplianceReport } : {}),
       ...(section.reviewerReadinessReport ? { reviewerReadinessReport: section.reviewerReadinessReport } : {}),
@@ -651,6 +707,7 @@ function buildGrantBlueprintEnrichmentContext(input: {
     globalKeywords: input.payload.globalKeywords,
     focusAreas: input.payload.fundingCall.focusAreas,
     capturedKeywords: collectGrantCapturedKeywords(input.payload.stageStates),
+    prepEvidence: input.payload.prepEvidence || [],
     prepEvidenceBySection: input.payload.prepEvidenceBySection || {},
     globalCaptureSummary: input.payload.globalCaptureSummary || [],
     stageStates: input.payload.stageStates,
@@ -685,6 +742,9 @@ function buildGrantBlueprintHydrationContext(input: {
       : asStringArray(input.blueprint.globalKeywordsJson),
     focusAreas: asStringArray(fundingCall.focusAreas),
     capturedKeywords: collectGrantCapturedKeywords(stageStates),
+    prepEvidence: Array.isArray(payload.prepEvidence)
+      ? payload.prepEvidence as GrantBlueprintEnrichmentContext['prepEvidence']
+      : [],
     prepEvidenceBySection: asObject(payload.prepEvidenceBySection) as GrantBlueprintEnrichmentContext['prepEvidenceBySection'],
     globalCaptureSummary: asStringArray(payload.globalCaptureSummary),
     stageStates: Object.keys(stageStates).length > 0
@@ -719,15 +779,10 @@ function buildStructuredScaffold(
     }
   }
 
-  return {
+  return buildBudgetStructuredScaffold({
+    section,
     currency: payload.fundingCall.funding.match(/[A-Z]{3}/)?.[0] || null,
-    columns: [
-      { key: 'category', label: 'Category' },
-      { key: 'amount', label: 'Amount' },
-      { key: 'justification', label: 'Justification' },
-    ],
-    rows: [],
-  }
+  })
 }
 
 function isDraftableGrantSection(
@@ -753,6 +808,7 @@ function enrichGrantSectionPlan(
           workflowMode: section.workflowMode,
           suggestedCitationCount: section.suggestedCitationCount,
         }),
+        budgetTemplate: section.budgetTemplate || null,
       },
     ] as const)
   )
@@ -769,6 +825,7 @@ function enrichGrantSectionPlan(
         suggestedCitationCount: section.suggestedCitationCount,
       }
     ),
+    budgetTemplate: compiledByKey.get(section.sectionKey)?.budgetTemplate || section.budgetTemplate || null,
   }))
 }
 
@@ -841,7 +898,7 @@ function buildShadowResearchTopic(input: {
   }
 }
 
-async function resolveGrantTenantContext(
+export async function resolveGrantTenantContext(
   tenantId: string,
   userId: string
 ): Promise<TenantContext | null> {
@@ -1326,10 +1383,12 @@ async function ensureGrantSessionAnchor(tx: Prisma.TransactionClient, input: {
       where: { id: input.prepSession.grant_session_id },
     })
     if (existing) {
+      if (existing.fundingCallId !== input.fundingCallId) {
+        throw new Error('Linked grant session funding call does not match the Grant Prep funding context.')
+      }
       return tx.grantSession.update({
         where: { id: existing.id },
         data: {
-          fundingCallId: input.fundingCallId,
           status: 'BLUEPRINT',
           updatedByUserId: input.userId,
         },
@@ -1380,7 +1439,10 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
     throw new Error('Grant Prep session not found')
   }
 
-  const serverContext = await resolveGrantPrepContext(prepSession.project_id, actor)
+  const serverContext = await resolveGrantPrepContext(prepSession.project_id, actor, {
+    grantSessionId: prepSession.grant_session_id,
+    fundingCallId: prepSession.funding_call_id,
+  })
   if (!serverContext.fundingCallId) {
     throw new Error('A linked funding call is required before launching the local grant workspace.')
   }

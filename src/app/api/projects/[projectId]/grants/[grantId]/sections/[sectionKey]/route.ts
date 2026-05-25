@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { saveGrantSectionDraft } from '@/lib/grants/drafting'
+import { generateGrantSectionDraft, saveGrantSectionDraft } from '@/lib/grants/drafting'
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 
 const generateSchema = z.object({
   action: z.enum(['generate', 'regenerate']).default('generate'),
+  userInstructions: z.string().max(5000).optional(),
+  overwriteAmounts: z.boolean().optional().default(false),
 })
 
 const saveSchema = z.object({
@@ -52,20 +54,30 @@ export async function POST(
   }
 
   try {
-    generateSchema.parse(await request.json())
-    return NextResponse.json(
-      {
-        message: 'App Draft sections are generated in the linked literature workspace.',
-      },
-      { status: 409 }
-    )
+    const payload = generateSchema.parse(await request.json())
+    const section = await generateGrantSectionDraft({
+      grantSessionId: grantId,
+      tenantId: actor.tenantId,
+      sectionKey,
+      userId: actor.id,
+      userInstructions: payload.userInstructions,
+      overwriteAmounts: payload.overwriteAmounts,
+    })
+
+    return NextResponse.json({ section })
   } catch (error) {
     console.error('[Grant Section] generate error:', error)
     return NextResponse.json(
       {
         message: error instanceof Error ? error.message : 'Failed to generate the grant section',
       },
-      { status: 500 }
+      {
+        status: error instanceof Error && error.message.includes('literature workspace')
+          ? 409
+          : error instanceof Error && error.message.includes('Only budget sections')
+            ? 409
+          : 500,
+      }
     )
   }
 }

@@ -106,7 +106,7 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
         // Calculate cost using the model class
         // Use ?? (nullish coalescing) instead of || to handle 0 as a valid token count
-        let costData: { actualCost: number; contingencyCost: number; inputCost: number; outputCost: number } | null = null
+        let costData: { actualCost: number; contingencyCost: number; inputCost: number; outputCost: number; thoughtCost?: number } | null = null
         if (stats.modelClass) {
           const costBreakdown = calculateCost(
             stats.modelClass,
@@ -118,7 +118,8 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
             actualCost: costBreakdown.actualCost,
             contingencyCost: costBreakdown.contingencyCost,
             inputCost: costBreakdown.inputCost,
-            outputCost: costBreakdown.outputCost
+            outputCost: costBreakdown.outputCost,
+            thoughtCost: costBreakdown.thoughtCost
           }
         }
 

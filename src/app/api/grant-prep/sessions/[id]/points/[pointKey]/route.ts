@@ -82,7 +82,10 @@ export async function PATCH(
       return NextResponse.json({ message: 'Archived Grant Prep sessions are read-only' }, { status: 400 })
     }
 
-    const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
+    const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor, {
+      grantSessionId: grantPrepSession.grant_session_id,
+      fundingCallId: grantPrepSession.funding_call_id,
+    })
     const warning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
     const prepContext = inflateGrantPrepSessionContext(grantPrepSession, { warning })
     const stageKey = payload.stageKey as GrantPrepStageKey

@@ -16,6 +16,7 @@ import {
   FaTimes,
   FaUniversity,
 } from 'react-icons/fa';
+import FinderPreferencesPanel, { type FinderPreferenceValues } from './FinderPreferencesPanel';
 import type { DirectoryFacetDimension, DirectoryFacetItem, DirectoryFacetResponse, RecommendationRawResultItem, RecommendationSearchFilters } from '../lib/recommendations/types';
 
 type BrowseCategory = DirectoryFacetDimension | null;
@@ -75,6 +76,8 @@ interface FundingDirectoryPanelProps {
   activeSelections: ActiveSelection[];
   onOpenAdvancedFilters: () => void;
   onBeginWriting?: (result: RecommendationRawResultItem) => void;
+  preferences: FinderPreferenceValues;
+  onChangePreferences: (preferences: FinderPreferenceValues) => void;
 }
 
 function ExpandableCard({
@@ -125,6 +128,11 @@ function ExpandableCard({
           ) : null}
 
           <div className="mt-3 flex flex-wrap gap-1.5">
+            {result.profileMatch?.reasons.slice(0, 1).map((reason) => (
+              <span key={reason} className="rounded-full bg-violet-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
+                {reason}
+              </span>
+            ))}
             {result.fundingKinds.slice(0, 2).map((v) => (
               <span key={v} className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">{v}</span>
             ))}
@@ -155,6 +163,17 @@ function ExpandableCard({
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Eligibility</div>
                 <p className="mt-1.5 leading-relaxed text-slate-700">{result.eligibilityText || result.eligibilitySummary}</p>
+              </div>
+            ) : null}
+
+            {result.profileMatch?.reasons.length ? (
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Preference Match</div>
+                <ul className="mt-1.5 space-y-1 leading-relaxed text-slate-700">
+                  {result.profileMatch.reasons.slice(0, 4).map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
               </div>
             ) : null}
 
@@ -230,9 +249,12 @@ export default function FundingDirectoryPanel({
   activeSelections,
   onOpenAdvancedFilters,
   onBeginWriting,
+  preferences,
+  onChangePreferences,
 }: FundingDirectoryPanelProps) {
   const [openCategory, setOpenCategory] = useState<BrowseCategory>(null);
   const [facetSearch, setFacetSearch] = useState('');
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   const pageWindow = Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
     const start = Math.max(1, Math.min(page - 2, totalPages - 4));
@@ -259,6 +281,10 @@ export default function FundingDirectoryPanel({
     return activeSelections.filter((s) => s.dimension === dim).length;
   }
 
+  const activePreferenceCount =
+    (preferences.useEligibilityProfile ? 1 : 0) +
+    (preferences.usePublicationContext ? 1 : 0);
+
   return (
     <div className="space-y-5">
       <section className="overflow-hidden rounded-[28px] border border-white/70 bg-white/92 shadow-[0_28px_70px_rgba(15,23,42,0.10)] backdrop-blur">
@@ -272,10 +298,36 @@ export default function FundingDirectoryPanel({
                 Click a category to explore available values, select facets to progressively narrow results, or use the search bar for keyword matching.
               </p>
             </div>
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-semibold text-emerald-800">
-              {loading || facetsLoading ? 'Loading...' : `${totalResults.toLocaleString()} opportunities`}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPreferencesOpen((open) => !open)}
+                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors ${
+                  activePreferenceCount > 0
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800'
+                }`}
+              >
+                My Preferences
+                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px]">
+                  {activePreferenceCount > 0 ? `${activePreferenceCount} on` : 'off'}
+                </span>
+              </button>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-semibold text-emerald-800">
+                {loading || facetsLoading ? 'Loading...' : `${totalResults.toLocaleString()} opportunities`}
+              </div>
             </div>
           </div>
+
+          {preferencesOpen ? (
+            <div className="mt-4">
+              <FinderPreferencesPanel
+                preferences={preferences}
+                onChange={onChangePreferences}
+                compact
+              />
+            </div>
+          ) : null}
 
           {/* Search bar */}
           <div className="mt-4 flex flex-col gap-3 sm:flex-row">

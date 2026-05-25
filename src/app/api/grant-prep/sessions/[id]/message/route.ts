@@ -36,13 +36,33 @@ import {
 } from '@/lib/grantPrep/sessionState'
 import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary'
 import { runGrantPrepStageTidyPass } from '@/lib/grantPrep/tidyPass'
-import type { GrantPrepMarkerPayload, GrantPrepStageKey, GrantPrepStatus } from '@/lib/grantPrep/types'
+import type {
+  GrantPrepMarkerPayload,
+  GrantPrepStageKey,
+  GrantPrepStatus,
+  GrantPrepSuggestedAnswer,
+} from '@/lib/grantPrep/types'
 import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
+import {
+  mergeGrantPrepSuggestedAnswersWithInline,
+  removeGrantPrepApprovalBundlePrefix,
+} from '@/lib/grantPrep/suggestedAnswers'
 
 const messageSchema = z.object({
   content: z.string().min(1).max(12000),
   clientMessageId: z.string().min(1).max(120).optional(),
   stageKey: z.string().optional(),
+  selectedSuggestedAnswer: z.object({
+    label: z.string().min(1).max(20),
+    text: z.string().min(1).max(12000),
+    rationale: z.string().max(1000).nullable().optional(),
+    coverageSummary: z.string().max(1000).nullable().optional(),
+    covers: z.array(z.object({
+      stageKey: z.string().min(1).max(80),
+      pointKey: z.string().min(1).max(160),
+      label: z.string().min(1).max(240),
+    })).max(12).optional(),
+  }).optional(),
 })
 
 type GrantPrepTextGenerator = (
@@ -155,6 +175,89 @@ async function compactAssistantMessage(
   }
 }
 
+function buildSelectedSuggestedAnswerMarker(
+  answer: GrantPrepSuggestedAnswer | undefined,
+  stageKey: GrantPrepStageKey
+): GrantPrepMarkerPayload | null {
+  const covers = Array.isArray(answer?.covers) ? answer.covers : []
+  const answerText = removeGrantPrepApprovalBundlePrefix(answer?.text || '').trim()
+  if (!answer || !answerText || covers.length === 0) {
+    return null
+  }
+
+  const buildPoint = (cover: NonNullable<GrantPrepSuggestedAnswer['covers']>[number]) => ({
+    stageKey: cover.stageKey,
+    pointKey: cover.pointKey,
+    keywords: [answer.coverageSummary || cover.label].filter(Boolean) as string[],
+    thrustLinkage: [],
+    factBullets: [answerText],
+    ruleNotes: answer.rationale ? [answer.rationale] : [],
+    confidence: 0.92,
+    captureBasis: ['user_confirmed'] as Array<'user_confirmed'>,
+    ruleCompliance: {
+      status: 'ok' as const,
+      reason: null,
+      rescopeNeeded: false,
+    },
+  })
+
+  const pointsCovered = covers
+    .filter((cover) => cover.stageKey === stageKey)
+    .map(buildPoint)
+  const crossStagePointsCovered = covers
+    .filter((cover) => cover.stageKey !== stageKey)
+    .map(buildPoint)
+
+  if (pointsCovered.length === 0 && crossStagePointsCovered.length === 0) {
+    return null
+  }
+
+  return {
+    version: 'brainstorm_marker_v1',
+    stageKey,
+    pointsCovered,
+    crossStagePointsCovered,
+    currentPoint: null,
+    suggestedFollowUps: null,
+    suggestedAnswers: null,
+    qualityAssessment: 'adequate',
+    steeringEvents: [],
+  }
+}
+
+function mergeSelectedSuggestedAnswerMarker(
+  marker: GrantPrepMarkerPayload | null,
+  selectedMarker: GrantPrepMarkerPayload | null
+): GrantPrepMarkerPayload | null {
+  if (!selectedMarker) {
+    return marker
+  }
+  if (!marker || marker.stageKey !== selectedMarker.stageKey) {
+    return selectedMarker
+  }
+
+  const mergePoints = (
+    existing: NonNullable<GrantPrepMarkerPayload['pointsCovered']>,
+    selected: NonNullable<GrantPrepMarkerPayload['pointsCovered']>
+  ) => {
+    const byKey = new Map<string, NonNullable<GrantPrepMarkerPayload['pointsCovered']>[number]>()
+    for (const point of existing) {
+      byKey.set(`${point.stageKey || marker.stageKey}:${point.pointKey}`, point)
+    }
+    for (const point of selected) {
+      byKey.set(`${point.stageKey || selectedMarker.stageKey}:${point.pointKey}`, point)
+    }
+    return Array.from(byKey.values())
+  }
+
+  return {
+    ...marker,
+    pointsCovered: mergePoints(marker.pointsCovered || [], selectedMarker.pointsCovered || []),
+    crossStagePointsCovered: mergePoints(marker.crossStagePointsCovered || [], selectedMarker.crossStagePointsCovered || []),
+    qualityAssessment: marker.qualityAssessment || selectedMarker.qualityAssessment,
+  }
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -188,19 +291,13 @@ export async function POST(
       return NextResponse.json({ message: 'Archived Grant Prep sessions are read-only' }, { status: 400 })
     }
 
-    if (payload.clientMessageId) {
-      const duplicate = grantPrepSession.messages.find((message) => message.client_message_id === payload.clientMessageId)
-      if (duplicate) {
-        return NextResponse.json({
-          replayed: true,
-          duplicateMessageId: duplicate.id,
-        })
-      }
-    }
-
-    const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
+    const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor, {
+      grantSessionId: grantPrepSession.grant_session_id,
+      fundingCallId: grantPrepSession.funding_call_id,
+    })
     const prepWarning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
     let prepContext = inflateGrantPrepSessionContext(grantPrepSession, { warning: prepWarning })
+    let currentSessionStatus = grantPrepSession.status as GrantPrepStatus
     const templateOrGuidelineStale =
       grantPrepSession.template_revision_id !== serverContext.templateRevisionId ||
       grantPrepSession.guideline_revision_id !== serverContext.guidelineRevisionId
@@ -222,14 +319,37 @@ export async function POST(
           last_handoff_error: null,
         },
       })
+      currentSessionStatus = isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode) ? 'ready' : 'active'
     }
-    const stageKey = (payload.stageKey || prepContext.activeStageKey) as GrantPrepStageKey
+    const duplicateUserMessage = payload.clientMessageId
+      ? grantPrepSession.messages.find((message) => message.client_message_id === payload.clientMessageId)
+      : null
+    const stageKey = (duplicateUserMessage?.stage_key || payload.stageKey || prepContext.activeStageKey) as GrantPrepStageKey
     if (!GRANT_PREP_STAGE_BY_KEY[stageKey]) {
       return NextResponse.json({ message: 'Unknown stage key' }, { status: 400 })
     }
 
     if (!prepContext.stageStates[stageKey]?.enabled) {
       return NextResponse.json({ message: 'This stage is disabled for the current session' }, { status: 400 })
+    }
+
+    if (duplicateUserMessage) {
+      const duplicateIndex = grantPrepSession.messages.findIndex((message) => message.id === duplicateUserMessage.id)
+      const replayAssistant = duplicateIndex >= 0
+        ? grantPrepSession.messages
+            .slice(duplicateIndex + 1)
+            .find((message) => message.role === 'assistant' && message.stage_key === stageKey)
+        : null
+
+      if (replayAssistant) {
+        return NextResponse.json({
+          replayed: true,
+          duplicateMessageId: duplicateUserMessage.id,
+          message: replayAssistant,
+          prepContext,
+          sessionStatus: currentSessionStatus,
+        })
+      }
     }
 
     const tenantContext = await resolveGrantPrepTenantContext(auth.actor.tenantId, auth.actor.id)
@@ -251,16 +371,24 @@ export async function POST(
           stageKey,
         },
       })
-
-    await prisma.grantPrepMessage.create({
-      data: {
-        session_id: grantPrepSession.id,
-        stage_key: stageKey,
-        role: 'user',
-        content: payload.content,
-        client_message_id: payload.clientMessageId || null,
-      },
+    const toPromptMessage = (message: { role: string; content: string }) => ({
+      role: message.role,
+      content: message.role === 'assistant'
+        ? removeGrantPrepApprovalBundlePrefix(message.content)
+        : message.content,
     })
+
+    if (!duplicateUserMessage) {
+      await prisma.grantPrepMessage.create({
+        data: {
+          session_id: grantPrepSession.id,
+          stage_key: stageKey,
+          role: 'user',
+          content: payload.content,
+          client_message_id: payload.clientMessageId || null,
+        },
+      })
+    }
 
     const prompt = buildGrantPrepPrompt({
       session: prepContext,
@@ -271,13 +399,12 @@ export async function POST(
       },
       fundingContext: serverContext.fundingContext,
       guidelinePack: (serverContext.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as any) || null,
-      conversation: [
-        ...grantPrepSession.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-        { role: 'user', content: payload.content },
-      ],
+      conversation: duplicateUserMessage
+        ? grantPrepSession.messages.map(toPromptMessage)
+        : [
+            ...grantPrepSession.messages.map(toPromptMessage),
+            { role: 'user', content: payload.content },
+          ],
       userMessage: payload.content,
     })
 
@@ -301,7 +428,7 @@ export async function POST(
     const allowedPointKeys = prepContext.stageStates[stageKey].points
       .filter((point) => isGrantPrepUserFacingPoint(point))
       .map((point) => point.key)
-    const inferredMarker =
+    let inferredMarker =
       repaired.marker ||
       (await inferMarkerFromTurn({
         stageKey,
@@ -310,18 +437,50 @@ export async function POST(
         assistantMessage: repaired.assistantMessage,
         generateText,
       }))
+    inferredMarker = mergeSelectedSuggestedAnswerMarker(
+      inferredMarker,
+      buildSelectedSuggestedAnswerMarker(payload.selectedSuggestedAnswer as GrantPrepSuggestedAnswer | undefined, stageKey)
+    )
+    if (inferredMarker) {
+      const cleanedAssistantMessage = removeGrantPrepApprovalBundlePrefix(repaired.assistantMessage)
+      const mergedSuggestedAnswers = mergeGrantPrepSuggestedAnswersWithInline(
+        inferredMarker.suggestedAnswers || [],
+        cleanedAssistantMessage
+      )
+      inferredMarker = {
+        ...inferredMarker,
+        suggestedAnswers: mergedSuggestedAnswers.length > 0 ? mergedSuggestedAnswers : null,
+      }
+    }
 
     const finalWarning =
       !repaired.marker && inferredMarker
         ? 'The assistant response marker was reconstructed from the turn before committing state.'
         : repaired.warning
+    const finalMarkerStatus = inferredMarker
+      ? (repaired.marker ? repaired.markerStatus : 'repaired')
+      : 'invalid'
 
     const hasAnswerOptions = !!(inferredMarker?.suggestedAnswers && inferredMarker.suggestedAnswers.length > 0)
-    const assistantMessage = await compactAssistantMessage(repaired.assistantMessage, hasAnswerOptions, generateText)
+    const assistantMessage = await compactAssistantMessage(
+      removeGrantPrepApprovalBundlePrefix(repaired.assistantMessage),
+      hasAnswerOptions,
+      generateText
+    )
+    if (inferredMarker) {
+      const mergedSuggestedAnswers = mergeGrantPrepSuggestedAnswersWithInline(
+        inferredMarker.suggestedAnswers || [],
+        assistantMessage
+      )
+      inferredMarker = {
+        ...inferredMarker,
+        suggestedAnswers: mergedSuggestedAnswers.length > 0 ? mergedSuggestedAnswers : null,
+      }
+    }
 
     let nextContext = prepContext
     let nextStatus: GrantPrepStatus = resolveMutableGrantPrepStatus({
-      currentStatus: grantPrepSession.status,
+      currentStatus: currentSessionStatus,
       isReady: isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode),
     })
 
@@ -330,8 +489,16 @@ export async function POST(
         buildGrantPrepConversationBundle({
           session: prepContext,
           stageKey,
+          latestUserMessage: payload.content,
         })
       )
+      const selectedCrossStagePointKeys = (payload.selectedSuggestedAnswer?.covers || [])
+        .filter((cover) => cover.stageKey && cover.stageKey !== stageKey)
+        .map((cover) => `${cover.stageKey}.${cover.pointKey}`)
+      const effectiveAllowedCrossStagePointKeys = Array.from(new Set([
+        ...allowedCrossStagePointKeys,
+        ...selectedCrossStagePointKeys,
+      ]))
       const stageBeforeUpdate = prepContext.stageStates[stageKey]
       let nextStageStates = applyMarkerToStageStates(prepContext.stageStates, stageKey, inferredMarker, {
         engagementMode: prepContext.engagementMode,
@@ -346,7 +513,7 @@ export async function POST(
         availableFocusAreas: serverContext.fundingContext.focusAreas || [],
         budgetLimits: serverContext.fundingContext.budgetLimits || null,
         projectDuration: serverContext.fundingContext.projectDuration || null,
-        allowedCrossStagePointKeys,
+        allowedCrossStagePointKeys: effectiveAllowedCrossStagePointKeys,
       })
       const stageAfterMarker = nextStageStates[stageKey]
       const stageChanged = hasStageContentChanged(stageBeforeUpdate, stageAfterMarker)
@@ -415,7 +582,7 @@ export async function POST(
       }
 
       nextStatus = resolveMutableGrantPrepStatus({
-        currentStatus: grantPrepSession.status,
+        currentStatus: currentSessionStatus,
         isReady: isGrantPrepSessionReady(nextStageStates, prepContext.engagementMode),
       })
       const persistence = normalizeGrantPrepForPersistence(nextContext)
@@ -436,7 +603,7 @@ export async function POST(
         role: 'assistant',
         content: assistantMessage,
         marker_version: inferredMarker?.version || null,
-        marker_status: inferredMarker ? repaired.markerStatus : 'invalid',
+        marker_status: finalMarkerStatus,
         readiness_snapshot: inferredMarker
           ? computeOverallReadiness(nextContext.stageStates)
           : grantPrepSession.overall_readiness,

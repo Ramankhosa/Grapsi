@@ -21,7 +21,67 @@ export type GrantPrepPlannedPoint = {
 export type GrantPrepConversationBundle = {
   primary: GrantPrepPlannedPoint | null;
   related: GrantPrepPlannedPoint[];
+  paired: GrantPrepPlannedPoint[];
   lookahead: GrantPrepPlannedPoint[];
+};
+
+type RelatedStagePair = {
+  stageKey: GrantPrepStageKey;
+  note: string;
+  requiresUserSignal?: RegExp;
+};
+
+export const GRANT_PREP_RELATED_STAGE_PAIRS: Partial<Record<GrantPrepStageKey, RelatedStagePair[]>> = {
+  problem_definition: [
+    {
+      stageKey: 'root_cause',
+      note: 'If the user confirms the problem framing, also confirm the driver or current failure behind it.',
+    },
+  ],
+  root_cause: [
+    {
+      stageKey: 'problem_definition',
+      note: 'If the driver changes the problem framing, update the problem facts conservatively.',
+    },
+  ],
+  methodology: [
+    {
+      stageKey: 'workplan',
+      note: 'If the user confirms the approach, also confirm phases, milestones, or deliverables that naturally follow.',
+    },
+  ],
+  workplan: [
+    {
+      stageKey: 'methodology',
+      note: 'If the delivery plan clarifies the approach, capture the method detail too.',
+    },
+  ],
+  outcomes: [
+    {
+      stageKey: 'evaluation',
+      note: 'If the user confirms outcomes, also confirm the metric or verification method reviewers will expect.',
+    },
+  ],
+  evaluation: [
+    {
+      stageKey: 'outcomes',
+      note: 'If the user confirms metrics, also capture the outcome those measures prove.',
+    },
+  ],
+  budget_strategy: [
+    {
+      stageKey: 'sustainability_and_scale',
+      note: 'Only pair budget with sustainability when the user already mentions continuity, future funding, adoption, scale, or budget limits.',
+      requiresUserSignal: /\b(sustainab\w*|continu\w*|future fund\w*|post[-\s]?grant|after funding|adopt\w*|scale\w*|replicat\w*|budget limit\w*|funding limit\w*|cap|ceiling)\b/i,
+    },
+  ],
+  sustainability_and_scale: [
+    {
+      stageKey: 'budget_strategy',
+      note: 'Only pair sustainability with budget when the user already mentions continuity, future funding, adoption, scale, or budget limits.',
+      requiresUserSignal: /\b(sustainab\w*|continu\w*|future fund\w*|post[-\s]?grant|after funding|adopt\w*|scale\w*|replicat\w*|budget limit\w*|funding limit\w*|cap|ceiling)\b/i,
+    },
+  ],
 };
 
 function getMappedPoint(
@@ -61,35 +121,59 @@ function pendingPoints(stageState: GrantPrepStageState) {
     });
 }
 
-function getCandidateLookaheadStages(session: GrantPrepSessionContext, stageKey: GrantPrepStageKey) {
+function isEnabledPickableStage(stageState: GrantPrepStageState | undefined): stageState is GrantPrepStageState {
+  return Boolean(
+    stageState?.pickable &&
+    stageState.enabled &&
+    stageState.selectionLevel !== 'excluded'
+  );
+}
+
+function getPairedStages(
+  session: GrantPrepSessionContext,
+  stageKey: GrantPrepStageKey,
+  latestUserMessage?: string
+) {
+  const pairs = GRANT_PREP_RELATED_STAGE_PAIRS[stageKey] || [];
+  return pairs
+    .filter((pair) => !pair.requiresUserSignal || pair.requiresUserSignal.test(latestUserMessage || ''))
+    .map((pair) => session.stageStates[pair.stageKey])
+    .filter(isEnabledPickableStage);
+}
+
+function getCandidateLookaheadStages(
+  session: GrantPrepSessionContext,
+  stageKey: GrantPrepStageKey,
+  excludedStageKeys: Set<GrantPrepStageKey>
+) {
   const currentIndex = GRANT_PREP_STAGE_LIBRARY.findIndex((stage) => stage.key === stageKey);
   const stagesAfterCurrent = GRANT_PREP_STAGE_LIBRARY.slice(Math.max(0, currentIndex + 1));
 
   return stagesAfterCurrent
     .map((stage) => session.stageStates[stage.key])
-    .filter(
-      (stage): stage is GrantPrepStageState =>
-        Boolean(stage?.pickable) &&
-        stage.selectionLevel !== 'excluded' &&
-        (stage.enabled || stage.selectionLevel === 'optional')
-    )
+    .filter((stage): stage is GrantPrepStageState => isEnabledPickableStage(stage) && !excludedStageKeys.has(stage.stageKey))
     .slice(0, 4);
 }
 
 export function buildGrantPrepConversationBundle(input: {
   session: GrantPrepSessionContext;
   stageKey: GrantPrepStageKey;
+  latestUserMessage?: string;
 }): GrantPrepConversationBundle {
   const stageState = input.session.stageStates[input.stageKey];
   const currentPending = pendingPoints(stageState);
   const primary = currentPending[0] ? toPlannedPoint(input.session, stageState, currentPending[0]) : null;
   const related = currentPending.slice(1, 4).map((point) => toPlannedPoint(input.session, stageState, point));
+  const paired = getPairedStages(input.session, input.stageKey, input.latestUserMessage)
+    .flatMap((stage) => pendingPoints(stage).slice(0, 2).map((point) => toPlannedPoint(input.session, stage, point)))
+    .slice(0, 4);
+  const pairedStageKeys = new Set(paired.map((point) => point.stageKey));
 
-  const lookahead = getCandidateLookaheadStages(input.session, input.stageKey)
+  const lookahead = getCandidateLookaheadStages(input.session, input.stageKey, pairedStageKeys)
     .flatMap((stage) => pendingPoints(stage).slice(0, 2).map((point) => toPlannedPoint(input.session, stage, point)))
     .slice(0, 4);
 
-  return { primary, related, lookahead };
+  return { primary, related, paired, lookahead };
 }
 
 export function formatGrantPrepConversationBundle(bundle: GrantPrepConversationBundle) {
@@ -102,19 +186,24 @@ export function formatGrantPrepConversationBundle(bundle: GrantPrepConversationB
     bundle.related.length > 0
       ? `Related current-stage targets:\n${bundle.related.map(formatPoint).join('\n')}`
       : 'Related current-stage targets: none',
+    bundle.paired.length > 0
+      ? `Related stage opportunity: if the user confirms an option, it may also advance these paired points:\n${bundle.paired.map(formatPoint).join('\n')}`
+      : 'Related stage opportunity: none',
     bundle.lookahead.length > 0
       ? `Lookahead targets eligible for cross-stage capture:\n${bundle.lookahead.map(formatPoint).join('\n')}`
       : 'Lookahead targets eligible for cross-stage capture: none',
     '',
-    'Use the primary, related, and lookahead points to propose one approval bundle of hard facts.',
+    'Coverage objective for this turn:',
+    'Ask one bundled question and write options that advance the primary target plus as many related current-stage or paired-stage targets as safely possible.',
+    'Default target: 3-5 concrete reviewer-useful facts across 2-4 point keys per option.',
     'The user should be able to approve or lightly edit several facts in one message.',
-    'Use lookahead points only when the user answer or selected option clearly supports them.',
-    'Do not invent hard facts for lookahead points; mark uncertain facts as inferred or needs_review.',
+    'Use paired-stage and lookahead points only when the user answer or selected option clearly supports them.',
+    'Do not invent hard facts for cross-stage points; mark uncertain facts as inferred or needs_review.',
   ].join('\n');
 }
 
 export function getGrantPrepCrossStageAllowedPointKeys(bundle: GrantPrepConversationBundle) {
-  return bundle.lookahead.map((point) => `${point.stageKey}.${point.pointKey}`);
+  return [...bundle.paired, ...bundle.lookahead].map((point) => `${point.stageKey}.${point.pointKey}`);
 }
 
 export function getGrantPrepStageLevelLabel(stageKey: GrantPrepStageKey) {

@@ -41,8 +41,12 @@ export interface GrantBackedGeneratedQuery {
   suggestedYearFrom?: number
   suggestedYearTo?: number
   searchIntent: string
+  resultLimit?: number
   dimensionTargets: GrantBlueprintDimensionTarget[]
 }
+
+export const GRANT_SEARCH_STRATEGY_VERSION = 'grant_search_v3_hybrid'
+export const GRANT_SEARCH_RESULT_LIMIT = 10
 
 const STOP_WORDS = new Set([
   'and', 'the', 'for', 'with', 'that', 'this', 'into', 'from', 'across', 'through',
@@ -156,6 +160,27 @@ function dominantIntent(bundle: Array<GrantBlueprintDimensionTarget & { persuasi
   }
 }
 
+function roleLabel(role: GrantPersuasionRole): string {
+  switch (role) {
+    case 'proves_need':
+      return 'need burden baseline'
+    case 'shows_gap':
+      return 'gap barriers limitations'
+    case 'validates_approach':
+      return 'validation methods benchmarks'
+    case 'supports_feasibility':
+      return 'implementation feasibility adoption'
+    case 'quantifies_impact':
+      return 'outcomes impact metrics'
+    case 'establishes_precedent':
+      return 'precedent comparison current practice'
+    case 'policy_alignment':
+      return 'policy framework strategy'
+    default:
+      return 'grant evidence'
+  }
+}
+
 function yearWindow(bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>) {
   return getGrantPersuasionYearWindow(dominantRole(bundle))
 }
@@ -164,13 +189,21 @@ function describeBundle(bundle: Array<GrantBlueprintDimensionTarget & { persuasi
   const sectionKeys = dedupeStrings(bundle.map((item) => item.sectionKey)).slice(0, 3)
   const dimensions = bundle.map((item) => item.dimension).slice(0, 2)
   const roles = dedupeStrings(bundle.map((item) => dominantIntent([item]))).slice(0, 2)
-  return `Targets ${sectionKeys.join(', ')} through ${roles.join(' and ')} evidence on ${dimensions.join(' and ')}.`
+  return `Focused grant evidence search for ${sectionKeys.join(', ')} through ${roles.join(' and ')} evidence on ${dimensions.join(' and ')}.`
 }
 
-function bundleDimensions<T extends GrantBlueprintDimensionTarget>(targets: T[]): T[][] {
+function describeBroadBundle(bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>): string {
+  const sectionKeys = dedupeStrings(bundle.map((item) => item.sectionKey)).slice(0, 3)
+  const role = dominantRole(bundle)
+  return `Broad grant discovery search for ${roleLabel(role)} evidence that may be titled differently from the proposal wording; representative sections: ${sectionKeys.join(', ')}.`
+}
+
+function bundleDimensions<T extends GrantBlueprintDimensionTarget>(targets: T[], targetQueryCount?: number): T[][] {
   if (targets.length === 0) return []
-  const targetQueryCount = clamp(Math.ceil(targets.length / 4.5), 4, 12)
-  const bundleSize = clamp(Math.ceil(targets.length / targetQueryCount), 3, 6)
+  const focusedQueryCount = targetQueryCount
+    ? clamp(targetQueryCount, 1, 12)
+    : clamp(Math.ceil(targets.length / 2.5), 3, 9)
+  const bundleSize = clamp(Math.ceil(targets.length / focusedQueryCount), 1, 4)
   const bundles: T[][] = []
 
   for (let index = 0; index < targets.length; index += bundleSize) {
@@ -178,6 +211,57 @@ function bundleDimensions<T extends GrantBlueprintDimensionTarget>(targets: T[])
   }
 
   return bundles
+}
+
+function buildBroadDiscoveryBundles<T extends GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>(
+  targets: T[],
+  maxCount: number
+): T[][] {
+  if (targets.length === 0 || maxCount <= 0) return []
+
+  const byRole = new Map<GrantPersuasionRole, T[]>()
+  for (const target of targets) {
+    const role = target.persuasionRole
+    if (!byRole.has(role)) byRole.set(role, [])
+    byRole.get(role)!.push(target)
+  }
+
+  const rolePriority: GrantPersuasionRole[] = [
+    'proves_need',
+    'shows_gap',
+    'supports_feasibility',
+    'validates_approach',
+    'establishes_precedent',
+    'quantifies_impact',
+    'policy_alignment',
+  ]
+
+  return rolePriority
+    .map((role) => byRole.get(role) || [])
+    .filter((items) => items.length > 0)
+    .slice(0, maxCount)
+    .map((items) => items.slice(0, 6))
+}
+
+function deriveBroadQueryTerms(
+  bundle: Array<GrantBlueprintDimensionTarget & { persuasionRole: GrantPersuasionRole }>,
+  researchTopic: ResearchTopicLike
+): string[] {
+  const researchTerms = dedupeStrings(
+    [
+      ...(researchTopic.keywords || []),
+      ...tokenize(researchTopic.title || '').slice(0, 2),
+      ...tokenize(researchTopic.researchQuestion || '').slice(0, 2),
+    ]
+  ).slice(0, 3)
+
+  const role = dominantRole(bundle)
+  const roleTerms = roleLabel(role).split(/\s+/)
+  const dimensionTerms = dedupeStrings(
+    bundle.flatMap((target) => tokenize(target.dimension).slice(0, 2))
+  ).slice(0, 4)
+
+  return dedupeStrings([...researchTerms, ...dimensionTerms, ...roleTerms]).slice(0, 9)
 }
 
 export function buildGrantBackedSearchStrategy(input: {
@@ -204,25 +288,39 @@ export function buildGrantBackedSearchStrategy(input: {
     return null
   }
 
-  const bundles = bundleDimensions(targets)
-  const queries = bundles.map((bundle, index) => {
+  const focusedBundles = bundleDimensions(targets)
+  const broadBundles = buildBroadDiscoveryBundles(
+    targets,
+    clamp(12 - focusedBundles.length, 1, 3)
+  )
+  const queryBundles = [
+    ...focusedBundles.map((bundle) => ({ kind: 'focused' as const, bundle })),
+    ...broadBundles.map((bundle) => ({ kind: 'broad' as const, bundle })),
+  ].slice(0, 12)
+
+  const queries = queryBundles.map(({ kind, bundle }, index) => {
     const queryTerms = deriveQueryTerms(bundle, input.researchTopic)
+    const broadQueryTerms = kind === 'broad'
+      ? deriveBroadQueryTerms(bundle, input.researchTopic)
+      : queryTerms
     const category = dominantCategory(bundle)
+    const intent = dominantIntent(bundle)
     return {
-      queryText: queryTerms.join(' '),
+      queryText: (kind === 'broad' ? broadQueryTerms : queryTerms).join(' '),
       category,
-      description: describeBundle(bundle),
+      description: kind === 'broad' ? describeBroadBundle(bundle) : describeBundle(bundle),
       priority: index + 1,
       suggestedSources: ['semantic_scholar', 'openalex', 'crossref'],
-      searchIntent: dominantIntent(bundle),
+      searchIntent: kind === 'broad' ? `broad_discovery_${intent}` : `focused_${intent}`,
+      resultLimit: GRANT_SEARCH_RESULT_LIMIT,
       dimensionTargets: bundle,
       ...yearWindow(bundle),
     } satisfies GrantBackedGeneratedQuery
   })
 
   return {
-    summary: `Grant-aware literature strategy covering ${targets.length} blueprint evidence pillars across ${queries.length} bundled searches.`,
-    estimatedPapers: Math.max(queries.length * 12, targets.length * 2),
+    summary: `Grant-aware hybrid literature strategy covering ${targets.length} blueprint evidence pillars with focused dimension searches and broad discovery searches.`,
+    estimatedPapers: Math.max(queries.length * GRANT_SEARCH_RESULT_LIMIT, targets.length * 2),
     queries,
   }
 }

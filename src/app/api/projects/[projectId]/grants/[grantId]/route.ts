@@ -243,6 +243,9 @@ export async function GET(
     id: user.id,
     email: user.email ?? null,
     tenantId: user.tenantId,
+  }, {
+    grantSessionId: grantPrepSession.grant_session_id || grantSession?.id || null,
+    fundingCallId: grantPrepSession.funding_call_id || grantSession?.fundingCallId || null,
   })
   const warning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
   let prepContext = inflateGrantPrepSessionContext(grantPrepSession, {

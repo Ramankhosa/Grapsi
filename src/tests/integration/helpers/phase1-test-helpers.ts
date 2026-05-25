@@ -140,7 +140,7 @@ export function createJsonRequest(
   body?: unknown
 ) {
   return new NextRequest(
-    new Request(`http://localhost:3008${path}`, {
+    new Request(`http://localhost:3010${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -153,7 +153,7 @@ export function createJsonRequest(
 
 export function createRequest(path: string, token: string, method = 'GET') {
   return new NextRequest(
-    new Request(`http://localhost:3008${path}`, {
+    new Request(`http://localhost:3010${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -180,7 +180,7 @@ export function createMultipartRequest(options: {
   }
 
   return new NextRequest(
-    new Request(`http://localhost:3008${options.path}`, {
+    new Request(`http://localhost:3010${options.path}`, {
       method: options.method || 'POST',
       headers: {
         Authorization: `Bearer ${options.token}`,

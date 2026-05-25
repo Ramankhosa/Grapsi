@@ -1507,6 +1507,156 @@ export default function LiteratureSearchStage({
     return count;
   }, [yearFrom, yearTo, publicationTypes, openAccessOnly, minCitations, fieldsOfStudy]);
 
+  const importRecommendedPapersToGrantCitations = async (options?: {
+    resultsSource?: any[];
+    suggestionsSource?: Map<string, any>;
+    recommendationsSource?: Map<string, 'IMPORT' | 'MAYBE' | 'SKIP'>;
+    dimensionMappingsSource?: Map<string, Array<{
+      sectionKey: string;
+      dimension: string;
+      remark: string;
+      confidence: MappingConfidence;
+    }>>;
+    auto?: boolean;
+  }): Promise<{ importedCount: number; skippedCount: number; attemptedCount: number }> => {
+    const sourceResults = options?.resultsSource || results;
+    const suggestionSource = options?.suggestionsSource || aiSuggestions;
+    const recommendationSource = options?.recommendationsSource || paperRecommendations;
+    const dimensionMappingSource = options?.dimensionMappingsSource || paperDimensionMappings;
+    const existingKeys = new Set(citations.map(c => c.doi || c.title));
+    const autoImport = options?.auto === true;
+
+    const suggestedPapers = sourceResults.filter((paper) => {
+      const recommendation = recommendationSource.get(paper.id) || suggestionSource.get(paper.id)?.recommendation;
+      return recommendation === 'IMPORT' && !existingKeys.has(paper.doi || paper.title);
+    });
+
+    if (suggestedPapers.length === 0) {
+      if (!autoImport) {
+        showToast({
+          type: 'info',
+          title: 'No Papers to Add',
+          message: 'No AI import-recommended papers are pending Grant Citation import',
+          duration: 3000
+        });
+      }
+      return { importedCount: 0, skippedCount: 0, attemptedCount: 0 };
+    }
+
+    try {
+      if (!autoImport) {
+        setBulkAddingSuggested(true);
+      }
+
+      const response = await fetch(`/api/papers/${sessionId}/citations/bulk-import`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          citations: suggestedPapers.map(paper => {
+            const suggestion = suggestionSource.get(paper.id);
+            const suggestionMeta = suggestion?.citationMeta;
+            return {
+              searchResult: paper,
+              citationMeta: suggestionMeta ? {
+                keyContribution: suggestionMeta.keyContribution,
+                keyFindings: suggestionMeta.keyFindings,
+                methodologicalApproach: suggestionMeta.methodologicalApproach,
+                relevanceToResearch: suggestionMeta.relevanceToResearch,
+                limitationsOrGaps: suggestionMeta.limitationsOrGaps,
+                claimTypesSupported: suggestionMeta.claimTypesSupported,
+                evidenceBoundary: suggestionMeta.evidenceBoundary,
+                positionalRelation: suggestionMeta.positionalRelation,
+                referenceArchetype: suggestionMeta.referenceArchetype,
+                archetypeSignal: suggestionMeta.archetypeSignal,
+                grantUtility: suggestionMeta.grantUtility,
+                usage: suggestionMeta.usage,
+                relevanceScore: suggestion?.score,
+                deepAnalysisRecommendation: suggestion?.deepAnalysisRecommendation,
+                deepAnalysisRationale: suggestion?.deepAnalysisRationale
+              } : null,
+              relevanceScore: suggestion?.score,
+              recommendation: recommendationSource.get(paper.id) || suggestion?.recommendation,
+              dimensionMappings: dimensionMappingSource.get(paper.id) || []
+            };
+          })
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Bulk import failed');
+      }
+
+      const importedBatch = Array.isArray(data.citations) ? data.citations : [];
+      const importedCount = typeof data.importedCount === 'number'
+        ? data.importedCount
+        : importedBatch.length;
+      const skippedCount = typeof data.skippedCount === 'number'
+        ? data.skippedCount
+        : Math.max(0, suggestedPapers.length - importedCount);
+
+      if (importedBatch.length > 0) {
+        setCitations(prev => {
+          const next = [...prev];
+          const seen = new Set(next.map(c => c.id));
+          for (const citation of importedBatch) {
+            if (citation?.id && !seen.has(citation.id)) {
+              seen.add(citation.id);
+              next.push(citation);
+            }
+          }
+          return next;
+        });
+      }
+
+      await refreshSession();
+
+      if (!autoImport) {
+        showToast({
+          type: importedCount > 0 ? 'success' : 'info',
+          title: importedCount > 0 ? 'Grant Citations Added' : 'No New Grant Citations',
+          message: skippedCount > 0
+            ? `Added ${importedCount} AI import-recommended papers to Grant Citations (${skippedCount} skipped as duplicates)`
+            : `Added ${importedCount} AI import-recommended papers to Grant Citations`,
+          duration: 4000
+        });
+      } else if (importedCount > 0) {
+        showToast({
+          type: 'success',
+          title: 'Grant Citations Updated',
+          message: `Automatically added ${importedCount} AI import-recommended papers to Grant Citations`,
+          duration: 3500
+        });
+      }
+
+      return { importedCount, skippedCount, attemptedCount: suggestedPapers.length };
+    } catch (err) {
+      if (!autoImport) {
+        showToast({
+          type: 'error',
+          title: 'Import Failed',
+          message: err instanceof Error ? err.message : 'Could not import suggested papers to Grant Citations',
+          duration: 5000
+        });
+      } else {
+        showToast({
+          type: 'error',
+          title: 'Grant Citation Import Failed',
+          message: err instanceof Error ? err.message : 'Could not automatically import suggested papers to Grant Citations',
+          duration: 5000
+        });
+      }
+      return { importedCount: 0, skippedCount: 0, attemptedCount: suggestedPapers.length };
+    } finally {
+      if (!autoImport) {
+        setBulkAddingSuggested(false);
+      }
+    }
+  };
+
   // AI Relevance Analysis - batch all papers in single LLM call with blueprint mapping
   const handleAiRelevanceAnalysis = async () => {
     if (!searchRunId || !authToken || results.length === 0) return;
@@ -1804,6 +1954,14 @@ export default function LiteratureSearchStage({
         setBlueprintCoverage(data.analysis.blueprintCoverage);
       }
 
+      const autoImportResult = await importRecommendedPapersToGrantCitations({
+        resultsSource: results,
+        suggestionsSource: suggestionsMap,
+        recommendationsSource: recommendationsMap,
+        dimensionMappingsSource: dimensionMappingsMap,
+        auto: true
+      });
+
       const meta = data.analysis?.analysisMeta;
       const skippedCount = meta?.skippedNoAbstractCount || 0;
       if (meta && typeof meta.totalPapers === 'number') {
@@ -1824,7 +1982,7 @@ export default function LiteratureSearchStage({
         type: 'success',
         title: hasBlueprintData ? 'Blueprint Analysis Complete' : 'AI Analysis Complete',
         message: hasBlueprintData 
-          ? `Analyzed ${suggestionsMap.size} papers against ${data.analysis?.blueprintCoverage?.totalDimensions || 0} blueprint dimensions${skippedSuffix}`
+          ? `Analyzed ${suggestionsMap.size} papers against ${data.analysis?.blueprintCoverage?.totalDimensions || 0} blueprint dimensions${skippedSuffix}${autoImportResult.importedCount > 0 ? `; ${autoImportResult.importedCount} added to Grant Citations` : ''}`
           : `Found ${suggestionsMap.size} relevant papers${!data.analysis?.blueprintIncluded ? ' (no blueprint found - generate one first for dimension mapping)' : ''}${skippedSuffix}`,
         duration: hasBlueprintData ? 4000 : 5000
       });
@@ -1845,107 +2003,7 @@ export default function LiteratureSearchStage({
 
   // Add all AI-suggested papers at once
   const handleAddAllSuggested = async () => {
-    const suggestedPapers = results.filter(
-      r => aiImportSuggestionIds.has(r.id) && !importedKeys.has(r.doi || r.title)
-    );
-    
-    if (suggestedPapers.length === 0) {
-      showToast({
-        type: 'info',
-        title: 'No Papers to Add',
-        message: 'No AI import-recommended papers are pending citation import',
-        duration: 3000
-      });
-      return;
-    }
-
-    try {
-      setBulkAddingSuggested(true);
-
-      const response = await fetch(`/api/papers/${sessionId}/citations/bulk-import`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          citations: suggestedPapers.map(paper => {
-            const suggestion = aiSuggestions.get(paper.id);
-            const suggestionMeta = suggestion?.citationMeta;
-            return {
-              searchResult: paper,
-              citationMeta: suggestionMeta ? {
-                keyContribution: suggestionMeta.keyContribution,
-                keyFindings: suggestionMeta.keyFindings,
-                methodologicalApproach: suggestionMeta.methodologicalApproach,
-                relevanceToResearch: suggestionMeta.relevanceToResearch,
-                limitationsOrGaps: suggestionMeta.limitationsOrGaps,
-                claimTypesSupported: suggestionMeta.claimTypesSupported,
-                evidenceBoundary: suggestionMeta.evidenceBoundary,
-                positionalRelation: suggestionMeta.positionalRelation,
-                referenceArchetype: suggestionMeta.referenceArchetype,
-                archetypeSignal: suggestionMeta.archetypeSignal,
-                grantUtility: suggestionMeta.grantUtility,
-                usage: suggestionMeta.usage,
-                relevanceScore: suggestion?.score,
-                deepAnalysisRecommendation: suggestion?.deepAnalysisRecommendation,
-                deepAnalysisRationale: suggestion?.deepAnalysisRationale
-              } : null,
-              relevanceScore: suggestion?.score,
-              recommendation: paperRecommendations.get(paper.id),
-              dimensionMappings: paperDimensionMappings.get(paper.id) || []
-            };
-          })
-        })
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Bulk import failed');
-      }
-
-      const importedBatch = Array.isArray(data.citations) ? data.citations : [];
-      const importedCount = typeof data.importedCount === 'number'
-        ? data.importedCount
-        : importedBatch.length;
-      const skippedCount = typeof data.skippedCount === 'number'
-        ? data.skippedCount
-        : Math.max(0, suggestedPapers.length - importedCount);
-
-      if (importedBatch.length > 0) {
-        setCitations(prev => {
-          const next = [...prev];
-          const seen = new Set(next.map(c => c.id));
-          for (const citation of importedBatch) {
-            if (citation?.id && !seen.has(citation.id)) {
-              seen.add(citation.id);
-              next.push(citation);
-            }
-          }
-          return next;
-        });
-      }
-
-      await refreshSession();
-
-      showToast({
-        type: importedCount > 0 ? 'success' : 'info',
-        title: importedCount > 0 ? 'Papers Added' : 'No New Papers Added',
-        message: skippedCount > 0
-          ? `Added ${importedCount} AI import-recommended papers (${skippedCount} skipped as duplicates)`
-          : `Added ${importedCount} AI import-recommended papers to citations`,
-        duration: 4000
-      });
-    } catch (err) {
-      showToast({
-        type: 'error',
-        title: 'Import Failed',
-        message: err instanceof Error ? err.message : 'Could not import suggested papers',
-        duration: 5000
-      });
-    } finally {
-      setBulkAddingSuggested(false);
-    }
+    await importRecommendedPapersToGrantCitations({ auto: false });
   };
 
   const applyPdfRetrievalResults = useCallback((items: any[]) => {
@@ -2416,11 +2474,11 @@ export default function LiteratureSearchStage({
     }
   }, [authToken, ensureReferenceForPaper, showToast]);
 
-  // Analyze unanalyzed citations against blueprint dimensions
+  // Analyze unanalyzed Grant Citations against blueprint dimensions
   const handleAnalyzeUnanalyzedCitations = async () => {
     if (!authToken || citations.length === 0) return;
     
-    // Filter to citations without blueprint analysis AND under the retry limit.
+    // Filter to Grant Citations without blueprint analysis AND under the retry limit.
     // Papers that exceeded MAX_ANALYSIS_ATTEMPTS are excluded to prevent infinite token spend.
     const unanalyzedCitations = citations.filter(c =>
       !analyzedCitationIds.has(c.id) &&
@@ -2434,16 +2492,16 @@ export default function LiteratureSearchStage({
     if (unanalyzedCitations.length === 0) {
       showToast({
         type: exhaustedCitations.length > 0 ? 'warning' : 'info',
-        title: exhaustedCitations.length > 0 ? 'Retry Limit Reached' : 'All Citations Analyzed',
+        title: exhaustedCitations.length > 0 ? 'Retry Limit Reached' : 'All Grant Citations Analyzed',
         message: exhaustedCitations.length > 0
-          ? `${exhaustedCitations.length} citation${exhaustedCitations.length > 1 ? 's' : ''} failed after ${MAX_ANALYSIS_ATTEMPTS} attempts. Try adding abstracts or editing titles for better results.`
-          : 'All imported citations have already been analyzed against the blueprint.',
+          ? `${exhaustedCitations.length} Grant Citation${exhaustedCitations.length > 1 ? 's' : ''} failed after ${MAX_ANALYSIS_ATTEMPTS} attempts. Try adding abstracts or editing titles for better results.`
+          : 'All Grant Citations have already been analyzed against the blueprint.',
         duration: 4000
       });
       return;
     }
     
-    // Separate citations with and without abstracts.
+    // Separate Grant Citations with and without abstracts.
     // Papers without abstracts are NOT sent to the LLM — they produce low-quality
     // results and waste tokens. Instead they are flagged in the UI with a "No Abstract" tag.
     const withAbstracts = unanalyzedCitations.filter((c: any) => c.abstract);
@@ -2462,15 +2520,15 @@ export default function LiteratureSearchStage({
       showToast({
         type: 'warning',
         title: 'No Abstracts Available',
-        message: `All ${withoutAbstracts.length} citation${withoutAbstracts.length > 1 ? 's' : ''} lack abstracts and were skipped. Add abstracts to enable AI analysis.`,
+        message: `All ${withoutAbstracts.length} Grant Citation${withoutAbstracts.length > 1 ? 's' : ''} lack abstracts and were skipped. Add abstracts to enable AI analysis.`,
         duration: 4000
       });
       return;
     } else if (withoutAbstracts.length > 0) {
       showToast({
         type: 'info',
-        title: 'Some Citations Skipped',
-        message: `${withoutAbstracts.length} citation${withoutAbstracts.length > 1 ? 's' : ''} without abstracts will be skipped. Analyzing ${withAbstracts.length} citation${withAbstracts.length > 1 ? 's' : ''} with abstracts.`,
+        title: 'Some Grant Citations Skipped',
+        message: `${withoutAbstracts.length} Grant Citation${withoutAbstracts.length > 1 ? 's' : ''} without abstracts will be skipped. Analyzing ${withAbstracts.length} Grant Citation${withAbstracts.length > 1 ? 's' : ''} with abstracts.`,
         duration: 3000
       });
     }
@@ -2478,7 +2536,7 @@ export default function LiteratureSearchStage({
     try {
       setCitationAnalyzing(true);
       
-      // Only send citations WITH abstracts to the mapping API
+      // Only send Grant Citations WITH abstracts to the mapping API
       const citationsAsResults = withAbstracts.map((c: any) => ({
         id: c.id,
         title: c.title,
@@ -2496,7 +2554,7 @@ export default function LiteratureSearchStage({
         retry: 0
       });
       
-      // Chunk citations into groups of 100 (API limit) and process in parallel.
+      // Chunk Grant Citations into groups of 100 (API limit) and process in parallel.
       // Up to PARALLEL_API_CHUNKS are fired concurrently; results merge after each group.
       const API_CHUNK_SIZE = 100;
       const PARALLEL_API_CHUNKS = 2;
@@ -2629,10 +2687,10 @@ export default function LiteratureSearchStage({
       const skippedSuffix = withoutAbstracts.length > 0 ? ` (${withoutAbstracts.length} skipped — no abstract)` : '';
       showToast({
         type: 'success',
-        title: 'Citation Analysis Complete',
+        title: 'Grant Citation Analysis Complete',
         message: remainingCount > 0
-          ? `Analyzed ${analyzedCount} citation${analyzedCount !== 1 ? 's' : ''}. ${remainingCount} remaining — run again to continue.${skippedSuffix}`
-          : `Analyzed ${analyzedCount} citation${analyzedCount !== 1 ? 's' : ''} against blueprint dimensions${skippedSuffix}`,
+          ? `Analyzed ${analyzedCount} Grant Citation${analyzedCount !== 1 ? 's' : ''}. ${remainingCount} remaining — run again to continue.${skippedSuffix}`
+          : `Analyzed ${analyzedCount} Grant Citation${analyzedCount !== 1 ? 's' : ''} against blueprint dimensions${skippedSuffix}`,
         duration: 4500
       });
     } catch (err) {
@@ -2641,7 +2699,7 @@ export default function LiteratureSearchStage({
       showToast({
         type: 'error',
         title: 'Analysis Failed',
-        message: err instanceof Error ? err.message : 'Could not analyze citations',
+        message: err instanceof Error ? err.message : 'Could not analyze Grant Citations',
         duration: 5000
       });
     } finally {
@@ -2732,7 +2790,7 @@ export default function LiteratureSearchStage({
       }
 
       setCitations(prev => [...prev, data.citation]);
-      setImportMessage('Citation imported.');
+      setImportMessage('Grant Citation imported.');
       await refreshSession();
     } catch (err) {
       setImportMessage(err instanceof Error ? err.message : 'Import failed');
@@ -2759,7 +2817,7 @@ export default function LiteratureSearchStage({
 
       setCitations(prev => [...prev, data.citation]);
       setDoiInput('');
-      setImportMessage('DOI imported.');
+      setImportMessage('DOI imported to Grant Citations.');
       await refreshSession();
     } catch (err) {
       setImportMessage(err instanceof Error ? err.message : 'DOI import failed');
@@ -2786,7 +2844,7 @@ export default function LiteratureSearchStage({
 
       setCitations(prev => [...prev, ...(data.citations || [])]);
       setBibtexInput('');
-      setImportMessage('BibTeX import complete.');
+      setImportMessage('BibTeX import added to Grant Citations.');
       await refreshSession();
     } catch (err) {
       setImportMessage(err instanceof Error ? err.message : 'BibTeX import failed');
@@ -2819,8 +2877,8 @@ export default function LiteratureSearchStage({
       const link = document.createElement('a');
       link.href = url;
       link.download = selectedCitations.size > 0
-        ? `citations_selected_${sessionId}.bib`
-        : `citations_${sessionId}.bib`;
+        ? `grant_citations_selected_${sessionId}.bib`
+        : `grant_citations_${sessionId}.bib`;
       link.click();
       window.URL.revokeObjectURL(url);
 
@@ -2828,7 +2886,7 @@ export default function LiteratureSearchStage({
       showToast({
         type: 'success',
         title: 'BibTeX Export Ready',
-        message: `Downloaded ${exportedCount} citation${exportedCount === 1 ? '' : 's'} as BibTeX.`,
+        message: `Downloaded ${exportedCount} Grant Citation${exportedCount === 1 ? '' : 's'} as BibTeX.`,
         duration: 3500
       });
     } catch (err) {
@@ -2870,7 +2928,7 @@ export default function LiteratureSearchStage({
     }
   };
 
-  // Filter citations for display
+  // Filter Grant Citations for display
   const filteredCitations = useMemo(() => {
     if (!citationSearch.trim()) return citations;
     const search = citationSearch.toLowerCase();
@@ -2881,10 +2939,10 @@ export default function LiteratureSearchStage({
     );
   }, [citations, citationSearch]);
 
-  // Handle removing selected citations (bulk delete)
+  // Handle removing selected Grant Citations (bulk delete)
   const handleRemoveSelected = async () => {
     if (selectedCitations.size === 0) return;
-    if (!confirm(`Remove ${selectedCitations.size} citation(s) from this paper?`)) return;
+    if (!confirm(`Remove ${selectedCitations.size} Grant Citation(s)?`)) return;
     
     const idsToDelete = Array.from(selectedCitations);
     
@@ -3700,7 +3758,7 @@ export default function LiteratureSearchStage({
       showToast({
         type: 'info',
         title: 'Import required',
-        message: 'This paper must be added to citations before inclusion state can be persisted.',
+        message: 'This paper must be added to Grant Citations before inclusion state can be persisted.',
         duration: 3500
       });
       updateCoverageFeedbackState(row.id, inclusionStatus);
@@ -3764,7 +3822,7 @@ export default function LiteratureSearchStage({
       showToast({
         type: 'info',
         title: 'Import required',
-        message: 'This paper must be added to citations before mapping changes can be persisted.',
+        message: 'This paper must be added to Grant Citations before mapping changes can be persisted.',
         duration: 3500
       });
       return;
@@ -4090,14 +4148,14 @@ export default function LiteratureSearchStage({
           <p className="text-sm text-gray-500">
             {isFullTextEvidenceMode
               ? 'Retrieve full text, validate mappings, and review grounded evidence coverage.'
-              : 'Find papers, analyze relevance, check coverage, and manage citations'}
+              : 'Find papers, analyze relevance, check coverage, and manage Grant Citations'}
           </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right">
             <div className="text-2xl font-bold text-indigo-600">{citations.length}</div>
             <div className="text-xs text-gray-500">
-              {citationTargets.recommended ? `of ${citationTargets.recommended} recommended` : 'citations'}
+              {citationTargets.recommended ? `of ${citationTargets.recommended} recommended` : 'Grant Citations'}
             </div>
           </div>
           {citationTargets.min && citations.length < citationTargets.min && (
@@ -4139,7 +4197,7 @@ export default function LiteratureSearchStage({
               <span className="font-semibold">1.</span> Generate a Search Strategy to get AI-suggested queries {' '}
               <span className="font-semibold">2.</span> Search &amp; import relevant papers {' '}
               <span className="font-semibold">3.</span> Run Analyze &amp; Map to check blueprint coverage {' '}
-              <span className="font-semibold">4.</span> Review your citations in the Paper Citations tab
+              <span className="font-semibold">4.</span> Review your Grant Citations
             </p>
           </div>
         </div>
@@ -4170,11 +4228,11 @@ export default function LiteratureSearchStage({
             </svg>
             Find & Add
           </TabsTrigger>
-          <TabsTrigger value="citations" className="flex items-center gap-2" title="View and manage all citations you've added to this paper. Analyze coverage and export references.">
+          <TabsTrigger value="citations" className="flex items-center gap-2" title="View and manage all Grant Citations you've added. Analyze coverage and export references.">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            Paper Citations ({citations.length})
+            Grant Citations ({citations.length})
           </TabsTrigger>
         </TabsList>
 
@@ -4581,7 +4639,7 @@ export default function LiteratureSearchStage({
                       ? 'border-indigo-600 text-indigo-700 bg-white'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
-                  title="Import citations from BibTeX files, DOI lists, or other reference formats directly into your paper."
+                  title="Import Grant Citations from BibTeX files, DOI lists, or other reference formats."
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
@@ -4959,7 +5017,7 @@ export default function LiteratureSearchStage({
                     <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                     </svg>
-                    Add citation manually
+                    Add Grant Citation manually
                   </Button>
 
                   {importMessage && (
@@ -5367,7 +5425,7 @@ export default function LiteratureSearchStage({
                               setSelectedResults(new Set());
                             }}
                             className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700"
-                            title="Import the selected papers into your citation list for use in your paper."
+                            title="Import the selected papers into Grant Citations."
                           >
                             <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -5402,7 +5460,7 @@ export default function LiteratureSearchStage({
                 )}
                 
                 <CardDescription className="text-xs">
-                  💡 Tip: Add citations with abstracts for better literature analysis
+                  💡 Tip: Add Grant Citations with abstracts for better literature analysis
                 </CardDescription>
                 
                 {/* AI Relevance Analysis Section */}
@@ -6808,7 +6866,7 @@ export default function LiteratureSearchStage({
           )}
         </TabsContent>
 
-        {/* PAPER CITATIONS TAB */}
+        {/* GRANT CITATIONS TAB */}
         <TabsContent value="citations" className="space-y-4">
           <Card>
             <CardHeader className="pb-2">
@@ -6817,12 +6875,12 @@ export default function LiteratureSearchStage({
                   <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  Citations in Your Paper
+                  Grant Citations
                 </CardTitle>
                 <Badge variant="secondary">{citations.length}</Badge>
               </div>
               <CardDescription>
-                These citations will be used in your publication
+                These Grant Citations will support your proposal
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -6833,9 +6891,9 @@ export default function LiteratureSearchStage({
                   <Input
                     value={citationSearch}
                     onChange={e => setCitationSearch(e.target.value)}
-                    placeholder="Search citations..."
+                    placeholder="Search Grant Citations..."
                     className="h-8 text-sm bg-white"
-                    title="Filter citations by title, author, or citation key."
+                    title="Filter Grant Citations by title, author, or citation key."
                   />
                 </div>
 
@@ -6848,8 +6906,8 @@ export default function LiteratureSearchStage({
                     disabled={citations.length === 0 || exportingBibtex}
                     className="shrink-0 h-7 text-xs text-slate-700 border-slate-300 hover:bg-slate-50"
                     title={selectedCitations.size > 0
-                      ? `Export BibTeX: Download only the ${selectedCitations.size} selected citation${selectedCitations.size === 1 ? '' : 's'}.`
-                      : 'Export BibTeX: Download all citations as a .bib file for LaTeX/reference managers.'}
+                      ? `Export BibTeX: Download only the ${selectedCitations.size} selected Grant Citation${selectedCitations.size === 1 ? '' : 's'}.`
+                      : 'Export BibTeX: Download all Grant Citations as a .bib file for LaTeX/reference managers.'}
                   >
                     {exportingBibtex
                       ? 'Exporting...'
@@ -6860,7 +6918,7 @@ export default function LiteratureSearchStage({
                 </div>
 
                 <p className="text-[11px] text-gray-500">
-                  Select citation rows if you want to export only a subset; otherwise export will include all citations.
+                  Select Grant Citation rows if you want to export only a subset; otherwise export will include all Grant Citations.
                 </p>
               </div>
               {citationReviewStatus && (
@@ -6927,12 +6985,12 @@ export default function LiteratureSearchStage({
                     <svg className="w-10 h-10 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                     </svg>
-                    <p className="text-sm font-medium">No citations yet</p>
-                    <p className="text-xs mt-1">Search or import to add citations</p>
+                    <p className="text-sm font-medium">No Grant Citations yet</p>
+                    <p className="text-xs mt-1">Search or import to add Grant Citations</p>
                   </div>
                 ) : filteredCitations.length === 0 ? (
                   <div className="text-center py-4 text-gray-400 text-sm">
-                    No citations match your search
+                    No Grant Citations match your search
                   </div>
                 ) : (
                   <AnimatePresence>
@@ -7108,13 +7166,13 @@ export default function LiteratureSearchStage({
                         }
                       }}
                       className="text-xs text-indigo-600 hover:underline"
-                      title="Select or deselect all citations for bulk actions like removal."
+                      title="Select or deselect all Grant Citations for bulk actions like removal."
                     >
                       {selectedCitations.size === citations.length ? 'Deselect all' : 'Select all'}
                     </button>
                   </div>
                   <span className="text-[11px] text-gray-500">
-                    Use the toolbar above to export all citations or only the selected ones.
+                    Use the toolbar above to export all Grant Citations or only the selected ones.
                   </span>
                 </div>
               )}
@@ -7434,7 +7492,7 @@ export default function LiteratureSearchStage({
           <DialogHeader>
             <DialogTitle>Literature Gap Analysis</DialogTitle>
             <DialogDescription>
-              Analyze your {citations.length} citations for themes, gaps, and positioning opportunities
+              Analyze your {citations.length} Grant Citations for themes, gaps, and positioning opportunities
             </DialogDescription>
           </DialogHeader>
           
@@ -7995,7 +8053,7 @@ function InlineLibraryImport({
             <span className="text-amber-600"> ({importResult.workspaceSkipped} skipped as duplicates)</span>
           )}
           <span className="block mt-1 text-indigo-600">
-            Papers are available in AI workspace only until you choose to add citations.
+            Papers are available in AI workspace only until you choose to add Grant Citations.
           </span>
         </p>
 
@@ -8460,7 +8518,7 @@ function LibraryImportModal({
             </h3>
             
             <p className="text-gray-600 mb-6">
-              <span className="font-medium text-emerald-600">{importResult.imported} citation{importResult.imported !== 1 ? 's' : ''}</span> imported successfully
+              <span className="font-medium text-emerald-600">{importResult.imported} Grant Citation{importResult.imported !== 1 ? 's' : ''}</span> imported successfully
               {importResult.skipped > 0 && (
                 <span className="text-amber-600"> ({importResult.skipped} skipped as duplicates)</span>
               )}
@@ -8474,10 +8532,10 @@ function LibraryImportModal({
                   </svg>
                 </div>
                 <div>
-                  <p className="font-medium text-indigo-900 text-sm">Where to find your citations</p>
+                  <p className="font-medium text-indigo-900 text-sm">Where to find your Grant Citations</p>
                   <p className="text-xs text-indigo-700 mt-1">
-                    Your imported references are now available in the <strong>"Manage citations"</strong> tab above. 
-                    You can also see them in the <strong>"Imported Citations"</strong> panel on the right side of the Search tab.
+                    Your imported references are now available in the <strong>"Grant Citations"</strong> tab above.
+                    You can also see them in the <strong>"Grant Citations"</strong> panel on the right side of the Search tab.
                   </p>
                 </div>
               </div>
@@ -8492,7 +8550,7 @@ function LibraryImportModal({
                 setSelected(new Set());
                 onGoToManage?.();
               }}>
-                Go to Manage Citations
+                Go to Grant Citations
               </Button>
             </div>
           </motion.div>
@@ -8872,7 +8930,7 @@ function ManualCitationModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl bg-white border-gray-200 shadow-2xl">
         <DialogHeader>
-          <DialogTitle>Add Citation Manually</DialogTitle>
+          <DialogTitle>Add Grant Citation Manually</DialogTitle>
           <DialogDescription>Enter the bibliographic details</DialogDescription>
         </DialogHeader>
 
@@ -8936,7 +8994,7 @@ function ManualCitationModal({
         <div className="flex justify-end gap-2 pt-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={handleSave} disabled={saving || !form.title.trim()}>
-            {saving ? 'Saving...' : 'Add Citation'}
+            {saving ? 'Saving...' : 'Add Grant Citation'}
           </Button>
         </div>
       </DialogContent>

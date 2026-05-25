@@ -197,6 +197,14 @@ export interface ProviderFilterSupport {
   yearRange: boolean;
 }
 
+export const LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT = 10;
+
+function resolveSearchLimit(limit?: number): number {
+  return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+    ? limit
+    : LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT;
+}
+
 // Export filter support map for UI to use
 export const PROVIDER_FILTER_SUPPORT: Record<string, ProviderFilterSupport> = {
   google_scholar: {
@@ -292,10 +300,11 @@ class LiteratureSearchService {
     sources: string[];
   }> {
     const sources = options.sources || ['google_scholar', 'semantic_scholar', 'crossref'];
-    const limit = options.limit || 20;
+    const limit = resolveSearchLimit(options.limit);
+    const searchOptions: SearchOptions = { ...options, limit };
 
     // Check cache first
-    const cacheKey = this.generateCacheKey(query, options);
+    const cacheKey = this.generateCacheKey(query, searchOptions);
     const cached = this.getCachedResults(cacheKey);
     if (cached) {
       return {
@@ -312,7 +321,7 @@ class LiteratureSearchService {
         try {
           await this.checkRateLimit(source);
           const provider = this.providers.get(source)!;
-          const results = await provider.search(query, options);
+          const results = await provider.search(query, searchOptions);
           this.recordRequest(source);
           return results;
         } catch (error) {
@@ -335,7 +344,7 @@ class LiteratureSearchService {
     });
 
     // Cache results
-    this.cacheResults(cacheKey, sortedResults, query, options);
+    this.cacheResults(cacheKey, sortedResults, query, searchOptions);
 
     const finalResults = sortedResults.slice(0, limit);
 
@@ -597,7 +606,7 @@ class GoogleScholarProvider implements SearchProvider {
         api_key: apiKey,
         engine: 'google_scholar',
         q: query,
-        num: (options.limit || 20).toString(),
+        num: resolveSearchLimit(options.limit).toString(),
       });
 
       // Add year filters if provided
@@ -755,7 +764,7 @@ class SemanticScholarProvider implements SearchProvider {
       try {
         const params = new URLSearchParams({
           query: query,
-          limit: Math.min(options.limit || 20, 100).toString(), // Max 100 per request
+          limit: Math.min(resolveSearchLimit(options.limit), 100).toString(), // Max 100 per request
           fields: 'title,authors,year,venue,journal,abstract,citationCount,externalIds,url,publicationTypes,isOpenAccess,fieldsOfStudy,openAccessPdf'
         });
 
@@ -1038,7 +1047,7 @@ class CrossRefProvider implements SearchProvider {
 
         const params = new URLSearchParams({
           query: sanitizedQuery,
-          rows: (options.limit || 20).toString(),
+          rows: resolveSearchLimit(options.limit).toString(),
           'sort': 'relevance'
         });
 
@@ -1233,7 +1242,7 @@ class OpenAlexProvider implements SearchProvider {
     try {
       const params = new URLSearchParams({
         search: query,
-        per_page: (options.limit || 20).toString(),
+        per_page: resolveSearchLimit(options.limit).toString(),
         'sort': 'relevance_score:desc'
       });
 
@@ -1553,7 +1562,7 @@ class PubMedProvider implements SearchProvider {
       const baseParams = new URLSearchParams({
         db: 'pubmed',
         term: enhancedQuery,
-        retmax: (options.limit || 20).toString(),
+        retmax: resolveSearchLimit(options.limit).toString(),
         retmode: 'json',
         usehistory: 'n'
       });
@@ -1857,7 +1866,7 @@ class ArXivProvider implements SearchProvider {
       const params = new URLSearchParams({
         search_query: searchQuery,
         start: '0',
-        max_results: (options.limit || 20).toString(),
+        max_results: resolveSearchLimit(options.limit).toString(),
         sortBy: 'relevance',
         sortOrder: 'descending'
       });
@@ -2078,7 +2087,7 @@ class COREProvider implements SearchProvider {
 
       const requestBody: any = {
         q: searchQuery,
-        limit: Math.min(options.limit || 20, 100),
+        limit: Math.min(resolveSearchLimit(options.limit), 100),
         offset: 0
       };
 

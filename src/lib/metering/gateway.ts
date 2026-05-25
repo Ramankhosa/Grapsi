@@ -32,6 +32,7 @@ import { createMeteringSystem } from './system'
 import { extractTenantContextFromRequest } from './auth-bridge'
 import { llmProviderRouter } from './providers/provider-router'
 import { resolveModel, type ModelResolutionResult } from './model-resolver'
+import { recordStandaloneLLMUsage } from './llm-usage'
 
 // === CENTRAL GATEWAY SERVICE ===
 
@@ -267,47 +268,53 @@ export class LLMGateway {
         response = await llmProviderRouter.routeAndExecute(executionRequest, decision)
       }
 
+      const responseMetadata =
+        response.metadata && typeof response.metadata === 'object'
+          ? (response.metadata as Record<string, unknown>)
+          : {}
+      const normalizedUsage =
+        responseMetadata.tokenUsage && typeof responseMetadata.tokenUsage === 'object'
+          ? (responseMetadata.tokenUsage as Record<string, unknown>)
+          : {}
+
+      const meteredInputTokens =
+        typeof normalizedUsage.inputTokens === 'number'
+          ? normalizedUsage.inputTokens
+          : typeof responseMetadata.inputTokens === 'number'
+          ? responseMetadata.inputTokens
+          : (llmRequest.inputTokens ?? 0)
+
+      const meteredOutputTokens =
+        typeof normalizedUsage.outputTokens === 'number'
+          ? normalizedUsage.outputTokens
+          : typeof responseMetadata.outputTokens === 'number'
+          ? responseMetadata.outputTokens
+          : response.outputTokens
+
+      const meteredThoughtTokens =
+        typeof normalizedUsage.thoughtTokens === 'number'
+          ? normalizedUsage.thoughtTokens
+          : typeof responseMetadata.thoughtTokens === 'number'
+          ? responseMetadata.thoughtTokens
+          : 0
+
+      const meteredTotalTokens =
+        typeof normalizedUsage.totalTokens === 'number'
+          ? normalizedUsage.totalTokens
+          : meteredInputTokens + meteredOutputTokens + meteredThoughtTokens
+      const meteredModelClass =
+        typeof responseMetadata.modelUsed === 'string' && responseMetadata.modelUsed.trim()
+          ? responseMetadata.modelUsed
+          : typeof responseMetadata.model === 'string' && responseMetadata.model.trim()
+          ? responseMetadata.model
+          : response.modelClass
+
       // 7. Record usage (metering for billing/quotas)
       if (decision.reservationId) {
-        const responseMetadata =
-          response.metadata && typeof response.metadata === 'object'
-            ? (response.metadata as Record<string, unknown>)
-            : {}
-        const normalizedUsage =
-          responseMetadata.tokenUsage && typeof responseMetadata.tokenUsage === 'object'
-            ? (responseMetadata.tokenUsage as Record<string, unknown>)
-            : {}
-
-        const meteredInputTokens =
-          typeof normalizedUsage.inputTokens === 'number'
-            ? normalizedUsage.inputTokens
-            : typeof responseMetadata.inputTokens === 'number'
-            ? responseMetadata.inputTokens
-            : (llmRequest.inputTokens ?? 0)
-
-        const meteredOutputTokens =
-          typeof normalizedUsage.outputTokens === 'number'
-            ? normalizedUsage.outputTokens
-            : typeof responseMetadata.outputTokens === 'number'
-            ? responseMetadata.outputTokens
-            : response.outputTokens
-
-        const meteredThoughtTokens =
-          typeof normalizedUsage.thoughtTokens === 'number'
-            ? normalizedUsage.thoughtTokens
-            : typeof responseMetadata.thoughtTokens === 'number'
-            ? responseMetadata.thoughtTokens
-            : 0
-
-        const meteredTotalTokens =
-          typeof normalizedUsage.totalTokens === 'number'
-            ? normalizedUsage.totalTokens
-            : meteredInputTokens + meteredOutputTokens + meteredThoughtTokens
-
         const usageStats: UsageStats = {
           inputTokens: meteredInputTokens,
           outputTokens: meteredOutputTokens,
-          modelClass: response.modelClass as any,
+          modelClass: meteredModelClass as any,
           apiCalls: 1,
           metadata: {
             ...llmRequest.metadata,
@@ -319,6 +326,29 @@ export class LLMGateway {
         }
 
         await this.system.metering.recordUsage(decision.reservationId, usageStats, tenantContext.userId)
+      } else if (skipFeaturePolicy) {
+        await recordStandaloneLLMUsage({
+          tenantId: tenantContext.tenantId,
+          userId: tenantContext.userId,
+          featureCode: this.getFeatureForTask(llmRequest.taskCode),
+          taskCode: llmRequest.taskCode,
+          operation: String(llmRequest.metadata?.action || llmRequest.metadata?.purpose || llmRequest.stageCode || llmRequest.taskCode),
+          stageCode: llmRequest.stageCode,
+          modelClass: meteredModelClass,
+          inputTokens: meteredInputTokens,
+          outputTokens: meteredOutputTokens,
+          thoughtTokens: meteredThoughtTokens,
+          idempotencyKey: llmRequest.idempotencyKey,
+          metadata: {
+            ...llmRequest.metadata,
+            stageCode: llmRequest.stageCode,
+            modelSource: modelResolution?.source,
+            thoughtTokens: meteredThoughtTokens,
+            totalTokens: meteredTotalTokens,
+            gatewayPolicy: 'skipFeaturePolicy',
+          },
+          skipTerminalLog: true,
+        })
       }
 
       return { success: true, response }
@@ -591,6 +621,7 @@ export class LLMGateway {
       'gemini-3-pro-preview': { maxInput: 2000000, maxOutput: 16384 },
       'gemini-3-pro-preview-thinking': { maxInput: 2000000, maxOutput: 16384 },
       'gemini-3-pro-image-preview': { maxInput: 1000000, maxOutput: 8192 },
+      'gemini-embedding-001': { maxInput: 2048, maxOutput: 0 },
       
       // DeepSeek
       'deepseek-v4-pro': { maxInput: 1000000, maxOutput: 384000 },

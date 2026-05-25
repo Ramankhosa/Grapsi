@@ -39,6 +39,58 @@ export interface RecommendationStrictFilterRecovery {
 
 export interface RecommendationSearchDiagnostics {
   strictFilterRecovery?: RecommendationStrictFilterRecovery | null;
+  profile?: RecommendationProfileRunDiagnostics | null;
+}
+
+export interface RecommendationPreferenceFlags {
+  useEligibilityProfile: boolean;
+  usePublicationContext: boolean;
+}
+
+export interface RecommendationProfileSavedAreaSnapshot {
+  id: string;
+  label: string;
+  researchArea: string;
+  keywords: string[];
+  disciplines: string[];
+  taxonomyAreaId: string | null;
+  taxonomyPath: string | null;
+}
+
+export interface RecommendationPublicationSnapshot {
+  id: string;
+  title: string;
+  year: number | null;
+  venue: string | null;
+  doi: string | null;
+  tags: string[];
+  abstractSnippet: string | null;
+}
+
+export interface RecommendationProfileSnapshot {
+  countryOfResidence: string | null;
+  citizenshipCountries: string[];
+  institutionType: string | null;
+  careerStage: string | null;
+  applicationLanguages: string[];
+  researchAreas: string[];
+  keywords: string[];
+  savedResearchAreas: RecommendationProfileSavedAreaSnapshot[];
+  publications: RecommendationPublicationSnapshot[];
+  sourceLabel: string | null;
+  preferences?: RecommendationPreferenceFlags;
+}
+
+export interface RecommendationProfileMatch {
+  score: number;
+  reasons: string[];
+  fieldsUsed: string[];
+}
+
+export interface RecommendationProfileRunDiagnostics {
+  enabled: boolean;
+  snapshot: RecommendationProfileSnapshot | null;
+  preferences?: RecommendationPreferenceFlags;
 }
 
 export interface PaperMetadataQuery {
@@ -56,6 +108,11 @@ export interface RecommendationSearchRequest {
   query: PaperMetadataQuery | ResearchAreaQuery;
   filters?: RecommendationSearchFilters;
   access?: RecommendationAccessScope;
+  llmContext?: { tenantId?: string | null; userId?: string | null; planId?: string | null };
+  profileContext?: RecommendationProfileSnapshot | null;
+  useProfileContext?: boolean;
+  useEligibilityProfile?: boolean;
+  usePublicationContext?: boolean;
 }
 
 export interface RecommendationDirectoryRequest {
@@ -63,6 +120,10 @@ export interface RecommendationDirectoryRequest {
   page?: number;
   filters?: RecommendationSearchFilters;
   access?: RecommendationAccessScope;
+  profileContext?: RecommendationProfileSnapshot | null;
+  useProfileContext?: boolean;
+  useEligibilityProfile?: boolean;
+  usePublicationContext?: boolean;
 }
 
 export interface NormalizedRecommendationSearchRequest {
@@ -133,6 +194,7 @@ export interface RecommendationSearchResultItem {
   officialUrls: string[];
   score: number;
   matchReasons: string[];
+  profileMatch: RecommendationProfileMatch | null;
   eligibilitySummary: string;
 }
 
@@ -144,6 +206,7 @@ export interface RecommendationSearchResponse {
   noResultsReason: RecommendationNoResultsReason;
   relaxationSuggestions: string[];
   strictFilterRecovery?: RecommendationStrictFilterRecovery | null;
+  searchDiagnostics?: RecommendationSearchDiagnostics | null;
   results: RecommendationSearchResultItem[];
   totalResults: number;
 }

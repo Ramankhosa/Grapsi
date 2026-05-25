@@ -1,6 +1,9 @@
-import { generateJsonFromDeepSeek } from '../deepseekService';
-import { generateFromGemini } from '../geminiService';
-import { generateFromOpenAI } from '../openaiService';
+import {
+  FUNDING_GUIDELINE_EXTRACT_TASK_CODE,
+  FUNDING_GUIDELINE_TEXT_STAGE_CODE,
+  runFundingGatewayText,
+  type FundingLlmRoutingContext,
+} from '../funding/llmRouting';
 import { parseJsonResponse } from '../fundingIntake/utils';
 import type { GuidelinePackDocument } from './types';
 import { normalizeGuidelinePack } from './utils';
@@ -42,6 +45,7 @@ export type GuidelineExtractionInput = {
   rawText: string | null;
   normalizedText: string | null;
   extractedJson: unknown;
+  llmContext?: FundingLlmRoutingContext | null;
 };
 
 const SYSTEM_INSTRUCTIONS = `
@@ -131,43 +135,29 @@ ${(input.normalizedText || input.rawText || '').slice(0, 80000)}
 `;
 }
 
-async function callExtractor(prompt: string) {
-  if (process.env.DEEPSEEK_API_KEY) {
-    const model = process.env.FUNDING_GUIDELINE_DEEPSEEK_MODEL || 'deepseek-v4-pro';
+async function callExtractor(prompt: string, context?: FundingLlmRoutingContext | null) {
+  const result = await runFundingGatewayText({
+    taskCode: FUNDING_GUIDELINE_EXTRACT_TASK_CODE,
+    stageCode: FUNDING_GUIDELINE_TEXT_STAGE_CODE,
+    prompt,
+    systemPrompt: SYSTEM_INSTRUCTIONS,
+    context,
+    responseMimeType: 'application/json',
+    temperature: 0,
+    maxTokensOut: 16000,
+    skipFeaturePolicy: true,
+    metadata: {
+      purpose: 'funding_guideline_extract',
+      extractorVersion: FUNDING_GUIDELINE_EXTRACTOR_VERSION,
+      promptVersion: FUNDING_GUIDELINE_PROMPT_VERSION,
+    },
+  });
 
-    try {
-      return await generateJsonFromDeepSeek({
-        prompt,
-        model,
-        systemPrompt: SYSTEM_INSTRUCTIONS,
-        maxTokens: 16000,
-        temperature: 0,
-      });
-    } catch (error) {
-      if (!process.env.GOOGLE_AI_API_KEY && !process.env.OPENAI_API_KEY) {
-        throw error;
-      }
-
-      console.warn(
-        '[Funding Guidelines] DeepSeek extraction failed, falling back to the next configured provider:',
-        error
-      );
-    }
+  if (!result) {
+    throw new Error('No LLM provider configured for guideline extraction');
   }
 
-  if (process.env.GOOGLE_AI_API_KEY) {
-    const model = process.env.FUNDING_GUIDELINE_GEMINI_MODEL || 'gemini-2.5-pro';
-    const rawText = await generateFromGemini(prompt, model);
-    return { model, rawText };
-  }
-
-  if (process.env.OPENAI_API_KEY) {
-    const model = process.env.FUNDING_GUIDELINE_OPENAI_MODEL || 'gpt-4.1-mini';
-    const rawText = await generateFromOpenAI(prompt, model, SYSTEM_INSTRUCTIONS);
-    return { model, rawText };
-  }
-
-  throw new Error('No LLM provider configured for guideline extraction');
+  return result;
 }
 
 export async function extractFundingGuidelines(input: GuidelineExtractionInput): Promise<{
@@ -178,7 +168,7 @@ export async function extractFundingGuidelines(input: GuidelineExtractionInput):
   promptVersion: string;
 }> {
   const prompt = buildPrompt(input);
-  const { model, rawText } = await callExtractor(prompt);
+  const { model, rawText } = await callExtractor(prompt, input.llmContext);
   const rawOutput = parseJsonResponse(rawText);
   const guidelinePack = normalizeGuidelinePack(rawOutput);
 

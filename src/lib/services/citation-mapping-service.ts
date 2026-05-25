@@ -534,6 +534,8 @@ Rules:
 - For gap dimensions, prioritize papers that explicitly describe limitations, barriers, or insufficiency of current approaches.
 - For feasibility/method dimensions, prioritize analogous implementations, pilot results, delivery precedent, validation studies, or benchmark evidence.
 - For impact dimensions, prioritize measurable outcome metrics, effect sizes, or adoption results.
+- For policy-fit dimensions, prioritize frameworks, guidelines, public priorities, mission alignment, or institutional precedent.
+- Preserve evidence boundaries: state limits, scope, populations, settings, or conditions that the abstract does not support.
 - In each remark, state the specific fact, statistic, limitation, method, finding, or precedent that can be nailed to the selected evidence pillar and later used in drafting.
 - Return valid JSON only.
 

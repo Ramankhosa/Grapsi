@@ -123,8 +123,10 @@ function buildPrompt(input: {
     ?.map((item) => compactText(item.text, 180))
     .filter(Boolean)
     .slice(0, 4) || []
-  const prepFacts = Object.values(input.context.prepEvidenceBySection || {})
-    .flatMap((items) => items)
+  const prepFacts = [
+    ...(input.context.prepEvidence || []),
+    ...Object.values(input.context.prepEvidenceBySection || {}).flatMap((items) => items),
+  ]
     .filter((item) => item.status === 'covered')
     .slice(0, 6)
     .map((item) => [

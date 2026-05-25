@@ -1,6 +1,70 @@
+import crypto from 'crypto'
+
 import prisma from '@/lib/prisma'
-import { getGrantWorkspace } from '@/lib/grants/workspace'
+import { llmGateway } from '@/lib/metering'
+import {
+  buildBudgetDraftingPrompt,
+  buildBudgetStructuredScaffold,
+  buildFallbackBudgetTemplate,
+  validateBudgetDraftLlmResult,
+} from '@/lib/grants/budgetTemplate'
+import {
+  getGrantWorkspace,
+  resolveGrantTenantContext,
+} from '@/lib/grants/workspace'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import type { GrantBlueprintPlanSection } from '@/types/grant'
+
+function getStructuredResponseValue(sectionDraft: {
+  structuredResponses?: Array<{ fieldKey: string; responseJson: unknown }>
+}) {
+  const responses = sectionDraft.structuredResponses || []
+  return responses.find((response) => response.fieldKey === 'structuredData')?.responseJson
+    ?? responses[0]?.responseJson
+}
+
+function summarizeFundingContext(workspace: NonNullable<Awaited<ReturnType<typeof getGrantWorkspace>>>): string[] {
+  const fundingCall = workspace.grantSession.fundingCall
+  const project = workspace.grantSession.project
+  const closeDate = fundingCall?.close_date instanceof Date
+    ? fundingCall.close_date.toISOString()
+    : fundingCall?.close_date
+      ? String(fundingCall.close_date)
+      : ''
+  return [
+    project?.name ? `Project: ${project.name}` : '',
+    fundingCall?.scheme_title ? `Funding call: ${fundingCall.scheme_title}` : '',
+    fundingCall?.agency_name ? `Agency: ${fundingCall.agency_name}` : '',
+    fundingCall?.currency ? `Currency: ${fundingCall.currency}` : '',
+    fundingCall?.amount_min || fundingCall?.amount_max
+      ? `Funding range: ${[
+          fundingCall.amount_min ? `${fundingCall.amount_min}` : '',
+          fundingCall.amount_max ? `${fundingCall.amount_max}` : '',
+        ].filter(Boolean).join(' - ')}`
+      : '',
+    closeDate ? `Deadline: ${closeDate}` : '',
+  ].map((line) => line.trim()).filter(Boolean)
+}
+
+function collectBudgetPrepFacts(section: GrantBlueprintPlanSection): string[] {
+  const facts = [
+    ...(section.authoritativePrepBundle?.bullets || []),
+    ...(section.prepContextBlock?.bullets || []),
+    ...(section.relatedPrepAwareness?.bullets || []),
+    ...(section.mustCover || []),
+  ]
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const fact of facts) {
+    const normalized = String(fact || '').trim().replace(/\s+/g, ' ')
+    const key = normalized.toLowerCase()
+    if (!normalized || seen.has(key)) continue
+    seen.add(key)
+    next.push(normalized)
+    if (next.length >= 30) break
+  }
+  return next
+}
 
 function stringifyStructuredSection(value: unknown) {
   if (!value) return ''
@@ -29,6 +93,8 @@ export async function generateGrantSectionDraft(input: {
   tenantId: string
   sectionKey: string
   userId: string
+  userInstructions?: string | null
+  overwriteAmounts?: boolean
 }) {
   const workspace = await getGrantWorkspace({
     grantSessionId: input.grantSessionId,
@@ -50,14 +116,81 @@ export async function generateGrantSectionDraft(input: {
     throw new Error('Grant section not found')
   }
 
-  if (!isGrantSectionAutoDraftable({
-    sectionType: sectionDraft.sectionType,
-    workflowMode: (sectionDraft as { workflowMode?: string }).workflowMode,
-  })) {
-    throw new Error('Only app draft sections are eligible for AI generation.')
+  const sectionPlan = blueprint.sectionPlan.find((section) => section.sectionKey === input.sectionKey)
+  if (!sectionPlan) {
+    throw new Error('Grant section plan not found')
   }
 
-  throw new Error('App draft sections are generated in the linked literature workspace.')
+  if (sectionDraft.sectionType !== 'budget_rows') {
+    if (isGrantSectionAutoDraftable({
+      sectionType: sectionDraft.sectionType,
+      workflowMode: (sectionDraft as { workflowMode?: string }).workflowMode,
+    })) {
+      throw new Error('App draft sections are generated in the linked literature workspace.')
+    }
+    throw new Error('Only budget sections are eligible for structured generation.')
+  }
+
+  const currency = workspace.grantSession.fundingCall?.currency || null
+  const currentData = getStructuredResponseValue(sectionDraft)
+    || buildBudgetStructuredScaffold({
+      section: sectionPlan,
+      currency,
+    })
+  const budgetTemplate = sectionPlan.budgetTemplate
+    ? { ...sectionPlan.budgetTemplate, currency: sectionPlan.budgetTemplate.currency || currency }
+    : buildFallbackBudgetTemplate(currency)
+  const prompt = buildBudgetDraftingPrompt({
+    budgetTemplate,
+    currentData,
+    grantContextSummary: summarizeFundingContext(workspace),
+    prepFacts: collectBudgetPrepFacts(sectionPlan),
+    userInstructions: input.userInstructions || null,
+  })
+  const tenantContext = await resolveGrantTenantContext(input.tenantId, input.userId)
+  if (!tenantContext) {
+    throw new Error('Unable to resolve tenant context for budget generation.')
+  }
+
+  const result = await llmGateway.executeLLMOperation(
+    { tenantContext },
+    {
+      taskCode: 'GRANT_SECTION_GENERATE',
+      stageCode: 'GRANT_BUDGET_DRAFT',
+      prompt,
+      parameters: {
+        purpose: 'grant_budget_structured_draft',
+        temperature: 0.1,
+      },
+      idempotencyKey: crypto.randomUUID(),
+      metadata: {
+        grantSessionId: input.grantSessionId,
+        sectionKey: input.sectionKey,
+        purpose: 'grant_budget_structured_draft',
+      },
+    }
+  )
+
+  if (!result.success || !result.response?.output) {
+    throw new Error(result.error?.message || 'Budget section generation failed.')
+  }
+
+  const structuredData = validateBudgetDraftLlmResult({
+    rawOutput: result.response.output,
+    template: budgetTemplate,
+    currentData,
+    allowNewNumericValues: Boolean(String(input.userInstructions || '').trim()),
+    preserveCurrentNumericValues: input.overwriteAmounts !== true,
+  })
+
+  return saveGrantSectionDraft({
+    grantSessionId: input.grantSessionId,
+    tenantId: input.tenantId,
+    sectionKey: input.sectionKey,
+    userId: input.userId,
+    structuredData,
+    markReviewed: false,
+  })
 }
 
 export async function saveGrantSectionDraft(input: {

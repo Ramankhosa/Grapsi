@@ -154,6 +154,37 @@ export interface GrantTemplateGuidanceProfile {
   draftingVsSubmission: GrantDraftingSubmissionMode
 }
 
+export interface GrantBudgetTemplateColumn {
+  key: string
+  label: string
+  kind?: string | null
+  required?: boolean
+  sourceAnchors?: Array<Record<string, unknown>>
+}
+
+export interface GrantBudgetTemplateCategory {
+  key: string
+  label: string
+  cap?: string | null
+  notes?: string | null
+  sourceAnchors?: Array<Record<string, unknown>>
+}
+
+export interface GrantBudgetTemplateScaffold {
+  source: 'extracted' | 'fallback'
+  required: boolean
+  yearWise: boolean
+  fixedCategories: boolean
+  currency?: string | null
+  columns: GrantBudgetTemplateColumn[]
+  categories: GrantBudgetTemplateCategory[]
+  caps?: Record<string, unknown> | null
+  notes?: string | null
+  sourceAnchors?: Array<Record<string, unknown>>
+  supportLevel?: string | null
+  confidence?: number | null
+}
+
 export interface GrantSectionComplianceCheck {
   key: string
   label: string
@@ -278,6 +309,7 @@ export interface CompiledGrantTemplateSection {
   relatedPrepAwareness?: GrantPrepPromptBundle | null
   grantRuleProfile?: GrantRuleProfile | null
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null
+  budgetTemplate?: GrantBudgetTemplateScaffold | null
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
   grantComplianceReport?: GrantComplianceReport | null
   reviewerReadinessReport?: ReviewerReadinessReport | null
@@ -322,6 +354,7 @@ export interface GrantBlueprintPlanSection {
   relatedPrepAwareness?: GrantPrepPromptBundle | null
   grantRuleProfile?: GrantRuleProfile | null
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null
+  budgetTemplate?: GrantBudgetTemplateScaffold | null
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
   grantComplianceReport?: GrantComplianceReport | null
   reviewerReadinessReport?: ReviewerReadinessReport | null

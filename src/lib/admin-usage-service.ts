@@ -1,5 +1,6 @@
 import { prisma } from './prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER, ensurePricingLoaded } from './metering/cost-calculator'
+import { getStoredUsageLogActualCost } from './metering/llm-usage'
 
 export interface TenantUsageMetrics {
   tenantId: string | null
@@ -39,10 +40,14 @@ export interface UsageSummaryResult {
  * @returns Cost in USD
  */
 function calculateCostForLog(
-  log: { inputTokens: number | null; outputTokens: number | null; modelClass: string | null }
+  log: { inputTokens: number | null; outputTokens: number | null; modelClass: string | null; meta?: unknown }
 ): number {
   const inputTokens = log.inputTokens ?? 0
   const outputTokens = log.outputTokens ?? 0
+  const storedCost = getStoredUsageLogActualCost(log.meta)
+  if (storedCost !== null && (storedCost > 0 || (inputTokens === 0 && outputTokens === 0))) {
+    return storedCost
+  }
 
   // Use the centralized cost-calculator which reads from LLMModel table (llm-config)
   // This ensures consistent pricing across terminal logs and admin reports
@@ -93,7 +98,8 @@ export async function computeUsageSummary(
         inputTokens: true,
         outputTokens: true,
         apiCalls: true,
-        modelClass: true
+        modelClass: true,
+        meta: true
       }
     }),
     prisma.draftingSession.groupBy({
@@ -390,14 +396,7 @@ export async function computeUserCostsByTenant(
     bucket.totalOutputTokens += output
     bucket.totalApiCalls += calls
 
-    // Calculate cost using our cost calculator
-    if (log.modelClass) {
-      const costBreakdown = calculateCost(log.modelClass, input, output)
-      bucket.actualCost += costBreakdown.actualCost
-    } else {
-      // Fallback pricing: matches DEFAULT_PRICING in cost-calculator.ts ($1/$4 per million)
-      bucket.actualCost += (input * 0.000001) + (output * 0.000004)
-    }
+    bucket.actualCost += calculateCostForLog(log)
   }
 
   // Add drafting session counts
@@ -593,15 +592,7 @@ export async function computePatentCosts(
     metrics.totalOutputTokens += output
     metrics.totalApiCalls += calls
 
-    // Calculate cost
-    let actualCost = 0
-    if (log.modelClass) {
-      const costBreakdown = calculateCost(log.modelClass, input, output)
-      actualCost = costBreakdown.actualCost
-    } else {
-      // Fallback pricing: matches DEFAULT_PRICING in cost-calculator.ts ($1/$4 per million)
-      actualCost = (input * 0.000001) + (output * 0.000004)
-    }
+    const actualCost = calculateCostForLog(log)
     metrics.actualCost += actualCost
 
     // Track stage breakdown

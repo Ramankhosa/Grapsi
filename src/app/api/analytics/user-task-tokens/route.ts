@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { getStoredUsageLogActualCost } from '@/lib/metering/llm-usage'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -171,8 +172,10 @@ export async function GET(request: NextRequest) {
       if (!unitPrices) {
         unitPrices = { input: 0.000005, output: 0.000015 }
       }
-      const cost =
-        input * (unitPrices.input / 1_000_000) + output * (unitPrices.output / 1_000_000)
+      const storedCost = getStoredUsageLogActualCost(log.meta)
+      const cost = storedCost !== null && (storedCost > 0 || (input === 0 && output === 0))
+        ? storedCost
+        : input * (unitPrices.input / 1_000_000) + output * (unitPrices.output / 1_000_000)
 
       userEntry.totalInputTokens += input
       userEntry.totalOutputTokens += output

@@ -288,10 +288,32 @@ export class LLMProviderRouter {
     return undefined
   }
 
+  private firstPositiveTokenNumber(...values: unknown[]): number | undefined {
+    for (const value of values) {
+      const parsed = this.readTokenNumber(value)
+      if (parsed !== undefined && parsed > 0) return parsed
+    }
+    return undefined
+  }
+
+  private estimateTokensFromText(value: string | null | undefined): number {
+    if (!value) return 0
+    const hasJson = value.includes('{') && value.includes('}')
+    const hasCode = /\b(function|const|import|class)\b/.test(value)
+    const charsPerToken = hasJson ? 2.5 : hasCode ? 3 : 4
+    return Math.ceil(value.length / charsPerToken)
+  }
+
   private normalizeTokenUsage(response: LLMResponse, request: LLMRequest): NormalizedTokenUsage {
     const metadata =
       response.metadata && typeof response.metadata === 'object'
         ? (response.metadata as Record<string, unknown>)
+        : {}
+
+    const tokenUsageCandidate = metadata.tokenUsage
+    const tokenUsage =
+      tokenUsageCandidate && typeof tokenUsageCandidate === 'object'
+        ? (tokenUsageCandidate as Record<string, unknown>)
         : {}
 
     const usageCandidate = metadata.usage ?? metadata.usageMetadata
@@ -300,7 +322,8 @@ export class LLMProviderRouter {
         ? (usageCandidate as Record<string, unknown>)
         : {}
 
-    const inputTokens = this.firstTokenNumber(
+    const reportedInputTokens = this.firstPositiveTokenNumber(
+      tokenUsage.inputTokens,
       metadata.inputTokens,
       metadata.promptTokens,
       metadata.promptTokenCount,
@@ -308,11 +331,13 @@ export class LLMProviderRouter {
       usage.prompt_tokens,
       usage.input_tokens,
       usage.promptTokenCount,
-      usage.inputTokenCount,
-      request.inputTokens
-    ) ?? 0
+      usage.inputTokenCount
+    )
+    const fallbackInputTokens = this.readTokenNumber(request.inputTokens) ?? 0
+    const inputTokens = reportedInputTokens ?? fallbackInputTokens
 
-    const outputTokens = this.firstTokenNumber(
+    let outputTokens = this.firstPositiveTokenNumber(
+      tokenUsage.outputTokens,
       response.outputTokens,
       metadata.outputTokens,
       metadata.completionTokens,
@@ -322,9 +347,10 @@ export class LLMProviderRouter {
       usage.output_tokens,
       usage.candidatesTokenCount,
       usage.outputTokenCount
-    ) ?? 0
+    ) ?? this.estimateTokensFromText(response.output)
 
     const thoughtTokens = this.firstTokenNumber(
+      tokenUsage.thoughtTokens,
       metadata.thoughtTokens,
       metadata.reasoningTokens,
       metadata.reasoning_tokens,
@@ -343,12 +369,27 @@ export class LLMProviderRouter {
       this.getNestedValue(usage, ['output_tokens_details', 'thinking_tokens'])
     ) ?? 0
 
-    const totalTokens = this.firstTokenNumber(
+    const reportedTotalTokens = this.firstPositiveTokenNumber(
+      tokenUsage.totalTokens,
       metadata.totalTokens,
       metadata.total_tokens,
       usage.total_tokens,
       usage.totalTokenCount
-    ) ?? (inputTokens + outputTokens + thoughtTokens)
+    )
+
+    if (
+      thoughtTokens > 0 &&
+      reportedTotalTokens !== undefined &&
+      reportedTotalTokens <= inputTokens + outputTokens &&
+      outputTokens >= thoughtTokens
+    ) {
+      const visibleOutputTokens = reportedTotalTokens - inputTokens - thoughtTokens
+      outputTokens = visibleOutputTokens >= 0 && visibleOutputTokens <= outputTokens
+        ? visibleOutputTokens
+        : outputTokens - thoughtTokens
+    }
+
+    const totalTokens = reportedTotalTokens ?? (inputTokens + outputTokens + thoughtTokens)
 
     return {
       inputTokens,

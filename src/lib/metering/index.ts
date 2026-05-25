@@ -21,6 +21,7 @@ export { extractTenantContextFromRequest, createFeatureRequest, recordApiUsage }
 export { llmGateway, executePriorArtSearch, executePatentDrafting, executeDiagramGeneration } from './gateway'
 export { llmProviderRouter } from './providers/provider-router'
 export { createLLMProvider } from './providers/llm-provider'
+export * from './llm-usage'
 
 // Configuration and utilities
 export { defaultConfig, createMeteringConfig } from './config'

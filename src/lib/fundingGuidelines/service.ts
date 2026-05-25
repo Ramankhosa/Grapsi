@@ -525,6 +525,10 @@ export class FundingGuidelineService {
         rawText: guidelineSource.rawText,
         normalizedText: guidelineSource.normalizedText,
         extractedJson: call.extracted_json,
+        llmContext: {
+          tenantId: operator.tenantId || null,
+          userId: operator.userId,
+        },
       });
 
       const nextPack = normalizeGuidelinePack(extraction.guidelinePack);

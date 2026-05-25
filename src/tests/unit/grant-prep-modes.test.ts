@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { buildGrantPrepPrompt } from '@/lib/grantPrep/promptComposer'
 import { parseGrantPrepResponse } from '@/lib/grantPrep/marker'
 import {
+  buildGrantPrepConversationBundle,
+  getGrantPrepCrossStageAllowedPointKeys,
+} from '@/lib/grantPrep/proactivePlanner'
+import { mergeGrantPrepSuggestedAnswersWithInline } from '@/lib/grantPrep/suggestedAnswers'
+import {
   applyCrossStageMarkerToStageStates,
   applyMarkerToStageStates,
   buildGrantPrepSessionContext,
@@ -61,6 +66,10 @@ describe('grant prep prompt modes', () => {
     expect(prompt).toContain('Concrete reviewer-useful facts to capture for this stage:')
     expect(prompt).toContain('problem scale, burden, cost, prevalence, or baseline')
     expect(prompt).toContain('captureBasis to include "generic_placeholder"')
+    expect(prompt).toContain('Coverage objective for this turn:')
+    expect(prompt).toContain('exactly three approval bundle options labeled A, B, C')
+    expect(prompt).toContain('Related stage opportunity:')
+    expect(prompt).not.toContain(`I approve this ${'bundle'}:`)
   })
 
   it('keeps the express prompt on the fast extraction path', () => {
@@ -238,6 +247,42 @@ describe('grant prep progression by mode', () => {
     expect(parsed.marker?.suggestedAnswers?.[0]?.covers?.[0]?.label).toBe('Direct beneficiaries')
   })
 
+  it('preserves inline option C when the structured marker only has A and B', () => {
+    const repeatedPrefix = `I approve this ${'bundle'}:`;
+    const merged = mergeGrantPrepSuggestedAnswersWithInline(
+      [
+        { label: 'A', text: `${repeatedPrefix} Use the community clinic delivery model.`, rationale: null },
+        { label: 'B', text: 'Use the mobile outreach delivery model.', rationale: null },
+      ],
+      [
+        'Which implementation bundle should I use?',
+        '',
+        'A. Use the community clinic delivery model.',
+        'B. Use the mobile outreach delivery model.',
+        'C. Use a hybrid model with clinic anchors and scheduled outreach camps.',
+      ].join('\n')
+    )
+
+    expect(merged.map((answer) => answer.label)).toEqual(['A', 'B', 'C'])
+    expect(merged[0].text).toBe('Use the community clinic delivery model.')
+    expect(merged[2].text).toBe('Use a hybrid model with clinic anchors and scheduled outreach camps.')
+  })
+
+  it('parses three inline options across common label formats', () => {
+    const cases = [
+      'A) Use clinic delivery.\nB) Use outreach delivery.\nC) Use a hybrid delivery model.',
+      'Option A: Use clinic delivery.\nOption B: Use outreach delivery.\nOption C: Use a hybrid delivery model.',
+      'A - Use clinic delivery.\nB - Use outreach delivery.\nC - Use a hybrid delivery model.',
+      'Which model fits? A. Use clinic delivery. B. Use outreach delivery. C. Use a hybrid delivery model.',
+    ]
+
+    for (const content of cases) {
+      const merged = mergeGrantPrepSuggestedAnswersWithInline([], content)
+      expect(merged.map((answer) => answer.label)).toEqual(['A', 'B', 'C'])
+      expect(merged[2].text).toBe('Use a hybrid delivery model.')
+    }
+  })
+
   it('applies high-confidence cross-stage captures as covered', () => {
     const session = makeSession('express')
 
@@ -337,5 +382,38 @@ describe('grant prep progression by mode', () => {
     const point = nextStates.beneficiaries.points.find((entry) => entry.key === 'direct_beneficiaries')
     expect(point?.status).toBe('pending')
     expect(point?.capture).toBeNull()
+  })
+})
+
+describe('grant prep conversation bundle planning', () => {
+  it('prioritizes paired-stage targets before generic lookahead', () => {
+    const session = makeSession('expert')
+    const bundle = buildGrantPrepConversationBundle({
+      session,
+      stageKey: 'problem_definition',
+      latestUserMessage: 'The problem is medication adherence in rural clinics.',
+    })
+
+    expect(bundle.primary?.stageKey).toBe('problem_definition')
+    expect(bundle.paired.map((point) => point.stageKey)).toContain('root_cause')
+    expect(bundle.lookahead.map((point) => point.stageKey)).not.toContain('root_cause')
+    expect(getGrantPrepCrossStageAllowedPointKeys(bundle)).toContain('root_cause.root_drivers')
+  })
+
+  it('only pairs budget with sustainability when the user gives a relevant signal', () => {
+    const session = makeSession('expert')
+    const withoutSignal = buildGrantPrepConversationBundle({
+      session,
+      stageKey: 'budget_strategy',
+      latestUserMessage: 'The main cost categories are staff and field travel.',
+    })
+    const withSignal = buildGrantPrepConversationBundle({
+      session,
+      stageKey: 'budget_strategy',
+      latestUserMessage: 'We need a future funding and continuity plan after the grant.',
+    })
+
+    expect(withoutSignal.paired.map((point) => point.stageKey)).not.toContain('sustainability_and_scale')
+    expect(withSignal.paired.map((point) => point.stageKey)).toContain('sustainability_and_scale')
   })
 })

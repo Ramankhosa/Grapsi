@@ -17,7 +17,7 @@ const jsonSchema: z.ZodType<any> = z.lazy(() =>
 );
 
 export const sourceAnchorSchema = z.object({
-  asset_id: z.string().uuid(),
+  asset_id: z.string().trim().min(1),
   page: z.number().int().nullable().optional(),
   section: z.string().nullable().optional(),
   urlFragment: z.string().nullable().optional(),
@@ -55,10 +55,19 @@ export const budgetCategorySchema = z.object({
   sourceAnchors: z.array(sourceAnchorSchema).optional().default([]),
 });
 
+export const budgetColumnSchema = z.object({
+  key: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  kind: z.string().trim().nullable().optional(),
+  required: z.boolean().optional().default(false),
+  sourceAnchors: z.array(sourceAnchorSchema).optional().default([]),
+});
+
 export const budgetSchema = z.object({
   required: z.boolean().optional().default(false),
   yearWise: z.boolean().optional().default(false),
   workflowMode: z.string().optional().default('app_support'),
+  columns: z.array(budgetColumnSchema).optional().default([]),
   categories: z.array(budgetCategorySchema).optional().default([]),
   caps: z.record(jsonSchema).nullable().optional(),
   justificationNotes: z.string().nullable().optional(),
@@ -72,7 +81,7 @@ export const mergeConflictSchema = z.object({
   key: z.string().trim().min(1),
   existingItem: jsonSchema,
   incomingItem: jsonSchema,
-  runId: z.string().uuid().nullable().optional(),
+  runId: z.string().trim().min(1).nullable().optional(),
   createdAt: z.string().optional(),
   message: z.string().trim().min(1),
 });
@@ -104,7 +113,7 @@ export const templateAssetJsonSchema = z.object({
 });
 
 export const templateExtractRequestSchema = z.object({
-  assetIds: z.array(z.string().uuid()).optional(),
+  assetIds: z.array(z.string().trim().min(1)).optional(),
 });
 
 export const templateRevertSchema = z.object({

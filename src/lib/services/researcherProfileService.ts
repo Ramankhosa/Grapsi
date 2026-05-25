@@ -17,12 +17,18 @@ import {
   normalizeInstitutionTypeList,
   normalizeWhitespace,
 } from '../recommendations/utils';
-import type { RecommendationSearchFilters } from '../recommendations/types';
+import type {
+  RecommendationPreferenceFlags,
+  RecommendationProfileSnapshot,
+  RecommendationPublicationSnapshot,
+  RecommendationSearchFilters,
+} from '../recommendations/types';
 import { EmbeddingService } from './embeddingService';
 import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
 
 const embeddingService = new EmbeddingService();
 export const RESEARCH_AREA_EMBEDDING_VERSION = 'research-area-v2-taxonomy';
+export const FUNDING_PUBLICATION_TAG = 'my-publication';
 
 export interface ResearchAreaEmbeddingCoverage {
   total: number;
@@ -58,6 +64,14 @@ function normalizeTextArray(values: string[] | null | undefined) {
         .filter(Boolean)
     )
   );
+}
+
+function truncateText(value: string | null | undefined, maxLength: number) {
+  const normalized = normalizeWhitespace(value || '');
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trim()}...` : normalized;
 }
 
 function normalizeProfileRecord(user: { name?: string | null; email?: string | null; researcher_profile?: any; researcher_notification_preference?: any }): ResearcherProfilePayload {
@@ -232,6 +246,141 @@ function buildProfileDefaultFilters(profile: ResearcherProfileRecord): Recommend
   }
 
   return filters;
+}
+
+export function buildRecommendationProfileSnapshot(
+  context: ResearcherFinderContext,
+  options: {
+    includeResearchSignals?: boolean;
+    publications?: RecommendationPublicationSnapshot[];
+    preferences?: RecommendationPreferenceFlags;
+  } = {}
+): RecommendationProfileSnapshot {
+  const profile = context.profile;
+  const includeResearchSignals = options.includeResearchSignals !== false;
+  const countryOfResidence = profile.countryOfResidence
+    ? normalizeCountryInput(profile.countryOfResidence) || normalizeWhitespace(profile.countryOfResidence)
+    : null;
+  const citizenshipCountries =
+    normalizeCountryList(profile.citizenshipCountries) || normalizeTextArray(profile.citizenshipCountries);
+  const institutionType =
+    normalizeInstitutionTypeList(profile.institutionType ? [profile.institutionType] : [])?.[0] ||
+    normalizeWhitespace(profile.institutionType) ||
+    null;
+  const careerStage =
+    normalizeCareerStageList(profile.careerStage ? [profile.careerStage] : [])?.[0] ||
+    normalizeWhitespace(profile.careerStage) ||
+    null;
+  const applicationLanguages =
+    normalizeApplicationLanguageList(profile.applicationLanguages) || normalizeTextArray(profile.applicationLanguages);
+
+  return {
+    countryOfResidence,
+    citizenshipCountries,
+    institutionType,
+    careerStage,
+    applicationLanguages,
+    researchAreas: includeResearchSignals ? normalizeTextArray(profile.researchAreas) : [],
+    keywords: includeResearchSignals ? normalizeTextArray(profile.keywords) : [],
+    savedResearchAreas: includeResearchSignals
+      ? context.researchAreas
+          .filter((area) => area.useForAlerts !== false)
+          .slice(0, 10)
+          .map((area) => {
+            const taxonomyPath = [area.taxonomy?.level1Name, area.taxonomy?.level2Name].filter(Boolean).join(' / ');
+            return {
+              id: area.id,
+              label: normalizeWhitespace(area.label),
+              researchArea: normalizeWhitespace(area.researchArea),
+              keywords: normalizeTextArray(area.keywords),
+              disciplines: normalizeTextArray(area.disciplines),
+              taxonomyAreaId: area.taxonomy?.areaId || null,
+              taxonomyPath: taxonomyPath || null,
+            };
+          })
+      : [],
+    publications: options.publications || [],
+    sourceLabel: context.profileDefaultContext?.sourceLabel || null,
+    preferences: options.preferences,
+  };
+}
+
+export function buildEmptyRecommendationProfileSnapshot(options: {
+  publications?: RecommendationPublicationSnapshot[];
+  preferences?: RecommendationPreferenceFlags;
+} = {}): RecommendationProfileSnapshot {
+  return {
+    countryOfResidence: null,
+    citizenshipCountries: [],
+    institutionType: null,
+    careerStage: null,
+    applicationLanguages: [],
+    researchAreas: [],
+    keywords: [],
+    savedResearchAreas: [],
+    publications: options.publications || [],
+    sourceLabel: null,
+    preferences: options.preferences,
+  };
+}
+
+async function listFundingPublicationSignals(userId: string, limit = 10): Promise<RecommendationPublicationSnapshot[]> {
+  const rows = await prisma.referenceLibrary.findMany({
+    where: {
+      userId,
+      isActive: true,
+      tags: { has: FUNDING_PUBLICATION_TAG },
+    },
+    select: {
+      id: true,
+      title: true,
+      year: true,
+      venue: true,
+      doi: true,
+      abstract: true,
+      tags: true,
+      updatedAt: true,
+    },
+    orderBy: [
+      { year: 'desc' },
+      { updatedAt: 'desc' },
+    ],
+    take: limit,
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: normalizeWhitespace(row.title),
+    year: row.year || null,
+    venue: normalizeWhitespace(row.venue || '') || null,
+    doi: normalizeWhitespace(row.doi || '') || null,
+    tags: normalizeTextArray(row.tags).filter((tag) => tag.toLowerCase() !== FUNDING_PUBLICATION_TAG),
+    abstractSnippet: truncateText(row.abstract, 360),
+  })).filter((publication) => Boolean(publication.title));
+}
+
+export async function buildRecommendationPreferenceSnapshot(
+  userId: string,
+  preferences: RecommendationPreferenceFlags
+): Promise<RecommendationProfileSnapshot | null> {
+  if (!preferences.useEligibilityProfile && !preferences.usePublicationContext) {
+    return null;
+  }
+
+  const publications = preferences.usePublicationContext
+    ? await listFundingPublicationSignals(userId)
+    : [];
+
+  if (!preferences.useEligibilityProfile) {
+    return buildEmptyRecommendationProfileSnapshot({ publications, preferences });
+  }
+
+  const context = await researcherProfileService.getFinderContext(userId);
+  return buildRecommendationProfileSnapshot(context, {
+    includeResearchSignals: false,
+    publications,
+    preferences,
+  });
 }
 
 export class ResearcherProfileService {

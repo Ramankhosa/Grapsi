@@ -13,7 +13,7 @@ import GrantPrepHandoffModal from '@/components/grantPrep/GrantPrepHandoffModal'
 import GrantPrepStageEditorModal from '@/components/grantPrep/GrantPrepStageEditorModal';
 import GrantPrepStageNavigator from '@/components/grantPrep/GrantPrepStageNavigator';
 import GrantPrepTopBar from '@/components/grantPrep/GrantPrepTopBar';
-import type { GrantPrepStageKey } from '@/lib/grantPrep/types';
+import type { GrantPrepStageKey, GrantPrepSuggestedAnswer } from '@/lib/grantPrep/types';
 import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary';
 import type {
   GrantPrepLayoutMode,
@@ -480,7 +480,10 @@ export default function GrantPrepPage(props: any) {
   }, [confirmAction, sessionData?.id, hydrateSession, router]);
 
   // EC-11: cooldown only on success
-  const sendMessage = useCallback(async (contentOverride?: string) => {
+  const sendMessage = useCallback(async (
+    contentOverride?: string,
+    selectedSuggestedAnswer?: GrantPrepSuggestedAnswer
+  ) => {
     const content = (contentOverride ?? input).trim();
     if (!sessionData?.id || !prepContext || !content || sessionLocked) return;
 
@@ -497,7 +500,7 @@ export default function GrantPrepPage(props: any) {
     try {
       const response = await axios.post(
         `/api/grant-prep/sessions/${sessionData.id}/message`,
-        { content, clientMessageId, stageKey: prepContext.activeStageKey },
+        { content, clientMessageId, stageKey: prepContext.activeStageKey, selectedSuggestedAnswer },
         axiosConfig()
       );
       if (response.data.warning) toast(response.data.warning, { icon: '!' });

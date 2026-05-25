@@ -92,6 +92,13 @@ const VISIBLE_STAGE_CODES_BY_FEATURE: Partial<Record<string, Set<string>>> = {
   FUNDING_DISCOVERY: new Set([
     'FUNDING_CALL_INGEST_PDF',
     'FUNDING_CALL_INGEST_TEXT',
+    'FUNDING_CHAT_ORCHESTRATOR',
+    'FUNDING_CHAT_QUERY_ENRICHMENT',
+    'FUNDING_CHAT_NARRATIVE',
+    'FUNDING_CHAT_EMBEDDING',
+    'FUNDING_TEMPLATE_EXTRACT_TEXT',
+    'FUNDING_TEMPLATE_EXTRACT_MULTIMODAL',
+    'FUNDING_GUIDELINE_EXTRACT_TEXT',
   ]),
   GRANT_PREP: new Set([
     'GRANT_PREP_CHAT',
@@ -112,6 +119,7 @@ const VISIBLE_STAGE_CODES_BY_FEATURE: Partial<Record<string, Set<string>>> = {
     'PAPER_REVIEW_COHERENCE',
   ]),
   GRANT_DRAFTING: new Set([
+    'GRANT_BUDGET_DRAFT',
     'PAPER_CREATE_SECTIONS',
     'PAPER_SECTION_DRAFT',
     'PAPER_SECTION_GEN',
@@ -244,6 +252,42 @@ const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
       passLabel: 'Web/Text',
       title: 'Call Ingestion Web & Text',
       description: 'Structured funding-call facts extraction from URL content, pasted text, and transcribed PDF text.'
+    },
+    {
+      code: 'FUNDING_CHAT_ORCHESTRATOR',
+      passLabel: 'Chat Route',
+      title: 'Fund Finder Orchestrator',
+      description: 'Intent classification and structured filter extraction for AI Fund Finder chat.'
+    },
+    {
+      code: 'FUNDING_CHAT_QUERY_ENRICHMENT',
+      passLabel: 'Search',
+      title: 'Fund Finder Query Enrichment',
+      description: 'Research-area enrichment before vector and keyword funding-call retrieval.'
+    },
+    {
+      code: 'FUNDING_CHAT_NARRATIVE',
+      passLabel: 'Narrative',
+      title: 'Fund Finder Narrative',
+      description: 'Grounded recommendation explanations, comparisons, and follow-up responses.'
+    },
+    {
+      code: 'FUNDING_TEMPLATE_EXTRACT_TEXT',
+      passLabel: 'Template',
+      title: 'Template Text Extraction',
+      description: 'Structured grant template extraction from pasted, web, or OCR text assets.'
+    },
+    {
+      code: 'FUNDING_TEMPLATE_EXTRACT_MULTIMODAL',
+      passLabel: 'Template PDF',
+      title: 'Template Multimodal Extraction',
+      description: 'Structured grant template extraction from PDF and image assets.'
+    },
+    {
+      code: 'FUNDING_GUIDELINE_EXTRACT_TEXT',
+      passLabel: 'Guidelines',
+      title: 'Guideline Extraction',
+      description: 'Structured extraction of grant-writing rules and reviewer guidance.'
     }
   ],
   GRANT_PREP: [
@@ -261,6 +305,12 @@ const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
     }
   ],
   GRANT_DRAFTING: [
+    {
+      code: 'GRANT_BUDGET_DRAFT',
+      passLabel: 'Budget',
+      title: 'Grant Budget Generation',
+      description: 'Structured budget rows, categories, and justification fields generated from blueprint and prep facts.'
+    },
     {
       code: 'PAPER_SECTION_DRAFT',
       passLabel: 'Generate',
@@ -309,6 +359,41 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     responsibility: 'Controls structured fact extraction for URL intake, pasted text intake, and the second pass after PDF transcription.',
     tip: 'DeepSeek V4 Pro is the cost-conscious default for evidence-backed JSON extraction.'
   },
+  FUNDING_CHAT_ORCHESTRATOR: {
+    summary: 'AI Fund Finder intent routing.',
+    responsibility: 'Controls the model used to classify chat turns, extract filters, and choose the next grounded search action.',
+    tip: 'Use a fast structured-output model; JSON discipline matters more than long-form writing quality.'
+  },
+  FUNDING_CHAT_QUERY_ENRICHMENT: {
+    summary: 'Funding search query enrichment.',
+    responsibility: 'Expands terse research-area queries into retrieval-friendly terms before vector and keyword search.',
+    tip: 'Use a low-latency model that handles controlled JSON well.'
+  },
+  FUNDING_CHAT_NARRATIVE: {
+    summary: 'Grounded funding recommendation narrative.',
+    responsibility: 'Generates user-facing explanations from retrieved funding calls and database facts.',
+    tip: 'Use a balanced model with good factual summarization; the prompt is grounded and should not invent call details.'
+  },
+  FUNDING_CHAT_EMBEDDING: {
+    summary: 'Funding query embedding.',
+    responsibility: 'Tracks the embedding model used for vector retrieval metering.',
+    tip: 'This stage is logged separately from chat generation and normally uses the configured embedding service model.'
+  },
+  FUNDING_TEMPLATE_EXTRACT_TEXT: {
+    summary: 'Grant template text extraction.',
+    responsibility: 'Extracts structured application sections, budget rules, attachments, and app/manual ownership from text assets.',
+    tip: 'Use a model with strong long-context JSON extraction.'
+  },
+  FUNDING_TEMPLATE_EXTRACT_MULTIMODAL: {
+    summary: 'Grant template PDF/image extraction.',
+    responsibility: 'Extracts structured application template data from uploaded PDF and image assets.',
+    tip: 'Use a file-capable multimodal model. Text-only models will fail this stage.'
+  },
+  FUNDING_GUIDELINE_EXTRACT_TEXT: {
+    summary: 'Grant guideline extraction.',
+    responsibility: 'Extracts reusable section-specific rules, evaluation hints, budget guidance, and submission constraints.',
+    tip: 'Prefer long-context extraction models with conservative evidence handling.'
+  },
   GRANT_PREP_CHAT: {
     summary: 'Interactive Grant Prep chatbot.',
     responsibility: 'Controls the model used for coaching turns, marker extraction, marker repair, assistant compaction, and tidy cleanup.',
@@ -318,6 +403,11 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
     summary: 'Grant blueprint dimension generation.',
     responsibility: 'Builds grant-specific dimensions, framing, and evaluation anchors from prep context.',
     tip: 'Use a top-tier reasoning model because this stage sets the structure for downstream drafting and review.'
+  },
+  GRANT_BUDGET_DRAFT: {
+    summary: 'Structured grant budget generation.',
+    responsibility: 'Generates budget rows and justification text from template columns, blueprint context, and prep facts.',
+    tip: 'Use a structured-output model that follows numeric preservation rules carefully.'
   },
   SEARCH_STRATEGY_PLANNING: {
     summary: 'Literature search strategy planning.',
@@ -549,7 +639,7 @@ function isStageVisibleInAdmin(stage: WorkflowStage): boolean {
 }
 
 function getStageCodeBadgeClasses(stageCode: string): string {
-  if (/^FUNDING_CALL_INGEST/.test(stageCode)) {
+  if (/^FUNDING_|^GRANT_BUDGET_DRAFT$/.test(stageCode)) {
     return 'border-lime-700/50 bg-lime-900/25 text-lime-200'
   }
   if (/^PAPER_TOPIC_|^PAPER_ABSTRACT_TITLE$/.test(stageCode)) {

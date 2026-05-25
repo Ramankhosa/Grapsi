@@ -800,7 +800,10 @@ export class FundingTemplateService {
         data: { status: 'extracting' },
       });
 
-      const extraction = await extractGrantTemplateFromAssets(assets);
+      const extraction = await extractGrantTemplateFromAssets(assets, {
+        tenantId: operator.tenantId || null,
+        userId: operator.userId,
+      });
 
       await prisma.$transaction(async (tx) => {
         await tx.fundingCallTemplateRun.update({

@@ -10,6 +10,9 @@ const requestSchema = z.object({
   confirm: z.boolean(),
   editedQueryPatch: z.record(z.any()).optional(),
   editedFilterPatch: z.record(z.any()).optional(),
+  useProfileContext: z.boolean().optional(),
+  useEligibilityProfile: z.boolean().optional(),
+  usePublicationContext: z.boolean().optional(),
 })
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {

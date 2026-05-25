@@ -192,6 +192,27 @@ function normalizeConflict(conflict: any): FundingTemplateMergeConflict {
   };
 }
 
+function normalizeBudgetColumns(columns: any[]): NonNullable<GrantTemplateDocument['budget']>['columns'] {
+  const seen = new Set<string>();
+  const next: NonNullable<GrantTemplateDocument['budget']>['columns'] = [];
+  for (const column of Array.isArray(columns) ? columns : []) {
+    const key = String(column?.key || column?.id || column?.name || column?.label || '').trim();
+    const label = String(column?.label || column?.title || column?.name || key).trim();
+    if (!key || !label) continue;
+    const identity = key.toLowerCase();
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    next.push({
+      key,
+      label,
+      kind: column.kind ? String(column.kind).trim() || null : null,
+      required: column.required === true,
+      sourceAnchors: dedupeAnchors(column.sourceAnchors || []),
+    });
+  }
+  return next;
+}
+
 export function createEmptyGrantTemplate(): GrantTemplateDocument {
   return {
     questions: [],
@@ -220,6 +241,7 @@ export function normalizeGrantTemplate(input?: unknown): GrantTemplateDocument {
           required: Boolean(parsed.budget.required),
           yearWise: Boolean(parsed.budget.yearWise),
           workflowMode: normalizeGrantWorkflowMode(parsed.budget.workflowMode, 'app_support'),
+          columns: normalizeBudgetColumns(parsed.budget.columns || []),
           categories: parsed.budget.categories.map((category: any) => ({
             key: String(category.key || '').trim(),
             label: String(category.label || '').trim(),

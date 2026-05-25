@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import crypto from 'crypto'
 
 import prisma from '@/lib/prisma'
 import { llmGateway, type ContentPart, type TenantContext } from '@/lib/metering'
@@ -8,6 +9,15 @@ import type { TaskCode } from '@/lib/prisma-generated'
 export const FUNDING_CALL_INGEST_TASK_CODE = 'FUNDING_CALL_INGEST' as TaskCode
 export const FUNDING_CALL_INGEST_PDF_STAGE_CODE = 'FUNDING_CALL_INGEST_PDF'
 export const FUNDING_CALL_INGEST_TEXT_STAGE_CODE = 'FUNDING_CALL_INGEST_TEXT'
+export const FUNDING_CHAT_TASK_CODE = 'FUNDING_CHAT' as TaskCode
+export const FUNDING_CHAT_ORCHESTRATOR_STAGE_CODE = 'FUNDING_CHAT_ORCHESTRATOR'
+export const FUNDING_CHAT_NARRATIVE_STAGE_CODE = 'FUNDING_CHAT_NARRATIVE'
+export const FUNDING_CHAT_QUERY_ENRICHMENT_STAGE_CODE = 'FUNDING_CHAT_QUERY_ENRICHMENT'
+export const FUNDING_TEMPLATE_EXTRACT_TASK_CODE = 'FUNDING_TEMPLATE_EXTRACT' as TaskCode
+export const FUNDING_TEMPLATE_TEXT_STAGE_CODE = 'FUNDING_TEMPLATE_EXTRACT_TEXT'
+export const FUNDING_TEMPLATE_MULTIMODAL_STAGE_CODE = 'FUNDING_TEMPLATE_EXTRACT_MULTIMODAL'
+export const FUNDING_GUIDELINE_EXTRACT_TASK_CODE = 'FUNDING_GUIDELINE_EXTRACT' as TaskCode
+export const FUNDING_GUIDELINE_TEXT_STAGE_CODE = 'FUNDING_GUIDELINE_EXTRACT_TEXT'
 
 export interface FundingLlmRoutingContext {
   tenantId?: string | null
@@ -174,6 +184,65 @@ export async function runFundingGatewayExtraction(options: {
         skipFeaturePolicy: true,
         module: 'funding',
         action: options.stageCode,
+        ...options.metadata,
+      },
+      idempotencyKey: crypto.randomUUID(),
+    }
+  )
+
+  if (!result.success || !result.response?.output) {
+    throw new Error(result.error?.message || `Funding LLM gateway request failed for ${options.stageCode}`)
+  }
+
+  return {
+    model: result.response.modelClass,
+    rawText: result.response.output,
+  }
+}
+
+export async function runFundingGatewayText(options: {
+  taskCode: TaskCode
+  stageCode: string
+  prompt: string
+  systemPrompt?: string
+  context?: FundingLlmRoutingContext | null
+  contentParts?: ContentPart[]
+  maxTokensOut?: number
+  temperature?: number
+  responseMimeType?: string
+  metadata?: Record<string, unknown>
+  skipFeaturePolicy?: boolean
+}): Promise<FundingGatewayExtractionResult | null> {
+  const tenantContext = await resolveFundingLlmTenantContext(options.context)
+  if (!tenantContext) {
+    return null
+  }
+
+  const fullPrompt = buildGatewayPrompt(options.prompt, options.systemPrompt)
+  const content = options.contentParts
+    ? {
+        parts: [
+          { type: 'text' as const, text: fullPrompt },
+          ...options.contentParts,
+        ],
+      }
+    : undefined
+  const result = await llmGateway.executeLLMOperation(
+    { tenantContext },
+    {
+      taskCode: options.taskCode,
+      stageCode: options.stageCode,
+      prompt: content ? undefined : fullPrompt,
+      content,
+      parameters: {
+        temperature: options.temperature ?? 0,
+        ...(options.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
+        ...(options.maxTokensOut ? { maxTokensOut: options.maxTokensOut } : {}),
+      },
+      metadata: {
+        module: 'funding',
+        action: options.stageCode,
+        ...(options.skipFeaturePolicy ? { skipFeaturePolicy: true } : {}),
         ...options.metadata,
       },
       idempotencyKey: crypto.randomUUID(),

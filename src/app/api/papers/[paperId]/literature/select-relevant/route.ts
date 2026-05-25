@@ -1242,7 +1242,7 @@ ${sectionsText}
    - Only map if there's concrete evidence in the abstract
 
 8. RECOMMENDATION:
-${grantBacked ? `   - "IMPORT" only if the paper provides a reviewer-usable grant evidence asset for need, gap, approach validity, feasibility, impact, precedent, or policy fit
+${grantBacked ? `   - "IMPORT" only if the paper provides a reviewer-usable grant evidence asset for need, gap, validation, feasibility, impact, precedent, policy fit, or evidence boundary
    - "MAYBE" if it is relevant but weak, redundant, background-only, or needs full text before relying on it
    - "SKIP" if it does not support a concrete grant claim, even when topically related` : `   - "IMPORT" if paper maps to 2+ dimensions with HIGH/MEDIUM confidence
    - "MAYBE" if paper maps to 1 dimension or has only LOW confidence mappings
@@ -1273,7 +1273,7 @@ For each paper, determine:
 1. Key contribution (1 sentence - what concrete reviewer-facing evidence asset does this paper offer?)
 2. Key findings (1 sentence - include the most grant-useful statistic, limitation, outcome, or validation signal)
 3. Methodological approach (if it helps validate feasibility, measurement, or implementation)
-4. Persuasion value for the grant (1-2 sentences, concrete and specific)
+4. Persuasion value for the grant (1-2 sentences covering need, gap, feasibility, validation, impact, precedent, policy fit, or evidence boundary)
 5. Limitations or gaps (what this paper says current approaches still fail to address)
 6. Claim types this paper can support (choose up to 3): BACKGROUND, GAP, METHOD, LIMITATION, DATASET, IMPLEMENTATION_CONSTRAINT
 7. Evidence boundary (1 sentence: what NOT to claim from this paper)
@@ -1285,6 +1285,7 @@ For each paper, determine:
    - QUANTIFIES_IMPACT: outcomes, effect sizes, or measurable results from related work
    - SUPPORTS_FEASIBILITY: analogous implementation success, pilot evidence, or delivery precedent
    - ESTABLISHES_PRECEDENT: comparative baseline, precedent, or policy/implementation case
+   - POLICY_ALIGNMENT: policy framework, public priority, mission fit, or guideline evidence
    Set citationMeta.grantUtility to the strongest single utility and mention that utility directly in your reasoning and dimension remarks.
 9. POSITIONAL RELATION to the research question:
    Assign exactly one: REINFORCES | CONTRADICTS | EXTENDS | QUALIFIES | TENSION
@@ -1452,7 +1453,7 @@ IMPORTANT CRITERIA:
 - In reasoning and dimension remarks, state the specific fact, statistic, limitation, outcome, or precedent that can be nailed to the selected evidence pillar and later injected into section drafts
 - For burden and gap dimensions, one concrete fact beats broad thematic similarity
 - For feasibility and method dimensions, recent analogous implementation evidence is especially valuable
-- IMPORT only when a reviewer could use the paper as evidence for need, gap, approach validity, feasibility, impact, precedent, or policy fit. Use MAYBE for relevant but weak or redundant papers.` : ''}
+- IMPORT only when a reviewer could use the paper as evidence for need, gap, validation, feasibility, impact, precedent, policy fit, or evidence boundary. Use MAYBE for relevant but weak or redundant papers.` : ''}
 
 Respond in the following JSON format ONLY (no markdown, no explanation outside JSON):
 ${jsonSchema}

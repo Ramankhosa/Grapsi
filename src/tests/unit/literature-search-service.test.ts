@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { LiteratureSearchService, type SearchResult, type SearchOptions, type SearchProvider } from '../../lib/services/literature-search-service';
+import {
+  LiteratureSearchService,
+  LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT,
+  type SearchResult,
+  type SearchOptions,
+  type SearchProvider,
+} from '../../lib/services/literature-search-service';
 
 describe('LiteratureSearchService', () => {
   let service: LiteratureSearchService;
@@ -86,12 +92,13 @@ describe('LiteratureSearchService', () => {
       }];
 
       // Manually set cache
-      const cacheKey = (service as any).generateCacheKey('test query', {});
+      const defaultOptions = { limit: LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT };
+      const cacheKey = (service as any).generateCacheKey('test query', defaultOptions);
       (service as any).cache.set(cacheKey, {
         results: mockResults,
         timestamp: Date.now(),
         query: 'test query',
-        options: {}
+        options: defaultOptions
       });
 
       const result = await service.search('test query', {});
@@ -133,6 +140,26 @@ describe('LiteratureSearchService', () => {
         const limitedResults = mockResults.slice(0, 10);
         expect(limitedResults).toHaveLength(10);
       }
+    });
+
+    it('should default search results to 10 when no limit is provided', async () => {
+      const mockResults: SearchResult[] = Array.from({ length: 25 }, (_, i) => ({
+        id: `default-limit-result${i}`,
+        title: `Default Limit Paper ${i}`,
+        authors: [`Author ${i}`],
+        source: 'mock_provider'
+      }));
+
+      (mockProvider.search as Mock).mockResolvedValue(mockResults);
+
+      const result = await service.search('test query', { sources: ['mock_provider'] });
+
+      expect(mockProvider.search).toHaveBeenCalledWith(
+        'test query',
+        expect.objectContaining({ limit: LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT })
+      );
+      expect(result.results).toHaveLength(LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT);
+      expect(result.totalFound).toBe(25);
     });
   });
 
@@ -306,12 +333,13 @@ describe('LiteratureSearchService', () => {
       (mockProvider.search as Mock).mockResolvedValue(mockResults);
 
       // Manually set cache to test cache retrieval
-      const cacheKey = (service as any).generateCacheKey('test query', {});
+      const defaultOptions = { limit: LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT };
+      const cacheKey = (service as any).generateCacheKey('test query', defaultOptions);
       (service as any).cache.set(cacheKey, {
         results: mockResults,
         timestamp: Date.now(),
         query: 'test query',
-        options: {},
+        options: defaultOptions,
         sources: ['mock_provider']
       });
 
@@ -335,7 +363,7 @@ describe('LiteratureSearchService', () => {
       (mockProvider.search as Mock).mockResolvedValue(mockResults);
 
       // Mock cache with expired timestamp
-      const cacheKey = (service as any).generateCacheKey('test query', {});
+      const cacheKey = (service as any).generateCacheKey('test query', { limit: LITERATURE_SEARCH_DEFAULT_RESULT_LIMIT });
       (service as any).cache.set(cacheKey, {
         results: mockResults,
         timestamp: Date.now() - 2 * 60 * 60 * 1000, // 2 hours ago (expired)

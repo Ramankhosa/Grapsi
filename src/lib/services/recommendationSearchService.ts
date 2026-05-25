@@ -1,7 +1,11 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { EmbeddingService } from './embeddingService';
-import { generateFromGemini } from '../geminiService';
+import {
+  FUNDING_CHAT_QUERY_ENRICHMENT_STAGE_CODE,
+  FUNDING_CHAT_TASK_CODE,
+  runFundingGatewayText,
+} from '../funding/llmRouting';
 import { extractJsonObject } from '../recommendations/conversationUtils';
 import { sanitizeExternalUrls } from '../urlSafety';
 import type {
@@ -15,6 +19,9 @@ import type {
   NormalizedRecommendationSearchRequest,
   RecommendationAccessScope,
   RecommendationCandidate,
+  RecommendationProfileMatch,
+  RecommendationProfileSnapshot,
+  RecommendationPublicationSnapshot,
   RecommendationSearchFilters,
   RecommendationSearchRequest,
   RecommendationSearchResponse,
@@ -56,6 +63,7 @@ type SearchExecutionResult = {
 type ScoredCandidate = {
   candidate: RecommendationCandidate;
   score: number;
+  profileMatch: RecommendationProfileMatch | null;
 };
 
 type RankedExecution = {
@@ -337,6 +345,271 @@ function scalarSignal(candidateValue: string | null, queryValues: string[]) {
   return queryValues.map((value) => normalizeKey(value)).includes(normalizeKey(candidateValue)) ? 1 : 0;
 }
 
+function normalizeSet(values: Array<string | null | undefined>) {
+  return new Set(values.map((value) => normalizeKey(normalizeWhitespace(value || ''))).filter(Boolean));
+}
+
+function findNormalizedHit(candidateValues: string[], profileValues: string[]) {
+  if (candidateValues.length === 0 || profileValues.length === 0) {
+    return null;
+  }
+  const profileSet = normalizeSet(profileValues);
+  return candidateValues.find((value) => profileSet.has(normalizeKey(value))) || null;
+}
+
+function textContainsProfileTerm(candidate: RecommendationCandidate, profileTerms: string[]) {
+  const terms = profileTerms.map((value) => normalizeKey(value)).filter((value) => value.length >= 3);
+  if (terms.length === 0) {
+    return null;
+  }
+  const haystack = normalizeKey(
+    [
+      candidate.schemeTitle,
+      candidate.agencyName,
+      candidate.shortDescription,
+      candidate.fullDescription,
+      candidate.description,
+      candidate.eligibilityText,
+      candidate.disciplines.join(' '),
+    ].filter(Boolean).join(' ')
+  );
+  return terms.find((term) => haystack.includes(term)) || null;
+}
+
+function isGlobalOrInternational(candidate: RecommendationCandidate) {
+  const values = [
+    candidate.geographyScope,
+    ...candidate.eligibleCountries,
+    ...candidate.eligibleRegions,
+    ...candidate.hostCountries,
+  ].map((value) => normalizeKey(value || ''));
+  return values.some((value) =>
+    ['global', 'worldwide', 'international', 'any', 'all', 'all countries'].includes(value)
+  );
+}
+
+function buildProfileResearchTerms(profile: RecommendationProfileSnapshot) {
+  return Array.from(
+    new Set(
+      [
+        ...(profile.researchAreas || []),
+        ...(profile.keywords || []),
+        ...(profile.savedResearchAreas || []).flatMap((area) => [
+          area.label,
+          area.researchArea,
+          ...area.keywords,
+          ...area.disciplines,
+          area.taxonomyPath || '',
+        ]),
+      ]
+        .map((value) => normalizeWhitespace(value || ''))
+        .filter(Boolean)
+    )
+  );
+}
+
+const PUBLICATION_TERM_STOPWORDS = new Set([
+  'with',
+  'from',
+  'using',
+  'based',
+  'study',
+  'studies',
+  'research',
+  'analysis',
+  'effect',
+  'effects',
+  'towards',
+  'toward',
+  'approach',
+  'methods',
+  'method',
+  'model',
+  'models',
+]);
+
+function buildTermsFromPublication(publication: RecommendationPublicationSnapshot) {
+  const terms = new Set<string>();
+  publication.tags.forEach((tag) => {
+    const normalized = normalizeWhitespace(tag);
+    if (normalized && normalized.toLowerCase() !== 'my-publication') {
+      terms.add(normalized);
+    }
+  });
+
+  const titleWords = normalizeWhitespace(publication.title)
+    .split(/\s+/)
+    .map((word) => word.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, ''))
+    .filter((word) => word.length >= 5 && !PUBLICATION_TERM_STOPWORDS.has(word.toLowerCase()));
+  titleWords.forEach((word) => terms.add(word));
+
+  const abstractWords = normalizeWhitespace(publication.abstractSnippet || '')
+    .split(/\s+/)
+    .map((word) => word.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, ''))
+    .filter((word) => word.length >= 7 && !PUBLICATION_TERM_STOPWORDS.has(word.toLowerCase()))
+    .slice(0, 12);
+  abstractWords.forEach((word) => terms.add(word));
+
+  return Array.from(terms).slice(0, 18);
+}
+
+function buildPublicationResearchTerms(profile: RecommendationProfileSnapshot) {
+  return Array.from(
+    new Set(
+      (profile.publications || [])
+        .flatMap((publication) => buildTermsFromPublication(publication))
+        .map((value) => normalizeWhitespace(value))
+        .filter(Boolean)
+    )
+  );
+}
+
+function findPublicationHit(candidate: RecommendationCandidate, publications: RecommendationPublicationSnapshot[]) {
+  if (publications.length === 0) {
+    return null;
+  }
+
+  const haystack = normalizeKey(
+    [
+      candidate.schemeTitle,
+      candidate.agencyName,
+      candidate.shortDescription,
+      candidate.fullDescription,
+      candidate.description,
+      candidate.eligibilityText,
+      candidate.disciplines.join(' '),
+    ].filter(Boolean).join(' ')
+  );
+
+  for (const publication of publications) {
+    const terms = buildTermsFromPublication(publication)
+      .map((term) => normalizeKey(term))
+      .filter((term) => term.length >= 4);
+    const termHit = terms.find((term) => haystack.includes(term));
+    if (termHit) {
+      return { publication, term: termHit };
+    }
+  }
+
+  return null;
+}
+
+function buildProfileMatch(
+  candidate: RecommendationCandidate,
+  profile: RecommendationProfileSnapshot | null | undefined
+): RecommendationProfileMatch | null {
+  if (!profile) {
+    return null;
+  }
+
+  const reasons: string[] = [];
+  const fieldsUsed = new Set<string>();
+  let weightedScore = 0;
+  let totalWeight = 0;
+
+  function addSignal(field: string, weight: number, value: number, reason?: string) {
+    totalWeight += weight;
+    weightedScore += Math.max(0, Math.min(value, 1)) * weight;
+    fieldsUsed.add(field);
+    if (reason && reasons.length < 5) {
+      reasons.push(reason);
+    }
+  }
+
+  const researchTerms = buildProfileResearchTerms(profile);
+  if (researchTerms.length > 0) {
+    const disciplineHit = findNormalizedHit(candidate.disciplines, researchTerms);
+    const textHit = disciplineHit ? null : textContainsProfileTerm(candidate, researchTerms);
+    addSignal(
+      'researchAreas',
+      0.3,
+      disciplineHit ? 1 : textHit ? 0.65 : 0,
+      disciplineHit
+        ? `Matches your research area: ${disciplineHit}`
+        : textHit
+          ? `Mentions your profile topic: ${textHit}`
+          : undefined
+    );
+  }
+
+  const publications = profile.publications || [];
+  if (publications.length > 0) {
+    const publicationHit = findPublicationHit(candidate, publications);
+    addSignal(
+      'publications',
+      0.26,
+      publicationHit ? 0.9 : 0,
+      publicationHit
+        ? `Matched your publication: ${publicationHit.publication.title}`
+        : undefined
+    );
+  }
+
+  if (profile.countryOfResidence) {
+    const residenceHit = findNormalizedHit(candidate.eligibleCountries, [profile.countryOfResidence]);
+    addSignal(
+      'countryOfResidence',
+      0.18,
+      residenceHit ? 1 : isGlobalOrInternational(candidate) ? 0.7 : 0,
+      residenceHit
+        ? `Eligibility checked using residence: ${residenceHit}`
+        : isGlobalOrInternational(candidate)
+          ? 'Global or international opportunity'
+          : undefined
+    );
+  }
+
+  if (profile.citizenshipCountries.length > 0) {
+    const citizenshipHit = findNormalizedHit(candidate.citizenshipRequirements, profile.citizenshipCountries);
+    addSignal(
+      'citizenshipCountries',
+      0.12,
+      candidate.citizenshipRequirements.length === 0 ? 0.25 : citizenshipHit ? 1 : 0,
+      citizenshipHit ? `Eligibility checked using citizenship: ${citizenshipHit}` : undefined
+    );
+  }
+
+  if (profile.institutionType) {
+    const institutionHit = findNormalizedHit(candidate.institutionTypes, [profile.institutionType]);
+    addSignal(
+      'institutionType',
+      0.14,
+      institutionHit ? 1 : 0,
+      institutionHit ? `Eligibility checked using institution type: ${institutionHit}` : undefined
+    );
+  }
+
+  if (profile.careerStage) {
+    const careerHit = findNormalizedHit(candidate.careerStages, [profile.careerStage]);
+    addSignal(
+      'careerStage',
+      0.16,
+      careerHit ? 1 : 0,
+      careerHit ? `Eligibility checked using career stage: ${careerHit}` : undefined
+    );
+  }
+
+  if (profile.applicationLanguages.length > 0) {
+    const languageHit = findNormalizedHit(candidate.applicationLanguages, profile.applicationLanguages);
+    addSignal(
+      'applicationLanguages',
+      0.1,
+      candidate.applicationLanguages.length === 0 ? 0.2 : languageHit ? 1 : 0,
+      languageHit ? `Eligibility checked using application language: ${languageHit}` : undefined
+    );
+  }
+
+  if (totalWeight === 0) {
+    return null;
+  }
+
+  return {
+    score: Number((weightedScore / totalWeight).toFixed(4)),
+    reasons,
+    fieldsUsed: Array.from(fieldsUsed),
+  };
+}
+
 function buildMatchReasons(candidate: RecommendationCandidate, normalized: NormalizedRecommendationSearchRequest) {
   const reasons: string[] = [];
   const disciplineHits = candidate.disciplines.filter((value) =>
@@ -417,7 +690,8 @@ function buildEligibilitySummary(candidate: RecommendationCandidate) {
 function toPublicResult(
   candidate: RecommendationCandidate,
   score: number,
-  normalized: NormalizedRecommendationSearchRequest
+  normalized: NormalizedRecommendationSearchRequest,
+  profileMatch: RecommendationProfileMatch | null = null
 ): RecommendationSearchResultItem & InternalRecommendationSearchResponse['rawResults'][number] {
   return {
     id: candidate.id,
@@ -437,6 +711,7 @@ function toPublicResult(
     officialUrls: sanitizeExternalUrls(candidate.officialUrls),
     score: Number(score.toFixed(4)),
     matchReasons: buildMatchReasons(candidate, normalized),
+    profileMatch,
     eligibilitySummary: buildEligibilitySummary(candidate),
     fullDescription: candidate.fullDescription,
     description: candidate.description,
@@ -554,7 +829,11 @@ function clearFilterKey(
   }
 }
 
-function scoreCandidate(candidate: RecommendationCandidate, normalized: NormalizedRecommendationSearchRequest) {
+function scoreCandidate(
+  candidate: RecommendationCandidate,
+  normalized: NormalizedRecommendationSearchRequest,
+  profileMatch: RecommendationProfileMatch | null = null
+) {
   const textRank = normalizeTextRank(candidate.textRank);
   const researchTags = normalized.normalizedQuery.researchTags;
   const filters = normalized.filters;
@@ -584,8 +863,8 @@ function scoreCandidate(candidate: RecommendationCandidate, normalized: Normaliz
   const deadlineFreshness = computeDeadlineFreshness(candidate.closeDate, candidate.isRolling);
   const hasSemanticSignal = candidate.semanticSimilarity >= 0.08;
 
-  if (!hasSemanticSignal) {
-    return (
+  const baseScore = !hasSemanticSignal
+    ? (
       textRank * 0.5 +
       disciplineOverlap * 0.22 +
       fundingKindOverlap * 0.08 +
@@ -594,26 +873,30 @@ function scoreCandidate(candidate: RecommendationCandidate, normalized: Normaliz
       careerFit * 0.03 +
       eligibilityFit * 0.02 +
       deadlineFreshness * 0.05
+    )
+    : (
+      candidate.semanticSimilarity * 0.35 +
+      textRank * 0.2 +
+      disciplineOverlap * 0.15 +
+      fundingKindOverlap * 0.1 +
+      geographyFit * 0.08 +
+      institutionFit * 0.04 +
+      careerFit * 0.03 +
+      eligibilityFit * 0.03 +
+      deadlineFreshness * 0.02
     );
+
+  if (!profileMatch) {
+    return baseScore;
   }
 
-  return (
-    candidate.semanticSimilarity * 0.35 +
-    textRank * 0.2 +
-    disciplineOverlap * 0.15 +
-    fundingKindOverlap * 0.1 +
-    geographyFit * 0.08 +
-    institutionFit * 0.04 +
-    careerFit * 0.03 +
-    eligibilityFit * 0.03 +
-    deadlineFreshness * 0.02
-  );
+  return Math.min(1, baseScore * 0.86 + profileMatch.score * 0.14);
 }
 
-function sortCandidates(
-  candidates: Array<{ candidate: RecommendationCandidate; score: number }>,
+function sortCandidates<T extends { candidate: RecommendationCandidate; score: number }>(
+  candidates: T[],
   normalized: NormalizedRecommendationSearchRequest
-) {
+): T[] {
   if (normalized.filters.sort === 'deadline_soonest') {
     const allRolling = candidates.every((item) => item.candidate.isRolling || !item.candidate.closeDate);
     return candidates.sort((left, right) => {
@@ -669,18 +952,78 @@ function buildResearchAreaEnrichmentCacheInput(
 }
 
 export class RecommendationSearchService {
+  private applyProfileContextToQuery(
+    normalized: NormalizedRecommendationSearchRequest,
+    profileContext: RecommendationProfileSnapshot | null
+  ): NormalizedRecommendationSearchRequest {
+    if (!profileContext) {
+      return normalized;
+    }
+
+    const normalizedQueryText = normalizeKey(normalized.normalizedQuery.canonicalQueryText);
+    const publicationIntent =
+      normalizedQueryText.includes('publication') ||
+      normalizedQueryText.includes('publications') ||
+      normalizedQueryText.includes('paper') ||
+      normalizedQueryText.includes('papers');
+    const shouldExpand =
+      normalized.normalizedQuery.queryStrength === 'weak' ||
+      (publicationIntent && (profileContext.publications || []).length > 0);
+    if (!shouldExpand) {
+      return normalized;
+    }
+
+    const profileTerms = buildProfileResearchTerms(profileContext).slice(0, 12);
+    const publicationTerms = buildPublicationResearchTerms(profileContext).slice(0, 16);
+    const allTerms = Array.from(new Set([...profileTerms, ...publicationTerms]));
+    if (allTerms.length === 0) {
+      return normalized;
+    }
+
+    const fullTextTerms = Array.from(
+      new Set([
+        normalized.normalizedQuery.fullTextQuery,
+        ...allTerms.map((term) => (term.includes(' ') ? `"${term}"` : term)),
+      ].filter(Boolean))
+    ).join(' OR ');
+
+    const contextLines = [
+      profileTerms.length > 0 ? `Profile research context: ${profileTerms.join(', ')}` : '',
+      publicationTerms.length > 0 ? `Publication context: ${publicationTerms.join(', ')}` : '',
+    ].filter(Boolean);
+
+    return {
+      ...normalized,
+      normalizedQuery: {
+        ...normalized.normalizedQuery,
+        semanticDocument: [
+          normalized.normalizedQuery.semanticDocument,
+          ...contextLines,
+        ].filter(Boolean).join('\n'),
+        fullTextQuery: fullTextTerms,
+        researchTags: Array.from(new Set([...normalized.normalizedQuery.researchTags, ...allTerms])),
+        queryStrength: 'normal',
+      },
+    };
+  }
+
   private rankExecution(
     normalized: NormalizedRecommendationSearchRequest,
-    execution: SearchExecutionResult
+    execution: SearchExecutionResult,
+    profileContext: RecommendationProfileSnapshot | null = null
   ): RankedExecution {
     const hasSemanticCandidates = execution.candidates.some((candidate) => candidate.semanticSimilarity >= 0.08);
     const scoreThreshold = hasSemanticCandidates ? NO_RESULT_SCORE_THRESHOLD : 0.08;
     const lowConfidenceThreshold = hasSemanticCandidates ? LOW_CONFIDENCE_THRESHOLD : 0.2;
     const scored = sortCandidates(
-      execution.candidates.map((candidate) => ({
-        candidate,
-        score: scoreCandidate(candidate, normalized),
-      })),
+      execution.candidates.map((candidate) => {
+        const profileMatch = buildProfileMatch(candidate, profileContext);
+        return {
+          candidate,
+          profileMatch,
+          score: scoreCandidate(candidate, normalized, profileMatch),
+        };
+      }),
       normalized
     );
 
@@ -697,7 +1040,8 @@ export class RecommendationSearchService {
 
   private async buildStrictFilterRecovery(
     normalized: NormalizedRecommendationSearchRequest,
-    access?: RecommendationAccessScope
+    access?: RecommendationAccessScope,
+    profileContext: RecommendationProfileSnapshot | null = null
   ): Promise<RecommendationStrictFilterRecovery | null> {
     if (!hasActiveUserFilters(normalized.filters)) {
       return null;
@@ -724,7 +1068,7 @@ export class RecommendationSearchService {
         filters: cloneFilters(retryFilters),
       };
       const relaxedExecution = await this.executeSearch(relaxedNormalized, false, access);
-      const relaxedRanking = this.rankExecution(relaxedNormalized, relaxedExecution);
+      const relaxedRanking = this.rankExecution(relaxedNormalized, relaxedExecution, profileContext);
       if (relaxedRanking.filteredScored.length > 0) {
         return {
           retryFilters: cloneFilters(relaxedNormalized.filters),
@@ -892,7 +1236,8 @@ export class RecommendationSearchService {
   }
 
   private async enrichResearchAreaRequest(
-    normalized: NormalizedRecommendationSearchRequest
+    normalized: NormalizedRecommendationSearchRequest,
+    llmContext?: RecommendationSearchRequest['llmContext']
   ): Promise<NormalizedRecommendationSearchRequest | null> {
     if (normalized.inputMode !== 'research_area' || !normalized.normalizedQuery.researchArea) {
       return null;
@@ -922,7 +1267,20 @@ Rules:
 - Keep relatedTerms to at most 8 items.`;
 
     try {
-      const rawResponse = await generateFromGemini(prompt, RESEARCH_AREA_ENRICHMENT_MODEL);
+      const response = await runFundingGatewayText({
+        taskCode: FUNDING_CHAT_TASK_CODE,
+        stageCode: FUNDING_CHAT_QUERY_ENRICHMENT_STAGE_CODE,
+        prompt,
+        context: llmContext || null,
+        responseMimeType: 'application/json',
+        temperature: 0.1,
+        maxTokensOut: 800,
+        metadata: {
+          purpose: 'funding_chat_query_enrichment',
+          fallbackModelHint: RESEARCH_AREA_ENRICHMENT_MODEL,
+        },
+      });
+      const rawResponse = response?.rawText || '';
       const parsed = extractJsonObject(rawResponse) as {
         rewrittenResearchArea?: string;
         relatedTerms?: string[];
@@ -954,9 +1312,10 @@ Rules:
   private async buildResponseFromExecution(
     normalized: NormalizedRecommendationSearchRequest,
     execution: SearchExecutionResult,
-    access?: RecommendationAccessScope
+    access?: RecommendationAccessScope,
+    profileContext: RecommendationProfileSnapshot | null = null
   ): Promise<{ response: InternalRecommendationSearchResponse; topScore: number }> {
-    const ranked = this.rankExecution(normalized, execution);
+    const ranked = this.rankExecution(normalized, execution, profileContext);
     const { filteredScored, lowConfidence, topScore } = ranked;
 
     let noResultsReason: RecommendationSearchResponse['noResultsReason'] = null;
@@ -965,7 +1324,7 @@ Rules:
 
     if (filteredScored.length === 0) {
       strictFilterRecovery = hasActiveUserFilters(normalized.filters)
-        ? await this.buildStrictFilterRecovery(normalized, access)
+        ? await this.buildStrictFilterRecovery(normalized, access, profileContext)
         : null;
       noResultsReason = strictFilterRecovery
         ? 'filters_too_strict'
@@ -975,7 +1334,20 @@ Rules:
       relaxationSuggestions = buildRelaxationSuggestions(normalized, noResultsReason);
     }
 
-    const rawResults = filteredScored.map(({ candidate, score }) => toPublicResult(candidate, score, normalized));
+    const rawResults = filteredScored.map(({ candidate, score, profileMatch }) =>
+      toPublicResult(candidate, score, normalized, profileMatch)
+    );
+    const searchDiagnostics = {
+      strictFilterRecovery,
+      profile: {
+        enabled: Boolean(profileContext),
+        snapshot: profileContext,
+        preferences: profileContext?.preferences || {
+          useEligibilityProfile: Boolean(profileContext),
+          usePublicationContext: false,
+        },
+      },
+    };
 
     return {
       topScore,
@@ -987,6 +1359,7 @@ Rules:
         noResultsReason,
         relaxationSuggestions,
         strictFilterRecovery,
+        searchDiagnostics,
         results: rawResults.map(({ fullDescription, description, amountMin, amountMax, currency, eligibilityText, contactInfo, geographyScope, funderCountry, citizenshipRequirements, residencyRequirements, applicationLanguages, semanticSimilarity, textRank, ...publicFields }) => publicFields),
         rawResults,
         totalResults: rawResults.length,
@@ -997,10 +1370,20 @@ Rules:
   private async searchByVector(
     normalized: NormalizedRecommendationSearchRequest,
     ignoreUserFilters = false,
-    access?: RecommendationAccessScope
+    access?: RecommendationAccessScope,
+    llmContext?: RecommendationSearchRequest['llmContext']
   ): Promise<SearchExecutionResult> {
     const baseConditions = buildBaseConditions(normalized, ignoreUserFilters, access);
-    const vectorText = `[${(await embeddingService.generateEmbedding(normalized.normalizedQuery.semanticDocument)).embedding.join(',')}]`;
+    const vectorText = `[${(await embeddingService.generateEmbedding(
+      normalized.normalizedQuery.semanticDocument,
+      {
+        tenantId: llmContext?.tenantId || access?.tenantId || null,
+        userId: llmContext?.userId || null,
+        taskCode: FUNDING_CHAT_TASK_CODE,
+        stageCode: 'FUNDING_CHAT_EMBEDDING',
+        operation: 'funding_chat_embedding',
+      }
+    )).embedding.join(',')}]`;
     const vectorLiteral = vectorText === '[]' ? null : vectorText;
 
     if (!vectorLiteral) {
@@ -1083,10 +1466,11 @@ Rules:
   private async executeSearch(
     normalized: NormalizedRecommendationSearchRequest,
     ignoreUserFilters = false,
-    access?: RecommendationAccessScope
+    access?: RecommendationAccessScope,
+    llmContext?: RecommendationSearchRequest['llmContext']
   ): Promise<SearchExecutionResult> {
     const [vectorResult, fullTextResult] = await Promise.allSettled([
-      this.searchByVector(normalized, ignoreUserFilters, access),
+      this.searchByVector(normalized, ignoreUserFilters, access, llmContext),
       this.searchByFullText(normalized, ignoreUserFilters, access),
     ]);
 
@@ -1113,15 +1497,20 @@ Rules:
   }
 
   async search(request: RecommendationSearchRequest): Promise<InternalRecommendationSearchResponse> {
-    const normalized = normalizeRecommendationSearchRequest(request);
-    const execution = await this.executeSearch(normalized, false, request.access);
-    let best = await this.buildResponseFromExecution(normalized, execution, request.access);
+    const usePersonalContext =
+      request.useProfileContext === true ||
+      request.useEligibilityProfile === true ||
+      request.usePublicationContext === true;
+    const profileContext = usePersonalContext ? request.profileContext || null : null;
+    const normalized = this.applyProfileContextToQuery(normalizeRecommendationSearchRequest(request), profileContext);
+    const execution = await this.executeSearch(normalized, false, request.access, request.llmContext);
+    let best = await this.buildResponseFromExecution(normalized, execution, request.access, profileContext);
 
     if ((best.response.totalResults === 0 || best.response.lowConfidence) && normalized.inputMode === 'research_area') {
-      const enriched = await this.enrichResearchAreaRequest(normalized);
+      const enriched = await this.enrichResearchAreaRequest(normalized, request.llmContext);
       if (enriched) {
-        const enrichedExecution = await this.executeSearch(enriched, false, request.access);
-        const enrichedResult = await this.buildResponseFromExecution(enriched, enrichedExecution, request.access);
+        const enrichedExecution = await this.executeSearch(enriched, false, request.access, request.llmContext);
+        const enrichedResult = await this.buildResponseFromExecution(enriched, enrichedExecution, request.access, profileContext);
 
         if (
           enrichedResult.response.totalResults > best.response.totalResults ||
@@ -1292,11 +1681,16 @@ Rules:
 
   async browseDirectory(request: RecommendationDirectoryRequest): Promise<RecommendationDirectoryResponse> {
     const rawQuery = normalizeWhitespace(request.query || '');
-    const normalized = normalizeRecommendationSearchRequest({
+    const usePersonalContext =
+      request.useProfileContext === true ||
+      request.useEligibilityProfile === true ||
+      request.usePublicationContext === true;
+    const profileContext = usePersonalContext ? request.profileContext || null : null;
+    const normalized = this.applyProfileContextToQuery(normalizeRecommendationSearchRequest({
       inputMode: 'research_area',
       query: { researchArea: rawQuery || 'funding opportunities' },
       filters: request.filters,
-    });
+    }), profileContext);
     const baseConditions = buildBaseConditions(normalized, false, request.access);
     const hasQuery = Boolean(rawQuery) && Boolean(normalized.normalizedQuery.fullTextQuery);
     const where = combineConditions([
@@ -1355,9 +1749,16 @@ Rules:
           `
         );
 
-    const results = rows.map((candidate) => {
-      const score = hasQuery ? normalizeTextRank(candidate.textRank) : 0;
-      const mapped = toPublicResult(candidate, score, normalized);
+    const scoredRows = rows.map((candidate) => {
+      const profileMatch = buildProfileMatch(candidate, profileContext);
+      const score = hasQuery || profileMatch ? scoreCandidate(candidate, normalized, profileMatch) : 0;
+      return { candidate, score, profileMatch };
+    });
+    const orderedRows = normalized.filters.sort === 'best_match'
+      ? sortCandidates(scoredRows, normalized)
+      : scoredRows;
+    const results = orderedRows.map(({ candidate, score, profileMatch }) => {
+      const mapped = toPublicResult(candidate, score, normalized, profileMatch);
       return {
         ...mapped,
         score: Number(score.toFixed(4)),

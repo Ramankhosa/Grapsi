@@ -41,6 +41,10 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = auth.actor.id || auth.actor.email || 'anonymous'
+    const llmContext = {
+      tenantId: auth.actor.tenantId || null,
+      userId: auth.actor.id || null,
+    }
     const convId = conversationId || `conv_${Date.now()}`
     if (!conversationHistory[convId]) {
       conversationHistory[convId] = { userId, messages: [] }
@@ -63,6 +67,7 @@ export async function POST(request: NextRequest) {
           query,
           conversationHistory: history,
           access: toRecommendationAccessScope(auth.actor),
+          llmContext,
         })
         conversationHistory[convId].messages.push({ role: 'user', content: query })
         conversationHistory[convId].messages.push({ role: 'assistant', content: result })
@@ -78,7 +83,7 @@ export async function POST(request: NextRequest) {
         })
       }
       case 'introduction':
-        result = await fundingAdvisorService.getIntroduction()
+        result = await fundingAdvisorService.getIntroduction(llmContext)
         break
       case 'search': {
         if (!query) {
@@ -96,6 +101,7 @@ export async function POST(request: NextRequest) {
             sort: body.sort === 'deadline_soonest' ? 'deadline_soonest' : 'best_match',
           },
           access: toRecommendationAccessScope(auth.actor),
+          llmContext,
         }
         const searchResult = await recommendationSearchService.search(recommendationRequest)
         if (searchResult.results.length === 0) {
@@ -123,6 +129,7 @@ export async function POST(request: NextRequest) {
           userCountry: params?.countries?.[0],
           maxResultsToAnalyze: 5,
           detailedAnalysis: params?.detailedAnalysis,
+          llmContext,
         })
 
         const formattedSearchResponse = responseFormatter.formatSearchResults(llmResponse, legacyResults, similarities, {
@@ -156,19 +163,23 @@ export async function POST(request: NextRequest) {
           userOrgType: params.userOrgType || '',
           userCareerStage: params.userCareerStage || '',
           userResearchField: params.userResearchField || '',
+          llmContext,
         })
         break
       case 'advice':
         if (!params?.opportunityDetails) {
           return NextResponse.json({ error: 'Missing opportunity details for application advice' }, { status: 400 })
         }
-        result = await fundingAdvisorService.getApplicationAdvice({ opportunityDetails: params.opportunityDetails })
+        result = await fundingAdvisorService.getApplicationAdvice({
+          opportunityDetails: params.opportunityDetails,
+          llmContext,
+        })
         break
       case 'question':
         if (!query) {
           return NextResponse.json({ error: 'Missing query parameter for question' }, { status: 400 })
         }
-        result = await fundingAdvisorService.answerQuestion(query)
+        result = await fundingAdvisorService.answerQuestion(query, llmContext)
         break
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })

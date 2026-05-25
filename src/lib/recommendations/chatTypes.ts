@@ -65,6 +65,7 @@ export interface RecommendationConversationRunRecord {
   lowConfidence: boolean;
   noResultsReason: RecommendationNoResultsReason;
   searchDiagnostics: RecommendationSearchDiagnostics | null;
+  profileDiagnostics: RecommendationSearchDiagnostics['profile'] | null;
   results: RecommendationRawResultItem[];
 }
 
@@ -97,6 +98,9 @@ export interface RecommendationConversationMessageRequest {
   manualFilterPatch?: RecommendationSearchFilters;
   replaceManualFilters?: boolean;
   clientTurnId?: string;
+  useProfileContext?: boolean;
+  useEligibilityProfile?: boolean;
+  usePublicationContext?: boolean;
 }
 
 export interface RecommendationConversationMutationResponse {

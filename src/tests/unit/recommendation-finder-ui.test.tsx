@@ -5,6 +5,7 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import FinderChatMessage from '@/components/FinderChatMessage';
 import FinderPendingFilterConfirmationBar from '@/components/FinderPendingFilterConfirmationBar';
 import FinderPendingTurnMessage from '@/components/FinderPendingTurnMessage';
+import FinderPreferencesPanel from '@/components/FinderPreferencesPanel';
 import FinderStrictFilterRecoveryNotice from '@/components/FinderStrictFilterRecoveryNotice';
 import { createDefaultFilters } from '@/lib/recommendations/conversationUtils';
 import {
@@ -43,6 +44,7 @@ function createResult(overrides: Partial<RecommendationRawResultItem> = {}): Rec
     officialUrls: overrides.officialUrls || ['https://example.org/call'],
     score: overrides.score || 0.91,
     matchReasons: overrides.matchReasons || ['Strong topical overlap'],
+    profileMatch: overrides.profileMatch === undefined ? null : overrides.profileMatch,
     eligibilitySummary:
       overrides.eligibilitySummary === undefined
         ? 'Open to postdoctoral researchers at accredited universities.'
@@ -84,6 +86,7 @@ function createRun(results: RecommendationRawResultItem[]): RecommendationConver
     lowConfidence: false,
     noResultsReason: null,
     searchDiagnostics: null,
+    profileDiagnostics: null,
     results,
   };
 }
@@ -285,6 +288,20 @@ describe('finder trust recovery UI', () => {
     expect(markup).toContain('Apply Germany and postdoctoral filters before searching.');
     expect(markup).toContain('Confirm');
     expect(markup).toContain('Reject');
+  });
+
+  it('renders explicit preference controls for eligibility and publication context', () => {
+    const markup = renderToStaticMarkup(
+      <FinderPreferencesPanel
+        preferences={{ useEligibilityProfile: false, usePublicationContext: false }}
+        onChange={() => undefined}
+      />
+    );
+
+    expect(markup).toContain('My Preferences');
+    expect(markup).toContain('Use eligibility profile');
+    expect(markup).toContain('Use my publications');
+    expect(markup).toContain('my-publication');
   });
 
   it('renders amount, deadline states, eligibility copy, and inline recovery on chat result cards', () => {

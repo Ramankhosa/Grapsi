@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { getStoredUsageLogActualCost } from '@/lib/metering/llm-usage'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -150,6 +151,10 @@ export async function GET(
     const calcCost = (log: any) => {
       const inputTokens = log.inputTokens || 0
       const outputTokens = log.outputTokens || 0
+      const storedCost = getStoredUsageLogActualCost(log.meta)
+      if (storedCost !== null && (storedCost > 0 || (inputTokens === 0 && outputTokens === 0))) {
+        return storedCost
+      }
       if (log.modelClass && priceMap.has(log.modelClass)) {
         const price = priceMap.get(log.modelClass)!
         return inputTokens * (price.input / 1_000_000) + outputTokens * (price.output / 1_000_000)
@@ -202,4 +207,3 @@ export async function GET(
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-

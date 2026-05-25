@@ -463,8 +463,10 @@ export function buildGrantPrepSelectorResult(input: {
     }
   }
 
-  const withDependencies = resolveUpstreamStageDependencies(autoEnabled);
-  withDependencies.forEach((stageKey) => {
+  const finalAutoEnabledStageKeys = useRealTemplate
+    ? sortStageKeys(autoEnabled)
+    : resolveUpstreamStageDependencies(autoEnabled);
+  finalAutoEnabledStageKeys.forEach((stageKey) => {
     if (!selectionSources[stageKey]) {
       selectionSources[stageKey] = 'dependency';
     }
@@ -479,8 +481,8 @@ export function buildGrantPrepSelectorResult(input: {
 
   return {
     stageMapping,
-    autoEnabledStageKeys: withDependencies,
-    autoOptionalStageKeys: sortStageKeys(Array.from(autoOptional).filter((stageKey) => !withDependencies.includes(stageKey))),
+    autoEnabledStageKeys: finalAutoEnabledStageKeys,
+    autoOptionalStageKeys: sortStageKeys(Array.from(autoOptional).filter((stageKey) => !finalAutoEnabledStageKeys.includes(stageKey))),
     selectionMode,
     selectionSources,
     selectionLevels,

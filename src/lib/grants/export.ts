@@ -131,11 +131,19 @@ function renderRowsAsTableBlocks(record: Record<string, unknown>): PaperDocxBloc
     return [{ type: 'paragraph', text: GRANT_EXPORT_EMPTY_PLACEHOLDER }]
   }
 
-  return [{
+  const blocks: PaperDocxBlock[] = []
+  const notes = cleanText(record.notes)
+  if (notes) {
+    blocks.push({ type: 'paragraph', text: notes })
+  }
+
+  blocks.push({
     type: 'table',
     headers: columns.map((column) => column.label),
     rows: rows.map((row) => columns.map((column) => cleanText(row[column.key]))),
-  }]
+  })
+
+  return blocks
 }
 
 function renderGenericStructuredBlocks(value: unknown): PaperDocxBlock[] {

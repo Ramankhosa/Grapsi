@@ -1,9 +1,13 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { generateJsonFromDeepSeek } from '../deepseekService';
-import { generateFromGemini } from '../geminiService';
-import { generateFromOpenAI } from '../openaiService';
 import { parseJsonResponse } from '../fundingIntake/utils';
+import {
+  FUNDING_TEMPLATE_EXTRACT_TASK_CODE,
+  FUNDING_TEMPLATE_MULTIMODAL_STAGE_CODE,
+  FUNDING_TEMPLATE_TEXT_STAGE_CODE,
+  runFundingGatewayText,
+  type FundingLlmRoutingContext,
+} from '../funding/llmRouting';
 import {
   normalizeGrantTemplateIntent,
   normalizeGrantTemplateIntentConfidence,
@@ -12,9 +16,10 @@ import {
 import { normalizeGrantWorkflowMode } from '../grants/workflowMode';
 import { buildAssetSequenceMap, buildCompatibilitySummary, normalizeGrantTemplate, sortAndDeduplicateGrantTemplate } from './utils';
 import type { FundingTemplateCompatibilitySummary, GrantTemplateDocument } from './types';
+import type { ContentPart } from '../metering';
 
-const TEMPLATE_PROMPT_VERSION = 'funding-template-v4';
-const TEMPLATE_EXTRACTOR_VERSION = 'funding-template-extractor-v4';
+const TEMPLATE_PROMPT_VERSION = 'funding-template-v5';
+const TEMPLATE_EXTRACTOR_VERSION = 'funding-template-extractor-v5';
 
 const SYSTEM_INSTRUCTIONS = `
 You extract grant application templates from funding template assets.
@@ -109,7 +114,7 @@ Return JSON in this exact shape:
         "confidence": 0.0,
         "sourceAnchors": [
           {
-            "asset_id": "uuid",
+            "asset_id": "asset id",
             "page": 1,
             "section": "string|null",
             "urlFragment": "string|null",
@@ -146,6 +151,15 @@ Return JSON in this exact shape:
       "required": true,
       "yearWise": false,
       "workflowMode": "app_support",
+      "columns": [
+        {
+          "key": "string",
+          "label": "string",
+          "kind": "category|amount|year|total|co_funding|justification|notes|text|number|null",
+          "required": true,
+          "sourceAnchors": []
+        }
+      ],
       "categories": [
         {
           "key": "string",
@@ -175,6 +189,7 @@ Return JSON in this exact shape:
 }
 Use the same item fields shown in the questions example for sections, attachments, evaluationCriteria, and submissionRules.items.
 Preserve all visible subsection headings in template.sections, including headings that appear in right-hand columns or secondary panels.
+For budget tables, preserve visible column headers in budget.columns. Use stable lowercase snake_case keys. Mark amount, total, year, co-funding, justification, and notes columns with the closest kind. Preserve fixed budget category rows in budget.categories.
 `;
 }
 
@@ -243,107 +258,106 @@ async function buildGeminiRestParts(assets: TemplateExtractionAssetInput[]): Pro
   return parts;
 }
 
-async function callTextExtractor(prompt: string): Promise<{ model: string; rawText: string }> {
-  if (process.env.DEEPSEEK_API_KEY) {
-    const model = process.env.FUNDING_TEMPLATE_DEEPSEEK_MODEL || 'deepseek-v4-pro';
-    console.log(`[Funding Template] Using DeepSeek text extraction model: ${model}`);
+async function callTextExtractor(
+  prompt: string,
+  context?: FundingLlmRoutingContext | null
+): Promise<{ model: string; rawText: string }> {
+  const result = await runFundingGatewayText({
+    taskCode: FUNDING_TEMPLATE_EXTRACT_TASK_CODE,
+    stageCode: FUNDING_TEMPLATE_TEXT_STAGE_CODE,
+    prompt,
+    systemPrompt: SYSTEM_INSTRUCTIONS,
+    context,
+    responseMimeType: 'application/json',
+    temperature: 0,
+    maxTokensOut: 24000,
+    skipFeaturePolicy: true,
+    metadata: {
+      purpose: 'funding_template_text_extract',
+      extractorVersion: TEMPLATE_EXTRACTOR_VERSION,
+      promptVersion: TEMPLATE_PROMPT_VERSION,
+    },
+  });
 
-    try {
-      return await generateJsonFromDeepSeek({
-        prompt,
-        model,
-        systemPrompt: SYSTEM_INSTRUCTIONS,
-        maxTokens: 24000,
-        temperature: 0,
-      });
-    } catch (error) {
-      if (!process.env.GOOGLE_AI_API_KEY && !process.env.OPENAI_API_KEY) {
-        throw error;
+  if (!result) {
+    throw new Error('No LLM provider configured for funding template extraction');
+  }
+
+  return result;
+}
+
+async function buildGatewayContentParts(assets: TemplateExtractionAssetInput[]): Promise<ContentPart[]> {
+  const parts: ContentPart[] = [];
+  const restParts = await buildGeminiRestParts(assets);
+
+  for (const part of restParts) {
+    if (typeof part.text === 'string') {
+      parts.push({ type: 'text', text: part.text });
+    } else {
+      const inlineData = part.inline_data && typeof part.inline_data === 'object'
+        ? part.inline_data as Record<string, unknown>
+        : null;
+      const data = typeof inlineData?.data === 'string' ? inlineData.data : '';
+      if (!data) {
+        continue;
       }
-
-      console.warn(
-        '[Funding Template] DeepSeek text extraction failed, falling back to the next configured provider:',
-        error
+      const mimeType = typeof inlineData?.mime_type === 'string'
+        ? inlineData.mime_type
+        : 'application/pdf';
+      parts.push(
+        mimeType.includes('pdf')
+          ? {
+              type: 'file',
+              file: {
+                mimeType,
+                data,
+              },
+            }
+          : {
+              type: 'image',
+              image: {
+                mimeType,
+                data,
+              },
+            }
       );
     }
   }
 
-  if (process.env.GOOGLE_AI_API_KEY) {
-    const model = process.env.FUNDING_TEMPLATE_GEMINI_MODEL || 'gemini-2.5-pro';
-    console.log(`[Funding Template] Using Gemini text extraction model: ${model}`);
-
-    const rawText = await generateFromGemini(prompt, model);
-    return { model, rawText };
-  }
-
-  if (process.env.OPENAI_API_KEY) {
-    const model = process.env.FUNDING_TEMPLATE_OPENAI_MODEL || 'gpt-4o-mini';
-    const rawText = await generateFromOpenAI(prompt, model, SYSTEM_INSTRUCTIONS);
-    return { model, rawText };
-  }
-
-  throw new Error('No LLM provider configured for funding template extraction');
-}
-function extractGeminiRestText(parsedBody: any, rawBody: string): string {
-  const textParts =
-    parsedBody?.candidates
-      ?.flatMap((candidate: any) => candidate?.content?.parts ?? [])
-      ?.filter((part: any) => typeof part?.text === 'string')
-      ?.map((part: any) => String(part.text)) ?? [];
-
-  if (textParts.length === 0) {
-    throw new Error(`Gemini multimodal request returned no text parts: ${rawBody.slice(0, 1000)}`);
-  }
-
-  return textParts.join('');
+  return parts;
 }
 
-async function callGeminiMultimodal(assets: TemplateExtractionAssetInput[]): Promise<{ model: string; rawText: string }> {
-  const apiKey = process.env.GOOGLE_AI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Gemini multimodal extraction requires GOOGLE_AI_API_KEY');
+async function callGeminiMultimodal(
+  assets: TemplateExtractionAssetInput[],
+  context?: FundingLlmRoutingContext | null
+): Promise<{ model: string; rawText: string }> {
+  const result = await runFundingGatewayText({
+    taskCode: FUNDING_TEMPLATE_EXTRACT_TASK_CODE,
+    stageCode: FUNDING_TEMPLATE_MULTIMODAL_STAGE_CODE,
+    prompt: SYSTEM_INSTRUCTIONS,
+    context,
+    contentParts: await buildGatewayContentParts(assets),
+    responseMimeType: 'application/json',
+    temperature: 0,
+    maxTokensOut: 24000,
+    skipFeaturePolicy: true,
+    metadata: {
+      purpose: 'funding_template_multimodal_extract',
+      extractorVersion: TEMPLATE_EXTRACTOR_VERSION,
+      promptVersion: TEMPLATE_PROMPT_VERSION,
+    },
+  });
+
+  if (!result) {
+    throw new Error('No LLM provider configured for funding template multimodal extraction');
   }
 
-  const model = process.env.FUNDING_TEMPLATE_GEMINI_MODEL || 'gemini-2.5-pro';
-  console.log(`[Funding Template] Using Gemini multimodal extraction model: ${model}`);
-  const parts = await buildGeminiRestParts(assets);
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        },
-      }),
-    }
-  );
-
-  const rawBody = await response.text();
-  if (!response.ok) {
-    throw new Error(`Gemini multimodal request failed (${response.status} ${response.statusText}): ${rawBody}`);
+  console.log(`[Funding Template] Gateway response length: ${result.rawText.length} chars`);
+  if (result.rawText.length < 50) {
+    console.warn(`[Funding Template] Suspiciously short response: ${result.rawText.slice(0, 200)}`);
   }
 
-  let parsedBody: any;
-  try {
-    parsedBody = JSON.parse(rawBody);
-  } catch (error) {
-    throw new Error(`Gemini multimodal request returned non-JSON response: ${(error as Error).message}. Body: ${rawBody.slice(0, 1000)}`);
-  }
-
-  const rawText = extractGeminiRestText(parsedBody, rawBody);
-  console.log(`[Funding Template] Gemini response length: ${rawText.length} chars`);
-  if (rawText.length < 50) {
-    console.warn(`[Funding Template] Suspiciously short response: ${rawText.slice(0, 200)}`);
-  }
-
-  return { model, rawText };
+  return result;
 }
 
 function safeParseJsonResponse(rawText: string): any {
@@ -525,6 +539,60 @@ function combineGuidance(...values: Array<unknown>): string | null {
   return Array.from(new Set(parts)).join('\n\n');
 }
 
+function inferBudgetColumnKind(value: unknown): string | null {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  if (!normalized) return null;
+  if (/\b(category|head|item|cost item|expense)\b/.test(normalized)) return 'category';
+  if (/\b(justification|rationale|basis|description)\b/.test(normalized)) return 'justification';
+  if (/\b(co funding|cofunding|matching|match|cost share|contribution)\b/.test(normalized)) return 'co_funding';
+  if (/\b(total|subtotal|grand total)\b/.test(normalized)) return 'total';
+  if (/\b(year|yr|fy|financial year|fiscal year)\b/.test(normalized)) return 'year';
+  if (/\b(amount|cost|budget|requested|funds|salary|fee|rate)\b/.test(normalized)) return 'amount';
+  if (/\b(note|remark|comment)\b/.test(normalized)) return 'notes';
+  if (/\b(number|qty|quantity|unit)\b/.test(normalized)) return 'number';
+  return 'text';
+}
+
+function coerceBudgetColumns(value: any): Array<Record<string, unknown>> {
+  const source = Array.isArray(value?.columns)
+    ? value.columns
+    : Array.isArray(value?.headers)
+      ? value.headers
+      : Array.isArray(value?.fields)
+        ? value.fields
+        : [];
+  const seen = new Set<string>();
+  const columns: Array<Record<string, unknown>> = [];
+
+  for (let index = 0; index < source.length; index += 1) {
+    const column = source[index];
+    const rawLabel = typeof column === 'string'
+      ? column
+      : column?.label || column?.title || column?.name || column?.key || column?.id;
+    const label = String(rawLabel || '').trim();
+    if (!label) continue;
+    const key = slugifyTemplateKey(
+      typeof column === 'string' ? label : column?.key || column?.id || label,
+      `column_${index + 1}`
+    );
+    if (seen.has(key)) continue;
+    seen.add(key);
+    columns.push({
+      key,
+      label,
+      kind: typeof column === 'string'
+        ? inferBudgetColumnKind(label)
+        : column?.kind || column?.type || inferBudgetColumnKind(label),
+      required: typeof column === 'object' && column !== null ? column.required === true : false,
+      sourceAnchors: typeof column === 'object' && column !== null
+        ? coerceAnchors(column.sourceAnchors || column.anchors)
+        : [],
+    });
+  }
+
+  return columns;
+}
+
 function coerceTemplateItem(
   item: any,
   fallbackType: GrantTemplateItemType,
@@ -685,6 +753,7 @@ function coerceBudgetBlock(value: any): Record<string, unknown> | null {
     required: Boolean(value.required),
     yearWise: Boolean(value.yearWise || value.year_wise || value.yearly),
     workflowMode: coerceWorkflowMode(value.workflowMode || value.workflow_mode, 'app_support'),
+    columns: coerceBudgetColumns(value),
     categories: categories.map((category: any, index: number) => ({
       key: slugifyTemplateKey(category?.key || category?.label || category?.title || `budget_${index + 1}`, `budget_${index + 1}`),
       label: String(category?.label || category?.title || category?.key || `Budget Category ${index + 1}`).trim(),
@@ -770,14 +839,15 @@ function lenientNormalizeTemplate(raw: any): ReturnType<typeof normalizeGrantTem
     console.warn('[Funding Template] Strict normalization failed, trying lenient pass:', (strictError as Error).message);
   }
 
+  const hasUsableAssetId = (anchor: any) =>
+    typeof anchor?.asset_id === 'string' && anchor.asset_id.trim().length > 0;
+
   function stripInvalidAnchors(items: any[]): any[] {
     if (!Array.isArray(items)) return [];
     return items.map((item) => ({
       ...item,
       sourceAnchors: Array.isArray(item.sourceAnchors)
-        ? item.sourceAnchors.filter((a: any) =>
-            typeof a?.asset_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(a.asset_id)
-          )
+        ? item.sourceAnchors.filter(hasUsableAssetId)
         : [],
     }));
   }
@@ -793,34 +863,36 @@ function lenientNormalizeTemplate(raw: any): ReturnType<typeof normalizeGrantTem
       ...patched.submissionRules,
       items: stripInvalidAnchors(patched.submissionRules.items),
       sourceAnchors: Array.isArray(patched.submissionRules.sourceAnchors)
-        ? patched.submissionRules.sourceAnchors.filter((a: any) =>
-            typeof a?.asset_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(a.asset_id)
-          )
+        ? patched.submissionRules.sourceAnchors.filter(hasUsableAssetId)
         : [],
     };
   }
-  if (patched.budget && Array.isArray(patched.budget.sourceAnchors)) {
+  if (patched.budget) {
     patched.budget = {
       ...patched.budget,
-      sourceAnchors: patched.budget.sourceAnchors.filter((a: any) =>
-        typeof a?.asset_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(a.asset_id)
-      ),
+      sourceAnchors: Array.isArray(patched.budget.sourceAnchors)
+        ? patched.budget.sourceAnchors.filter(hasUsableAssetId)
+        : [],
+      columns: Array.isArray(patched.budget.columns)
+        ? patched.budget.columns.map((c: any) => ({
+            ...c,
+            sourceAnchors: Array.isArray(c.sourceAnchors)
+              ? c.sourceAnchors.filter(hasUsableAssetId)
+              : [],
+          }))
+        : [],
       categories: Array.isArray(patched.budget.categories)
         ? patched.budget.categories.map((c: any) => ({
             ...c,
             sourceAnchors: Array.isArray(c.sourceAnchors)
-              ? c.sourceAnchors.filter((a: any) =>
-                  typeof a?.asset_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(a.asset_id)
-                )
+              ? c.sourceAnchors.filter(hasUsableAssetId)
               : [],
           }))
         : [],
     };
   }
   if (Array.isArray(patched.sourceAnchors)) {
-    patched.sourceAnchors = patched.sourceAnchors.filter((a: any) =>
-      typeof a?.asset_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(a.asset_id)
-    );
+    patched.sourceAnchors = patched.sourceAnchors.filter(hasUsableAssetId);
   }
 
   try {
@@ -837,7 +909,8 @@ function lenientNormalizeTemplate(raw: any): ReturnType<typeof normalizeGrantTem
 }
 
 export async function extractGrantTemplateFromAssets(
-  assets: TemplateExtractionAssetInput[]
+  assets: TemplateExtractionAssetInput[],
+  context?: FundingLlmRoutingContext | null
 ): Promise<TemplateExtractionResult> {
   const selectedAssets = assets.filter(Boolean);
   if (selectedAssets.length === 0) {
@@ -858,10 +931,10 @@ export async function extractGrantTemplateFromAssets(
   let modelResponse: { model: string; rawText: string };
   if (hasBinaryAsset) {
     console.log('[Funding Template] Using multimodal extraction path (binary assets detected)');
-    modelResponse = await callGeminiMultimodal(selectedAssets);
+    modelResponse = await callGeminiMultimodal(selectedAssets, context);
   } else {
     console.log('[Funding Template] Using text-only extraction path');
-    modelResponse = await callTextExtractor(buildTextOnlyPrompt(selectedAssets));
+    modelResponse = await callTextExtractor(buildTextOnlyPrompt(selectedAssets), context);
   }
 
   const parsed = safeParseJsonResponse(modelResponse.rawText);

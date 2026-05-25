@@ -30,6 +30,7 @@ function makeResult(id: string): RecommendationRawResultItem {
     officialUrls: ['https://example.com'],
     score: 0.8,
     matchReasons: ['Matched discipline: artificial intelligence'],
+    profileMatch: null,
     eligibilitySummary: 'Open to research institutions.',
     fullDescription: null,
     description: 'Summary',
@@ -58,6 +59,7 @@ function makeRun(results: RecommendationRawResultItem[]): RecommendationConversa
     lowConfidence: false,
     noResultsReason: null,
     searchDiagnostics: null,
+    profileDiagnostics: null,
     results,
   };
 }
@@ -188,7 +190,59 @@ describe('RecommendationConversationService', () => {
     });
 
     expect(guarded.requiresConfirmation).toBe(true);
-    expect(guarded.assistantSuggestion).toContain('profile-based context');
+    expect(guarded.assistantSuggestion).toContain('selected preference context');
+  });
+
+  it('asks the user to enable eligibility preferences before using profile data', async () => {
+    const service = new RecommendationConversationService();
+    const state = {
+      inputMode: 'research_area' as const,
+      query: { researchArea: '' },
+      filters: createDefaultFilters(),
+      pendingPatch: null,
+      lastRunId: null,
+      lastTurnIndex: 0,
+    };
+
+    const outcome = await (service as any).createTurnOutcome({
+      input: { message: 'Find grants eligible for me.' },
+      state,
+      latestRun: undefined,
+      turnIndex: 1,
+      conversationDetail: makeConversationDetail(),
+      profileSnapshot: null,
+      preferences: { useEligibilityProfile: false, usePublicationContext: false },
+    });
+
+    expect(outcome.messageType).toBe('assistant_notice');
+    expect(outcome.assistantContent).toContain('Use eligibility profile');
+    expect(outcome.assistantContent).toContain('currently off');
+  });
+
+  it('asks the user to enable publication preferences before using papers', async () => {
+    const service = new RecommendationConversationService();
+    const state = {
+      inputMode: 'research_area' as const,
+      query: { researchArea: '' },
+      filters: createDefaultFilters(),
+      pendingPatch: null,
+      lastRunId: null,
+      lastTurnIndex: 0,
+    };
+
+    const outcome = await (service as any).createTurnOutcome({
+      input: { message: 'Find funding aligned with my publications.' },
+      state,
+      latestRun: undefined,
+      turnIndex: 1,
+      conversationDetail: makeConversationDetail(),
+      profileSnapshot: null,
+      preferences: { useEligibilityProfile: false, usePublicationContext: false },
+    });
+
+    expect(outcome.messageType).toBe('assistant_notice');
+    expect(outcome.assistantContent).toContain('Use my publications');
+    expect(outcome.assistantContent).toContain('my-publication');
   });
 
   it('promotes topic pivots to new_search and resets prior filters', () => {

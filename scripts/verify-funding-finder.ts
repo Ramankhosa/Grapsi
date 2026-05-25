@@ -19,24 +19,41 @@ async function readJson(response: Response) {
   }
 }
 
+function getSeedModule(rawModule: any) {
+  return rawModule.seedFundingFinderVerificationData ? rawModule : rawModule.default;
+}
+
 async function main() {
-  const [{ generateJWT }, { NextRequest }, seedModule, manualSearchRoute, facetsRoute, conversationsRoute, messageRoute, contextRoute] =
-    await Promise.all([
-      import('../src/lib/auth'),
-      import('next/server'),
-      import('./seed-funding-finder-verification'),
-      import('../src/app/api/recommendations/manual-search/route'),
-      import('../src/app/api/recommendations/directory/facets/route'),
-      import('../src/app/api/recommendations/conversations/route'),
-      import('../src/app/api/recommendations/conversations/[id]/messages/route'),
-      import('../src/app/api/researcher/context/route'),
-    ]);
+  const [
+    { generateJWT },
+    { NextRequest },
+    seedModuleRaw,
+    manualSearchRoute,
+    facetsRoute,
+    conversationsRoute,
+    messageRoute,
+    contextRoute,
+  ] = await Promise.all([
+    import('../src/lib/auth'),
+    import('next/server'),
+    import('./seed-funding-finder-verification'),
+    import('../src/app/api/recommendations/manual-search/route'),
+    import('../src/app/api/recommendations/directory/facets/route'),
+    import('../src/app/api/recommendations/conversations/route'),
+    import('../src/app/api/recommendations/conversations/[id]/messages/route'),
+    import('../src/app/api/researcher/context/route'),
+  ]);
 
+  const seedModule = getSeedModule(seedModuleRaw);
   const seeded = await seedModule.seedFundingFinderVerificationData();
+  assert(seeded.publishedActive >= 15, `Expected at least 15 active seeded calls, got ${seeded.publishedActive}`);
+  assert(seeded.approvedTemplates >= 15, `Expected at least 15 approved templates, got ${seeded.approvedTemplates}`);
+  assert(seeded.approvedGuidelines >= 15, `Expected at least 15 approved guidelines, got ${seeded.approvedGuidelines}`);
+  assert(Array.isArray(seeded.seededProfiles) && seeded.seededProfiles.length === 5, 'Expected five seeded researcher profiles');
 
-  const token = generateJWT({
-    sub: seeded.userId,
-    email: seeded.userEmail,
+  const makeToken = (user: { userId: string; email: string }) => generateJWT({
+    sub: user.userId,
+    email: user.email,
     tenant_id: seeded.tenantId,
     roles: ['ANALYST'],
     ati_id: null,
@@ -44,6 +61,7 @@ async function main() {
     scope: 'tenant',
   });
 
+  const token = makeToken({ userId: seeded.userId, email: seeded.userEmail });
   const authHeaders = {
     authorization: `Bearer ${token}`,
     'content-type': 'application/json',
@@ -51,9 +69,7 @@ async function main() {
 
   const contextRequest = new NextRequest('http://localhost/api/researcher/context', {
     method: 'GET',
-    headers: new Headers({
-      authorization: `Bearer ${token}`,
-    }),
+    headers: new Headers({ authorization: `Bearer ${token}` }),
   });
   const contextResponse = await contextRoute.GET(contextRequest);
   const contextBody = await readJson(contextResponse);
@@ -87,14 +103,58 @@ async function main() {
     'Manual search returned the hidden archived verification call'
   );
 
+  const profileScenarios = [
+    { email: seedModule.FINDER_VERIFICATION_USER_EMAIL, query: 'medical imaging diagnostics', expectedTitle: seedModule.FINDER_EXPECTED_PRIMARY_TITLE },
+    { email: 'finder.climate@grapsi.local', query: 'climate resilient agriculture', expectedTitle: 'Climate Resilient Agriculture Research Grant' },
+    { email: 'finder.quantum@grapsi.local', query: 'quantum materials spectroscopy', expectedTitle: 'Quantum Materials Equipment Grant' },
+    { email: 'finder.publichealth@grapsi.local', query: 'digital public health implementation', expectedTitle: 'Public Health Innovation Seed Grant' },
+    { email: 'finder.policy@grapsi.local', query: 'responsible ai policy governance', expectedTitle: 'Responsible AI Policy Small Grant' },
+  ];
+
+  const profileChecks = [];
+  for (const scenario of profileScenarios) {
+    const profile = seeded.seededProfiles.find((item: any) => item.email === scenario.email);
+    assert(profile, `Missing seeded profile for ${scenario.email}`);
+    const profileToken = makeToken(profile);
+    const profileSearchRequest = new NextRequest('http://localhost/api/recommendations/manual-search', {
+      method: 'POST',
+      headers: new Headers({
+        authorization: `Bearer ${profileToken}`,
+        'content-type': 'application/json',
+      }),
+      body: JSON.stringify({
+        query: scenario.query,
+        useEligibilityProfile: true,
+        usePublicationContext: true,
+        filters: {
+          limit: 5,
+          sort: 'best_match',
+        },
+      }),
+    });
+    const profileSearchResponse = await manualSearchRoute.POST(profileSearchRequest);
+    const profileSearchBody = await readJson(profileSearchResponse);
+    assert(profileSearchResponse.status === 200, `Profile search failed for ${scenario.email}: ${JSON.stringify(profileSearchBody)}`);
+    const profileTitles = (profileSearchBody.results || []).map((item: any) => item.schemeTitle);
+    assert(
+      profileTitles.slice(0, 3).includes(scenario.expectedTitle),
+      `Profile search for ${scenario.email} did not rank ${scenario.expectedTitle} in top 3. Results: ${profileTitles.join(', ')}`
+    );
+    const expectedResult = (profileSearchBody.results || []).find((item: any) => item.schemeTitle === scenario.expectedTitle);
+    assert(expectedResult?.profileMatch, `Expected profileMatch diagnostics for ${scenario.expectedTitle}`);
+    profileChecks.push({
+      email: scenario.email,
+      topTitles: profileTitles.slice(0, 3),
+      profileReasons: expectedResult.profileMatch?.reasons || [],
+    });
+  }
+
   const facetsRequest = new NextRequest('http://localhost/api/recommendations/directory/facets', {
     method: 'POST',
     headers: new Headers(authHeaders),
     body: JSON.stringify({
       query: 'artificial intelligence',
-      filters: {
-        eligibleCountries: ['India'],
-      },
+      filters: { eligibleCountries: ['India'] },
     }),
   });
   const facetsResponse = await facetsRoute.POST(facetsRequest);
@@ -109,9 +169,7 @@ async function main() {
   const createConversationRequest = new NextRequest('http://localhost/api/recommendations/conversations', {
     method: 'POST',
     headers: new Headers(authHeaders),
-    body: JSON.stringify({
-      title: 'Funding Finder Verification',
-    }),
+    body: JSON.stringify({ title: 'Funding Finder Verification' }),
   });
   const createConversationResponse = await conversationsRoute.POST(createConversationRequest);
   const createConversationBody = await readJson(createConversationResponse);
@@ -121,6 +179,23 @@ async function main() {
   );
 
   const conversationId = createConversationBody.conversation.id;
+  const optOutMessageRequest = new NextRequest(
+    `http://localhost/api/recommendations/conversations/${conversationId}/messages`,
+    {
+      method: 'POST',
+      headers: new Headers(authHeaders),
+      body: JSON.stringify({
+        message: 'Find grants eligible for me.',
+        clientTurnId: 'verification-profile-optout',
+      }),
+    }
+  );
+  const optOutMessageResponse = await messageRoute.POST(optOutMessageRequest, { params: { id: conversationId } });
+  const optOutMessageBody = await readJson(optOutMessageResponse);
+  assert(optOutMessageResponse.status === 200, `Profile opt-out chatbot check failed: ${JSON.stringify(optOutMessageBody)}`);
+  const optOutAssistant = optOutMessageBody.conversation?.messages?.filter((message: any) => message.role === 'assistant')?.slice(-1)?.[0];
+  assert(optOutAssistant?.messageType === 'assistant_notice', 'Expected chatbot to ask for profile preference opt-in');
+  assert(String(optOutAssistant?.content || '').includes('currently off'), 'Expected chatbot opt-in notice to mention preferences are off');
 
   const firstMessageRequest = new NextRequest(
     `http://localhost/api/recommendations/conversations/${conversationId}/messages`,
@@ -129,6 +204,8 @@ async function main() {
       headers: new Headers(authHeaders),
       body: JSON.stringify({
         message: 'Find medical imaging funding opportunities in India for an early career researcher.',
+        useEligibilityProfile: true,
+        usePublicationContext: true,
         clientTurnId: 'verification-turn-1',
       }),
     }
@@ -146,6 +223,7 @@ async function main() {
     firstRunTitles.includes(seedModule.FINDER_EXPECTED_PRIMARY_TITLE),
     `Finder chatbot did not surface ${seedModule.FINDER_EXPECTED_PRIMARY_TITLE}. Results: ${firstRunTitles.join(', ')}`
   );
+  assert(firstRun?.profileDiagnostics?.enabled === true, 'Finder chatbot did not include opted-in profile diagnostics');
 
   const secondMessageRequest = new NextRequest(
     `http://localhost/api/recommendations/conversations/${conversationId}/messages`,
@@ -154,6 +232,8 @@ async function main() {
       headers: new Headers(authHeaders),
       body: JSON.stringify({
         message: 'Only show fellowships.',
+        useEligibilityProfile: true,
+        usePublicationContext: true,
         clientTurnId: 'verification-turn-2',
       }),
     }
@@ -176,6 +256,9 @@ async function main() {
     JSON.stringify(
       {
         seededPublishedActiveCalls: seeded.publishedActive,
+        approvedTemplates: seeded.approvedTemplates,
+        approvedGuidelines: seeded.approvedGuidelines,
+        seededProfiles: seeded.seededProfiles.length,
         researcherContextAreas: contextBody.researchAreas?.length || 0,
         manualSearch: {
           degradedMode: manualSearchBody.degradedMode ?? null,
@@ -186,10 +269,13 @@ async function main() {
           totalPublished: facetsBody.totalPublished,
           topFundingKinds: (facetsBody.facets?.fundingKind || []).slice(0, 5),
         },
+        profileChecks,
         chatbot: {
           conversationId,
+          optOutNotice: optOutAssistant?.content?.slice(0, 180) || null,
           firstRunDegradedMode: firstRun?.degradedMode ?? null,
           firstRunTopTitles: firstRunTitles.slice(0, 3),
+          firstRunProfileReasons: firstRun?.results?.[0]?.profileMatch?.reasons || [],
           secondRunDegradedMode: secondRun?.degradedMode ?? null,
           secondRunTopTitles: (secondRun?.results || []).map((item: any) => item.schemeTitle).slice(0, 3),
           assistantPreview: latestAssistantMessage?.content?.slice(0, 300) || null,
@@ -201,7 +287,7 @@ async function main() {
   );
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .catch((error) => {
       console.error(error);

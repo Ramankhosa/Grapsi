@@ -1,5 +1,11 @@
-import { generateFromGemini } from '../geminiService';
 import { fillPromptTemplate, parseResponse } from '../promptTemplates';
+import {
+  FUNDING_CHAT_NARRATIVE_STAGE_CODE,
+  FUNDING_CHAT_ORCHESTRATOR_STAGE_CODE,
+  FUNDING_CHAT_TASK_CODE,
+  runFundingGatewayText,
+  type FundingLlmRoutingContext,
+} from '../funding/llmRouting';
 import type { RecommendationAccessScope } from '../recommendations/types';
 import { formatFundingAmount } from '../recommendations/utils';
 import { recommendationSearchService } from './recommendationSearchService';
@@ -14,6 +20,7 @@ export interface FundingSearchParams {
   orgType?: string;
   grantType?: string[];
   includeExpired?: boolean;
+  llmContext?: FundingLlmRoutingContext | null;
 }
 
 /**
@@ -25,6 +32,7 @@ export interface EligibilityAssessmentParams {
   userOrgType: string;
   userCareerStage: string;
   userResearchField: string;
+  llmContext?: FundingLlmRoutingContext | null;
 }
 
 /**
@@ -32,6 +40,7 @@ export interface EligibilityAssessmentParams {
  */
 export interface ApplicationAdviceParams {
   opportunityDetails: string;
+  llmContext?: FundingLlmRoutingContext | null;
 }
 
 /**
@@ -41,6 +50,7 @@ export interface ConversationParams {
   query: string;
   conversationHistory?: string;
   access?: RecommendationAccessScope;
+  llmContext?: FundingLlmRoutingContext | null;
 }
 
 /**
@@ -57,15 +67,47 @@ export type UserIntent =
  * Service for the funding advisor chatbot
  */
 export class FundingAdvisorService {
+  private async generateAdvisorText(options: {
+    prompt: string;
+    action: string;
+    context?: FundingLlmRoutingContext | null;
+    stageCode?: string;
+    maxTokensOut?: number;
+    temperature?: number;
+  }): Promise<string> {
+    const result = await runFundingGatewayText({
+      taskCode: FUNDING_CHAT_TASK_CODE,
+      stageCode: options.stageCode || FUNDING_CHAT_NARRATIVE_STAGE_CODE,
+      prompt: options.prompt,
+      context: options.context,
+      temperature: options.temperature ?? 0.2,
+      maxTokensOut: options.maxTokensOut ?? 1800,
+      metadata: {
+        purpose: `funding_advisor_${options.action}`,
+        legacyService: 'FundingAdvisorService',
+      },
+    });
+
+    if (!result?.rawText) {
+      throw new Error('No LLM provider configured for funding advisor');
+    }
+
+    return result.rawText;
+  }
+
   /**
    * Get introduction message from the funding advisor
    */
-  async getIntroduction(): Promise<string> {
+  async getIntroduction(llmContext?: FundingLlmRoutingContext | null): Promise<string> {
     try {
       const { systemPrompt, userPrompt } = fillPromptTemplate('fundingAdvisorIntro');
       
       const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-      const response = await generateFromGemini(combinedPrompt, 'gemini-2.0-flash');
+      const response = await this.generateAdvisorText({
+        prompt: combinedPrompt,
+        action: 'introduction',
+        context: llmContext,
+      });
       
       return response;
     } catch (error) {
@@ -77,7 +119,7 @@ export class FundingAdvisorService {
   /**
    * Classify the intent of a user query
    */
-  async classifyIntent(query: string): Promise<UserIntent> {
+  async classifyIntent(query: string, llmContext?: FundingLlmRoutingContext | null): Promise<UserIntent> {
     try {
       // First try our local intent detection for faster response
       const localIntent = this.detectIntent(query);
@@ -90,7 +132,14 @@ export class FundingAdvisorService {
       const { systemPrompt, userPrompt } = fillPromptTemplate('intentClassification', { query });
       
       const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-      const response = await generateFromGemini(combinedPrompt, 'gemini-2.0-flash');
+      const response = await this.generateAdvisorText({
+        prompt: combinedPrompt,
+        action: 'intent_classification',
+        context: llmContext,
+        stageCode: FUNDING_CHAT_ORCHESTRATOR_STAGE_CODE,
+        maxTokensOut: 400,
+        temperature: 0.1,
+      });
       
       return parseResponse('intentClassification', response) as UserIntent;
     } catch (error) {
@@ -192,7 +241,7 @@ export class FundingAdvisorService {
       const { query, conversationHistory = '' } = params;
       
       // First, classify the intent of the query
-      const intent = await this.classifyIntent(query);
+      const intent = await this.classifyIntent(query, params.llmContext);
       console.log(`Classified intent: ${intent}`);
       
       // Process based on intent
@@ -204,6 +253,7 @@ export class FundingAdvisorService {
               query: { researchArea: query },
               filters: { limit: 10, includeExpired: false },
               access: params.access,
+              llmContext: params.llmContext || undefined,
             });
 
             if (searchResult.rawResults.length > 0) {
@@ -236,17 +286,17 @@ export class FundingAdvisorService {
           
         case 'eligibility_question':
           // For eligibility questions, use the QA functionality
-          return this.answerQuestion(query);
+          return this.answerQuestion(query, params.llmContext);
           break;
           
         case 'application_advice':
           // For application advice, use the QA functionality
-          return this.answerQuestion(query);
+          return this.answerQuestion(query, params.llmContext);
           break;
           
         case 'funding_general_question':
           // For general funding questions, use the QA functionality
-          return this.answerQuestion(query);
+          return this.answerQuestion(query, params.llmContext);
           break;
           
         case 'general_conversation':
@@ -254,7 +304,8 @@ export class FundingAdvisorService {
           // For general conversation, use the conversational mode
           return this.handleGeneralConversation({
             query,
-            conversationHistory
+            conversationHistory,
+            llmContext: params.llmContext,
           });
       }
     } catch (error) {
@@ -275,7 +326,11 @@ export class FundingAdvisorService {
       });
       
       const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-      const response = await generateFromGemini(combinedPrompt, 'gemini-2.0-flash');
+      const response = await this.generateAdvisorText({
+        prompt: combinedPrompt,
+        action: 'general_conversation',
+        context: params.llmContext,
+      });
       
       return response;
     } catch (error) {
@@ -306,7 +361,11 @@ export class FundingAdvisorService {
       // and incorporate those results into the prompt
       
       const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-      const response = await generateFromGemini(combinedPrompt, 'gemini-2.0-flash');
+      const response = await this.generateAdvisorText({
+        prompt: combinedPrompt,
+        action: 'search_funding_opportunities',
+        context: params.llmContext,
+      });
       
       return parseResponse('fundingSearch', response);
     } catch (error) {
@@ -323,7 +382,11 @@ export class FundingAdvisorService {
       const { systemPrompt, userPrompt } = fillPromptTemplate('eligibilityAssessment', params as unknown as Record<string, string>);
       
       const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-      const response = await generateFromGemini(combinedPrompt, 'gemini-2.0-flash');
+      const response = await this.generateAdvisorText({
+        prompt: combinedPrompt,
+        action: 'eligibility_assessment',
+        context: params.llmContext,
+      });
       
       return response;
     } catch (error) {
@@ -340,7 +403,11 @@ export class FundingAdvisorService {
       const { systemPrompt, userPrompt } = fillPromptTemplate('applicationAdvice', params as unknown as Record<string, string>);
       
       const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-      const response = await generateFromGemini(combinedPrompt, 'gemini-2.0-flash');
+      const response = await this.generateAdvisorText({
+        prompt: combinedPrompt,
+        action: 'application_advice',
+        context: params.llmContext,
+      });
       
       return response;
     } catch (error) {
@@ -352,12 +419,16 @@ export class FundingAdvisorService {
   /**
    * Answer a general funding-related question
    */
-  async answerQuestion(question: string): Promise<string> {
+  async answerQuestion(question: string, llmContext?: FundingLlmRoutingContext | null): Promise<string> {
     try {
       const { systemPrompt, userPrompt } = fillPromptTemplate('fundingQA', { question });
       
       const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-      const response = await generateFromGemini(combinedPrompt, 'gemini-2.0-flash');
+      const response = await this.generateAdvisorText({
+        prompt: combinedPrompt,
+        action: 'funding_question_answer',
+        context: llmContext,
+      });
       
       return response;
     } catch (error) {

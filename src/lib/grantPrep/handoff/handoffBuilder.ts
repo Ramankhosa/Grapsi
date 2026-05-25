@@ -182,7 +182,7 @@ export function buildGrantPrepFreezePayload(input: {
 }
 
 function isGrantPrepLaunchBlocker(stage: GrantPrepStageState, point: GrantPrepPointState) {
-  if (!stage.enabled || !stage.pickable) {
+  if (!stage.enabled || !stage.pickable || stage.selectionLevel === 'optional') {
     return false;
   }
 
@@ -194,7 +194,11 @@ function isGrantPrepLaunchBlocker(stage: GrantPrepStageState, point: GrantPrepPo
     return true;
   }
 
-  return point.priority === 'P1';
+  if (point.status === 'needs_review') {
+    return true;
+  }
+
+  return point.priority !== 'P3';
 }
 
 export function getBlockingStageKeys(payload: GrantPrepFreezePayload): GrantPrepStageKey[] {

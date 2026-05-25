@@ -42,7 +42,10 @@ export async function GET(
       return accessResult
     }
 
-    const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor)
+    const serverContext = await resolveGrantPrepContext(grantPrepSession.project_id, auth.actor, {
+      grantSessionId: grantPrepSession.grant_session_id,
+      fundingCallId: grantPrepSession.funding_call_id,
+    })
     const warning = buildGrantPrepModeWarning(serverContext.mode, serverContext.fundingContext.warning)
     let prepContext = inflateGrantPrepSessionContext(grantPrepSession, {
       warning,

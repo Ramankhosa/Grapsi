@@ -41,6 +41,9 @@ const requestSchema = z.object({
   manualQueryPatch: z.record(z.any()).optional(),
   manualFilterPatch: filterSchema.optional(),
   replaceManualFilters: z.boolean().optional(),
+  useProfileContext: z.boolean().optional(),
+  useEligibilityProfile: z.boolean().optional(),
+  usePublicationContext: z.boolean().optional(),
 })
 
 function getRequestIp(request: NextRequest) {

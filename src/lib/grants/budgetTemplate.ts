@@ -1,0 +1,364 @@
+import type { FundingTemplateBudget } from '@/lib/fundingTemplates/types'
+import type {
+  GrantBlueprintPlanSection,
+  GrantBudgetTemplateCategory,
+  GrantBudgetTemplateColumn,
+  GrantBudgetTemplateScaffold,
+} from '@/types/grant'
+
+type JsonRecord = Record<string, unknown>
+
+const FALLBACK_BUDGET_COLUMNS: GrantBudgetTemplateColumn[] = [
+  { key: 'category', label: 'Category', kind: 'category', required: true },
+  { key: 'amount', label: 'Amount', kind: 'amount', required: false },
+  { key: 'justification', label: 'Justification', kind: 'justification', required: false },
+]
+
+const NUMERIC_KINDS = new Set(['amount', 'year', 'total', 'co_funding', 'number'])
+const UNKNOWN_NUMERIC_VALUES = new Set(['', 'tbd', 'to be determined', 'unknown', 'n/a', 'na', 'not available', 'null'])
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}
+}
+
+function cleanText(value: unknown): string {
+  return String(value ?? '').trim().replace(/\s+/g, ' ')
+}
+
+function slugify(value: unknown, fallback: string): string {
+  const normalized = cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80)
+  return normalized || fallback
+}
+
+function inferColumnKind(value: unknown): string | null {
+  const text = cleanText(value).toLowerCase().replace(/[_-]+/g, ' ')
+  if (!text) return null
+  if (/\b(category|head|item|expense)\b/.test(text)) return 'category'
+  if (/\b(justification|rationale|basis|description)\b/.test(text)) return 'justification'
+  if (/\b(co funding|cofunding|matching|match|cost share|contribution)\b/.test(text)) return 'co_funding'
+  if (/\b(total|subtotal|grand total)\b/.test(text)) return 'total'
+  if (/\b(year|yr|fy|fiscal year|financial year)\b/.test(text)) return 'year'
+  if (/\b(amount|cost|budget|requested|funds|salary|fee|rate)\b/.test(text)) return 'amount'
+  if (/\b(note|remark|comment)\b/.test(text)) return 'notes'
+  if (/\b(number|qty|quantity|unit)\b/.test(text)) return 'number'
+  return 'text'
+}
+
+export function normalizeBudgetColumns(columns: unknown): GrantBudgetTemplateColumn[] {
+  const source = Array.isArray(columns) ? columns : []
+  const seen = new Set<string>()
+  const next: GrantBudgetTemplateColumn[] = []
+
+  source.forEach((entry, index) => {
+    const record = asRecord(entry)
+    const label = cleanText(record.label || record.title || record.name || record.key || entry)
+    if (!label) return
+    const key = slugify(record.key || record.id || label, `column_${index + 1}`)
+    if (seen.has(key)) return
+    seen.add(key)
+    next.push({
+      key,
+      label,
+      kind: cleanText(record.kind || record.type || inferColumnKind(label)) || null,
+      required: record.required === true,
+      sourceAnchors: Array.isArray(record.sourceAnchors) ? record.sourceAnchors as Array<Record<string, unknown>> : [],
+    })
+  })
+
+  return next
+}
+
+function normalizeBudgetCategories(categories: unknown): GrantBudgetTemplateCategory[] {
+  const source = Array.isArray(categories) ? categories : []
+  const seen = new Set<string>()
+  const next: GrantBudgetTemplateCategory[] = []
+
+  source.forEach((entry, index) => {
+    const record = asRecord(entry)
+    const label = cleanText(record.label || record.title || record.name || record.key)
+    if (!label) return
+    const key = slugify(record.key || label, `budget_${index + 1}`)
+    const identity = `${key}:${label.toLowerCase()}`
+    if (seen.has(identity)) return
+    seen.add(identity)
+    next.push({
+      key,
+      label,
+      cap: cleanText(record.cap || record.limit) || null,
+      notes: cleanText(record.notes || record.description || record.instructions) || null,
+      sourceAnchors: Array.isArray(record.sourceAnchors) ? record.sourceAnchors as Array<Record<string, unknown>> : [],
+    })
+  })
+
+  return next
+}
+
+export function buildBudgetTemplateFromFundingBudget(
+  budget: FundingTemplateBudget,
+  currency?: string | null
+): GrantBudgetTemplateScaffold {
+  const categories = normalizeBudgetCategories(budget.categories)
+  return {
+    source: 'extracted',
+    required: budget.required,
+    yearWise: budget.yearWise,
+    fixedCategories: categories.length > 0,
+    currency: currency || null,
+    columns: normalizeBudgetColumns(budget.columns || []),
+    categories,
+    caps: budget.caps ? budget.caps as Record<string, unknown> : null,
+    notes: cleanText(budget.justificationNotes) || null,
+    sourceAnchors: Array.isArray(budget.sourceAnchors)
+      ? budget.sourceAnchors as unknown as Array<Record<string, unknown>>
+      : [],
+    supportLevel: budget.supportLevel,
+    confidence: typeof budget.confidence === 'number' ? budget.confidence : null,
+  }
+}
+
+export function buildFallbackBudgetTemplate(currency?: string | null): GrantBudgetTemplateScaffold {
+  return {
+    source: 'fallback',
+    required: false,
+    yearWise: false,
+    fixedCategories: false,
+    currency: currency || null,
+    columns: FALLBACK_BUDGET_COLUMNS,
+    categories: [],
+    caps: null,
+    notes: null,
+    sourceAnchors: [],
+    supportLevel: null,
+    confidence: null,
+  }
+}
+
+function getCategoryColumnKey(columns: GrantBudgetTemplateColumn[]): string | null {
+  return columns.find((column) => column.kind === 'category')?.key
+    || columns.find((column) => /category|head|item/i.test(column.label))?.key
+    || null
+}
+
+function ensureUsableBudgetColumns(
+  columns: GrantBudgetTemplateColumn[],
+  hasCategories: boolean
+): GrantBudgetTemplateColumn[] {
+  const normalized = normalizeBudgetColumns(columns)
+  const selected = normalized.length > 0 ? normalized : FALLBACK_BUDGET_COLUMNS
+  if (!hasCategories || getCategoryColumnKey(selected)) {
+    return selected.map((column) => ({ ...column }))
+  }
+
+  return [{ ...FALLBACK_BUDGET_COLUMNS[0] }, ...selected.map((column) => ({ ...column }))]
+}
+
+export function buildBudgetStructuredScaffold(input: {
+  section: GrantBlueprintPlanSection
+  currency?: string | null
+}): JsonRecord {
+  const baseTemplate = input.section.budgetTemplate || buildFallbackBudgetTemplate(input.currency)
+  const template = {
+    ...baseTemplate,
+    required: baseTemplate.required || input.section.required,
+  }
+  const categories = normalizeBudgetCategories(template.categories)
+  const columns = ensureUsableBudgetColumns(template.columns, categories.length > 0)
+  const categoryColumnKey = getCategoryColumnKey(columns)
+  const rowTemplates = categories.length > 0
+    ? categories
+    : template.required
+      ? [{ key: 'budget_1', label: '', cap: null, notes: null, sourceAnchors: [] }]
+      : []
+
+  const rows = rowTemplates.map((category) => {
+    const row: JsonRecord = {}
+    for (const column of columns) {
+      row[column.key] = column.key === categoryColumnKey ? category.label : null
+    }
+    return row
+  })
+
+  return {
+    currency: template.currency || input.currency || null,
+    columns,
+    rows,
+    notes: template.notes || null,
+    constraints: template.caps || null,
+    openQuestions: [],
+    source: template.source || 'fallback',
+  }
+}
+
+function strictParseJsonObject(output: string): JsonRecord {
+  const text = String(output || '').trim()
+  if (!text.startsWith('{') || !text.endsWith('}')) {
+    throw new Error('Budget LLM output must be a single JSON object.')
+  }
+  const parsed = JSON.parse(text)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Budget LLM output must be a JSON object.')
+  }
+  return parsed as JsonRecord
+}
+
+function isNumericColumn(column: GrantBudgetTemplateColumn): boolean {
+  return NUMERIC_KINDS.has(cleanText(column.kind).toLowerCase())
+}
+
+function cleanCellValue(value: unknown): string | null {
+  const text = cleanText(value)
+  return text || null
+}
+
+function cleanNumericCellValue(value: unknown): string | null {
+  const text = cleanText(value)
+  return UNKNOWN_NUMERIC_VALUES.has(text.toLowerCase()) ? null : text
+}
+
+function rowHasAnyValue(row: JsonRecord): boolean {
+  return Object.values(row).some((value) => cleanText(value).length > 0)
+}
+
+function findCandidateRow(
+  rows: JsonRecord[],
+  categoryLabel: string,
+  categoryColumnKey: string | null,
+  index: number
+): JsonRecord {
+  if (categoryColumnKey && categoryLabel) {
+    const match = rows.find((row) =>
+      cleanText(row[categoryColumnKey]).toLowerCase() === categoryLabel.toLowerCase()
+    )
+    if (match) return match
+  }
+  return rows[index] || {}
+}
+
+export function validateBudgetDraftLlmResult(input: {
+  rawOutput: string
+  template: GrantBudgetTemplateScaffold
+  currentData?: unknown
+  allowNewNumericValues?: boolean
+  preserveCurrentNumericValues?: boolean
+}): JsonRecord {
+  const parsed = strictParseJsonObject(input.rawOutput)
+  const current = asRecord(input.currentData)
+  const templateScaffold = {
+    ...input.template,
+    columns: ensureUsableBudgetColumns(input.template.columns, input.template.categories.length > 0),
+    categories: normalizeBudgetCategories(input.template.categories),
+  }
+  const columns = templateScaffold.columns
+  const categoryColumnKey = getCategoryColumnKey(columns)
+  const candidateRows = Array.isArray(parsed.rows)
+    ? parsed.rows.map((row) => asRecord(row))
+    : []
+  const currentRows = Array.isArray(current.rows)
+    ? current.rows.map((row) => asRecord(row))
+    : []
+  const fixedCategories = templateScaffold.fixedCategories && templateScaffold.categories.length > 0
+  const rowSource = fixedCategories
+    ? templateScaffold.categories
+    : candidateRows.map((_, index) => ({ key: `row_${index + 1}`, label: '', cap: null, notes: null, sourceAnchors: [] }))
+
+  const rows = rowSource.map((category, index) => {
+    const candidateRow = fixedCategories
+      ? findCandidateRow(candidateRows, category.label, categoryColumnKey, index)
+      : candidateRows[index] || {}
+    const currentRow = fixedCategories
+      ? findCandidateRow(currentRows, category.label, categoryColumnKey, index)
+      : currentRows[index] || {}
+    const row: JsonRecord = {}
+
+    for (const column of columns) {
+      if (column.key === categoryColumnKey && fixedCategories) {
+        row[column.key] = category.label
+        continue
+      }
+
+      if (isNumericColumn(column)) {
+        const existing = cleanNumericCellValue(currentRow[column.key])
+        if (input.preserveCurrentNumericValues !== false && existing) {
+          row[column.key] = existing
+          continue
+        }
+        row[column.key] = input.allowNewNumericValues
+          ? cleanNumericCellValue(candidateRow[column.key])
+          : null
+        continue
+      }
+
+      row[column.key] = cleanCellValue(candidateRow[column.key])
+    }
+
+    return row
+  }).filter((row) => fixedCategories || rowHasAnyValue(row))
+
+  if (rows.length === 0 && input.template.required) {
+    const row: JsonRecord = {}
+    for (const column of columns) row[column.key] = null
+    rows.push(row)
+  }
+
+  const openQuestions = Array.isArray(parsed.openQuestions)
+    ? parsed.openQuestions.map((item) => cleanText(item)).filter(Boolean).slice(0, 10)
+    : []
+
+  return {
+    currency: cleanText(parsed.currency) || input.template.currency || current.currency || null,
+    columns,
+    rows,
+    notes: cleanText(parsed.notes) || input.template.notes || null,
+    constraints: input.template.caps || asRecord(current.constraints) || null,
+    openQuestions,
+    source: input.template.source || 'fallback',
+  }
+}
+
+export function buildBudgetDraftingPrompt(input: {
+  budgetTemplate: GrantBudgetTemplateScaffold
+  currentData?: unknown
+  grantContextSummary: string[]
+  prepFacts: string[]
+  userInstructions?: string | null
+}): string {
+  return [
+    'You are completing a structured grant budget table.',
+    'Return ONLY raw JSON. No markdown, no code fences, no prose outside JSON.',
+    '',
+    'HARD RULES:',
+    '- Preserve the provided column keys exactly.',
+    '- Preserve extracted category rows unless the template has no fixed categories.',
+    '- Do not invent amounts, totals, rates, salaries, co-funding, or contribution values.',
+    '- Leave unknown numeric cells null.',
+    '- Fill justification and notes cells only from project facts, Grant Prep facts, or user instructions.',
+    '- Put uncertainties in openQuestions, not inside table cells.',
+    '',
+    'OUTPUT JSON SHAPE:',
+    '{"currency":"string|null","columns":[{"key":"string","label":"string","kind":"string|null"}],"rows":[{"...columnKey":"string|null"}],"notes":"string|null","openQuestions":["string"]}',
+    '',
+    'BUDGET TEMPLATE:',
+    JSON.stringify(input.budgetTemplate, null, 2),
+    '',
+    'CURRENT STRUCTURED BUDGET:',
+    JSON.stringify(input.currentData || null, null, 2),
+    '',
+    'FUNDING CALL SUMMARY:',
+    input.grantContextSummary.length > 0
+      ? input.grantContextSummary.map((item) => `- ${item}`).join('\n')
+      : '- None available.',
+    '',
+    'GRANT PREP BUDGET FACTS:',
+    input.prepFacts.length > 0
+      ? input.prepFacts.map((item) => `- ${item}`).join('\n')
+      : '- None available.',
+    '',
+    input.userInstructions
+      ? `USER INSTRUCTIONS:\n${input.userInstructions}`
+      : 'USER INSTRUCTIONS:\n- None.',
+  ].join('\n')
+}

@@ -110,4 +110,39 @@ describe('grant proposal DOCX section assembly', () => {
     expect(result.sections.map((section) => section.content).join('\n')).not.toContain('{')
     expect(result.emptySectionCount).toBe(0)
   })
+
+  it('renders budget template notes before the structured budget table', () => {
+    const result = buildGrantProposalDocxSections([
+      {
+        sectionKey: 'budget',
+        label: 'Budget',
+        sectionType: 'budget_rows',
+        sectionOrder: 1,
+        content: null,
+        structuredResponses: [
+          {
+            fieldKey: 'structuredData',
+            responseJson: {
+              notes: 'Use the funder-provided budget categories.',
+              columns: [
+                { key: 'category', label: 'Category' },
+                { key: 'amount', label: 'Amount' },
+              ],
+              rows: [{ category: 'Equipment', amount: '' }],
+            },
+          },
+        ],
+      },
+    ])
+
+    expect(result.sections[0].blocks?.[0]).toMatchObject({
+      type: 'paragraph',
+      text: 'Use the funder-provided budget categories.',
+    })
+    expect(result.sections[0].blocks?.[1]).toMatchObject({
+      type: 'table',
+      headers: ['Category', 'Amount'],
+      rows: [['Equipment', '']],
+    })
+  })
 })

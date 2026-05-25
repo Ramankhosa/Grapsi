@@ -1,14 +1,19 @@
+import React, { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, FocusEvent } from 'react';
-import { useEffect, useRef } from 'react';
-import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HiArrowsPointingIn, HiArrowsPointingOut, HiExclamationTriangle, HiPaperAirplane, HiSparkles } from 'react-icons/hi2';
 import type { PrepMessage } from './types';
+import {
+  mergeGrantPrepSuggestedAnswersWithInline,
+  removeGrantPrepApprovalBundlePrefix,
+} from '@/lib/grantPrep/suggestedAnswers';
 
 function clsx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
 }
+
+type SuggestedAnswer = NonNullable<PrepMessage['suggested_answers']>[number];
 
 type Props = {
   messages: PrepMessage[];
@@ -16,7 +21,7 @@ type Props = {
   sendCooldown?: boolean;
   input: string;
   onInputChange: (value: string) => void;
-  onSend: (contentOverride?: string) => void;
+  onSend: (contentOverride?: string, selectedSuggestedAnswer?: SuggestedAnswer) => void;
   onRetry?: (content: string) => void;
   sessionLocked: boolean;
   currentPointLabel?: string | null;
@@ -38,8 +43,6 @@ function SteeringBanner({ level, message }: { level: string; message: string }) 
   return <div className={clsx('rounded-lg border px-3 py-2 text-xs', tone)}>{message}</div>;
 }
 
-type SuggestedAnswer = NonNullable<PrepMessage['suggested_answers']>[number];
-
 function buildOptionCombinations(options: SuggestedAnswer[]) {
   const usableOptions = options
     .filter((option) => option?.label && option?.text)
@@ -51,7 +54,7 @@ function buildOptionCombinations(options: SuggestedAnswer[]) {
       const selected = [usableOptions[i], usableOptions[j]];
       combinations.push({
         label: `${selected[0].label} + ${selected[1].label}`,
-        text: `I approve a combination of options ${selected[0].label} and ${selected[1].label}:\n\n${selected
+        text: `Combined options ${selected[0].label} and ${selected[1].label}:\n\n${selected
           .map((option) => `${option.label}. ${option.text}`)
           .join('\n\n')}`,
       });
@@ -61,7 +64,7 @@ function buildOptionCombinations(options: SuggestedAnswer[]) {
   if (usableOptions.length > 2) {
     combinations.push({
       label: 'All options',
-      text: `I approve a combined version of options ${usableOptions.map((option) => option.label).join(', ')}:\n\n${usableOptions
+      text: `Combined options ${usableOptions.map((option) => option.label).join(', ')}:\n\n${usableOptions
         .map((option) => `${option.label}. ${option.text}`)
         .join('\n\n')}`,
     });
@@ -76,18 +79,34 @@ function buildOptionCombinations(options: SuggestedAnswer[]) {
  * Only applied to the last assistant message to avoid duplicate display.
  */
 function stripInlineOptions(text: string): string {
-  // Match lines starting with **A.**, **B.**, A., B., A), B) etc.
-  // Also matches a preceding "header" line like "Suggested answers:" or "Options:" if present.
-  const optionBlockPattern = /\n*(?:(?:\*{0,2}(?:suggested|possible|choose|options?)[^:\n]*:\*{0,2}\s*\n))?(?:\s*\*{0,2}[A-C][.)]\*{0,2}\s.+(?:\n|$))+/gi;
-  return text.replace(optionBlockPattern, '').trimEnd();
+  const firstOption = text.search(/(^|[\s\r\n])(?:[-*]\s*)?\*{0,2}(?:option\s+)?[A-C](?:[.):]|\s*[-\u2013\u2014])\*{0,2}\s+/i);
+  if (firstOption === -1) {
+    return text.trimEnd();
+  }
+
+  const headerStart = text
+    .slice(0, firstOption)
+    .search(/\n\s*\*{0,2}(?:suggested|possible|choose|options?)[^:\n]*:\*{0,2}\s*$/i);
+  const cutAt = headerStart >= 0 ? headerStart : firstOption;
+  return text.slice(0, cutAt).trimEnd();
 }
 
-function MessageBubble({ message, isLast = false }: { message: PrepMessage; isLast?: boolean }) {
+function MessageBubble({
+  message,
+  isLast = false,
+  structuredAnswerCount = 0,
+}: {
+  message: PrepMessage;
+  isLast?: boolean;
+  structuredAnswerCount?: number;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const rawContent = message.content || '';
+  const rawContent = message.role === 'user'
+    ? message.content || ''
+    : removeGrantPrepApprovalBundlePrefix(message.content || '');
 
   // Strip inline options from the last assistant message when cards will render below
-  const hasStructuredOptions = isLast && message.role !== 'user' && Array.isArray(message.suggested_answers) && message.suggested_answers.length > 0;
+  const hasStructuredOptions = isLast && message.role !== 'user' && structuredAnswerCount > 0;
   const content = hasStructuredOptions ? stripInlineOptions(rawContent) : rawContent;
 
   const shouldCollapse = content.length > 320;
@@ -242,13 +261,20 @@ export default function GrantPrepChatPane({
         ) : (
           messages.map((message, index) => {
             const isLastAssistant = message.role !== 'user' && index === messages.length - 1;
-            const structuredAnswers = Array.isArray(message.suggested_answers) ? message.suggested_answers : [];
+            const structuredAnswers = mergeGrantPrepSuggestedAnswersWithInline(
+              Array.isArray(message.suggested_answers) ? message.suggested_answers : [],
+              message.content || ''
+            );
             const hasStructuredAnswers = isLastAssistant && structuredAnswers.length > 0;
             const optionCombinations = hasStructuredAnswers ? buildOptionCombinations(structuredAnswers) : [];
 
             return (
             <div key={message.id}>
-              <MessageBubble message={message} isLast={index === messages.length - 1} />
+              <MessageBubble
+                message={message}
+                isLast={index === messages.length - 1}
+                structuredAnswerCount={hasStructuredAnswers ? structuredAnswers.length : 0}
+              />
 
               {/* B9: Answer Option Cards — only on last assistant message */}
               {hasStructuredAnswers ? (
@@ -305,7 +331,7 @@ export default function GrantPrepChatPane({
                         </button>
                         <button
                           type="button"
-                          onClick={() => onSend(option.text)}
+                          onClick={() => onSend(option.text, option)}
                           disabled={sessionLocked || sending || !!sendCooldown}
                           className="rounded-lg bg-prep-accent px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
                         >

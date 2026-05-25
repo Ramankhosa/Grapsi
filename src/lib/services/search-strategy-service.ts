@@ -8,7 +8,10 @@
  */
 
 import { prisma } from '../prisma';
-import { buildGrantBackedSearchStrategy } from '@/lib/grants/searchStrategy';
+import {
+  buildGrantBackedSearchStrategy,
+  GRANT_SEARCH_STRATEGY_VERSION,
+} from '@/lib/grants/searchStrategy';
 import {
   isGrantBackedPaperTypeCode,
   resolveGrantSectionDimensions,
@@ -54,6 +57,7 @@ export interface GeneratedQuery {
   suggestedSources: string[];
   suggestedYearFrom?: number;
   suggestedYearTo?: number;
+  resultLimit?: number;
   dimensionTargets?: Array<{ sectionKey: string; dimension: string; dimensionType?: string }>;
 }
 
@@ -788,7 +792,9 @@ Return ONLY the JSON array.`;
             suggestedYearTo: q.suggestedYearTo,
             suggestedFilters: {
               searchIntent: q.searchIntent,
+              ...(q.resultLimit ? { resultLimit: q.resultLimit } : {}),
               ...(q.dimensionTargets ? { dimensionTargets: q.dimensionTargets } : {}),
+              ...(q.dimensionTargets ? { strategyVersion: GRANT_SEARCH_STRATEGY_VERSION } : {}),
             },
             status: 'PENDING'
           }))

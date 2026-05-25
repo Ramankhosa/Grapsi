@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server'
 // Force dynamic rendering for API routes that use headers
 export const dynamic = 'force-dynamic'
 import { prisma } from '@/lib/prisma'
+import { getStoredUsageLogActualCost } from '@/lib/metering/llm-usage'
 import { z } from 'zod'
 
 const AnalyticsQuerySchema = z.object({
@@ -333,6 +334,10 @@ function calculateCost(
 ): number {
   const inputTokens = log.inputTokens || 0
   const outputTokens = log.outputTokens || 0
+  const storedCost = getStoredUsageLogActualCost(log.meta)
+  if (storedCost !== null && (storedCost > 0 || (inputTokens === 0 && outputTokens === 0))) {
+    return storedCost
+  }
 
   if (priceMap && log.modelClass && priceMap.has(log.modelClass)) {
     const price = priceMap.get(log.modelClass)!

@@ -38,6 +38,11 @@ export type FundingCallContext = {
   legacyCallAnalysis: unknown | null
 }
 
+export type ProjectFundingContextBinding = {
+  grantSessionId?: string | null
+  fundingCallId?: string | null
+}
+
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : {}
 }
@@ -152,8 +157,15 @@ export function buildCallAnalysisCompatibleContext(context: FundingCallContext) 
 
 export async function resolveProjectFundingContext(
   projectId: string,
-  user: { id: string; email?: string | null; tenantId?: string | null }
+  user: { id: string; email?: string | null; tenantId?: string | null },
+  binding?: ProjectFundingContextBinding
 ): Promise<FundingCallContext> {
+  const grantSessionWhere = binding?.grantSessionId
+    ? { id: binding.grantSessionId }
+    : binding?.fundingCallId
+      ? { fundingCallId: binding.fundingCallId }
+      : {}
+
   const project = await prisma.project.findFirst({
     where: {
       id: projectId,
@@ -162,7 +174,7 @@ export async function resolveProjectFundingContext(
     select: {
       id: true,
       grantSessions: {
-        where: {},
+        where: grantSessionWhere,
         orderBy: { updatedAt: 'desc' },
         take: 1,
         select: {

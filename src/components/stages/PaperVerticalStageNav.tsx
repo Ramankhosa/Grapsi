@@ -597,15 +597,15 @@ const STAGE_DEFINITIONS: StageDefinition[] = [
     key: 'LITERATURE_SEARCH',
     label: 'Literature Search',
     icon: Search,
-    description: 'Search and import citations',
+    description: 'Search and import Grant Citations',
     groupLabel: 'Literature Review',
     weight: 8,
     subStages: [
       {
         key: 'citations_imported',
-        label: 'Imported Citations',
+        label: 'Grant Citations',
         icon: BookOpen,
-        description: 'Import at least 5 citations',
+        description: 'Import at least 5 Grant Citations',
         required: true,
         getStatus: (session) => {
           const count = getCitationsCount(session)

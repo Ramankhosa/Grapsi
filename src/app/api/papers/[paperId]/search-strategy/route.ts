@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { extractGrantDimensionTargets, isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata';
+import {
+  GRANT_SEARCH_RESULT_LIMIT,
+  GRANT_SEARCH_STRATEGY_VERSION,
+} from '@/lib/grants/searchStrategy';
 import { getDraftingSessionForUser } from '@/lib/grants/shadowSessionAccess';
 import { llmGateway } from '@/lib/metering/gateway';
 import type { Prisma } from '@prisma/client';
@@ -71,12 +75,14 @@ type GrantDimensionTargetBundle = {
   id: string;
   theme: string;
   queryFocus: string;
+  mode: 'focused' | 'broad';
   targets: IndexedGrantDimensionTarget[];
 };
 
 const GRANT_STRATEGY_MAX_QUERY_COUNT = 10;
 const GRANT_STRATEGY_MAX_TARGETS_PER_QUERY = 4;
-const GRANT_STRATEGY_RESULTS_PER_QUERY = 10;
+const GRANT_STRATEGY_FOCUSED_QUERY_RESERVE = 8;
+const GRANT_STRATEGY_RESULTS_PER_QUERY = GRANT_SEARCH_RESULT_LIMIT;
 
 const VALID_SEARCH_QUERY_CATEGORIES = [
   'CORE_CONCEPTS',
@@ -108,59 +114,59 @@ const GRANT_SEARCH_THEMES: Array<{
   patterns: RegExp[];
 }> = [
   {
-    key: 'community_baseline',
-    label: 'Community baseline and socio-economic evidence',
-    queryFocus: 'population baseline, socio-economic status, health, education, livelihood, geography, and infrastructure evidence',
+    key: 'need_baseline',
+    label: 'Need, burden, and baseline evidence',
+    queryFocus: 'prevalence, burden, incidence, costs, affected population, baseline conditions, and urgency evidence',
     patterns: [
-      /\b(?:pvtg|tribal|tribe|baiga|mandla|madhya pradesh|bichhiya|mawai|socio.?economic|livelihood|poverty|demographic|health|education|infrastructure|geographical|rural|district|block)\b/i,
+      /\b(?:need|burden|baseline|prevalence|incidence|morbidity|mortality|cost|affected|population|demographic|socio.?economic|urgency|demand|underserved|vulnerable|rural|urban|community)\b/i,
     ],
   },
   {
-    key: 'indigenous_knowledge',
-    label: 'Indigenous knowledge preservation evidence',
-    queryFocus: 'oral indigenous knowledge, traditional healers, ethnobotany, cultural heritage preservation, and knowledge erosion evidence',
+    key: 'gap_landscape',
+    label: 'Gap, barrier, and current landscape evidence',
+    queryFocus: 'current state of practice, evidence gaps, barriers, limitations, unmet needs, and insufficiency of existing responses',
     patterns: [
-      /\b(?:indigenous knowledge|traditional knowledge|oral|healer|healers|ethnobotany|ethnobotanical|medicinal|biocultural|cultural heritage|knowledge loss|knowledge preservation|traditional medicine)\b/i,
+      /\b(?:gap|barrier|limitation|challenge|constraint|unmet|insufficient|shortfall|bottleneck|state of art|state of the art|current landscape|existing evidence|evidence landscape)\b/i,
     ],
   },
   {
-    key: 'existing_solutions',
-    label: 'Existing solution and repository comparison evidence',
-    queryFocus: 'traditional knowledge databases, digital libraries, repositories, archives, and comparative solution gaps',
+    key: 'approach_feasibility',
+    label: 'Implementation feasibility and adoption evidence',
+    queryFocus: 'implementation studies, pilot programs, deployment, adoption, delivery models, operational feasibility, and scale-up precedent',
     patterns: [
-      /\b(?:tkdl|maori|unesco|repository|repositories|database|databases|digital librar|archive|archives|existing solution|comparison|comparative)\b/i,
+      /\b(?:feasib|implementation|pilot|deployment|delivery|adoption|uptake|operational|scale.?up|scaling|readiness|workflow|field implementation)\b/i,
     ],
   },
   {
-    key: 'low_resource_ai',
-    label: 'Low-resource AI and language technology evidence',
-    queryFocus: 'large language models, low-resource languages, Llama/open-source models, fine-tuning, vernacular NLP, and specialized-domain adaptation',
+    key: 'method_validation',
+    label: 'Method validation and benchmark evidence',
+    queryFocus: 'validation studies, measurement reliability, evaluation methods, benchmarks, indicators, protocols, and methodological evidence',
     patterns: [
-      /\b(?:llm|large language model|llama|open-source llm|fine.?tun|low.?resource|language model|nlp|vernacular|bilingual|specialized domain)\b/i,
+      /\b(?:validation|validated|benchmark|reliability|measurement|indicator|protocol|evaluation design|method|methodology|assessment|metric)\b/i,
     ],
   },
   {
-    key: 'inclusive_digital_delivery',
-    label: 'Inclusive digital delivery and learning evidence',
-    queryFocus: 'voice interfaces, low-literacy mobile applications, adaptive learning, query-based retrieval, blended learning, and digital inclusion evidence',
+    key: 'precedent_comparison',
+    label: 'Precedent, comparison, and current practice evidence',
+    queryFocus: 'comparable interventions, alternative approaches, current practice, benchmarks, precedent, and comparative evidence',
     patterns: [
-      /\b(?:voice|mobile app|mobile application|low.?literacy|adaptive learning|query.?based retrieval|blended learning|digital literacy|digital divide|community knowledge dissemination|bilingual module|vernacular audio)\b/i,
+      /\b(?:comparison|comparative|precedent|current practice|alternative|benchmark against|advantage|existing solution|similar intervention|related intervention)\b/i,
     ],
   },
   {
-    key: 'participatory_methodology',
-    label: 'Participatory implementation methodology evidence',
-    queryFocus: 'participatory rural appraisal, train-the-trainer, community mobilization, validation, knowledge transfer, and capacity-building methodology evidence',
+    key: 'impact_outcomes',
+    label: 'Impact and outcome evidence',
+    queryFocus: 'measurable outcomes, effect sizes, impact metrics, improvements, benefits, success rates, and adoption results',
     patterns: [
-      /\b(?:participatory|pra|rural appraisal|train.?the.?trainer|community mobilization|capacity building|capacity enhancement|validation|knowledge transfer|community trainer)\b/i,
+      /\b(?:outcome|impact|effect size|improvement|reduction|increase|success rate|result metric|benefit|performance|development|growth|adoption result)\b/i,
     ],
   },
   {
-    key: 'gap_and_impact',
-    label: 'Problem gap and outcome evidence',
-    queryFocus: 'documented gaps, disparities, sustainability risks, adverse outcomes, and measurable development impact evidence',
+    key: 'policy_alignment',
+    label: 'Policy, framework, and priority evidence',
+    queryFocus: 'policy frameworks, strategies, priorities, roadmaps, institutional programs, and funder or mission alignment evidence',
     patterns: [
-      /\b(?:gap|gaps|disparit|adverse|outcome|impact|sustainability|erosion|loss|challenge|limitation|risk)\b/i,
+      /\b(?:policy|strategy|framework|priority|mission|roadmap|scheme|guideline|program alignment|institutional|government|agency)\b/i,
     ],
   },
 ];
@@ -206,13 +212,13 @@ function resolveGrantSearchTheme(target: GrantBlueprintDimensionTarget) {
 
   switch (target.dimensionType) {
     case 'methodological':
-      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'participatory_methodology')!;
+      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'method_validation')!;
     case 'comparative':
-      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'existing_solutions')!;
+      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'precedent_comparison')!;
     case 'gap':
-      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'gap_and_impact')!;
+      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'gap_landscape')!;
     case 'foundational':
-      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'indigenous_knowledge')!;
+      return GRANT_SEARCH_THEMES.find((theme) => theme.key === 'need_baseline')!;
     default:
       return {
         key: 'empirical_evidence',
@@ -239,10 +245,13 @@ function splitGrantThemeTargets(targets: IndexedGrantDimensionTarget[]): Indexed
   return chunks;
 }
 
-function mergeSmallGrantBundles(bundles: GrantDimensionTargetBundle[]): GrantDimensionTargetBundle[] {
+function mergeSmallGrantBundles(
+  bundles: GrantDimensionTargetBundle[],
+  maxCount: number = GRANT_STRATEGY_MAX_QUERY_COUNT
+): GrantDimensionTargetBundle[] {
   const merged = [...bundles];
 
-  while (merged.length > GRANT_STRATEGY_MAX_QUERY_COUNT) {
+  while (merged.length > maxCount) {
     let smallestIndex = 0;
     for (let index = 1; index < merged.length; index += 1) {
       if (merged[index].targets.length < merged[smallestIndex].targets.length) {
@@ -306,12 +315,56 @@ function bundleGrantDimensionTargets(targets: IndexedGrantDimensionTarget[]): Gr
         id: '',
         theme: group.label,
         queryFocus: group.queryFocus,
+        mode: 'focused' as const,
         targets: chunk,
       }))
     )
     .map((bundle, index) => ({ ...bundle, id: `B${index + 1}` }));
 
-  return mergeSmallGrantBundles(bundles);
+  const focusedBundles = mergeSmallGrantBundles(
+    bundles,
+    Math.min(GRANT_STRATEGY_FOCUSED_QUERY_RESERVE, GRANT_STRATEGY_MAX_QUERY_COUNT)
+  );
+  const broadBundles = buildBroadGrantDiscoveryBundles(
+    targets,
+    GRANT_STRATEGY_MAX_QUERY_COUNT - focusedBundles.length
+  );
+
+  return [...focusedBundles, ...broadBundles].map((bundle, index) => ({ ...bundle, id: `B${index + 1}` }));
+}
+
+function buildBroadGrantDiscoveryBundles(
+  targets: IndexedGrantDimensionTarget[],
+  availableSlots: number
+): GrantDimensionTargetBundle[] {
+  if (availableSlots <= 0 || targets.length === 0) return [];
+
+  const groups = new Map<string, { label: string; queryFocus: string; targets: IndexedGrantDimensionTarget[]; firstIndex: number }>();
+  targets.forEach((target, index) => {
+    const theme = resolveGrantSearchTheme(target);
+    const current = groups.get(theme.key);
+    if (current) {
+      current.targets.push(target);
+      return;
+    }
+    groups.set(theme.key, {
+      label: theme.label,
+      queryFocus: theme.queryFocus,
+      targets: [target],
+      firstIndex: index,
+    });
+  });
+
+  return [...groups.values()]
+    .sort((left, right) => right.targets.length - left.targets.length || left.firstIndex - right.firstIndex)
+    .slice(0, Math.min(2, availableSlots))
+    .map((group, index) => ({
+      id: `BROAD${index + 1}`,
+      theme: `Broad discovery: ${group.label}`,
+      queryFocus: `Use academic title/abstract language to find ${group.queryFocus}. Do not rely on exact proposal wording.`,
+      mode: 'broad' as const,
+      targets: group.targets.slice(0, 6),
+    }));
 }
 
 function selectGrantSearchContextKeywords(
@@ -423,6 +476,7 @@ function buildGrantDimensionStrategyPrompt(input: {
   const contextKeywords = selectGrantSearchContextKeywords(input.keywords, input.bundles);
   const bundlePayload = input.bundles.map((bundle) => ({
     bundleId: bundle.id,
+    bundleMode: bundle.mode,
     evidenceTheme: bundle.theme,
     queryFocus: bundle.queryFocus,
     targetIds: bundle.targets.map((target) => target.id),
@@ -450,7 +504,7 @@ BLUEPRINT DIMENSION BUNDLES:
 ${JSON.stringify(bundlePayload)}
 
 TASK:
-Generate exactly ${queryCount} high-quality academic search queries, one query per evidence-theme bundle.
+Generate exactly ${queryCount} high-quality academic search queries, one query per bundle.
 The app will retrieve about ${GRANT_STRATEGY_RESULTS_PER_QUERY} papers per query, so the total search pool should stay around ${targetPaperCount} papers before deduplication and relevance filtering.
 
 Rules:
@@ -459,14 +513,17 @@ Rules:
 - Use the bundle's targetIds exactly. Do not invent ids and do not split a bundle into multiple queries.
 - Write short keyword search phrases, usually 4-8 words.
 - Do not use question format.
-- Build the query from the bundle evidenceTheme, queryFocus, and dimensions. Optional domain anchors are context, not a checklist.
+- Build the query from the bundle evidenceTheme, queryFocus, bundleMode, and dimensions. Optional domain anchors are context, not a checklist.
 - Do not stuff keywords from the grant prep. Never paste long lists of project-specific phrases into a query.
 - Avoid administrative grant terms, dates, budgets, output counts, internal milestones, section labels, and exact proposal deliverables.
 - Avoid generic phrases like "literature review", "grant", "proposal", or "project" unless genuinely useful.
-- Prefer terms that will find empirical evidence, intervention studies, implementation evidence, comparisons, policy evidence, or evaluation metrics relevant to the targetIds.
+- For bundleMode "focused", make a selective query tied to the target dimensions and one evidence role such as need, gap, feasibility, validation, impact, precedent, policy fit, or evidence boundary.
+- For bundleMode "broad", use academic title/abstract language that may not match the proposal wording exactly. Prefer broader population, setting, intervention, method, policy, evaluation, or outcome terms.
+- Prefer terms that will find empirical evidence, intervention studies, implementation evidence, comparisons, policy evidence, evaluation metrics, or evidence boundaries relevant to the targetIds.
 - A good query should have one clear academic construct plus one domain/population/method anchor.
 - If a bundle contains multiple dimensions, write the query around their shared evidence family. Do not combine unrelated concepts in one phrase.
-- Keep the strategy selective. It should support selecting 20-30 final grant citations from roughly ${targetPaperCount} candidate papers, not broad harvesting.
+- Keep the strategy selective. It should support selecting 20-30 final Grant Citations from roughly ${targetPaperCount} candidate papers, not broad harvesting.
+- searchIntent must start with "focused_" for focused bundles and "broad_discovery_" for broad bundles.
 
 Respond in JSON format ONLY:
 {
@@ -482,7 +539,7 @@ Respond in JSON format ONLY:
       "suggestedSources": ["semantic_scholar", "openalex", "crossref"],
       "suggestedYearFrom": <optional year>,
       "suggestedYearTo": <optional year>,
-      "searchIntent": "<short snake_case intent>",
+      "searchIntent": "<focused_or_broad_discovery_snake_case_intent>",
       "targetIds": ["exact ids from that bundle"]
     }
   ]
@@ -532,6 +589,29 @@ function normalizeGrantGeneratedQueryText(value: unknown): string {
   const words = clean.split(/\s+/).filter(Boolean);
   if (words.length <= 10) return clean.slice(0, 200);
   return words.slice(0, 10).join(' ').slice(0, 200);
+}
+
+function normalizeGrantSearchIntent(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 70);
+}
+
+function resolveGrantSearchIntent(value: unknown, bundle: GrantDimensionTargetBundle): string {
+  const prefix = bundle.mode === 'broad' ? 'broad_discovery' : 'focused';
+  const normalized = normalizeGrantSearchIntent(value);
+  if (!normalized) {
+    return `${prefix}_${normalizeGrantSearchIntent(bundle.theme || bundle.queryFocus) || 'grant_evidence'}`.slice(0, 80);
+  }
+  if (normalized.startsWith(`${prefix}_`)) {
+    return normalized.slice(0, 80);
+  }
+  const unprefixed = normalized
+    .replace(/^focused_/, '')
+    .replace(/^broad_discovery_/, '');
+  return `${prefix}_${unprefixed || 'grant_evidence'}`.slice(0, 80);
 }
 
 function parseStrategyResponse(output: string): LLMStrategyResponse {
@@ -604,7 +684,7 @@ function parseGrantDimensionStrategyResponse(
           : DEFAULT_SEARCH_SOURCES,
         suggestedYearFrom: q?.suggestedYearFrom ? Number(q.suggestedYearFrom) : undefined,
         suggestedYearTo: q?.suggestedYearTo ? Number(q.suggestedYearTo) : undefined,
-        searchIntent: q?.searchIntent ? String(q.searchIntent).slice(0, 80) : undefined,
+        searchIntent: resolveGrantSearchIntent(q?.searchIntent || expectedBundle.theme, expectedBundle),
         resultLimit: GRANT_STRATEGY_RESULTS_PER_QUERY,
         targetIds,
         dimensionTargets: targetIds.map((targetId: string) => {
@@ -643,7 +723,7 @@ function buildSuggestedFilters(query: GeneratedQuery): Prisma.InputJsonObject {
     filters.resultLimit = query.resultLimit;
   }
   if (query.dimensionTargets?.length) {
-    filters.strategyVersion = 'grant_search_v2';
+    filters.strategyVersion = GRANT_SEARCH_STRATEGY_VERSION;
     filters.dimensionTargets = query.dimensionTargets.map((target) => ({
       sectionKey: target.sectionKey,
       dimension: target.dimension,
@@ -676,18 +756,18 @@ export async function GET(request: NextRequest, context: { params: { paperId: st
 
     // Calculate progress
     const queries = session.citationSearchStrategy.queries;
-    const hasGrantSearchV2Query = queries.some((query) =>
-      (query.suggestedFilters as { strategyVersion?: string } | null)?.strategyVersion === 'grant_search_v2'
+    const hasCurrentGrantSearchQuery = queries.some((query) =>
+      (query.suggestedFilters as { strategyVersion?: string } | null)?.strategyVersion === GRANT_SEARCH_STRATEGY_VERSION
     );
     const isUnusedLegacyGrantStrategy =
       isGrantBackedPaperTypeCode(session.paperBlueprint?.paperTypeCode)
-      && !hasGrantSearchV2Query
+      && !hasCurrentGrantSearchQuery
       && !strategyQueriesHaveProgress(queries);
 
     if (isUnusedLegacyGrantStrategy) {
       return NextResponse.json({
         strategy: null,
-        message: 'Existing rule-built grant search strategy needs regeneration from the blueprint dimensions.',
+        message: 'Existing grant search strategy needs regeneration from the current grant-aligned strategy.',
         needsRegeneration: true,
       });
     }
@@ -802,11 +882,14 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
 
     const existingGrantStrategyIsLegacy =
       isGrantBackedBlueprint
-      && session.citationSearchStrategy?.aiModelUsed === 'grant_blueprint_bundle'
+      && !!session.citationSearchStrategy
+      && !session.citationSearchStrategy.queries.some((query) =>
+        (query.suggestedFilters as { strategyVersion?: string } | null)?.strategyVersion === GRANT_SEARCH_STRATEGY_VERSION
+      )
       && !strategyQueriesHaveProgress(session.citationSearchStrategy.queries);
 
     // Check if strategy already exists and regenerate is not requested.
-    // Legacy grant_blueprint_bundle strategies are replaced automatically because they were rule-built.
+    // Legacy grant strategies are replaced automatically before they have user progress.
     if (session.citationSearchStrategy && !data.regenerate && !existingGrantStrategyIsLegacy) {
       return NextResponse.json({ 
         error: 'Search strategy already exists. Set regenerate: true to create a new one.',

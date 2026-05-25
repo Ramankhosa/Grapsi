@@ -30,6 +30,7 @@ import type {
   GrantSectionComplianceContract,
   GrantRuleProfile,
   GrantSectionSemantic,
+  GrantBudgetTemplateScaffold,
   GrantTemplateIntent,
   GrantTemplateGuidanceProfile,
   ReviewerReadinessReport,
@@ -89,6 +90,7 @@ export interface SectionPlanItem {
   relatedPrepAwareness?: GrantPrepPromptBundle | null;
   grantRuleProfile?: GrantRuleProfile | null;
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null;
+  budgetTemplate?: GrantBudgetTemplateScaffold | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
   grantComplianceReport?: GrantComplianceReport | null;
   reviewerReadinessReport?: ReviewerReadinessReport | null;
@@ -147,6 +149,7 @@ export interface SectionContext {
   relatedPrepAwareness?: GrantPrepPromptBundle | null;
   grantRuleProfile?: GrantRuleProfile | null;
   grantTemplateGuidance?: GrantTemplateGuidanceProfile | null;
+  budgetTemplate?: GrantBudgetTemplateScaffold | null;
   grantSectionComplianceContract?: GrantSectionComplianceContract | null;
   grantComplianceReport?: GrantComplianceReport | null;
   reviewerReadinessReport?: ReviewerReadinessReport | null;
@@ -562,6 +565,7 @@ class BlueprintService {
         relatedPrepAwareness: sectionPlan.relatedPrepAwareness,
         grantRuleProfile: sectionPlan.grantRuleProfile,
         grantTemplateGuidance: sectionPlan.grantTemplateGuidance,
+        budgetTemplate: sectionPlan.budgetTemplate,
         grantSectionComplianceContract: sectionPlan.grantSectionComplianceContract,
         grantComplianceReport: sectionPlan.grantComplianceReport,
         reviewerReadinessReport: sectionPlan.reviewerReadinessReport,
@@ -1195,6 +1199,9 @@ CRITICAL RULES:
           : {}),
         ...(raw.grantTemplateGuidance && typeof raw.grantTemplateGuidance === 'object'
           ? { grantTemplateGuidance: raw.grantTemplateGuidance as GrantTemplateGuidanceProfile }
+          : {}),
+        ...(raw.budgetTemplate && typeof raw.budgetTemplate === 'object'
+          ? { budgetTemplate: raw.budgetTemplate as GrantBudgetTemplateScaffold }
           : {}),
         ...(raw.grantSectionComplianceContract && typeof raw.grantSectionComplianceContract === 'object'
           ? { grantSectionComplianceContract: raw.grantSectionComplianceContract as GrantSectionComplianceContract }

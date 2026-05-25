@@ -546,20 +546,20 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
       }
     ]
   },
-  // Stage 4: Literature Search (LITERATURE_SEARCH) - Search and import citations
+  // Stage 4: Literature Search (LITERATURE_SEARCH) - Search and import Grant Citations
   {
     key: 'LITERATURE_SEARCH',
     label: 'Literature Search',
     icon: Search,
-    description: 'Search and import citations',
+    description: 'Search and import Grant Citations',
     groupLabel: 'Literature Review',
     weight: 8,
     subStages: [
       {
         key: 'citations_imported',
-        label: 'Imported Citations',
+        label: 'Grant Citations',
         icon: FileText,
-        description: 'Import at least 5 citations',
+        description: 'Import at least 5 Grant Citations',
         required: true,
         getStatus: (session) => {
           const count = getCitationsCount(session)

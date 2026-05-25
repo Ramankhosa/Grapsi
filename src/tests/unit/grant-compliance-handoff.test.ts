@@ -136,7 +136,7 @@ describe('grant prep freeze payload', () => {
     expect(result.payload.globalCaptureSummary[0]).toContain('Rule note')
   })
 
-  it('allows launch when core P1 facts are covered even if P2 detail remains open', () => {
+  it('blocks launch when required-stage P2 detail keeps readiness below threshold', () => {
     const session = {
       mode: 'template_driven',
       engagementMode: 'expert',
@@ -195,7 +195,13 @@ describe('grant prep freeze payload', () => {
       templateRevisionId: null,
     })
 
-    expect(result.blockers).toEqual([])
+    expect(result.blockers).toEqual([
+      {
+        stageKey: 'methodology',
+        pointKey: 'evidence_generation',
+        message: 'Methodology: Data, validation, or evidence plan is still incomplete.',
+      },
+    ])
   })
 
   it('still blocks launch when a core P1 fact is missing', () => {

@@ -1,6 +1,11 @@
 import { FundingCall } from './fundingCallsService';
-import { generateFromGemini } from '../geminiService';
 import { fillPromptTemplate } from '../promptTemplates';
+import {
+  FUNDING_CHAT_NARRATIVE_STAGE_CODE,
+  FUNDING_CHAT_TASK_CODE,
+  runFundingGatewayText,
+  type FundingLlmRoutingContext,
+} from '../funding/llmRouting';
 
 /**
  * Interface for search result enrichment
@@ -23,12 +28,38 @@ export interface LLMAnalysisOptions {
   userCountry?: string;
   maxResultsToAnalyze?: number;
   detailedAnalysis?: boolean;
+  llmContext?: FundingLlmRoutingContext | null;
 }
 
 /**
  * Service for connecting SQL search results to LLM for processing
  */
 export class SQLToLLMConnector {
+  private async generateFundingAnalysisText(
+    prompt: string,
+    action: string,
+    context?: FundingLlmRoutingContext | null
+  ): Promise<string> {
+    const result = await runFundingGatewayText({
+      taskCode: FUNDING_CHAT_TASK_CODE,
+      stageCode: FUNDING_CHAT_NARRATIVE_STAGE_CODE,
+      prompt,
+      context,
+      temperature: 0.2,
+      maxTokensOut: 2200,
+      metadata: {
+        purpose: `funding_sql_llm_${action}`,
+        legacyService: 'SQLToLLMConnector',
+      },
+    });
+
+    if (!result?.rawText) {
+      throw new Error('No LLM provider configured for funding result analysis');
+    }
+
+    return result.rawText;
+  }
+
   /**
    * Format funding calls for LLM consumption
    */
@@ -119,7 +150,11 @@ Format each analysis with clear headings and bullet points.
 `;
 
       // Get LLM analysis
-      const llmResponse = await generateFromGemini(analysisPrompt, 'gemini-2.0-flash');
+      const llmResponse = await this.generateFundingAnalysisText(
+        analysisPrompt,
+        'enrich_search_results',
+        options.llmContext
+      );
       
       // Process LLM response to extract structured data
       // This is a simplified version; in a real implementation, we would parse the response more carefully
@@ -203,7 +238,11 @@ Format your response in a clear, conversational way that helps the user understa
 `;
 
       // Get LLM response
-      return await generateFromGemini(responsePrompt, 'gemini-2.0-flash');
+      return await this.generateFundingAnalysisText(
+        responsePrompt,
+        'generate_search_response',
+        options.llmContext
+      );
     } catch (error) {
       console.error('Error generating search response:', error);
       return `I found some funding opportunities that might match your query, but I'm having trouble analyzing them in detail. Here are the basic results:\n\n${fundingCalls.slice(0, 3).map(call => `- ${call.schemeTitle} (${call.agencyName})`).join('\n')}`;
@@ -260,7 +299,11 @@ Format your analysis with clear headings and bullet points where appropriate.
 `;
 
       // Get LLM analysis
-      return await generateFromGemini(analysisPrompt, 'gemini-2.0-flash');
+      return await this.generateFundingAnalysisText(
+        analysisPrompt,
+        'analyze_funding_opportunity',
+        options.llmContext
+      );
     } catch (error) {
       console.error('Error analyzing funding opportunity:', error);
       return `I found the funding opportunity "${fundingCall.schemeTitle}" from ${fundingCall.agencyName}, but I'm having trouble analyzing it in detail.`;
