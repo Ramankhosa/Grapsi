@@ -497,12 +497,16 @@ export class LLMGateway {
    */
   private readonly VISION_CAPABLE_MODELS = new Set([
     // OpenAI
-    'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.1', 'gpt-5.2', 'gpt-5-mini', 'gpt-5-nano',
+    'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.1', 'gpt-5.2',
+    'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.4-pro', 'gpt-5.5', 'gpt-5.5-pro',
+    'gpt-5-mini', 'gpt-5-nano',
     'gpt-5.1-thinking', 'gpt-5.2-thinking',
     // Anthropic
     'claude-opus-4.5',
     'claude-opus-4-5',
     'claude-opus-4.6',
+    'claude-opus-4-6',
+    'claude-opus-4-7',
     'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
     'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229',
     // Google Gemini
@@ -566,6 +570,12 @@ export class LLMGateway {
       'gpt-5': { maxInput: 400000, maxOutput: 128000 },
       'gpt-5.1': { maxInput: 400000, maxOutput: 128000 },
       'gpt-5.2': { maxInput: 400000, maxOutput: 128000 },
+      'gpt-5.4': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.4-mini': { maxInput: 400000, maxOutput: 64000 },
+      'gpt-5.4-nano': { maxInput: 400000, maxOutput: 32000 },
+      'gpt-5.4-pro': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.5': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.5-pro': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5-mini': { maxInput: 200000, maxOutput: 64000 },
       'gpt-5-nano': { maxInput: 128000, maxOutput: 32000 },
       // OpenAI - GPT-5 Thinking Variants (alias to base)
@@ -587,6 +597,7 @@ export class LLMGateway {
       'claude-opus-4-5': { maxInput: 1000000, maxOutput: 128000 },
       'claude-opus-4.6': { maxInput: 1000000, maxOutput: 128000 },
       'claude-opus-4-6': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-opus-4-7': { maxInput: 1000000, maxOutput: 128000 },
       // Anthropic - Claude 3.7 models
       'claude-3-7-sonnet': { maxInput: 200000, maxOutput: 16384 },
       'claude-3-7-sonnet-20250219': { maxInput: 200000, maxOutput: 16384 },
@@ -630,7 +641,21 @@ export class LLMGateway {
       'deepseek-reasoner': { maxInput: 128000, maxOutput: 8192 },
 
       // Zhipu
+      'glm-5.1': { maxInput: 200000, maxOutput: 65536 },
       'glm-5': { maxInput: 200000, maxOutput: 65536 },
+      'glm-5-turbo': { maxInput: 200000, maxOutput: 65536 },
+      'glm-5v-turbo': { maxInput: 200000, maxOutput: 65536 },
+      'glm-4.7': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.7-flash': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.7-flashx': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.6': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.5': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.5-air': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.5-x': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.5-airx': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.5-flash': { maxInput: 128000, maxOutput: 32768 },
+      'glm-4.5v': { maxInput: 128000, maxOutput: 16384 },
+      'glm-4-32b-0414-128k': { maxInput: 128000, maxOutput: 32768 },
 
       // Qwen
       'qwen2.5-72b-instruct': { maxInput: 131072, maxOutput: 8192 },

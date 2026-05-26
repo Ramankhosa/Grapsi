@@ -7,6 +7,7 @@ import {
   validateFundingExtractionPayload,
 } from '@/lib/fundingIntake/utils'
 import { prepareFundingJsonIntake } from '@/lib/fundingIntake/jsonIngestion'
+import { parseCoreExtractorPayload } from '@/lib/fundingIntake/coreExtractionPayload'
 
 describe('funding intake normalization', () => {
   it('builds description deterministically from evidence-backed segments', () => {
@@ -218,5 +219,43 @@ describe('funding intake normalization', () => {
         }),
       ])
     )
+  })
+
+  it('coerces recoverable LLM field-shape drift before strict parsing', () => {
+    const parsed = parseCoreExtractorPayload(JSON.stringify({
+      fields: {
+        agency_name: {
+          value: ['Lung Cancer Research Foundation'],
+          status: 'supported',
+          confidence: 0.9,
+          evidence: [{ segmentId: 'seg_001', quote: ['Lung Cancer Research Foundation'] }],
+        },
+        scheme_title: {
+          value: 'LCRF OUCH-I RFP',
+          status: 'supported',
+          confidence: 0.9,
+          evidence: [{ sourceType: 'segment', segmentId: 'seg_001', quote: 'LCRF OUCH-I RFP' }],
+        },
+        description: {
+          value: ['Funds research on lung cancer.', 'Supports investigator-initiated proposals.'],
+          status: 'supported',
+          confidence: 0.9,
+          evidence: [{ segmentId: 'seg_002', quote: ['Funds research on lung cancer.'] }],
+        },
+        amount_min: null,
+      },
+      warnings: [],
+    }))
+
+    expect(parsed.fields.agency_name.value).toBe('Lung Cancer Research Foundation')
+    expect(parsed.fields.description.value).toBe(
+      'Funds research on lung cancer.\nSupports investigator-initiated proposals.'
+    )
+    expect(parsed.fields.amount_min).toMatchObject({
+      value: null,
+      status: 'unsupported',
+      confidence: 0,
+      evidence: [],
+    })
   })
 })

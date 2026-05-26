@@ -106,6 +106,12 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gpt-5': 'openai',
     'gpt-5.1': 'openai',
     'gpt-5.2': 'openai',
+    'gpt-5.4': 'openai',
+    'gpt-5.4-mini': 'openai',
+    'gpt-5.4-nano': 'openai',
+    'gpt-5.4-pro': 'openai',
+    'gpt-5.5': 'openai',
+    'gpt-5.5-pro': 'openai',
     'gpt-5-mini': 'openai',
     'gpt-5-nano': 'openai',
     // OpenAI - GPT-5 Thinking Variants
@@ -123,6 +129,7 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'claude-opus-4-5': 'anthropic',
     'claude-opus-4.6': 'anthropic',
     'claude-opus-4-6': 'anthropic',
+    'claude-opus-4-7': 'anthropic',
     'claude-3.5-sonnet': 'anthropic',
     'claude-3.5-haiku': 'anthropic',
     'claude-3-opus': 'anthropic',
@@ -159,8 +166,21 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'grok-2': 'grok',
 
     // Zhipu (GLM)
+    'glm-5.1': 'zhipu',
     'glm-5': 'zhipu',
+    'glm-5-turbo': 'zhipu',
+    'glm-5v-turbo': 'zhipu',
+    'glm-4.7': 'zhipu',
+    'glm-4.7-flash': 'zhipu',
+    'glm-4.7-flashx': 'zhipu',
+    'glm-4.6': 'zhipu',
+    'glm-4.5': 'zhipu',
+    'glm-4.5-air': 'zhipu',
+    'glm-4.5-x': 'zhipu',
+    'glm-4.5-airx': 'zhipu',
+    'glm-4.5-flash': 'zhipu',
     'glm-4.5v': 'zhipu',
+    'glm-4-32b-0414-128k': 'zhipu',
 
     // Qwen (DashScope-compatible)
     'qwen2.5-72b-instruct': 'qwen',

@@ -14,6 +14,7 @@ import {
   FUNDING_INTAKE_PROMPT_VERSION,
   LLM_EXTRACTABLE_FUNDING_FIELD_KEYS,
 } from './constants';
+import { parseCoreExtractorPayload } from './coreExtractionPayload';
 import { fundingIntakeStructuredOutputSchema, type FundingIntakeStructuredOutput } from './schemas';
 import type {
   FundingExtractionPayload,
@@ -59,7 +60,9 @@ function buildSegmentPrompt(segments: FundingSourceSegment[]): string {
 Extract only these funding fields:
 ${LLM_EXTRACTABLE_FUNDING_FIELD_KEYS.map((key) => `- ${key}`).join('\n')}
 
-Return an object with:
+Return strict JSON only.
+
+Return a JSON object with:
 - fields: every listed field must be present
 - warnings: array of extraction notes, or []
 
@@ -99,8 +102,7 @@ async function callCoreExtractor(
   });
 
   if (gatewayResponse) {
-    const parsedJson = parseJsonResponse(gatewayResponse.rawText);
-    const parsed = fundingIntakeStructuredOutputSchema.parse(parsedJson);
+    const parsed = parseCoreExtractorPayload(gatewayResponse.rawText);
 
     return {
       model: gatewayResponse.model,
@@ -119,8 +121,7 @@ async function callCoreExtractor(
         maxTokens: 12000,
         temperature: 0,
       });
-      const parsedJson = parseJsonResponse(response.rawText);
-      const parsed = fundingIntakeStructuredOutputSchema.parse(parsedJson);
+      const parsed = parseCoreExtractorPayload(response.rawText);
 
       return {
         model: response.model,

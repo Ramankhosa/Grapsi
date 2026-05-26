@@ -9,7 +9,23 @@ import { collectOpenAICompatibleChatCompletionStream } from './streaming-utils'
 
 export class ZhipuProvider implements LLMProvider {
   name = 'zhipu'
-  supportedModels = ['glm-5', 'glm-4.5v']
+  supportedModels = [
+    'glm-5.1',
+    'glm-5',
+    'glm-5-turbo',
+    'glm-5v-turbo',
+    'glm-4.7',
+    'glm-4.7-flash',
+    'glm-4.7-flashx',
+    'glm-4.6',
+    'glm-4.5',
+    'glm-4.5-air',
+    'glm-4.5-x',
+    'glm-4.5-airx',
+    'glm-4.5-flash',
+    'glm-4.5v',
+    'glm-4-32b-0414-128k',
+  ]
 
   private config: ProviderConfig
   private client: any
@@ -44,9 +60,22 @@ export class ZhipuProvider implements LLMProvider {
     const startTime = Date.now()
     const modelToUse = request.modelClass || this.config.model || 'glm-5'
     const modelMap: Record<string, string> = {
+      'glm-5.1': 'glm-5.1',
       'glm-5': 'glm-5',
+      'glm-5-turbo': 'glm-5-turbo',
+      'glm-5v-turbo': 'glm-5v-turbo',
+      'glm-4.7': 'glm-4.7',
+      'glm-4.7-flash': 'glm-4.7-flash',
+      'glm-4.7-flashx': 'glm-4.7-flashx',
+      'glm-4.6': 'glm-4.6',
+      'glm-4.5': 'glm-4.5',
+      'glm-4.5-air': 'glm-4.5-air',
+      'glm-4.5-x': 'glm-4.5-x',
+      'glm-4.5-airx': 'glm-4.5-airx',
+      'glm-4.5-flash': 'glm-4.5-flash',
       'glm-4.5v': 'glm-4.5v',
-      'glm-4-5v': 'glm-4.5v'
+      'glm-4-5v': 'glm-4.5v',
+      'glm-4-32b-0414-128k': 'glm-4-32b-0414-128k',
     }
     const actualModel = modelMap[modelToUse] || modelToUse
 
@@ -167,8 +196,21 @@ export class ZhipuProvider implements LLMProvider {
 
   getTokenLimits(modelName: string): { input: number; output: number } {
     const limits: Record<string, { input: number; output: number }> = {
+      'glm-5.1': { input: 200000, output: 65536 },
       'glm-5': { input: 200000, output: 65536 },
-      'glm-4.5v': { input: 128000, output: 16384 }
+      'glm-5-turbo': { input: 200000, output: 65536 },
+      'glm-5v-turbo': { input: 200000, output: 65536 },
+      'glm-4.7': { input: 128000, output: 32768 },
+      'glm-4.7-flash': { input: 128000, output: 32768 },
+      'glm-4.7-flashx': { input: 128000, output: 32768 },
+      'glm-4.6': { input: 128000, output: 32768 },
+      'glm-4.5': { input: 128000, output: 32768 },
+      'glm-4.5-air': { input: 128000, output: 32768 },
+      'glm-4.5-x': { input: 128000, output: 32768 },
+      'glm-4.5-airx': { input: 128000, output: 32768 },
+      'glm-4.5-flash': { input: 128000, output: 32768 },
+      'glm-4.5v': { input: 128000, output: 16384 },
+      'glm-4-32b-0414-128k': { input: 128000, output: 32768 },
     }
     return limits[modelName] || { input: 128000, output: 8192 }
   }
@@ -176,8 +218,21 @@ export class ZhipuProvider implements LLMProvider {
   getCostPerToken(modelName: string): { input: number; output: number } {
     const costs: Record<string, { input: number; output: number }> = {
       // USD per token (from per-1M pricing)
+      'glm-5.1': { input: 0.0000014, output: 0.0000044 },
       'glm-5': { input: 0.000001, output: 0.0000032 },
-      'glm-4.5v': { input: 0.0000006, output: 0.0000018 }
+      'glm-5-turbo': { input: 0.0000012, output: 0.000004 },
+      'glm-5v-turbo': { input: 0.0000012, output: 0.000004 },
+      'glm-4.7': { input: 0.000001, output: 0.0000032 },
+      'glm-4.7-flash': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.7-flashx': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.6': { input: 0.000001, output: 0.0000032 },
+      'glm-4.5': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-air': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-x': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-airx': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-flash': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5v': { input: 0.0000006, output: 0.0000018 },
+      'glm-4-32b-0414-128k': { input: 0.0000002, output: 0.0000011 },
     }
     return costs[modelName] || { input: 0.000001, output: 0.0000032 }
   }

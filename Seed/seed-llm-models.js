@@ -153,6 +153,18 @@ async function main() {
       isActive: true,
       isDefault: false
     },
+    {
+      code: 'gemini-embedding-001',
+      displayName: 'Gemini Embedding 001',
+      provider: 'google',
+      contextWindow: 2048,
+      supportsVision: false,
+      supportsStreaming: false,
+      inputCostPer1M: 15,
+      outputCostPer1M: 0,
+      isActive: true,
+      isDefault: false
+    },
     // Google - Image Generation Model (Nano Banana Pro - legacy)
     // Reference: https://ai.google.dev/gemini-api/docs/image-generation
     {
@@ -302,6 +314,78 @@ async function main() {
       isActive: true,
       isDefault: false
     },
+    {
+      code: 'gpt-5.4',
+      displayName: 'GPT-5.4',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 250,    // $2.50
+      outputCostPer1M: 1500,  // $15.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.4-mini',
+      displayName: 'GPT-5.4 Mini',
+      provider: 'openai',
+      contextWindow: 400000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 75,     // $0.75
+      outputCostPer1M: 450,   // $4.50
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.4-nano',
+      displayName: 'GPT-5.4 Nano',
+      provider: 'openai',
+      contextWindow: 400000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 125,   // $1.25
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.4-pro',
+      displayName: 'GPT-5.4 Pro',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 3000,   // $30.00
+      outputCostPer1M: 18000, // $180.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.5',
+      displayName: 'GPT-5.5',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 3000,  // $30.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.5-pro',
+      displayName: 'GPT-5.5 Pro',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: false,
+      inputCostPer1M: 3000,   // $30.00
+      outputCostPer1M: 18000, // $180.00
+      isActive: true,
+      isDefault: false
+    },
     // OpenAI - "Thinking" aliases (translated to reasoning controls in provider request)
     {
       code: 'gpt-5.1-thinking',
@@ -428,7 +512,31 @@ async function main() {
     },
 
     // === ANTHROPIC MODELS ===
-    // Provider supports: claude-3-5-sonnet, claude-3-5-haiku, claude-3-opus, claude-3-sonnet, claude-3-haiku
+    // Provider supports: Claude 4.x and Claude 3.x model codes.
+    {
+      code: 'claude-opus-4-7',
+      displayName: 'Claude Opus 4.7',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-opus-4-6',
+      displayName: 'Claude Opus 4.6',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'claude-3-5-sonnet',
       displayName: 'Claude 3.5 Sonnet',
@@ -503,7 +611,7 @@ async function main() {
     },
     {
       code: 'claude-opus-4.6',
-      displayName: 'Claude Opus 4.6',
+      displayName: 'Claude Opus 4.6 [Alias]',
       provider: 'anthropic',
       contextWindow: 1000000,
       supportsVision: true,
@@ -676,7 +784,19 @@ async function main() {
       isDefault: false
     },
 
-    // === ZHIPU MODELS (GLM) ===
+    // === ZHIPU / Z.AI MODELS (GLM) ===
+    {
+      code: 'glm-5.1',
+      displayName: 'GLM-5.1',
+      provider: 'zhipu',
+      contextWindow: 200000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 140,    // $1.40
+      outputCostPer1M: 440,   // $4.40
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'glm-5',
       displayName: 'GLM-5',
@@ -690,6 +810,138 @@ async function main() {
       isDefault: false
     },
     {
+      code: 'glm-5-turbo',
+      displayName: 'GLM-5 Turbo',
+      provider: 'zhipu',
+      contextWindow: 200000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 120,    // $1.20
+      outputCostPer1M: 400,   // $4.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5v-turbo',
+      displayName: 'GLM-5V Turbo',
+      provider: 'zhipu',
+      contextWindow: 200000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 120,    // $1.20
+      outputCostPer1M: 400,   // $4.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.7',
+      displayName: 'GLM-4.7',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 320,   // $3.20
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.7-flash',
+      displayName: 'GLM-4.7 Flash',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.7-flashx',
+      displayName: 'GLM-4.7 FlashX',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.6',
+      displayName: 'GLM-4.6',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 320,   // $3.20
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5',
+      displayName: 'GLM-4.5',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-air',
+      displayName: 'GLM-4.5 Air',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-x',
+      displayName: 'GLM-4.5 X',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-airx',
+      displayName: 'GLM-4.5 AirX',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-flash',
+      displayName: 'GLM-4.5 Flash',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'glm-4.5v',
       displayName: 'GLM-4.5V',
       provider: 'zhipu',
@@ -698,6 +950,18 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 60,     // $0.60
       outputCostPer1M: 180,   // $1.80
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4-32b-0414-128k',
+      displayName: 'GLM-4 32B 128K',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
       isActive: true,
       isDefault: false
     },
@@ -743,6 +1007,87 @@ async function main() {
   console.log('\n[seed] Step 2: Seeding workflow stages...\n');
 
   const stageSeeds = [
+    {
+      code: 'FUNDING_CALL_INGEST_PDF',
+      displayName: 'Call Ingestion PDF',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 1,
+      description: 'PDF transcription for funding-call intake before structured field extraction.',
+      tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
+    },
+    {
+      code: 'FUNDING_CALL_INGEST_TEXT',
+      displayName: 'Call Ingestion Web & Text',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 2,
+      description: 'Structured funding-call facts extraction from URL content, pasted text, and transcribed PDF text.',
+      tokenLimits: { maxTokensIn: 200000, maxTokensOut: 24000 },
+      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+    },
+    {
+      code: 'FUNDING_CHAT_ORCHESTRATOR',
+      displayName: 'AI Fund Finder Orchestrator',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 3,
+      description: 'Classify and structure user funding-chat intent.',
+      tokenLimits: { maxTokensIn: 24000, maxTokensOut: 6000 },
+      models: { FREE_PLAN: 'gemini-2.0-flash-lite', PRO_PLAN: 'gemini-2.0-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'FUNDING_CHAT_QUERY_ENRICHMENT',
+      displayName: 'AI Fund Finder Query Enrichment',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 4,
+      description: 'Expand research-area searches for retrieval.',
+      tokenLimits: { maxTokensIn: 24000, maxTokensOut: 4000 },
+      models: { FREE_PLAN: 'gemini-2.0-flash-lite', PRO_PLAN: 'gemini-2.0-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'FUNDING_CHAT_NARRATIVE',
+      displayName: 'AI Fund Finder Narrative',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 5,
+      description: 'Generate grounded recommendation summaries and follow-up answers.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.0-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'FUNDING_CHAT_EMBEDDING',
+      displayName: 'AI Fund Finder Embedding',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 6,
+      description: 'Embed funding search queries for vector retrieval cost tracking.',
+      tokenLimits: { maxTokensIn: 12000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-embedding-001', PRO_PLAN: 'gemini-embedding-001', ENTERPRISE_PLAN: 'gemini-embedding-001' }
+    },
+    {
+      code: 'FUNDING_TEMPLATE_EXTRACT_TEXT',
+      displayName: 'Funding Template Text Extraction',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 7,
+      description: 'Extract grant template structure from text assets.',
+      tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
+      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+    },
+    {
+      code: 'FUNDING_TEMPLATE_EXTRACT_MULTIMODAL',
+      displayName: 'Funding Template Multimodal Extraction',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 8,
+      description: 'Extract grant template structure from PDF and image assets.',
+      tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
+      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
+    },
+    {
+      code: 'FUNDING_GUIDELINE_EXTRACT_TEXT',
+      displayName: 'Funding Guideline Extraction',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 9,
+      description: 'Extract structured grant-writing guidelines from call text.',
+      tokenLimits: { maxTokensIn: 200000, maxTokensOut: 24000 },
+      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+    },
     {
       code: 'GRANT_PREP_CHAT',
       displayName: 'Grant Prep Chatbot',
@@ -1036,7 +1381,10 @@ async function main() {
     }
   ];
 
-  const stages = stageSeeds.map(({ tokenLimits, models, ...stage }) => stage);
+  const stages = stageSeeds.map(({ tokenLimits, models, ...stage }) => ({
+    ...stage,
+    isActive: true
+  }));
   const activeStageCodes = stages.map(stage => stage.code);
 
   try {

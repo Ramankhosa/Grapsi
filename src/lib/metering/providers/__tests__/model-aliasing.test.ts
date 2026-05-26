@@ -52,7 +52,12 @@ describe('Provider model aliasing', () => {
   it('routes new model codes to the expected providers', () => {
     expect(getProviderFromModelCode('claude-opus-4.5')).toBe('anthropic')
     expect(getProviderFromModelCode('claude-opus-4.6')).toBe('anthropic')
+    expect(getProviderFromModelCode('claude-opus-4-7')).toBe('anthropic')
+    expect(getProviderFromModelCode('gpt-5.4')).toBe('openai')
+    expect(getProviderFromModelCode('gpt-5.5-pro')).toBe('openai')
     expect(getProviderFromModelCode('glm-5')).toBe('zhipu')
+    expect(getProviderFromModelCode('glm-5.1')).toBe('zhipu')
+    expect(getProviderFromModelCode('glm-4.7-flash')).toBe('zhipu')
     expect(getProviderFromModelCode('glm-4.5v')).toBe('zhipu')
     expect(getProviderFromModelCode('qwen2.5-72b-instruct')).toBe('qwen')
     expect(getProviderFromModelCode('gemini-3.1-flash-image')).toBe('gemini')
