@@ -18,11 +18,11 @@ import {
   ChevronRight,
   BarChart3,
   TrendingUp,
-  Calendar,
   Target,
   Library,
   Search,
-  UserCircle
+  UserCircle,
+  UploadCloud
 } from 'lucide-react'
 
 interface Paper {
@@ -57,12 +57,39 @@ interface DashboardStats {
   totalWords: number
 }
 
+interface UploadedFundingCall {
+  id: string
+  title: string
+  agencyName?: string | null
+  sourceUrl?: string | null
+  closeDate?: string | null
+  isRolling: boolean
+  catalogStatus?: string | null
+  guidelineStatus: string
+  templateStatus: string
+  adminReviewStatus?: string | null
+  updatedAt: string
+}
+
+interface ActiveFundingUploadJob {
+  id: string
+  inputType: string
+  sourceUrl?: string | null
+  status: string
+  linkedFundingCallId?: string | null
+  errorMessage?: string | null
+  updatedAt: string
+}
+
 export default function UserDashboard() {
-  const { user } = useAuth()
+  const { user, authFetch } = useAuth()
   const router = useRouter()
   const paperUiEnabled = false
   const [papers, setPapers] = useState<Paper[]>([])
   const [loading, setLoading] = useState(true)
+  const [fundingUploadsLoading, setFundingUploadsLoading] = useState(true)
+  const [uploadedCalls, setUploadedCalls] = useState<UploadedFundingCall[]>([])
+  const [activeUploadJobs, setActiveUploadJobs] = useState<ActiveFundingUploadJob[]>([])
   const [stats, setStats] = useState<DashboardStats>({
     totalPapers: 0,
     inProgress: 0,
@@ -101,6 +128,22 @@ export default function UserDashboard() {
     }
   }, [])
 
+  const fetchFundingUploads = useCallback(async () => {
+    try {
+      setFundingUploadsLoading(true)
+      const response = await authFetch('/api/funding/user-uploads')
+      if (response.ok) {
+        const data = await response.json()
+        setUploadedCalls(data.calls || [])
+        setActiveUploadJobs(data.activeJobs || [])
+      }
+    } catch (error) {
+      console.error('Error fetching funding uploads:', error)
+    } finally {
+      setFundingUploadsLoading(false)
+    }
+  }, [authFetch])
+
   // Use user_id instead of user object to prevent re-fetches on object reference changes
   const userId = user?.user_id
   
@@ -111,6 +154,14 @@ export default function UserDashboard() {
       setLoading(false)
     }
   }, [userId, fetchPapers, paperUiEnabled])
+
+  useEffect(() => {
+    if (userId) {
+      fetchFundingUploads()
+    } else {
+      setFundingUploadsLoading(false)
+    }
+  }, [userId, fetchFundingUploads])
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -161,15 +212,15 @@ export default function UserDashboard() {
         </div>
       </button>
       <button
-        onClick={() => router.push('/funding/imports')}
+        onClick={() => router.push('/finder?upload=1')}
         className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-amber-200 hover:bg-amber-50 transition-colors text-left"
       >
         <div className="p-2 bg-amber-100 rounded-lg">
-          <Calendar className="w-4 h-4 text-amber-600" />
+          <UploadCloud className="w-4 h-4 text-amber-600" />
         </div>
         <div>
-          <div className="font-medium text-slate-900">Funding Imports</div>
-          <div className="text-xs text-slate-500">Bring in new calls from URL, PDF, or pasted text</div>
+          <div className="font-medium text-slate-900">Upload New Call For Proposal</div>
+          <div className="text-xs text-slate-500">Upload a call, guidelines, and templates in a simple flow</div>
         </div>
       </button>
       <button
@@ -212,6 +263,83 @@ export default function UserDashboard() {
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-6">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">Funding Workspace</h3>
             {fundingActions}
+          </div>
+          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-slate-900">My Uploaded Calls</h3>
+              <button
+                onClick={() => fetchFundingUploads()}
+                className="text-sm font-medium text-emerald-700 hover:text-emerald-900"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {fundingUploadsLoading ? (
+              <div className="text-sm text-slate-500">Loading uploaded calls...</div>
+            ) : uploadedCalls.length === 0 && activeUploadJobs.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
+                No uploaded calls yet. Use Upload New Call For Proposal to add one.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {activeUploadJobs.map((job) => (
+                  <div key={job.id} className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                          Upload {job.status.replace(/_/g, ' ')}
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">
+                          {job.sourceUrl || `${job.inputType.toUpperCase()} upload`}
+                        </div>
+                        {job.errorMessage ? (
+                          <div className="mt-1 text-xs text-red-700">{job.errorMessage}</div>
+                        ) : (
+                          <div className="mt-1 text-xs text-slate-500">Updated {formatDate(job.updatedAt)}</div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => router.push(`/finder?upload=1&jobId=${encodeURIComponent(job.id)}`)}
+                        className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-white hover:bg-slate-700"
+                      >
+                        Resume
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {uploadedCalls.map((call) => (
+                  <div key={call.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-slate-900">{call.title}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {call.agencyName || 'Funding agency'} - {call.isRolling ? 'Rolling deadline' : call.closeDate ? `Deadline ${new Date(call.closeDate).toLocaleDateString()}` : 'Deadline not set'}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide">
+                          <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
+                            Review {call.adminReviewStatus || 'pending'}
+                          </span>
+                          <span className="rounded-full bg-white px-2 py-1 text-slate-600">
+                            Guidelines {call.guidelineStatus.replace(/_/g, ' ')}
+                          </span>
+                          <span className="rounded-full bg-white px-2 py-1 text-slate-600">
+                            Template {call.templateStatus.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => router.push(`/finder/calls/${encodeURIComponent(call.id)}`)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-700 hover:bg-slate-100"
+                      >
+                        Open
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

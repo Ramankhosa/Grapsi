@@ -855,12 +855,16 @@ async function persistDraft(
       last_catalog_update_by: operator.email,
       last_catalog_update_at: new Date().toISOString(),
       verification_status: operator.role === 'USER' ? 'pending_admin_verification' : 'curator_review',
+      submitted_for_admin_review: operator.role === 'USER',
+      admin_review_status: operator.role === 'USER' ? 'pending' : 'curator_review',
       owner_user_id: operator.role === 'USER' ? operator.userId : null,
       user_import: operator.role === 'USER'
         ? {
             owner_user_id: operator.userId,
             user_email: operator.email,
             verification_status: 'pending_admin_verification',
+            submitted_for_admin_review: true,
+            admin_review_status: 'pending',
             imported_at: new Date().toISOString(),
           }
         : null,

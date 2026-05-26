@@ -1,19 +1,12 @@
-import HeroSection from '@/components/home/HeroSection'
-import FeaturesSection from '@/components/home/FeaturesSection'
-import HowItWorksSection from '@/components/home/HowItWorksSection'
-import TrustSection from '@/components/home/TrustSection'
-import CTAFooter from '@/components/home/CTAFooter'
-import MinimalFooter from '@/components/home/MinimalFooter'
+import type { Metadata } from 'next'
+import AIGrantMentorHomePage from '@/components/home/AIGrantMentorHomePage'
+
+export const metadata: Metadata = {
+  title: 'AI Grant Suite - Find, Write, Perfect Your Grant Proposals',
+  description:
+    'AI Grant Suite combines Grant Finder, Grant Mentor, and Grant Reviewer to transform your research funding journey from start to finish.',
+}
 
 export default function HomePage() {
-  return (
-    <div className="min-h-screen bg-ai-graphite-950 selection:bg-ai-blue-500/30">
-      <HeroSection />
-      <FeaturesSection />
-      <HowItWorksSection />
-      <TrustSection />
-      <CTAFooter />
-      <MinimalFooter />
-    </div>
-  )
+  return <AIGrantMentorHomePage />
 }

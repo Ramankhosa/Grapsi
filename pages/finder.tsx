@@ -13,6 +13,7 @@ import {
   FaSignOutAlt,
   FaTimes,
   FaTrash,
+  FaUpload,
   FaUserCircle,
 } from 'react-icons/fa';
 import FinderActiveFilterBar from '@/components/FinderActiveFilterBar';
@@ -212,6 +213,7 @@ export default function FinderPage() {
   const [directoryFacetsLoading, setDirectoryFacetsLoading] = useState(false);
   const [directorySelections, setDirectorySelections] = useState<DirectorySelection[]>([]);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const uploadQueryHandledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingTurn, setPendingTurn] = useState<PendingTurnState | null>(null);
 
@@ -221,6 +223,26 @@ export default function FinderPage() {
       router.push(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
     }
   }, [isLoading, router, user]);
+
+  useEffect(() => {
+    if (!router.isReady || uploadQueryHandledRef.current) return;
+    if (router.query.upload === '1' || router.query.upload === 'true') {
+      const resumeJobId = typeof router.query.jobId === 'string' ? router.query.jobId : null;
+      if (resumeJobId && typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          'funding-call-upload-wizard-v1',
+          JSON.stringify({
+            step: 'source',
+            mode: 'url',
+            jobId: resumeJobId,
+            savedAt: new Date().toISOString(),
+          })
+        );
+      }
+      uploadQueryHandledRef.current = true;
+      setImportModalOpen(true);
+    }
+  }, [router.isReady, router.query.jobId, router.query.upload]);
 
   useEffect(() => {
     if (!conversation) return;
@@ -942,9 +964,10 @@ export default function FinderPage() {
           <button
             type="button"
             onClick={() => setImportModalOpen(true)}
-            className="rounded-full border border-emerald-300 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-900 transition-colors hover:bg-emerald-100"
+            className="inline-flex items-center gap-2 rounded-full border border-emerald-300 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-900 transition-colors hover:bg-emerald-100"
           >
-            Import funding call
+            <FaUpload />
+            Upload New Call For Proposal
           </button>
         </div>
 
