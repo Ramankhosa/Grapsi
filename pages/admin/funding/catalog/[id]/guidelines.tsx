@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
+import Header from '@/components/Header';
 import FundingWorkspaceTabs from '@/components/FundingWorkspaceTabs';
 import type {
   FundingGuidelineBlockKey,
@@ -524,6 +525,21 @@ export default function FundingGuidelineWorkspacePage() {
   const latestReviewableRun = useMemo(() => {
     return bundle?.runs.find((run) => run.status === 'needs_review') || null;
   }, [bundle]);
+  const activeRuns = useMemo(() => {
+    return (bundle?.runs || []).filter((run) => run.status === 'queued' || run.status === 'extracting');
+  }, [bundle]);
+
+  useEffect(() => {
+    if (!id || activeRuns.length === 0) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadBundle(false);
+    }, 3500);
+
+    return () => window.clearInterval(interval);
+  }, [id, activeRuns.length]);
 
   async function loadBundle(showSpinner = true) {
     if (!id) {
@@ -618,7 +634,7 @@ export default function FundingGuidelineWorkspacePage() {
 
       await loadBundle(false);
       setSourcePdf(null);
-      toast.success('Guideline extraction completed. Review the extracted run and apply it when ready.');
+      toast.success('Guideline extraction started. It will continue if you switch tabs.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to run guideline extraction');
     } finally {
@@ -764,6 +780,7 @@ export default function FundingGuidelineWorkspacePage() {
       <Head>
         <title>Funding Guideline Workspace</title>
       </Head>
+      <Header />
 
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <FundingWorkspaceTabs
@@ -835,11 +852,15 @@ export default function FundingGuidelineWorkspacePage() {
                 </div>
               </div>
 
-              {extracting && (
+              {(extracting || activeRuns.length > 0) && (
                 <div className="mt-5">
                   <ExtractionWaitingNotice
-                    title="Guideline extraction is running"
-                    description="The model is reading the selected source, combining it with the saved call facts, and generating a reviewed guideline pack."
+                    title={activeRuns.length > 0 ? 'Guideline extraction is still running' : 'Guideline extraction is being submitted'}
+                    description={
+                      activeRuns.length > 0
+                        ? `${activeRuns.length} guideline run${activeRuns.length === 1 ? '' : 's'} queued or extracting. You can switch to Call or Template; this run stays attached to the same funding call.`
+                        : 'Submitting a persisted run. Once accepted, the model continues server-side even if you switch tabs.'
+                    }
                   />
                 </div>
               )}
@@ -878,7 +899,7 @@ export default function FundingGuidelineWorkspacePage() {
               <div className="mt-5">
                 {sourceMode === 'intake' && (
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                    This run will reuse the source originally saved with the call. No extra source input is required.
+                    This run reuses the intake source attached to this funding call. If call-details extraction has not finished preparing the text, this guideline run prepares the existing source for its own use without changing Template assets.
                   </div>
                 )}
 

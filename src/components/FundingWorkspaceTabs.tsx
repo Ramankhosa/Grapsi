@@ -24,20 +24,20 @@ export default function FundingWorkspaceTabs(props: FundingWorkspaceTabsProps) {
     {
       key: 'call',
       label: '1. Call',
-      subtitle: 'Source review and draft save',
+      subtitle: 'Independent call details',
       href: props.callHref || null,
     },
     {
       key: 'guidelines',
       label: '2. Guidelines',
-      subtitle: 'Existing guideline workspace',
+      subtitle: 'Independent guideline runs',
       href: props.guidelinesHref || null,
       status: props.guidelineStatus || null,
     },
     {
       key: 'template',
       label: '3. Template',
-      subtitle: 'Existing template workspace',
+      subtitle: 'Independent template runs',
       href: props.templateHref || null,
       status: props.templateStatus || null,
     },

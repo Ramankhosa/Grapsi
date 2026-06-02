@@ -259,10 +259,67 @@ async function resolveGuidelineSource(
   operator?: IntakeOperator
 ) {
   if (!sourceInput || sourceInput.sourceMode === 'intake') {
+    let rawText = call.raw_text || null;
+    let normalizedText = call.normalized_text || null;
+    const warnings: string[] = [];
+
+    if (!normalizedText && call.intake_job_id) {
+      const intakeJob = await prisma.fundingIntakeJob.findUnique({
+        where: { id: call.intake_job_id },
+        select: {
+          id: true,
+          input_type: true,
+          source_url: true,
+          source_file_path: true,
+          raw_text: true,
+          normalized_text: true,
+        },
+      });
+
+      rawText = intakeJob?.raw_text || rawText;
+      normalizedText = intakeJob?.normalized_text || normalizedText;
+
+      if (!normalizedText && intakeJob?.input_type === 'url' && intakeJob.source_url) {
+        const fetched = await fetchReadableUrlContent(intakeJob.source_url);
+        rawText = fetched.rawText;
+        normalizedText = fetched.normalizedText;
+        warnings.push('Guideline extraction prepared the existing intake URL source because call-details extraction had not finished.');
+      }
+
+      if (!normalizedText && intakeJob?.input_type === 'pdf' && intakeJob.source_file_path) {
+        const extracted = await extractCanonicalTextFromPdf(intakeJob.source_file_path, {
+          tenantId: operator?.tenantId || null,
+          userId: operator?.userId || null,
+        });
+        rawText = extracted.rawText;
+        normalizedText = extracted.normalizedText;
+        warnings.push('Guideline extraction transcribed the existing intake PDF because call-details extraction had not finished.');
+      }
+
+      if (normalizedText) {
+        await prisma.$transaction([
+          prisma.fundingCall.update({
+            where: { id: call.id },
+            data: {
+              raw_text: rawText,
+              normalized_text: normalizedText,
+            },
+          }),
+          prisma.fundingIntakeJob.update({
+            where: { id: call.intake_job_id },
+            data: {
+              raw_text: rawText,
+              normalized_text: normalizedText,
+            },
+          }),
+        ]);
+      }
+    }
+
     return {
-      rawText: call.raw_text || null,
-      normalizedText: call.normalized_text || null,
-      warnings: [] as string[],
+      rawText,
+      normalizedText,
+      warnings,
       changeNote: 'Auto-extracted from funding call facts and the intake source text',
     };
   }
@@ -479,18 +536,54 @@ export class FundingGuidelineService {
     operator: IntakeOperator,
     sourceInput?: GuidelineExtractionSourceInput
   ) {
-    const { call, guideline } = await ensureGuidelineRecord(fundingCallId, operator);
-    const guidelineSource = await resolveGuidelineSource(call, sourceInput, operator);
-
+    const { guideline } = await ensureGuidelineRecord(fundingCallId, operator);
     const run = await prisma.fundingCallGuidelineRun.create({
       data: {
         funding_call_id: fundingCallId,
         guideline_id: guideline.id,
-        status: 'extracting',
+        status: 'queued',
       },
     });
 
+    await this.completeExtractionRunFromFundingCall(run.id, fundingCallId, operator, sourceInput);
+    return this.getRun(fundingCallId, run.id);
+  }
+
+  async startExtractionRunFromFundingCall(
+    fundingCallId: string,
+    operator: IntakeOperator,
+    sourceInput?: GuidelineExtractionSourceInput
+  ) {
+    const { guideline } = await ensureGuidelineRecord(fundingCallId, operator);
+    const run = await prisma.fundingCallGuidelineRun.create({
+      data: {
+        funding_call_id: fundingCallId,
+        guideline_id: guideline.id,
+        status: 'queued',
+      },
+    });
+
+    void this.completeExtractionRunFromFundingCall(run.id, fundingCallId, operator, sourceInput).catch((error) => {
+      console.error('[Funding Guidelines] background extraction failed:', error);
+    });
+
+    return this.getRun(fundingCallId, run.id);
+  }
+
+  private async completeExtractionRunFromFundingCall(
+    runId: string,
+    fundingCallId: string,
+    operator: IntakeOperator,
+    sourceInput?: GuidelineExtractionSourceInput
+  ) {
     try {
+      const { call } = await ensureGuidelineRecord(fundingCallId, operator);
+      await prisma.fundingCallGuidelineRun.update({
+        where: { id: runId },
+        data: { status: 'extracting' },
+      });
+
+      const guidelineSource = await resolveGuidelineSource(call, sourceInput, operator);
       const extraction = await extractFundingGuidelines({
         fundingCallId: call.id,
         agencyName: call.agency_name,
@@ -535,7 +628,7 @@ export class FundingGuidelineService {
 
       await prisma.$transaction(async (tx) => {
         await tx.fundingCallGuidelineRun.update({
-          where: { id: run.id },
+          where: { id: runId },
           data: {
             status: 'needs_review',
             extractor_model: extraction.extractorModel,
@@ -555,7 +648,7 @@ export class FundingGuidelineService {
       });
     } catch (error) {
       await prisma.fundingCallGuidelineRun.update({
-        where: { id: run.id },
+        where: { id: runId },
         data: {
           status: 'failed',
           error_code: 'guideline_extraction_failed',
@@ -565,8 +658,6 @@ export class FundingGuidelineService {
 
       throw error;
     }
-
-    return this.getRun(fundingCallId, run.id);
   }
 
   async applyRun(fundingCallId: string, runId: string, operator: IntakeOperator) {

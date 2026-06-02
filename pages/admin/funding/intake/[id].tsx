@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
+import Header from '@/components/Header';
 import FundingWorkspaceTabs from '@/components/FundingWorkspaceTabs';
 import { createEmptyGuidelinePack, normalizeGuidelinePack } from '@/lib/fundingGuidelines/utils';
 import type { GuidelinePackDocument } from '@/lib/fundingGuidelines/types';
@@ -27,6 +28,7 @@ type JobDetails = {
     source_file_path: string | null;
     raw_text: string | null;
     normalized_text: string | null;
+    processing_phase: string | null;
     error_code: string | null;
     error_message: string | null;
     duplicate_status: string;
@@ -360,6 +362,14 @@ export default function FundingIntakeJobPage() {
     () => details && ['queued', 'fetching', 'extracting'].includes(details.job.status),
     [details]
   );
+  const activeGuidelineRuns = useMemo(
+    () => (details?.guidelines?.runs || []).filter((run) => run.status === 'queued' || run.status === 'extracting'),
+    [details?.guidelines?.runs]
+  );
+  const activeTemplateRuns = useMemo(
+    () => (details?.template?.runs || []).filter((run) => run.status === 'queued' || run.status === 'extracting'),
+    [details?.template?.runs]
+  );
   const isPublishedLinkedCall = details?.call?.status === 'PUBLISHED';
   const hasPendingDuplicates = useMemo(
     () => (details?.duplicates || []).some((duplicate) => (duplicateResolutions[duplicate.id] || duplicate.resolution || 'pending') === 'pending'),
@@ -401,7 +411,7 @@ export default function FundingIntakeJobPage() {
   }, [user, id, canReadFundingIntake]);
 
   useEffect(() => {
-    if (!isActiveJob || !id) {
+    if ((!isActiveJob && activeGuidelineRuns.length === 0 && activeTemplateRuns.length === 0) || !id) {
       return;
     }
 
@@ -410,7 +420,7 @@ export default function FundingIntakeJobPage() {
     }, 3500);
 
     return () => window.clearInterval(interval);
-  }, [id, isActiveJob]);
+  }, [id, isActiveJob, activeGuidelineRuns.length, activeTemplateRuns.length]);
 
   async function loadDetails(showSpinner = true) {
     if (!id) {
@@ -1114,6 +1124,7 @@ export default function FundingIntakeJobPage() {
       <Head>
         <title>Funding Intake Workspace</title>
       </Head>
+      <Header />
 
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <FundingWorkspaceTabs
@@ -1195,9 +1206,24 @@ export default function FundingIntakeJobPage() {
           </div>
         )}
         <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-          Guidelines and Template stages enable as soon as the first draft save creates or links the funding call.
-          After that, the top step tabs stay clickable on all three screens so the admin can move between Call, Guidelines, and Template without losing context.
+          Call, Guidelines, and Template are independent requests under the same funding call. As soon as this intake job has a linked draft call, the step tabs stay clickable so the admin can start guideline or template LLM requests while call-details extraction is still running.
         </div>
+        {(isActiveJob || activeGuidelineRuns.length > 0 || activeTemplateRuns.length > 0) && (
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <div className="font-semibold">Call details extraction</div>
+              <div className="mt-1">{isActiveJob ? `Running: ${details.job.processing_phase || details.job.status}` : 'No active call-details request'}</div>
+            </div>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div className="font-semibold">Guideline extraction</div>
+              <div className="mt-1">{activeGuidelineRuns.length > 0 ? `${activeGuidelineRuns.length} run${activeGuidelineRuns.length === 1 ? '' : 's'} queued or extracting` : 'No active guideline request'}</div>
+            </div>
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              <div className="font-semibold">Template extraction</div>
+              <div className="mt-1">{activeTemplateRuns.length > 0 ? `${activeTemplateRuns.length} run${activeTemplateRuns.length === 1 ? '' : 's'} queued or extracting` : 'No active template request'}</div>
+            </div>
+          </div>
+        )}
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm">

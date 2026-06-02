@@ -653,7 +653,37 @@ export class FundingTemplateService {
       return metadata.auto_managed === true && metadata.intake_job_id === intakeJob.id;
     });
 
-    const intakeMetadata = readAssetMetadata(intakeJob.fetch_metadata_json);
+    let rawText = intakeJob.raw_text || null;
+    let normalizedText = intakeJob.normalized_text || null;
+    let intakeMetadata = readAssetMetadata(intakeJob.fetch_metadata_json);
+    if (intakeJob.input_type === 'url' && intakeJob.source_url && !normalizedText) {
+      const fetched = await fetchReadableUrlContent(intakeJob.source_url);
+      rawText = fetched.rawText;
+      normalizedText = fetched.normalizedText;
+      intakeMetadata = {
+        ...intakeMetadata,
+        ...fetched.fetchMetadata,
+        prepared_for_template_extraction: true,
+      };
+      await prisma.$transaction([
+        prisma.fundingIntakeJob.update({
+          where: { id: intakeJob.id },
+          data: {
+            raw_text: rawText,
+            normalized_text: normalizedText,
+            fetch_metadata_json: intakeMetadata as any,
+          },
+        }),
+        prisma.fundingCall.update({
+          where: { id: fundingCallId },
+          data: {
+            raw_text: rawText,
+            normalized_text: normalizedText,
+          },
+        }),
+      ]);
+    }
+
     const metadata = {
       ...intakeMetadata,
       auto_managed: true,
@@ -664,17 +694,17 @@ export class FundingTemplateService {
     };
     const sourceType = intakeJob.input_type === 'url' ? 'url' : intakeJob.input_type === 'pdf' ? 'pdf' : 'text';
     const checksum = sourceType === 'url'
-      ? hashText(`${intakeJob.source_url || ''}::${intakeJob.normalized_text || ''}`)
+      ? hashText(`${intakeJob.source_url || ''}::${normalizedText || ''}`)
       : sourceType === 'text'
-        ? hashText(intakeJob.normalized_text || intakeJob.raw_text || '')
+        ? hashText(normalizedText || rawText || '')
         : String(intakeMetadata.checksum || intakeJob.source_text_hash || hashText(`${intakeJob.source_file_path || ''}`));
     const assetData = {
       source_type: sourceType,
       source_url: sourceType === 'url' ? intakeJob.source_url || null : null,
       storage_path: sourceType === 'pdf' ? intakeJob.source_file_path || null : null,
       mime: sourceType === 'url' ? 'text/html' : sourceType === 'text' ? 'text/plain' : 'application/pdf',
-      raw_text: intakeJob.raw_text || null,
-      normalized_text: intakeJob.normalized_text || null,
+      raw_text: rawText,
+      normalized_text: normalizedText,
       source_metadata_json: asJson(metadata),
       checksum,
       uploaded_by: operator.email,
@@ -745,7 +775,7 @@ export class FundingTemplateService {
     return { ok: true };
   }
 
-  async createExtractionRun(fundingCallId: string, operator: IntakeOperator, assetIds?: string[]) {
+  private async resolveTemplateExtractionAssets(fundingCallId: string, operator: IntakeOperator, assetIds?: string[]) {
     const { call, template } = await ensureTemplateRecord(fundingCallId, operator);
 
     let assets = await prisma.fundingCallTemplateAsset.findMany({
@@ -781,22 +811,18 @@ export class FundingTemplateService {
       throw new Error('No template assets are available for extraction');
     }
 
-    const assetSetHash = hashText(
-      assets.map((asset) => `${asset.id}:${asset.sequence_no}:${asset.checksum || ''}`).join('|')
-    );
+    return { template, assets };
+  }
 
-    const run = await prisma.fundingCallTemplateRun.create({
-      data: {
-        funding_call_id: fundingCallId,
-        template_id: template.id,
-        status: 'queued',
-        asset_set_hash: assetSetHash,
-      },
-    });
-
+  private async completeTemplateExtractionRun(
+    fundingCallId: string,
+    runId: string,
+    assets: any[],
+    operator: IntakeOperator
+  ) {
     try {
       await prisma.fundingCallTemplateRun.update({
-        where: { id: run.id },
+        where: { id: runId },
         data: { status: 'extracting' },
       });
 
@@ -805,9 +831,14 @@ export class FundingTemplateService {
         userId: operator.userId,
       });
 
+      const template = await prisma.fundingCallTemplate.findUnique({
+        where: { fundingCallId: fundingCallId },
+        select: { id: true },
+      });
+
       await prisma.$transaction(async (tx) => {
         await tx.fundingCallTemplateRun.update({
-          where: { id: run.id },
+          where: { id: runId },
           data: {
             status: 'needs_review',
             extractor_model: extraction.extractorModel,
@@ -823,13 +854,13 @@ export class FundingTemplateService {
           where: { id: fundingCallId },
           data: {
             template_status: 'needs_review',
-            active_template_id: template.id,
+            ...(template?.id ? { active_template_id: template.id } : {}),
           },
         });
       });
     } catch (error) {
       await prisma.fundingCallTemplateRun.update({
-        where: { id: run.id },
+        where: { id: runId },
         data: {
           status: 'failed',
           error_code: 'template_extraction_failed',
@@ -838,7 +869,46 @@ export class FundingTemplateService {
       });
       throw error;
     }
+  }
 
+  async startExtractionRun(fundingCallId: string, operator: IntakeOperator, assetIds?: string[]) {
+    const { template, assets } = await this.resolveTemplateExtractionAssets(fundingCallId, operator, assetIds);
+    const assetSetHash = hashText(
+      assets.map((asset) => `${asset.id}:${asset.sequence_no}:${asset.checksum || ''}`).join('|')
+    );
+
+    const run = await prisma.fundingCallTemplateRun.create({
+      data: {
+        funding_call_id: fundingCallId,
+        template_id: template.id,
+        status: 'queued',
+        asset_set_hash: assetSetHash,
+      },
+    });
+
+    void this.completeTemplateExtractionRun(fundingCallId, run.id, assets, operator).catch((error) => {
+      console.error('[Funding Template] background extraction failed:', error);
+    });
+
+    return this.getRun(fundingCallId, run.id);
+  }
+
+  async createExtractionRun(fundingCallId: string, operator: IntakeOperator, assetIds?: string[]) {
+    const { template, assets } = await this.resolveTemplateExtractionAssets(fundingCallId, operator, assetIds);
+    const assetSetHash = hashText(
+      assets.map((asset) => `${asset.id}:${asset.sequence_no}:${asset.checksum || ''}`).join('|')
+    );
+
+    const run = await prisma.fundingCallTemplateRun.create({
+      data: {
+        funding_call_id: fundingCallId,
+        template_id: template.id,
+        status: 'queued',
+        asset_set_hash: assetSetHash,
+      },
+    });
+
+    await this.completeTemplateExtractionRun(fundingCallId, run.id, assets, operator);
     return this.getRun(fundingCallId, run.id);
   }
 

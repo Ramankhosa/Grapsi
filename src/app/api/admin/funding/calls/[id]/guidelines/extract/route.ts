@@ -44,8 +44,8 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       sourceInput = body?.sourceMode ? body : undefined
     }
 
-    const run = await fundingGuidelineService.createExtractionRunFromFundingCall(params.id, auth.operator, sourceInput)
-    return NextResponse.json({ run })
+    const run = await fundingGuidelineService.startExtractionRunFromFundingCall(params.id, auth.operator, sourceInput)
+    return NextResponse.json({ run, accepted: true }, { status: 202 })
   } catch (error) {
     return NextResponse.json({ message: error instanceof Error ? error.message : 'Failed to extract guidelines' }, { status: 500 })
   }

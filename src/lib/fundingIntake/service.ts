@@ -250,6 +250,28 @@ function readFetchedUrl(value: Prisma.JsonValue | null | undefined): string | nu
     : null;
 }
 
+function buildWorkingDraftTitle(job: {
+  id: string;
+  input_type: FundingInputType | string;
+  source_url?: string | null;
+}) {
+  if (job.source_url) {
+    const hostname = normalizeHostname(job.source_url);
+    return `Funding intake from ${hostname || job.source_url}`;
+  }
+
+  switch (job.input_type) {
+    case 'pdf':
+      return `Funding intake PDF ${job.id}`;
+    case 'json':
+      return `Funding intake JSON ${job.id}`;
+    case 'text':
+      return `Funding intake text ${job.id}`;
+    default:
+      return `Funding intake ${job.id}`;
+  }
+}
+
 function normalizeSourceKey(input: string | null | undefined): string {
   return String(input || '').trim();
 }
@@ -684,7 +706,8 @@ async function computeDuplicateCandidates(
   payload: FundingExtractionPayload,
   sourceUrl: string | null | undefined,
   fetchedUrl: string | null | undefined,
-  operator: IntakeOperator
+  operator: IntakeOperator,
+  excludeFundingCallId?: string | null
 ): Promise<FundingDuplicateStatus> {
   const draftValues = buildDraftValuesFromExtraction(payload, { sourceUrl, fetchedUrl });
   const schemeTitle = draftValues.scheme_title;
@@ -699,6 +722,7 @@ async function computeDuplicateCandidates(
         where: {
           AND: [
             visibilityWhere,
+            ...(excludeFundingCallId ? [{ id: { not: excludeFundingCallId } }] : []),
             {
               OR: [
                 { source_url: { in: sourceUrls } },
@@ -721,17 +745,18 @@ async function computeDuplicateCandidates(
     : [];
 
   const agencyMatches = agencyName
-      ? await prisma.fundingCall.findMany({
-          where: {
-            AND: [
-              visibilityWhere,
-              {
-                agency_name: {
-                  equals: agencyName,
-                  mode: 'insensitive',
-                },
+    ? await prisma.fundingCall.findMany({
+        where: {
+          AND: [
+            visibilityWhere,
+            ...(excludeFundingCallId ? [{ id: { not: excludeFundingCallId } }] : []),
+            {
+              agency_name: {
+                equals: agencyName,
+                mode: 'insensitive',
               },
-            ],
+            },
+          ],
         },
         select: {
           id: true,
@@ -747,17 +772,18 @@ async function computeDuplicateCandidates(
     : [];
 
   const titleMatches = schemeTitle
-      ? await prisma.fundingCall.findMany({
-          where: {
-            AND: [
-              visibilityWhere,
-              {
-                scheme_title: {
-                  contains: schemeTitle.slice(0, 24),
-                  mode: 'insensitive',
-                },
+    ? await prisma.fundingCall.findMany({
+        where: {
+          AND: [
+            visibilityWhere,
+            ...(excludeFundingCallId ? [{ id: { not: excludeFundingCallId } }] : []),
+            {
+              scheme_title: {
+                contains: schemeTitle.slice(0, 24),
+                mode: 'insensitive',
               },
-            ],
+            },
+          ],
         },
         select: {
           id: true,
@@ -845,7 +871,8 @@ async function computeDomainDuplicateCandidates(
   payload: FundingExtractionPayload | null | undefined,
   sourceUrl: string | null | undefined,
   fetchedUrl: string | null | undefined,
-  operator: IntakeOperator
+  operator: IntakeOperator,
+  excludeFundingCallId?: string | null
 ): Promise<DomainDuplicateCandidateSummary[]> {
   if (!payload) return [];
 
@@ -883,6 +910,7 @@ async function computeDomainDuplicateCandidates(
     where: {
       AND: [
         visibilityWhere,
+        ...(excludeFundingCallId ? [{ id: { not: excludeFundingCallId } }] : []),
         {
           OR: [...domainSourceClauses, ...similarityClauses],
         },
@@ -1064,6 +1092,114 @@ async function persistDraft(
 }
 
 class FundingIntakeService {
+  private async ensureWorkingDraftCall(job: any, operator: IntakeOperator) {
+    if (job.linked_funding_call_id) {
+      return job.linked_funding_call_id as string;
+    }
+
+    const isTenantPrivateDraft = operator.role === 'USER' && Boolean(operator.tenantId);
+    const sourceMetadata = readFetchMetadata(job.fetch_metadata_json);
+    const sourceDomain = normalizeHostname(job.source_url);
+
+    const call = await prisma.$transaction(async (tx) => {
+      const latestJob = await tx.fundingIntakeJob.findUnique({
+        where: { id: job.id },
+        select: {
+          linked_funding_call_id: true,
+          status: true,
+        },
+      });
+
+      if (latestJob?.linked_funding_call_id) {
+        return { id: latestJob.linked_funding_call_id };
+      }
+
+      const created = await tx.fundingCall.create({
+        data: {
+          status: mapCatalogStatusToFundingStatus('DRAFT'),
+          catalog_status: 'DRAFT',
+          visibility: isTenantPrivateDraft ? 'TENANT_PRIVATE' : 'GLOBAL_PUBLISHED',
+          tenantId: isTenantPrivateDraft ? operator.tenantId || null : null,
+          title: buildWorkingDraftTitle(job),
+          agencyName: null,
+          sourceUrl: job.source_url || null,
+          sourceDomain,
+          summary: null,
+          sourceType: mapFundingSourceType(job.input_type),
+          extractedFacts: null,
+          normalizedMetadata: null,
+          createdByUserId: operator.userId,
+          updatedByUserId: operator.userId,
+          input_type: job.input_type,
+          agency_name: null,
+          scheme_title: null,
+          description: null,
+          is_rolling: false,
+          official_urls: job.source_url ? [job.source_url] : [],
+          source: operator.role === 'USER' ? 'user-funding-intake' : 'funding-intake',
+          source_url: job.source_url || null,
+          source_text_hash: job.source_text_hash || null,
+          uploaded_by: operator.email,
+          raw_text: job.raw_text || null,
+          normalized_text: job.normalized_text || null,
+          operator_notes: job.operator_notes || null,
+          extracted_json: null,
+          extraction_confidence_json: null,
+          is_active: false,
+          intake_job_id: job.id,
+          metadata: {
+            ...sourceMetadata,
+            source_module: 'funding_intake',
+            intake_job_id: job.id,
+            saved_by: operator.email,
+            saved_at: new Date().toISOString(),
+            working_draft_created_at: new Date().toISOString(),
+            parallel_intake_shell: true,
+            source_text_status: job.normalized_text ? 'ready' : 'pending',
+            verification_status: operator.role === 'USER' ? 'pending_admin_verification' : 'curator_review',
+            submitted_for_admin_review: operator.role === 'USER',
+            admin_review_status: operator.role === 'USER' ? 'pending' : 'curator_review',
+            owner_user_id: operator.role === 'USER' ? operator.userId : null,
+            user_import: operator.role === 'USER'
+              ? {
+                  owner_user_id: operator.userId,
+                  user_email: operator.email,
+                  verification_status: 'pending_admin_verification',
+                  submitted_for_admin_review: true,
+                  admin_review_status: 'pending',
+                  imported_at: new Date().toISOString(),
+                }
+              : null,
+            embedding_status: 'not_generated',
+          },
+        } as any,
+        select: { id: true },
+      });
+
+      await tx.fundingIntakeJob.update({
+        where: { id: job.id },
+        data: {
+          linked_funding_call_id: created.id,
+        },
+      });
+
+      await tx.fundingIntakeJobEvent.create({
+        data: {
+          job_id: job.id,
+          actor_user_id: operator.userId,
+          previous_status: latestJob?.status || null,
+          next_status: latestJob?.status || job.status,
+          event_type: 'working_call_created',
+          message: 'Working funding call draft created for parallel Call, Guidelines, and Template requests',
+        },
+      });
+
+      return created;
+    });
+
+    return call.id as string;
+  }
+
   async createJob(operator: IntakeOperator, input: IntakeSubmitInput) {
     const preparedSource = await prepareJobSourceData(sourceToIntakeSource(input), 0);
     const sourceHash = String(preparedSource.source_text_hash || '');
@@ -1084,6 +1220,7 @@ class FundingIntakeService {
       if (allowedTransitionTarget(existingJob.status)) {
         this.enqueue(existingJob.id);
       }
+      await this.ensureWorkingDraftCall(existingJob, operator);
       return existingJob;
     }
 
@@ -1119,6 +1256,7 @@ class FundingIntakeService {
       message: 'Funding intake job created',
     });
 
+    await this.ensureWorkingDraftCall(job, operator);
     this.enqueue(job.id);
     return job;
   }
@@ -1551,11 +1689,12 @@ class FundingIntakeService {
       : null);
     const domainDuplicates = duplicateOperator
       ? await computeDomainDuplicateCandidates(
-          latestExtraction?.extracted_json as any,
-          job.source_url,
-          readFetchedUrl(job.fetch_metadata_json),
-          duplicateOperator
-        )
+        latestExtraction?.extracted_json as any,
+        job.source_url,
+        readFetchedUrl(job.fetch_metadata_json),
+        duplicateOperator,
+        job.linked_funding_call_id
+      )
       : [];
 
     const publishWarnings = buildPublishWarnings({
@@ -1564,16 +1703,21 @@ class FundingIntakeService {
       templateBundle,
     });
     const draftingReadiness = buildDraftingReadiness(fundingCall);
+    const callMetadata = readCatalogMetadata(fundingCall?.metadata);
+    const extractedDraftValues = buildDraftValuesFromExtraction(latestExtraction?.extracted_json as any, {
+      sourceUrl: job.source_url,
+      fetchedUrl: readFetchedUrl(job.fetch_metadata_json),
+    });
+    const draftValues = callMetadata.parallel_intake_shell && latestExtraction
+      ? extractedDraftValues
+      : catalogDetails?.draftValues || extractedDraftValues;
 
     return {
       job,
       submitter,
       extraction: latestExtraction,
       draft: fundingCall,
-      draftValues: catalogDetails?.draftValues || buildDraftValuesFromExtraction(latestExtraction?.extracted_json as any, {
-        sourceUrl: job.source_url,
-        fetchedUrl: readFetchedUrl(job.fetch_metadata_json),
-      }),
+      draftValues,
       call: catalogDetails?.call || null,
       publishReadiness: catalogDetails?.publishReadiness || null,
       publishWarnings,
@@ -2011,6 +2155,30 @@ class FundingIntakeService {
     });
 
     if (mergedDuplicate) {
+      const previousLinkedCallId = details.job.linked_funding_call_id;
+      if (previousLinkedCallId && previousLinkedCallId !== mergedDuplicate.candidate_funding_call_id) {
+        const previousCall = await prisma.fundingCall.findUnique({
+          where: { id: previousLinkedCallId },
+          select: {
+            id: true,
+            catalog_status: true,
+            intake_job_id: true,
+          },
+        });
+
+        if (previousCall?.intake_job_id === jobId && readCatalogStatus(previousCall) !== 'PUBLISHED') {
+          const templateAssetPaths = (await prisma.fundingCallTemplateAsset.findMany({
+            where: { funding_call_id: previousCall.id },
+            select: { storage_path: true },
+          })).map((asset) => asset.storage_path).filter(Boolean);
+
+          await prisma.fundingCall.delete({
+            where: { id: previousCall.id },
+          });
+          await Promise.all(templateAssetPaths.map((filePath) => deleteManagedUploadIfPresent(filePath)));
+        }
+      }
+
       await transitionJobStatus(jobId, 'draft_created', {
         actorUserId: operator.userId,
         duplicateStatus: 'resolved',
@@ -2114,7 +2282,7 @@ class FundingIntakeService {
   private async updateJobLegacySource(jobId: string, source: any, processingPhase?: string) {
     const existingJob = await prisma.fundingIntakeJob.findUnique({
       where: { id: jobId },
-      select: { fetch_metadata_json: true },
+      select: { fetch_metadata_json: true, linked_funding_call_id: true },
     });
     const existingMetadata = readFetchMetadata(existingJob?.fetch_metadata_json);
     const sourceMetadata = readFetchMetadata(source.fetch_metadata_json);
@@ -2135,6 +2303,33 @@ class FundingIntakeService {
         ...(processingPhase ? { processing_phase: processingPhase } : {}),
       } as any,
     });
+
+    if (existingJob?.linked_funding_call_id) {
+      const currentCall = await prisma.fundingCall.findUnique({
+        where: { id: existingJob.linked_funding_call_id },
+        select: { metadata: true },
+      });
+      const currentMetadata = readCatalogMetadata(currentCall?.metadata);
+      await prisma.fundingCall.update({
+        where: { id: existingJob.linked_funding_call_id },
+        data: {
+          sourceUrl: source.source_url || null,
+          sourceDomain: normalizeHostname(source.source_url),
+          sourceType: mapFundingSourceType(source.input_type),
+          input_type: source.input_type,
+          source_url: source.source_url || null,
+          source_text_hash: source.source_text_hash || null,
+          raw_text: source.raw_text || null,
+          normalized_text: source.normalized_text || null,
+          updatedByUserId: currentMetadata.owner_user_id || undefined,
+          metadata: {
+            ...currentMetadata,
+            source_text_status: source.normalized_text ? 'ready' : 'pending',
+            source_prepared_at: source.normalized_text ? new Date().toISOString() : currentMetadata.source_prepared_at || null,
+          } as any,
+        } as any,
+      });
+    }
   }
 
   private async prepareSourceForExtraction(
@@ -2403,7 +2598,8 @@ class FundingIntakeService {
         extractionResult.payload,
         detailsSource.source_url,
         readFetchedUrl(detailsSource.fetch_metadata_json),
-        operator
+        operator,
+        latestJob.linked_funding_call_id
       );
 
       const latestJob = await getJobForProcessing(jobId);

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
+import Header from '@/components/Header';
 import FundingWorkspaceTabs from '@/components/FundingWorkspaceTabs';
 import { BOOLEAN_FIELD_KEYS, FUNDING_FIELD_DEFINITIONS, NUMERIC_FIELD_KEYS } from '@/lib/fundingIntake/constants';
 import type {
@@ -311,6 +312,7 @@ export default function FundingCatalogDetailPage() {
       <Head>
         <title>Funding Catalog Record</title>
       </Head>
+      <Header />
 
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <FundingWorkspaceTabs

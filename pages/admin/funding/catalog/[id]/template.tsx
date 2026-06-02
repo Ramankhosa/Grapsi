@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
+import Header from '@/components/Header';
 import FundingWorkspaceTabs from '@/components/FundingWorkspaceTabs';
 import type {
   FundingTemplateItem,
@@ -655,6 +656,9 @@ export default function FundingTemplatePage() {
   const latestRunHasContent = latestExtractionCounts.total > 0;
   const currentTemplateIsEmpty = currentTemplateCounts.total === 0;
   const latestRunNeedsApply = latestExtractionRun?.status === 'needs_review';
+  const activeRuns = useMemo(() => {
+    return (bundle?.runs || []).filter((run) => run.status === 'queued' || run.status === 'extracting');
+  }, [bundle]);
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -667,6 +671,18 @@ export default function FundingTemplatePage() {
       void loadBundle();
     }
   }, [user, id, isFundingOperator]);
+
+  useEffect(() => {
+    if (!id || activeRuns.length === 0) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadBundle(false);
+    }, 3500);
+
+    return () => window.clearInterval(interval);
+  }, [id, activeRuns.length]);
 
   useEffect(() => {
     if (!bundle) {
@@ -902,7 +918,7 @@ export default function FundingTemplatePage() {
       const data = await postJson(`/api/admin/funding/calls/${id}/template/extract`, { assetIds });
       await loadBundle(false);
       setSelectedRunId(data.run?.id || null);
-      toast.success('Extraction completed. Review the preview below and use the latest extraction button to make it the current template.');
+      toast.success('Template extraction started. It will continue if you switch tabs.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to extract template');
     } finally {
@@ -954,6 +970,7 @@ export default function FundingTemplatePage() {
   return (
     <div className="min-h-screen bg-slate-50">
       <Head><title>Funding Template Authoring</title></Head>
+      <Header />
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <FundingWorkspaceTabs
           current="template"
@@ -1048,13 +1065,17 @@ export default function FundingTemplatePage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-900">Assets and Extraction</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Reuse the existing intake source automatically, or add separate URL, text, PDF, or snapshot-image assets for the same call.
+                Reuse the intake source attached to this call, or add separate URL, text, PDF, or snapshot-image assets for this template run. Asset choices stay local to Template and do not overwrite Call or Guideline source selection.
               </p>
-              {busyState === 'extract' && (
+              {(busyState === 'extract' || activeRuns.length > 0) && (
                 <div className="mt-5">
                   <ExtractionWaitingNotice
-                    title="Template extraction is running"
-                    description="The model is reading the selected ordered assets, reconstructing field order, and preparing the combined template draft."
+                    title={activeRuns.length > 0 ? 'Template extraction is still running' : 'Template extraction is being submitted'}
+                    description={
+                      activeRuns.length > 0
+                        ? `${activeRuns.length} template run${activeRuns.length === 1 ? '' : 's'} queued or extracting. You can switch to Call or Guidelines; this run stays attached to the same funding call.`
+                        : 'Submitting a persisted run. Once accepted, the model continues server-side even if you switch tabs.'
+                    }
                   />
                 </div>
               )}
