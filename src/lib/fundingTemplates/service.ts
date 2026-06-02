@@ -1028,3 +1028,7 @@ export class FundingTemplateService {
 }
 
 export const fundingTemplateService = new FundingTemplateService();
+
+export function startTemplateExtractionRun(fundingCallId: string, operator: IntakeOperator, assetIds?: string[]) {
+  return fundingTemplateService.startExtractionRun(fundingCallId, operator, assetIds);
+}
