@@ -146,16 +146,18 @@ export default function FundingIntakeAdminPage() {
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
+  const isPlatformAdmin = userRoles.includes('ADMIN') && user?.ati_id === 'PLATFORM';
   const canReadFundingIntake =
     userRoles.includes('SUPER_ADMIN') ||
     userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    isPlatformAdmin ||
     platformPermissions.includes('platform.support.read') ||
     platformPermissions.includes('funding.operations.write') ||
     platformPermissions.includes('funding.publisher.write');
   const canWriteFundingIntake =
-    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.operations.write');
+    userRoles.includes('SUPER_ADMIN') || isPlatformAdmin || platformPermissions.includes('funding.operations.write');
   const canPublishFunding =
-    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.publisher.write');
+    userRoles.includes('SUPER_ADMIN') || isPlatformAdmin || platformPermissions.includes('funding.publisher.write');
 
   const activeJobs = useMemo(
     () => jobs.filter((job) => ['queued', 'fetching', 'extracting'].includes(job.status)),
@@ -718,7 +720,7 @@ export default function FundingIntakeAdminPage() {
           </section>
         </div>
 
-        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section id="batch-composer" className="mt-8 scroll-mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Batch composer</h2>
@@ -888,7 +890,7 @@ export default function FundingIntakeAdminPage() {
           </form>
         </section>
 
-        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section id="recent-batches" className="mt-8 scroll-mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Recent batches</h2>
@@ -951,7 +953,7 @@ export default function FundingIntakeAdminPage() {
           </div>
         </section>
 
-        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section id="recent-intake-jobs" className="mt-8 scroll-mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Recent intake jobs</h2>

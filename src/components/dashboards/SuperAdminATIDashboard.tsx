@@ -38,6 +38,13 @@ interface SignupUser {
   }
 }
 
+interface TenantOption {
+  id: string
+  name: string
+  ati_id: string
+  status: string
+}
+
 export default function SuperAdminATIDashboard() {
   const { user, logout } = useAuth()
   const [tokens, setTokens] = useState<ATIToken[]>([])
@@ -59,10 +66,39 @@ export default function SuperAdminATIDashboard() {
   const [selectedTokenUsers, setSelectedTokenUsers] = useState<SignupUser[]>([])
   const [isLoadingUsers, setIsLoadingUsers] = useState(false)
   const [usersError, setUsersError] = useState<string | null>(null)
+  const [tenants, setTenants] = useState<TenantOption[]>([])
+  const [isCreating, setIsCreating] = useState(false)
+  const [createForm, setCreateForm] = useState({
+    tenant_id: '',
+    expires_at: '',
+    max_uses: '',
+    plan_tier: '',
+    notes: '',
+    assigned_role: 'ANALYST',
+    assigned_team_id: '',
+    entitlement_plan_code: '',
+    entitlement_expires_at: ''
+  })
 
   useEffect(() => {
     fetchTokens()
+    fetchTenants()
   }, [])
+
+  const fetchTenants = async () => {
+    try {
+      const response = await fetch('/api/v1/platform/tenants', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      })
+      if (response.ok) {
+        setTenants(await response.json())
+      }
+    } catch (error) {
+      console.error('Failed to fetch tenants:', error)
+    }
+  }
 
   const fetchTokens = async () => {
     try {
@@ -231,6 +267,74 @@ export default function SuperAdminATIDashboard() {
     }
   }
 
+  const handleCreateToken = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsCreating(true)
+
+    try {
+      if (createForm.entitlement_plan_code) {
+        const entitlementResponse = await fetch('/api/v1/platform/entitlements', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({
+            tenant_id: createForm.tenant_id,
+            plan_code: createForm.entitlement_plan_code,
+            expires_at: createForm.entitlement_expires_at
+              ? new Date(createForm.entitlement_expires_at).toISOString()
+              : undefined,
+            notes: createForm.notes || undefined
+          })
+        })
+        const entitlementData = await entitlementResponse.json()
+        if (!entitlementResponse.ok) {
+          throw new Error(entitlementData.message || 'Failed to grant tenant entitlement')
+        }
+      }
+
+      const response = await fetch('/api/v1/platform/ati', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          tenant_id: createForm.tenant_id,
+          expires_at: createForm.expires_at ? new Date(createForm.expires_at).toISOString() : undefined,
+          max_uses: createForm.max_uses ? parseInt(createForm.max_uses) : undefined,
+          plan_tier: createForm.plan_tier || undefined,
+          notes: createForm.notes || undefined,
+          assigned_role: createForm.assigned_role || undefined,
+          assigned_team_id: createForm.assigned_team_id || undefined
+        })
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to create token')
+      }
+
+      setRevealedToken(data.token_display_once)
+      setCreateForm({
+        tenant_id: '',
+        expires_at: '',
+        max_uses: '',
+        plan_tier: '',
+        notes: '',
+        assigned_role: 'ANALYST',
+        assigned_team_id: '',
+        entitlement_plan_code: '',
+        entitlement_expires_at: ''
+      })
+      fetchTokens()
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to create token')
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -292,6 +396,93 @@ export default function SuperAdminATIDashboard() {
             </div>
           </div>
         )}
+
+        <div className="bg-white shadow rounded-lg mb-8">
+          <div className="px-4 py-5 sm:p-6">
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Create Tenant ATI Token</h3>
+            <form onSubmit={handleCreateToken} className="mt-4 space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <select
+                  required
+                  value={createForm.tenant_id}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, tenant_id: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                >
+                  <option value="">Select tenant</option>
+                  {tenants.filter(tenant => tenant.status === 'ACTIVE').map(tenant => (
+                    <option key={tenant.id} value={tenant.id}>{tenant.name} ({tenant.ati_id})</option>
+                  ))}
+                </select>
+                <select
+                  value={createForm.assigned_role}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, assigned_role: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                >
+                  <option value="ADMIN">Admin</option>
+                  <option value="MANAGER">Manager</option>
+                  <option value="ANALYST">Analyst</option>
+                  <option value="VIEWER">Viewer</option>
+                </select>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Max signups (unlimited if empty)"
+                  value={createForm.max_uses}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, max_uses: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <input
+                  type="text"
+                  placeholder="Optional entitlement plan code"
+                  value={createForm.entitlement_plan_code}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, entitlement_plan_code: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                />
+                <input
+                  type="datetime-local"
+                  aria-label="Optional entitlement expiry"
+                  title="Optional entitlement expiry"
+                  value={createForm.entitlement_expires_at}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, entitlement_expires_at: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <input
+                  type="datetime-local"
+                  value={createForm.expires_at}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, expires_at: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                />
+                <input
+                  type="text"
+                  placeholder="Optional team id"
+                  value={createForm.assigned_team_id}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, assigned_team_id: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                />
+                <input
+                  type="text"
+                  placeholder="Notes"
+                  value={createForm.notes}
+                  onChange={(e) => setCreateForm(prev => ({ ...prev, notes: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                />
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={isCreating}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {isCreating ? 'Creating...' : 'Create Token'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5 mb-8">

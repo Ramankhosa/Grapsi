@@ -64,15 +64,18 @@ function CompleteSocialSignupContent() {
 
   const token = searchParams?.get('token')
   const provider = searchParams?.get('provider') || 'social'
+  const inviteToken = searchParams?.get('invite')
 
   useEffect(() => {
     if (token) {
       try {
-        const decoded = JSON.parse(Buffer.from(token, 'base64url').toString())
+        const [, payload] = token.split('.')
+        if (!payload) throw new Error('Invalid registration token')
+        const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString())
         setPendingData(decoded)
 
         // Check if token is expired
-        if (Date.now() > decoded.exp) {
+        if (Date.now() > decoded.exp * 1000) {
           setIsExpired(true)
           setError('Your registration session has expired. Please try again.')
         }
@@ -83,6 +86,10 @@ function CompleteSocialSignupContent() {
       setError('Missing registration token. Please start the signup process again.')
     }
   }, [token])
+
+  useEffect(() => {
+    if (inviteToken) setAtiToken(inviteToken)
+  }, [inviteToken])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

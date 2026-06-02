@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { hashPassword, validateATIToken, incrementATITokenUsage, createAuditLog } from '@/lib/auth'
+import { hashPassword, validateATIToken } from '@/lib/auth'
 import { generateToken, hashToken } from '@/lib/token-utils'
 import { sendEmail } from '@/lib/mailer'
 import { verificationTemplate } from '@/lib/email-templates'
-import { autoAssignToDefaultTeam } from '@/lib/org-access-service'
-import { validateInviteToken, recordSignup } from '@/lib/trial-invite-service'
+import { validateInviteToken, recordSignupInTransaction } from '@/lib/trial-invite-service'
 import { assignTrialPlanToTenant } from '@/lib/trial-plan-service'
+import { ATIRedemptionError, assignSignupTeam, claimATITokenUse } from '@/lib/ati-redemption-service'
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -100,77 +100,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if this is the first user for this tenant
-    const existingUsersCount = await prisma.user.count({
-      where: { tenantId: tenant.id }
-    })
-
-    // Validate tenant user limit based on original tenant creation token
-    if (existingUsersCount > 0) {
-      // Find the original tenant admin user (first user) and their signup token
-      const tenantAdmin = await prisma.user.findFirst({
-        where: {
-          tenantId: tenant.id,
-          roles: { hasSome: ['OWNER', 'ADMIN'] } // Find tenant admin
-        },
-        select: {
-          id: true,
-          signupAtiTokenId: true
-        },
-        orderBy: { createdAt: 'asc' } // Get the first admin user
-      })
-
-      console.log('Tenant user limit validation:', {
-        tenantId: tenant.id,
-        existingUsersCount,
-        tenantAdminFound: !!tenantAdmin,
-        tenantAdminSignupTokenId: tenantAdmin?.signupAtiTokenId
-      })
-
-      if (tenantAdmin?.signupAtiTokenId) {
-        // Get the original token used to create the tenant admin
-        const originalToken = await prisma.aTIToken.findUnique({
-          where: { id: tenantAdmin.signupAtiTokenId }
-        })
-
-        console.log('Original token check:', {
-          tokenId: tenantAdmin.signupAtiTokenId,
-          tokenFound: !!originalToken,
-          tokenMaxUses: originalToken?.maxUses,
-          wouldExceedLimit: originalToken?.maxUses ? existingUsersCount >= originalToken.maxUses : false
-        })
-
-        // Check if adding this user would exceed the tenant's user limit
-        // existingUsersCount is the current count before adding this user
-        // So we reject if current count >= maxUses (meaning tenant is already at limit)
-        // Note: if maxUses is null/undefined, it means unlimited users allowed
-        if (originalToken?.maxUses && existingUsersCount >= originalToken.maxUses) {
-          return NextResponse.json(
-            {
-              code: 'TENANT_USER_LIMIT_EXCEEDED',
-              message: `Tenant has reached its maximum user limit of ${originalToken.maxUses} users.`,
-              current_users: existingUsersCount,
-              max_users: originalToken.maxUses
-            },
-            { status: 400 }
-          )
-        }
-      } else {
-        console.log('No tenant admin with signup token found - allowing signup (unlimited)')
-      }
-    }
-
     // Determine role based on context
-    // Priority: 1. First user = OWNER, 2. Explicit assignedRole on token, 3. Token creator logic, 4. Default ANALYST
+    // Priority for non-first users: 1. Explicit assignedRole on token,
+    // 2. Token creator logic, 3. Default ANALYST. The first user is promoted
+    // to OWNER inside the transaction after taking a tenant-level lock.
     let userRole = 'ANALYST' // Default role
     let tokenCreator = null
     let roleReason = 'default'
 
-    if (existingUsersCount === 0) {
-      // First user for this tenant - make them OWNER (cannot be overridden)
-      userRole = 'OWNER'
-      roleReason = 'first_tenant_user'
-    } else if (fullToken?.assignedRole) {
+    if (fullToken?.assignedRole) {
       // Explicit role set on the ATI token (highest priority for non-first users)
       // Validate the role is not SUPER_ADMIN or SUPER_ADMIN_VIEWER
       const explicitRole = fullToken.assignedRole
@@ -234,6 +172,18 @@ export async function POST(request: NextRequest) {
 
     // Use a transaction to ensure atomicity - either everything succeeds or nothing does
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`tenant-signup:${tenant.id}`}))`
+
+      // Claim token capacity before creating records. This guarded update prevents
+      // concurrent signups from exceeding maxUses.
+      await claimATITokenUse(tx, tokenValidation.atiToken!.id)
+
+      const transactionExistingUsersCount = await tx.user.count({
+        where: { tenantId: tenant.id }
+      })
+      const assignedUserRole = transactionExistingUsersCount === 0 ? 'OWNER' : userRole
+      const assignedRoleReason = transactionExistingUsersCount === 0 ? 'first_tenant_user' : roleReason
+
       // Create user
       const user = await tx.user.create({
         data: {
@@ -241,7 +191,7 @@ export async function POST(request: NextRequest) {
           passwordHash,
           tenantId: tenant.id,
           signupAtiTokenId: tokenValidation.atiToken!.id, // Track which ATI token was used
-          roles: [userRole as any],
+          roles: [assignedUserRole as any],
           status: 'ACTIVE',
           emailVerified: true,
           firstName,
@@ -260,22 +210,11 @@ export async function POST(request: NextRequest) {
         }
       })
 
-      // Get current token state for status update logic
-      const currentToken = await tx.aTIToken.findUnique({
-        where: { id: tokenValidation.atiToken!.id }
-      })
+      await assignSignupTeam(tx, user.id, tenant.id, fullToken?.assignedTeamId)
 
-      // Increment ATI token usage atomically
-      await tx.aTIToken.update({
-        where: { id: tokenValidation.atiToken!.id },
-        data: {
-          usageCount: { increment: 1 },
-          // Update status if usage limit reached
-          ...(currentToken && currentToken.maxUses && currentToken.usageCount + 1 >= currentToken.maxUses
-            ? { status: 'USED_UP' }
-            : {})
-        }
-      })
+      if (trialInvite) {
+        await recordSignupInTransaction(tx, atiToken, user.id)
+      }
 
       // Audit log within transaction
       const ip = request.headers.get('x-forwarded-for') ||
@@ -292,13 +231,13 @@ export async function POST(request: NextRequest) {
           meta: {
             email: user.email,
             roles: user.roles,
-            assigned_role_reason: roleReason,
+            assigned_role_reason: assignedRoleReason,
             signup_method: 'ati_token',
             ati_token_fingerprint: tokenValidation.atiToken!.fingerprint,
             ati_token_creator: tokenCreator?.actorUserId || null,
             ati_explicit_role: fullToken?.assignedRole || null,
             ati_assigned_team: fullToken?.assignedTeamId || null,
-            is_first_tenant_user: existingUsersCount === 0
+            is_first_tenant_user: transactionExistingUsersCount === 0
           }
         }
       })
@@ -307,20 +246,6 @@ export async function POST(request: NextRequest) {
     })
 
     const user = result
-    
-    // Auto-assign to team (outside transaction for flexibility)
-    // Priority: 1. Explicit team from ATI token, 2. Default team
-    try {
-      await autoAssignToDefaultTeam(
-        user.id,
-        tenant.id,
-        fullToken?.assignedTeamId || undefined
-      )
-      console.log('User auto-assigned to team:', fullToken?.assignedTeamId || 'default')
-    } catch (teamError) {
-      // Non-fatal - log but don't fail signup
-      console.warn('Failed to auto-assign user to team:', teamError)
-    }
 
     // Email verification disabled by default; enable with ENFORCE_EMAIL_VERIFICATION=true
     if (process.env.ENFORCE_EMAIL_VERIFICATION === 'true') {
@@ -336,16 +261,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Record trial invite signup if applicable
-    if (trialInvite) {
-      try {
-        await recordSignup(atiToken, user.id)
-        console.log('Trial signup recorded for invite:', trialInvite.id)
-      } catch (trialError) {
-        console.warn('Failed to record trial signup:', trialError)
-      }
-    }
-
     return NextResponse.json({
       user_id: user.id,
       tenant_id: tenant.id,
@@ -357,6 +272,13 @@ export async function POST(request: NextRequest) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { code: 'INVALID_INPUT', message: 'Invalid input data', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    if (error instanceof ATIRedemptionError) {
+      return NextResponse.json(
+        { code: error.code, message: error.message },
         { status: 400 }
       )
     }

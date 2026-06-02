@@ -4,14 +4,14 @@ const {
   tenantFindUniqueMock,
   tenantPlanFindFirstMock,
   planFindFirstMock,
-  getTrialUserInfoMock,
+  getTrialQuotaStatusMock,
   checkQuotaMock,
   createReservationMock,
 } = vi.hoisted(() => ({
   tenantFindUniqueMock: vi.fn(),
   tenantPlanFindFirstMock: vi.fn(),
   planFindFirstMock: vi.fn(),
-  getTrialUserInfoMock: vi.fn(),
+  getTrialQuotaStatusMock: vi.fn(),
   checkQuotaMock: vi.fn(),
   createReservationMock: vi.fn(),
 }))
@@ -34,7 +34,7 @@ vi.mock('@/lib/prisma', () => ({
 }))
 
 vi.mock('@/lib/trial-plan-service', () => ({
-  getTrialUserInfo: getTrialUserInfoMock,
+  getTrialQuotaStatus: getTrialQuotaStatusMock,
 }))
 
 vi.mock('@/lib/metering/metering', () => ({
@@ -52,12 +52,12 @@ vi.mock('@/lib/metering/reservation', () => ({
 import { defaultConfig } from '@/lib/metering/config'
 import { createPolicyService } from '@/lib/metering/policy'
 
-describe('metering policy plan-agnostic features', () => {
+describe('metering policy entitlement features', () => {
   beforeEach(() => {
     tenantFindUniqueMock.mockReset()
     tenantPlanFindFirstMock.mockReset()
     planFindFirstMock.mockReset()
-    getTrialUserInfoMock.mockReset()
+    getTrialQuotaStatusMock.mockReset()
     checkQuotaMock.mockReset()
     createReservationMock.mockReset()
 
@@ -73,12 +73,36 @@ describe('metering policy plan-agnostic features', () => {
       planLLMAccess: [],
       policyRules: [],
     })
-    getTrialUserInfoMock.mockResolvedValue({ isTrialUser: false })
+    getTrialQuotaStatusMock.mockResolvedValue({ isTrialUser: false })
     checkQuotaMock.mockResolvedValue({ allowed: true, remaining: { monthly: 10, daily: 5 } })
     createReservationMock.mockResolvedValue('reservation-1')
   })
 
-  it('allows Grant Prep when the active plan has no GRANT_PREP PlanFeature row', async () => {
+  it('denies Grant Prep when the active entitlement has no GRANT_PREP feature row', async () => {
+    const policy = createPolicyService(defaultConfig)
+
+    const decision = await policy.evaluateAccess({
+      tenantId: 'tenant-1',
+      featureCode: 'GRANT_PREP',
+      taskCode: 'GRANT_PREP_CHAT',
+      userId: 'user-1',
+    })
+
+    expect(decision.allowed).toBe(false)
+    expect(decision.reason).toBe("Feature 'GRANT_PREP' not available in plan 'PRO_PLAN'")
+    expect(checkQuotaMock).not.toHaveBeenCalled()
+    expect(createReservationMock).not.toHaveBeenCalled()
+  })
+
+  it('allows Grant Prep after checking quota when the entitlement includes the feature', async () => {
+    planFindFirstMock.mockResolvedValue({
+      id: 'plan-1',
+      code: 'PRO_PLAN',
+      planFeatures: [{ feature: { code: 'GRANT_PREP' } }],
+      planLLMAccess: [],
+      policyRules: [],
+    })
+
     const policy = createPolicyService(defaultConfig)
 
     const decision = await policy.evaluateAccess({
@@ -90,7 +114,7 @@ describe('metering policy plan-agnostic features', () => {
 
     expect(decision.allowed).toBe(true)
     expect(decision.reservationId).toBe('reservation-1')
-    expect(checkQuotaMock).not.toHaveBeenCalled()
+    expect(checkQuotaMock).toHaveBeenCalled()
   })
 
   it('keeps the missing-plan-feature denial for non-universal features', async () => {

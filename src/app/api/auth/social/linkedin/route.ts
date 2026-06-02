@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthorizationUrl, validateOAuthConfig } from '@/lib/oauth-config'
+import { createOAuthState, setOAuthStateCookie } from '@/lib/oauth-state'
 
 // Force dynamic rendering since we access request.nextUrl.origin
 export const dynamic = 'force-dynamic'
@@ -15,12 +16,16 @@ export async function GET(request: NextRequest) {
     }
 
     // Generate state parameter for CSRF protection
-    const state = crypto.randomUUID()
+    const state = createOAuthState('linkedin', {
+      inviteToken: request.nextUrl.searchParams.get('invite') || undefined,
+    })
 
     // Generate authorization URL
     const authUrl = getAuthorizationUrl('linkedin', state, request.nextUrl.origin)
 
-    return NextResponse.redirect(authUrl)
+    const response = NextResponse.redirect(authUrl)
+    setOAuthStateCookie(response, 'linkedin', state)
+    return response
   } catch (error) {
     console.error('LinkedIn OAuth initiation error:', error)
     return NextResponse.json(

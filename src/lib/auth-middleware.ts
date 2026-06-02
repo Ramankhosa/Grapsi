@@ -67,18 +67,6 @@ export async function authenticateUser(request: NextRequest): Promise<{
       }
     }
 
-    // For non-social login users, validate ATI token
-    if (!user.oauthProvider && !user.signupAtiTokenId) {
-      return {
-        user: null,
-        error: {
-          code: 'MISSING_SIGNUP_TOKEN',
-          message: 'User signup ATI token not found.',
-          status: 401
-        }
-      }
-    }
-
     // Check tenant status if user has a tenant
     if (user.tenant && user.tenant.status !== 'ACTIVE') {
       return {

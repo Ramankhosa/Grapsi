@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { getAppOrigin, getRedirectUri, oauthConfig } from '@/lib/oauth-config'
+import { clearOAuthStateCookie, verifyOAuthCallbackState } from '@/lib/oauth-state'
+import { createSocialSignupToken } from '@/lib/social-signup-token'
 
 // Force dynamic rendering since we access search params
 export const dynamic = 'force-dynamic'
@@ -28,17 +30,14 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Decode state parameter to get PKCE verifier
-    let decodedState
-    try {
-      decodedState = JSON.parse(Buffer.from(state, 'base64url').toString())
-    } catch (e) {
+    const oauthState = verifyOAuthCallbackState(request, 'twitter', state)
+    if (!oauthState?.codeVerifier) {
       return NextResponse.redirect(
         new URL('/login?error=invalid_state', appOrigin)
       )
     }
 
-    const { codeVerifier } = decodedState
+    const { codeVerifier } = oauthState
     const redirectUri = getRedirectUri('twitter', request.nextUrl.origin)
 
     // Exchange authorization code for access token using PKCE
@@ -114,19 +113,22 @@ export async function GET(request: NextRequest) {
       } else {
         // New user - redirect to registration completion with ATI token entry
         const pendingData = {
-          provider: 'twitter',
+          provider: 'twitter' as const,
           providerId: twitterUser.id,
           email: email,
           name: name,
-          profile: twitterData,
-          exp: Date.now() + 15 * 60 * 1000
+          profile: twitterData
         }
 
-        const pendingToken = Buffer.from(JSON.stringify(pendingData)).toString('base64url')
+        const pendingToken = createSocialSignupToken(pendingData)
 
-        return NextResponse.redirect(
-          new URL(`/register/complete-social?token=${pendingToken}&provider=twitter`, appOrigin)
-        )
+        const completionUrl = new URL('/register/complete-social', appOrigin)
+        completionUrl.searchParams.set('token', pendingToken)
+        completionUrl.searchParams.set('provider', 'twitter')
+        if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
+        const response = NextResponse.redirect(completionUrl)
+        clearOAuthStateCookie(response, 'twitter')
+        return response
       }
     }
 
@@ -172,6 +174,7 @@ export async function GET(request: NextRequest) {
     const response = NextResponse.redirect(
       new URL('/dashboard', appOrigin)
     )
+    clearOAuthStateCookie(response, 'twitter')
 
     // Set tokens as cookies
     response.cookies.set('refresh_token', refreshTokenData.token, {

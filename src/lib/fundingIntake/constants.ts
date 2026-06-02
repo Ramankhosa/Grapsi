@@ -1,5 +1,5 @@
-export const FUNDING_INTAKE_PROMPT_VERSION = 'funding-intake-v4';
-export const FUNDING_INTAKE_EXTRACTOR_VERSION = '1.3.0';
+export const FUNDING_INTAKE_PROMPT_VERSION = 'funding-intake-v5';
+export const FUNDING_INTAKE_EXTRACTOR_VERSION = '1.4.0';
 export const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 export const FETCH_TIMEOUT_MS = 15_000;
 export const ACTIVE_IDEMPOTENT_STATUSES = ['queued', 'fetching', 'extracting', 'needs_review', 'draft_created'] as const;
@@ -85,12 +85,14 @@ export const LLM_EXTRACTABLE_FUNDING_FIELD_KEYS = [
   'agency_name',
   'scheme_title',
   'description',
+  'open_date',
   'close_date',
   'is_rolling',
   'geography_scope',
   'eligible_countries',
   'eligible_regions',
   'host_countries',
+  'funder_country',
   'funding_kinds',
   'institution_types',
   'career_stages',
@@ -101,9 +103,14 @@ export const LLM_EXTRACTABLE_FUNDING_FIELD_KEYS = [
   'amount_min',
   'amount_max',
   'currency',
+  'project_duration_min_months',
+  'project_duration_max_months',
   'project_duration_text',
   'eligibility_text',
   'expected_deliverables_text',
+  'official_urls',
+  'contact_info',
+  'sponsor_type',
 ] as const satisfies readonly FundingFieldKey[];
 
 export interface FundingFieldDefinition {

@@ -8,6 +8,12 @@ import {
   getIntegratedReviewerState,
   refreshIntegratedReviewerCall,
 } from '@/lib/reviewer/template-bridge'
+import {
+  releaseReservedServiceUsage,
+  reserveServiceUsage,
+  ServiceQuotaExceededError,
+  trackServiceUsage,
+} from '@/lib/service-usage-tracker'
 
 export const runtime = 'nodejs'
 
@@ -45,7 +51,7 @@ export async function GET(
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'read')
+  const actor = await requireProjectGrantActor(request, projectId, 'read', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) return actor
 
   const grantSession = await assertGrantWorkspace(projectId, grantId, actor.tenantId)
@@ -66,7 +72,7 @@ export async function POST(
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'editContent')
+  const actor = await requireProjectGrantActor(request, projectId, 'editContent', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) return actor
 
   const grantSession = await assertGrantWorkspace(projectId, grantId, actor.tenantId)
@@ -74,8 +80,18 @@ export async function POST(
     return NextResponse.json({ message: 'Grant workspace not found' }, { status: 404 })
   }
 
+  const operationId = `grant-reviewer-refresh:${grantId}:${Date.now()}`
   try {
     const payload = refreshSchema.parse(await request.json().catch(() => ({})))
+    await reserveServiceUsage({
+      tenantId: actor.tenantId,
+      userId: actor.id,
+      serviceType: 'GRANT_DRAFTING',
+      operationId,
+      operationType: 'grant_reviewer_refresh',
+      metadata: { grantSessionId: grantId }
+    })
+
     const state = await refreshIntegratedReviewerCall({
       grantSessionId: grantId,
       tenantId: actor.tenantId,
@@ -84,11 +100,22 @@ export async function POST(
       createRevisions: payload.createRevisions === true,
     })
 
+    await trackServiceUsage({
+      tenantId: actor.tenantId,
+      userId: actor.id,
+      serviceType: 'GRANT_DRAFTING',
+      operationId,
+      operationType: 'grant_reviewer_refresh',
+      isCompleted: true,
+      metadata: { grantSessionId: grantId }
+    })
+
     return NextResponse.json(state)
   } catch (error) {
+    await releaseReservedServiceUsage(actor.tenantId, 'GRANT_DRAFTING', operationId).catch(() => undefined)
     return NextResponse.json(
       { message: error instanceof Error ? error.message : 'Failed to prepare reviewer mappings' },
-      { status: 400 }
+      { status: error instanceof ServiceQuotaExceededError ? 429 : 400 }
     )
   }
 }
@@ -98,7 +125,7 @@ export async function PATCH(
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'editContent')
+  const actor = await requireProjectGrantActor(request, projectId, 'editContent', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) return actor
 
   const grantSession = await assertGrantWorkspace(projectId, grantId, actor.tenantId)

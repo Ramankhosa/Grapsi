@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { Prisma } from '@/lib/prisma-generated'
 import prisma from '@/lib/prisma'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
+import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import { hasMeaningfulSectionContent } from '@/lib/reviewer/content'
 import { normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
 import type { GrantBlueprintPlanSection, GrantTemplateIntent } from '@/types/grant'
@@ -520,7 +521,10 @@ export function buildReviewerSectionMappings(input: {
 
     const planSection = resolvePlanSection(draft, sectionPlanByKey)
     const workflowMode = asString(planSection?.workflowMode) || asString(draft?.workflowMode)
-    if (workflowMode !== 'app_draft') continue
+    if (!isGrantSectionAutoDraftable({
+      sectionType: asString(planSection?.sectionType) || asString(draft?.sectionType),
+      workflowMode,
+    })) continue
 
     const content = serializeGrantDraft(draft)
     if (!hasMeaningfulSectionContent(content)) continue

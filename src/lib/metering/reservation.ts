@@ -186,7 +186,12 @@ export function createReservationService(config: MeteringConfig): ReservationSer
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {
             tenantId,
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            effectiveFrom: { lte: new Date() },
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } }
+            ]
           },
           include: {
             plan: true

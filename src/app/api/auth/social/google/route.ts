@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthorizationUrl, validateOAuthConfig } from '@/lib/oauth-config'
+import { createOAuthState, setOAuthStateCookie } from '@/lib/oauth-state'
 
 // Force dynamic rendering since we access request.nextUrl.origin
 export const dynamic = 'force-dynamic'
@@ -15,7 +16,9 @@ export async function GET(request: NextRequest) {
     }
 
     // Generate state parameter for CSRF protection
-    const state = crypto.randomUUID()
+    const state = createOAuthState('google', {
+      inviteToken: request.nextUrl.searchParams.get('invite') || undefined,
+    })
 
     // Generate authorization URL
     const authUrl = getAuthorizationUrl('google', state, request.nextUrl.origin)
@@ -23,7 +26,9 @@ export async function GET(request: NextRequest) {
     // Store state in session for verification (in production, use secure session store)
     // For now, we'll handle this in the callback
 
-    return NextResponse.redirect(authUrl)
+    const response = NextResponse.redirect(authUrl)
+    setOAuthStateCookie(response, 'google', state)
+    return response
   } catch (error) {
     console.error('Google OAuth initiation error:', error)
     return NextResponse.json(

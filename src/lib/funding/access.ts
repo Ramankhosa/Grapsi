@@ -10,6 +10,7 @@ export interface FundingActor {
   email: string
   roles: string[]
   tenantId: string | null
+  tenantAtiId: string | null
   isSuperAdmin: boolean
   isSuperAdminWriter: boolean
   platformPermissions: PlatformPermissionCode[]
@@ -19,13 +20,26 @@ function hasRole(actor: { roles: string[] }, role: string) {
   return actor.roles.includes(role)
 }
 
+function isFundingAdminRole(actor: { roles: string[]; tenantAtiId?: string | null }) {
+  return hasRole(actor, 'ADMIN') && actor.tenantAtiId === 'PLATFORM'
+}
+
+function isFundingAdminPermission(permissionCode: PlatformPermissionCode) {
+  return permissionCode === 'funding.operations.write' || permissionCode === 'funding.publisher.write'
+}
+
 export function actorHasPlatformPermission(actor: FundingActor, permissionCode: PlatformPermissionCode) {
-  return actor.isSuperAdminWriter || actor.platformPermissions.includes(permissionCode)
+  return (
+    actor.isSuperAdminWriter ||
+    actor.platformPermissions.includes(permissionCode) ||
+    (isFundingAdminRole(actor) && isFundingAdminPermission(permissionCode))
+  )
 }
 
 export function actorHasPlatformReadAccess(actor: FundingActor) {
   return (
     actor.isSuperAdmin ||
+    isFundingAdminRole(actor) ||
     actor.platformPermissions.includes('platform.support.read') ||
     actor.platformPermissions.includes('funding.operations.write') ||
     actor.platformPermissions.includes('funding.publisher.write')
@@ -59,15 +73,18 @@ export async function requireFundingActor(
     email: user.email,
     roles: user.roles || [],
     tenantId: user.tenantId ?? null,
+    tenantAtiId: user.tenant?.atiId ?? null,
     isSuperAdmin: hasRole(user, 'SUPER_ADMIN') || hasRole(user, 'SUPER_ADMIN_VIEWER'),
     isSuperAdminWriter: hasRole(user, 'SUPER_ADMIN'),
     platformPermissions,
   }
 
   const hasRequiredPlatformPermission = options?.requiredPlatformPermission
-    ? actor.platformPermissions.includes(options.requiredPlatformPermission)
+    ? actorHasPlatformPermission(actor, options.requiredPlatformPermission)
     : false
-  const hasPlatformRoleAccess = options?.allowPlatform && actor.platformPermissions.length > 0
+  const hasPlatformRoleAccess =
+    options?.allowPlatform &&
+    (actor.platformPermissions.length > 0 || (isFundingAdminRole(actor) && user.tenant?.atiId === 'PLATFORM'))
 
   if (!actor.tenantId && !actor.isSuperAdmin && !hasPlatformRoleAccess) {
     return {

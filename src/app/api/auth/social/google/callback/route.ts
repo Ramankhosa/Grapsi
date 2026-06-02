@@ -3,6 +3,8 @@ import { OAuth2Client } from 'google-auth-library'
 import { prisma } from '@/lib/prisma'
 import { generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { getAppOrigin, getRedirectUri, oauthConfig } from '@/lib/oauth-config'
+import { clearOAuthStateCookie, verifyOAuthCallbackState } from '@/lib/oauth-state'
+import { createSocialSignupToken } from '@/lib/social-signup-token'
 
 // Force dynamic rendering since we access search params
 export const dynamic = 'force-dynamic'
@@ -26,6 +28,13 @@ export async function GET(request: NextRequest) {
     if (!code) {
       return NextResponse.redirect(
         new URL('/login?error=no_code', appOrigin)
+      )
+    }
+
+    const oauthState = verifyOAuthCallbackState(request, 'google', state)
+    if (!oauthState) {
+      return NextResponse.redirect(
+        new URL('/login?error=invalid_state', appOrigin)
       )
     }
 
@@ -87,21 +96,24 @@ export async function GET(request: NextRequest) {
         // New user - redirect to registration completion with ATI token entry
         // Create a pending registration token with user data
         const pendingData = {
-          provider: 'google',
+          provider: 'google' as const,
           providerId: googleUser.id,
           email: googleUser.email,
           name: googleUser.name,
           firstName: googleUser.given_name,
           lastName: googleUser.family_name,
-          profile: googleUser,
-          exp: Date.now() + 15 * 60 * 1000 // 15 minutes expiry
+          profile: googleUser
         }
 
-        const pendingToken = Buffer.from(JSON.stringify(pendingData)).toString('base64url')
+        const pendingToken = createSocialSignupToken(pendingData)
 
-        return NextResponse.redirect(
-          new URL(`/register/complete-social?token=${pendingToken}&provider=google`, appOrigin)
-        )
+        const completionUrl = new URL('/register/complete-social', appOrigin)
+        completionUrl.searchParams.set('token', pendingToken)
+        completionUrl.searchParams.set('provider', 'google')
+        if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
+        const response = NextResponse.redirect(completionUrl)
+        clearOAuthStateCookie(response, 'google')
+        return response
       }
     }
 
@@ -148,6 +160,7 @@ export async function GET(request: NextRequest) {
     const response = NextResponse.redirect(
       new URL('/dashboard', appOrigin)
     )
+    clearOAuthStateCookie(response, 'google')
 
     // Set refresh token as httpOnly cookie
     response.cookies.set('refresh_token', refreshTokenData.token, {

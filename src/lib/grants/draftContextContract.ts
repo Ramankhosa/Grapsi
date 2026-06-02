@@ -4,7 +4,14 @@ import {
   buildGrantComplianceReport,
   buildReviewerReadinessReport,
 } from '@/lib/grants/compliance'
+import {
+  budgetStructuredDataHasConfirmedNumericValues,
+  budgetStructuredDataHasMeaningfulRows,
+  budgetStructuredDataHasNumericColumns,
+  getBudgetStructuredOpenQuestions,
+} from '@/lib/grants/budgetTemplate'
 import { requiresMappedGrantEvidence } from '@/lib/grants/citationMode'
+import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import type {
   GrantCitationMode,
   GrantComplianceReport,
@@ -92,6 +99,14 @@ function contractFingerprint(value: Omit<GrantDraftContextContract, 'fingerprint
     .update(JSON.stringify(value))
     .digest('hex')
     .slice(0, 16)
+}
+
+function getStructuredResponseValue(section: {
+  structuredResponses?: Array<{ fieldKey?: string | null; responseJson?: unknown }>
+}) {
+  const responses = section.structuredResponses || []
+  return responses.find((response) => response.fieldKey === 'structuredData')?.responseJson
+    ?? responses[0]?.responseJson
 }
 
 function buildReadiness(input: {
@@ -254,9 +269,11 @@ export function validateGrantFinalExportReadiness(input: {
   sections: Array<{
     sectionKey: string
     label?: string | null
+    sectionType?: string | null
     workflowMode?: string | null
     required?: boolean | null
     content?: string | null
+    structuredResponses?: Array<{ fieldKey?: string | null; responseJson?: unknown }>
     status?: string | null
     grantComplianceReport?: GrantComplianceReport | null
     validationReport?: unknown
@@ -265,8 +282,37 @@ export function validateGrantFinalExportReadiness(input: {
 }): { ok: boolean; issues: string[] } {
   const issues: string[] = []
   for (const section of input.sections) {
-    if (section.workflowMode !== 'app_draft') continue
+    const paperDraftable = section.sectionType
+      ? isGrantSectionAutoDraftable({
+          sectionType: section.sectionType,
+          workflowMode: section.workflowMode,
+        })
+      : section.workflowMode === 'app_draft'
     const label = section.label || section.sectionKey
+    if (section.sectionType === 'budget_rows') {
+      if (section.required !== false) {
+        const structuredData = getStructuredResponseValue(section)
+        const openQuestions = getBudgetStructuredOpenQuestions(structuredData)
+        if (!budgetStructuredDataHasMeaningfulRows(structuredData)) {
+          issues.push(`${label} has no prepared budget rows.`)
+        }
+        if (
+          budgetStructuredDataHasNumericColumns(structuredData)
+          && !budgetStructuredDataHasConfirmedNumericValues(structuredData)
+        ) {
+          issues.push(`${label} has no confirmed numeric budget amounts.`)
+        }
+        if (openQuestions.length > 0) {
+          issues.push(`${label} has unresolved budget questions: ${openQuestions.join('; ')}`)
+        }
+      }
+      if (section.isStale) {
+        issues.push(`${label} is stale after blueprint, guideline, prep, or evidence changes.`)
+      }
+      continue
+    }
+    if (!paperDraftable) continue
+
     const validation = section.validationReport && typeof section.validationReport === 'object' && !Array.isArray(section.validationReport)
       ? section.validationReport as Record<string, unknown>
       : {}

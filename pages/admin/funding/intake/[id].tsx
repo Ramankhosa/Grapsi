@@ -343,16 +343,18 @@ export default function FundingIntakeJobPage() {
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
+  const isPlatformAdmin = userRoles.includes('ADMIN') && user?.ati_id === 'PLATFORM';
   const canReadFundingIntake =
     userRoles.includes('SUPER_ADMIN') ||
     userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    isPlatformAdmin ||
     platformPermissions.includes('platform.support.read') ||
     platformPermissions.includes('funding.operations.write') ||
     platformPermissions.includes('funding.publisher.write');
   const canWriteFundingIntake =
-    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.operations.write');
+    userRoles.includes('SUPER_ADMIN') || isPlatformAdmin || platformPermissions.includes('funding.operations.write');
   const canPublishFunding =
-    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.publisher.write');
+    userRoles.includes('SUPER_ADMIN') || isPlatformAdmin || platformPermissions.includes('funding.publisher.write');
   const callId = details?.call?.id || details?.job.linked_funding_call_id || linkedCallOverrideId || null;
   const isActiveJob = useMemo(
     () => details && ['queued', 'fetching', 'extracting'].includes(details.job.status),

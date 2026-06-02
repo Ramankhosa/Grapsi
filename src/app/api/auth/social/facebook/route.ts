@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthorizationUrl, validateOAuthConfig } from '@/lib/oauth-config'
+import { createOAuthState, setOAuthStateCookie } from '@/lib/oauth-state'
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,12 +13,16 @@ export async function GET(request: NextRequest) {
     }
 
     // Generate state parameter for CSRF protection
-    const state = crypto.randomUUID()
+    const state = createOAuthState('facebook', {
+      inviteToken: request.nextUrl.searchParams.get('invite') || undefined,
+    })
 
     // Generate authorization URL
     const authUrl = getAuthorizationUrl('facebook', state, request.nextUrl.origin)
 
-    return NextResponse.redirect(authUrl)
+    const response = NextResponse.redirect(authUrl)
+    setOAuthStateCookie(response, 'facebook', state)
+    return response
   } catch (error) {
     console.error('Facebook OAuth initiation error:', error)
     return NextResponse.json(

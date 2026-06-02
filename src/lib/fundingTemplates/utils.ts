@@ -240,7 +240,7 @@ export function normalizeGrantTemplate(input?: unknown): GrantTemplateDocument {
       ? {
           required: Boolean(parsed.budget.required),
           yearWise: Boolean(parsed.budget.yearWise),
-          workflowMode: normalizeGrantWorkflowMode(parsed.budget.workflowMode, 'app_support'),
+          workflowMode: 'app_draft',
           columns: normalizeBudgetColumns(parsed.budget.columns || []),
           categories: parsed.budget.categories.map((category: any) => ({
             key: String(category.key || '').trim(),

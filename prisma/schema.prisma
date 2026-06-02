@@ -2057,12 +2057,18 @@ model TenantPlan {
   effectiveFrom DateTime
   expiresAt     DateTime?
   status        String    @default("ACTIVE")
+  source        String    @default("LEGACY") // LEGACY, SUPERADMIN_GRANT, SUBSCRIPTION, TRIAL
+  sourceRef     String?
+  metadata      Json?
   createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   plan   Plan   @relation(fields: [planId], references: [id])
 
   @@unique([tenantId, planId, effectiveFrom])
+  @@unique([source, sourceRef])
+  @@index([tenantId, status, effectiveFrom, expiresAt])
   @@map("tenant_plans")
 }
 

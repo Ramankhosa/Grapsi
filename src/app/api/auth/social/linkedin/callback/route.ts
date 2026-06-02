@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { getAppOrigin, getRedirectUri, oauthConfig } from '@/lib/oauth-config'
+import { clearOAuthStateCookie, verifyOAuthCallbackState } from '@/lib/oauth-state'
+import { createSocialSignupToken } from '@/lib/social-signup-token'
 
 // Force dynamic rendering since we access search params
 export const dynamic = 'force-dynamic'
@@ -25,6 +27,13 @@ export async function GET(request: NextRequest) {
     if (!code) {
       return NextResponse.redirect(
         new URL('/login?error=no_code', appOrigin)
+      )
+    }
+
+    const oauthState = verifyOAuthCallbackState(request, 'linkedin', state)
+    if (!oauthState) {
+      return NextResponse.redirect(
+        new URL('/login?error=invalid_state', appOrigin)
       )
     }
 
@@ -107,21 +116,24 @@ export async function GET(request: NextRequest) {
       } else {
         // New user - redirect to registration completion with ATI token entry
         const pendingData = {
-          provider: 'linkedin',
+          provider: 'linkedin' as const,
           providerId: profileId,
           email: email,
           name: `${firstName} ${lastName}`.trim(),
           firstName: firstName,
           lastName: lastName,
-          profile: linkedinUser,
-          exp: Date.now() + 15 * 60 * 1000
+          profile: linkedinUser
         }
 
-        const pendingToken = Buffer.from(JSON.stringify(pendingData)).toString('base64url')
+        const pendingToken = createSocialSignupToken(pendingData)
 
-        return NextResponse.redirect(
-          new URL(`/register/complete-social?token=${pendingToken}&provider=linkedin`, appOrigin)
-        )
+        const completionUrl = new URL('/register/complete-social', appOrigin)
+        completionUrl.searchParams.set('token', pendingToken)
+        completionUrl.searchParams.set('provider', 'linkedin')
+        if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
+        const response = NextResponse.redirect(completionUrl)
+        clearOAuthStateCookie(response, 'linkedin')
+        return response
       }
     }
 
@@ -167,6 +179,7 @@ export async function GET(request: NextRequest) {
     const response = NextResponse.redirect(
       new URL('/dashboard', appOrigin)
     )
+    clearOAuthStateCookie(response, 'linkedin')
 
     // Set tokens as cookies
     response.cookies.set('refresh_token', refreshTokenData.token, {

@@ -25,15 +25,19 @@ export default function SuperAdminResearchAreasPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
+  const isPlatformAdmin = Boolean(user?.roles?.includes('ADMIN') && user?.ati_id === 'PLATFORM');
   const isSuperAdmin = useMemo(
     () =>
       user?.roles?.includes('SUPER_ADMIN') ||
       user?.roles?.includes('SUPER_ADMIN_VIEWER') ||
+      isPlatformAdmin ||
       user?.platformPermissions?.includes('platform.support.read') ||
       user?.platformPermissions?.includes('funding.operations.write'),
-    [user?.platformPermissions, user?.roles]
+    [isPlatformAdmin, user?.platformPermissions, user?.roles]
   );
-  const canUpload = Boolean(user?.roles?.includes('SUPER_ADMIN') || user?.platformPermissions?.includes('funding.operations.write'));
+  const canUpload = Boolean(
+    user?.roles?.includes('SUPER_ADMIN') || isPlatformAdmin || user?.platformPermissions?.includes('funding.operations.write')
+  );
 
   useEffect(() => {
     if (isLoading) return;

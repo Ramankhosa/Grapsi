@@ -70,40 +70,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if this is a social login user (OAuth users don't need ATI token validation)
-    const isSocialLogin = !!user.oauthProvider
-
     // Determine scope based on tenant membership
     const isPlatformScope = !!(user.tenantId && user.tenant?.atiId === 'PLATFORM')
     const isTenantScope = !!(user.tenantId && user.tenant?.atiId !== 'PLATFORM')
-
-    // For non-social login users, validate ATI token
-    if (!isSocialLogin && user.signupAtiTokenId) {
-      const signupToken = await prisma.aTIToken.findUnique({
-        where: { id: user.signupAtiTokenId },
-        include: { tenant: true }
-      })
-
-      if (signupToken) {
-        // Check if signup token is still valid
-        if (signupToken.status === 'REVOKED') {
-          return NextResponse.json(
-            { code: 'SIGNUP_TOKEN_REVOKED', message: 'Your signup ATI token has been revoked. Please contact your administrator.' },
-            { status: 401 }
-          )
-        }
-
-        if (signupToken.status === 'EXPIRED' || (signupToken.expiresAt && new Date() > signupToken.expiresAt)) {
-          return NextResponse.json(
-            { code: 'SIGNUP_TOKEN_EXPIRED', message: 'Your signup ATI token has expired. Please contact your administrator.' },
-            { status: 401 }
-          )
-        }
-
-        // Note: We don't check USED_UP for login - the token was already used for signup
-        // The usageCount tracks signups, not logins
-      }
-    }
 
     // Validate scope: every user must have exactly one scope
     if (!isPlatformScope && !isTenantScope) {
@@ -190,6 +159,5 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-
 
 

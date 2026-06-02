@@ -145,7 +145,7 @@ function buildPseudoTemplate(mode: PseudoTemplateMode) {
     template.budget = {
       required: true,
       yearWise: false,
-      workflowMode: 'app_support',
+      workflowMode: 'app_draft',
       categories: [
         {
           key: 'core_budget',

@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { randomUUID } from 'crypto'
 
 import { prisma } from '@/lib/prisma'
+import {
+  releaseReservedServiceUsage,
+  reserveServiceUsage,
+  ServiceQuotaExceededError,
+  trackServiceUsage,
+} from '@/lib/service-usage-tracker'
 import { assertGrantPrepProjectCapability, requireGrantPrepActor } from '@/lib/grantPrep/access'
 import { generateGrantPrepText, resolveGrantPrepTenantContext } from '@/lib/grantPrep/llm'
 import { buildGrantPrepPrompt } from '@/lib/grantPrep/promptComposer'
@@ -272,6 +279,7 @@ export async function POST(
     return NextResponse.json({ message: 'Invalid session id' }, { status: 400 })
   }
 
+  let reservedOperationId: string | null = null
   try {
     const payload = messageSchema.parse(await request.json())
     const grantPrepSession = await loadGrantPrepSession({
@@ -406,6 +414,16 @@ export async function POST(
             { role: 'user', content: payload.content },
           ],
       userMessage: payload.content,
+    })
+
+    reservedOperationId = `grant-prep-message:${grantPrepSession.id}:${payload.clientMessageId || randomUUID()}`
+    await reserveServiceUsage({
+      tenantId: auth.actor.tenantId,
+      userId: auth.actor.id,
+      serviceType: 'GRANT_PREP',
+      operationId: reservedOperationId,
+      operationType: 'grant_prep_chat_message',
+      metadata: { grantPrepSessionId: grantPrepSession.id, stageKey }
     })
 
     const rawResponse = await generateText(prompt, 'chat_response')
@@ -617,6 +635,19 @@ export async function POST(
       },
     })
 
+    await trackServiceUsage({
+      tenantId: auth.actor.tenantId,
+      userId: auth.actor.id,
+      serviceType: 'GRANT_PREP',
+      operationId: reservedOperationId,
+      operationType: 'grant_prep_chat_message',
+      isCompleted: true,
+      metadata: {
+        grantPrepSessionId: grantPrepSession.id,
+        stageKey
+      }
+    })
+
     return NextResponse.json({
       message: assistantRecord,
       prepContext: nextContext,
@@ -624,12 +655,15 @@ export async function POST(
       warning: finalWarning,
     })
   } catch (error) {
+    if (reservedOperationId) {
+      await releaseReservedServiceUsage(auth.actor.tenantId, 'GRANT_PREP', reservedOperationId).catch(() => undefined)
+    }
     console.error('[Grant Prep Sessions] message error:', error)
     return NextResponse.json(
       {
         message: error instanceof Error ? error.message : 'Failed to process Grant Prep message',
       },
-      { status: 500 }
+      { status: error instanceof ServiceQuotaExceededError ? 429 : 500 }
     )
   }
 }

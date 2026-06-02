@@ -1,4 +1,5 @@
 import type { PaperDocxBlock, PaperDocxSection } from '@/lib/export/paper-docx-export'
+import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 
 export const GRANT_EXPORT_EMPTY_PLACEHOLDER = 'Not prepared yet.'
 
@@ -35,11 +36,15 @@ function asStructuredResponse(sectionDraft: GrantExportSectionDraft): unknown {
   return structured?.responseJson
 }
 
-function structuredValueHasContent(value: unknown): boolean {
+function structuredValueHasContent(value: unknown, sectionType?: string | null): boolean {
   if (value === null || typeof value === 'undefined') return false
   if (typeof value === 'string') return hasText(value)
   if (Array.isArray(value)) return value.length > 0
   if (!isRecord(value)) return true
+
+  if (sectionType === 'budget_rows') {
+    return budgetStructuredDataHasMeaningfulRows(value)
+  }
 
   if (Array.isArray(value.items)) {
     return value.items.some((item) => {
@@ -174,7 +179,7 @@ function renderGenericStructuredBlocks(value: unknown): PaperDocxBlock[] {
 
 function renderStructuredBlocks(sectionDraft: GrantExportSectionDraft): PaperDocxBlock[] {
   const structuredData = asStructuredResponse(sectionDraft)
-  if (!structuredValueHasContent(structuredData)) {
+  if (!structuredValueHasContent(structuredData, sectionDraft.sectionType)) {
     return [{ type: 'paragraph', text: GRANT_EXPORT_EMPTY_PLACEHOLDER }]
   }
 

@@ -439,7 +439,8 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[2].citationMode).toBe('direct_draft');
     expect(enriched[2].grantSemantic).toBe('objectives');
 
-    expect(enriched[3].suggestedCitationCount).toBeNull();
+    expect(enriched[3].suggestedCitationCount).toBe(0);
+    expect(enriched[3].dimensions).toEqual([]);
     expect(enriched[3].thematicBlueprint).toBeNull();
     expect(enriched[3].grantSemantic).toBeNull();
     expect(enriched[3].citationMode).toBe('no_citations');
@@ -743,6 +744,80 @@ describe('grant blueprint enrichment', () => {
     expect(technical?.citationMode).toBe('direct_draft');
     expect(technical?.suggestedCitationCount).toBe(0);
     expect(technical?.dimensions || []).toEqual([]);
+  });
+
+  it('preserves budget prep facts on budget rows without literature enrichment', () => {
+    const enriched = enrichGrantBlueprintSections([
+      makeSection({
+        sectionKey: 'budget',
+        label: 'Budget',
+        sectionType: 'budget_rows',
+        workflowMode: 'app_draft',
+        citationMode: 'mapped_evidence',
+        sourceTemplatePointer: 'budget',
+        purpose: 'Complete the funder budget table.',
+        mustCover: ['Equipment', 'Personnel'],
+      }),
+    ], {
+      prepEvidenceBySection: {
+        budget: [
+          {
+            stageKey: 'budget_strategy',
+            pointKey: 'equipment_costs',
+            label: 'Equipment costs',
+            sourceTemplatePointer: 'budget',
+            sectionKeys: ['budget'],
+            keywords: ['prototype hardware'],
+            thrustLinkage: ['prototype development'],
+            factBullets: ['Prototype hardware costs are tied to the validation work package.'],
+            ruleNotes: ['Keep values within extracted funder caps.'],
+            confidence: 0.91,
+            captureBasis: ['user_confirmed'],
+            status: 'covered',
+          },
+        ],
+      },
+      prepEvidence: [
+        {
+          stageKey: 'budget_strategy',
+          pointKey: 'institutional_support',
+          label: 'Institutional support',
+          keywords: ['cloud credits'],
+          thrustLinkage: ['co-funding'],
+          factBullets: ['Institution will cover cloud credits outside the requested budget.'],
+          ruleNotes: [],
+          confidence: 0.86,
+          captureBasis: ['user_confirmed'],
+          status: 'covered',
+        },
+        {
+          stageKey: 'budget_strategy',
+          pointKey: 'unconfirmed_amount',
+          label: 'Unconfirmed amount',
+          keywords: [],
+          thrustLinkage: [],
+          factBullets: ['This needs review and should not be promptable.'],
+          ruleNotes: [],
+          confidence: 0.2,
+          captureBasis: ['draft'],
+          status: 'needs_review',
+        },
+      ],
+    }, 'hydrate');
+
+    const budget = enriched[0];
+    const bullets = budget.prepContextBlock?.bullets.join(' ') || '';
+
+    expect(budget.citationMode).toBe('no_citations');
+    expect(budget.dimensions).toEqual([]);
+    expect(budget.suggestedCitationCount).toBe(0);
+    expect(budget.grantComplianceReport).toBeNull();
+    expect(budget.reviewerReadinessReport).toBeNull();
+    expect(budget.prepContextBlock?.stageKeys).toEqual(['budget_strategy']);
+    expect(bullets).toContain('Prototype hardware costs are tied to the validation work package.');
+    expect(bullets).toContain('Institution will cover cloud credits outside the requested budget.');
+    expect(bullets).not.toContain('This needs review');
+    expect(budget.grantTemplateGuidance?.draftingVsSubmission).toBe('both');
   });
 
   it('promotes high-confidence prep evidence into synthesis sections without exact section keys', () => {

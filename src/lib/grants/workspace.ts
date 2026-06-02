@@ -21,6 +21,7 @@ import {
 import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType'
 import {
   isGrantSectionAutoDraftable,
+  normalizeGrantSectionWorkflowMode,
   normalizeGrantWorkflowMode,
 } from '@/lib/grants/workflowMode'
 import { buildGrantWorkspaceUrl } from '@/lib/grants/workspaceNavigation'
@@ -189,7 +190,10 @@ function normalizeCompiledSection(
     label: String(section.label || section.sectionKey || `Section ${index + 1}`),
     order: Number.isFinite(section.order) ? Number(section.order) : index + 1,
     sectionType: (section.sectionType || 'narrative') as CompiledGrantTemplateSectionType,
-    workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+    workflowMode: normalizeGrantSectionWorkflowMode({
+      sectionType: section.sectionType,
+      workflowMode: section.workflowMode,
+    }),
     citationMode: normalizeGrantCitationMode(section.citationMode, {
       sectionType: section.sectionType,
       workflowMode: section.workflowMode,
@@ -229,7 +233,10 @@ function compiledTemplateHasWorkflowModes(value: CompiledGrantTemplate | null | 
   return Boolean(
     value
     && Array.isArray(value.sections)
-    && value.sections.every((section) => normalizeGrantWorkflowMode((section as CompiledGrantTemplateSection).workflowMode) === (section as CompiledGrantTemplateSection).workflowMode)
+    && value.sections.every((section) => normalizeGrantSectionWorkflowMode({
+      sectionType: (section as CompiledGrantTemplateSection).sectionType,
+      workflowMode: (section as CompiledGrantTemplateSection).workflowMode,
+    }) === (section as CompiledGrantTemplateSection).workflowMode)
   )
 }
 
@@ -354,7 +361,7 @@ function compileGrantTemplateDocument(input: {
       label: 'Budget',
       order,
       sectionType: 'budget_rows',
-      workflowMode: normalizeGrantWorkflowMode(input.document.budget.workflowMode, 'app_support'),
+      workflowMode: 'app_draft',
       citationMode: 'no_citations',
       required: input.document.budget.required,
       wordBudget: null,
@@ -587,7 +594,10 @@ async function resolveCompiledTemplateForGrantBlueprint(input: {
           ...storedCompiled,
           sections: storedCompiled.sections.map((section) => ({
             ...section,
-            workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+            workflowMode: normalizeGrantSectionWorkflowMode({
+              sectionType: section.sectionType,
+              workflowMode: section.workflowMode,
+            }),
           })),
         }
       : null
@@ -652,7 +662,10 @@ export function buildBlueprintPlanFromCompiledTemplate(
       label: section.label,
       order: section.order,
       sectionType: section.sectionType,
-      workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+      workflowMode: normalizeGrantSectionWorkflowMode({
+        sectionType: section.sectionType,
+        workflowMode: section.workflowMode,
+      }),
       citationMode: normalizeGrantCitationMode(section.citationMode, {
         sectionType: section.sectionType,
         workflowMode: section.workflowMode,
@@ -802,7 +815,10 @@ function enrichGrantSectionPlan(
     compiledSections.map((section) => [
       section.sectionKey,
       {
-        workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+        workflowMode: normalizeGrantSectionWorkflowMode({
+          sectionType: section.sectionType,
+          workflowMode: section.workflowMode,
+        }),
         citationMode: normalizeGrantCitationMode(section.citationMode, {
           sectionType: section.sectionType,
           workflowMode: section.workflowMode,
@@ -816,7 +832,10 @@ function enrichGrantSectionPlan(
   return sectionPlan.map((section) => ({
     ...section,
     workflowMode: compiledByKey.get(section.sectionKey)?.workflowMode
-      || normalizeGrantWorkflowMode((section as Partial<GrantBlueprintPlanSection>).workflowMode),
+      || normalizeGrantSectionWorkflowMode({
+        sectionType: section.sectionType,
+        workflowMode: (section as Partial<GrantBlueprintPlanSection>).workflowMode,
+      }),
     citationMode: normalizeGrantCitationMode(
       section.citationMode ?? compiledByKey.get(section.sectionKey)?.citationMode,
       {
@@ -837,7 +856,10 @@ function enrichGrantSectionDrafts<T extends { sectionKey: string }>(
     sectionPlan.map((section) => [
       section.sectionKey,
       {
-        workflowMode: normalizeGrantWorkflowMode(section.workflowMode),
+        workflowMode: normalizeGrantSectionWorkflowMode({
+          sectionType: section.sectionType,
+          workflowMode: section.workflowMode,
+        }),
         citationMode: normalizeGrantCitationMode(section.citationMode, {
           sectionType: section.sectionType,
           workflowMode: section.workflowMode,
@@ -1264,7 +1286,10 @@ async function ensureGrantShadowWorkspace(input: {
     ? enrichGrantSectionPlan(rawSectionPlan, compiledTemplate.sections)
     : rawSectionPlan.map((section) => ({
         ...section,
-        workflowMode: normalizeGrantWorkflowMode((section as Partial<GrantBlueprintPlanSection>).workflowMode),
+        workflowMode: normalizeGrantSectionWorkflowMode({
+          sectionType: (section as Partial<GrantBlueprintPlanSection>).sectionType,
+          workflowMode: (section as Partial<GrantBlueprintPlanSection>).workflowMode,
+        }),
         citationMode: normalizeGrantCitationMode((section as Partial<GrantBlueprintPlanSection>).citationMode, {
           sectionType: (section as Partial<GrantBlueprintPlanSection>).sectionType,
           workflowMode: (section as Partial<GrantBlueprintPlanSection>).workflowMode,
@@ -1755,7 +1780,10 @@ export async function getGrantWorkspace(input: {
     ? enrichGrantSectionPlan(rawSectionPlan, compiledTemplate.sections)
     : rawSectionPlan.map((section) => ({
         ...section,
-        workflowMode: normalizeGrantWorkflowMode((section as Partial<GrantBlueprintPlanSection>).workflowMode),
+        workflowMode: normalizeGrantSectionWorkflowMode({
+          sectionType: (section as Partial<GrantBlueprintPlanSection>).sectionType,
+          workflowMode: (section as Partial<GrantBlueprintPlanSection>).workflowMode,
+        }),
         citationMode: normalizeGrantCitationMode((section as Partial<GrantBlueprintPlanSection>).citationMode, {
           sectionType: (section as Partial<GrantBlueprintPlanSection>).sectionType,
           workflowMode: (section as Partial<GrantBlueprintPlanSection>).workflowMode,
@@ -1792,7 +1820,10 @@ export async function getGrantWorkspace(input: {
     }
   }
   const sectionDrafts = baseSectionDrafts.map((draft) => {
-    if (draft.workflowMode !== 'app_draft') {
+    if (!isGrantSectionAutoDraftable({
+      sectionType: draft.sectionType,
+      workflowMode: draft.workflowMode,
+    })) {
       return draft
     }
 
@@ -1846,6 +1877,7 @@ export async function getGrantWorkspace(input: {
       return {
         sectionKey: section.sectionKey,
         label: section.label,
+        sectionType: section.sectionType,
         required: section.required,
         workflowMode: section.workflowMode,
         grantSemantic: section.grantSemantic,
@@ -1864,6 +1896,7 @@ export async function getGrantWorkspace(input: {
       return {
         sectionKey: section.sectionKey,
         label: section.label,
+        sectionType: section.sectionType,
         required: section.required,
         workflowMode: section.workflowMode,
         grantSemantic: section.grantSemantic,

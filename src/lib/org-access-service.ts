@@ -31,6 +31,7 @@ import { TaskCode } from '@/lib/prisma-generated'
 import type { UserRole, ServiceType, TeamRole } from '@/lib/prisma-generated'
 import { getPatentDraftingQuota } from './patent-drafting-tracker'
 import { checkServiceQuota, getServiceUsage } from './service-usage-tracker'
+import { checkTrialQuotaForService } from './trial-plan-service'
 
 // ============================================================================
 // Types
@@ -515,6 +516,11 @@ export async function checkServiceAccess(
   if (user.status !== 'ACTIVE') {
     return { allowed: false, reason: 'User account is not active' }
   }
+
+  const trialAccess = await checkTrialQuotaForService(userId, serviceType)
+  if (!trialAccess.allowed) {
+    return { allowed: false, reason: trialAccess.reason }
+  }
   
   // 1. Check role-based access
   const allowedRoles = SERVICE_DEFAULT_ROLES[serviceType]
@@ -522,6 +528,9 @@ export async function checkServiceAccess(
     return { allowed: false, reason: `Role not authorized for ${serviceType}` }
   }
   
+  let overrideQuota: ServiceAccessResult['remainingQuota'] | undefined
+  let overrideQuotaSource: ServiceAccessResult['quotaSource'] | undefined
+
   // 2. Check user-level quota/access (highest priority)
   const userQuota = user.serviceQuotas[0]
   if (userQuota) {
@@ -529,8 +538,20 @@ export async function checkServiceAccess(
       return { allowed: false, reason: `${serviceType} is disabled for this user` }
     }
     
-    // Check user-level quotas
-    if (userQuota.dailyQuota !== null && userQuota.currentDayUsage >= userQuota.dailyQuota) {
+    const currentDay = new Date().toISOString().substring(0, 10)
+    const currentMonth = new Date().toISOString().substring(0, 7)
+    const [trackedDailyUsage, trackedMonthlyUsage] = await Promise.all([
+      prisma.serviceCompletionUsage.count({
+        where: { tenantId, userId, serviceType, isCompleted: true, completionDate: currentDay }
+      }),
+      prisma.serviceCompletionUsage.count({
+        where: { tenantId, userId, serviceType, isCompleted: true, completionMonth: currentMonth }
+      })
+    ])
+    const dailyUsage = Math.max(userQuota.currentDayUsage, trackedDailyUsage)
+    const monthlyUsage = Math.max(userQuota.currentMonthUsage, trackedMonthlyUsage)
+
+    if (userQuota.dailyQuota !== null && dailyUsage >= userQuota.dailyQuota) {
       return { 
         allowed: false, 
         reason: `Daily quota exceeded for ${serviceType}`,
@@ -539,7 +560,7 @@ export async function checkServiceAccess(
       }
     }
     
-    if (userQuota.monthlyQuota !== null && userQuota.currentMonthUsage >= userQuota.monthlyQuota) {
+    if (userQuota.monthlyQuota !== null && monthlyUsage >= userQuota.monthlyQuota) {
       return { 
         allowed: false, 
         reason: `Monthly quota exceeded for ${serviceType}`,
@@ -548,34 +569,70 @@ export async function checkServiceAccess(
       }
     }
     
-    // User has explicit quota that's not exhausted
-    return {
-      allowed: true,
-      remainingQuota: {
-        daily: userQuota.dailyQuota !== null ? userQuota.dailyQuota - userQuota.currentDayUsage : null,
-        monthly: userQuota.monthlyQuota !== null ? userQuota.monthlyQuota - userQuota.currentMonthUsage : null
-      },
-      quotaSource: 'user'
+    overrideQuota = {
+      daily: userQuota.dailyQuota !== null ? userQuota.dailyQuota - dailyUsage : null,
+      monthly: userQuota.monthlyQuota !== null ? userQuota.monthlyQuota - monthlyUsage : null
     }
+    overrideQuotaSource = 'user'
   }
   
   // 3. Check team-level access
-  for (const membership of user.teamMemberships) {
-    const teamAccess = membership.team.serviceAccess[0]
-    if (teamAccess) {
-      if (!teamAccess.isEnabled) {
-        // At least one team has disabled this service - continue checking other teams
-        continue
+  if (!userQuota) {
+    const configuredTeams = user.teamMemberships
+      .map(membership => ({ membership, teamAccess: membership.team.serviceAccess[0] }))
+      .filter(({ teamAccess }) => Boolean(teamAccess))
+
+    if (configuredTeams.length > 0) {
+      let allowedTeamQuota: ServiceAccessResult['remainingQuota'] | undefined
+      let quotaDenied = false
+      const currentDay = new Date().toISOString().substring(0, 10)
+      const currentMonth = new Date().toISOString().substring(0, 7)
+
+      for (const { membership, teamAccess } of configuredTeams) {
+        if (!teamAccess?.isEnabled) continue
+
+        const memberRows = await prisma.teamMember.findMany({
+          where: { teamId: membership.team.id },
+          select: { userId: true }
+        })
+        const memberIds = memberRows.map(member => member.userId)
+        const [dailyUsage, monthlyUsage] = memberIds.length > 0
+          ? await Promise.all([
+              prisma.serviceCompletionUsage.count({
+                where: { tenantId, userId: { in: memberIds }, serviceType, isCompleted: true, completionDate: currentDay }
+              }),
+              prisma.serviceCompletionUsage.count({
+                where: { tenantId, userId: { in: memberIds }, serviceType, isCompleted: true, completionMonth: currentMonth }
+              })
+            ])
+          : [0, 0]
+
+        const dailyAllowed = teamAccess.dailyQuota === null || dailyUsage < teamAccess.dailyQuota
+        const monthlyAllowed = teamAccess.monthlyQuota === null || monthlyUsage < teamAccess.monthlyQuota
+        if (!dailyAllowed || !monthlyAllowed) {
+          quotaDenied = true
+          continue
+        }
+
+        allowedTeamQuota = {
+          daily: teamAccess.dailyQuota === null ? null : teamAccess.dailyQuota - dailyUsage,
+          monthly: teamAccess.monthlyQuota === null ? null : teamAccess.monthlyQuota - monthlyUsage
+        }
+        break
       }
-      // Team allows access
-      return {
-        allowed: true,
-        remainingQuota: {
-          daily: teamAccess.dailyQuota,
-          monthly: teamAccess.monthlyQuota
-        },
-        quotaSource: 'team'
+
+      if (!allowedTeamQuota) {
+        return {
+          allowed: false,
+          reason: quotaDenied
+            ? `Team quota exceeded for ${serviceType}`
+            : `${serviceType} is disabled for this user's teams`,
+          quotaSource: 'team'
+        }
       }
+
+      overrideQuota = allowedTeamQuota
+      overrideQuotaSource = 'team'
     }
   }
   
@@ -588,7 +645,8 @@ export async function checkServiceAccess(
       OR: [
         { expiresAt: null },
         { expiresAt: { gt: new Date() } }
-      ]
+      ],
+      plan: { status: 'ACTIVE' }
     },
     include: {
       plan: {
@@ -600,14 +658,12 @@ export async function checkServiceAccess(
           }
         }
       }
-    }
+    },
+    orderBy: { effectiveFrom: 'desc' }
   })
   
   if (!tenantPlan) {
-    // In development/testing, allow access if no plan is set up
-    // In production, you may want to return { allowed: false }
-    console.warn(`[ServiceAccess] No active plan found for tenant ${tenantId}, allowing access by default`)
-    return { allowed: true, reason: 'No plan configured - defaulting to allowed' }
+    return { allowed: false, reason: 'No active entitlement found for tenant' }
   }
   
   const featureCode = SERVICE_TO_FEATURE[serviceType]
@@ -616,10 +672,7 @@ export async function checkServiceAccess(
   )
   
   if (!planFeature) {
-    // Feature not in plan - allow by default for development
-    // In production, you may want to restrict this
-    console.warn(`[ServiceAccess] ${serviceType} not in plan for tenant ${tenantId}, allowing access by default`)
-    return { allowed: true, reason: 'Feature not in plan - defaulting to allowed' }
+    return { allowed: false, reason: `${serviceType} is not included in the active entitlement` }
   }
   
   // Check tenant-level usage using unified service usage tracker
@@ -691,11 +744,11 @@ export async function checkServiceAccess(
     
     return {
       allowed: true,
-      remainingQuota: {
+      remainingQuota: overrideQuota || {
         daily: patentQuota.dailyRemaining,
         monthly: patentQuota.monthlyRemaining
       },
-      quotaSource: 'tenant'
+      quotaSource: overrideQuotaSource || 'tenant'
     }
   }
   
@@ -718,11 +771,11 @@ export async function checkServiceAccess(
     
     return {
       allowed: true,
-      remainingQuota: {
+      remainingQuota: overrideQuota || {
         daily: quotaCheck.quotaStatus.dailyCompletionsRemaining,
         monthly: quotaCheck.quotaStatus.monthlyCompletionsRemaining
       },
-      quotaSource: 'tenant'
+      quotaSource: overrideQuotaSource || 'tenant'
     }
   } catch (error) {
     // Fallback to legacy token-based metering if new system fails
@@ -763,11 +816,11 @@ export async function checkServiceAccess(
     
     return {
       allowed: true,
-      remainingQuota: {
+      remainingQuota: overrideQuota || {
         daily: planFeature.dailyQuota !== null ? planFeature.dailyQuota - dailyUsage : null,
         monthly: planFeature.monthlyQuota !== null ? planFeature.monthlyQuota - monthlyUsage : null
       },
-      quotaSource: 'tenant'
+      quotaSource: overrideQuotaSource || 'tenant'
     }
   }
 }

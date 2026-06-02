@@ -209,6 +209,10 @@ function isNumericColumn(column: GrantBudgetTemplateColumn): boolean {
   return NUMERIC_KINDS.has(cleanText(column.kind).toLowerCase())
 }
 
+function isCategoryColumn(column: GrantBudgetTemplateColumn): boolean {
+  return column.kind === 'category' || /\b(category|head|item|expense)\b/i.test(column.label)
+}
+
 function cleanCellValue(value: unknown): string | null {
   const text = cleanText(value)
   return text || null
@@ -219,8 +223,80 @@ function cleanNumericCellValue(value: unknown): string | null {
   return UNKNOWN_NUMERIC_VALUES.has(text.toLowerCase()) ? null : text
 }
 
+function cleanMeaningfulCellValue(value: unknown): string | null {
+  const text = cleanText(value)
+  return UNKNOWN_NUMERIC_VALUES.has(text.toLowerCase()) ? null : text
+}
+
+function cleanConfirmedNumericCellValue(value: unknown): string | null {
+  const text = cleanNumericCellValue(value)
+  return text && /\d/.test(text) ? text : null
+}
+
 function rowHasAnyValue(row: JsonRecord): boolean {
   return Object.values(row).some((value) => cleanText(value).length > 0)
+}
+
+function budgetColumnsFromStructuredData(record: JsonRecord): GrantBudgetTemplateColumn[] {
+  if (Array.isArray(record.columns) && record.columns.length > 0) {
+    return normalizeBudgetColumns(record.columns)
+  }
+
+  const keys: string[] = []
+  const seen = new Set<string>()
+  for (const row of Array.isArray(record.rows) ? record.rows : []) {
+    const rowRecord = asRecord(row)
+    for (const key of Object.keys(rowRecord)) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      keys.push(key)
+    }
+  }
+
+  return normalizeBudgetColumns(keys.map((key) => ({ key, label: key })))
+}
+
+export function getBudgetStructuredOpenQuestions(value: unknown): string[] {
+  const record = asRecord(value)
+  return Array.isArray(record.openQuestions)
+    ? record.openQuestions.map((item) => cleanText(item)).filter(Boolean).slice(0, 10)
+    : []
+}
+
+export function budgetStructuredDataHasNumericColumns(value: unknown): boolean {
+  return budgetColumnsFromStructuredData(asRecord(value)).some(isNumericColumn)
+}
+
+export function budgetStructuredDataHasConfirmedNumericValues(value: unknown): boolean {
+  const record = asRecord(value)
+  const rows = Array.isArray(record.rows) ? record.rows.map((row) => asRecord(row)) : []
+  const numericColumnKeys = budgetColumnsFromStructuredData(record)
+    .filter(isNumericColumn)
+    .map((column) => column.key)
+  if (rows.length === 0 || numericColumnKeys.length === 0) return false
+
+  return rows.some((row) =>
+    numericColumnKeys.some((key) => Boolean(cleanConfirmedNumericCellValue(row[key])))
+  )
+}
+
+export function budgetStructuredDataHasMeaningfulRows(value: unknown): boolean {
+  const record = asRecord(value)
+  const rows = Array.isArray(record.rows) ? record.rows.map((row) => asRecord(row)) : []
+  if (rows.length === 0) return false
+
+  const columns = budgetColumnsFromStructuredData(record)
+  const categoryColumnKeys = new Set(columns.filter(isCategoryColumn).map((column) => column.key))
+  const columnByKey = new Map(columns.map((column) => [column.key, column]))
+
+  return rows.some((row) =>
+    Object.entries(row).some(([key, value]) => {
+      if (categoryColumnKeys.has(key)) return false
+      const column = columnByKey.get(key)
+      if (column && isNumericColumn(column)) return Boolean(cleanConfirmedNumericCellValue(value))
+      return Boolean(cleanMeaningfulCellValue(value))
+    })
+  )
 }
 
 function findCandidateRow(
@@ -325,6 +401,7 @@ export function buildBudgetDraftingPrompt(input: {
   grantContextSummary: string[]
   prepFacts: string[]
   userInstructions?: string | null
+  allowInstructionAmounts?: boolean
 }): string {
   return [
     'You are completing a structured grant budget table.',
@@ -334,6 +411,9 @@ export function buildBudgetDraftingPrompt(input: {
     '- Preserve the provided column keys exactly.',
     '- Preserve extracted category rows unless the template has no fixed categories.',
     '- Do not invent amounts, totals, rates, salaries, co-funding, or contribution values.',
+    input.allowInstructionAmounts
+      ? '- You may transcribe confirmed numeric amounts from user instructions; do not infer amounts beyond those instructions.'
+      : '- Do not place numeric amounts from user instructions into table cells unless they already appear in the current structured budget.',
     '- Leave unknown numeric cells null.',
     '- Fill justification and notes cells only from project facts, Grant Prep facts, or user instructions.',
     '- Put uncertainties in openQuestions, not inside table cells.',

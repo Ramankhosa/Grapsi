@@ -26,7 +26,7 @@ export async function GET(
   const exportMode = request.nextUrl.searchParams.get('mode')?.toLowerCase() === 'draft'
     ? 'draft'
     : 'final'
-  const actor = await requireProjectGrantActor(request, projectId, 'read')
+  const actor = await requireProjectGrantActor(request, projectId, 'read', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) {
     return actor
   }
@@ -45,9 +45,11 @@ export async function GET(
         sections: workspace.blueprint.sectionDrafts.map((section) => ({
           sectionKey: section.sectionKey,
           label: section.label,
+          sectionType: section.sectionType,
           workflowMode: (section as { workflowMode?: string | null }).workflowMode || null,
           required: section.required,
           content: section.content,
+          structuredResponses: section.structuredResponses,
           status: section.status,
           isStale: (section as { isStale?: boolean | null }).isStale || false,
           validationReport: (section as { validationReport?: unknown }).validationReport,

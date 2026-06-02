@@ -13,7 +13,7 @@ export async function GET(
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'read')
+  const actor = await requireProjectGrantActor(request, projectId, 'read', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) {
     return actor
   }
@@ -41,7 +41,7 @@ export async function POST(
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'editContent')
+  const actor = await requireProjectGrantActor(request, projectId, 'editContent', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) {
     return actor
   }

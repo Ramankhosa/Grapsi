@@ -115,10 +115,23 @@ export async function enforceServiceAccess(
     return { allowed: true, result }
   } catch (error) {
     console.error('[ServiceAccessMiddleware] Error checking access:', error)
-    // On error, allow access (fail open) - metering will still enforce quotas
+    if (process.env.NODE_ENV === 'production') {
+      return {
+        allowed: false,
+        response: NextResponse.json(
+          {
+            error: 'Service access could not be verified. Please try again.',
+            message: 'Service access could not be verified. Please try again.',
+            code: 'SERVICE_ACCESS_CHECK_FAILED'
+          },
+          { status: 503 }
+        )
+      }
+    }
+
     return { 
       allowed: true, 
-      result: { allowed: true, reason: 'Access check failed, defaulting to allowed' } 
+      result: { allowed: true, reason: 'Development mode: access check failed, defaulting to allowed' }
     }
   }
 }

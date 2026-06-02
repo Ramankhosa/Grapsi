@@ -14,7 +14,10 @@ import {
 } from '@/lib/grants/templateIntent'
 import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType'
 import { buildPaperSectionPlanFromGrantSections } from '@/lib/grants/workspace'
-import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import {
+  isGrantSectionAiGenerated,
+  isGrantSectionAutoDraftable,
+} from '@/lib/grants/workflowMode'
 import { generateDiffSummary, mergeGrantTemplates, normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
 import type { GrantBlueprintPlanSection } from '@/types/grant'
 
@@ -58,7 +61,7 @@ describe('grant workflow mode extraction and runtime', () => {
 
     expect(normalized.questions[0].workflowMode).toBe('team_manual')
     expect(normalized.sections[0].workflowMode).toBe('team_manual')
-    expect(normalized.budget?.workflowMode).toBe('app_support')
+    expect(normalized.budget?.workflowMode).toBe('app_draft')
   })
 
   it('treats workflowMode changes as material template diffs', () => {
@@ -303,7 +306,7 @@ describe('grant workflow mode extraction and runtime', () => {
       {
         sectionKey: 'budget_justification',
         displayLabel: 'Budget Justification',
-        workflowMode: 'app_support',
+        workflowMode: 'app_draft',
         sectionType: 'narrative',
         grantSemantic: 'methodology',
         templateIntent: 'budget',
@@ -386,7 +389,7 @@ describe('grant workflow mode extraction and runtime', () => {
       budget: {
         required: true,
         yearWise: false,
-        workflowMode: 'app_support',
+        workflowMode: 'app_draft',
         categories: [
           {
             key: 'capital',
@@ -542,7 +545,7 @@ describe('grant workflow mode extraction and runtime', () => {
         label: 'Budget',
         order: 3,
         sectionType: 'budget_rows',
-        workflowMode: 'app_support',
+        workflowMode: 'app_draft',
         required: true,
         wordBudget: null,
         characterLimit: null,
@@ -583,5 +586,7 @@ describe('grant workflow mode extraction and runtime', () => {
     expect(shadowPlan[0].seededContext).toBe('')
     expect(isGrantSectionAutoDraftable({ sectionType: 'short_answer', workflowMode: 'app_draft' })).toBe(true)
     expect(isGrantSectionAutoDraftable({ sectionType: 'short_answer', workflowMode: 'team_manual' })).toBe(false)
+    expect(isGrantSectionAutoDraftable({ sectionType: 'budget_rows', workflowMode: 'app_draft' })).toBe(false)
+    expect(isGrantSectionAiGenerated({ sectionType: 'budget_rows', workflowMode: 'team_manual' })).toBe(true)
   })
 })

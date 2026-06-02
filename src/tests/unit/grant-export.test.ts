@@ -128,7 +128,7 @@ describe('grant proposal DOCX section assembly', () => {
                 { key: 'category', label: 'Category' },
                 { key: 'amount', label: 'Amount' },
               ],
-              rows: [{ category: 'Equipment', amount: '' }],
+              rows: [{ category: 'Equipment', amount: '1000' }],
             },
           },
         ],
@@ -142,7 +142,39 @@ describe('grant proposal DOCX section assembly', () => {
     expect(result.sections[0].blocks?.[1]).toMatchObject({
       type: 'table',
       headers: ['Category', 'Amount'],
-      rows: [['Equipment', '']],
+      rows: [['Equipment', '1000']],
     })
+  })
+
+  it('treats category-only budget rows as unprepared for export', () => {
+    const result = buildGrantProposalDocxSections([
+      {
+        sectionKey: 'budget',
+        label: 'Budget',
+        sectionType: 'budget_rows',
+        sectionOrder: 1,
+        content: null,
+        structuredResponses: [
+          {
+            fieldKey: 'structuredData',
+            responseJson: {
+              notes: 'Use the funder-provided budget categories.',
+              columns: [
+                { key: 'category', label: 'Category', kind: 'category' },
+                { key: 'amount', label: 'Amount', kind: 'amount' },
+                { key: 'justification', label: 'Justification', kind: 'justification' },
+              ],
+              rows: [{ category: 'Equipment', amount: null, justification: '' }],
+            },
+          },
+        ],
+      },
+    ])
+
+    expect(result.sections[0].content).toBe(GRANT_EXPORT_EMPTY_PLACEHOLDER)
+    expect(result.sections[0].blocks).toEqual([
+      { type: 'paragraph', text: GRANT_EXPORT_EMPTY_PLACEHOLDER },
+    ])
+    expect(result.emptySectionCount).toBe(1)
   })
 })

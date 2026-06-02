@@ -235,7 +235,12 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {
             tenantId: request.tenantId,
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            effectiveFrom: { lte: new Date() },
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } }
+            ]
           },
           include: {
             plan: true
@@ -305,10 +310,11 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
       } catch (error) {
         console.error('Quota check failed:', error)
-        // Fail open - allow request if quota check fails
         return {
-          allowed: true,
-          remaining: { monthly: 999999, daily: 999999 }
+          allowed: process.env.NODE_ENV !== 'production',
+          remaining: process.env.NODE_ENV !== 'production'
+            ? { monthly: 999999, daily: 999999 }
+            : { monthly: 0, daily: 0 }
         }
       }
     },
@@ -326,7 +332,12 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {
             tenantId,
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            effectiveFrom: { lte: new Date() },
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } }
+            ]
           },
           include: {
             plan: true
@@ -378,11 +389,22 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
     async getCurrentUsage(tenantId: string, featureCode?: string, periodType: 'DAILY' | 'MONTHLY' = 'MONTHLY'): Promise<number> {
       const { key } = getCurrentPeriod(periodType)
+      const feature = featureCode
+        ? await prisma.feature.findFirst({
+            where: {
+              OR: [
+                { id: featureCode },
+                { code: featureCode as any }
+              ]
+            },
+            select: { id: true }
+          })
+        : null
 
       const meter = await prisma.usageMeter.findFirst({
         where: {
           tenantId,
-          featureId: featureCode,
+          featureId: feature?.id,
           periodType,
           periodKey: key
         }
@@ -402,7 +424,12 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {
             tenantId,
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            effectiveFrom: { lte: new Date() },
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } }
+            ]
           },
           include: {
             plan: true

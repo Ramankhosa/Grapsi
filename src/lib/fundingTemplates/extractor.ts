@@ -18,8 +18,8 @@ import { buildAssetSequenceMap, buildCompatibilitySummary, normalizeGrantTemplat
 import type { FundingTemplateCompatibilitySummary, GrantTemplateDocument } from './types';
 import type { ContentPart } from '../metering';
 
-const TEMPLATE_PROMPT_VERSION = 'funding-template-v5';
-const TEMPLATE_EXTRACTOR_VERSION = 'funding-template-extractor-v5';
+const TEMPLATE_PROMPT_VERSION = 'funding-template-v6';
+const TEMPLATE_EXTRACTOR_VERSION = 'funding-template-extractor-v6';
 
 const SYSTEM_INSTRUCTIONS = `
 You extract grant application templates from funding template assets.
@@ -43,7 +43,8 @@ Every extracted response-bearing item MUST include workflowMode:
 - app_support: structured support content the app should keep visible but exclude from ideation/dimension/AI drafting.
 - team_manual: team-owned/admin/compliance/upload content that should remain visible but stay out of prep/blueprint/dimension/AI drafting.
 Classify app_draft for objectives, problem statement, summary, aim/scope, detailed proposal, methodology/workplan narrative, impact, outcomes, sustainability, risks/mitigation, and justification text.
-Classify app_support for budget overview, budget categories, structured implementation matrices, and other structured support blocks.
+Classify the top-level budget block as app_draft because the app generates it through a dedicated structured budget drafting stage.
+Classify app_support for structured implementation matrices and other structured support blocks that remain manual.
 Classify team_manual for personnel details, institution metadata, category selectors, declarations, proofs, certificates, letters, annexures, attachments, signatures, and uploads.
 For each response-bearing item, also classify templateIntent using only: summary, problem_need, objectives, methodology, workplan, innovation, evaluation, impact_outcomes, alignment, sustainability, risk, team, budget, eligibility, submission, attachments, institutional, default.
 Use templateIntent="default" when the intent is unclear.
@@ -51,6 +52,13 @@ Return at most 2 templateIntentAlternates for ambiguity/audit context and a nume
 If you see more than 1 plausible alternate, that means the item is ambiguous and downstream routing will fall back to heuristics instead of trusting templateIntent.
 Preserve section-specific instructions, reviewer-facing guidance, explicit required inclusions, and exact word/character limits on the extracted item they belong to.
 When a heading or prompt includes both the section label and embedded drafting instructions, keep the label concise in "label" and place the drafting instructions in "guidance" without dropping any concrete requirements.
+For each response-bearing item, also extract grant-drafting guidance metadata:
+- requiredFacts: short, atomic facts or content elements the applicant must provide in this item.
+- reviewerGoal: what a reviewer should be convinced of after reading the response.
+- forbiddenMoves: explicit do-not instructions, exclusions, unsupported-claim risks, or common non-compliant moves for this item.
+- draftingVsSubmission: drafting, submission, or both.
+Use draftingVsSubmission="drafting" for proposal narrative, "submission" for uploads/declarations/admin-only fields, and "both" for items that shape narrative and final compliance.
+Keep requiredFacts and forbiddenMoves source-grounded; do not invent a proposal strategy that is not implied by the template.
 `;
 
 export interface TemplateExtractionAssetInput {
@@ -110,6 +118,10 @@ Return JSON in this exact shape:
         "templateIntent": "summary|problem_need|objectives|methodology|workplan|innovation|evaluation|impact_outcomes|alignment|sustainability|risk|team|budget|eligibility|submission|attachments|institutional|default",
         "templateIntentAlternates": ["string"],
         "templateIntentConfidence": 0.0,
+        "requiredFacts": ["string"],
+        "reviewerGoal": "string|null",
+        "forbiddenMoves": ["string"],
+        "draftingVsSubmission": "drafting|submission|both",
         "supportLevel": "full|partial|manual|unsupported",
         "confidence": 0.0,
         "sourceAnchors": [
@@ -142,6 +154,10 @@ Return JSON in this exact shape:
         "templateIntent": "summary|problem_need|objectives|methodology|workplan|innovation|evaluation|impact_outcomes|alignment|sustainability|risk|team|budget|eligibility|submission|attachments|institutional|default",
         "templateIntentAlternates": ["string"],
         "templateIntentConfidence": 0.0,
+        "requiredFacts": ["string"],
+        "reviewerGoal": "string|null",
+        "forbiddenMoves": ["string"],
+        "draftingVsSubmission": "drafting|submission|both",
         "supportLevel": "full|partial|manual|unsupported",
         "confidence": 0.0,
         "sourceAnchors": []
@@ -150,7 +166,7 @@ Return JSON in this exact shape:
     "budget": {
       "required": true,
       "yearWise": false,
-      "workflowMode": "app_support",
+      "workflowMode": "app_draft",
       "columns": [
         {
           "key": "string",
@@ -190,6 +206,10 @@ Return JSON in this exact shape:
 Use the same item fields shown in the questions example for sections, attachments, evaluationCriteria, and submissionRules.items.
 Preserve all visible subsection headings in template.sections, including headings that appear in right-hand columns or secondary panels.
 For budget tables, preserve visible column headers in budget.columns. Use stable lowercase snake_case keys. Mark amount, total, year, co-funding, justification, and notes columns with the closest kind. Preserve fixed budget category rows in budget.categories.
+For evaluationCriteria and rubric-like blocks, use type "rubric", workflowMode "app_support", and include reviewerGoal or requiredFacts that make the criterion actionable for drafting.
+For attachments, declarations, signatures, certificates, CVs, letters, and institutional proofs, use workflowMode "team_manual", templateIntent "attachments" or "institutional", and draftingVsSubmission "submission".
+For eligibility or applicant-fit prompts, use templateIntent "eligibility"; use draftingVsSubmission "both" when the answer affects narrative fit and compliance.
+For section prompts that ask the applicant to "describe", "justify", "explain", "demonstrate", "provide evidence", or "show impact", set workflowMode "app_draft" unless the field is purely administrative.
 `;
 }
 
@@ -545,6 +565,27 @@ function combineGuidance(...values: Array<unknown>): string | null {
   return Array.from(new Set(parts)).join('\n\n');
 }
 
+function normalizeStringArray(value: unknown, limit = 10): string[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? [value]
+      : [];
+
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const item of source) {
+    const normalized = String(item || '').trim().replace(/\s+/g, ' ');
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(normalized);
+    if (next.length >= limit) break;
+  }
+  return next;
+}
+
 function inferBudgetColumnKind(value: unknown): string | null {
   const normalized = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
   if (!normalized) return null;
@@ -664,6 +705,21 @@ function coerceTemplateItem(
     templateIntentConfidence: normalizeGrantTemplateIntentConfidence(
       item?.templateIntentConfidence || item?.intentConfidence
     ),
+    requiredFacts: normalizeStringArray(
+      item?.requiredFacts || item?.mustCover || item?.mustInclude || item?.requiredContent,
+      8
+    ),
+    reviewerGoal: combineGuidance(
+      item?.reviewerGoal,
+      item?.reviewer_goal,
+      item?.reviewerIntent,
+      item?.reviewer_intent
+    ),
+    forbiddenMoves: normalizeStringArray(
+      item?.forbiddenMoves || item?.mustAvoid || item?.avoid || item?.doNotInclude,
+      8
+    ),
+    draftingVsSubmission: item?.draftingVsSubmission || item?.drafting_vs_submission || item?.draftingMode || undefined,
     supportLevel: coerceSupportLevel(item?.supportLevel || item?.support || item?.compatibility, 'partial'),
     confidence: coerceConfidence(item?.confidence),
     sourceAnchors: coerceAnchors(item?.sourceAnchors || item?.anchors),
@@ -758,7 +814,7 @@ function coerceBudgetBlock(value: any): Record<string, unknown> | null {
   return {
     required: Boolean(value.required),
     yearWise: Boolean(value.yearWise || value.year_wise || value.yearly),
-    workflowMode: coerceWorkflowMode(value.workflowMode || value.workflow_mode, 'app_support'),
+    workflowMode: 'app_draft',
     columns: coerceBudgetColumns(value),
     categories: categories.map((category: any, index: number) => ({
       key: slugifyTemplateKey(category?.key || category?.label || category?.title || `budget_${index + 1}`, `budget_${index + 1}`),

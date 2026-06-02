@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { assertProjectCapability, ProjectAccessError } from '@/lib/project-access'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import type { ServiceType } from '@/lib/prisma-generated'
 
 export interface ProjectGrantActor {
   id: string
@@ -14,7 +15,8 @@ export interface ProjectGrantActor {
 export async function requireProjectGrantActor(
   request: NextRequest,
   projectId: string,
-  capability: 'read' | 'editContent'
+  capability: 'read' | 'editContent',
+  serviceType: ServiceType = 'GRANT_PREP'
 ): Promise<ProjectGrantActor | NextResponse> {
   const { user, error } = await authenticateUser(request)
   if (error || !user) {
@@ -28,7 +30,7 @@ export async function requireProjectGrantActor(
     )
   }
 
-  const serviceAccess = await enforceServiceAccess(user.id, user.tenantId, 'GRANT_PREP')
+  const serviceAccess = await enforceServiceAccess(user.id, user.tenantId, serviceType)
   if (!serviceAccess.allowed) {
     return serviceAccess.response
   }

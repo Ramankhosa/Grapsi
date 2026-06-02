@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma'
+import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 
 export interface GrantPrepPostLaunchImpact {
   hasLaunchedWorkspace: boolean
@@ -14,12 +15,15 @@ function hasMeaningfulText(value: unknown) {
   return String(value || '').replace(/<[^>]*>/g, ' ').trim().length > 0
 }
 
-function hasMeaningfulJson(value: unknown) {
+function hasMeaningfulJson(value: unknown, sectionType?: string | null) {
   if (value === null || typeof value === 'undefined') return false
   if (typeof value === 'string') return hasMeaningfulText(value)
   if (Array.isArray(value)) return value.length > 0
   if (typeof value === 'object') {
     const record = value as Record<string, unknown>
+    if (sectionType === 'budget_rows') {
+      return budgetStructuredDataHasMeaningfulRows(record)
+    }
     if (Array.isArray(record.items)) {
       return record.items.some((item) => {
         const entry = item as Record<string, unknown>
@@ -71,6 +75,7 @@ export async function getGrantPrepPostLaunchImpact(input: {
         sectionDrafts: {
           select: {
             sectionKey: true,
+            sectionType: true,
             content: true,
             structuredResponses: {
               select: {
@@ -112,7 +117,7 @@ export async function getGrantPrepPostLaunchImpact(input: {
   for (const draft of grantSession.sectionDrafts) {
     const hasContent =
       hasMeaningfulText(draft.content) ||
-      draft.structuredResponses.some((response) => hasMeaningfulJson(response.responseJson))
+      draft.structuredResponses.some((response) => hasMeaningfulJson(response.responseJson, draft.sectionType))
     if (!hasContent) continue
 
     draftedSectionKeys.add(draft.sectionKey)

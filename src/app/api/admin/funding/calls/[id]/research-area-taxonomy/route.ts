@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { requireFundingActor } from '@/lib/funding/access';
+import { actorHasPlatformReadAccess, requireFundingActor } from '@/lib/funding/access';
 import { fundingCallResearchAreaTaxonomyService } from '@/lib/services/fundingCallResearchAreaTaxonomyService';
 
 export const runtime = 'nodejs';
@@ -16,12 +16,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     return auth.response;
   }
 
-  if (
-    !auth.actor.isSuperAdmin &&
-    !auth.actor.platformPermissions.includes('platform.support.read') &&
-    !auth.actor.platformPermissions.includes('funding.operations.write') &&
-    !auth.actor.platformPermissions.includes('funding.publisher.write')
-  ) {
+  if (!actorHasPlatformReadAccess(auth.actor)) {
     return NextResponse.json({ error: 'Platform funding access required' }, { status: 403 });
   }
 

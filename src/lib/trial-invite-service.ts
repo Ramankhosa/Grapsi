@@ -13,6 +13,7 @@
 import { prisma } from './prisma'
 import crypto from 'crypto'
 import { TrialInviteStatus, TrialCampaignStatus } from '@prisma/client'
+import { Prisma } from '@/lib/prisma-generated'
 
 // Types
 export interface CampaignCreateInput {
@@ -776,65 +777,77 @@ export async function processWebhookEvent(event: {
  * Record signup from trial invite
  * Uses transaction to prevent race conditions
  */
+export async function recordSignupInTransaction(
+  tx: Prisma.TransactionClient,
+  inviteToken: string,
+  userId: string
+): Promise<void> {
+  const inviteTokenHash = crypto.createHash('sha256').update(inviteToken).digest('hex')
+  const invite = await tx.trialInvite.findUnique({
+    where: { inviteTokenHash },
+    include: { campaign: true }
+  })
+
+  if (!invite) {
+    throw new Error('Unknown invite token')
+  }
+
+  const now = new Date()
+  if (invite.campaign.status !== 'ACTIVE') {
+    throw new Error('Trial campaign is not active')
+  }
+
+  if (invite.tokenExpiresAt && invite.tokenExpiresAt <= now) {
+    throw new Error('Trial invite has expired')
+  }
+
+  const claimedCampaign = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE "trial_campaigns"
+    SET "signedUpCount" = "signedUpCount" + 1,
+        "updatedAt" = NOW()
+    WHERE "id" = ${invite.campaignId}
+      AND "status" = 'ACTIVE'::"TrialCampaignStatus"
+      AND ("maxSignups" IS NULL OR "signedUpCount" < "maxSignups")
+    RETURNING "id"
+  `
+
+  if (claimedCampaign.length === 0) {
+    throw new Error('Campaign signup limit reached')
+  }
+
+  const claimedInvite = await tx.trialInvite.updateMany({
+    where: {
+      id: invite.id,
+      status: { not: 'SIGNED_UP' },
+      OR: [
+        { tokenExpiresAt: null },
+        { tokenExpiresAt: { gt: now } }
+      ]
+    },
+    data: {
+      status: 'SIGNED_UP',
+      signedUpAt: now,
+      signedUpUserId: userId
+    }
+  })
+
+  if (claimedInvite.count !== 1) {
+    throw new Error('Invite already used or expired')
+  }
+
+  await tx.trialInviteEvent.create({
+    data: {
+      inviteId: invite.id,
+      eventType: 'SIGNED_UP',
+      source: 'signup',
+      eventData: { userId }
+    }
+  })
+}
+
 export async function recordSignup(inviteToken: string, userId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const invite = await prisma.trialInvite.findUnique({
-      where: { inviteToken },
-      include: { campaign: true }
-    })
-
-    if (!invite) {
-      console.warn('Signup recorded for unknown invite token')
-      return { success: false, error: 'Unknown invite token' }
-    }
-
-    // Check if already signed up
-    if (invite.status === 'SIGNED_UP') {
-      return { success: false, error: 'Invite already used' }
-    }
-
-    // Use transaction for atomicity
-    await prisma.$transaction(async (tx) => {
-      // Re-check campaign limits with lock
-      if (invite.campaign.maxSignups) {
-        const campaign = await tx.trialCampaign.findUnique({
-          where: { id: invite.campaignId }
-        })
-        
-        if (campaign && campaign.signedUpCount >= invite.campaign.maxSignups) {
-          throw new Error('Campaign signup limit reached')
-        }
-      }
-
-      // Update invite
-      await tx.trialInvite.update({
-        where: { id: invite.id },
-        data: {
-          status: 'SIGNED_UP',
-          signedUpAt: new Date(),
-          signedUpUserId: userId
-        }
-      })
-
-      // Log event
-      await tx.trialInviteEvent.create({
-        data: {
-          inviteId: invite.id,
-          eventType: 'SIGNED_UP',
-          source: 'signup',
-          eventData: { userId }
-        }
-      })
-
-      // Increment campaign stats atomically
-      await tx.trialCampaign.update({
-        where: { id: invite.campaignId },
-        data: {
-          signedUpCount: { increment: 1 }
-        }
-      })
-    })
-
+    await prisma.$transaction((tx) => recordSignupInTransaction(tx, inviteToken, userId))
     return { success: true }
   } catch (error) {
     console.error('Record signup error:', error)
@@ -849,8 +862,9 @@ export async function validateInviteToken(
   token: string,
   email: string
 ): Promise<{ valid: boolean; error?: string; invite?: any }> {
+  const inviteTokenHash = crypto.createHash('sha256').update(token).digest('hex')
   const invite = await prisma.trialInvite.findUnique({
-    where: { inviteToken: token },
+    where: { inviteTokenHash },
     include: { campaign: true }
   })
 
@@ -874,7 +888,7 @@ export async function validateInviteToken(
   }
 
   // Check campaign status
-  if (invite.campaign.status !== 'ACTIVE' && invite.campaign.status !== 'DRAFT') {
+  if (invite.campaign.status !== 'ACTIVE') {
     return { valid: false, error: 'This campaign is no longer active' }
   }
 

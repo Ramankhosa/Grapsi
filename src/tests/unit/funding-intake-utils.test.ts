@@ -258,4 +258,73 @@ describe('funding intake normalization', () => {
       evidence: [],
     })
   })
+
+  it('parses expanded core extraction fields used by funding search and embeddings', () => {
+    const parsed = parseCoreExtractorPayload(JSON.stringify({
+      fields: {
+        open_date: {
+          value: '2026-06-01',
+          status: 'supported',
+          confidence: 0.9,
+          evidence: [{ segmentId: 'seg_001', quote: 'opens on 2026-06-01' }],
+        },
+        funder_country: {
+          value: 'India',
+          status: 'supported',
+          confidence: 0.9,
+          evidence: [{ segmentId: 'seg_001', quote: 'Government of India' }],
+        },
+        disciplines: {
+          value: ['Climate adaptation', 'Sustainable agriculture', 'Rural livelihoods'],
+          status: 'supported',
+          confidence: 0.92,
+          evidence: [{ segmentId: 'seg_002', quote: 'climate adaptation for sustainable agriculture and rural livelihoods' }],
+        },
+        project_duration_min_months: {
+          value: 12,
+          status: 'supported',
+          confidence: 0.9,
+          evidence: [{ segmentId: 'seg_003', quote: '12 to 24 months' }],
+        },
+        project_duration_max_months: {
+          value: 24,
+          status: 'supported',
+          confidence: 0.9,
+          evidence: [{ segmentId: 'seg_003', quote: '12 to 24 months' }],
+        },
+        official_urls: {
+          value: ['https://example.org/call'],
+          status: 'supported',
+          confidence: 0.88,
+          evidence: [{ segmentId: 'seg_004', quote: 'https://example.org/call' }],
+        },
+        contact_info: {
+          value: 'grants@example.org',
+          status: 'supported',
+          confidence: 0.88,
+          evidence: [{ segmentId: 'seg_004', quote: 'grants@example.org' }],
+        },
+        sponsor_type: {
+          value: 'Government',
+          status: 'supported',
+          confidence: 0.8,
+          evidence: [{ segmentId: 'seg_001', quote: 'Government of India' }],
+        },
+      },
+      warnings: [],
+    }))
+
+    expect(parsed.fields.open_date.value).toBe('2026-06-01')
+    expect(parsed.fields.funder_country.value).toBe('India')
+    expect(parsed.fields.disciplines.value).toEqual([
+      'Climate adaptation',
+      'Sustainable agriculture',
+      'Rural livelihoods',
+    ])
+    expect(parsed.fields.project_duration_min_months.value).toBe(12)
+    expect(parsed.fields.project_duration_max_months.value).toBe(24)
+    expect(parsed.fields.official_urls.value).toEqual(['https://example.org/call'])
+    expect(parsed.fields.contact_info.value).toBe('grants@example.org')
+    expect(parsed.fields.sponsor_type.value).toBe('Government')
+  })
 })

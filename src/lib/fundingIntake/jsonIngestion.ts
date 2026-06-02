@@ -11,7 +11,7 @@ import {
 } from './utils';
 export { FUNDING_JSON_UPLOAD_CHATGPT_PROMPT } from './jsonPrompt';
 
-export const FUNDING_JSON_UPLOAD_PROMPT_VERSION = 'funding-json-upload-v1';
+export const FUNDING_JSON_UPLOAD_PROMPT_VERSION = 'funding-json-upload-v2';
 export const FUNDING_JSON_UPLOAD_EXTRACTOR_MODEL = 'external-chatgpt-json';
 export const FUNDING_JSON_UPLOAD_EXTRACTOR_VERSION = 'json-ingestion-v1';
 
@@ -247,7 +247,7 @@ function sanitizeTemplateCandidate(candidate: JsonRecord): JsonRecord {
     const budget = asRecord(next.budget) || {};
     next.budget = {
       ...budget,
-      workflowMode: normalizeWorkflowMode(budget.workflowMode),
+      workflowMode: 'app_draft',
       supportLevel: normalizeSupportLevel(budget.supportLevel),
       confidence: Number.isFinite(Number(budget.confidence)) ? Number(budget.confidence) : 0.85,
       categories: Array.isArray(budget.categories)

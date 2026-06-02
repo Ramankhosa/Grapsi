@@ -4,6 +4,7 @@ import crypto from 'crypto'
 import { prisma } from '@/lib/prisma'
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
+import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import { hasMeaningfulSectionContent, normalizeStringArray } from '@/lib/reviewer/content'
 
 export const runtime = 'nodejs'
@@ -141,7 +142,7 @@ export async function GET(
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'read')
+  const actor = await requireProjectGrantActor(request, projectId, 'read', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) return actor
 
   const workspace = await getGrantWorkspace({
@@ -155,7 +156,7 @@ export async function GET(
 
   const appDraftKeys = new Set(
     (workspace.blueprint.sectionPlan || [])
-      .filter((section) => section.workflowMode === 'app_draft')
+      .filter((section) => isGrantSectionAutoDraftable(section))
       .map((section) => normalizeKey(section.sectionKey))
   )
 
@@ -227,7 +228,7 @@ export async function PATCH(
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
 ) {
   const { projectId, grantId } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'editContent')
+  const actor = await requireProjectGrantActor(request, projectId, 'editContent', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) return actor
 
   const body = await request.json().catch(() => ({})) as {
@@ -249,7 +250,7 @@ export async function PATCH(
 
   const appDraftKeys = new Set(
     (workspace.blueprint.sectionPlan || [])
-      .filter((section) => section.workflowMode === 'app_draft')
+      .filter((section) => isGrantSectionAutoDraftable(section))
       .map((section) => normalizeKey(section.sectionKey))
   )
 

@@ -6,13 +6,16 @@ import {
   Download,
   Loader2,
   Save,
+  Sparkles,
 } from 'lucide-react'
 
 import SectionDraftingStage from '@/components/stages/SectionDraftingStage'
 import {
   getGrantWorkflowBadgeLabel,
   getGrantWorkflowManualDetail,
+  isGrantSectionAiGenerated,
 } from '@/lib/grants/workflowMode'
+import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 
 type StructuredResponse = {
   id?: string
@@ -99,6 +102,10 @@ export function isPaperBackedSection(section: GrantSection) {
   return section.workflowMode === 'app_draft' && isNarrativeSection(section)
 }
 
+export function isAiGeneratedSection(section: GrantSection) {
+  return isGrantSectionAiGenerated(section)
+}
+
 function sectionWordCount(section: GrantSection) {
   const text = String(section.content || '').replace(/<[^>]*>/g, ' ').trim()
   return text ? text.split(/\s+/).filter(Boolean).length : 0
@@ -107,6 +114,9 @@ function sectionWordCount(section: GrantSection) {
 function hasStructuredResponse(section: GrantSection) {
   const responseJson = section.structuredResponses?.[0]?.responseJson
   if (!responseJson) return false
+  if (section.sectionType === 'budget_rows') {
+    return budgetStructuredDataHasMeaningfulRows(responseJson)
+  }
   try {
     const serialized = JSON.stringify(responseJson)
     return Boolean(serialized && serialized !== '{}' && serialized !== '[]')
@@ -122,13 +132,17 @@ export function hasSectionContent(section: GrantSection) {
   return hasStructuredResponse(section)
 }
 
-function hasPreparedStructuredExportContent(value: unknown): boolean {
+function hasPreparedStructuredExportContent(value: unknown, sectionType?: GrantSection['sectionType']): boolean {
   if (value === null || typeof value === 'undefined') return false
   if (typeof value === 'string') return value.trim().length > 0
   if (Array.isArray(value)) return value.length > 0
   if (typeof value !== 'object') return true
 
   const record = value as Record<string, unknown>
+  if (sectionType === 'budget_rows') {
+    return budgetStructuredDataHasMeaningfulRows(record)
+  }
+
   if (Array.isArray(record.items)) {
     return record.items.some((item) => {
       const row = item && typeof item === 'object' && !Array.isArray(item)
@@ -153,7 +167,7 @@ function hasPreparedStructuredExportContent(value: unknown): boolean {
 
 function hasPreparedExportContent(section: GrantSection) {
   if (isNarrativeSection(section)) return sectionWordCount(section) > 0
-  return hasPreparedStructuredExportContent(section.structuredResponses?.[0]?.responseJson)
+  return hasPreparedStructuredExportContent(section.structuredResponses?.[0]?.responseJson, section.sectionType)
 }
 
 function statusLabel(section: GrantSection) {
@@ -179,8 +193,8 @@ function workflowClasses(workflowMode: GrantSection['workflowMode']) {
 }
 
 export function filterMatches(section: GrantSection, filter: DraftingFilter) {
-  if (filter === 'app_draft') return isPaperBackedSection(section)
-  if (filter === 'team_draft') return !isPaperBackedSection(section)
+  if (filter === 'app_draft') return isAiGeneratedSection(section)
+  if (filter === 'team_draft') return !isAiGeneratedSection(section)
   if (filter === 'evidence') return isPaperBackedSection(section) && (section.dimensions || []).length > 0
   return true
 }
@@ -204,8 +218,11 @@ export default function GrantSectionDraftingStage({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [savingKey, setSavingKey] = useState<string | null>(null)
+  const [generatingKey, setGeneratingKey] = useState<string | null>(null)
   const [draftValues, setDraftValues] = useState<Record<string, string>>({})
   const [structuredValues, setStructuredValues] = useState<Record<string, string>>({})
+  const [budgetInstructions, setBudgetInstructions] = useState<Record<string, string>>({})
+  const [allowInstructionAmounts, setAllowInstructionAmounts] = useState<Record<string, boolean>>({})
   const [reviewerRecommendations, setReviewerRecommendations] = useState<GrantReviewerRecommendation[]>([])
   const [exportingDraft, setExportingDraft] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
@@ -375,6 +392,54 @@ export default function GrantSectionDraftingStage({
     return (structuredValues[section.sectionKey] || '{}') !== structuredJson(section)
   }, [draftValues, structuredValues])
 
+  const generateBudgetSection = useCallback(async (section: GrantSection) => {
+    if (!authToken) {
+      setError('You must be signed in to generate grant sections')
+      return
+    }
+
+    try {
+      setGeneratingKey(section.sectionKey)
+      setError(null)
+      if (hasLocalGrantSectionChange(section)) {
+        await persistSection(section, false)
+      }
+
+      const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/sections/${section.sectionKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          action: hasSectionContent(section) ? 'regenerate' : 'generate',
+          userInstructions: budgetInstructions[section.sectionKey] || undefined,
+          allowInstructionAmounts: Boolean(allowInstructionAmounts[section.sectionKey]),
+          overwriteAmounts: false,
+        }),
+      })
+      const payload = await response.json().catch(() => ({})) as { message?: string }
+      if (!response.ok) {
+        throw new Error(payload.message || 'Failed to generate the budget section')
+      }
+
+      await loadSections()
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to generate the budget section')
+    } finally {
+      setGeneratingKey(null)
+    }
+  }, [
+    authToken,
+    allowInstructionAmounts,
+    budgetInstructions,
+    grantId,
+    hasLocalGrantSectionChange,
+    loadSections,
+    persistSection,
+    projectId,
+  ])
+
   const persistLocalGrantSectionChanges = useCallback(async () => {
     const changedSections = sections.filter((section) =>
       !isPaperBackedSection(section) && hasLocalGrantSectionChange(section)
@@ -535,7 +600,7 @@ export default function GrantSectionDraftingStage({
             <button
               type="button"
               onClick={() => void saveSection(currentSection)}
-              disabled={savingKey !== null}
+              disabled={savingKey !== null || generatingKey !== null}
               className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
             >
               {savingKey === currentSection.sectionKey ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -545,7 +610,7 @@ export default function GrantSectionDraftingStage({
               <button
                 type="button"
                 onClick={() => void exportDraftWord()}
-                disabled={savingKey !== null || exportingDraft}
+                disabled={savingKey !== null || generatingKey !== null || exportingDraft}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               >
                 {exportingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
@@ -570,14 +635,60 @@ export default function GrantSectionDraftingStage({
               placeholder="Write this grant section here."
             />
           ) : (
-            <textarea
-              value={structuredValues[currentSection.sectionKey] || '{}'}
-              onChange={(event) =>
-                setStructuredValues((current) => ({ ...current, [currentSection.sectionKey]: event.target.value }))
-              }
-              className="mt-6 min-h-[380px] w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm leading-6 text-slate-700 outline-none focus:border-slate-500"
-              placeholder="Enter the structured response JSON for this section."
-            />
+            <>
+              {currentSection.sectionType === 'budget_rows' ? (
+                <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="text-sm font-semibold text-emerald-900">AI-generated structured budget</div>
+                  <div className="mt-1 text-sm text-emerald-800">
+                    The app sends the extracted budget template, current rows, funding-call limits, and Grant Prep facts to the budget drafting stage.
+                  </div>
+                  <textarea
+                    value={budgetInstructions[currentSection.sectionKey] || ''}
+                    onChange={(event) =>
+                      setBudgetInstructions((current) => ({
+                        ...current,
+                        [currentSection.sectionKey]: event.target.value,
+                      }))
+                    }
+                    className="mt-4 min-h-[84px] w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-emerald-500"
+                    placeholder="Optional: provide confirmed amounts or budget-specific instructions."
+                  />
+                  <label className="mt-3 flex items-center gap-2 text-sm text-emerald-900">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(allowInstructionAmounts[currentSection.sectionKey])}
+                      onChange={(event) =>
+                        setAllowInstructionAmounts((current) => ({
+                          ...current,
+                          [currentSection.sectionKey]: event.target.checked,
+                        }))
+                      }
+                      className="h-4 w-4 rounded border-emerald-300 text-emerald-700 focus:ring-emerald-600"
+                    />
+                    <span>Use confirmed amounts from these instructions.</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void generateBudgetSection(currentSection)}
+                    disabled={savingKey !== null || generatingKey !== null}
+                    className="mt-3 inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+                  >
+                    {generatingKey === currentSection.sectionKey
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Sparkles className="h-4 w-4" />}
+                    {generatingKey === currentSection.sectionKey ? 'Generating Budget...' : 'Generate Budget With AI'}
+                  </button>
+                </div>
+              ) : null}
+              <textarea
+                value={structuredValues[currentSection.sectionKey] || '{}'}
+                onChange={(event) =>
+                  setStructuredValues((current) => ({ ...current, [currentSection.sectionKey]: event.target.value }))
+                }
+                className="mt-6 min-h-[380px] w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm leading-6 text-slate-700 outline-none focus:border-slate-500"
+                placeholder="Enter the structured response JSON for this section."
+              />
+            </>
           )}
         </div>
       </div>

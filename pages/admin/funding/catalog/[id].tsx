@@ -72,16 +72,18 @@ export default function FundingCatalogDetailPage() {
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
+  const isPlatformAdmin = userRoles.includes('ADMIN') && user?.ati_id === 'PLATFORM';
   const isFundingOperator =
     userRoles.includes('SUPER_ADMIN') ||
     userRoles.includes('SUPER_ADMIN_VIEWER') ||
+    isPlatformAdmin ||
     platformPermissions.includes('platform.support.read') ||
     platformPermissions.includes('funding.operations.write') ||
     platformPermissions.includes('funding.publisher.write');
   const isFundingWriter =
-    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.operations.write');
+    userRoles.includes('SUPER_ADMIN') || isPlatformAdmin || platformPermissions.includes('funding.operations.write');
   const isFundingPublisher =
-    userRoles.includes('SUPER_ADMIN') || platformPermissions.includes('funding.publisher.write');
+    userRoles.includes('SUPER_ADMIN') || isPlatformAdmin || platformPermissions.includes('funding.publisher.write');
   const taxonomyAreaById = useMemo(() => {
     return new Map((taxonomy?.areas || []).map((area) => [area.id, area]));
   }, [taxonomy]);

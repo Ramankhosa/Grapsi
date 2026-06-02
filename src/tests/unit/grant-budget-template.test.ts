@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   buildBudgetDraftingPrompt,
   buildBudgetStructuredScaffold,
+  budgetStructuredDataHasConfirmedNumericValues,
+  budgetStructuredDataHasMeaningfulRows,
+  budgetStructuredDataHasNumericColumns,
+  getBudgetStructuredOpenQuestions,
   validateBudgetDraftLlmResult,
 } from '@/lib/grants/budgetTemplate'
 import type { GrantBlueprintPlanSection, GrantBudgetTemplateScaffold } from '@/types/grant'
@@ -38,7 +42,7 @@ function section(template = budgetTemplate()): GrantBlueprintPlanSection {
     label: 'Budget',
     order: 1,
     sectionType: 'budget_rows',
-    workflowMode: 'app_support',
+    workflowMode: 'app_draft',
     citationMode: 'no_citations',
     required: true,
     wordBudget: null,
@@ -108,8 +112,19 @@ describe('grant budget template scaffold and drafting contract', () => {
     expect(prompt).toContain('Return ONLY raw JSON')
     expect(prompt).toContain('Preserve the provided column keys exactly')
     expect(prompt).toContain('Do not invent amounts')
+    expect(prompt).toContain('Do not place numeric amounts from user instructions')
     expect(prompt).toContain('"key": "year_1"')
     expect(prompt).toContain('Use prototype hardware for Equipment.')
+
+    const confirmedAmountPrompt = buildBudgetDraftingPrompt({
+      budgetTemplate: budgetTemplate(),
+      currentData: { rows: [] },
+      grantContextSummary: [],
+      prepFacts: [],
+      userInstructions: 'Equipment is confirmed at 2500.',
+      allowInstructionAmounts: true,
+    })
+    expect(confirmedAmountPrompt).toContain('You may transcribe confirmed numeric amounts')
   })
 
   it('validates LLM output, strips unknown columns, and preserves existing numeric values', () => {
@@ -158,6 +173,120 @@ describe('grant budget template scaffold and drafting contract', () => {
     ])
     expect(JSON.stringify(result.rows)).not.toContain('remove me')
     expect(result.openQuestions).toEqual(['Confirm personnel amount.'])
+  })
+
+  it('does not accept new numeric values from generic instructions', () => {
+    const result = validateBudgetDraftLlmResult({
+      template: budgetTemplate(),
+      currentData: {
+        rows: [
+          { category: 'Equipment', year_1: null, year_2: null, justification: '' },
+          { category: 'Personnel', year_1: null, year_2: null, justification: '' },
+        ],
+      },
+      rawOutput: JSON.stringify({
+        rows: [
+          { category: 'Equipment', year_1: '2500', justification: 'Prototype hardware.' },
+          { category: 'Personnel', year_1: '5000', justification: 'Staff time.' },
+        ],
+      }),
+      allowNewNumericValues: false,
+      preserveCurrentNumericValues: true,
+    })
+
+    expect(result.rows).toEqual([
+      { category: 'Equipment', year_1: null, year_2: null, justification: 'Prototype hardware.' },
+      { category: 'Personnel', year_1: null, year_2: null, justification: 'Staff time.' },
+    ])
+  })
+
+  it('accepts instruction-confirmed numeric values into blank numeric cells', () => {
+    const result = validateBudgetDraftLlmResult({
+      template: budgetTemplate(),
+      currentData: {
+        rows: [
+          { category: 'Equipment', year_1: null, year_2: null, justification: '' },
+          { category: 'Personnel', year_1: null, year_2: null, justification: '' },
+        ],
+      },
+      rawOutput: JSON.stringify({
+        rows: [
+          { category: 'Equipment', year_1: '2500', year_2: 'TBD', justification: 'Prototype hardware.' },
+          { category: 'Personnel', year_1: '5000', year_2: null, justification: 'Staff time.' },
+        ],
+      }),
+      allowNewNumericValues: true,
+      preserveCurrentNumericValues: true,
+    })
+
+    expect(result.rows).toEqual([
+      { category: 'Equipment', year_1: '2500', year_2: null, justification: 'Prototype hardware.' },
+      { category: 'Personnel', year_1: '5000', year_2: null, justification: 'Staff time.' },
+    ])
+  })
+
+  it('replaces existing numeric cells only when overwrites are allowed', () => {
+    const common = {
+      template: budgetTemplate(),
+      currentData: {
+        rows: [
+          { category: 'Equipment', year_1: '1200', year_2: null, justification: '' },
+          { category: 'Personnel', year_1: null, year_2: null, justification: '' },
+        ],
+      },
+      rawOutput: JSON.stringify({
+        rows: [
+          { category: 'Equipment', year_1: '9999', year_2: '3000', justification: 'Updated hardware.' },
+          { category: 'Personnel', year_1: null, year_2: null, justification: '' },
+        ],
+      }),
+      allowNewNumericValues: true,
+    }
+
+    const preserved = validateBudgetDraftLlmResult({
+      ...common,
+      preserveCurrentNumericValues: true,
+    })
+    const overwritten = validateBudgetDraftLlmResult({
+      ...common,
+      preserveCurrentNumericValues: false,
+    })
+
+    expect((preserved.rows as Array<Record<string, unknown>>)[0]).toMatchObject({
+      year_1: '1200',
+      year_2: '3000',
+    })
+    expect((overwritten.rows as Array<Record<string, unknown>>)[0]).toMatchObject({
+      year_1: '9999',
+      year_2: '3000',
+    })
+  })
+
+  it('detects meaningful budget rows and unresolved questions honestly', () => {
+    const categoryOnly = {
+      columns: budgetTemplate().columns,
+      rows: [
+        { category: 'Equipment', year_1: null, year_2: null, justification: null },
+        { category: 'Personnel', year_1: null, year_2: null, justification: '' },
+      ],
+      openQuestions: ['Confirm personnel amount.'],
+    }
+    const withJustification = {
+      ...categoryOnly,
+      rows: [{ category: 'Equipment', year_1: null, year_2: null, justification: 'Prototype hardware.' }],
+    }
+    const withNumericAmount = {
+      ...categoryOnly,
+      rows: [{ category: 'Equipment', year_1: '1200', year_2: null, justification: null }],
+    }
+
+    expect(budgetStructuredDataHasNumericColumns(categoryOnly)).toBe(true)
+    expect(budgetStructuredDataHasMeaningfulRows(categoryOnly)).toBe(false)
+    expect(budgetStructuredDataHasMeaningfulRows(withJustification)).toBe(true)
+    expect(budgetStructuredDataHasMeaningfulRows(withNumericAmount)).toBe(true)
+    expect(budgetStructuredDataHasConfirmedNumericValues(categoryOnly)).toBe(false)
+    expect(budgetStructuredDataHasConfirmedNumericValues(withNumericAmount)).toBe(true)
+    expect(getBudgetStructuredOpenQuestions(categoryOnly)).toEqual(['Confirm personnel amount.'])
   })
 
   it('rejects malformed or prose-wrapped budget LLM output', () => {

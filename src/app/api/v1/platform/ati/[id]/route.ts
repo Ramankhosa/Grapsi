@@ -9,7 +9,9 @@ const updateTokenSchema = z.object({
   expires_at: z.string().optional(), // ISO date string
   max_uses: z.number().min(1).optional(),
   plan_tier: z.string().optional(),
-  notes: z.string().optional()
+  notes: z.string().optional(),
+  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER']).nullable().optional(),
+  assigned_team_id: z.string().nullable().optional()
 })
 
 export async function GET(
@@ -155,6 +157,8 @@ export async function GET(
       usage_count: token.usageCount,
       plan_tier: token.planTier,
       notes: token.notes,
+      assigned_role: token.assignedRole,
+      assigned_team_id: token.assignedTeamId,
       created_at: token.createdAt.toISOString(),
       updated_at: token.updatedAt.toISOString(),
       ...(token.tenant && {
@@ -221,6 +225,19 @@ export async function PUT(
     const body = await request.json()
     const updates = updateTokenSchema.parse(body)
 
+    if (updates.assigned_team_id) {
+      const team = await prisma.team.findFirst({
+        where: { id: updates.assigned_team_id, tenantId: existingToken.tenantId!, isActive: true },
+        select: { id: true }
+      })
+      if (!team) {
+        return NextResponse.json(
+          { code: 'INVALID_TEAM', message: 'Assigned team must be active and belong to the token tenant' },
+          { status: 400 }
+        )
+      }
+    }
+
     // Build update object
     const updateData: any = {}
     if (updates.status !== undefined) updateData.status = updates.status
@@ -228,6 +245,8 @@ export async function PUT(
     if (updates.max_uses !== undefined) updateData.maxUses = updates.max_uses
     if (updates.plan_tier !== undefined) updateData.planTier = updates.plan_tier
     if (updates.notes !== undefined) updateData.notes = updates.notes
+    if (updates.assigned_role !== undefined) updateData.assignedRole = updates.assigned_role
+    if (updates.assigned_team_id !== undefined) updateData.assignedTeamId = updates.assigned_team_id
 
     // Update token
     const updatedToken = await prisma.aTIToken.update({
@@ -280,6 +299,8 @@ export async function PUT(
         usage_count: updatedToken.usageCount,
         plan_tier: updatedToken.planTier,
         notes: updatedToken.notes,
+        assigned_role: updatedToken.assignedRole,
+        assigned_team_id: updatedToken.assignedTeamId,
         created_at: updatedToken.createdAt.toISOString(),
         updated_at: updatedToken.updatedAt.toISOString(),
         ...(updatedToken.tenant && {

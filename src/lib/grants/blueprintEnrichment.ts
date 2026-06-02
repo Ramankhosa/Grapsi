@@ -1166,6 +1166,47 @@ function buildTemplateGuidanceProfile(section: GrantBlueprintPlanSection): Grant
   }
 }
 
+function collectBudgetPrepEvidence(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext
+): GrantPrepEvidenceItem[] {
+  return dedupePrepEvidence(filterPromptablePrepEvidence([
+    ...(context.prepEvidenceBySection?.[section.sectionKey] || []),
+    ...(section.sourceTemplatePointer ? context.prepEvidenceBySection?.[section.sourceTemplatePointer] || [] : []),
+    ...(context.prepEvidence || []).filter((item) => item.stageKey === 'budget_strategy'),
+  ]))
+}
+
+function enrichBudgetSection(
+  section: GrantBlueprintPlanSection,
+  context: GrantBlueprintEnrichmentContext
+): GrantBlueprintPlanSection {
+  const budgetEvidence = collectBudgetPrepEvidence(section, context)
+  const budgetBundle = formatPrepEvidenceBundle(budgetEvidence, {
+    bulletLimit: 8,
+    keywordLimit: 12,
+  })
+
+  return {
+    ...section,
+    citationMode: 'no_citations',
+    grantSemantic: null,
+    prepContextBlock: budgetBundle,
+    authoritativePrepBundle: budgetBundle,
+    relatedPrepAwareness: null,
+    grantRuleProfile: null,
+    grantTemplateGuidance: buildTemplateGuidanceProfile(section),
+    grantSectionComplianceContract: null,
+    grantComplianceReport: null,
+    reviewerReadinessReport: null,
+    dimensions: [],
+    dimensionTyping: undefined,
+    mustCoverTyping: undefined,
+    suggestedCitationCount: 0,
+    thematicBlueprint: null,
+  }
+}
+
 function buildSectionPrepEvidence(
   section: GrantBlueprintPlanSection,
   context: GrantBlueprintEnrichmentContext,
@@ -1444,6 +1485,10 @@ function enrichOneSection(
   context: GrantBlueprintEnrichmentContext,
   mode: 'generate' | 'hydrate'
 ): GrantBlueprintPlanSection {
+  if (section.sectionType === 'budget_rows') {
+    return enrichBudgetSection(section, context)
+  }
+
   if (!isGrantSectionAutoDraftable(section)) {
     return {
       ...section,

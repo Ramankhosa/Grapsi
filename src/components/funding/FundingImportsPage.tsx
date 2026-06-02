@@ -26,18 +26,25 @@ export default function FundingImportsPage({
 }: FundingImportsPageProps = {}) {
   const { token, user, isLoading: authLoading } = useAuth()
   const router = useRouter()
+  const isPlatformAdmin = Boolean(user?.roles?.includes('ADMIN') && user?.ati_id === 'PLATFORM')
   const isSuperAdmin = useMemo(
     () =>
       user?.roles?.includes('SUPER_ADMIN') ||
       user?.roles?.includes('SUPER_ADMIN_VIEWER') ||
+      isPlatformAdmin ||
       user?.platformPermissions?.includes('platform.support.read') ||
       user?.platformPermissions?.includes('funding.operations.write') ||
       user?.platformPermissions?.includes('funding.publisher.write'),
-    [user?.platformPermissions, user?.roles]
+    [isPlatformAdmin, user?.platformPermissions, user?.roles]
   )
   const canCreateGlobalImport = useMemo(
-    () => Boolean(user?.roles?.includes('SUPER_ADMIN') || user?.platformPermissions?.includes('funding.operations.write')),
-    [user?.platformPermissions, user?.roles]
+    () =>
+      Boolean(
+        user?.roles?.includes('SUPER_ADMIN') ||
+        isPlatformAdmin ||
+        user?.platformPermissions?.includes('funding.operations.write')
+      ),
+    [isPlatformAdmin, user?.platformPermissions, user?.roles]
   )
   const canSubmitImport = !requireSuperAdmin || canCreateGlobalImport
 

@@ -4,7 +4,7 @@
 import type { MeteringConfig, PolicyService, FeatureRequest, EnforcementDecision, PolicyLimits } from './types'
 import { MeteringErrorUtils, MeteringError } from './errors'
 import { prisma } from '@/lib/prisma'
-import { getTrialUserInfo } from '@/lib/trial-plan-service'
+import { getTrialQuotaStatus } from '@/lib/trial-plan-service'
 import { createMeteringService } from './metering'
 import { createReservationService } from './reservation'
 import { isPlanAgnosticFeature } from './plan-features'
@@ -57,7 +57,12 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {
             tenantId: request.tenantId,
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            effectiveFrom: { lte: new Date() },
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } }
+            ]
           },
           include: {
             plan: true
@@ -111,21 +116,23 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
           }
         }
 
-        // 5. Check if user is a trial user (bypass quotas for trial users)
-        const trialUserInfo = request.userId ? await getTrialUserInfo(request.userId) : { isTrialUser: false }
-        const isTrialUser = trialUserInfo.isTrialUser
-
-        // Debug logging for trial user detection
-        console.log(`[Policy] User ${request.userId} trial status: ${isTrialUser}`, {
-          hasInvite: !!trialUserInfo.invite,
-          hasCampaign: !!trialUserInfo.campaign,
-          tenantAtiId: trialUserInfo.invite?.campaign?.trialAtiTokenId ? 'campaign-specific' : 'unknown'
-        })
+        // 5. Trial users must pass their time and token-budget checks before
+        // normal plan quota enforcement.
+        if (request.userId) {
+          const trialStatus = await getTrialQuotaStatus(request.userId)
+          if (trialStatus.isTrialUser && (trialStatus.trialExpired || trialStatus.quotaExceeded.tokens)) {
+            return {
+              allowed: false,
+              reason: trialStatus.trialExpired ? 'Trial period expired' : 'Trial token budget exceeded',
+              remainingQuota: { monthly: 0, daily: 0 }
+            }
+          }
+        }
 
         let quotaRemaining: any = { monthly: 999999, daily: 999999 }
 
-        // 6. Check quota limits (skip for trial users)
-        if (!isTrialUser && planFeature) {
+        // 6. Check quota limits for every account type, including trials.
+        if (planFeature) {
           const quotaCheck = await this.checkQuota(request)
           if (!quotaCheck.allowed) {
             return {
@@ -194,7 +201,12 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {
             tenantId,
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            effectiveFrom: { lte: new Date() },
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } }
+            ]
           },
           include: {
             plan: true

@@ -126,7 +126,12 @@ export class IdeaBankService extends BasePatentService {
       const tenantPlan = await prisma.tenantPlan.findFirst({
         where: {
           tenantId: user.tenantId || 'default-tenant',
-          status: 'ACTIVE'
+          status: 'ACTIVE',
+          effectiveFrom: { lte: new Date() },
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } }
+          ]
         },
         include: {
           plan: true

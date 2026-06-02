@@ -20,6 +20,15 @@ export function isGrantWorkflowManualDrafting(workflowMode: unknown): boolean {
   return !isGrantWorkflowAppDraft(workflowMode)
 }
 
+export function normalizeGrantSectionWorkflowMode(input: {
+  sectionType?: CompiledGrantTemplateSectionType | string | null
+  workflowMode: unknown
+}): GrantWorkflowMode {
+  return input.sectionType === 'budget_rows'
+    ? 'app_draft'
+    : normalizeGrantWorkflowMode(input.workflowMode)
+}
+
 export function getGrantWorkflowBadgeLabel(workflowMode: unknown): string {
   return isGrantWorkflowAppDraft(workflowMode) ? 'App Draft' : 'Manual Drafting'
 }
@@ -40,7 +49,21 @@ export function isGrantSectionAutoDraftable(input: {
   workflowMode: unknown
 }): boolean {
   return (
-    isGrantWorkflowAppDraft(input.workflowMode)
+    normalizeGrantSectionWorkflowMode(input) === 'app_draft'
     && (input.sectionType === 'narrative' || input.sectionType === 'short_answer')
+  )
+}
+
+export function isGrantSectionAiGenerated(input: {
+  sectionType: CompiledGrantTemplateSectionType | string
+  workflowMode: unknown
+}): boolean {
+  return (
+    normalizeGrantSectionWorkflowMode(input) === 'app_draft'
+    && (
+      input.sectionType === 'narrative'
+      || input.sectionType === 'short_answer'
+      || input.sectionType === 'budget_rows'
+    )
   )
 }

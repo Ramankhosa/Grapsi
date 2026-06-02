@@ -91,10 +91,36 @@ describe('funding template extractor coercion', () => {
       'justification',
     ])
     expect(normalized.budget?.columns?.[0].kind).toBe('category')
+    expect(normalized.budget?.workflowMode).toBe('app_draft')
     expect(normalized.budget?.categories).toMatchObject([
       { key: 'equipment', label: 'Equipment', cap: 'Up to 30%' },
     ])
     expect(normalized.budget?.sourceAnchors[0].asset_id).toBe('cm_template_asset_1')
     expect(normalized.budget?.categories[0].sourceAnchors[0].asset_id).toBe('cm_template_asset_1')
+  })
+
+  it('preserves drafting guidance metadata through lenient template coercion', () => {
+    const normalized = normalizeGrantTemplate(coerceTemplateShape({
+      sections: [
+        {
+          heading: 'Implementation Plan',
+          type: 'section',
+          workflowMode: 'app_draft',
+          templateIntent: 'workplan',
+          requiredFacts: ['Timeline by quarter', 'Milestone ownership'],
+          reviewerGoal: 'Show the plan is feasible within the grant period.',
+          forbiddenMoves: ['Do not list activities without owners.'],
+          draftingVsSubmission: 'drafting',
+        },
+      ],
+    }))
+
+    expect(normalized.sections[0]).toMatchObject({
+      key: 'implementation_plan',
+      reviewerGoal: 'Show the plan is feasible within the grant period.',
+      requiredFacts: ['Timeline by quarter', 'Milestone ownership'],
+      forbiddenMoves: ['Do not list activities without owners.'],
+      draftingVsSubmission: 'drafting',
+    })
   })
 })

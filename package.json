@@ -10,6 +10,7 @@
     "seed:plans:prod": "node scripts/run-local-command.js node scripts/seed-production-plans.js",
     "seed:llm-models": "node scripts/run-local-command.js node Seed/seed-llm-models.js",
     "seed:llm-models:prod": "node scripts/run-local-command.js node Seed/seed-llm-models-modified.js",
+    "seed:call-ingestion-users": "node scripts/run-local-command.js node scripts/call_ingestion_users.js",
     "create-admin": "node scripts/run-local-command.js node scripts/create-super-admin.js",
     "superadminbirth": "node scripts/run-local-command.js node scripts/create-super-admin.js ramankhosa@gmail.com",
     "superadminviewerbirth": "node scripts/run-local-command.js node scripts/create-super-admin-viewer.js ramandeep.singh@lpu.co.in",

@@ -52,6 +52,7 @@ function collectBudgetPrepFacts(section: GrantBlueprintPlanSection): string[] {
     ...(section.prepContextBlock?.bullets || []),
     ...(section.relatedPrepAwareness?.bullets || []),
     ...(section.mustCover || []),
+    ...String(section.seededContext || '').split('\n'),
   ]
   const seen = new Set<string>()
   const next: string[] = []
@@ -89,11 +90,13 @@ function stringifyStructuredSection(value: unknown) {
 }
 
 export async function generateGrantSectionDraft(input: {
+  projectId: string
   grantSessionId: string
   tenantId: string
   sectionKey: string
   userId: string
   userInstructions?: string | null
+  allowInstructionAmounts?: boolean
   overwriteAmounts?: boolean
 }) {
   const workspace = await getGrantWorkspace({
@@ -102,6 +105,9 @@ export async function generateGrantSectionDraft(input: {
   })
 
   if (!workspace || !workspace.blueprint) {
+    throw new Error('Grant workspace not found')
+  }
+  if (workspace.grantSession.projectId !== input.projectId) {
     throw new Error('Grant workspace not found')
   }
 
@@ -146,6 +152,7 @@ export async function generateGrantSectionDraft(input: {
     grantContextSummary: summarizeFundingContext(workspace),
     prepFacts: collectBudgetPrepFacts(sectionPlan),
     userInstructions: input.userInstructions || null,
+    allowInstructionAmounts: input.allowInstructionAmounts === true,
   })
   const tenantContext = await resolveGrantTenantContext(input.tenantId, input.userId)
   if (!tenantContext) {
@@ -179,11 +186,12 @@ export async function generateGrantSectionDraft(input: {
     rawOutput: result.response.output,
     template: budgetTemplate,
     currentData,
-    allowNewNumericValues: Boolean(String(input.userInstructions || '').trim()),
+    allowNewNumericValues: input.allowInstructionAmounts === true || input.overwriteAmounts === true,
     preserveCurrentNumericValues: input.overwriteAmounts !== true,
   })
 
   return saveGrantSectionDraft({
+    projectId: input.projectId,
     grantSessionId: input.grantSessionId,
     tenantId: input.tenantId,
     sectionKey: input.sectionKey,
@@ -194,6 +202,7 @@ export async function generateGrantSectionDraft(input: {
 }
 
 export async function saveGrantSectionDraft(input: {
+  projectId: string
   grantSessionId: string
   tenantId: string
   sectionKey: string
@@ -210,6 +219,9 @@ export async function saveGrantSectionDraft(input: {
   if (!workspace || !workspace.blueprint) {
     throw new Error('Grant workspace not found')
   }
+  if (workspace.grantSession.projectId !== input.projectId) {
+    throw new Error('Grant workspace not found')
+  }
 
   const blueprint = workspace.blueprint
   const sectionDraft = blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
@@ -217,7 +229,10 @@ export async function saveGrantSectionDraft(input: {
     throw new Error('Grant section not found')
   }
 
-  if (sectionDraft.workflowMode === 'app_draft') {
+  if (isGrantSectionAutoDraftable({
+    sectionType: sectionDraft.sectionType,
+    workflowMode: sectionDraft.workflowMode,
+  })) {
     throw new Error('App draft sections are edited in the linked literature workspace.')
   }
 

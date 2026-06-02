@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs'
 import sgMail from '@sendgrid/mail'
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
+import { claimATITokenUse } from './ati-redemption-service'
 import { prisma } from '@/lib/prisma'
 import dotenv from 'dotenv'
 
@@ -366,34 +367,7 @@ export async function validateATIToken(token: string, tenantId?: string) {
 }
 
 export async function incrementATITokenUsage(tokenId: string) {
-  // Get current token state first
-  const currentToken = await prisma.aTIToken.findUnique({
-    where: { id: tokenId }
-  })
-
-  if (!currentToken) {
-    throw new Error('Token not found')
-  }
-
-  // Atomically increment and check in a transaction to avoid race conditions
-  await prisma.$transaction(async (tx) => {
-    // Increment usage count
-    await tx.aTIToken.update({
-      where: { id: tokenId },
-      data: {
-        usageCount: { increment: 1 }
-      }
-    })
-
-    // Check if now used up (current usage + 1 >= max uses)
-    const newUsageCount = currentToken.usageCount + 1
-    if (currentToken.maxUses && newUsageCount >= currentToken.maxUses) {
-      await tx.aTIToken.update({
-        where: { id: tokenId },
-        data: { status: 'USED_UP' }
-      })
-    }
-  })
+  await prisma.$transaction((tx) => claimATITokenUse(tx, tokenId))
 }
 
 // Token encryption for temporary revelation

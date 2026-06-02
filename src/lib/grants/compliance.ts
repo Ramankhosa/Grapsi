@@ -8,6 +8,7 @@ import type {
   GrantSectionComplianceContract,
   ReviewerReadinessReport,
 } from '@/types/grant'
+import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'their', 'must',
@@ -420,6 +421,7 @@ type ProposalReportSection = Pick<
   GrantBlueprintPlanSection,
   'sectionKey' | 'label' | 'required' | 'workflowMode' | 'grantSemantic' | 'grantComplianceReport' | 'reviewerReadinessReport'
 > & {
+  sectionType?: GrantBlueprintPlanSection['sectionType']
   content?: string | null
   status?: string | null
 }
@@ -433,7 +435,12 @@ function buildProposalSectionMaps(sections: ProposalReportSection[]) {
 }
 
 function isDraftableProposalSection(section: ProposalReportSection) {
-  return section.workflowMode === 'app_draft'
+  return section.sectionType
+    ? isGrantSectionAutoDraftable({
+        sectionType: section.sectionType,
+        workflowMode: section.workflowMode,
+      })
+    : section.workflowMode === 'app_draft'
 }
 
 function semanticGroupMatches(

@@ -23,6 +23,13 @@ function RegisterContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
+  const getSocialSignupUrl = (provider: string) => {
+    const params = new URLSearchParams()
+    if (atiToken.trim()) params.set('invite', atiToken.trim())
+    const query = params.toString()
+    return `/api/auth/social/${provider}${query ? `?${query}` : ''}`
+  }
+
   // Check for invite token in URL (magic link support)
   useEffect(() => {
     const inviteToken = searchParams?.get('invite')
@@ -148,7 +155,7 @@ function RegisterContent() {
           <div className="mt-6 grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={() => window.location.href = '/api/auth/social/google'}
+              onClick={() => window.location.href = getSocialSignupUrl('google')}
               className="w-full inline-flex justify-center py-2 px-4 border border-ai-graphite-700 bg-ai-graphite-900/50 rounded-lg shadow-sm text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
             >
               <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
@@ -163,7 +170,7 @@ function RegisterContent() {
             {/* Facebook button hidden for now
             <button
               type="button"
-              onClick={() => window.location.href = '/api/auth/social/facebook'}
+              onClick={() => window.location.href = getSocialSignupUrl('facebook')}
               className="w-full inline-flex justify-center py-2 px-4 border border-ai-graphite-700 bg-ai-graphite-900/50 rounded-lg shadow-sm text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
             >
               <svg className="w-5 h-5 mr-2" fill="#1877F2" viewBox="0 0 24 24">
@@ -175,7 +182,7 @@ function RegisterContent() {
 
             <button
               type="button"
-              onClick={() => window.location.href = '/api/auth/social/linkedin'}
+              onClick={() => window.location.href = getSocialSignupUrl('linkedin')}
               className="w-full inline-flex justify-center py-2 px-4 border border-ai-graphite-700 bg-ai-graphite-900/50 rounded-lg shadow-sm text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
             >
               <svg className="w-5 h-5 mr-2" fill="#0077B5" viewBox="0 0 24 24">
@@ -187,7 +194,7 @@ function RegisterContent() {
             {/* Twitter button hidden for now
             <button
               type="button"
-              onClick={() => window.location.href = '/api/auth/social/twitter'}
+              onClick={() => window.location.href = getSocialSignupUrl('twitter')}
               className="w-full inline-flex justify-center py-2 px-4 border border-ai-graphite-700 bg-ai-graphite-900/50 rounded-lg shadow-sm text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
             >
               <svg className="w-5 h-5 mr-2" fill="#1DA1F2" viewBox="0 0 24 24">

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { validateATIToken, generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
-import { autoAssignToDefaultTeam } from '@/lib/org-access-service'
+import { ATIRedemptionError, assignSignupTeam, claimATITokenUse } from '@/lib/ati-redemption-service'
+import { verifySocialSignupToken } from '@/lib/social-signup-token'
 
 const completeSignupSchema = z.object({
   atiToken: z.string().min(1),
@@ -14,31 +15,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { atiToken, pendingToken } = completeSignupSchema.parse(body)
 
-    // Decode and validate the pending registration token
-    let pendingData: {
-      provider: string
-      providerId: string
-      email: string
-      name?: string
-      firstName?: string
-      lastName?: string
-      profile?: any
-      exp: number
-    }
-
+    // Verify that the pending profile came from a completed OAuth callback.
+    let pendingData
     try {
-      pendingData = JSON.parse(Buffer.from(pendingToken, 'base64url').toString())
+      pendingData = verifySocialSignupToken(pendingToken)
     } catch {
       return NextResponse.json(
         { code: 'INVALID_PENDING_TOKEN', message: 'Invalid or expired registration token' },
-        { status: 400 }
-      )
-    }
-
-    // Check if token has expired (15 minutes validity)
-    if (Date.now() > pendingData.exp) {
-      return NextResponse.json(
-        { code: 'TOKEN_EXPIRED', message: 'Registration session has expired. Please try again.' },
         { status: 400 }
       )
     }
@@ -91,49 +74,26 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check tenant user limits
-    const existingUsersCount = await prisma.user.count({
-      where: { tenantId: tenant.id }
-    })
-
-    if (existingUsersCount > 0) {
-      const tenantAdmin = await prisma.user.findFirst({
-        where: {
-          tenantId: tenant.id,
-          roles: { hasSome: ['OWNER', 'ADMIN'] }
-        },
-        select: { signupAtiTokenId: true },
-        orderBy: { createdAt: 'asc' }
-      })
-
-      if (tenantAdmin?.signupAtiTokenId) {
-        const originalToken = await prisma.aTIToken.findUnique({
-          where: { id: tenantAdmin.signupAtiTokenId }
-        })
-
-        if (originalToken?.maxUses && existingUsersCount >= originalToken.maxUses) {
-          return NextResponse.json(
-            { code: 'TENANT_USER_LIMIT_EXCEEDED', message: `Tenant has reached its maximum user limit.` },
-            { status: 400 }
-          )
-        }
-      }
-    }
-
     // Determine user role
     let userRole = 'ANALYST'
     let roleReason = 'default'
 
-    if (existingUsersCount === 0) {
-      userRole = 'OWNER'
-      roleReason = 'first_tenant_user'
-    } else if (fullToken?.assignedRole && !['SUPER_ADMIN', 'SUPER_ADMIN_VIEWER'].includes(fullToken.assignedRole)) {
+    if (fullToken?.assignedRole && !['SUPER_ADMIN', 'SUPER_ADMIN_VIEWER'].includes(fullToken.assignedRole)) {
       userRole = fullToken.assignedRole
       roleReason = 'ati_token_explicit_role'
     }
 
     // Create user with social OAuth data
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`tenant-signup:${tenant.id}`}))`
+      await claimATITokenUse(tx, tokenValidation.atiToken!.id)
+
+      const transactionExistingUsersCount = await tx.user.count({
+        where: { tenantId: tenant.id }
+      })
+      const assignedUserRole = transactionExistingUsersCount === 0 ? 'OWNER' : userRole
+      const assignedRoleReason = transactionExistingUsersCount === 0 ? 'first_tenant_user' : roleReason
+
       const user = await tx.user.create({
         data: {
           email: pendingData.email,
@@ -142,7 +102,7 @@ export async function POST(request: NextRequest) {
           lastName: pendingData.lastName,
           tenantId: tenant.id,
           signupAtiTokenId: tokenValidation.atiToken!.id,
-          roles: [userRole as any],
+          roles: [assignedUserRole as any],
           status: 'ACTIVE',
           emailVerified: true, // Social logins are verified
           oauthProvider: pendingData.provider.toUpperCase() as any,
@@ -160,21 +120,7 @@ export async function POST(request: NextRequest) {
         }
       })
 
-      // Get current token state
-      const currentToken = await tx.aTIToken.findUnique({
-        where: { id: tokenValidation.atiToken!.id }
-      })
-
-      // Increment ATI token usage
-      await tx.aTIToken.update({
-        where: { id: tokenValidation.atiToken!.id },
-        data: {
-          usageCount: { increment: 1 },
-          ...(currentToken && currentToken.maxUses && currentToken.usageCount + 1 >= currentToken.maxUses
-            ? { status: 'USED_UP' }
-            : {})
-        }
-      })
+      await assignSignupTeam(tx, user.id, tenant.id, fullToken?.assignedTeamId)
 
       // Audit log
       const ip = request.headers.get('x-forwarded-for') ||
@@ -191,11 +137,11 @@ export async function POST(request: NextRequest) {
           meta: {
             email: user.email,
             roles: user.roles,
-            assigned_role_reason: roleReason,
+            assigned_role_reason: assignedRoleReason,
             signup_method: 'social_oauth_with_ati',
             oauth_provider: pendingData.provider,
             ati_token_fingerprint: tokenValidation.atiToken!.fingerprint,
-            is_first_tenant_user: existingUsersCount === 0
+            is_first_tenant_user: transactionExistingUsersCount === 0
           }
         }
       })
@@ -204,13 +150,6 @@ export async function POST(request: NextRequest) {
     })
 
     const user = result
-
-    // Auto-assign to team
-    try {
-      await autoAssignToDefaultTeam(user.id, tenant.id, fullToken?.assignedTeamId || undefined)
-    } catch (teamError) {
-      console.warn('Failed to auto-assign user to team:', teamError)
-    }
 
     // Generate JWT token
     const accessToken = generateJWT({
@@ -268,6 +207,13 @@ export async function POST(request: NextRequest) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { code: 'INVALID_INPUT', message: 'Invalid input data', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    if (error instanceof ATIRedemptionError) {
+      return NextResponse.json(
+        { code: error.code, message: error.message },
         { status: 400 }
       )
     }

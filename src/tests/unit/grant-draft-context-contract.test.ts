@@ -180,7 +180,8 @@ describe('GrantDraftContextContract', () => {
         {
           sectionKey: 'budget',
           label: 'Budget',
-          workflowMode: 'app_support',
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
           required: true,
           content: '',
         },
@@ -191,5 +192,138 @@ describe('GrantDraftContextContract', () => {
     expect(readiness.issues.join(' ')).toMatch(/stale/i)
     expect(readiness.issues.join(' ')).toMatch(/not been validated/i)
     expect(readiness.issues.join(' ')).not.toMatch(/Budget has no final draft/)
+  })
+
+  it('blocks final export when a required budget has no structured rows', () => {
+    const readiness = validateGrantFinalExportReadiness({
+      sections: [
+        {
+          sectionKey: 'budget',
+          label: 'Budget',
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          required: true,
+          content: '',
+          structuredResponses: [],
+        },
+      ],
+    })
+
+    expect(readiness.ok).toBe(false)
+    expect(readiness.issues.join(' ')).toMatch(/Budget has no prepared budget rows/)
+  })
+
+  it('blocks final export when required budget rows only contain category labels', () => {
+    const readiness = validateGrantFinalExportReadiness({
+      sections: [
+        {
+          sectionKey: 'budget',
+          label: 'Budget',
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          required: true,
+          structuredResponses: [
+            {
+              fieldKey: 'structuredData',
+              responseJson: {
+                columns: [
+                  { key: 'category', label: 'Category', kind: 'category' },
+                  { key: 'amount', label: 'Amount', kind: 'amount' },
+                  { key: 'justification', label: 'Justification', kind: 'justification' },
+                ],
+                rows: [{ category: 'Equipment', amount: null, justification: '' }],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(readiness.ok).toBe(false)
+    expect(readiness.issues.join(' ')).toMatch(/no prepared budget rows/)
+    expect(readiness.issues.join(' ')).toMatch(/no confirmed numeric budget amounts/)
+  })
+
+  it('allows final export when a required budget has confirmed numeric values or justification', () => {
+    const withAmount = validateGrantFinalExportReadiness({
+      sections: [
+        {
+          sectionKey: 'budget',
+          label: 'Budget',
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          required: true,
+          structuredResponses: [
+            {
+              fieldKey: 'structuredData',
+              responseJson: {
+                columns: [
+                  { key: 'category', label: 'Category', kind: 'category' },
+                  { key: 'amount', label: 'Amount', kind: 'amount' },
+                ],
+                rows: [{ category: 'Equipment', amount: '1200' }],
+              },
+            },
+          ],
+        },
+      ],
+    })
+    const withJustificationOnly = validateGrantFinalExportReadiness({
+      sections: [
+        {
+          sectionKey: 'budget',
+          label: 'Budget',
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          required: true,
+          structuredResponses: [
+            {
+              fieldKey: 'structuredData',
+              responseJson: {
+                columns: [
+                  { key: 'category', label: 'Category', kind: 'category' },
+                  { key: 'justification', label: 'Justification', kind: 'justification' },
+                ],
+                rows: [{ category: 'Equipment', justification: 'Prototype hardware.' }],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(withAmount).toEqual({ ok: true, issues: [] })
+    expect(withJustificationOnly).toEqual({ ok: true, issues: [] })
+  })
+
+  it('blocks final export when a required budget has unresolved questions', () => {
+    const readiness = validateGrantFinalExportReadiness({
+      sections: [
+        {
+          sectionKey: 'budget',
+          label: 'Budget',
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          required: true,
+          structuredResponses: [
+            {
+              fieldKey: 'structuredData',
+              responseJson: {
+                columns: [
+                  { key: 'category', label: 'Category', kind: 'category' },
+                  { key: 'amount', label: 'Amount', kind: 'amount' },
+                ],
+                rows: [{ category: 'Equipment', amount: '1200' }],
+                openQuestions: ['Confirm equipment quote.'],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(readiness.ok).toBe(false)
+    expect(readiness.issues.join(' ')).toMatch(/unresolved budget questions/)
+    expect(readiness.issues.join(' ')).toMatch(/Confirm equipment quote/)
   })
 })

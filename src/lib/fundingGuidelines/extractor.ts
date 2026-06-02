@@ -8,8 +8,8 @@ import { parseJsonResponse } from '../fundingIntake/utils';
 import type { GuidelinePackDocument } from './types';
 import { normalizeGuidelinePack } from './utils';
 
-const FUNDING_GUIDELINE_PROMPT_VERSION = 'funding-guideline-v2';
-const FUNDING_GUIDELINE_EXTRACTOR_VERSION = '1.0.0';
+const FUNDING_GUIDELINE_PROMPT_VERSION = 'funding-guideline-v3';
+const FUNDING_GUIDELINE_EXTRACTOR_VERSION = '1.1.0';
 
 export type GuidelineExtractionInput = {
   fundingCallId: string;
@@ -57,6 +57,7 @@ If a block is unsupported, return an empty array for that block.
 Keep rule extraction atomic: split combined paragraphs into separate rule items whenever the source states separate obligations, limits, or reviewer expectations.
 Preserve exact numeric limits, page caps, character caps, file-format constraints, and explicit must/do-not wording from the source whenever available.
 Separate narrative/reviewer rules from operational submission steps as cleanly as the source allows.
+For each rule, include routing metadata when the source makes it clear: ruleClass, enforcementLevel, appliesTo, draftingStage, draftingVsSubmission, and detectorHints. Downstream grant prep and compliance use these fields to route the right rule to the right proposal section.
 Return strict JSON only.
 `;
 
@@ -66,7 +67,7 @@ ${SYSTEM_INSTRUCTIONS}
 
 Return JSON in this exact shape:
 {
-  "priorities": [{ "key": string, "text": string, "importance": "high"|"medium"|"low", "rationale": string|null, "confidence": number, "sourceAnchors": [{ "sourceType": "raw_text"|"normalized_text"|"official_url"|"field"|"manual", "fieldKey": string|null, "url": string|null, "quote": string|null, "note": string|null, "confidence": number|null }] }],
+  "priorities": [{ "key": string, "text": string, "importance": "high"|"medium"|"low", "ruleClass": "priority|must_address|avoid|evaluation|budget|duration|format|submission|deliverable|reviewer_signal|other", "enforcementLevel": "hard|soft|info", "appliesTo": ["summary|problem_need|objectives|methodology|workplan|innovation|evaluation|impact_outcomes|alignment|sustainability|risk|team|budget|eligibility|submission|attachments|institutional|all"], "draftingStage": ["problem_definition|root_cause|beneficiaries|fit_and_scope|thrust_alignment|methodology|workplan|team_and_partnerships|innovation|evaluation|outcomes|risk_and_ethics|budget_strategy|sustainability_and_scale|final_pitch"], "draftingVsSubmission": "drafting|submission|both", "detectorHints": ["string"], "rationale": string|null, "confidence": number, "sourceAnchors": [{ "sourceType": "raw_text"|"normalized_text"|"official_url"|"field"|"manual", "fieldKey": string|null, "url": string|null, "quote": string|null, "note": string|null, "confidence": number|null }] }],
   "mustAddress": [{ ...same shape as priorities items... }],
   "avoid": [{ ...same shape as priorities items... }],
   "evaluationCriteria": [{ ...same shape as priorities items... }],
@@ -90,6 +91,18 @@ Classification guidance:
 - submissionRules: procedural submission rules, deadlines, portal steps, attachments timing
 - deliverableRules: outputs, reports, pilots, dissemination, milestones
 - reviewerSignals: what usually signals a strong submission from the call language
+
+Routing metadata guidance:
+- ruleClass should mirror the selected block unless the rule text clearly belongs elsewhere.
+- enforcementLevel="hard" for mandatory requirements, prohibitions, eligibility constraints, caps, deadlines, page/word/format limits, and submission obligations.
+- enforcementLevel="soft" for priorities, reviewer preferences, and evaluation emphasis that should shape drafting but are not strict compliance gates.
+- enforcementLevel="info" only for low-risk contextual notes.
+- draftingVsSubmission="drafting" for narrative content the proposal writer must address, "submission" for portal/upload/admin steps, and "both" for rules that affect both writing and final compliance.
+- appliesTo should name proposal/template section semantics the rule directly affects. Use "all" only when the rule is genuinely global.
+- draftingStage should name grant-prep stages where the rule should appear. Prefer precise stages over broad "all".
+- detectorHints should be short compliance/audit hints such as word_limit, character_limit, format_rule, budget_limit, duration_limit, submission_checklist, priority_alignment, deliverable_presence, evaluation_metric, eligibility_constraint, required_evidence, reviewer_signal, or avoid_claim.
+- Put applicant eligibility, host/institution eligibility, consortium, PI, citizenship/residency, and exclusion rules in mustAddress or avoid as appropriate, with draftingVsSubmission="both" when they shape both narrative fit and final compliance.
+- Put research-area fit, mission/thrust alignment, target beneficiaries, impact pathway, adoption/commercialization, sustainability, team capacity, methodology rigor, evaluation metrics, risk/ethics, and dissemination requirements into the most specific blocks available.
 
 Canonical funding call facts:
 ${JSON.stringify(

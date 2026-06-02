@@ -4,10 +4,17 @@ import { z } from 'zod'
 import { generateGrantSectionDraft, saveGrantSectionDraft } from '@/lib/grants/drafting'
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
+import {
+  releaseReservedServiceUsage,
+  reserveServiceUsage,
+  ServiceQuotaExceededError,
+  trackServiceUsage,
+} from '@/lib/service-usage-tracker'
 
 const generateSchema = z.object({
   action: z.enum(['generate', 'regenerate']).default('generate'),
   userInstructions: z.string().max(5000).optional(),
+  allowInstructionAmounts: z.boolean().optional().default(false),
   overwriteAmounts: z.boolean().optional().default(false),
 })
 
@@ -22,7 +29,7 @@ export async function GET(
   { params }: { params: Promise<{ projectId: string; grantId: string; sectionKey: string }> }
 ) {
   const { projectId, grantId, sectionKey } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'read')
+  const actor = await requireProjectGrantActor(request, projectId, 'read', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) {
     return actor
   }
@@ -48,31 +55,58 @@ export async function POST(
   { params }: { params: Promise<{ projectId: string; grantId: string; sectionKey: string }> }
 ) {
   const { projectId, grantId, sectionKey } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'editContent')
+  const actor = await requireProjectGrantActor(request, projectId, 'editContent', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) {
     return actor
   }
 
+  const operationId = `grant-section-generation:${grantId}:${sectionKey}:${Date.now()}`
   try {
     const payload = generateSchema.parse(await request.json())
+    await reserveServiceUsage({
+      tenantId: actor.tenantId,
+      userId: actor.id,
+      serviceType: 'GRANT_DRAFTING',
+      operationId,
+      operationType: 'grant_section_generation',
+      metadata: { grantSessionId: grantId, sectionKey, action: payload.action }
+    })
+
     const section = await generateGrantSectionDraft({
+      projectId,
       grantSessionId: grantId,
       tenantId: actor.tenantId,
       sectionKey,
       userId: actor.id,
       userInstructions: payload.userInstructions,
+      allowInstructionAmounts: payload.allowInstructionAmounts,
       overwriteAmounts: payload.overwriteAmounts,
+    })
+
+    await trackServiceUsage({
+      tenantId: actor.tenantId,
+      userId: actor.id,
+      serviceType: 'GRANT_DRAFTING',
+      operationId,
+      operationType: 'grant_section_generation',
+      isCompleted: true,
+      metadata: { grantSessionId: grantId, sectionKey, action: payload.action }
     })
 
     return NextResponse.json({ section })
   } catch (error) {
+    await releaseReservedServiceUsage(actor.tenantId, 'GRANT_DRAFTING', operationId).catch(() => undefined)
     console.error('[Grant Section] generate error:', error)
     return NextResponse.json(
       {
         message: error instanceof Error ? error.message : 'Failed to generate the grant section',
       },
       {
-        status: error instanceof Error && error.message.includes('literature workspace')
+        status: error instanceof ServiceQuotaExceededError
+          ? 429
+          : error instanceof Error && error.message.includes('Grant workspace not found')
+          ? 404
+          : error instanceof Error && error.message.includes('literature workspace')
           ? 409
           : error instanceof Error && error.message.includes('Only budget sections')
             ? 409
@@ -87,7 +121,7 @@ export async function PATCH(
   { params }: { params: Promise<{ projectId: string; grantId: string; sectionKey: string }> }
 ) {
   const { projectId, grantId, sectionKey } = await params
-  const actor = await requireProjectGrantActor(request, projectId, 'editContent')
+  const actor = await requireProjectGrantActor(request, projectId, 'editContent', 'GRANT_DRAFTING')
   if (actor instanceof NextResponse) {
     return actor
   }
@@ -95,6 +129,7 @@ export async function PATCH(
   try {
     const payload = saveSchema.parse(await request.json())
     const section = await saveGrantSectionDraft({
+      projectId,
       grantSessionId: grantId,
       tenantId: actor.tenantId,
       sectionKey,
@@ -114,6 +149,8 @@ export async function PATCH(
       {
         status: error instanceof Error && error.message.includes('literature workspace')
           ? 409
+          : error instanceof Error && error.message.includes('Grant workspace not found')
+            ? 404
           : 500,
       }
     )

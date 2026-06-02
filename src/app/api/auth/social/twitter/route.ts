@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getRedirectUri, validateOAuthConfig } from '@/lib/oauth-config'
 import crypto from 'crypto'
+import { createOAuthState, setOAuthStateCookie } from '@/lib/oauth-state'
 
 export async function GET(request: NextRequest) {
   try {
@@ -17,14 +18,10 @@ export async function GET(request: NextRequest) {
     const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest().toString('base64url')
 
     // Generate state parameter for CSRF protection
-    const state = crypto.randomUUID()
-
-    // Store PKCE verifier and state in session (in production, use secure session store)
-    // For now, we'll encode them in the state parameter
-    const encodedState = Buffer.from(JSON.stringify({
-      state,
-      codeVerifier
-    })).toString('base64url')
+    const state = createOAuthState('twitter', {
+      codeVerifier,
+      inviteToken: request.nextUrl.searchParams.get('invite') || undefined,
+    })
 
     const redirectUri = getRedirectUri('twitter', request.nextUrl.origin)
     const params = new URLSearchParams({
@@ -32,14 +29,16 @@ export async function GET(request: NextRequest) {
       redirect_uri: redirectUri,
       scope: 'tweet.read users.read offline.access',
       response_type: 'code',
-      state: encodedState,
+      state,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256'
     })
 
     const authUrl = `https://twitter.com/i/oauth2/authorize?${params.toString()}`
 
-    return NextResponse.redirect(authUrl)
+    const response = NextResponse.redirect(authUrl)
+    setOAuthStateCookie(response, 'twitter', state)
+    return response
   } catch (error) {
     console.error('Twitter OAuth initiation error:', error)
     return NextResponse.json(

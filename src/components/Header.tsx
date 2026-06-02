@@ -13,6 +13,13 @@ export default function Header() {
   const [isSendingReset, setIsSendingReset] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
   const menuTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const platformPermissions = user?.platformPermissions || []
+  const isPlatformAdmin = Boolean(user?.roles?.includes('ADMIN') && user?.ati_id === 'PLATFORM')
+  const canOpenPlatformFunding =
+    Boolean(user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER') || isPlatformAdmin) ||
+    platformPermissions.includes('platform.support.read') ||
+    platformPermissions.includes('funding.operations.write') ||
+    platformPermissions.includes('funding.publisher.write')
 
   // Close menu function
   const closeMenu = useCallback(() => {
@@ -299,11 +306,11 @@ export default function Header() {
                     )}
 
                     {/* Super Admin Links */}
-                    {user.roles?.includes('SUPER_ADMIN') && (
+                    {canOpenPlatformFunding && (
                       <>
                         <div className="border-t border-gpt-gray-200 my-1"></div>
                         <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
-                          Platform Admin
+                          {user.roles?.includes('SUPER_ADMIN') ? 'Platform Admin' : 'Platform Funding'}
                         </div>
                         <Link
                           href="/super-admin/funding"
@@ -313,6 +320,28 @@ export default function Header() {
                           <span>💼</span>
                           <span>Funding Control</span>
                         </Link>
+                      </>
+                    )}
+
+                    {/* Super Admin Links */}
+                    {user.roles?.includes('SUPER_ADMIN') && (
+                      <>
+                        {!canOpenPlatformFunding && (
+                          <>
+                            <div className="border-t border-gpt-gray-200 my-1"></div>
+                            <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
+                              Platform Admin
+                            </div>
+                            <Link
+                              href="/super-admin/funding"
+                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              onClick={closeMenu}
+                            >
+                              <span>💼</span>
+                              <span>Funding Control</span>
+                            </Link>
+                          </>
+                        )}
                         <Link
                           href="/super-admin/jurisdiction-config"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"

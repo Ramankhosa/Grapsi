@@ -6,6 +6,7 @@
  */
 
 import { prisma } from './prisma'
+import type { ServiceType } from '@/lib/prisma-generated'
 
 // ============================================================================
 // Types
@@ -482,6 +483,44 @@ export async function checkTrialQuota(
   }
 }
 
+export async function checkTrialQuotaForService(userId: string, serviceType: ServiceType) {
+  const actionByService: Partial<Record<ServiceType, Parameters<typeof checkTrialQuota>[1]>> = {
+    PATENT_DRAFTING: 'patent',
+    NOVELTY_SEARCH: 'noveltySearch',
+    PRIOR_ART_SEARCH: 'priorArt',
+    IDEATION: 'ideation',
+    DIAGRAM_GENERATION: 'diagram'
+  }
+
+  const action = actionByService[serviceType]
+  if (action) {
+    return checkTrialQuota(userId, action)
+  }
+
+  const status = await getTrialQuotaStatus(userId)
+  if (!status.isTrialUser) {
+    return { allowed: true }
+  }
+
+  if (status.trialExpired) {
+    return {
+      allowed: false,
+      reason: 'Your trial period has expired. Please upgrade to continue using the platform.',
+      remaining: 0
+    }
+  }
+
+  if (status.quotaExceeded.tokens) {
+    return {
+      allowed: false,
+      reason: 'Trial token budget exceeded. Please upgrade to continue.',
+      remaining: 0
+    }
+  }
+
+  return { allowed: true }
+}
+
 // ============================================================================
 // Seed Function - Creates TRIAL plan in database
 // ============================================================================
@@ -605,7 +644,8 @@ export async function assignTrialPlanToTenant(tenantId: string): Promise<void> {
         planId: plan.id,
         effectiveFrom: new Date(),
         expiresAt: null, // Trial doesn't expire by date, only by usage
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        source: 'TRIAL'
       }
     })
   } catch (error: any) {
