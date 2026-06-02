@@ -298,6 +298,13 @@ export class LLMGateway {
           ? responseMetadata.thoughtTokens
           : 0
 
+      const meteredCachedInputTokens =
+        typeof normalizedUsage.cachedInputTokens === 'number'
+          ? normalizedUsage.cachedInputTokens
+          : typeof responseMetadata.cachedInputTokens === 'number'
+          ? responseMetadata.cachedInputTokens
+          : 0
+
       const meteredTotalTokens =
         typeof normalizedUsage.totalTokens === 'number'
           ? normalizedUsage.totalTokens
@@ -320,6 +327,7 @@ export class LLMGateway {
             ...llmRequest.metadata,
             stageCode: llmRequest.stageCode,
             modelSource: modelResolution?.source,
+            cachedInputTokens: meteredCachedInputTokens,
             thoughtTokens: meteredThoughtTokens,
             totalTokens: meteredTotalTokens
           }
@@ -343,6 +351,7 @@ export class LLMGateway {
             ...llmRequest.metadata,
             stageCode: llmRequest.stageCode,
             modelSource: modelResolution?.source,
+            cachedInputTokens: meteredCachedInputTokens,
             thoughtTokens: meteredThoughtTokens,
             totalTokens: meteredTotalTokens,
             gatewayPolicy: 'skipFeaturePolicy',

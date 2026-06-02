@@ -271,11 +271,14 @@ async function callTextExtractor(
     responseMimeType: 'application/json',
     temperature: 0,
     maxTokensOut: 24000,
+    promptCacheKey: `funding-intake:template:${TEMPLATE_PROMPT_VERSION}`,
+    promptCacheRetention: '24h',
     skipFeaturePolicy: true,
     metadata: {
       purpose: 'funding_template_text_extract',
       extractorVersion: TEMPLATE_EXTRACTOR_VERSION,
       promptVersion: TEMPLATE_PROMPT_VERSION,
+      promptCacheKey: `funding-intake:template:${TEMPLATE_PROMPT_VERSION}`,
     },
   });
 
@@ -340,11 +343,14 @@ async function callGeminiMultimodal(
     responseMimeType: 'application/json',
     temperature: 0,
     maxTokensOut: 24000,
+    promptCacheKey: `funding-intake:template:${TEMPLATE_PROMPT_VERSION}:multimodal`,
+    promptCacheRetention: '24h',
     skipFeaturePolicy: true,
     metadata: {
       purpose: 'funding_template_multimodal_extract',
       extractorVersion: TEMPLATE_EXTRACTOR_VERSION,
       promptVersion: TEMPLATE_PROMPT_VERSION,
+      promptCacheKey: `funding-intake:template:${TEMPLATE_PROMPT_VERSION}:multimodal`,
     },
   });
 

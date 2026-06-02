@@ -13,6 +13,15 @@ const DEFAULT_GPT5_TIMEOUT_MS = 120000
 const DEFAULT_O1_TIMEOUT_MS = 120000
 const DEFAULT_OPENAI_MAX_RETRIES = 3
 const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504])
+const EXTENDED_PROMPT_CACHE_MODELS = new Set([
+  'gpt-5.5',
+  'gpt-5.5-pro',
+  'gpt-5.4',
+  'gpt-5.2',
+  'gpt-5.1',
+  'gpt-5',
+  'gpt-4.1'
+])
 
 export class OpenAIProvider implements LLMProvider {
   name = 'openai'
@@ -122,6 +131,10 @@ export class OpenAIProvider implements LLMProvider {
     return 0
   }
 
+  private supportsExtendedPromptCache(modelCode: string): boolean {
+    return EXTENDED_PROMPT_CACHE_MODELS.has(modelCode)
+  }
+
   private extractThoughtTokens(usage: Record<string, unknown> | undefined): number {
     if (!usage) return 0
 
@@ -206,6 +219,19 @@ export class OpenAIProvider implements LLMProvider {
       const responseFormat = request.parameters?.response_format || request.parameters?.responseFormat
       if (responseFormat && typeof responseFormat === 'object') {
         requestBody.response_format = responseFormat
+      }
+
+      const promptCacheKey = request.parameters?.prompt_cache_key || request.parameters?.promptCacheKey
+      if (typeof promptCacheKey === 'string' && promptCacheKey.trim().length > 0) {
+        requestBody.prompt_cache_key = promptCacheKey.trim()
+      }
+
+      const promptCacheRetention = request.parameters?.prompt_cache_retention || request.parameters?.promptCacheRetention
+      if (
+        (promptCacheRetention === 'in_memory' || promptCacheRetention === '24h') &&
+        (promptCacheRetention !== '24h' || this.supportsExtendedPromptCache(modelToUse))
+      ) {
+        requestBody.prompt_cache_retention = promptCacheRetention
       }
 
       // Reasoning / "thinking" controls:
@@ -371,6 +397,11 @@ export class OpenAIProvider implements LLMProvider {
           const outputTokens = this.readTokenNumber(usage?.completion_tokens)
           const totalTokens = this.readTokenNumber(usage?.total_tokens)
           const thoughtTokens = this.extractThoughtTokens(usage)
+          const promptTokenDetails =
+            usage?.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object'
+              ? usage.prompt_tokens_details as Record<string, unknown>
+              : undefined
+          const cachedInputTokens = this.readTokenNumber(promptTokenDetails?.cached_tokens)
 
           if (!choice?.message?.content) {
             throw new Error('OpenAI API returned an empty response')
@@ -384,6 +415,7 @@ export class OpenAIProvider implements LLMProvider {
               provider: 'openai',
               inputTokens,
               outputTokens,
+              cachedInputTokens,
               thoughtTokens,
               totalTokens,
               finishReason: choice.finish_reason,

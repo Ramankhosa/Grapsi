@@ -96,8 +96,11 @@ async function callCoreExtractor(
     context: llmContext,
     maxTokensOut: 12000,
     temperature: 0,
+    promptCacheKey: `funding-intake:core:${FUNDING_INTAKE_PROMPT_VERSION}`,
+    promptCacheRetention: '24h',
     metadata: {
       action: 'funding_call_core_extraction',
+      promptCacheKey: `funding-intake:core:${FUNDING_INTAKE_PROMPT_VERSION}`,
     },
   });
 
@@ -254,6 +257,29 @@ export async function extractCanonicalTextFromPdf(
   warnings: string[];
   extractorModel: string;
 }> {
+  const absolutePath = path.isAbsolute(storagePath)
+    ? storagePath
+    : path.join(process.cwd(), storagePath);
+
+  try {
+    const fileBuffer = await fs.readFile(absolutePath);
+    const pdfParse = (await import('pdf-parse-fork')).default;
+    const parsed = await pdfParse(fileBuffer);
+    const rawText = String(parsed?.text || '').trim();
+    const normalizedText = normalizeMultilineText(rawText);
+
+    if (normalizedText) {
+      return {
+        rawText,
+        normalizedText,
+        warnings: [],
+        extractorModel: 'pdf-parse-fork',
+      };
+    }
+  } catch (error) {
+    console.warn('[Funding Intake] Local PDF text extraction failed, falling back to LLM transcription:', error);
+  }
+
   const pdfFilePart = await buildPdfFileContentPart(storagePath);
   const gatewayResponse = await runFundingGatewayExtraction({
     stageCode: FUNDING_CALL_INGEST_PDF_STAGE_CODE,
@@ -268,8 +294,11 @@ export async function extractCanonicalTextFromPdf(
     ],
     maxTokensOut: 16000,
     temperature: 0.1,
+    promptCacheKey: 'funding-intake:pdf-transcription:v1',
+    promptCacheRetention: '24h',
     metadata: {
       action: 'funding_call_pdf_transcription',
+      promptCacheKey: 'funding-intake:pdf-transcription:v1',
     },
   });
 
@@ -298,9 +327,6 @@ export async function extractCanonicalTextFromPdf(
     throw error;
   }
 
-  const absolutePath = path.isAbsolute(storagePath)
-    ? storagePath
-    : path.join(process.cwd(), storagePath);
   const fileBuffer = await fs.readFile(absolutePath);
   const model = process.env.FUNDING_INTAKE_PDF_GEMINI_MODEL || process.env.FUNDING_INTAKE_GEMINI_MODEL || 'gemini-2.5-pro';
 

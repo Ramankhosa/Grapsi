@@ -28,6 +28,13 @@ export interface FundingLlmRoutingContext {
 export interface FundingGatewayExtractionResult {
   model: string
   rawText: string
+  metadata?: Record<string, unknown>
+}
+
+export interface FundingGatewayStructuredSchema {
+  name: string
+  schema: unknown
+  strict?: boolean
 }
 
 async function getActivePlanIdForTenant(tenantId?: string | null): Promise<string | null> {
@@ -150,6 +157,9 @@ export async function runFundingGatewayExtraction(options: {
   maxTokensOut?: number
   temperature?: number
   responseMimeType?: string
+  promptCacheKey?: string
+  promptCacheRetention?: 'in_memory' | '24h'
+  structuredSchema?: FundingGatewayStructuredSchema
   metadata?: Record<string, unknown>
 }): Promise<FundingGatewayExtractionResult | null> {
   const tenantContext = await resolveFundingLlmTenantContext(options.context)
@@ -176,8 +186,25 @@ export async function runFundingGatewayExtraction(options: {
       content,
       parameters: {
         temperature: options.temperature ?? 0,
-        response_format: { type: 'json_object' },
+        response_format: options.structuredSchema
+          ? {
+              type: 'json_schema',
+              json_schema: {
+                name: options.structuredSchema.name,
+                schema: options.structuredSchema.schema,
+                strict: options.structuredSchema.strict ?? true,
+              },
+            }
+          : { type: 'json_object' },
         responseMimeType: options.responseMimeType || 'application/json',
+        ...(options.structuredSchema
+          ? {
+              responseJsonSchema: options.structuredSchema.schema,
+              responseSchema: options.structuredSchema.schema,
+            }
+          : {}),
+        ...(options.promptCacheKey ? { prompt_cache_key: options.promptCacheKey } : {}),
+        ...(options.promptCacheRetention ? { prompt_cache_retention: options.promptCacheRetention } : {}),
         ...(options.maxTokensOut ? { maxTokensOut: options.maxTokensOut } : {}),
       },
       metadata: {
@@ -197,6 +224,7 @@ export async function runFundingGatewayExtraction(options: {
   return {
     model: result.response.modelClass,
     rawText: result.response.output,
+    metadata: result.response.metadata,
   }
 }
 
@@ -210,6 +238,9 @@ export async function runFundingGatewayText(options: {
   maxTokensOut?: number
   temperature?: number
   responseMimeType?: string
+  promptCacheKey?: string
+  promptCacheRetention?: 'in_memory' | '24h'
+  structuredSchema?: FundingGatewayStructuredSchema
   metadata?: Record<string, unknown>
   skipFeaturePolicy?: boolean
 }): Promise<FundingGatewayExtractionResult | null> {
@@ -236,7 +267,23 @@ export async function runFundingGatewayText(options: {
       content,
       parameters: {
         temperature: options.temperature ?? 0,
+        ...(options.structuredSchema
+          ? {
+              response_format: {
+                type: 'json_schema',
+                json_schema: {
+                  name: options.structuredSchema.name,
+                  schema: options.structuredSchema.schema,
+                  strict: options.structuredSchema.strict ?? true,
+                },
+              },
+              responseJsonSchema: options.structuredSchema.schema,
+              responseSchema: options.structuredSchema.schema,
+            }
+          : {}),
         ...(options.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
+        ...(options.promptCacheKey ? { prompt_cache_key: options.promptCacheKey } : {}),
+        ...(options.promptCacheRetention ? { prompt_cache_retention: options.promptCacheRetention } : {}),
         ...(options.maxTokensOut ? { maxTokensOut: options.maxTokensOut } : {}),
       },
       metadata: {
@@ -256,6 +303,7 @@ export async function runFundingGatewayText(options: {
   return {
     model: result.response.modelClass,
     rawText: result.response.output,
+    metadata: result.response.metadata,
   }
 }
 

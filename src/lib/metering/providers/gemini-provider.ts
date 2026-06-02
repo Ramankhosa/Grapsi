@@ -175,7 +175,12 @@ export class GeminiProvider implements LLMProvider {
           topP: topP,
           ...(request.parameters?.responseMimeType
             ? { responseMimeType: request.parameters.responseMimeType }
-            : {})
+            : {}),
+          ...(request.parameters?.responseSchema
+            ? { responseSchema: request.parameters.responseSchema }
+            : request.parameters?.responseJsonSchema
+              ? { responseSchema: request.parameters.responseJsonSchema }
+              : {})
         }
       })
 
@@ -247,6 +252,9 @@ export class GeminiProvider implements LLMProvider {
         const inputTokens = readStreamTokenNumber(usage?.promptTokenCount) || request.inputTokens || 0
         const outputTokens = readStreamTokenNumber(usage?.candidatesTokenCount) || estimateTokensFromText(output)
         const thoughtTokens = this.extractThoughtTokens(usage)
+        const cachedInputTokens = this.readTokenNumber(
+          usage?.cachedContentTokenCount ?? usage?.cached_content_token_count
+        )
         const totalTokens = readStreamTokenNumber(usage?.totalTokenCount) || (inputTokens + outputTokens + thoughtTokens)
 
         if (!output || output.trim().length === 0) {
@@ -262,6 +270,7 @@ export class GeminiProvider implements LLMProvider {
             provider: 'gemini',
             inputTokens,
             outputTokens,
+            cachedInputTokens,
             thoughtTokens,
             totalTokens,
             finishReason: finalResponse?.candidates?.[0]?.finishReason,
@@ -293,6 +302,9 @@ export class GeminiProvider implements LLMProvider {
           const outputTokens = this.readTokenNumber(usage?.candidatesTokenCount)
           const totalTokens = this.readTokenNumber(usage?.totalTokenCount)
           const thoughtTokens = this.extractThoughtTokens(usage)
+          const cachedInputTokens = this.readTokenNumber(
+            usage?.cachedContentTokenCount ?? usage?.cached_content_token_count
+          )
 
           // Log response details for debugging
           console.log('🔍 Gemini API response details:', {
@@ -321,6 +333,7 @@ export class GeminiProvider implements LLMProvider {
               provider: 'gemini',
               inputTokens,
               outputTokens,
+              cachedInputTokens,
               thoughtTokens,
               totalTokens,
               finishReason: response.candidates?.[0]?.finishReason,
@@ -485,7 +498,12 @@ export class GeminiProvider implements LLMProvider {
         topP,
         ...(request.parameters?.responseMimeType
           ? { responseMimeType: request.parameters.responseMimeType }
-          : {})
+          : {}),
+        ...(request.parameters?.responseJsonSchema
+          ? { responseJsonSchema: request.parameters.responseJsonSchema }
+          : request.parameters?.responseSchema
+            ? { responseJsonSchema: request.parameters.responseSchema }
+            : {})
       }
     }
 
@@ -526,6 +544,9 @@ export class GeminiProvider implements LLMProvider {
     const outputTokens = this.readTokenNumber(usage?.candidatesTokenCount)
     const totalTokens = this.readTokenNumber(usage?.totalTokenCount)
     const thoughtTokens = this.extractThoughtTokens(usage)
+    const cachedInputTokens = this.readTokenNumber(
+      usage?.cachedContentTokenCount ?? usage?.cached_content_token_count
+    )
     return {
       output,
       outputTokens,
@@ -534,6 +555,7 @@ export class GeminiProvider implements LLMProvider {
         provider: 'gemini',
         inputTokens,
         outputTokens,
+        cachedInputTokens,
         thoughtTokens,
         totalTokens,
         finishReason: candidate?.finishReason,

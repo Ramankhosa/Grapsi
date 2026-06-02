@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -8,9 +8,11 @@ import { FUNDING_JSON_UPLOAD_CHATGPT_PROMPT } from '@/lib/fundingIntake/jsonProm
 
 type JobSummary = {
   id: string;
+  batch_id?: string | null;
   input_type: 'url' | 'text' | 'pdf' | 'json';
   source_url: string | null;
   status: string;
+  processing_phase?: string | null;
   error_code: string | null;
   error_message: string | null;
   duplicate_status: string;
@@ -24,6 +26,61 @@ type JobSummary = {
     name: string | null;
   } | null;
 };
+
+type BatchSummary = {
+  id: string;
+  label: string | null;
+  status: string;
+  total_jobs: number;
+  counts: Record<string, number>;
+  created_at: string;
+  updated_at: string;
+  submitted_by: {
+    id: string;
+    email: string;
+    name: string | null;
+  } | null;
+};
+
+type BatchSourceForm = {
+  sourceKey: 'source_1' | 'source_2' | 'source_3';
+  inputType: 'url' | 'text' | 'pdf' | 'json';
+  sourceUrl: string;
+  sourceText: string;
+  sourceFile: File | null;
+};
+
+type BatchJobForm = {
+  localId: string;
+  operatorNotes: string;
+  detailsSourceKey: 'source_1' | 'source_2' | 'source_3';
+  guidelinesSourceKey: 'source_1' | 'source_2' | 'source_3';
+  templateSourceKey: 'source_1' | 'source_2' | 'source_3';
+  sources: BatchSourceForm[];
+};
+
+const SOURCE_KEYS: Array<BatchSourceForm['sourceKey']> = ['source_1', 'source_2', 'source_3'];
+
+function createBatchSource(index = 0): BatchSourceForm {
+  return {
+    sourceKey: SOURCE_KEYS[index] || 'source_1',
+    inputType: 'url',
+    sourceUrl: '',
+    sourceText: '',
+    sourceFile: null,
+  };
+}
+
+function createBatchJob(): BatchJobForm {
+  return {
+    localId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    operatorNotes: '',
+    detailsSourceKey: 'source_1',
+    guidelinesSourceKey: 'source_1',
+    templateSourceKey: 'source_1',
+    sources: [createBatchSource(0)],
+  };
+}
 
 function readApiErrorMessage(data: any, fallback: string) {
   if (data && typeof data === 'object') {
@@ -50,6 +107,23 @@ function formatJobErrorCode(errorCode: string | null | undefined) {
   }
 }
 
+function getBatchStatusBadgeClass(status: string) {
+  switch (status) {
+    case 'completed':
+      return 'bg-emerald-100 text-emerald-700';
+    case 'needs_review':
+      return 'bg-amber-100 text-amber-800';
+    case 'partially_failed':
+    case 'failed':
+      return 'bg-rose-100 text-rose-700';
+    case 'canceled':
+      return 'bg-slate-200 text-slate-700';
+    case 'processing':
+    default:
+      return 'bg-sky-100 text-sky-700';
+  }
+}
+
 export default function FundingIntakeAdminPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
@@ -61,8 +135,13 @@ export default function FundingIntakeAdminPage() {
   const [showJsonPrompt, setShowJsonPrompt] = useState(false);
   const [operatorNotes, setOperatorNotes] = useState('');
   const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [batches, setBatches] = useState<BatchSummary[]>([]);
+  const [batchLabel, setBatchLabel] = useState('');
+  const [batchJobs, setBatchJobs] = useState<BatchJobForm[]>([createBatchJob()]);
   const [loadingJobs, setLoadingJobs] = useState(true);
+  const [loadingBatches, setLoadingBatches] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [actioningJobId, setActioningJobId] = useState<string | null>(null);
 
   const userRoles = user?.roles || [];
@@ -82,6 +161,10 @@ export default function FundingIntakeAdminPage() {
     () => jobs.filter((job) => ['queued', 'fetching', 'extracting'].includes(job.status)),
     [jobs]
   );
+  const activeBatches = useMemo(
+    () => batches.filter((batch) => batch.status === 'processing'),
+    [batches]
+  );
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -92,20 +175,22 @@ export default function FundingIntakeAdminPage() {
   useEffect(() => {
     if (user && canReadFundingIntake) {
       void loadJobs();
+      void loadBatches();
     }
   }, [user, canReadFundingIntake]);
 
   useEffect(() => {
-    if (!activeJobs.length) {
+    if (!activeJobs.length && !activeBatches.length) {
       return;
     }
 
     const interval = window.setInterval(() => {
       void loadJobs(false);
+      void loadBatches(false);
     }, 4000);
 
     return () => window.clearInterval(interval);
-  }, [activeJobs.length]);
+  }, [activeJobs.length, activeBatches.length]);
 
   async function loadJobs(showSpinner = true) {
     if (showSpinner) {
@@ -128,7 +213,148 @@ export default function FundingIntakeAdminPage() {
     }
   }
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function loadBatches(showSpinner = true) {
+    if (showSpinner) {
+      setLoadingBatches(true);
+    }
+
+    try {
+      const response = await fetch('/api/admin/funding/intake/batches');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(readApiErrorMessage(data, 'Failed to load intake batches'));
+      }
+      setBatches(data.batches || []);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to load intake batches');
+    } finally {
+      if (showSpinner) {
+        setLoadingBatches(false);
+      }
+    }
+  }
+
+  function updateBatchJob(jobIndex: number, patch: Partial<BatchJobForm>) {
+    setBatchJobs((current) => current.map((job, index) => index === jobIndex ? { ...job, ...patch } : job));
+  }
+
+  function updateBatchSource(jobIndex: number, sourceIndex: number, patch: Partial<BatchSourceForm>) {
+    setBatchJobs((current) => current.map((job, index) => {
+      if (index !== jobIndex) {
+        return job;
+      }
+      const nextSources = job.sources.map((source, itemIndex) => itemIndex === sourceIndex ? { ...source, ...patch } : source);
+      const availableKeys = nextSources.map((source) => source.sourceKey);
+      const fallbackKey = availableKeys[0] || 'source_1';
+      return {
+        ...job,
+        sources: nextSources,
+        detailsSourceKey: availableKeys.includes(job.detailsSourceKey) ? job.detailsSourceKey : fallbackKey,
+        guidelinesSourceKey: availableKeys.includes(job.guidelinesSourceKey) ? job.guidelinesSourceKey : fallbackKey,
+        templateSourceKey: availableKeys.includes(job.templateSourceKey) ? job.templateSourceKey : fallbackKey,
+      };
+    }));
+  }
+
+  function addBatchSource(jobIndex: number) {
+    setBatchJobs((current) => current.map((job, index) => {
+      if (index !== jobIndex || job.sources.length >= 3) {
+        return job;
+      }
+      const usedKeys = new Set(job.sources.map((source) => source.sourceKey));
+      const nextKey = SOURCE_KEYS.find((key) => !usedKeys.has(key)) || SOURCE_KEYS[job.sources.length];
+      return {
+        ...job,
+        sources: [...job.sources, createBatchSource(SOURCE_KEYS.indexOf(nextKey))],
+      };
+    }));
+  }
+
+  function removeBatchSource(jobIndex: number, sourceIndex: number) {
+    setBatchJobs((current) => current.map((job, index) => {
+      if (index !== jobIndex || job.sources.length === 1) {
+        return job;
+      }
+      const nextSources = job.sources.filter((_, itemIndex) => itemIndex !== sourceIndex);
+      const fallbackKey = nextSources[0]?.sourceKey || 'source_1';
+      const availableKeys = nextSources.map((source) => source.sourceKey);
+      return {
+        ...job,
+        sources: nextSources,
+        detailsSourceKey: availableKeys.includes(job.detailsSourceKey) ? job.detailsSourceKey : fallbackKey,
+        guidelinesSourceKey: availableKeys.includes(job.guidelinesSourceKey) ? job.guidelinesSourceKey : fallbackKey,
+        templateSourceKey: availableKeys.includes(job.templateSourceKey) ? job.templateSourceKey : fallbackKey,
+      };
+    }));
+  }
+
+  async function handleBatchSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canWriteFundingIntake) {
+      toast.error('Funding operations write access required.');
+      return;
+    }
+
+    setBatchSubmitting(true);
+    try {
+      const hasFiles = batchJobs.some((job) => job.sources.some((source) => source.sourceFile));
+      const payload = {
+        label: batchLabel.trim() || undefined,
+        jobs: batchJobs.map((job) => ({
+          operatorNotes: job.operatorNotes.trim() || undefined,
+          detailsSourceKey: job.detailsSourceKey,
+          guidelinesSourceKey: job.guidelinesSourceKey,
+          templateSourceKey: job.templateSourceKey,
+          autoCreateDraft: true,
+          extractAll: true,
+          sources: job.sources.map((source) => ({
+            sourceKey: source.sourceKey,
+            inputType: source.inputType,
+            sourceUrl: source.inputType === 'url' ? source.sourceUrl : undefined,
+            sourceText: source.inputType === 'text' ? source.sourceText : undefined,
+          })),
+        })),
+      };
+
+      const response = hasFiles
+        ? await (async () => {
+            const formData = new FormData();
+            formData.append('payload', JSON.stringify(payload));
+            batchJobs.forEach((job, jobIndex) => {
+              job.sources.forEach((source) => {
+                if (source.sourceFile) {
+                  formData.append(`file_${jobIndex}_${source.sourceKey}`, source.sourceFile);
+                }
+              });
+            });
+            return fetch('/api/admin/funding/intake/batches', {
+              method: 'POST',
+              body: formData,
+            });
+          })()
+        : await fetch('/api/admin/funding/intake/batches', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(readApiErrorMessage(data, 'Failed to create funding intake batch'));
+      }
+
+      toast.success('Funding intake batch created');
+      setBatchLabel('');
+      setBatchJobs([createBatchJob()]);
+      await Promise.all([loadJobs(false), loadBatches(false)]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to create funding intake batch');
+    } finally {
+      setBatchSubmitting(false);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canWriteFundingIntake) {
       toast.error('Funding operations write access required.');
@@ -491,6 +717,239 @@ export default function FundingIntakeAdminPage() {
             </div>
           </section>
         </div>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Batch composer</h2>
+              <p className="mt-1 text-sm text-slate-600">Submit multiple calls with reusable source slots. Details are required; guidelines and template default to the details source.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setBatchJobs((current) => [...current, createBatchJob()])}
+              disabled={!canWriteFundingIntake}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Add Call
+            </button>
+          </div>
+
+          <form className="mt-6 space-y-5" onSubmit={handleBatchSubmit}>
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700">Batch label</span>
+              <input
+                value={batchLabel}
+                onChange={(event) => setBatchLabel(event.target.value)}
+                disabled={!canWriteFundingIntake}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                placeholder="June batch, agency scrape, manual import..."
+              />
+            </label>
+
+            {batchJobs.map((batchJob, jobIndex) => {
+              const sourceKeys = batchJob.sources.map((source) => source.sourceKey);
+              return (
+                <div key={batchJob.localId} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">Call {jobIndex + 1}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => addBatchSource(jobIndex)}
+                        disabled={!canWriteFundingIntake || batchJob.sources.length >= 3}
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Add Source
+                      </button>
+                      {batchJobs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setBatchJobs((current) => current.filter((_, index) => index !== jobIndex))}
+                          disabled={!canWriteFundingIntake}
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800"
+                        >
+                          Remove Call
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                    {batchJob.sources.map((source, sourceIndex) => (
+                      <div key={source.sourceKey} className="rounded-lg bg-slate-50 p-4">
+                        <div className="flex items-center justify-between gap-2">
+                          <select
+                            value={source.sourceKey}
+                            onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { sourceKey: event.target.value as BatchSourceForm['sourceKey'] })}
+                            disabled={!canWriteFundingIntake}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                          >
+                            {SOURCE_KEYS.map((key) => (
+                              <option key={key} value={key} disabled={sourceKeys.includes(key) && key !== source.sourceKey}>
+                                {key.replace('_', ' ')}
+                              </option>
+                            ))}
+                          </select>
+                          {batchJob.sources.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeBatchSource(jobIndex, sourceIndex)}
+                              disabled={!canWriteFundingIntake}
+                              className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+
+                        <select
+                          value={source.inputType}
+                          onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { inputType: event.target.value as BatchSourceForm['inputType'], sourceFile: null })}
+                          disabled={!canWriteFundingIntake}
+                          className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          <option value="url">URL</option>
+                          <option value="text">Text</option>
+                          <option value="pdf">PDF</option>
+                          <option value="json">JSON</option>
+                        </select>
+
+                        {source.inputType === 'url' ? (
+                          <input
+                            value={source.sourceUrl}
+                            onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { sourceUrl: event.target.value })}
+                            disabled={!canWriteFundingIntake}
+                            className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                            placeholder="https://..."
+                          />
+                        ) : source.inputType === 'text' ? (
+                          <textarea
+                            value={source.sourceText}
+                            onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { sourceText: event.target.value })}
+                            rows={5}
+                            disabled={!canWriteFundingIntake}
+                            className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                            placeholder="Paste source text"
+                          />
+                        ) : (
+                          <input
+                            type="file"
+                            accept={source.inputType === 'pdf' ? '.pdf,application/pdf' : '.json,application/json'}
+                            onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { sourceFile: event.target.files?.[0] || null })}
+                            disabled={!canWriteFundingIntake}
+                            className="mt-3 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900"
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    {[
+                      ['detailsSourceKey', 'Details source'],
+                      ['guidelinesSourceKey', 'Guidelines source'],
+                      ['templateSourceKey', 'Template source'],
+                    ].map(([field, label]) => (
+                      <label key={field} className="block">
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
+                        <select
+                          value={(batchJob as any)[field]}
+                          onChange={(event) => updateBatchJob(jobIndex, { [field]: event.target.value } as any)}
+                          disabled={!canWriteFundingIntake}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          {sourceKeys.map((key) => (
+                            <option key={key} value={key}>{key.replace('_', ' ')}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+
+                  <textarea
+                    value={batchJob.operatorNotes}
+                    onChange={(event) => updateBatchJob(jobIndex, { operatorNotes: event.target.value })}
+                    rows={2}
+                    disabled={!canWriteFundingIntake}
+                    className="mt-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                    placeholder="Optional notes for this call"
+                  />
+                </div>
+              );
+            })}
+
+            <button
+              type="submit"
+              disabled={!canWriteFundingIntake || batchSubmitting}
+              className="inline-flex items-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              {batchSubmitting ? 'Submitting Batch...' : 'Submit Batch'}
+            </button>
+          </form>
+        </section>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Recent batches</h2>
+              <p className="mt-1 text-sm text-slate-600">Batch status is derived from its child jobs.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => loadBatches()}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div className="mt-6 overflow-x-auto">
+            {loadingBatches ? (
+              <div className="py-10 text-center text-sm text-slate-500">Loading batches...</div>
+            ) : batches.length === 0 ? (
+              <div className="py-10 text-center text-sm text-slate-500">No batch submissions yet.</div>
+            ) : (
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-medium text-slate-500">Batch</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-500">Status</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-500">Jobs</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-500">Created</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-500">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {batches.map((batch) => (
+                    <tr key={batch.id}>
+                      <td className="px-4 py-4 align-top">
+                        <div className="font-medium text-slate-900">{batch.label || 'Untitled batch'}</div>
+                        <div className="mt-1 text-xs text-slate-500">{batch.submitted_by?.name || batch.submitted_by?.email || 'Unknown'}</div>
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium uppercase tracking-wide ${getBatchStatusBadgeClass(batch.status)}`}>
+                          {batch.status.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 align-top text-slate-600">
+                        {batch.total_jobs} total · {batch.counts.needs_review || 0} review · {batch.counts.draft_created || 0} saved · {batch.counts.failed || 0} failed
+                      </td>
+                      <td className="px-4 py-4 align-top text-slate-600">{new Date(batch.created_at).toLocaleString()}</td>
+                      <td className="px-4 py-4 align-top">
+                        <Link
+                          href={`/api/admin/funding/intake/batches/${batch.id}`}
+                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700"
+                        >
+                          JSON Detail
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
 
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">

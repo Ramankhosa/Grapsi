@@ -14,6 +14,14 @@ import { fundingGuidelineService } from '../fundingGuidelines/service';
 import { fundingTemplateService } from '../fundingTemplates/service';
 import { fundingCatalogService } from '../services/fundingCatalogService';
 import {
+  FUNDING_BATCH_SOURCE_KEYS,
+  resolveBatchSourceAssignments,
+} from './batchSourceMapping';
+import {
+  buildFundingIntakeJobStatusCounts,
+  deriveFundingIntakeBatchStatus,
+} from './batchStatus';
+import {
   ACTIVE_IDEMPOTENT_STATUSES,
   DRAFT_MINIMUM_FIELDS,
 } from './constants';
@@ -31,7 +39,11 @@ import type {
   DomainDuplicateCandidateSummary,
   FundingDraftValues,
   FundingExtractionPayload,
+  BatchIntakeCreateInput,
+  BatchIntakeJobInput,
+  BatchIntakeSourceInput,
   IntakeDuplicateResolutionInput,
+  IntakeBatchSummary,
   IntakeJobSummary,
   IntakeOperator,
   IntakeSubmitInput,
@@ -52,9 +64,13 @@ import {
 } from './utils';
 
 const ACTIVE_STATUSES = [...ACTIVE_IDEMPOTENT_STATUSES];
-const activeJobPromises = new Map<string, Promise<void>>();
 const INTAKE_UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads', 'funding-intake');
 const TEMPLATE_UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads', 'funding-templates');
+const BATCH_SOURCE_KEYS = FUNDING_BATCH_SOURCE_KEYS;
+const QUEUE_CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.FUNDING_INTAKE_QUEUE_CONCURRENCY || 3)));
+const JOB_LOCK_STALE_MS = Math.max(60_000, Number(process.env.FUNDING_INTAKE_JOB_LOCK_STALE_MS || 10 * 60 * 1000));
+const WORKER_ID = `funding-intake-${process.pid}-${Math.random().toString(36).slice(2)}`;
+let drainPromise: Promise<void> | null = null;
 
 function mapCatalogStatusToFundingStatus(status: FundingCallStatus) {
   switch (status) {
@@ -232,6 +248,153 @@ function readFetchedUrl(value: Prisma.JsonValue | null | undefined): string | nu
   return typeof fetchMetadata.fetchedUrl === 'string' && fetchMetadata.fetchedUrl.trim().length > 0
     ? fetchMetadata.fetchedUrl
     : null;
+}
+
+function normalizeSourceKey(input: string | null | undefined): string {
+  return String(input || '').trim();
+}
+
+function assertAllowedSourceKey(sourceKey: string) {
+  if (!(BATCH_SOURCE_KEYS as readonly string[]).includes(sourceKey)) {
+    throw new Error(`Invalid source key: ${sourceKey}`);
+  }
+}
+
+function readBatchFlags(value: Prisma.JsonValue | null | undefined): { autoCreateDraft: boolean; extractAll: boolean } {
+  const metadata = readFetchMetadata(value);
+  const batch = metadata.batch_intake && typeof metadata.batch_intake === 'object' && !Array.isArray(metadata.batch_intake)
+    ? metadata.batch_intake as Record<string, unknown>
+    : {};
+  return {
+    autoCreateDraft: batch.auto_create_draft !== false,
+    extractAll: batch.extract_all !== false,
+  };
+}
+
+async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: number) {
+  const sourceKey = normalizeSourceKey(source.sourceKey || `source_${sequenceNo + 1}`);
+  assertAllowedSourceKey(sourceKey);
+
+  if (source.inputType === 'url') {
+    if (!source.sourceUrl) {
+      throw new Error(`${sourceKey}: sourceUrl is required for URL intake`);
+    }
+    const sourceUrl = normalizeUrl(source.sourceUrl);
+    await assertSafePublicHttpsUrl(sourceUrl);
+    return {
+      source_key: sourceKey,
+      sequence_no: sequenceNo,
+      input_type: source.inputType,
+      source_url: sourceUrl,
+      source_text_hash: hashText(sourceUrl),
+      source_file_path: null,
+      raw_text: null,
+      normalized_text: null,
+      fetch_metadata_json: Prisma.JsonNull,
+      status: 'pending' as const,
+    };
+  }
+
+  if (source.inputType === 'text') {
+    if (!source.sourceText || normalizeWhitespace(source.sourceText).length < 80) {
+      throw new Error(`${sourceKey}: sourceText must contain meaningful content`);
+    }
+    const normalizedText = normalizeMultilineText(source.sourceText);
+    return {
+      source_key: sourceKey,
+      sequence_no: sequenceNo,
+      input_type: source.inputType,
+      source_url: null,
+      source_text_hash: hashText(normalizedText),
+      source_file_path: null,
+      raw_text: source.sourceText,
+      normalized_text: normalizedText,
+      fetch_metadata_json: Prisma.JsonNull,
+      status: 'ready' as const,
+    };
+  }
+
+  if (source.inputType === 'pdf') {
+    if (!source.sourceFile) {
+      throw new Error(`${sourceKey}: PDF file is required for PDF intake`);
+    }
+    const storedPdfPath = await storeUploadedPdf(source.sourceFile);
+    return {
+      source_key: sourceKey,
+      sequence_no: sequenceNo,
+      input_type: source.inputType,
+      source_url: null,
+      source_text_hash: source.sourceFile.checksum,
+      source_file_path: storedPdfPath,
+      raw_text: null,
+      normalized_text: null,
+      fetch_metadata_json: {
+        original_name: source.sourceFile.originalName,
+        mime: source.sourceFile.mimeType,
+        bytes: source.sourceFile.size,
+        checksum: source.sourceFile.checksum,
+      } as Prisma.InputJsonValue,
+      status: 'pending' as const,
+    };
+  }
+
+  if (!source.sourceJsonText || normalizeWhitespace(source.sourceJsonText).length < 2) {
+    throw new Error(`${sourceKey}: JSON file is required for JSON intake`);
+  }
+  const parsedJsonUpload = parseFundingJsonUpload(source.sourceJsonText);
+  const preparedJsonIntake = prepareFundingJsonIntake(parsedJsonUpload);
+  const sourceHash = hashText(JSON.stringify(parsedJsonUpload));
+  const normalizedText = normalizeMultilineText(preparedJsonIntake.sourceText || source.sourceJsonText);
+
+  return {
+    source_key: sourceKey,
+    sequence_no: sequenceNo,
+    input_type: source.inputType,
+    source_url: null,
+    source_text_hash: sourceHash,
+    source_file_path: null,
+    raw_text: source.sourceJsonText,
+    normalized_text: normalizedText,
+    fetch_metadata_json: {
+      json_upload: {
+        ...preparedJsonIntake.metadata,
+        original_name: source.sourceJsonFile?.originalName || 'funding-intake.json',
+        mime: source.sourceJsonFile?.mimeType || 'application/json',
+        bytes: source.sourceJsonFile?.size || Buffer.byteLength(source.sourceJsonText || '', 'utf8'),
+        checksum: sourceHash,
+      },
+      json_artifacts: {
+        grant_template_json: preparedJsonIntake.template || null,
+        guideline_pack_json: preparedJsonIntake.guidelinePack || null,
+      },
+    } as Prisma.InputJsonValue,
+    status: 'ready' as const,
+  };
+}
+
+function sourceToIntakeSource(input: IntakeSubmitInput): BatchIntakeSourceInput {
+  return {
+    sourceKey: 'source_1',
+    inputType: input.inputType,
+    sourceUrl: input.sourceUrl,
+    sourceText: input.sourceText,
+    sourceFile: input.sourceFile,
+    sourceJsonText: input.sourceJsonText,
+    sourceJsonFile: input.sourceJsonFile,
+  };
+}
+
+function makeJobLikeFromSource(job: any, source: any) {
+  return {
+    ...job,
+    input_type: source.input_type,
+    source_url: source.source_url || null,
+    source_file_path: source.source_file_path || null,
+    source_text_hash: source.source_text_hash || null,
+    raw_text: source.raw_text || null,
+    normalized_text: source.normalized_text || null,
+    fetch_metadata_json: source.fetch_metadata_json || null,
+  };
 }
 
 function toTimestamp(value: unknown): number | null {
@@ -433,6 +596,7 @@ async function transitionJobStatus(
     completedAt?: Date | null;
     duplicateStatus?: FundingDuplicateStatus;
     linkedFundingCallId?: string | null;
+    processingPhase?: string | null;
     fetchMetadataJson?: Record<string, unknown> | null;
     rawText?: string | null;
     normalizedText?: string | null;
@@ -455,6 +619,10 @@ async function transitionJobStatus(
       completed_at: options?.completedAt ?? undefined,
       duplicate_status: options?.duplicateStatus ?? undefined,
       linked_funding_call_id: options?.linkedFundingCallId ?? undefined,
+      processing_phase: options?.processingPhase ?? undefined,
+      locked_at: allowedTransitionTarget(nextStatus) ? undefined : null,
+      locked_by: allowedTransitionTarget(nextStatus) ? undefined : null,
+      next_attempt_at: allowedTransitionTarget(nextStatus) ? undefined : null,
       fetch_metadata_json:
         options?.fetchMetadataJson === null
           ? Prisma.JsonNull
@@ -790,11 +958,12 @@ async function persistDraft(
       fetchedUrl: readFetchedUrl(job.fetch_metadata_json),
     }).official_urls,
   };
+  const isTenantPrivateDraft = operator.role === 'USER' && Boolean(operator.tenantId);
   const sharedData = {
     status: mapCatalogStatusToFundingStatus('DRAFT'),
     catalog_status: 'DRAFT' as FundingCallStatus,
-    visibility: operator.role === 'USER' ? 'TENANT_PRIVATE' : 'GLOBAL_PUBLISHED',
-    tenantId: operator.role === 'USER' ? operator.tenantId || null : null,
+    visibility: isTenantPrivateDraft ? 'TENANT_PRIVATE' : 'GLOBAL_PUBLISHED',
+    tenantId: isTenantPrivateDraft ? operator.tenantId || null : null,
     title: deterministicDraftValues.scheme_title || deterministicDraftValues.agency_name || job.source_url || 'Untitled funding call',
     agencyName: deterministicDraftValues.agency_name || null,
     sourceUrl: job.source_url || null,
@@ -896,45 +1065,8 @@ async function persistDraft(
 
 class FundingIntakeService {
   async createJob(operator: IntakeOperator, input: IntakeSubmitInput) {
-    if (input.inputType === 'url') {
-      if (!input.sourceUrl) {
-        throw new Error('sourceUrl is required for URL intake');
-      }
-      await assertSafePublicHttpsUrl(normalizeUrl(input.sourceUrl));
-    }
-
-    if (input.inputType === 'text') {
-      if (!input.sourceText || normalizeWhitespace(input.sourceText).length < 80) {
-        throw new Error('sourceText must contain meaningful content');
-      }
-    }
-
-    if (input.inputType === 'pdf') {
-      if (!input.sourceFile) {
-        throw new Error('PDF file is required for PDF intake');
-      }
-    }
-
-    let preparedJsonIntake: ReturnType<typeof prepareFundingJsonIntake> | null = null;
-    let parsedJsonUpload: unknown = null;
-    if (input.inputType === 'json') {
-      if (!input.sourceJsonText || normalizeWhitespace(input.sourceJsonText).length < 2) {
-        throw new Error('JSON file is required for JSON intake');
-      }
-      parsedJsonUpload = parseFundingJsonUpload(input.sourceJsonText);
-      preparedJsonIntake = prepareFundingJsonIntake(parsedJsonUpload);
-    }
-
-    const canonicalSource = input.inputType === 'url'
-      ? normalizeUrl(input.sourceUrl!)
-      : input.inputType === 'text'
-        ? normalizeMultilineText(input.sourceText || '')
-        : input.inputType === 'json'
-          ? JSON.stringify(parsedJsonUpload)
-          : input.sourceFile?.checksum || '';
-    const sourceHash = input.inputType === 'pdf'
-      ? String(input.sourceFile?.checksum || '')
-      : hashText(canonicalSource);
+    const preparedSource = await prepareJobSourceData(sourceToIntakeSource(input), 0);
+    const sourceHash = String(preparedSource.source_text_hash || '');
 
     const existingJob = await prisma.fundingIntakeJob.findFirst({
       where: {
@@ -955,54 +1087,30 @@ class FundingIntakeService {
       return existingJob;
     }
 
-    const storedPdfPath = input.inputType === 'pdf' && input.sourceFile
-      ? await storeUploadedPdf(input.sourceFile)
-      : null;
-    const pdfMetadata = input.inputType === 'pdf' && input.sourceFile
-      ? {
-          original_name: input.sourceFile.originalName,
-          mime: input.sourceFile.mimeType,
-          bytes: input.sourceFile.size,
-          checksum: input.sourceFile.checksum,
-        }
-      : null;
-    const jsonMetadata = input.inputType === 'json' && preparedJsonIntake
-      ? {
-          json_upload: {
-            ...preparedJsonIntake.metadata,
-            original_name: input.sourceJsonFile?.originalName || 'funding-intake.json',
-            mime: input.sourceJsonFile?.mimeType || 'application/json',
-            bytes: input.sourceJsonFile?.size || Buffer.byteLength(input.sourceJsonText || '', 'utf8'),
-            checksum: sourceHash,
-          },
-          json_artifacts: {
-            grant_template_json: preparedJsonIntake.template || null,
-            guideline_pack_json: preparedJsonIntake.guidelinePack || null,
-          },
-        }
-      : null;
-    const jsonRawText = input.inputType === 'json' ? input.sourceJsonText || '' : null;
-    const jsonNormalizedText = input.inputType === 'json'
-      ? preparedJsonIntake?.sourceText || normalizeMultilineText(input.sourceJsonText || '')
-      : null;
-
     const job = await prisma.fundingIntakeJob.create({
       data: {
         submitted_by_user_id: operator.userId,
-        input_type: input.inputType,
-        source_url: input.inputType === 'url' ? normalizeUrl(input.sourceUrl!) : null,
+        input_type: preparedSource.input_type,
+        source_url: preparedSource.source_url,
         source_text_hash: sourceHash,
-        source_file_path: storedPdfPath,
+        source_file_path: preparedSource.source_file_path,
         operator_notes: input.operatorNotes?.trim() || null,
-        raw_text: input.inputType === 'text' ? input.sourceText || null : jsonRawText,
-        normalized_text: input.inputType === 'text'
-          ? normalizeMultilineText(input.sourceText || '')
-          : input.inputType === 'json'
-            ? normalizeMultilineText(jsonNormalizedText || '')
-            : null,
-        fetch_metadata_json: pdfMetadata ? (pdfMetadata as any) : jsonMetadata ? (jsonMetadata as any) : undefined,
+        details_source_key: 'source_1',
+        guidelines_source_key: 'source_1',
+        template_source_key: 'source_1',
+        processing_phase: 'queued',
+        raw_text: preparedSource.raw_text,
+        normalized_text: preparedSource.normalized_text,
+        fetch_metadata_json: preparedSource.fetch_metadata_json as any,
         status: 'queued',
       },
+    });
+
+    await prisma.fundingIntakeJobSource.create({
+      data: {
+        job_id: job.id,
+        ...preparedSource,
+      } as any,
     });
 
     await recordJobEvent(job.id, 'queued', 'job_created', {
@@ -1015,20 +1123,141 @@ class FundingIntakeService {
     return job;
   }
 
-  enqueue(jobId: string) {
-    if (activeJobPromises.has(jobId)) {
+  async createBatch(operator: IntakeOperator, input: BatchIntakeCreateInput) {
+    if (!Array.isArray(input.jobs) || input.jobs.length === 0) {
+      throw new Error('Batch must include at least one funding call');
+    }
+    if (input.jobs.length > 100) {
+      throw new Error('Batch cannot include more than 100 funding calls');
+    }
+
+    const preparedJobs = [] as Array<{
+      input: BatchIntakeJobInput;
+      sources: Awaited<ReturnType<typeof prepareJobSourceData>>[];
+      detailsSourceKey: string;
+      guidelinesSourceKey: string;
+      templateSourceKey: string;
+    }>;
+
+    for (const [jobIndex, jobInput] of input.jobs.entries()) {
+      if (!Array.isArray(jobInput.sources) || jobInput.sources.length === 0) {
+        throw new Error(`Job ${jobIndex + 1}: at least one source is required`);
+      }
+      if (jobInput.sources.length > BATCH_SOURCE_KEYS.length) {
+        throw new Error(`Job ${jobIndex + 1}: a funding call can include at most 3 sources`);
+      }
+
+      const sources = [] as Awaited<ReturnType<typeof prepareJobSourceData>>[];
+      const seen = new Set<string>();
+      for (const [sourceIndex, source] of jobInput.sources.entries()) {
+        const sourceWithKey = {
+          ...source,
+          sourceKey: normalizeSourceKey(source.sourceKey) || BATCH_SOURCE_KEYS[sourceIndex],
+        };
+        const prepared = await prepareJobSourceData(sourceWithKey, sourceIndex);
+        if (seen.has(prepared.source_key)) {
+          throw new Error(`Job ${jobIndex + 1}: duplicate source key ${prepared.source_key}`);
+        }
+        seen.add(prepared.source_key);
+        sources.push(prepared);
+      }
+
+      const assignment = resolveBatchSourceAssignments({
+        sources: sources.map((source) => ({ sourceKey: source.source_key })),
+        detailsSourceKey: jobInput.detailsSourceKey,
+        guidelinesSourceKey: jobInput.guidelinesSourceKey,
+        templateSourceKey: jobInput.templateSourceKey,
+      });
+
+      preparedJobs.push({
+        input: jobInput,
+        sources,
+        detailsSourceKey: assignment.detailsSourceKey,
+        guidelinesSourceKey: assignment.guidelinesSourceKey,
+        templateSourceKey: assignment.templateSourceKey,
+      });
+    }
+
+    const batch = await prisma.$transaction(async (tx) => {
+      const createdBatch = await tx.fundingIntakeBatch.create({
+        data: {
+          submitted_by_user_id: operator.userId,
+          label: input.label?.trim() || null,
+          total_jobs: preparedJobs.length,
+          status: 'processing',
+        },
+      });
+
+      for (const preparedJob of preparedJobs) {
+        const detailSource = preparedJob.sources.find((source) => source.source_key === preparedJob.detailsSourceKey)!;
+        const sourceMetadata = readFetchMetadata(detailSource.fetch_metadata_json as any);
+        const jobMetadata = {
+          ...sourceMetadata,
+          batch_intake: {
+            batch_id: createdBatch.id,
+            auto_create_draft: preparedJob.input.autoCreateDraft !== false,
+            extract_all: preparedJob.input.extractAll !== false,
+          },
+        };
+
+        const job = await tx.fundingIntakeJob.create({
+          data: {
+            batch_id: createdBatch.id,
+            submitted_by_user_id: operator.userId,
+            input_type: detailSource.input_type,
+            source_url: detailSource.source_url,
+            source_text_hash: detailSource.source_text_hash,
+            source_file_path: detailSource.source_file_path,
+            operator_notes: preparedJob.input.operatorNotes?.trim() || null,
+            details_source_key: preparedJob.detailsSourceKey,
+            guidelines_source_key: preparedJob.guidelinesSourceKey,
+            template_source_key: preparedJob.templateSourceKey,
+            processing_phase: 'queued',
+            raw_text: detailSource.raw_text,
+            normalized_text: detailSource.normalized_text,
+            fetch_metadata_json: jobMetadata as any,
+            status: 'queued',
+          },
+        });
+
+        await tx.fundingIntakeJobSource.createMany({
+          data: preparedJob.sources.map((source) => ({
+            job_id: job.id,
+            ...source,
+          })) as any,
+        });
+
+        await tx.fundingIntakeJobEvent.create({
+          data: {
+            job_id: job.id,
+            actor_user_id: operator.userId,
+            previous_status: null,
+            next_status: 'queued',
+            event_type: 'batch_job_created',
+            message: 'Funding intake batch job created',
+          },
+        });
+      }
+
+      return createdBatch;
+    });
+
+    this.enqueue();
+    return batch;
+  }
+
+  enqueue(_jobId?: string) {
+    this.triggerDrain();
+  }
+
+  private triggerDrain() {
+    if (drainPromise) {
       return;
     }
 
-    const promise = (async () => {
-      try {
-        await this.processJob(jobId);
-      } finally {
-        activeJobPromises.delete(jobId);
-      }
-    })();
-
-    activeJobPromises.set(jobId, promise);
+    drainPromise = this.drainQueue().finally(() => {
+      drainPromise = null;
+    });
   }
 
   async maybeResume(jobId: string) {
@@ -1039,6 +1268,91 @@ class FundingIntakeService {
 
     if (job && allowedTransitionTarget(job.status)) {
       this.enqueue(jobId);
+    }
+  }
+
+  private async claimQueuedJobs(limit: number): Promise<string[]> {
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - JOB_LOCK_STALE_MS);
+    const candidates = await prisma.fundingIntakeJob.findMany({
+      where: {
+        status: { in: ['queued', 'fetching', 'extracting'] as any },
+        AND: [
+          {
+            OR: [
+              { next_attempt_at: null },
+              { next_attempt_at: { lte: now } },
+            ],
+          },
+          {
+            OR: [
+              { locked_at: null },
+              { locked_at: { lte: staleBefore } },
+            ],
+          },
+        ],
+      },
+      orderBy: [{ next_attempt_at: 'asc' }, { created_at: 'asc' }],
+      take: limit * 2,
+      select: { id: true },
+    });
+
+    const claimed: string[] = [];
+    for (const candidate of candidates) {
+      if (claimed.length >= limit) {
+        break;
+      }
+
+      const result = await prisma.fundingIntakeJob.updateMany({
+        where: {
+          id: candidate.id,
+          status: { in: ['queued', 'fetching', 'extracting'] as any },
+          AND: [
+            {
+              OR: [
+                { next_attempt_at: null },
+                { next_attempt_at: { lte: now } },
+              ],
+            },
+            {
+              OR: [
+                { locked_at: null },
+                { locked_at: { lte: staleBefore } },
+              ],
+            },
+          ],
+        },
+        data: {
+          locked_at: now,
+          locked_by: WORKER_ID,
+          attempt_count: { increment: 1 },
+          started_at: now,
+          completed_at: null,
+        },
+      });
+
+      if (result.count === 1) {
+        claimed.push(candidate.id);
+      }
+    }
+
+    return claimed;
+  }
+
+  private async drainQueue() {
+    while (true) {
+      const jobIds = await this.claimQueuedJobs(QUEUE_CONCURRENCY);
+      if (jobIds.length === 0) {
+        return;
+      }
+
+      console.log('[Funding Intake] queue drain claimed jobs', {
+        workerId: WORKER_ID,
+        configuredConcurrency: QUEUE_CONCURRENCY,
+        claimedJobCount: jobIds.length,
+      });
+
+      await Promise.all(jobIds.map((jobId) => this.processJob(jobId)));
     }
   }
 
@@ -1075,6 +1389,98 @@ class FundingIntakeService {
     }));
   }
 
+  async listBatches(limit = 25): Promise<IntakeBatchSummary[]> {
+    const batches = await prisma.fundingIntakeBatch.findMany({
+      orderBy: { created_at: 'desc' },
+      take: Math.max(1, Math.min(limit, 100)),
+      include: {
+        jobs: {
+          select: { status: true },
+        },
+      },
+    });
+
+    const userIds = Array.from(new Set(batches.map((batch) => batch.submitted_by_user_id)));
+    const users = userIds.length > 0
+      ? await prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, email: true, name: true },
+        })
+      : [];
+    const userMap = new Map(users.map((user) => [user.id, user]));
+    return batches.map((batch) => {
+      const jobStatuses = batch.jobs.map((job) => job.status as FundingIntakeJobStatus);
+      const counts = buildFundingIntakeJobStatusCounts(jobStatuses);
+
+      return {
+        id: batch.id,
+        label: batch.label,
+        status: deriveFundingIntakeBatchStatus(jobStatuses) as any,
+        total_jobs: batch.total_jobs,
+        counts,
+        created_at: batch.created_at,
+        updated_at: batch.updated_at,
+        submitted_by: userMap.get(batch.submitted_by_user_id) || null,
+      };
+    });
+  }
+
+  async getBatchDetails(batchId: string) {
+    const batch = await prisma.fundingIntakeBatch.findUnique({
+      where: { id: batchId },
+      include: {
+        jobs: {
+          orderBy: { created_at: 'asc' },
+          include: {
+            sources: {
+              orderBy: [{ sequence_no: 'asc' }, { created_at: 'asc' }],
+            },
+          },
+        },
+      },
+    });
+
+    if (!batch) {
+      return null;
+    }
+
+    const userIds = Array.from(new Set([batch.submitted_by_user_id, ...batch.jobs.map((job) => job.submitted_by_user_id)]));
+    const linkedCallIds = Array.from(new Set(batch.jobs.map((job) => job.linked_funding_call_id).filter(Boolean) as string[]));
+    const [users, linkedCalls] = await Promise.all([
+      prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, email: true, name: true },
+      }),
+      linkedCallIds.length > 0
+        ? prisma.fundingCall.findMany({
+            where: { id: { in: linkedCallIds } },
+            select: { id: true, catalog_status: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const userMap = new Map(users.map((user) => [user.id, user]));
+    const linkedCallStatusMap = new Map(linkedCalls.map((call) => [call.id, readCatalogStatus(call)]));
+    const jobStatuses = batch.jobs.map((job) => job.status as FundingIntakeJobStatus);
+
+    return {
+      id: batch.id,
+      label: batch.label,
+      status: deriveFundingIntakeBatchStatus(jobStatuses),
+      total_jobs: batch.total_jobs,
+      counts: buildFundingIntakeJobStatusCounts(jobStatuses),
+      created_at: batch.created_at,
+      updated_at: batch.updated_at,
+      submitted_by: userMap.get(batch.submitted_by_user_id) || null,
+      jobs: batch.jobs.map((job) => ({
+        ...job,
+        source_url: job.source_url || null,
+        linked_funding_call_id: job.linked_funding_call_id || null,
+        linked_call_status: job.linked_funding_call_id ? linkedCallStatusMap.get(job.linked_funding_call_id) || null : null,
+        submitted_by: userMap.get(job.submitted_by_user_id) || null,
+      })),
+    };
+  }
+
   async getJobDetails(jobId: string, operator?: IntakeOperator) {
     const job = await prisma.fundingIntakeJob.findUnique({
       where: { id: jobId },
@@ -1088,7 +1494,7 @@ class FundingIntakeService {
       return null;
     }
 
-    const [latestExtraction, duplicates, events, catalogDetails, guidelineBundle, templateBundle, submitter] = await Promise.all([
+    const [latestExtraction, duplicates, events, sources, catalogDetails, guidelineBundle, templateBundle, submitter] = await Promise.all([
       getLatestExtraction(jobId),
       prisma.fundingIntakeDuplicate.findMany({
         where: { job_id: jobId },
@@ -1097,6 +1503,10 @@ class FundingIntakeService {
       prisma.fundingIntakeJobEvent.findMany({
         where: { job_id: jobId },
         orderBy: { created_at: 'asc' },
+      }),
+      prisma.fundingIntakeJobSource.findMany({
+        where: { job_id: jobId },
+        orderBy: [{ sequence_no: 'asc' }, { created_at: 'asc' }],
       }),
       job.linked_funding_call_id
         ? fundingCatalogService.getFundingCallDetails(job.linked_funding_call_id)
@@ -1178,6 +1588,7 @@ class FundingIntakeService {
       })),
       domainDuplicates,
       events,
+      sources,
     };
   }
 
@@ -1296,9 +1707,19 @@ class FundingIntakeService {
         error_message: null,
         completed_at: null,
         started_at: null,
+        locked_at: null,
+        locked_by: null,
+        next_attempt_at: null,
+        processing_phase: 'queued',
         retry_count: { increment: 1 },
       },
     });
+    if (job.batch_id) {
+      await prisma.fundingIntakeBatch.update({
+        where: { id: job.batch_id },
+        data: { status: 'processing' },
+      });
+    }
 
     await recordJobEvent(jobId, 'queued', 'retry_requested', {
       actorUserId: operator.userId,
@@ -1325,8 +1746,10 @@ class FundingIntakeService {
     await transitionJobStatus(jobId, 'canceled', {
       actorUserId: operator.userId,
       completedAt: new Date(),
+      processingPhase: 'canceled',
       message: 'Funding intake job canceled',
     });
+    await this.maybeUpdateBatchStatus(job.batch_id);
   }
 
   private async applyJsonArtifactsForFundingCall(job: any, fundingCallId: string, operator: IntakeOperator) {
@@ -1424,47 +1847,74 @@ class FundingIntakeService {
     };
   }
 
-  private async runExtractAllForFundingCall(job: any, fundingCallId: string, operator: IntakeOperator) {
+  private async runExtractAllForFundingCall(
+    job: any,
+    fundingCallId: string,
+    operator: IntakeOperator,
+    options?: {
+      guidelineSource?: any | null;
+      templateSource?: any | null;
+    }
+  ) {
     if (job.input_type === 'json') {
       return this.applyJsonArtifactsForFundingCall(job, fundingCallId, operator);
     }
 
-    let guidelineStatus: string | null = null;
-    let guidelineRunId: string | null = null;
-    let guidelineExtractionError: string | null = null;
-    let templateStatus: string | null = null;
-    let templateRunId: string | null = null;
-    let templateAssetId: string | null = null;
-    let templateExtractionError: string | null = null;
+    const guidelineTask = (async () => {
+      try {
+        const source = options?.guidelineSource
+          ? {
+              sourceMode: 'text' as const,
+              sourceText: options.guidelineSource.normalized_text || options.guidelineSource.raw_text || '',
+            }
+          : undefined;
+        const guidelineRun = await fundingGuidelineService.createExtractionRunFromFundingCall(fundingCallId, operator, source);
+        return {
+          guidelineStatus: guidelineRun?.status || null,
+          guidelineRunId: guidelineRun?.id || null,
+          guidelineExtractionError: null as string | null,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[Funding Intake] guideline extraction failed:', error);
+        return {
+          guidelineStatus: null,
+          guidelineRunId: null,
+          guidelineExtractionError: message,
+        };
+      }
+    })();
 
-    try {
-      const guidelineRun = await fundingGuidelineService.createExtractionRunFromFundingCall(fundingCallId, operator);
-      guidelineStatus = guidelineRun?.status || null;
-      guidelineRunId = guidelineRun?.id || null;
-    } catch (error) {
-      guidelineExtractionError = error instanceof Error ? error.message : String(error);
-      console.error('[Funding Intake] guideline extraction failed:', error);
-    }
+    const templateTask = (async () => {
+      try {
+        const templateJob = options?.templateSource
+          ? makeJobLikeFromSource(job, options.templateSource)
+          : job;
+        const autoAsset = await fundingTemplateService.upsertAutoManagedAssetFromIntakeSource(fundingCallId, templateJob, operator);
+        const templateRun = await fundingTemplateService.createExtractionRun(fundingCallId, operator, [autoAsset.id]);
+        return {
+          templateStatus: templateRun?.status || null,
+          templateRunId: templateRun?.id || null,
+          templateAssetId: autoAsset.id,
+          templateExtractionError: null as string | null,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[Funding Intake] template extraction failed:', error);
+        return {
+          templateStatus: null,
+          templateRunId: null,
+          templateAssetId: null,
+          templateExtractionError: message,
+        };
+      }
+    })();
 
-    try {
-      const autoAsset = await fundingTemplateService.upsertAutoManagedAssetFromIntakeSource(fundingCallId, job, operator);
-      templateAssetId = autoAsset.id;
-      const templateRun = await fundingTemplateService.createExtractionRun(fundingCallId, operator, [autoAsset.id]);
-      templateStatus = templateRun?.status || null;
-      templateRunId = templateRun?.id || null;
-    } catch (error) {
-      templateExtractionError = error instanceof Error ? error.message : String(error);
-      console.error('[Funding Intake] template extraction failed:', error);
-    }
+    const [guidelineResult, templateResult] = await Promise.all([guidelineTask, templateTask]);
 
     return {
-      guidelineStatus,
-      guidelineRunId,
-      guidelineExtractionError,
-      templateStatus,
-      templateRunId,
-      templateAssetId,
-      templateExtractionError,
+      ...guidelineResult,
+      ...templateResult,
     };
   }
 
@@ -1484,7 +1934,31 @@ class FundingIntakeService {
       message: 'Extract all requested from intake workspace',
     });
 
-    return this.runExtractAllForFundingCall(details.job, details.job.linked_funding_call_id, operator);
+    const llmContext = {
+      tenantId: operator.tenantId || null,
+      userId: operator.userId,
+    };
+    const detailsSourceKey = details.job.details_source_key || 'source_1';
+    const detailsSource = await this.prepareSourceByKey(details.job, detailsSourceKey, llmContext);
+    const guidelineKey = details.job.guidelines_source_key || detailsSourceKey;
+    const templateKey = details.job.template_source_key || detailsSourceKey;
+    const guidelineSourcePromise = guidelineKey === detailsSource.source_key
+      ? Promise.resolve(detailsSource)
+      : this.prepareSourceByKey(details.job, guidelineKey, llmContext);
+    const templateSourcePromise = templateKey === detailsSource.source_key
+      ? Promise.resolve(detailsSource)
+      : this.prepareSourceByKey(details.job, templateKey, llmContext);
+    const [guidelineSource, templateSource] = await Promise.all([guidelineSourcePromise, templateSourcePromise]);
+
+    return this.runExtractAllForFundingCall(
+      makeJobLikeFromSource(details.job, detailsSource),
+      details.job.linked_funding_call_id,
+      operator,
+      {
+        guidelineSource,
+        templateSource,
+      }
+    );
   }
 
   async createOrUpdateDraft(
@@ -1599,6 +2073,227 @@ class FundingIntakeService {
     };
   }
 
+  private async ensureJobSources(job: any) {
+    const existingSources = await prisma.fundingIntakeJobSource.findMany({
+      where: { job_id: job.id },
+      orderBy: [{ sequence_no: 'asc' }, { created_at: 'asc' }],
+    });
+
+    if (existingSources.length > 0) {
+      return existingSources;
+    }
+
+    const source = await prisma.fundingIntakeJobSource.create({
+      data: {
+        job_id: job.id,
+        source_key: 'source_1',
+        sequence_no: 0,
+        input_type: job.input_type,
+        source_url: job.source_url || null,
+        source_text_hash: job.source_text_hash || null,
+        source_file_path: job.source_file_path || null,
+        raw_text: job.raw_text || null,
+        normalized_text: job.normalized_text || null,
+        fetch_metadata_json: job.fetch_metadata_json || Prisma.JsonNull,
+        status: job.normalized_text ? 'ready' : 'pending',
+      } as any,
+    });
+
+    await prisma.fundingIntakeJob.update({
+      where: { id: job.id },
+      data: {
+        details_source_key: job.details_source_key || 'source_1',
+        guidelines_source_key: job.guidelines_source_key || 'source_1',
+        template_source_key: job.template_source_key || 'source_1',
+      },
+    });
+
+    return [source];
+  }
+
+  private async updateJobLegacySource(jobId: string, source: any, processingPhase?: string) {
+    const existingJob = await prisma.fundingIntakeJob.findUnique({
+      where: { id: jobId },
+      select: { fetch_metadata_json: true },
+    });
+    const existingMetadata = readFetchMetadata(existingJob?.fetch_metadata_json);
+    const sourceMetadata = readFetchMetadata(source.fetch_metadata_json);
+    const mergedMetadata = existingMetadata.batch_intake
+      ? { ...sourceMetadata, batch_intake: existingMetadata.batch_intake }
+      : sourceMetadata;
+
+    await prisma.fundingIntakeJob.update({
+      where: { id: jobId },
+      data: {
+        input_type: source.input_type,
+        source_url: source.source_url || null,
+        source_text_hash: source.source_text_hash || null,
+        source_file_path: source.source_file_path || null,
+        raw_text: source.raw_text || null,
+        normalized_text: source.normalized_text || null,
+        fetch_metadata_json: mergedMetadata as any,
+        ...(processingPhase ? { processing_phase: processingPhase } : {}),
+      } as any,
+    });
+  }
+
+  private async prepareSourceForExtraction(
+    job: any,
+    source: any,
+    llmContext: { tenantId?: string | null; userId?: string | null }
+  ) {
+    if (source.status === 'ready' && source.normalized_text) {
+      return source;
+    }
+
+    try {
+      await prisma.fundingIntakeJobSource.update({
+        where: { id: source.id },
+        data: {
+          status: 'fetching',
+          error_code: null,
+          error_message: null,
+        },
+      });
+
+      let rawText = source.raw_text || '';
+      let normalizedText = source.normalized_text || '';
+      let fetchMetadata = readFetchMetadata(source.fetch_metadata_json);
+      let sourceHash = source.source_text_hash || null;
+
+      if (source.input_type === 'url') {
+        await transitionJobStatus(job.id, 'fetching', {
+          startedAt: job.started_at || new Date(),
+          processingPhase: `source:${source.source_key}:fetching`,
+          message: `Fetching ${source.source_key}`,
+        });
+
+        const fetched = await fetchReadableUrlContent(source.source_url!);
+        rawText = fetched.rawText;
+        normalizedText = fetched.normalizedText;
+        fetchMetadata = fetched.fetchMetadata;
+        sourceHash = hashText(`${source.source_url || ''}::${normalizedText}`);
+      } else if (source.input_type === 'text') {
+        rawText = source.raw_text || '';
+        normalizedText = source.normalized_text || normalizeMultilineText(rawText);
+        sourceHash = hashText(normalizedText);
+      } else if (source.input_type === 'pdf') {
+        if (!source.source_file_path) {
+          throw new Error(`No stored PDF file is available for ${source.source_key}`);
+        }
+
+        await transitionJobStatus(job.id, 'extracting', {
+          startedAt: job.started_at || new Date(),
+          processingPhase: `source:${source.source_key}:transcribing_pdf`,
+          message: `Transcribing ${source.source_key} PDF source`,
+        });
+
+        const pdfExtraction = await extractCanonicalTextFromPdf(source.source_file_path, llmContext);
+        rawText = pdfExtraction.rawText;
+        normalizedText = pdfExtraction.normalizedText;
+        fetchMetadata = {
+          ...fetchMetadata,
+          pdf_transcription: {
+            extractor_model: pdfExtraction.extractorModel,
+            warnings: pdfExtraction.warnings,
+            source_file_path: source.source_file_path,
+          },
+        };
+        sourceHash = sourceHash || hashText(`${source.source_file_path || ''}::${normalizedText}`);
+      } else if (source.input_type === 'json') {
+        const parsed = parseFundingJsonUpload(rawText || normalizedText);
+        const prepared = prepareFundingJsonIntake(parsed);
+        rawText = rawText || source.raw_text || '';
+        normalizedText = normalizeMultilineText(prepared.sourceText || normalizedText || rawText);
+        fetchMetadata = {
+          ...fetchMetadata,
+          json_upload: {
+            ...((fetchMetadata as any)?.json_upload || {}),
+            ...prepared.metadata,
+          },
+          json_artifacts: {
+            grant_template_json: prepared.template || null,
+            guideline_pack_json: prepared.guidelinePack || null,
+          },
+        };
+        sourceHash = sourceHash || hashText(JSON.stringify(parsed));
+      } else {
+        throw new Error(`Unsupported intake source type: ${source.input_type}`);
+      }
+
+      if (!normalizedText) {
+        throw new Error(`${source.source_key} produced no normalized text`);
+      }
+
+      const updatedSource = await prisma.fundingIntakeJobSource.update({
+        where: { id: source.id },
+        data: {
+          raw_text: rawText,
+          normalized_text: normalizedText,
+          source_text_hash: sourceHash,
+          fetch_metadata_json: fetchMetadata as any,
+          status: 'ready',
+          error_code: null,
+          error_message: null,
+        },
+      });
+
+      console.log('[Funding Intake] source prepared', {
+        jobId: job.id,
+        sourceKey: updatedSource.source_key,
+        sourceHash: updatedSource.source_text_hash,
+        inputType: updatedSource.input_type,
+        chars: updatedSource.normalized_text?.length || 0,
+      });
+
+      return updatedSource;
+    } catch (error) {
+      await prisma.fundingIntakeJobSource.update({
+        where: { id: source.id },
+        data: {
+          status: 'failed',
+          error_code: 'SOURCE_PREPARATION_FAILED',
+          error_message: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
+  }
+
+  private async prepareSourceByKey(
+    job: any,
+    sourceKey: string,
+    llmContext: { tenantId?: string | null; userId?: string | null }
+  ) {
+    const sources = await this.ensureJobSources(job);
+    const source = sources.find((item) => item.source_key === sourceKey);
+    if (!source) {
+      throw new Error(`Funding intake source not found: ${sourceKey}`);
+    }
+    return this.prepareSourceForExtraction(job, source, llmContext);
+  }
+
+  private async maybeUpdateBatchStatus(batchId?: string | null) {
+    if (!batchId) {
+      return;
+    }
+
+    const jobs = await prisma.fundingIntakeJob.findMany({
+      where: { batch_id: batchId },
+      select: { status: true },
+    });
+    if (jobs.length === 0) {
+      return;
+    }
+
+    const status = deriveFundingIntakeBatchStatus(jobs.map((job) => job.status as FundingIntakeJobStatus));
+
+    await prisma.fundingIntakeBatch.update({
+      where: { id: batchId },
+      data: { status: status as any },
+    });
+  }
+
   async processJob(jobId: string) {
     const job = await getJobForProcessing(jobId);
     if (!job || job.status === 'canceled' || !allowedTransitionTarget(job.status)) {
@@ -1606,109 +2301,88 @@ class FundingIntakeService {
     }
 
     try {
-      let rawText = job.raw_text || '';
-      let normalizedText = job.normalized_text || '';
-      let fetchMetadata = job.fetch_metadata_json as Record<string, unknown> | null;
       const submitterForLlm = await prisma.user.findUnique({
         where: { id: job.submitted_by_user_id },
         select: { id: true, email: true, roles: true, tenantId: true },
       });
+      const operator: IntakeOperator = {
+        userId: submitterForLlm?.id || job.submitted_by_user_id,
+        email: submitterForLlm?.email || '',
+        role: deriveOperatorRoleFromUser(submitterForLlm),
+        tenantId: submitterForLlm?.tenantId || null,
+      };
       const llmContext = {
         tenantId: submitterForLlm?.tenantId || null,
         userId: submitterForLlm?.id || job.submitted_by_user_id,
       };
+      const detailsSourceKey = job.details_source_key || 'source_1';
 
-      if (job.input_type === 'url') {
-        await transitionJobStatus(jobId, 'fetching', {
-          startedAt: job.started_at || new Date(),
-          message: 'Fetching source URL',
-        });
-
-        const fetched = await fetchReadableUrlContent(job.source_url!);
-        rawText = fetched.rawText;
-        normalizedText = fetched.normalizedText;
-        fetchMetadata = fetched.fetchMetadata;
-
-        const refreshed = await getJobForProcessing(jobId);
-        if (!refreshed || refreshed.status === 'canceled') {
-          return;
-        }
-
+      const batchFlagsForResume = readBatchFlags(job.fetch_metadata_json);
+      if (job.batch_id && job.linked_funding_call_id && batchFlagsForResume.extractAll) {
         await transitionJobStatus(jobId, 'extracting', {
-          startedAt: refreshed.started_at || job.started_at || new Date(),
-          rawText,
-          normalizedText,
-          fetchMetadataJson: fetchMetadata,
-          message: 'Source content fetched successfully',
-        });
-      } else if (job.input_type === 'text') {
-        rawText = job.raw_text || '';
-        normalizedText = job.normalized_text || normalizeMultilineText(rawText);
-        await transitionJobStatus(jobId, 'extracting', {
+          actorUserId: operator.userId,
           startedAt: job.started_at || new Date(),
-          rawText,
-          normalizedText,
-          message: 'Processing text submission',
-        });
-      } else if (job.input_type === 'pdf') {
-        if (!job.source_file_path) {
-          throw new Error('No stored PDF file is available for this intake job');
-        }
-
-        await transitionJobStatus(jobId, 'extracting', {
-          startedAt: job.started_at || new Date(),
-          message: 'Transcribing PDF source',
+          duplicateStatus: job.duplicate_status,
+          linkedFundingCallId: job.linked_funding_call_id,
+          processingPhase: 'extracting_guidelines_template',
+          message: 'Resuming guideline and template extraction for existing draft',
         });
 
-        const pdfExtraction = await extractCanonicalTextFromPdf(job.source_file_path, llmContext);
-        rawText = pdfExtraction.rawText;
-        normalizedText = pdfExtraction.normalizedText;
-        fetchMetadata = {
-          ...(fetchMetadata || {}),
-          pdf_transcription: {
-            extractor_model: pdfExtraction.extractorModel,
-            warnings: pdfExtraction.warnings,
-            source_file_path: job.source_file_path,
-          },
-        };
+        const detailsSource = await this.prepareSourceByKey(job, detailsSourceKey, llmContext);
+        const guidelineKey = job.guidelines_source_key || detailsSourceKey;
+        const templateKey = job.template_source_key || detailsSourceKey;
+        const guidelineSourcePromise = guidelineKey === detailsSource.source_key
+          ? Promise.resolve(detailsSource)
+          : this.prepareSourceByKey(job, guidelineKey, llmContext);
+        const templateSourcePromise = templateKey === detailsSource.source_key
+          ? Promise.resolve(detailsSource)
+          : this.prepareSourceByKey(job, templateKey, llmContext);
+        const [guidelineSource, templateSource] = await Promise.all([guidelineSourcePromise, templateSourcePromise]);
 
-        await transitionJobStatus(jobId, 'extracting', {
-          startedAt: job.started_at || new Date(),
-          rawText,
-          normalizedText,
-          fetchMetadataJson: fetchMetadata,
-          message: 'PDF source transcribed successfully',
+        const extractAllResult = await this.runExtractAllForFundingCall(
+          makeJobLikeFromSource(job, detailsSource),
+          job.linked_funding_call_id,
+          operator,
+          {
+            guidelineSource,
+            templateSource,
+          }
+        );
+
+        await recordJobEvent(jobId, 'extracting', 'batch_extract_all_completed', {
+          actorUserId: operator.userId,
+          previousStatus: 'extracting',
+          message: JSON.stringify(extractAllResult),
         });
-      } else if (job.input_type === 'json') {
-        await transitionJobStatus(jobId, 'extracting', {
-          startedAt: job.started_at || new Date(),
-          rawText,
-          normalizedText,
-          message: 'Processing JSON upload',
+
+        await transitionJobStatus(jobId, 'draft_created', {
+          actorUserId: operator.userId,
+          duplicateStatus: job.duplicate_status,
+          linkedFundingCallId: job.linked_funding_call_id,
+          completedAt: new Date(),
+          processingPhase: 'draft_created',
+          message: 'Batch funding intake job completed',
         });
-      } else {
-        throw new Error('Unsupported intake input type');
+        await this.maybeUpdateBatchStatus(job.batch_id);
+        return;
       }
 
-      if (!normalizedText) {
+      const detailsSource = await this.prepareSourceByKey(job, detailsSourceKey, llmContext);
+      await this.updateJobLegacySource(jobId, detailsSource, 'core_extraction');
+      await transitionJobStatus(jobId, 'extracting', {
+        startedAt: job.started_at || new Date(),
+        processingPhase: 'core_extraction',
+        message: 'Extracting core funding call details',
+      });
+
+      if (!detailsSource.normalized_text) {
         throw new Error('No source content available for extraction');
       }
 
-      const extractionResult = job.input_type === 'json'
+      const extractionResult = detailsSource.input_type === 'json'
         ? (() => {
-            const parsed = parseFundingJsonUpload(rawText || normalizedText);
+            const parsed = parseFundingJsonUpload(detailsSource.raw_text || detailsSource.normalized_text);
             const prepared = prepareFundingJsonIntake(parsed);
-            fetchMetadata = {
-              ...(fetchMetadata || {}),
-              json_upload: {
-                ...((fetchMetadata as any)?.json_upload || {}),
-                ...prepared.metadata,
-              },
-              json_artifacts: {
-                grant_template_json: prepared.template || null,
-                guideline_pack_json: prepared.guidelinePack || null,
-              },
-            };
             return {
               payload: prepared.payload,
               extractorModel: FUNDING_JSON_UPLOAD_EXTRACTOR_MODEL,
@@ -1717,39 +2391,90 @@ class FundingIntakeService {
               validationErrors: [],
             };
           })()
-        : await extractFundingOpportunity(normalizedText, llmContext);
+        : await extractFundingOpportunity(detailsSource.normalized_text, llmContext);
       const latestState = await getJobForProcessing(jobId);
       if (!latestState || latestState.status === 'canceled') {
         return;
       }
 
-      if (job.input_type === 'json') {
-        await transitionJobStatus(jobId, 'extracting', {
-          fetchMetadataJson: fetchMetadata,
-          message: 'JSON payload normalized successfully',
-        });
-      }
-
       await createExtractionAttempt(jobId, extractionResult.payload, extractionResult);
-      const submitter = submitterForLlm || (await prisma.user.findUnique({
-        where: { id: job.submitted_by_user_id },
-        select: { id: true, email: true, roles: true },
-      }));
       const duplicateStatus = await computeDuplicateCandidates(
         jobId,
         extractionResult.payload,
-        job.source_url,
-        readFetchedUrl(fetchMetadata),
-        {
-          userId: submitter?.id || job.submitted_by_user_id,
-          email: submitter?.email || '',
-          role: deriveOperatorRoleFromUser(submitter),
-        }
+        detailsSource.source_url,
+        readFetchedUrl(detailsSource.fetch_metadata_json),
+        operator
       );
+
+      const latestJob = await getJobForProcessing(jobId);
+      if (!latestJob || latestJob.status === 'canceled') {
+        return;
+      }
+
+      const batchFlags = readBatchFlags(latestJob.fetch_metadata_json);
+      if (latestJob.batch_id && batchFlags.autoCreateDraft && duplicateStatus === 'none') {
+        const draftValues = normalizeDraftInput(buildDraftValuesFromExtraction(extractionResult.payload, {
+          sourceUrl: detailsSource.source_url,
+          fetchedUrl: readFetchedUrl(detailsSource.fetch_metadata_json),
+        }));
+        const requiredFieldsRemaining = buildDraftRequiredFields(draftValues);
+
+        if (requiredFieldsRemaining.length === 0) {
+          const latestExtraction = await getLatestExtraction(jobId);
+          const detailsJob = makeJobLikeFromSource(latestJob, detailsSource);
+          const fundingCall = await persistDraft(detailsJob, draftValues, operator, latestExtraction);
+
+          await transitionJobStatus(jobId, 'extracting', {
+            actorUserId: operator.userId,
+            duplicateStatus,
+            linkedFundingCallId: fundingCall.id,
+            processingPhase: batchFlags.extractAll ? 'extracting_guidelines_template' : 'draft_created',
+            message: batchFlags.extractAll
+              ? 'Draft funding call saved; extracting guidelines and template'
+              : 'Draft funding call saved',
+          });
+
+          let extractAllResult: Record<string, unknown> | null = null;
+          if (batchFlags.extractAll) {
+            const guidelineKey = latestJob.guidelines_source_key || detailsSourceKey;
+            const templateKey = latestJob.template_source_key || detailsSourceKey;
+            const guidelineSourcePromise = guidelineKey === detailsSource.source_key
+              ? Promise.resolve(detailsSource)
+              : this.prepareSourceByKey(latestJob, guidelineKey, llmContext);
+            const templateSourcePromise = templateKey === detailsSource.source_key
+              ? Promise.resolve(detailsSource)
+              : this.prepareSourceByKey(latestJob, templateKey, llmContext);
+            const [guidelineSource, templateSource] = await Promise.all([guidelineSourcePromise, templateSourcePromise]);
+
+            extractAllResult = await this.runExtractAllForFundingCall(detailsJob, fundingCall.id, operator, {
+              guidelineSource,
+              templateSource,
+            });
+
+            await recordJobEvent(jobId, 'extracting', 'batch_extract_all_completed', {
+              actorUserId: operator.userId,
+              previousStatus: 'extracting',
+              message: JSON.stringify(extractAllResult),
+            });
+          }
+
+          await transitionJobStatus(jobId, 'draft_created', {
+            actorUserId: operator.userId,
+            duplicateStatus,
+            linkedFundingCallId: fundingCall.id,
+            completedAt: new Date(),
+            processingPhase: 'draft_created',
+            message: 'Batch funding intake job completed',
+          });
+          await this.maybeUpdateBatchStatus(latestJob.batch_id);
+          return;
+        }
+      }
 
       await transitionJobStatus(jobId, 'needs_review', {
         duplicateStatus,
         completedAt: new Date(),
+        processingPhase: 'needs_review',
         message: 'Extraction completed and awaiting curator review',
       });
     } catch (error) {
@@ -1780,8 +2505,15 @@ class FundingIntakeService {
         errorCode,
         errorMessage: message,
         completedAt: new Date(),
+        processingPhase: 'failed',
         message,
       });
+    } finally {
+      const latestJob = await prisma.fundingIntakeJob.findUnique({
+        where: { id: jobId },
+        select: { batch_id: true },
+      });
+      await this.maybeUpdateBatchStatus(latestJob?.batch_id);
     }
   }
 }

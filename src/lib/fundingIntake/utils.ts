@@ -744,7 +744,7 @@ export function validateFundingExtractionPayload(
           code: 'quote_not_in_segment',
           fieldKey,
           message: `${fieldKey} evidence quote does not match segment ${anchor.segmentId}`,
-          retryable: true,
+          retryable: false,
         });
       }
     });

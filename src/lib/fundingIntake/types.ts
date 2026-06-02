@@ -10,6 +10,18 @@ export type FundingIntakeJobStatus =
   | 'failed'
   | 'canceled';
 export type FundingInputType = 'url' | 'text' | 'pdf' | 'json';
+export type FundingIntakeBatchStatus =
+  | 'processing'
+  | 'needs_review'
+  | 'completed'
+  | 'partially_failed'
+  | 'failed'
+  | 'canceled';
+export type FundingIntakeSourceStatus =
+  | 'pending'
+  | 'fetching'
+  | 'ready'
+  | 'failed';
 export type FundingDuplicateMatchType =
   | 'same_source_url'
   | 'exact_fingerprint'
@@ -123,6 +135,43 @@ export interface IntakeSubmitInput {
   operatorNotes?: string;
 }
 
+export interface IntakeSourceFile {
+  originalName: string;
+  mimeType: string;
+  size: number;
+  tempFilePath: string;
+  checksum: string;
+}
+
+export interface BatchIntakeSourceInput {
+  sourceKey: string;
+  inputType: FundingInputType;
+  sourceUrl?: string;
+  sourceText?: string;
+  sourceFile?: IntakeSourceFile;
+  sourceJsonText?: string;
+  sourceJsonFile?: {
+    originalName: string;
+    mimeType: string;
+    size: number;
+  };
+}
+
+export interface BatchIntakeJobInput {
+  operatorNotes?: string;
+  sources: BatchIntakeSourceInput[];
+  detailsSourceKey: string;
+  guidelinesSourceKey?: string;
+  templateSourceKey?: string;
+  autoCreateDraft?: boolean;
+  extractAll?: boolean;
+}
+
+export interface BatchIntakeCreateInput {
+  label?: string;
+  jobs: BatchIntakeJobInput[];
+}
+
 export interface IntakeOperator {
   userId: string;
   email: string;
@@ -132,12 +181,29 @@ export interface IntakeOperator {
 
 export interface IntakeJobSummary {
   id: string;
+  batch_id?: string | null;
   input_type: FundingInputType;
   source_url: string | null;
   status: FundingIntakeJobStatus;
   duplicate_status: FundingDuplicateStatus;
   linked_funding_call_id: string | null;
   linked_call_status?: FundingCallStatus | null;
+  processing_phase?: string | null;
+  created_at: Date;
+  updated_at: Date;
+  submitted_by: {
+    id: string;
+    email: string;
+    name: string | null;
+  } | null;
+}
+
+export interface IntakeBatchSummary {
+  id: string;
+  label: string | null;
+  status: FundingIntakeBatchStatus;
+  total_jobs: number;
+  counts: Record<FundingIntakeJobStatus, number>;
   created_at: Date;
   updated_at: Date;
   submitted_by: {

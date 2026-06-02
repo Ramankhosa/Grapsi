@@ -255,19 +255,29 @@ export async function recordStandaloneLLMUsage(input: StandaloneUsageLogInput): 
   })
 
   try {
-    const feature = input.featureCode
-      ? await prisma.feature.findUnique({
-          where: { code: input.featureCode as FeatureCode },
-          select: { id: true },
-        })
-      : null
+    const [feature, task] = await Promise.all([
+      input.featureCode
+        ? prisma.feature.findUnique({
+            where: { code: input.featureCode as FeatureCode },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+      input.taskCode
+        ? prisma.task.findUnique({
+            where: { code: input.taskCode as TaskCode },
+            select: { code: true },
+          })
+        : Promise.resolve(null),
+    ])
+    const unresolvedFeatureCode = input.featureCode && !feature ? String(input.featureCode) : null
+    const unresolvedTaskCode = input.taskCode && !task ? String(input.taskCode) : null
 
     await prisma.usageLog.create({
       data: {
         tenantId: input.tenantId,
         userId: input.userId || undefined,
         featureId: feature?.id || undefined,
-        taskCode: input.taskCode ? input.taskCode as TaskCode : undefined,
+        taskCode: task ? input.taskCode as TaskCode : undefined,
         modelClass: input.modelClass,
         apiCode: input.apiCode || undefined,
         inputTokens,
@@ -281,7 +291,11 @@ export async function recordStandaloneLLMUsage(input: StandaloneUsageLogInput): 
         meta: {
           ...(input.metadata ? JSON.parse(JSON.stringify(input.metadata)) : {}),
           operation: input.operation,
+          featureCode: input.featureCode || null,
+          taskCode: input.taskCode || null,
           stageCode: input.stageCode || null,
+          unresolvedFeatureCode,
+          unresolvedTaskCode,
           thoughtTokens,
           totalTokens: operation.totalTokens,
           cost: {
@@ -296,7 +310,7 @@ export async function recordStandaloneLLMUsage(input: StandaloneUsageLogInput): 
     })
   } catch (error: any) {
     if (error?.code === 'P2003') {
-      console.warn(`[LLMUsage] Skipping usage log for ${input.operation}: missing related task/feature row`)
+      console.warn(`[LLMUsage] Failed to write usage log for ${input.operation}: missing related row`, error)
     } else {
       console.warn(`[LLMUsage] Failed to write usage log for ${input.operation}:`, error)
     }

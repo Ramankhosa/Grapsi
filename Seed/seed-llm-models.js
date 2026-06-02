@@ -21,6 +21,49 @@ const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 
+const FUNDING_FEATURE_DEF = {
+  code: 'FUNDING_DISCOVERY',
+  name: 'Funding Discovery',
+  unit: 'calls'
+};
+
+const FUNDING_TASK_SEEDS = [
+  {
+    code: 'FUNDING_CALL_INGEST',
+    name: 'Funding Call Ingestion',
+    defaultStageCode: 'FUNDING_CALL_INGEST_TEXT'
+  },
+  {
+    code: 'FUNDING_CHAT',
+    name: 'AI Fund Finder Chat',
+    defaultStageCode: 'FUNDING_CHAT_NARRATIVE'
+  },
+  {
+    code: 'FUNDING_TEMPLATE_EXTRACT',
+    name: 'Funding Template Extraction',
+    defaultStageCode: 'FUNDING_TEMPLATE_EXTRACT_TEXT'
+  },
+  {
+    code: 'FUNDING_GUIDELINE_EXTRACT',
+    name: 'Funding Guideline Extraction',
+    defaultStageCode: 'FUNDING_GUIDELINE_EXTRACT_TEXT'
+  }
+];
+
+const FUNDING_TASK_ACCESS_BY_PLAN = {
+  FREE_PLAN: { allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+  PRO_PLAN: { allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
+  ENTERPRISE_PLAN: { allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' }
+};
+
+const MODEL_CLASS_SEEDS = [
+  { code: 'BASE_S', name: 'Base Small' },
+  { code: 'BASE_M', name: 'Base Medium' },
+  { code: 'PRO_M', name: 'Professional Medium' },
+  { code: 'PRO_L', name: 'Professional Large' },
+  { code: 'ADVANCED', name: 'Advanced' }
+];
+
 async function main() {
   console.log('[seed] Seeding LLM models and workflow stages...\n');
 
@@ -1381,6 +1424,47 @@ async function main() {
     }
   ];
 
+  const stageSeedByCode = Object.fromEntries(stageSeeds.map(stage => [stage.code, stage]));
+  for (const task of FUNDING_TASK_SEEDS) {
+    if (!stageSeedByCode[task.defaultStageCode]) {
+      throw new Error(`Funding task ${task.code} points to missing workflow stage ${task.defaultStageCode}`);
+    }
+  }
+
+  try {
+    const fundingFeature = await prisma.feature.upsert({
+      where: { code: FUNDING_FEATURE_DEF.code },
+      update: {
+        name: FUNDING_FEATURE_DEF.name,
+        unit: FUNDING_FEATURE_DEF.unit
+      },
+      create: FUNDING_FEATURE_DEF
+    });
+
+    for (const task of FUNDING_TASK_SEEDS) {
+      await prisma.task.upsert({
+        where: { code: task.code },
+        update: {
+          name: task.name,
+          linkedFeatureId: fundingFeature.id
+        },
+        create: {
+          code: task.code,
+          name: task.name,
+          linkedFeatureId: fundingFeature.id
+        }
+      });
+    }
+
+    console.log(`  - Funding feature/task bindings ready (${FUNDING_TASK_SEEDS.length} tasks)`);
+  } catch (error) {
+    if (error.code === 'P2021' || error.message.includes('does not exist')) {
+      console.log('  [warn] Feature/Task tables do not exist yet. Skipping funding task binding seeding.');
+    } else {
+      throw error;
+    }
+  }
+
   const stages = stageSeeds.map(({ tokenLimits, models, ...stage }) => ({
     ...stage,
     isActive: true
@@ -1447,6 +1531,24 @@ async function main() {
     return;
   }
 
+  const modelClassesByCode = {};
+  try {
+    for (const modelClass of MODEL_CLASS_SEEDS) {
+      const record = await prisma.lLMModelClass.upsert({
+        where: { code: modelClass.code },
+        update: { name: modelClass.name },
+        create: modelClass
+      });
+      modelClassesByCode[modelClass.code] = record;
+    }
+  } catch (error) {
+    if (error.code === 'P2021' || error.message.includes('does not exist')) {
+      console.log('  [warn] LLMModelClass table does not exist yet. Skipping model class seeding.');
+    } else {
+      throw error;
+    }
+  }
+
   // Get model IDs
   const modelsByCode = {};
   const allModels = await prisma.lLMModel.findMany();
@@ -1492,6 +1594,8 @@ async function main() {
 
       console.log(`  - Configuring ${plan.code}...`);
       let configuredCount = 0;
+      let taskConfiguredCount = 0;
+      let accessConfiguredCount = 0;
       
       for (const [stageCode, modelCode] of Object.entries(config)) {
         const stageId = stagesByCode[stageCode];
@@ -1537,7 +1641,76 @@ async function main() {
         });
         configuredCount++;
       }
-      console.log(`  - ${plan.code} configured (${configuredCount} stages)`);
+
+      const fundingAccess = FUNDING_TASK_ACCESS_BY_PLAN[plan.code];
+      for (const task of FUNDING_TASK_SEEDS) {
+        const defaultStage = stageSeedByCode[task.defaultStageCode];
+        const modelCode = defaultStage.models[plan.code];
+        const modelId = modelsByCode[modelCode];
+        const rawLimits = tokenLimits[task.defaultStageCode];
+        const limits = rawLimits
+          ? {
+              maxTokensIn: Math.max(rawLimits.maxTokensIn, MIN_STAGE_MAX_TOKENS_IN),
+              maxTokensOut: Math.max(rawLimits.maxTokensOut, MIN_STAGE_MAX_TOKENS_OUT),
+            }
+          : null;
+
+        if (!modelId) {
+          console.log(`    [warn] Model ${modelCode} not found for task ${task.code}, skipping task default`);
+          continue;
+        }
+
+        await prisma.planTaskModelConfig.upsert({
+          where: {
+            planId_taskCode: {
+              planId: plan.id,
+              taskCode: task.code
+            }
+          },
+          update: {
+            modelId,
+            maxTokensIn: limits ? limits.maxTokensIn : null,
+            maxTokensOut: limits ? limits.maxTokensOut : null,
+            isActive: true
+          },
+          create: {
+            planId: plan.id,
+            taskCode: task.code,
+            modelId,
+            maxTokensIn: limits ? limits.maxTokensIn : null,
+            maxTokensOut: limits ? limits.maxTokensOut : null,
+            isActive: true
+          }
+        });
+        taskConfiguredCount++;
+
+        const defaultClass = fundingAccess ? modelClassesByCode[fundingAccess.defaultClass] : null;
+        if (fundingAccess && defaultClass) {
+          await prisma.planLLMAccess.upsert({
+            where: {
+              planId_taskCode: {
+                planId: plan.id,
+                taskCode: task.code
+              }
+            },
+            update: {
+              allowedClasses: JSON.stringify(fundingAccess.allowedClasses),
+              defaultClassId: defaultClass.id
+            },
+            create: {
+              planId: plan.id,
+              taskCode: task.code,
+              allowedClasses: JSON.stringify(fundingAccess.allowedClasses),
+              defaultClassId: defaultClass.id
+            }
+          });
+          accessConfiguredCount++;
+        }
+      }
+
+      console.log(
+        `  - ${plan.code} configured (${configuredCount} stages, ${taskConfiguredCount} funding task defaults, ${accessConfiguredCount} funding access rules)`
+      );
     }
   } catch (error) {
     if (error.code === 'P2021' || error.message.includes('does not exist')) {
@@ -1551,6 +1724,7 @@ async function main() {
   console.log('\n[done] LLM model and workflow stage seeding complete.');
   console.log(`   - ${models.length} LLM models registered`);
   console.log(`   - ${stages.length} workflow stages`);
+  console.log(`   - ${FUNDING_TASK_SEEDS.length} funding task defaults aligned to current stages`);
   console.log(`   - ${plans.length} plans configured with PRODUCTION token limits`);
 }
 

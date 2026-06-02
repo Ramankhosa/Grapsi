@@ -177,6 +177,22 @@ enum FundingIntakeJobStatus {
   canceled
 }
 
+enum FundingIntakeBatchStatus {
+  processing
+  needs_review
+  completed
+  partially_failed
+  failed
+  canceled
+}
+
+enum FundingIntakeSourceStatus {
+  pending
+  fetching
+  ready
+  failed
+}
+
 enum FundingDuplicateStatus {
   none
   candidate_found
@@ -953,6 +969,7 @@ model FundingImportAsset {
 
 model FundingIntakeJob {
   id                     String                 @id @default(cuid())
+  batch_id               String?
   submitted_by_user_id   String
   linked_funding_call_id String?
   input_type             FundingInputType
@@ -960,6 +977,10 @@ model FundingIntakeJob {
   source_text_hash       String?
   source_file_path       String?
   operator_notes         String?
+  details_source_key     String?
+  guidelines_source_key  String?
+  template_source_key    String?
+  processing_phase       String?
   raw_text               String?
   normalized_text        String?
   fetch_metadata_json    Json?
@@ -968,17 +989,68 @@ model FundingIntakeJob {
   error_code             String?
   error_message          String?
   retry_count            Int                    @default(0)
+  attempt_count          Int                    @default(0)
+  locked_at              DateTime?
+  locked_by              String?
+  next_attempt_at        DateTime?
   started_at             DateTime?
   completed_at           DateTime?
   created_at             DateTime               @default(now())
   updated_at             DateTime               @updatedAt
+  batch                  FundingIntakeBatch?     @relation(fields: [batch_id], references: [id], onDelete: SetNull)
   linked_funding_call    FundingCall?           @relation("FundingCallIntakeJobs", fields: [linked_funding_call_id], references: [id], onDelete: SetNull)
+  sources                FundingIntakeJobSource[]
 
+  @@index([batch_id])
   @@index([submitted_by_user_id])
   @@index([status])
+  @@index([status, next_attempt_at])
+  @@index([locked_at])
   @@index([source_text_hash])
   @@index([linked_funding_call_id])
   @@map("funding_intake_jobs")
+}
+
+model FundingIntakeBatch {
+  id                     String                   @id @default(cuid())
+  submitted_by_user_id   String
+  label                  String?
+  status                 FundingIntakeBatchStatus @default(processing)
+  total_jobs             Int                      @default(0)
+  created_at             DateTime                 @default(now())
+  updated_at             DateTime                 @updatedAt
+  jobs                   FundingIntakeJob[]
+
+  @@index([submitted_by_user_id])
+  @@index([status])
+  @@index([created_at])
+  @@map("funding_intake_batches")
+}
+
+model FundingIntakeJobSource {
+  id                  String                    @id @default(cuid())
+  job_id              String
+  source_key          String
+  sequence_no         Int                       @default(0)
+  input_type          FundingInputType
+  source_url          String?
+  source_text_hash    String?
+  source_file_path    String?
+  raw_text            String?
+  normalized_text     String?
+  fetch_metadata_json Json?
+  status              FundingIntakeSourceStatus @default(pending)
+  error_code          String?
+  error_message       String?
+  created_at          DateTime                  @default(now())
+  updated_at          DateTime                  @updatedAt
+  job                 FundingIntakeJob          @relation(fields: [job_id], references: [id], onDelete: Cascade)
+
+  @@unique([job_id, source_key])
+  @@index([job_id, sequence_no])
+  @@index([status])
+  @@index([source_text_hash])
+  @@map("funding_intake_job_sources")
 }
 
 model FundingIntakeExtraction {

@@ -145,11 +145,14 @@ async function callExtractor(prompt: string, context?: FundingLlmRoutingContext 
     responseMimeType: 'application/json',
     temperature: 0,
     maxTokensOut: 16000,
+    promptCacheKey: `funding-intake:guidelines:${FUNDING_GUIDELINE_PROMPT_VERSION}`,
+    promptCacheRetention: '24h',
     skipFeaturePolicy: true,
     metadata: {
       purpose: 'funding_guideline_extract',
       extractorVersion: FUNDING_GUIDELINE_EXTRACTOR_VERSION,
       promptVersion: FUNDING_GUIDELINE_PROMPT_VERSION,
+      promptCacheKey: `funding-intake:guidelines:${FUNDING_GUIDELINE_PROMPT_VERSION}`,
     },
   });
 
