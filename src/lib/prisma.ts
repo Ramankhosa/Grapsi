@@ -1,4 +1,25 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
+import dotenv from 'dotenv'
+
 import { PrismaClient } from '@/lib/prisma-generated'
+
+function loadLocalDatabaseEnv() {
+  for (const filename of ['.env', '.env.local']) {
+    const envPath = path.join(process.cwd(), filename)
+
+    if (fs.existsSync(envPath)) {
+      const parsed = dotenv.parse(fs.readFileSync(envPath))
+
+      if (parsed.DATABASE_URL) {
+        process.env.DATABASE_URL = parsed.DATABASE_URL
+      }
+    }
+  }
+}
+
+loadLocalDatabaseEnv()
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined

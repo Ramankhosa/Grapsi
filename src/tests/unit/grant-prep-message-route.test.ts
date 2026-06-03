@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   resolveGrantPrepContext: vi.fn(),
   grantPrepMessageCreate: vi.fn(),
   grantPrepSessionUpdate: vi.fn(),
+  reserveServiceUsage: vi.fn(),
+  releaseReservedServiceUsage: vi.fn(),
+  trackServiceUsage: vi.fn(),
 }))
 
 vi.mock('@/lib/prisma', () => ({
@@ -44,6 +47,13 @@ vi.mock('@/lib/grantPrep/server', async () => {
     resolveGrantPrepContext: mocks.resolveGrantPrepContext,
   }
 })
+
+vi.mock('@/lib/service-usage-tracker', () => ({
+  reserveServiceUsage: mocks.reserveServiceUsage,
+  releaseReservedServiceUsage: mocks.releaseReservedServiceUsage,
+  trackServiceUsage: mocks.trackServiceUsage,
+  ServiceQuotaExceededError: class ServiceQuotaExceededError extends Error {},
+}))
 
 function makeGrantPrepSessionRecord() {
   const stageMapping = buildGrantPrepStageMapping(null)
@@ -126,6 +136,9 @@ describe('grant prep message route', () => {
       id: `${data.role}-message-1`,
       ...data,
     }))
+    mocks.reserveServiceUsage.mockResolvedValue({})
+    mocks.releaseReservedServiceUsage.mockResolvedValue(undefined)
+    mocks.trackServiceUsage.mockResolvedValue({})
   })
 
   it('returns option C when the marker only included A and B but prose included C', async () => {

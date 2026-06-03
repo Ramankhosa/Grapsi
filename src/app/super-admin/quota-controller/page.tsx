@@ -13,7 +13,6 @@ type FeatureCode =
   | 'PATENT_REVIEW'
   | 'IDEATION'
   | 'FUNDING_DISCOVERY'
-  | 'GRANT_PREP'
   | 'GRANT_DRAFTING'
 type PlanCode = 'FREE_PLAN' | 'PRO_PLAN' | 'ENTERPRISE_PLAN'
 
@@ -47,7 +46,6 @@ const FEATURE_LABELS: Record<FeatureCode, string> = {
   PATENT_REVIEW: 'Patent reviews',
   IDEATION: 'Ideation sessions',
   FUNDING_DISCOVERY: 'Funding discovery runs',
-  GRANT_PREP: 'Grant prep sessions',
   GRANT_DRAFTING: 'Grant drafting sessions',
 }
 

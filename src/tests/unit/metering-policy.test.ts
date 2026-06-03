@@ -94,7 +94,31 @@ describe('metering policy entitlement features', () => {
     expect(createReservationMock).not.toHaveBeenCalled()
   })
 
-  it('allows Grant Prep after checking quota when the entitlement includes the feature', async () => {
+  it('allows Grant Prep chat without checking quota when the entitlement includes the feature', async () => {
+    planFindFirstMock.mockResolvedValue({
+      id: 'plan-1',
+      code: 'PRO_PLAN',
+      planFeatures: [{ feature: { code: 'GRANT_PREP' } }],
+      planLLMAccess: [],
+      policyRules: [],
+    })
+    checkQuotaMock.mockResolvedValue({ allowed: false, remaining: { monthly: 0, daily: 0 } })
+
+    const policy = createPolicyService(defaultConfig)
+
+    const decision = await policy.evaluateAccess({
+      tenantId: 'tenant-1',
+      featureCode: 'GRANT_PREP',
+      taskCode: 'GRANT_PREP_CHAT',
+      userId: 'user-1',
+    })
+
+    expect(decision.allowed).toBe(true)
+    expect(decision.reservationId).toBe('reservation-1')
+    expect(checkQuotaMock).not.toHaveBeenCalled()
+  })
+
+  it('still checks quota for Grant Blueprint generation', async () => {
     planFindFirstMock.mockResolvedValue({
       id: 'plan-1',
       code: 'PRO_PLAN',
@@ -108,7 +132,7 @@ describe('metering policy entitlement features', () => {
     const decision = await policy.evaluateAccess({
       tenantId: 'tenant-1',
       featureCode: 'GRANT_PREP',
-      taskCode: 'GRANT_PREP_CHAT',
+      taskCode: 'GRANT_BLUEPRINT_GENERATE',
       userId: 'user-1',
     })
 

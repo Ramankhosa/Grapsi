@@ -5,7 +5,7 @@ import type { MeteringConfig, MeteringService, FeatureRequest, QuotaCheckResult,
 import { MeteringErrorUtils, MeteringError } from './errors'
 import { prisma } from '@/lib/prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER } from './cost-calculator'
-import { isPlanAgnosticFeature } from './plan-features'
+import { isFeatureQuotaExempt, isPlanAgnosticFeature } from './plan-features'
 
 function getCurrentPeriod(type: 'DAILY' | 'MONTHLY'): { key: string, start: Date, end: Date } {
   const now = new Date()
@@ -249,6 +249,10 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
     async checkQuota(request: FeatureRequest): Promise<QuotaCheckResult> {
       try {
+        if (isFeatureQuotaExempt(request.featureCode, request.taskCode)) {
+          return { allowed: true, remaining: { monthly: 999999, daily: 999999 } }
+        }
+
         // Get tenant's current active plan
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {

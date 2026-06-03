@@ -7,7 +7,7 @@ import { prisma } from '@/lib/prisma'
 import { getTrialQuotaStatus } from '@/lib/trial-plan-service'
 import { createMeteringService } from './metering'
 import { createReservationService } from './reservation'
-import { isPlanAgnosticFeature } from './plan-features'
+import { isFeatureQuotaExempt, isPlanAgnosticFeature } from './plan-features'
 
 const POLICY_LIMITS_CACHE_TTL_MS = 30_000
 
@@ -132,7 +132,7 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
         let quotaRemaining: any = { monthly: 999999, daily: 999999 }
 
         // 6. Check quota limits for every account type, including trials.
-        if (planFeature) {
+        if (planFeature && !isFeatureQuotaExempt(request.featureCode, request.taskCode)) {
           const quotaCheck = await this.checkQuota(request)
           if (!quotaCheck.allowed) {
             return {

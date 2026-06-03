@@ -89,6 +89,10 @@ function getCurrentPeriods() {
   }
 }
 
+function isCompletionQuotaExempt(serviceType: ServiceType): boolean {
+  return serviceType === 'GRANT_PREP'
+}
+
 /**
  * Calculate cost from tokens using model prices
  * Falls back to average pricing if modelClass not provided or not found
@@ -146,6 +150,15 @@ async function getPlanQuotaLimits(tenantId: string, serviceType: ServiceType, cl
   dailyTokenLimit: number | null
   monthlyTokenLimit: number | null
 }> {
+  if (isCompletionQuotaExempt(serviceType)) {
+    return {
+      dailyCompletionLimit: null,
+      monthlyCompletionLimit: null,
+      dailyTokenLimit: null,
+      monthlyTokenLimit: null
+    }
+  }
+
   const featureCodeMap: Record<ServiceType, string> = {
     PATENT_DRAFTING: 'PATENT_DRAFTING',
     NOVELTY_SEARCH: 'PRIOR_ART_SEARCH',
@@ -263,89 +276,95 @@ export async function reserveServiceUsage(params: {
     })
     if (existing) return existing
 
-    const userQuota = await tx.userServiceQuota.findUnique({
-      where: {
-        userId_serviceType: {
-          userId: params.userId,
-          serviceType: params.serviceType
-        }
-      }
-    })
+    const skipQuotaChecks = isCompletionQuotaExempt(params.serviceType)
 
-    if (userQuota) {
-      if (!userQuota.isEnabled) {
-        throw new ServiceQuotaExceededError('SERVICE_DISABLED', `${params.serviceType} is disabled for this user`)
-      }
-
-      const userWhere = { tenantId: params.tenantId, userId: params.userId, serviceType: params.serviceType }
-      const [dailyUserUsage, monthlyUserUsage] = await Promise.all([
-        countReservedUsage(tx, userWhere, 'completionDate', currentDay),
-        countReservedUsage(tx, userWhere, 'completionMonth', currentMonth)
-      ])
-      if (userQuota.dailyQuota !== null && dailyUserUsage >= userQuota.dailyQuota) {
-        throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `User daily quota exceeded for ${params.serviceType}`)
-      }
-      if (userQuota.monthlyQuota !== null && monthlyUserUsage >= userQuota.monthlyQuota) {
-        throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `User monthly quota exceeded for ${params.serviceType}`)
-      }
-    } else {
-      const memberships = await tx.teamMember.findMany({
-        where: { userId: params.userId, team: { isActive: true } },
-        include: {
-          team: {
-            include: {
-              serviceAccess: { where: { serviceType: params.serviceType } }
-            }
+    if (!skipQuotaChecks) {
+      const userQuota = await tx.userServiceQuota.findUnique({
+        where: {
+          userId_serviceType: {
+            userId: params.userId,
+            serviceType: params.serviceType
           }
         }
       })
-      const configuredTeams = memberships.filter(membership => membership.team.serviceAccess.length > 0)
 
-      if (configuredTeams.length > 0) {
-        let allowedByTeam = false
-        for (const membership of configuredTeams) {
-          const teamAccess = membership.team.serviceAccess[0]
-          if (!teamAccess.isEnabled) continue
-
-          const members = await tx.teamMember.findMany({
-            where: { teamId: membership.teamId },
-            select: { userId: true }
-          })
-          const teamWhere = {
-            tenantId: params.tenantId,
-            userId: { in: members.map(member => member.userId) },
-            serviceType: params.serviceType
-          }
-          const [dailyTeamUsage, monthlyTeamUsage] = await Promise.all([
-            countReservedUsage(tx, teamWhere, 'completionDate', currentDay),
-            countReservedUsage(tx, teamWhere, 'completionMonth', currentMonth)
-          ])
-          const withinDailyQuota = teamAccess.dailyQuota === null || dailyTeamUsage < teamAccess.dailyQuota
-          const withinMonthlyQuota = teamAccess.monthlyQuota === null || monthlyTeamUsage < teamAccess.monthlyQuota
-          if (withinDailyQuota && withinMonthlyQuota) {
-            allowedByTeam = true
-            break
-          }
+      if (userQuota) {
+        if (!userQuota.isEnabled) {
+          throw new ServiceQuotaExceededError('SERVICE_DISABLED', `${params.serviceType} is disabled for this user`)
         }
 
-        if (!allowedByTeam) {
-          throw new ServiceQuotaExceededError('TEAM_QUOTA_EXCEEDED', `Team quota exceeded or service disabled for ${params.serviceType}`)
+        const userWhere = { tenantId: params.tenantId, userId: params.userId, serviceType: params.serviceType }
+        const [dailyUserUsage, monthlyUserUsage] = await Promise.all([
+          countReservedUsage(tx, userWhere, 'completionDate', currentDay),
+          countReservedUsage(tx, userWhere, 'completionMonth', currentMonth)
+        ])
+        if (userQuota.dailyQuota !== null && dailyUserUsage >= userQuota.dailyQuota) {
+          throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `User daily quota exceeded for ${params.serviceType}`)
+        }
+        if (userQuota.monthlyQuota !== null && monthlyUserUsage >= userQuota.monthlyQuota) {
+          throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `User monthly quota exceeded for ${params.serviceType}`)
+        }
+      } else {
+        const memberships = await tx.teamMember.findMany({
+          where: { userId: params.userId, team: { isActive: true } },
+          include: {
+            team: {
+              include: {
+                serviceAccess: { where: { serviceType: params.serviceType } }
+              }
+            }
+          }
+        })
+        const configuredTeams = memberships.filter(membership => membership.team.serviceAccess.length > 0)
+
+        if (configuredTeams.length > 0) {
+          let allowedByTeam = false
+          for (const membership of configuredTeams) {
+            const teamAccess = membership.team.serviceAccess[0]
+            if (!teamAccess.isEnabled) continue
+
+            const members = await tx.teamMember.findMany({
+              where: { teamId: membership.teamId },
+              select: { userId: true }
+            })
+            const teamWhere = {
+              tenantId: params.tenantId,
+              userId: { in: members.map(member => member.userId) },
+              serviceType: params.serviceType
+            }
+            const [dailyTeamUsage, monthlyTeamUsage] = await Promise.all([
+              countReservedUsage(tx, teamWhere, 'completionDate', currentDay),
+              countReservedUsage(tx, teamWhere, 'completionMonth', currentMonth)
+            ])
+            const withinDailyQuota = teamAccess.dailyQuota === null || dailyTeamUsage < teamAccess.dailyQuota
+            const withinMonthlyQuota = teamAccess.monthlyQuota === null || monthlyTeamUsage < teamAccess.monthlyQuota
+            if (withinDailyQuota && withinMonthlyQuota) {
+              allowedByTeam = true
+              break
+            }
+          }
+
+          if (!allowedByTeam) {
+            throw new ServiceQuotaExceededError('TEAM_QUOTA_EXCEEDED', `Team quota exceeded or service disabled for ${params.serviceType}`)
+          }
         }
       }
     }
 
-    const limits = await getPlanQuotaLimits(params.tenantId, params.serviceType, tx)
-    const baseWhere = { tenantId: params.tenantId, serviceType: params.serviceType }
-    const [dailyUsage, monthlyUsage] = await Promise.all([
-      countReservedUsage(tx, baseWhere, 'completionDate', currentDay),
-      countReservedUsage(tx, baseWhere, 'completionMonth', currentMonth)
-    ])
+    if (!skipQuotaChecks) {
+      const limits = await getPlanQuotaLimits(params.tenantId, params.serviceType, tx)
+      const baseWhere = { tenantId: params.tenantId, serviceType: params.serviceType }
+      const [dailyUsage, monthlyUsage] = await Promise.all([
+        countReservedUsage(tx, baseWhere, 'completionDate', currentDay),
+        countReservedUsage(tx, baseWhere, 'completionMonth', currentMonth)
+      ])
 
-    if (limits.dailyCompletionLimit !== null && dailyUsage >= limits.dailyCompletionLimit) {
-      throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `Tenant daily quota exceeded for ${params.serviceType}`)
-    }
-    if (limits.monthlyCompletionLimit !== null && monthlyUsage >= limits.monthlyCompletionLimit) {
-      throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `Tenant monthly quota exceeded for ${params.serviceType}`)
+      if (limits.dailyCompletionLimit !== null && dailyUsage >= limits.dailyCompletionLimit) {
+        throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `Tenant daily quota exceeded for ${params.serviceType}`)
+      }
+      if (limits.monthlyCompletionLimit !== null && monthlyUsage >= limits.monthlyCompletionLimit) {
+        throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `Tenant monthly quota exceeded for ${params.serviceType}`)
+      }
     }
 
     return tx.serviceCompletionUsage.create({

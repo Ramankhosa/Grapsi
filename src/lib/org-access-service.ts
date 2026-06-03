@@ -117,8 +117,12 @@ const SERVICE_DEFAULT_ROLES: Record<ServiceType, UserRole[]> = {
   PATENT_REVIEW: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],  // Pro tier feature - role access same, quota-controlled
   IDEATION: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
   FUNDING_DISCOVERY: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
-  GRANT_PREP: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
+  GRANT_PREP: ['SUPER_ADMIN', 'OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
   GRANT_DRAFTING: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
+}
+
+function isServiceQuotaExempt(serviceType: ServiceType): boolean {
+  return serviceType === 'GRANT_PREP'
 }
 
 // ============================================================================
@@ -530,6 +534,7 @@ export async function checkServiceAccess(
   
   let overrideQuota: ServiceAccessResult['remainingQuota'] | undefined
   let overrideQuotaSource: ServiceAccessResult['quotaSource'] | undefined
+  const quotaExempt = isServiceQuotaExempt(serviceType)
 
   // 2. Check user-level quota/access (highest priority)
   const userQuota = user.serviceQuotas[0]
@@ -537,43 +542,49 @@ export async function checkServiceAccess(
     if (!userQuota.isEnabled) {
       return { allowed: false, reason: `${serviceType} is disabled for this user` }
     }
-    
-    const currentDay = new Date().toISOString().substring(0, 10)
-    const currentMonth = new Date().toISOString().substring(0, 7)
-    const [trackedDailyUsage, trackedMonthlyUsage] = await Promise.all([
-      prisma.serviceCompletionUsage.count({
-        where: { tenantId, userId, serviceType, isCompleted: true, completionDate: currentDay }
-      }),
-      prisma.serviceCompletionUsage.count({
-        where: { tenantId, userId, serviceType, isCompleted: true, completionMonth: currentMonth }
-      })
-    ])
-    const dailyUsage = Math.max(userQuota.currentDayUsage, trackedDailyUsage)
-    const monthlyUsage = Math.max(userQuota.currentMonthUsage, trackedMonthlyUsage)
 
-    if (userQuota.dailyQuota !== null && dailyUsage >= userQuota.dailyQuota) {
-      return { 
-        allowed: false, 
-        reason: `Daily quota exceeded for ${serviceType}`,
-        remainingQuota: { daily: 0, monthly: null },
-        quotaSource: 'user'
-      }
-    }
+    if (quotaExempt) {
+      overrideQuota = { daily: null, monthly: null }
+      overrideQuotaSource = 'user'
+    } else {
     
-    if (userQuota.monthlyQuota !== null && monthlyUsage >= userQuota.monthlyQuota) {
-      return { 
-        allowed: false, 
-        reason: `Monthly quota exceeded for ${serviceType}`,
-        remainingQuota: { daily: null, monthly: 0 },
-        quotaSource: 'user'
+      const currentDay = new Date().toISOString().substring(0, 10)
+      const currentMonth = new Date().toISOString().substring(0, 7)
+      const [trackedDailyUsage, trackedMonthlyUsage] = await Promise.all([
+        prisma.serviceCompletionUsage.count({
+          where: { tenantId, userId, serviceType, isCompleted: true, completionDate: currentDay }
+        }),
+        prisma.serviceCompletionUsage.count({
+          where: { tenantId, userId, serviceType, isCompleted: true, completionMonth: currentMonth }
+        })
+      ])
+      const dailyUsage = Math.max(userQuota.currentDayUsage, trackedDailyUsage)
+      const monthlyUsage = Math.max(userQuota.currentMonthUsage, trackedMonthlyUsage)
+
+      if (userQuota.dailyQuota !== null && dailyUsage >= userQuota.dailyQuota) {
+        return {
+          allowed: false,
+          reason: `Daily quota exceeded for ${serviceType}`,
+          remainingQuota: { daily: 0, monthly: null },
+          quotaSource: 'user'
+        }
       }
-    }
     
-    overrideQuota = {
-      daily: userQuota.dailyQuota !== null ? userQuota.dailyQuota - dailyUsage : null,
-      monthly: userQuota.monthlyQuota !== null ? userQuota.monthlyQuota - monthlyUsage : null
+      if (userQuota.monthlyQuota !== null && monthlyUsage >= userQuota.monthlyQuota) {
+        return {
+          allowed: false,
+          reason: `Monthly quota exceeded for ${serviceType}`,
+          remainingQuota: { daily: null, monthly: 0 },
+          quotaSource: 'user'
+        }
+      }
+
+      overrideQuota = {
+        daily: userQuota.dailyQuota !== null ? userQuota.dailyQuota - dailyUsage : null,
+        monthly: userQuota.monthlyQuota !== null ? userQuota.monthlyQuota - monthlyUsage : null
+      }
+      overrideQuotaSource = 'user'
     }
-    overrideQuotaSource = 'user'
   }
   
   // 3. Check team-level access
@@ -590,6 +601,11 @@ export async function checkServiceAccess(
 
       for (const { membership, teamAccess } of configuredTeams) {
         if (!teamAccess?.isEnabled) continue
+
+        if (quotaExempt) {
+          allowedTeamQuota = { daily: null, monthly: null }
+          break
+        }
 
         const memberRows = await prisma.teamMember.findMany({
           where: { teamId: membership.team.id },
@@ -672,12 +688,21 @@ export async function checkServiceAccess(
   )
   
   if (!planFeature) {
+    console.error(`[ENTITLEMENT DEBUG] serviceType=${serviceType} featureCode=${featureCode} tenantId=${tenantId} planCode=${tenantPlan.plan.code ?? tenantPlan.plan.id} planFeatureCodes=${JSON.stringify(tenantPlan.plan.planFeatures?.map(pf => pf.feature.code))} DATABASE_URL=${process.env.DATABASE_URL?.replace(/:[^@]+@/, ':***@')}`)
     return { allowed: false, reason: `${serviceType} is not included in the active entitlement` }
   }
   
   // Check tenant-level usage using unified service usage tracker
   // This enforces BOTH completion-based AND token-based quotas
   
+  if (quotaExempt) {
+    return {
+      allowed: true,
+      remainingQuota: overrideQuota || { daily: null, monthly: null },
+      quotaSource: overrideQuotaSource || 'tenant'
+    }
+  }
+
   // Special handling for PATENT_DRAFTING (uses legacy patent-based counting for completions)
   if (serviceType === 'PATENT_DRAFTING') {
     const patentQuota = await getPatentDraftingQuota(tenantId)
