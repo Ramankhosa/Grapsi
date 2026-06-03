@@ -197,6 +197,9 @@ export class FundingCallsService {
         researchAreas: fundingCall.researchAreas,
         applicantTypes: fundingCall.applicantTypes,
         grantTypes: fundingCall.grantTypes
+      }, undefined, {
+        taskType: 'RETRIEVAL_DOCUMENT',
+        title: fundingCall.schemeTitle,
       });
       
       if (embedding.length === 0) {
@@ -222,7 +225,9 @@ export class FundingCallsService {
   private async searchByVector(searchQuery: string, filters: SearchFilters = {}): Promise<SearchResult> {
     try {
       // Generate embedding for the search query
-      const { embedding, error } = await embeddingService.generateEmbedding(searchQuery);
+      const { embedding, error } = await embeddingService.generateEmbedding(searchQuery, undefined, {
+        taskType: 'RETRIEVAL_QUERY',
+      });
       
       if (error || embedding.length === 0) {
         return { 

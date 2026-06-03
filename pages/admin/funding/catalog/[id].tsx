@@ -27,7 +27,7 @@ type CatalogDetails = {
     metadata: Record<string, any> | null;
     published_at: string | null;
     published_by: string | null;
-    embedding_status: 'not_generated' | 'generated' | 'failed';
+    embedding_status: 'not_generated' | 'generated' | 'failed' | 'stale';
   };
   draftValues: Record<string, any>;
   publishReadiness: {

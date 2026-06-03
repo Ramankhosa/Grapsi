@@ -1716,6 +1716,27 @@ model RecommendationQueryEnrichmentCache {
   @@map("recommendation_query_enrichment_cache")
 }
 
+model RecommendationQueryEmbeddingCache {
+  id                    String                @id @default(cuid())
+  request_hash          String
+  input_mode            String
+  semantic_document     String
+  model                 String
+  embedding_version     String
+  task_type             String
+  output_dimensionality Int
+  embedding             Unsupported("vector")
+  hit_count             Int                   @default(1)
+  last_used_at          DateTime              @default(now())
+  created_at            DateTime              @default(now())
+  updated_at            DateTime              @updatedAt
+
+  @@unique([request_hash, model, embedding_version, task_type, output_dimensionality], map: "rec_query_embedding_cache_key")
+  @@index([embedding])
+  @@index([last_used_at], map: "idx_recommendation_query_embedding_cache_last_used_at")
+  @@map("recommendation_query_embedding_cache")
+}
+
 model ResearcherProfile {
   id                    String   @id @default(cuid())
   user_id               String   @unique

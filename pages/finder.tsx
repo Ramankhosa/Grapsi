@@ -895,16 +895,16 @@ export default function FinderPage() {
         <title>Funding Chat Finder | GrantGenie</title>
         <meta
           name="description"
-          content="Ask for funding opportunities in a traditional chatbot interface, apply structured filters, and get grounded results from the published funding catalog."
+          content="Ask for funding opportunities in a traditional chatbot interface, apply structured filters, and get results from the published funding catalog."
         />
       </Head>
 
       <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3">
-            <Link href="/app-selector" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 transition-colors hover:text-emerald-950">
+            <Link href="/dashboard" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 transition-colors hover:text-emerald-950">
               <FaArrowLeft />
-              Back to App Selector
+              Back to Dashboard
             </Link>
             <Link href="/profile/researcher" className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 transition-colors hover:border-emerald-300">
               Research Profile
@@ -933,7 +933,7 @@ export default function FinderPage() {
               </p>
             </div>
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900">
-              {activeRun ? `${activeRun.results.length} results in the current grounded run` : 'Start a conversation to search'}
+              {activeRun ? `${activeRun.results.length} results in the current search` : 'Start a conversation to search'}
             </div>
           </div>
         </div>

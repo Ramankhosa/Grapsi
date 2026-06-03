@@ -27,7 +27,16 @@ const nextConfig = {
     }
     return config
   },
+
+  async redirects() {
+    return [
+      {
+        source: '/app-selector',
+        destination: '/dashboard',
+        permanent: false,
+      },
+    ]
+  },
 }
 
 module.exports = nextConfig
-

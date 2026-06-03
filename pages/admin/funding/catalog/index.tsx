@@ -18,7 +18,7 @@ type CatalogCallSummary = {
   is_rolling: boolean;
   published_at: string | null;
   published_by: string | null;
-  embedding_status: 'not_generated' | 'generated' | 'failed';
+  embedding_status: 'not_generated' | 'generated' | 'failed' | 'stale';
 };
 
 type EmbeddingCoverage = {
@@ -26,6 +26,8 @@ type EmbeddingCoverage = {
   publishedActiveEmbedded: number;
   publishedActiveMissingEmbedding: number;
   publishedActiveFailedEmbedding: number;
+  publishedActiveStaleEmbedding: number;
+  currentEmbeddingVersion: string;
 };
 
 type EmbeddingHealth = {
@@ -221,7 +223,7 @@ export default function FundingCatalogAdminPage() {
             </div>
           </div>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-4">
+          <div className="mt-6 grid gap-4 md:grid-cols-5">
             <div className="rounded-xl bg-slate-50 p-4">
               <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Published Active</div>
               <div className="mt-2 text-2xl font-semibold text-slate-900">{coverage?.publishedActiveTotal || 0}</div>
@@ -237,6 +239,10 @@ export default function FundingCatalogAdminPage() {
             <div className="rounded-xl bg-slate-50 p-4">
               <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Failed Embeddings</div>
               <div className="mt-2 text-2xl font-semibold text-rose-700">{coverage?.publishedActiveFailedEmbedding || 0}</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Stale Vectors</div>
+              <div className="mt-2 text-2xl font-semibold text-orange-700">{coverage?.publishedActiveStaleEmbedding || 0}</div>
             </div>
           </div>
 
@@ -343,7 +349,9 @@ export default function FundingCatalogAdminPage() {
                             ? 'bg-emerald-100 text-emerald-800'
                             : call.embedding_status === 'failed'
                               ? 'bg-rose-100 text-rose-800'
-                              : 'bg-amber-100 text-amber-800'
+                              : call.embedding_status === 'stale'
+                                ? 'bg-orange-100 text-orange-800'
+                                : 'bg-amber-100 text-amber-800'
                         }`}>
                           {call.embedding_status.replace('_', ' ')}
                         </span>

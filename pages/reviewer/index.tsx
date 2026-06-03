@@ -114,12 +114,6 @@ export default function ReviewerDashboard() {
             </div>
             <div className="flex items-center gap-3">
               <Link 
-                href="/app-selector"
-                className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-              >
-                App Selector
-              </Link>
-              <Link 
                 href="/dashboard"
                 className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
               >

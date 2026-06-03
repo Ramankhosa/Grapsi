@@ -23,7 +23,7 @@ export interface FundingCatalogSummary {
   updated_at: Date | null;
   published_at: string | null;
   published_by: string | null;
-  embedding_status: 'not_generated' | 'generated' | 'failed';
+  embedding_status: 'not_generated' | 'generated' | 'failed' | 'stale';
 }
 
 export interface PublishReadiness {
@@ -36,6 +36,8 @@ export interface FundingEmbeddingCoverageSummary {
   publishedActiveEmbedded: number;
   publishedActiveMissingEmbedding: number;
   publishedActiveFailedEmbedding: number;
+  publishedActiveStaleEmbedding: number;
+  currentEmbeddingVersion: string;
 }
 
 export interface FundingEmbeddingBackfillResult {
@@ -46,6 +48,8 @@ export interface FundingEmbeddingBackfillResult {
 }
 
 const embeddingService = new EmbeddingService();
+const FUNDING_CALL_EMBEDDING_TASK_TYPE = 'RETRIEVAL_DOCUMENT' as const;
+const FUNDING_CALL_EMBEDDING_VERSION_PREFIX = 'funding-call-v2';
 
 const SEARCHABLE_DRAFT_KEYS: Array<keyof FundingDraftValues> = [
   'agency_name',
@@ -182,15 +186,49 @@ function buildSearchableDocument(values: FundingDraftValues): string {
     .join('\n');
 }
 
-async function generateEmbedding(values: FundingDraftValues): Promise<number[]> {
+function getFundingCallEmbeddingVersion() {
+  const health = embeddingService.getHealth();
+  return `${FUNDING_CALL_EMBEDDING_VERSION_PREFIX}:${health.modelName}:${FUNDING_CALL_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`;
+}
+
+function isCurrentFundingCallEmbedding(metadata: Prisma.JsonValue | null | undefined, hasEmbedding: boolean) {
+  if (!hasEmbedding) {
+    return false;
+  }
+  const current = getFundingCallEmbeddingVersion();
+  const stored = asMetadata(metadata);
+  return stored.embedding_status === 'generated' && stored.embedding_version === current;
+}
+
+async function generateEmbedding(values: FundingDraftValues): Promise<{
+  embedding: number[];
+  version: string;
+  modelName: string;
+  outputDimensionality: number;
+  taskType: typeof FUNDING_CALL_EMBEDDING_TASK_TYPE;
+}> {
   const searchableDocument = buildSearchableDocument(values);
-  const { embedding, error } = await embeddingService.generateEmbedding(searchableDocument);
+  const health = embeddingService.getHealth();
+  const { embedding, error, modelName, outputDimensionality } = await embeddingService.generateEmbedding(
+    searchableDocument,
+    undefined,
+    {
+      taskType: FUNDING_CALL_EMBEDDING_TASK_TYPE,
+      title: [values.scheme_title, values.agency_name].filter(Boolean).join(' - '),
+    }
+  );
 
   if (error || embedding.length === 0) {
     throw new Error(error || 'Could not generate embedding for funding call');
   }
 
-  return embedding;
+  return {
+    embedding,
+    version: getFundingCallEmbeddingVersion(),
+    modelName: modelName || health.modelName,
+    outputDimensionality: outputDimensionality || health.outputDimensionality,
+    taskType: FUNDING_CALL_EMBEDDING_TASK_TYPE,
+  };
 }
 
 async function getEmbeddingPresence(ids: string[]): Promise<Map<string, boolean>> {
@@ -212,6 +250,12 @@ async function getEmbeddingPresence(ids: string[]): Promise<Map<string, boolean>
 function getEmbeddingStatus(call: { metadata: Prisma.JsonValue | null; id: string }, hasEmbedding: boolean) {
   const metadata = asMetadata(call.metadata);
   const storedStatus = metadata.embedding_status;
+  if (!hasEmbedding) {
+    return storedStatus === 'failed' ? 'failed' : 'not_generated';
+  }
+  if (hasEmbedding && !isCurrentFundingCallEmbedding(call.metadata, hasEmbedding)) {
+    return 'stale';
+  }
   if (storedStatus === 'generated' || storedStatus === 'failed' || storedStatus === 'not_generated') {
     return storedStatus;
   }
@@ -315,12 +359,14 @@ export class FundingCatalogService {
   }
 
   async getEmbeddingCoverageSummary(): Promise<FundingEmbeddingCoverageSummary> {
+    const currentEmbeddingVersion = getFundingCallEmbeddingVersion();
     const rows = await prisma.$queryRaw<
       Array<{
         publishedActiveTotal: bigint | number;
         publishedActiveEmbedded: bigint | number;
         publishedActiveMissingEmbedding: bigint | number;
         publishedActiveFailedEmbedding: bigint | number;
+        publishedActiveStaleEmbedding: bigint | number;
       }>
     >(PrismaNamespace.sql`
       SELECT
@@ -332,6 +378,8 @@ export class FundingCatalogService {
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
             AND embedding IS NOT NULL
+            AND COALESCE(metadata ->> 'embedding_status', '') = 'generated'
+            AND COALESCE(metadata ->> 'embedding_version', '') = ${currentEmbeddingVersion}
         ) AS "publishedActiveEmbedded",
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
@@ -342,7 +390,16 @@ export class FundingCatalogService {
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
             AND COALESCE(metadata ->> 'embedding_status', '') = 'failed'
-        ) AS "publishedActiveFailedEmbedding"
+        ) AS "publishedActiveFailedEmbedding",
+        COUNT(*) FILTER (
+          WHERE catalog_status = 'PUBLISHED'
+            AND COALESCE(is_active, true) = true
+            AND embedding IS NOT NULL
+            AND (
+              COALESCE(metadata ->> 'embedding_status', '') <> 'generated'
+              OR COALESCE(metadata ->> 'embedding_version', '') <> ${currentEmbeddingVersion}
+            )
+        ) AS "publishedActiveStaleEmbedding"
       FROM funding_calls
     `);
 
@@ -352,6 +409,8 @@ export class FundingCatalogService {
       publishedActiveEmbedded: toCount(row?.publishedActiveEmbedded),
       publishedActiveMissingEmbedding: toCount(row?.publishedActiveMissingEmbedding),
       publishedActiveFailedEmbedding: toCount(row?.publishedActiveFailedEmbedding),
+      publishedActiveStaleEmbedding: toCount(row?.publishedActiveStaleEmbedding),
+      currentEmbeddingVersion,
     };
   }
 
@@ -400,6 +459,7 @@ export class FundingCatalogService {
   }
 
   async backfillPublishedEmbeddings(limit = 25): Promise<FundingEmbeddingBackfillResult> {
+    const currentEmbeddingVersion = getFundingCallEmbeddingVersion();
     const candidates = await prisma.$queryRaw<Array<{ id: string }>>(
       PrismaNamespace.sql`
         SELECT id::text AS id
@@ -409,6 +469,7 @@ export class FundingCatalogService {
           AND (
             embedding IS NULL
             OR COALESCE(metadata ->> 'embedding_status', '') = 'failed'
+            OR COALESCE(metadata ->> 'embedding_version', '') <> ${currentEmbeddingVersion}
           )
         ORDER BY updated_at DESC
         LIMIT ${Math.max(1, Math.min(limit, 100))}
@@ -436,10 +497,14 @@ export class FundingCatalogService {
       const draftValues = buildDraftValuesFromCall(current);
 
       try {
-        const embedding = await generateEmbedding(draftValues);
+        const embeddingResult = await generateEmbedding(draftValues);
         const now = new Date().toISOString();
         const metadata = buildCatalogMetadata(current.metadata, {
           embedding_status: 'generated',
+          embedding_version: embeddingResult.version,
+          embedding_model: embeddingResult.modelName,
+          embedding_dimensions: embeddingResult.outputDimensionality,
+          embedding_task_type: embeddingResult.taskType,
           embedding_updated_at: now,
           embedding_error: null,
         });
@@ -452,7 +517,7 @@ export class FundingCatalogService {
             },
           });
 
-          await updateStoredEmbedding(tx, current.id, embedding);
+          await updateStoredEmbedding(tx, current.id, embeddingResult.embedding);
         });
 
         result.succeeded += 1;
@@ -551,10 +616,10 @@ export class FundingCatalogService {
       Object.prototype.hasOwnProperty.call(input, key)
     );
 
-    let embedding: number[] | null = null;
+    let embeddingResult: Awaited<ReturnType<typeof generateEmbedding>> | null = null;
     if (current.catalog_status === 'PUBLISHED' && Boolean(current.is_active) && searchableFieldsChanged) {
       try {
-        embedding = await generateEmbedding(nextDraftValues);
+        embeddingResult = await generateEmbedding(nextDraftValues);
       } catch (error) {
         const metadata = buildCatalogMetadata(current.metadata, {
           embedding_status: 'failed',
@@ -577,9 +642,13 @@ export class FundingCatalogService {
     const updateData = buildCallWriteData(current, nextDraftValues, {
       last_catalog_update_by: operator.email,
       last_catalog_update_at: now,
-      ...(embedding
+      ...(embeddingResult
         ? {
             embedding_status: 'generated',
+            embedding_version: embeddingResult.version,
+            embedding_model: embeddingResult.modelName,
+            embedding_dimensions: embeddingResult.outputDimensionality,
+            embedding_task_type: embeddingResult.taskType,
             embedding_updated_at: now,
             embedding_error: null,
           }
@@ -592,8 +661,8 @@ export class FundingCatalogService {
         data: updateData,
       });
 
-      if (embedding) {
-        await updateStoredEmbedding(tx, fundingCallId, embedding);
+      if (embeddingResult) {
+        await updateStoredEmbedding(tx, fundingCallId, embeddingResult.embedding);
       }
     });
 
@@ -619,9 +688,9 @@ export class FundingCatalogService {
       };
     }
 
-    let embedding: number[];
+    let embeddingResult: Awaited<ReturnType<typeof generateEmbedding>>;
     try {
-      embedding = await generateEmbedding(draftValues);
+      embeddingResult = await generateEmbedding(draftValues);
     } catch (error) {
       const metadata = buildCatalogMetadata(current.metadata, {
         embedding_status: 'failed',
@@ -647,6 +716,10 @@ export class FundingCatalogService {
         published_by: operator.email,
         published_at: now,
         embedding_status: 'generated',
+        embedding_version: embeddingResult.version,
+        embedding_model: embeddingResult.modelName,
+        embedding_dimensions: embeddingResult.outputDimensionality,
+        embedding_task_type: embeddingResult.taskType,
         embedding_updated_at: now,
         embedding_error: null,
         last_catalog_update_by: operator.email,
@@ -667,7 +740,7 @@ export class FundingCatalogService {
         data: updateData,
       });
 
-      await updateStoredEmbedding(tx, fundingCallId, embedding);
+      await updateStoredEmbedding(tx, fundingCallId, embeddingResult.embedding);
     });
 
     return {

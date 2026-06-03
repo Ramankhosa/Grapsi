@@ -244,7 +244,13 @@ export async function reserveServiceUsage(params: {
   const { currentDay, currentMonth } = getCurrentPeriods()
 
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`service-usage:${params.tenantId}:${params.serviceType}`}))`
+    await tx.$queryRaw`
+      WITH lock AS (
+        SELECT pg_advisory_xact_lock(hashtext(${`service-usage:${params.tenantId}:${params.serviceType}`}))
+      )
+      SELECT 1::int AS locked
+      FROM lock
+    `
 
     const existing = await tx.serviceCompletionUsage.findUnique({
       where: {

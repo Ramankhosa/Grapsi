@@ -115,10 +115,10 @@ export function describeStrictRecoverySentence(
   const restrictiveFilters = describeStrictRecoveryFilters(filters, recovery);
 
   if (restrictiveFilters.length === 0) {
-    return 'The last grounded search found no matches with the current filters. Retry without these filters to broaden the search.';
+    return 'The last search found no matches with the current filters. Retry without these filters to broaden the search.';
   }
 
-  return `The last grounded search found no matches with these filters: ${restrictiveFilters.join('; ')}. Retry without these filters to broaden the search.`;
+  return `The last search found no matches with these filters: ${restrictiveFilters.join('; ')}. Retry without these filters to broaden the search.`;
 }
 
 export function buildRetryWithoutFiltersRequest(

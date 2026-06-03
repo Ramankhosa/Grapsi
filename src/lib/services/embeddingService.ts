@@ -7,6 +7,8 @@ import {
 interface EmbeddingResponse {
   embedding: number[];
   error?: string;
+  modelName?: string;
+  outputDimensionality?: number;
 }
 
 export interface EmbeddingUsageContext {
@@ -27,6 +29,21 @@ export interface EmbeddingServiceHealth {
   nextRetryAt: string | null;
   modelName: string;
   outputDimensionality: number;
+}
+
+export type EmbeddingTaskType =
+  | 'TASK_TYPE_UNSPECIFIED'
+  | 'RETRIEVAL_QUERY'
+  | 'RETRIEVAL_DOCUMENT'
+  | 'SEMANTIC_SIMILARITY'
+  | 'CLASSIFICATION'
+  | 'CLUSTERING';
+
+export interface EmbeddingGenerationOptions {
+  taskType?: EmbeddingTaskType;
+  title?: string | null;
+  modelName?: string;
+  outputDimensionality?: number;
 }
 
 type EmbeddingCircuitState = {
@@ -123,7 +140,11 @@ export class EmbeddingService {
    * @param text - The text to generate embeddings for
    * @returns A promise resolving to the embedding vector
    */
-  async generateEmbedding(text: string, usageContext?: EmbeddingUsageContext): Promise<EmbeddingResponse> {
+  async generateEmbedding(
+    text: string,
+    usageContext?: EmbeddingUsageContext,
+    options: EmbeddingGenerationOptions = {}
+  ): Promise<EmbeddingResponse> {
     if (!this.apiKey) {
       return { 
         embedding: [], 
@@ -138,14 +159,21 @@ export class EmbeddingService {
       };
     }
     
+    const modelName = options.modelName || this.modelName;
+    const outputDimensionality = options.outputDimensionality || this.outputDimensionality;
+    const taskType = options.taskType || 'TASK_TYPE_UNSPECIFIED';
+    const title = taskType === 'RETRIEVAL_DOCUMENT' ? normalizeTitle(options.title) : '';
+
     try {
       const response = await axios.post(
-        `${this.apiUrl}/${this.modelName}:embedContent`,
+        `${this.apiUrl}/${modelName}:embedContent`,
         {
           content: {
             parts: [{ text }],
           },
-          outputDimensionality: this.outputDimensionality,
+          ...(taskType !== 'TASK_TYPE_UNSPECIFIED' ? { taskType } : {}),
+          ...(title ? { title } : {}),
+          outputDimensionality,
         },
         {
           headers: {
@@ -178,21 +206,22 @@ export class EmbeddingService {
           taskCode: usageContext.taskCode || 'FUNDING_CHAT',
           operation: usageContext.operation || 'embedding',
           stageCode: usageContext.stageCode || 'EMBEDDING',
-          modelClass: this.modelName,
+          modelClass: modelName,
           inputTokens: estimateTokensFromText(text),
           outputTokens: 0,
           thoughtTokens: 0,
           metadata: {
             module: 'funding',
             action: usageContext.operation || 'embedding',
-            outputDimensionality: this.outputDimensionality,
+            embeddingTaskType: taskType,
+            outputDimensionality,
             textLength: text.length,
             ...usageContext.metadata,
           },
         });
       }
       
-      return { embedding };
+      return { embedding, modelName, outputDimensionality };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.registerFailure(message);
@@ -210,8 +239,12 @@ export class EmbeddingService {
    * @param texts - Array of texts to generate embeddings for
    * @returns A promise resolving to an array of embedding vectors
    */
-  async generateBatchEmbeddings(texts: string[], usageContext?: EmbeddingUsageContext): Promise<EmbeddingResponse[]> {
-    return Promise.all(texts.map(text => this.generateEmbedding(text, usageContext)));
+  async generateBatchEmbeddings(
+    texts: string[],
+    usageContext?: EmbeddingUsageContext,
+    options: EmbeddingGenerationOptions = {}
+  ): Promise<EmbeddingResponse[]> {
+    return Promise.all(texts.map(text => this.generateEmbedding(text, usageContext, options)));
   }
   
   /**
@@ -220,7 +253,11 @@ export class EmbeddingService {
    * @param fields - Object containing different text fields to embed
    * @returns A promise resolving to the combined embedding
    */
-  async generateFieldEmbeddings(fields: Record<string, string | string[]>, usageContext?: EmbeddingUsageContext): Promise<EmbeddingResponse> {
+  async generateFieldEmbeddings(
+    fields: Record<string, string | string[]>,
+    usageContext?: EmbeddingUsageContext,
+    options: EmbeddingGenerationOptions = {}
+  ): Promise<EmbeddingResponse> {
     // Concatenate fields into a single text with field markers
     let combinedText = '';
     
@@ -232,6 +269,10 @@ export class EmbeddingService {
       }
     }
     
-    return this.generateEmbedding(combinedText, usageContext);
+    return this.generateEmbedding(combinedText, usageContext, options);
   }
 } 
+
+function normalizeTitle(value: string | null | undefined) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 256);
+}

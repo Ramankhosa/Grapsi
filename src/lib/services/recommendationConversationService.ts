@@ -74,6 +74,19 @@ import {
   REGION_ALIASES,
   SPONSOR_TYPE_ALIASES,
 } from '../recommendations/constants';
+import {
+  applyArrayFilterOperation,
+  buildCountryRemovalTerms,
+  clearCountryFiltersForValues,
+  compactResearchPhraseSignals,
+  extractResearchPhraseSignals,
+  getLexiconRemovalTerms,
+  hasExplicitCountryRoleCue,
+  isBroadResearchSearch,
+  normalizeDemonymCountry,
+  resolveCountryRoleFromMessage,
+  resolvePhraseFilterOperation,
+} from '../recommendations/researchPhraseLexicon';
 import { recommendationSearchService } from './recommendationSearchService';
 import { buildRecommendationPreferenceSnapshot } from './researcherProfileService';
 
@@ -406,16 +419,238 @@ function normalizeListMatch(message: string, aliases: Record<string, string>, al
   return Array.from(values);
 }
 
+function messageHasExplicitResearchGrantIntent(normalizedMessage: string) {
+  return /\bresearch\s+grants?\b/.test(normalizedMessage) || /\bproject\s+grants?\b/.test(normalizedMessage);
+}
+
+function normalizeFundingKindMentions(message: string) {
+  return extractResearchPhraseSignals(message).fundingKinds;
+}
+
+function sanitizeFundingKindsForMessage(values: string[], message?: string) {
+  const uniqueValues = Array.from(new Set(values));
+  const normalized = normalizeKey(message || '');
+  const hasSpecificGrantType = uniqueValues.some((value) => value !== 'Research Grant');
+
+  if (!normalized || !hasSpecificGrantType || !uniqueValues.includes('Research Grant')) {
+    return uniqueValues;
+  }
+
+  return messageHasExplicitResearchGrantIntent(normalized)
+    ? uniqueValues
+    : uniqueValues.filter((value) => value !== 'Research Grant');
+}
+
+function cleanPaperMetadataText(value: string, maxLength: number) {
+  return normalizeWhitespace(value.replace(/^["'`]+|["'`]+$/g, '')).slice(0, maxLength);
+}
+
+function isPaperInstructionLine(line: string) {
+  const normalized = normalizeKey(line);
+  return (
+    !normalized ||
+    /^(find|show|search|recommend|look for|looking for|i need|need|please)\b/.test(normalized) ||
+    /\b(this paper|this article|my paper|my article|following paper|following article|based on)\b/.test(normalized)
+  );
+}
+
+function splitKeywordText(value: string) {
+  return value
+    .split(/[\n,;]+/)
+    .map((item) => cleanPaperMetadataText(item, 64))
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function coercePaperMetadata(rawValue: unknown): { title: string; abstract: string; keywords: string[] } | null {
+  const value = rawValue && typeof rawValue === 'object' ? (rawValue as Record<string, unknown>) : null;
+  if (!value) {
+    return null;
+  }
+
+  const title = typeof value.title === 'string' ? cleanPaperMetadataText(value.title, 300) : '';
+  const abstract = typeof value.abstract === 'string' ? cleanPaperMetadataText(value.abstract, 10_000) : '';
+  const keywords = Array.isArray(value.keywords)
+    ? value.keywords.map((item) => cleanPaperMetadataText(String(item || ''), 64)).filter(Boolean).slice(0, 20)
+    : [];
+
+  return title || abstract || keywords.length > 0 ? { title, abstract, keywords } : null;
+}
+
+function hasFundingSearchIntent(message: string) {
+  const normalized = normalizeKey(message);
+  return /\b(find|show|search|recommend|give|looking|need)\b/.test(normalized) ||
+    /\b(funding|funding option|funding options|grant|grants|call|calls|opportunit)/.test(normalized);
+}
+
+function extractQuotedPaperTitle(message: string) {
+  if (!hasFundingSearchIntent(message)) {
+    return '';
+  }
+
+  const quotedSegments = Array.from(message.matchAll(/["“”]([^"“”]{10,300})["“”]/g))
+    .map((match) => cleanPaperMetadataText(match[1] || '', 300))
+    .filter(Boolean);
+
+  const best = quotedSegments
+    .sort((left, right) => right.length - left.length)
+    .find((segment) => normalizeKey(segment).split(/\s+/).filter(Boolean).length >= 4);
+
+  return best || '';
+}
+
+function extractPastedPaperMetadata(message: string): { title: string; abstract: string; keywords: string[] } | null {
+  const text = message.replace(/\r\n?/g, '\n');
+  const labelPattern = /(^|\n)\s*((?:paper|article|manuscript)\s+title|title|abstract|summary|keywords?)\s*[:\-]\s*/gi;
+  const matches = Array.from(text.matchAll(labelPattern));
+  if (matches.length === 0) {
+    const quotedTitle = extractQuotedPaperTitle(message);
+    return quotedTitle ? { title: quotedTitle, abstract: '', keywords: [] } : null;
+  }
+
+  let title = '';
+  let abstract = '';
+  let keywords: string[] = [];
+  let firstAbstractIndex = -1;
+
+  matches.forEach((match, index) => {
+    const rawLabel = normalizeKey(match[2] || '');
+    const contentStart = (match.index || 0) + match[0].length;
+    const contentEnd = index + 1 < matches.length ? (matches[index + 1].index || text.length) : text.length;
+    const rawContent = text.slice(contentStart, contentEnd).trim();
+
+    if (rawLabel.includes('title')) {
+      const titleLine = rawContent
+        .split('\n')
+        .map((line) => cleanPaperMetadataText(line, 300))
+        .find((line) => line && !isPaperInstructionLine(line));
+      if (titleLine) {
+        title = titleLine;
+      }
+      return;
+    }
+
+    if (rawLabel === 'abstract' || rawLabel === 'summary') {
+      if (firstAbstractIndex < 0) {
+        firstAbstractIndex = match.index || 0;
+      }
+      const cleanedAbstract = cleanPaperMetadataText(rawContent, 10_000);
+      if (cleanedAbstract) {
+        abstract = cleanedAbstract;
+      }
+      return;
+    }
+
+    if (rawLabel.startsWith('keyword')) {
+      keywords = splitKeywordText(rawContent);
+    }
+  });
+
+  if (!title && firstAbstractIndex > 0) {
+    const inferredTitle = text
+      .slice(0, firstAbstractIndex)
+      .split('\n')
+      .map((line) => cleanPaperMetadataText(line, 300))
+      .filter((line) => line && !isPaperInstructionLine(line) && !/^(title|paper title|article title)\s*[:\-]/i.test(line))
+      .pop();
+    if (inferredTitle && inferredTitle.length >= 10) {
+      title = inferredTitle;
+    }
+  }
+
+  return title || abstract || keywords.length > 0 ? { title, abstract, keywords } : null;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function extractCountryMentions(message: string) {
   const words = normalizeWhitespace(message).split(/\s+/).map((value) => value.trim()).filter(Boolean);
   const matches = new Set<string>();
   for (let size = 4; size >= 1; size -= 1) {
     for (let index = 0; index <= words.length - size; index += 1) {
-      const normalized = normalizeCountryInput(words.slice(index, index + size).join(' '), { allowIsoCodes: false });
+      const phrase = words.slice(index, index + size).join(' ');
+      const normalized =
+        normalizeCountryInput(phrase, { allowIsoCodes: false }) ||
+        normalizeDemonymCountry(phrase);
       if (normalized) matches.add(normalized);
     }
   }
   return Array.from(matches);
+}
+
+function resolveCountryFilterKey(message: string): 'eligibleCountries' | 'hostCountries' | 'funderCountries' {
+  return resolveCountryRoleFromMessage(message);
+}
+
+function hasInstitutionCue(normalizedMessage: string) {
+  return /\b(institution|institutional|university|universities|college|academic|academia|research institute|research institution|hospital|clinic|ngo|nonprofit|non profit|non-profit|startup|start up|company|corporate|individual|consortium)\b/.test(normalizedMessage);
+}
+
+function hasSponsorCue(normalizedMessage: string) {
+  return (
+    /\b(sponsor|sponsors|sponsored|funder|funders|funding from|funded by|agency|agencies|grantmaker|grantmakers)\b/.test(normalizedMessage) ||
+    /\b(government|gov|foundation|corporate|company|multilateral|philanthropic|philanthropy)\s+(sponsor|sponsors|funder|funders|funding|agency|agencies|grants?|grantmaker|grantmakers)\b/.test(normalizedMessage)
+  );
+}
+
+function removeTermsFromText(text: string, terms: string[]) {
+  return terms.reduce((current, term) => {
+    const normalizedTerm = normalizeWhitespace(term);
+    if (!normalizedTerm) {
+      return current;
+    }
+    return current.replace(new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, 'gi'), ' ');
+  }, text);
+}
+
+function buildAliasRemovalTerms(aliases: Record<string, string>) {
+  return Array.from(
+    new Set(
+      [
+        ...Object.keys(aliases),
+        ...Object.values(aliases),
+        ...Object.keys(aliases).map((value) => value.endsWith('s') ? value : `${value}s`),
+      ].map((value) => normalizeWhitespace(value)).filter(Boolean)
+    )
+  );
+}
+
+function deriveResearchAreaFromMessage(message: string) {
+  let cleaned = normalizeWhitespace(message);
+  if (!cleaned) {
+    return '';
+  }
+
+  cleaned = cleaned.replace(/^(please\s+)?(find|show|search|look for|looking for|i need|need)\s+/i, ' ');
+  cleaned = cleaned.replace(
+    /\b(funding opportunities?|opportunities?|calls?|research grants?|project grants?|grants?|fellowships?|scholarships?|travel grants?|conference grants?|financial support|funding options?|grant funding|research funding|funding)\b/gi,
+    ' '
+  );
+  cleaned = cleaned.replace(
+    /\b(open to|eligible for|eligible to|for researchers?|for students?|for universities?|for institutions?|based in|located in|hosted in|taking place in|funding from|funded by|sponsored by|from|deadline soon|closing soon|rolling only|always open|no deadline)\b/gi,
+    ' '
+  );
+  const countries = extractCountryMentions(message);
+  cleaned = removeTermsFromText(cleaned, buildCountryRemovalTerms(message, countries));
+  // Career-stage terms (e.g. "PhD", "postdoc") are unlikely to be research topics, so they are safe to strip.
+  // Institution and sponsor terms are intentionally NOT stripped here: many of them ("foundation", "government",
+  // "corporate", "hospital", "startup", "individual") double as legitimate research-topic words, and removing them
+  // corrupts the derived query. The institution/sponsor filters are still detected separately by the heuristics.
+  cleaned = removeTermsFromText(cleaned, buildAliasRemovalTerms(CAREER_STAGE_ALIASES));
+  cleaned = removeTermsFromText(cleaned, getLexiconRemovalTerms());
+  cleaned = cleaned.replace(
+    /\b(researchers?|institutions?|universities|university|colleges?|students?|applicants?|countries?|country|eligible|only|just|any|add|remove|exclude|without|not|no|in|at|for|to|by|with|and)\b/gi,
+    ' '
+  );
+  cleaned = normalizeWhitespace(cleaned.replace(/[(),.;:]+/g, ' '));
+
+  if (new Set(['ai', 'ml', 'nlp', 'cv', 'llm', 'ar', 'vr', 'xr', 'ui', 'ux']).has(normalizeKey(cleaned))) {
+    return cleaned;
+  }
+
+  return cleaned.length >= 3 ? cleaned : normalizeWhitespace(message);
 }
 
 function isFreshSearchMessage(message: string, hasLatestRun: boolean) {
@@ -463,20 +698,51 @@ function isFreshSearchMessage(message: string, hasLatestRun: boolean) {
     'is there ',
     'are there ',
     'any funding',
+    'research funding',
+    'grant funding',
     'funding opportunities',
+    'funding',
     'travel funding',
     'ai funding',
     'grant for ',
     'grants for ',
+    'calls for ',
+    'opportunities for ',
+    'opportunities in ',
     'fellowships for ',
     'funding for ',
   ];
 
-  if (explicitSearchPatterns.some((pattern) => normalized.startsWith(pattern) || normalized.includes(pattern))) {
+  if (
+    explicitSearchPatterns.some((pattern) => normalized.startsWith(pattern) || normalized.includes(pattern)) ||
+    isBroadResearchSearch(message)
+  ) {
     return true;
   }
 
   return !hasLatestRun;
+}
+
+function extractClearAndSearchQuery(message: string) {
+  const normalized = normalizeKey(message);
+  if (!/\b(clear all filters?|reset filters?|remove all filters?|start over)\b/.test(normalized)) {
+    return '';
+  }
+
+  const patterns = [
+    /\b(?:clear all filters?|reset filters?|remove all filters?)\s+(?:and\s+)?(?:find|search|show|look for|recommend|give)\s+(.+)$/i,
+    /\bstart over\s+(?:and\s+)?(?:find|search|show|look for|with|recommend|give)\s+(.+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    const candidate = normalizeWhitespace(match?.[1] || '');
+    if (candidate) {
+      return deriveResearchAreaFromMessage(candidate);
+    }
+  }
+
+  return '';
 }
 
 function applyStateNormalization(
@@ -508,6 +774,21 @@ const INFERRED_CONFIRMATION_FILTER_KEYS: Array<keyof RecommendationSearchFilters
   'amountMin',
   'amountMax',
 ];
+
+const HIGH_RISK_CONFIRMATION_FILTER_KEYS = new Set<keyof RecommendationSearchFilters>([
+  'geographyScope',
+  'eligibleCountries',
+  'eligibleRegions',
+  'hostCountries',
+  'funderCountries',
+  'institutionTypes',
+  'careerStages',
+  'citizenshipRequirements',
+  'residencyRequirements',
+  'applicationLanguages',
+  'sponsorTypes',
+  'taxonomyAreaIds',
+]);
 
 const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> = {
   geographyScope: 'Geography scope',
@@ -740,15 +1021,15 @@ function buildForcedConfirmationCopy(
     : '';
   if (inferredFilterDescriptions.length === 0) {
     return {
-      summary: `Confirm the inferred filters before I rerun the grounded search.${profileText}`.trim(),
-      assistantSuggestion: `I inferred some filters from your request.${profileText} Confirm them before I rerun the grounded search.`.trim(),
+      summary: `Confirm the inferred filters before I search again.${profileText}`.trim(),
+      assistantSuggestion: `I inferred some filters from your request.${profileText} Confirm them before I search again.`.trim(),
     };
   }
 
   const joined = inferredFilterDescriptions.join('; ');
   return {
-    summary: `Confirm these inferred filters before I rerun the grounded search: ${joined}.${profileText}`.trim(),
-    assistantSuggestion: `Before I rerun the search, confirm these inferred filters: ${joined}.${profileText}`.trim(),
+    summary: `Confirm these inferred filters before I search again: ${joined}.${profileText}`.trim(),
+    assistantSuggestion: `I read your request as: ${joined}.${profileText} Confirm them and I will search, or reject them to keep the current filters.`.trim(),
   };
 }
 
@@ -760,21 +1041,21 @@ function resolveOrdinalResults(run: RecommendationConversationRunRecord | undefi
 function buildDeterministicSearchSummary(response: InternalRecommendationSearchResponse, preface: string) {
   if (response.rawResults.length === 0) {
     const activeFilters = describeActiveFilters(response.appliedFilters);
-    const activeFilterText = activeFilters.length > 0 ? `\n\nI searched with these active filters:\n- ${activeFilters.join('\n- ')}` : '';
+    const activeFilterText = activeFilters.length > 0 ? `\n\nI searched with:\n- ${activeFilters.join('\n- ')}` : '';
     const retryFilters = response.strictFilterRecovery
       ? describeActiveFilters(response.appliedFilters, response.strictFilterRecovery.relaxedFilterKeys)
       : [];
     const retryText =
       response.noResultsReason === 'filters_too_strict' && retryFilters.length > 0
-        ? `\n\nYou can retry without these restrictive filters:\n- ${retryFilters.join('\n- ')}`
+        ? `\n\nThe strictest filters look like:\n- ${retryFilters.join('\n- ')}\n\nTry again without those filters to broaden the search.`
         : '';
-    const suggestionText = response.relaxationSuggestions.length > 0 ? `\n\nNext steps:\n- ${response.relaxationSuggestions.join('\n- ')}` : '';
+    const suggestionText = response.relaxationSuggestions.length > 0 ? `\n\nUseful next steps:\n- ${response.relaxationSuggestions.join('\n- ')}` : '';
     const noResultsText =
       response.noResultsReason === 'filters_too_strict'
-        ? 'No published funding calls matched all of the active filters in the current search.'
+        ? 'I could not find open published calls that matched every active filter.'
         : response.noResultsReason === 'query_too_weak'
-          ? 'The query is too weak for reliable matching.'
-          : 'No published funding calls matched the current search.';
+          ? 'I need a more specific topic to search reliably.'
+          : 'I could not find published calls for that search.';
     return `${preface}\n\n${noResultsText}${activeFilterText}${retryText}${suggestionText}`;
   }
 
@@ -786,7 +1067,7 @@ function buildDeterministicSearchSummary(response: InternalRecommendationSearchR
     return `${index + 1}. ${result.schemeTitle} (${result.agencyName})${result.isRolling ? ' [Rolling]' : result.closeDate ? ` [Deadline ${new Date(result.closeDate).toLocaleDateString()}]` : ''}\n   ${highlights}`;
   });
 
-  return `${preface}\n\n${lines.join('\n\n')}${response.lowConfidence ? '\n\nThese matches are low confidence, so you may want to broaden the query or adjust the filters.' : ''}`;
+  return `${preface}\n\nHere are the strongest matches I found:\n\n${lines.join('\n\n')}${response.lowConfidence ? '\n\nThese matches are lower confidence, so broadening the topic or relaxing filters may improve the list.' : ''}`;
 }
 
 function buildDeterministicExplainSummary(result: RecommendationRawResultItem, ordinal: number) {
@@ -802,7 +1083,7 @@ function buildDeterministicExplainSummary(result: RecommendationRawResultItem, o
 }
 
 function buildDeterministicCompareSummary(results: RecommendationRawResultItem[], ordinals: number[]) {
-  const lines = ['Here is a grounded comparison of the selected opportunities:'];
+  const lines = ['Here is a comparison of the selected opportunities:'];
   results.forEach((result, index) => {
     lines.push(...[
       `\n#${ordinals[index]} ${result.schemeTitle} (${result.agencyName})`,
@@ -864,6 +1145,19 @@ function buildOrchestratorContext(params: {
   const serverDate = new Date().toISOString().slice(0, 10);
 
   sections.push(`SERVER DATE: ${serverDate}`);
+
+  const phraseSignals = compactResearchPhraseSignals(params.message);
+  if (
+    phraseSignals.searchLike ||
+    phraseSignals.fundingKinds.length > 0 ||
+    phraseSignals.careerStages.length > 0 ||
+    phraseSignals.geographyScope.length > 0 ||
+    phraseSignals.topicSynonyms.length > 0 ||
+    phraseSignals.operation !== 'add'
+  ) {
+    sections.push(`DETECTED PHRASE SIGNALS:
+${JSON.stringify(phraseSignals)}`);
+  }
 
   if (params.profileSnapshot) {
     const p = params.profileSnapshot;
@@ -979,17 +1273,23 @@ async function generateGroundedTextWithLLM(
       taskCode: FUNDING_CHAT_TASK_CODE,
       stageCode: FUNDING_CHAT_NARRATIVE_STAGE_CODE,
       prompt,
-      systemPrompt: 'You are a grounded funding search assistant. Use only the provided data.',
+      systemPrompt:
+        'You are a warm, concise funding advisor helping a researcher find calls to apply to. ' +
+        'Write in a natural, conversational second-person voice — like a knowledgeable colleague, not a database. ' +
+        'Use only the data provided to you and never invent opportunities, amounts, deadlines, or details. ' +
+        'Keep it brief: a short lead-in sentence, then the matches, and at most one helpful follow-up suggestion.',
       context: llmContext,
-      temperature: 0.2,
-      maxTokensOut: 1800,
+      temperature: 0.3,
+      maxTokensOut: 900,
       metadata: {
         purpose: 'funding_chat_narrative',
         fallbackModelHint: CHAT_NARRATIVE_MODEL,
       },
     });
     if (normalizeWhitespace(response?.rawText || '')) return response!.rawText.trim();
-  } catch {}
+  } catch (error) {
+    console.warn('Funding chat narrative LLM failed; using deterministic fallback.', error);
+  }
 
   return fallback;
 }
@@ -1079,6 +1379,12 @@ function extractDeadlinePatch(message: string) {
   const startOfToday = toIsoDate(today);
   const endOfMonth = (year: number, monthIndex: number) => new Date(year, monthIndex + 1, 0);
 
+  if (normalized.includes('deadline soon') || normalized.includes('closing soon') || normalized.includes('closes soon')) {
+    const end = new Date(today);
+    end.setDate(end.getDate() + 60);
+    return { deadlineFrom: startOfToday, deadlineTo: toIsoDate(end) };
+  }
+
   if (
     normalized.includes('deadline this month') ||
     normalized.includes('in this month') ||
@@ -1134,9 +1440,29 @@ function extractDeadlinePatch(message: string) {
     }
   }
 
+  const broadWithinMonths = normalized.match(/\bwithin (\d{1,2}) months?\b/);
+  if (broadWithinMonths) {
+    const months = Number(broadWithinMonths[1]);
+    if (months > 0) {
+      const end = new Date(today);
+      end.setMonth(end.getMonth() + months);
+      return { deadlineFrom: startOfToday, deadlineTo: toIsoDate(end) };
+    }
+  }
+
   const withinWeeks = normalized.match(/deadline (?:within|in|next) (\d{1,2}) weeks?/);
   if (withinWeeks) {
     const weeks = Number(withinWeeks[1]);
+    if (weeks > 0) {
+      const end = new Date(today);
+      end.setDate(end.getDate() + weeks * 7);
+      return { deadlineFrom: startOfToday, deadlineTo: toIsoDate(end) };
+    }
+  }
+
+  const broadWithinWeeks = normalized.match(/\bwithin (\d{1,2}) weeks?\b/);
+  if (broadWithinWeeks) {
+    const weeks = Number(broadWithinWeeks[1]);
     if (weeks > 0) {
       const end = new Date(today);
       end.setDate(end.getDate() + weeks * 7);
@@ -1151,12 +1477,57 @@ function extractDeadlinePatch(message: string) {
   return null;
 }
 
+function parseAmountValue(rawValue: string, rawScale?: string) {
+  const numeric = Number(rawValue.replace(/,/g, ''));
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  const scale = normalizeKey(rawScale || '');
+  if (scale === 'k' || scale === 'thousand') {
+    return numeric * 1_000;
+  }
+  if (scale === 'm' || scale === 'million') {
+    return numeric * 1_000_000;
+  }
+  return numeric;
+}
+
+function extractAmountPatch(message: string) {
+  const normalized = normalizeKey(message);
+  if (/\b(remove|clear|reset)\s+(amount|budget|money|value)\s+filter\b/.test(normalized)) {
+    return { amountMin: null, amountMax: null };
+  }
+
+  const between = normalized.match(/\bbetween\s+(?:usd|eur|gbp|inr|[$€£₹])?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\s+(?:and|to|-)\s+(?:usd|eur|gbp|inr|[$€£₹])?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/);
+  if (between) {
+    const amountMin = parseAmountValue(between[1], between[2]);
+    const amountMax = parseAmountValue(between[3], between[4] || between[2]);
+    if (amountMin !== null && amountMax !== null) {
+      return { amountMin: Math.min(amountMin, amountMax), amountMax: Math.max(amountMin, amountMax) };
+    }
+  }
+
+  const min = normalized.match(/\b(?:at least|minimum|min|over|above|more than)\s+(?:usd|eur|gbp|inr|[$€£₹])?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/);
+  const max = normalized.match(/\b(?:up to|under|below|less than|maximum|max)\s+(?:usd|eur|gbp|inr|[$€£₹])?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/);
+  const patch: { amountMin?: number | null; amountMax?: number | null } = {};
+  if (min) {
+    const value = parseAmountValue(min[1], min[2]);
+    if (value !== null) patch.amountMin = value;
+  }
+  if (max) {
+    const value = parseAmountValue(max[1], max[2]);
+    if (value !== null) patch.amountMax = value;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
 function mergeFilterPatch(current: Required<RecommendationSearchFilters>, patch: Partial<RecommendationSearchFilters>) {
   return { ...cloneFilters(current), ...patch };
 }
 
 function buildSearchPreface(stateSummary: string, inferredFromProfile?: string[]) {
-  const base = stateSummary || 'I refreshed the grounded funding search using your latest instructions.';
+  const base = stateSummary || 'I updated the funding search using your latest instructions.';
   if (inferredFromProfile && inferredFromProfile.length > 0) {
     return `${base}\n\n(Based on your selected preferences, I also applied: ${inferredFromProfile.join(', ')})`;
   }
@@ -1311,7 +1682,7 @@ export class RecommendationConversationService {
     });
   }
 
-  private cleanFilterPatch(filterPatch: Partial<RecommendationSearchFilters>) {
+  private cleanFilterPatch(filterPatch: Partial<RecommendationSearchFilters>, message?: string) {
     const cleaned: Partial<RecommendationSearchFilters> = {};
 
     if (Array.isArray(filterPatch.geographyScope)) cleaned.geographyScope = normalizeGeographyScopeList(filterPatch.geographyScope) || [];
@@ -1319,7 +1690,9 @@ export class RecommendationConversationService {
     if (Array.isArray(filterPatch.eligibleRegions)) cleaned.eligibleRegions = normalizeRegionList(filterPatch.eligibleRegions) || [];
     if (Array.isArray(filterPatch.hostCountries)) cleaned.hostCountries = normalizeCountryList(filterPatch.hostCountries) || [];
     if (Array.isArray(filterPatch.funderCountries)) cleaned.funderCountries = normalizeCountryList(filterPatch.funderCountries) || [];
-    if (Array.isArray(filterPatch.fundingKinds)) cleaned.fundingKinds = normalizeFundingKindList(filterPatch.fundingKinds) || [];
+    if (Array.isArray(filterPatch.fundingKinds)) {
+      cleaned.fundingKinds = sanitizeFundingKindsForMessage(normalizeFundingKindList(filterPatch.fundingKinds) || [], message);
+    }
     if (Array.isArray(filterPatch.institutionTypes)) cleaned.institutionTypes = normalizeInstitutionTypeList(filterPatch.institutionTypes) || [];
     if (Array.isArray(filterPatch.careerStages)) cleaned.careerStages = normalizeCareerStageList(filterPatch.careerStages) || [];
     if (Array.isArray(filterPatch.applicationLanguages)) cleaned.applicationLanguages = normalizeApplicationLanguageList(filterPatch.applicationLanguages) || [];
@@ -1373,6 +1746,11 @@ Return a JSON object with this schema:
   "requiresConfirmation": false,
   "queryRewrite": "the research topic to search for (null if not changing query)",
   "inputMode": "research_area" or "paper_metadata" or null to keep current,
+  "paperMetadata": {
+    "title": null,
+    "abstract": null,
+    "keywords": []
+  },
   "filterSuggestions": {
     "geographyScope": [],
     "eligibleCountries": [],
@@ -1414,6 +1792,8 @@ RULES:
 9. EXPLAIN/COMPARE: For "explain result 2" or "tell me more about the first one", use intent=explain_result with referencedOrdinals. For "compare 1 and 3", use intent=compare_results. Ordinal words like "first"=1, "second"=2, "last"=last result.
 10. NEVER invent funding opportunities, amounts, deadlines, or URLs.
 11. requiresConfirmation should be true whenever you infer filters the user did not explicitly request or did not state directly, especially for geography, career stage, institution type, citizenship, funding type, or deadline filters, and always when using profile-based inference.
+12. PASTED PAPERS: If the user pastes a paper title, abstract, or keywords and asks for matching funding, set inputMode="paper_metadata" and fill paperMetadata from the pasted text. Do not compress the abstract into queryRewrite.
+13. DETECTED PHRASE SIGNALS are deterministic hints from code. Use them when they match the user text. Do not turn broad phrases like "research funding" or "grant funding" into Research Grant unless the signal includes fundingKinds=["Research Grant"].
 
     Return ONLY the JSON object, no markdown fences, no extra text.`;
 
@@ -1449,11 +1829,16 @@ RULES:
     const validIntents = ['new_search', 'refine_filters', 'clear_filters', 'compare_results', 'explain_result', 'browse_more', 'clarification_needed', 'general_help'];
     let safeIntent = (validIntents.includes(intent) ? intent : 'new_search') as RecommendationConversationIntent;
 
-    const inputMode = parsed.inputMode ? normalizeInputMode(parsed.inputMode) : params.state.inputMode;
     const filterSuggestions = parsed.filterSuggestions && typeof parsed.filterSuggestions === 'object'
-      ? this.cleanFilterPatch(parsed.filterSuggestions as Partial<RecommendationSearchFilters>)
+      ? this.cleanFilterPatch(parsed.filterSuggestions as Partial<RecommendationSearchFilters>, params.message)
       : {};
     const queryRewrite = typeof parsed.queryRewrite === 'string' ? normalizeWhitespace(parsed.queryRewrite) : '';
+    const paperMetadata = coercePaperMetadata(parsed.paperMetadata) || extractPastedPaperMetadata(params.message);
+    const inputMode = parsed.inputMode
+      ? normalizeInputMode(parsed.inputMode)
+      : paperMetadata
+        ? 'paper_metadata'
+        : params.state.inputMode;
 
     if (
       safeIntent === 'refine_filters' &&
@@ -1474,7 +1859,12 @@ RULES:
       const patchedFilters = mergeFilterPatch(baseFilters, filterSuggestions);
       const query =
         inputMode === 'paper_metadata'
-          ? cloneQuery(inputMode, params.state.query)
+          ? (
+              paperMetadata ||
+              (params.state.inputMode === 'paper_metadata'
+                ? cloneQuery(inputMode, params.state.query)
+                : createDefaultConversationState('paper_metadata').query)
+            )
           : {
               researchArea:
                 queryRewrite ||
@@ -1515,7 +1905,8 @@ RULES:
       return null;
     }
 
-    return ['compare_results', 'explain_result', 'browse_more', 'clear_filters'].includes(heuristic.intent)
+    return ['compare_results', 'explain_result', 'browse_more', 'clear_filters'].includes(heuristic.intent) ||
+      heuristic.confidence >= 0.95
       ? heuristic
       : null;
   }
@@ -1529,8 +1920,9 @@ RULES:
     }
 
     const implicitFilterKeys = collectImplicitFilterKeys(params.message, parsed.nextState.filters);
+    const confirmationFilterKeys = implicitFilterKeys.filter((key) => HIGH_RISK_CONFIRMATION_FILTER_KEYS.has(key));
     const inferredFromProfile = parsed.inferredFromProfile || [];
-    if (implicitFilterKeys.length === 0 && inferredFromProfile.length === 0) {
+    if (confirmationFilterKeys.length === 0 && inferredFromProfile.length === 0) {
       return parsed;
     }
 
@@ -1551,9 +1943,17 @@ RULES:
     const normalizedMessage = normalizeKey(params.message);
     const ordinals = extractOrdinals(params.message, params.latestRun?.results.length || 0);
     const freshSearch = isFreshSearchMessage(params.message, Boolean(params.latestRun));
+    const phraseSignals = extractResearchPhraseSignals(params.message);
+    const filterOperation = resolvePhraseFilterOperation(params.message);
     if (!normalizedMessage) return null;
 
-    if ((normalizedMessage.includes('compare') || normalizedMessage.includes('versus') || normalizedMessage.includes('vs')) && ordinals.length >= 2) {
+    if (
+      (normalizedMessage.includes('compare') ||
+        normalizedMessage.includes('versus') ||
+        normalizedMessage.includes('vs') ||
+        normalizedMessage.includes('which is better')) &&
+      ordinals.length >= 2
+    ) {
       return { intent: 'compare_results', confidence: 1, requiresConfirmation: false, referencedOrdinals: ordinals.slice(0, 2) };
     }
 
@@ -1569,7 +1969,18 @@ RULES:
         confidence: 1,
         requiresConfirmation: false,
         nextState: applyStateNormalization(params.state.inputMode, cloneQuery(params.state.inputMode, params.state.query), nextFilters),
-        summary: 'I increased the results window and reran the grounded search.',
+        summary: 'I increased the results window and searched again.',
+      };
+    }
+
+    const clearAndSearchQuery = extractClearAndSearchQuery(params.message);
+    if (clearAndSearchQuery) {
+      return {
+        intent: 'new_search',
+        confidence: 1,
+        requiresConfirmation: false,
+        nextState: applyStateNormalization('research_area', { researchArea: clearAndSearchQuery }, createDefaultFilters()),
+        summary: 'I cleared the active filters and started a fresh search from your new topic.',
       };
     }
 
@@ -1583,12 +1994,34 @@ RULES:
       };
     }
 
+    const pastedPaperMetadata = extractPastedPaperMetadata(params.message);
+    if (pastedPaperMetadata) {
+      const nextFilters = createDefaultFilters();
+      const fundingKinds = sanitizeFundingKindsForMessage(normalizeFundingKindMentions(params.message), params.message);
+      if (fundingKinds.length > 0) {
+        nextFilters.fundingKinds = fundingKinds;
+      }
+
+      return {
+        intent: 'new_search',
+        confidence: 1,
+        requiresConfirmation: false,
+        nextState: applyStateNormalization('paper_metadata', pastedPaperMetadata, nextFilters),
+        summary: 'I used the pasted paper title and abstract as the search context.',
+      };
+    }
+
     const nextFilters = freshSearch ? createDefaultFilters() : cloneFilters(params.state.filters);
     let modified = false;
 
     if (normalizedMessage.includes('include expired')) { nextFilters.includeExpired = true; modified = true; }
     if (normalizedMessage.includes('exclude expired') || normalizedMessage.includes('hide expired')) { nextFilters.includeExpired = false; modified = true; }
-    if (normalizedMessage.includes('rolling only') || normalizedMessage.includes('only rolling')) { nextFilters.rollingOnly = true; modified = true; }
+    if (
+      normalizedMessage.includes('rolling only') ||
+      normalizedMessage.includes('only rolling') ||
+      normalizedMessage.includes('always open') ||
+      normalizedMessage.includes('no deadline')
+    ) { nextFilters.rollingOnly = true; modified = true; }
     if (normalizedMessage.includes('remove rolling') || normalizedMessage.includes('disable rolling') || normalizedMessage.includes('not rolling')) { nextFilters.rollingOnly = false; modified = true; }
     if (normalizedMessage.includes('sort by deadline') || normalizedMessage.includes('deadline soonest')) { nextFilters.sort = 'deadline_soonest'; modified = true; }
     if (normalizedMessage.includes('best match')) { nextFilters.sort = 'best_match'; modified = true; }
@@ -1600,56 +2033,53 @@ RULES:
       modified = true;
     }
 
-    const fundingKinds = normalizeListMatch(params.message, FUNDING_KIND_ALIASES, FUNDING_KIND_VALUES);
+    const amountPatch = extractAmountPatch(params.message);
+    if (amountPatch) {
+      if ('amountMin' in amountPatch) nextFilters.amountMin = amountPatch.amountMin ?? null;
+      if ('amountMax' in amountPatch) nextFilters.amountMax = amountPatch.amountMax ?? null;
+      modified = true;
+    }
+
+    const fundingKinds = normalizeFundingKindMentions(params.message);
     if (fundingKinds.length > 0) {
-      nextFilters.fundingKinds = normalizedMessage.includes('remove')
-        ? nextFilters.fundingKinds.filter((value) => !fundingKinds.includes(value))
-        : normalizedMessage.includes('only') || normalizedMessage.includes('just')
-          ? fundingKinds
-          : Array.from(new Set([...nextFilters.fundingKinds, ...fundingKinds]));
+      nextFilters.fundingKinds = applyArrayFilterOperation(nextFilters.fundingKinds, fundingKinds, filterOperation);
+      modified = true;
+    }
+
+    if (phraseSignals.geographyScope.length > 0) {
+      nextFilters.geographyScope = applyArrayFilterOperation(nextFilters.geographyScope, phraseSignals.geographyScope, filterOperation);
       modified = true;
     }
 
     const institutionTypes = normalizeListMatch(params.message, INSTITUTION_TYPE_ALIASES, INSTITUTION_TYPE_VALUES);
-    if (institutionTypes.length > 0 && normalizedMessage.includes('institution')) {
-      nextFilters.institutionTypes = normalizedMessage.includes('remove')
-        ? nextFilters.institutionTypes.filter((value) => !institutionTypes.includes(value))
-        : normalizedMessage.includes('only') || normalizedMessage.includes('just')
-          ? institutionTypes
-          : Array.from(new Set([...nextFilters.institutionTypes, ...institutionTypes]));
+    if (institutionTypes.length > 0 && hasInstitutionCue(normalizedMessage)) {
+      nextFilters.institutionTypes = applyArrayFilterOperation(nextFilters.institutionTypes, institutionTypes, filterOperation);
       modified = true;
     }
 
-    const careerStages = normalizeListMatch(params.message, CAREER_STAGE_ALIASES, CAREER_STAGE_VALUES);
+    const careerStages = Array.from(new Set([
+      ...normalizeListMatch(params.message, CAREER_STAGE_ALIASES, CAREER_STAGE_VALUES),
+      ...phraseSignals.careerStages,
+    ]));
     if (careerStages.length > 0) {
-      nextFilters.careerStages = normalizedMessage.includes('remove')
-        ? nextFilters.careerStages.filter((value) => !careerStages.includes(value))
-        : normalizedMessage.includes('only') || normalizedMessage.includes('just')
-          ? careerStages
-          : Array.from(new Set([...nextFilters.careerStages, ...careerStages]));
+      nextFilters.careerStages = applyArrayFilterOperation(nextFilters.careerStages, careerStages, filterOperation);
       modified = true;
     }
 
     const sponsorTypes = normalizeListMatch(params.message, SPONSOR_TYPE_ALIASES, SPONSOR_TYPE_VALUES);
-    if (sponsorTypes.length > 0 && normalizedMessage.includes('sponsor')) {
-      nextFilters.sponsorTypes = normalizedMessage.includes('remove')
-        ? nextFilters.sponsorTypes.filter((value) => !sponsorTypes.includes(value))
-        : normalizedMessage.includes('only') || normalizedMessage.includes('just')
-          ? sponsorTypes
-          : Array.from(new Set([...nextFilters.sponsorTypes, ...sponsorTypes]));
+    if (sponsorTypes.length > 0 && hasSponsorCue(normalizedMessage)) {
+      nextFilters.sponsorTypes = applyArrayFilterOperation(nextFilters.sponsorTypes, sponsorTypes, filterOperation);
       modified = true;
     }
 
     const countries = extractCountryMentions(params.message);
     if (countries.length > 0) {
-      const targetKey = /(?:\bhost(?:ed)?\b|\bbased in\b|\blocated in\b|\btenable in\b|\bheld in\b)/i.test(params.message)
-        ? 'hostCountries'
-        : 'eligibleCountries';
-      nextFilters[targetKey] = normalizedMessage.includes('remove')
-        ? nextFilters[targetKey].filter((value) => !countries.includes(value))
-        : normalizedMessage.includes('only') || normalizedMessage.includes('just')
-          ? countries
-          : Array.from(new Set([...nextFilters[targetKey], ...countries]));
+      const targetKey = resolveCountryFilterKey(params.message);
+      if (filterOperation === 'remove' && !hasExplicitCountryRoleCue(params.message)) {
+        clearCountryFiltersForValues(nextFilters, countries);
+      } else {
+        nextFilters[targetKey] = applyArrayFilterOperation(nextFilters[targetKey], countries, filterOperation);
+      }
       modified = true;
     }
 
@@ -1660,12 +2090,12 @@ RULES:
         requiresConfirmation: false,
         nextState: applyStateNormalization(
           'research_area',
-          { researchArea: freshSearch ? params.message : ((cloneQuery(params.state.inputMode, params.state.query) as { researchArea?: string }).researchArea || params.message) },
+          { researchArea: freshSearch ? deriveResearchAreaFromMessage(params.message) : ((cloneQuery(params.state.inputMode, params.state.query) as { researchArea?: string }).researchArea || deriveResearchAreaFromMessage(params.message)) },
           nextFilters
         ),
         summary: freshSearch
           ? 'I treated this as a new search, reset the old filters, and applied the new ones from your request.'
-          : 'I applied your filter changes and refreshed the grounded search.',
+          : 'I applied your filter changes and updated the search.',
       };
     }
 
@@ -1679,10 +2109,10 @@ RULES:
     if (isLikelySearch) {
       return {
         intent: 'new_search',
-        confidence: 0.75,
+        confidence: 0.95,
         requiresConfirmation: false,
-        nextState: applyStateNormalization('research_area', { researchArea: params.message }, createDefaultFilters()),
-        summary: 'I started a fresh grounded search from your latest request and reset the previous filters.',
+        nextState: applyStateNormalization('research_area', { researchArea: deriveResearchAreaFromMessage(params.message) }, createDefaultFilters()),
+        summary: 'I started a fresh search from your latest request and reset the previous filters.',
       };
     }
 
@@ -1777,7 +2207,7 @@ RULES:
         return {
           intent: 'refine_filters',
           messageType: 'assistant_notice',
-          assistantContent: 'I updated the search state. Add a research area or paper details to run a grounded funding search.',
+          assistantContent: 'I updated the search state. Add a research area or paper details to search funding calls.',
           nextState,
           pendingPatch: null,
           citations: null,
@@ -1792,7 +2222,7 @@ RULES:
           searchResult,
           manualMessage
             ? `I updated the search using your latest instruction: "${manualMessage}".`
-            : 'I applied your manual search changes and refreshed the grounded results.',
+            : 'I applied your manual search changes and updated the results.',
           params.llmContext
         ),
         nextState: { inputMode: nextState.inputMode, query: queryStateFromNormalized(nextState.inputMode, searchResult.normalizedQuery), filters: searchResult.appliedFilters },
@@ -1890,7 +2320,7 @@ RULES:
       return {
         intent: parsed.intent,
         messageType: 'assistant_notice',
-        assistantContent: 'I could not build a grounded search update from that request. Try being more specific.',
+        assistantContent: 'I could not build a search update from that request. Try being more specific.',
         pendingPatch: null,
       };
     }
@@ -1902,7 +2332,7 @@ RULES:
         messageType: 'assistant_confirmation',
         assistantContent:
           parsed.assistantSuggestion ||
-          `${pendingPatch.summary} Confirm the suggested filter update if you want me to rerun the grounded search.`,
+          `${pendingPatch.summary} Confirm the suggested filter update if you want me to search again.`,
         pendingPatch,
       };
     }
@@ -1927,7 +2357,7 @@ RULES:
             messageType: 'assistant_response',
             assistantContent: await buildNarrativeForSearch(
               searchResult,
-              buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I ran a grounded funding search from your latest request.', parsed.inferredFromProfile),
+              buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I searched funding opportunities from your latest request.', parsed.inferredFromProfile),
               params.llmContext
             ),
             nextState: {
@@ -1945,7 +2375,7 @@ RULES:
       return {
         intent: parsed.intent,
         messageType: 'assistant_notice',
-        assistantContent: 'I updated the search state, but I still need a research area or paper details before I can run a grounded search.',
+        assistantContent: 'I updated the search state, but I still need a research area or paper details before I can search funding calls.',
         nextState: parsed.nextState,
         pendingPatch: null,
       };
@@ -1955,7 +2385,7 @@ RULES:
     return {
       intent: parsed.intent,
       messageType: 'assistant_response',
-      assistantContent: await buildNarrativeForSearch(searchResult, buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I refreshed the grounded funding search.', parsed.inferredFromProfile), params.llmContext),
+      assistantContent: await buildNarrativeForSearch(searchResult, buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I updated the funding search.', parsed.inferredFromProfile), params.llmContext),
       nextState: {
         inputMode: parsed.nextState.inputMode,
         query: queryStateFromNormalized(parsed.nextState.inputMode, searchResult.normalizedQuery),
@@ -2176,8 +2606,8 @@ RULES:
         assistantContent: options.confirm === false
           ? 'Okay, I left the active filters unchanged.'
           : run
-            ? await buildNarrativeForSearch(run, 'I confirmed the suggested filter changes and reran the grounded search.', llmContext)
-            : 'I applied the confirmed filter changes. Add a research area or paper details to run a grounded search.',
+            ? await buildNarrativeForSearch(run, 'I confirmed the suggested filter changes and searched again.', llmContext)
+            : 'I applied the confirmed filter changes. Add a research area or paper details to search funding calls.',
         nextState,
         pendingPatch: null,
         run,
@@ -2224,8 +2654,8 @@ RULES:
         intent: 'clear_filters',
         messageType: 'assistant_response',
         assistantContent: run
-          ? await buildNarrativeForSearch(run, 'I reset the active filters and reran the grounded search.', llmContext)
-          : 'I reset the active filters. Add a research area or paper details to start a grounded search.',
+          ? await buildNarrativeForSearch(run, 'I reset the active filters and searched again.', llmContext)
+          : 'I reset the active filters. Add a research area or paper details to start a funding search.',
         nextState,
         pendingPatch: null,
         run,

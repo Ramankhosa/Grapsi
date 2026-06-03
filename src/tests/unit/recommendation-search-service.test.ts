@@ -83,6 +83,43 @@ describe('RecommendationSearchService', () => {
     });
   });
 
+  it('reuses the query vector during strict-filter recovery attempts', async () => {
+    const service = new RecommendationSearchService();
+    const normalized = normalizeRecommendationSearchRequest({
+      inputMode: 'research_area',
+      query: { researchArea: 'AI healthcare diagnostics' },
+      filters: {
+        hostCountries: ['Germany'],
+      },
+    });
+    const executeSpy = vi.spyOn(service as any, 'executeSearch').mockResolvedValue({
+      candidates: [makeCandidate({ hostCountries: ['Canada'] })],
+      degradedMode: null,
+    });
+
+    const result = await (service as any).buildResponseFromExecution(
+      normalized,
+      {
+        candidates: [],
+        degradedMode: null,
+      },
+      undefined,
+      null,
+      { queryVectorLiteral: '[0.1,0.2,0.3]' }
+    );
+
+    expect(result.response.noResultsReason).toBe('filters_too_strict');
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ hostCountries: [] }),
+      }),
+      false,
+      undefined,
+      undefined,
+      { queryVectorLiteral: '[0.1,0.2,0.3]' }
+    );
+  });
+
   it('keeps no_match when the recovery ladder finds no displayable results', async () => {
     const service = new RecommendationSearchService();
     const normalized = normalizeRecommendationSearchRequest({
@@ -124,6 +161,168 @@ describe('RecommendationSearchService', () => {
     expect(result.response.noResultsReason).toBe('query_too_weak');
     expect(result.response.strictFilterRecovery).toBeNull();
     expect(executeSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not surface unrelated calls just because the funding type matches', async () => {
+    const service = new RecommendationSearchService();
+    const normalized = normalizeRecommendationSearchRequest({
+      inputMode: 'research_area',
+      query: { researchArea: 'research grant to work on biomedical field on infectious diseases' },
+      filters: {
+        fundingKinds: ['Research Grant'],
+        limit: 5,
+      },
+    });
+
+    const result = await (service as any).buildResponseFromExecution(normalized, {
+      degradedMode: null,
+      candidates: [
+        makeCandidate({
+          id: 'clean-energy',
+          schemeTitle: 'Clean Energy Storage Demonstrator',
+          agencyName: 'Clean Energy Demonstrators Agency',
+          shortDescription: 'Supports battery storage demonstrators and renewable energy deployment.',
+          description: 'Supports battery storage demonstrators and renewable energy deployment.',
+          disciplines: ['Clean Energy', 'Energy Storage'],
+          fundingKinds: ['Research Grant'],
+          semanticSimilarity: 0.34,
+          textRank: 0.2,
+        }),
+        makeCandidate({
+          id: 'infectious-disease',
+          schemeTitle: 'Biomedical Infectious Disease Research Grant',
+          shortDescription: 'Supports biomedical research on infectious disease diagnosis and treatment.',
+          description: 'Supports biomedical research on infectious disease diagnosis and treatment.',
+          disciplines: ['Biomedical Research', 'Infectious Diseases'],
+          fundingKinds: ['Research Grant'],
+          semanticSimilarity: 0.34,
+          textRank: 0.2,
+        }),
+      ],
+    });
+
+    expect(result.response.rawResults.map((item: any) => item.id)).toEqual(['infectious-disease']);
+    expect(result.response.rawResults[0].matchReasons).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^(Matched discipline|Topic text match|High semantic match)/)])
+    );
+  });
+
+  it('uses paper title and abstract as topic evidence when ranking paper-metadata searches', async () => {
+    const service = new RecommendationSearchService();
+    const normalized = normalizeRecommendationSearchRequest({
+      inputMode: 'paper_metadata',
+      query: {
+        title: 'Federated learning for medical imaging diagnosis',
+        abstract: 'This study develops privacy-preserving federated learning methods for radiology diagnosis across hospitals. The work focuses on medical imaging, diagnostic accuracy, clinical deployment, and privacy-preserving machine learning for healthcare systems.',
+        keywords: ['medical imaging', 'federated learning', 'diagnostics'],
+      },
+      filters: { limit: 5 },
+    });
+
+    const result = await (service as any).buildResponseFromExecution(normalized, {
+      degradedMode: null,
+      candidates: [
+        makeCandidate({
+          id: 'clean-energy',
+          schemeTitle: 'Clean Energy Storage Demonstrator',
+          shortDescription: 'Supports battery storage demonstrators and renewable energy deployment.',
+          description: 'Supports battery storage demonstrators and renewable energy deployment.',
+          disciplines: ['Clean Energy', 'Energy Storage'],
+          semanticSimilarity: 0.34,
+          textRank: 0.9,
+        }),
+        makeCandidate({
+          id: 'medical-imaging',
+          schemeTitle: 'Medical Imaging AI Research Grant',
+          shortDescription: 'Supports medical imaging, radiology diagnostics, and healthcare AI research.',
+          description: 'Supports medical imaging, radiology diagnostics, and healthcare AI research.',
+          disciplines: ['Medical Imaging', 'Healthcare AI'],
+          semanticSimilarity: 0.34,
+          textRank: 0.9,
+        }),
+      ],
+    });
+
+    expect(result.response.rawResults.map((item: any) => item.id)).toEqual(['medical-imaging']);
+  });
+
+  it('does not keep unrelated long-title matches on a single generic token', async () => {
+    const service = new RecommendationSearchService();
+    const normalized = normalizeRecommendationSearchRequest({
+      inputMode: 'paper_metadata',
+      query: {
+        title: 'An intelligent monitoring system for indoor safety of individuals suffering from Autism Spectrum Disorder (ASD)',
+        abstract: '',
+        keywords: [],
+      },
+      filters: { limit: 5 },
+    });
+
+    const result = await (service as any).buildResponseFromExecution(normalized, {
+      degradedMode: null,
+      candidates: [
+        makeCandidate({
+          id: 'climate-agriculture',
+          schemeTitle: 'Climate Resilient Agriculture Research Grant',
+          shortDescription: 'Supports climate resilient agricultural systems in South Asia.',
+          description: 'Supports climate resilient agricultural systems in South Asia.',
+          disciplines: ['Agriculture', 'Climate Resilience'],
+          semanticSimilarity: 0.34,
+          textRank: 0.7,
+        }),
+        makeCandidate({
+          id: 'asd-safety-monitoring',
+          schemeTitle: 'Assistive Technology Safety Monitoring Grant',
+          shortDescription: 'Supports indoor safety monitoring and assistive technology for autism care.',
+          description: 'Supports indoor safety monitoring and assistive technology for autism care.',
+          disciplines: ['Assistive Technology', 'Autism Research'],
+          semanticSimilarity: 0.34,
+          textRank: 0.7,
+        }),
+      ],
+    });
+
+    expect(result.response.rawResults.map((item: any) => item.id)).toEqual(['asd-safety-monitoring']);
+  });
+
+  it('finds women-focused opportunities from women-centric broad funding language', async () => {
+    const service = new RecommendationSearchService();
+    const normalized = normalizeRecommendationSearchRequest({
+      inputMode: 'research_area',
+      query: { researchArea: 'women centric' },
+      filters: { limit: 5 },
+    });
+
+    const result = await (service as any).buildResponseFromExecution(normalized, {
+      degradedMode: null,
+      candidates: [
+        makeCandidate({
+          id: 'generic-ai',
+          schemeTitle: 'Responsible AI Policy Small Grant',
+          shortDescription: 'Supports policy research on artificial intelligence governance and safety.',
+          description: 'Supports policy research on artificial intelligence governance and safety.',
+          disciplines: ['Artificial Intelligence'],
+          fundingKinds: ['Research Grant'],
+          semanticSimilarity: 0.34,
+          textRank: 0.7,
+        }),
+        makeCandidate({
+          id: 'women-stem',
+          schemeTitle: 'Women In STEM Leadership Fellowship',
+          shortDescription: 'Supports women researchers and female scientists in STEM leadership.',
+          description: 'Supports women researchers and female scientists in STEM leadership.',
+          disciplines: ['Women in STEM', 'Gender Equity'],
+          fundingKinds: ['Fellowship'],
+          semanticSimilarity: 0.34,
+          textRank: 0.7,
+        }),
+      ],
+    });
+
+    expect(result.response.rawResults.map((item: any) => item.id)).toEqual(['women-stem']);
+    expect(result.response.rawResults[0].matchReasons).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^(Matched discipline|Topic text match|High semantic match)/)])
+    );
   });
 
   it('soft-reranks profile-relevant calls without hiding valid non-profile calls', async () => {

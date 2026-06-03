@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { EmbeddingService } from './embeddingService';
@@ -44,8 +45,11 @@ const FULLTEXT_CANDIDATE_LIMIT = 60;
 const MERGED_CANDIDATE_LIMIT = 100;
 const NO_RESULT_SCORE_THRESHOLD = 0.2;
 const LOW_CONFIDENCE_THRESHOLD = 0.35;
+const TOPIC_RELEVANCE_SEMANTIC_THRESHOLD = 0.45;
 const RESEARCH_AREA_ENRICHMENT_MODEL = 'gemini-2.0-flash-lite';
 const QUERY_ENRICHMENT_CACHE_VERSION = 'v1';
+const QUERY_EMBEDDING_CACHE_VERSION_PREFIX = 'funding-query-v1';
+const QUERY_EMBEDDING_TASK_TYPE = 'RETRIEVAL_QUERY' as const;
 const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilters>> = [
   ['taxonomyAreaIds'],
   ['careerStages', 'institutionTypes', 'sponsorTypes', 'citizenshipRequirements', 'residencyRequirements', 'applicationLanguages'],
@@ -58,6 +62,10 @@ const STRICT_FILTER_RECOVERY_LADDER: Array<Array<keyof RecommendationSearchFilte
 type SearchExecutionResult = {
   candidates: RecommendationCandidate[];
   degradedMode: 'full_text_only' | null;
+};
+
+type SearchExecutionOptions = {
+  queryVectorLiteral?: string | null;
 };
 
 type ScoredCandidate = {
@@ -345,6 +353,98 @@ function scalarSignal(candidateValue: string | null, queryValues: string[]) {
   return queryValues.map((value) => normalizeKey(value)).includes(normalizeKey(candidateValue)) ? 1 : 0;
 }
 
+const TOPIC_STOP_TERMS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'but', 'for', 'to', 'of', 'on', 'in', 'with', 'from', 'by', 'at', 'as',
+  'about', 'around', 'related', 'work', 'working', 'field', 'fields', 'area', 'areas', 'topic', 'topics',
+  'funding', 'fund', 'funds', 'grant', 'grants', 'scheme', 'schemes', 'call', 'calls', 'opportunity',
+  'opportunities', 'research', 'researcher', 'researchers', 'project', 'projects', 'program', 'programme',
+  'support', 'supports', 'show', 'find', 'search', 'need', 'looking', 'give', 'option', 'options',
+  'paper', 'article', 'abstract', 'title', 'study', 'studies', 'method', 'methods', 'approach', 'analysis',
+  'result', 'results', 'develop', 'develops', 'development', 'evaluate', 'evaluates', 'propose', 'proposes',
+  'system', 'systems', 'individual', 'individuals', 'person', 'people', 'suffering', 'centric',
+]);
+
+function normalizeTopicToken(token: string) {
+  const normalized = normalizeKey(token);
+  if (!normalized || TOPIC_STOP_TERMS.has(normalized)) {
+    return '';
+  }
+  if (normalized.endsWith('ies') && normalized.length > 5) {
+    return `${normalized.slice(0, -3)}y`;
+  }
+  if (normalized.endsWith('ses') && normalized.length > 5) {
+    return normalized.slice(0, -2);
+  }
+  if (normalized.endsWith('s') && normalized.length > 4) {
+    return normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+function tokenizeTopicText(input: string, maxTokens = 40) {
+  const tokens = normalizeKey(input)
+    .split(/\s+/)
+    .map(normalizeTopicToken)
+    .filter(Boolean);
+  return Array.from(new Set(tokens)).slice(0, maxTokens);
+}
+
+function buildCandidateTopicText(candidate: RecommendationCandidate) {
+  return normalizeWhitespace([
+    candidate.schemeTitle,
+    candidate.agencyName,
+    candidate.shortDescription || '',
+    candidate.fullDescription || '',
+    candidate.description || '',
+    candidate.disciplines.join(' '),
+  ].filter(Boolean).join(' '));
+}
+
+function buildQueryTopicTokens(normalized: NormalizedRecommendationSearchRequest) {
+  const query = normalized.normalizedQuery;
+  const topicSource = [
+    query.researchArea || '',
+    query.title || '',
+    query.abstract || '',
+    query.keywords.join(' '),
+    query.researchTags.join(' '),
+  ].filter(Boolean).join(' ');
+  return tokenizeTopicText(topicSource, query.queryStrength === 'rich' ? 80 : 40);
+}
+
+function findCandidateTopicHits(candidate: RecommendationCandidate, normalized: NormalizedRecommendationSearchRequest) {
+  const queryTokens = buildQueryTopicTokens(normalized);
+  if (queryTokens.length === 0) {
+    return [];
+  }
+
+  const candidateTokens = new Set(tokenizeTopicText(buildCandidateTopicText(candidate), 160));
+  return queryTokens.filter((token) => candidateTokens.has(token));
+}
+
+function hasRequiredTopicRelevance(
+  candidate: RecommendationCandidate,
+  normalized: NormalizedRecommendationSearchRequest
+) {
+  const queryTokens = buildQueryTopicTokens(normalized);
+  if (queryTokens.length === 0) {
+    return true;
+  }
+
+  if (candidate.semanticSimilarity >= TOPIC_RELEVANCE_SEMANTIC_THRESHOLD) {
+    return true;
+  }
+
+  const candidateTokens = new Set(tokenizeTopicText(buildCandidateTopicText(candidate), 160));
+  const hitCount = queryTokens.filter((token) => candidateTokens.has(token)).length;
+  const requiredHits =
+    queryTokens.length >= 4 &&
+    (normalized.inputMode === 'paper_metadata' || normalized.normalizedQuery.queryStrength === 'rich')
+      ? 2
+      : 1;
+  return hitCount >= requiredHits;
+}
+
 function normalizeSet(values: Array<string | null | undefined>) {
   return new Set(values.map((value) => normalizeKey(normalizeWhitespace(value || ''))).filter(Boolean));
 }
@@ -618,8 +718,13 @@ function buildMatchReasons(candidate: RecommendationCandidate, normalized: Norma
 
   if (disciplineHits.length > 0) {
     reasons.push(`Matched discipline: ${disciplineHits.slice(0, 2).join(', ')}`);
-  } else if (candidate.semanticSimilarity >= 0.45) {
+  } else if (candidate.semanticSimilarity >= TOPIC_RELEVANCE_SEMANTIC_THRESHOLD) {
     reasons.push('High semantic match to the query text');
+  } else {
+    const topicHits = findCandidateTopicHits(candidate, normalized);
+    if (topicHits.length > 0) {
+      reasons.push(`Topic text match: ${topicHits.slice(0, 3).join(', ')}`);
+    }
   }
 
   if (candidate.fundingKinds.length > 0 && normalized.filters.fundingKinds.length > 0) {
@@ -951,6 +1056,41 @@ function buildResearchAreaEnrichmentCacheInput(
   };
 }
 
+function getQueryEmbeddingIdentity() {
+  const health = embeddingService.getHealth();
+  return {
+    modelName: health.modelName,
+    outputDimensionality: health.outputDimensionality,
+    taskType: QUERY_EMBEDDING_TASK_TYPE,
+    version: `${QUERY_EMBEDDING_CACHE_VERSION_PREFIX}:${health.modelName}:${QUERY_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`,
+  };
+}
+
+function buildQueryEmbeddingCacheInput(normalized: NormalizedRecommendationSearchRequest) {
+  const identity = getQueryEmbeddingIdentity();
+  const semanticDocument = normalizeWhitespace(normalized.normalizedQuery.semanticDocument || '');
+  return {
+    ...identity,
+    inputMode: normalized.inputMode,
+    semanticDocument,
+    requestHash: createRequestHash({
+      inputMode: normalized.inputMode,
+      semanticDocument,
+      model: identity.modelName,
+      taskType: identity.taskType,
+      outputDimensionality: identity.outputDimensionality,
+      version: identity.version,
+    }),
+  };
+}
+
+function vectorLiteralFromEmbedding(embedding: number[]) {
+  if (!embedding.length) {
+    return null;
+  }
+  return `[${embedding.join(',')}]`;
+}
+
 export class RecommendationSearchService {
   private applyProfileContextToQuery(
     normalized: NormalizedRecommendationSearchRequest,
@@ -1027,9 +1167,12 @@ export class RecommendationSearchService {
       normalized
     );
 
-    const topScore = scored[0]?.score || 0;
+    const displayableScored = scored.filter((item) => hasRequiredTopicRelevance(item.candidate, normalized));
+    const topScore = displayableScored[0]?.score || 0;
     const lowConfidence = topScore >= scoreThreshold && topScore < lowConfidenceThreshold;
-    const filteredScored = scored.filter((item) => item.score >= scoreThreshold).slice(0, normalized.filters.limit);
+    const filteredScored = displayableScored
+      .filter((item) => item.score >= scoreThreshold)
+      .slice(0, normalized.filters.limit);
 
     return {
       filteredScored,
@@ -1041,7 +1184,8 @@ export class RecommendationSearchService {
   private async buildStrictFilterRecovery(
     normalized: NormalizedRecommendationSearchRequest,
     access?: RecommendationAccessScope,
-    profileContext: RecommendationProfileSnapshot | null = null
+    profileContext: RecommendationProfileSnapshot | null = null,
+    options: { llmContext?: RecommendationSearchRequest['llmContext']; queryVectorLiteral?: string | null } = {}
   ): Promise<RecommendationStrictFilterRecovery | null> {
     if (!hasActiveUserFilters(normalized.filters)) {
       return null;
@@ -1067,7 +1211,13 @@ export class RecommendationSearchService {
         ...normalized,
         filters: cloneFilters(retryFilters),
       };
-      const relaxedExecution = await this.executeSearch(relaxedNormalized, false, access);
+      const relaxedExecution = await this.executeSearch(
+        relaxedNormalized,
+        false,
+        access,
+        options.llmContext,
+        { queryVectorLiteral: options.queryVectorLiteral }
+      );
       const relaxedRanking = this.rankExecution(relaxedNormalized, relaxedExecution, profileContext);
       if (relaxedRanking.filteredScored.length > 0) {
         return {
@@ -1313,7 +1463,8 @@ Rules:
     normalized: NormalizedRecommendationSearchRequest,
     execution: SearchExecutionResult,
     access?: RecommendationAccessScope,
-    profileContext: RecommendationProfileSnapshot | null = null
+    profileContext: RecommendationProfileSnapshot | null = null,
+    options: { llmContext?: RecommendationSearchRequest['llmContext']; queryVectorLiteral?: string | null } = {}
   ): Promise<{ response: InternalRecommendationSearchResponse; topScore: number }> {
     const ranked = this.rankExecution(normalized, execution, profileContext);
     const { filteredScored, lowConfidence, topScore } = ranked;
@@ -1324,7 +1475,7 @@ Rules:
 
     if (filteredScored.length === 0) {
       strictFilterRecovery = hasActiveUserFilters(normalized.filters)
-        ? await this.buildStrictFilterRecovery(normalized, access, profileContext)
+        ? await this.buildStrictFilterRecovery(normalized, access, profileContext, options)
         : null;
       noResultsReason = strictFilterRecovery
         ? 'filters_too_strict'
@@ -1367,24 +1518,143 @@ Rules:
     };
   }
 
-  private async searchByVector(
+  private async loadCachedQueryVectorLiteral(
+    cacheInput: ReturnType<typeof buildQueryEmbeddingCacheInput>
+  ): Promise<string | null> {
+    try {
+      const rows = await prisma.$queryRaw<Array<{ embedding: string }>>(Prisma.sql`
+        SELECT embedding::text AS embedding
+        FROM recommendation_query_embedding_cache
+        WHERE request_hash = ${cacheInput.requestHash}
+          AND model = ${cacheInput.modelName}
+          AND embedding_version = ${cacheInput.version}
+          AND task_type = ${cacheInput.taskType}
+          AND output_dimensionality = ${cacheInput.outputDimensionality}
+        LIMIT 1
+      `);
+
+      const cached = rows[0]?.embedding;
+      if (!cached) {
+        return null;
+      }
+
+      await prisma.$executeRaw(Prisma.sql`
+        UPDATE recommendation_query_embedding_cache
+        SET hit_count = hit_count + 1,
+            last_used_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE request_hash = ${cacheInput.requestHash}
+          AND model = ${cacheInput.modelName}
+          AND embedding_version = ${cacheInput.version}
+          AND task_type = ${cacheInput.taskType}
+          AND output_dimensionality = ${cacheInput.outputDimensionality}
+      `);
+
+      return cached;
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveQueryVectorLiteral(
+    cacheInput: ReturnType<typeof buildQueryEmbeddingCacheInput>,
+    vectorLiteral: string
+  ) {
+    try {
+      await prisma.$executeRaw(Prisma.sql`
+        INSERT INTO recommendation_query_embedding_cache (
+          id,
+          request_hash,
+          input_mode,
+          semantic_document,
+          model,
+          embedding_version,
+          task_type,
+          output_dimensionality,
+          embedding,
+          hit_count,
+          last_used_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${crypto.randomUUID()},
+          ${cacheInput.requestHash},
+          ${cacheInput.inputMode},
+          ${cacheInput.semanticDocument},
+          ${cacheInput.modelName},
+          ${cacheInput.version},
+          ${cacheInput.taskType},
+          ${cacheInput.outputDimensionality},
+          CAST(${vectorLiteral} AS vector),
+          1,
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        )
+        ON CONFLICT ("request_hash", "model", "embedding_version", "task_type", "output_dimensionality")
+        DO UPDATE SET
+          semantic_document = EXCLUDED.semantic_document,
+          embedding = EXCLUDED.embedding,
+          hit_count = recommendation_query_embedding_cache.hit_count + 1,
+          last_used_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      `);
+    } catch {
+      // Cache writes should never make search fail.
+    }
+  }
+
+  private async getQueryVectorLiteral(
     normalized: NormalizedRecommendationSearchRequest,
-    ignoreUserFilters = false,
     access?: RecommendationAccessScope,
     llmContext?: RecommendationSearchRequest['llmContext']
-  ): Promise<SearchExecutionResult> {
-    const baseConditions = buildBaseConditions(normalized, ignoreUserFilters, access);
-    const vectorText = `[${(await embeddingService.generateEmbedding(
-      normalized.normalizedQuery.semanticDocument,
+  ): Promise<string | null> {
+    const cacheInput = buildQueryEmbeddingCacheInput(normalized);
+    if (!cacheInput.semanticDocument) {
+      return null;
+    }
+
+    const cached = await this.loadCachedQueryVectorLiteral(cacheInput);
+    if (cached) {
+      return cached;
+    }
+
+    const response = await embeddingService.generateEmbedding(
+      cacheInput.semanticDocument,
       {
         tenantId: llmContext?.tenantId || access?.tenantId || null,
         userId: llmContext?.userId || null,
         taskCode: FUNDING_CHAT_TASK_CODE,
         stageCode: 'FUNDING_CHAT_EMBEDDING',
         operation: 'funding_chat_embedding',
+      },
+      {
+        taskType: QUERY_EMBEDDING_TASK_TYPE,
+        outputDimensionality: cacheInput.outputDimensionality,
       }
-    )).embedding.join(',')}]`;
-    const vectorLiteral = vectorText === '[]' ? null : vectorText;
+    );
+    const vectorLiteral = vectorLiteralFromEmbedding(response.embedding);
+    if (!vectorLiteral) {
+      return null;
+    }
+
+    await this.saveQueryVectorLiteral(cacheInput, vectorLiteral);
+    return vectorLiteral;
+  }
+
+  private async searchByVector(
+    normalized: NormalizedRecommendationSearchRequest,
+    ignoreUserFilters = false,
+    access?: RecommendationAccessScope,
+    llmContext?: RecommendationSearchRequest['llmContext'],
+    options: SearchExecutionOptions = {}
+  ): Promise<SearchExecutionResult> {
+    const baseConditions = buildBaseConditions(normalized, ignoreUserFilters, access);
+    const vectorLiteral =
+      options.queryVectorLiteral !== undefined
+        ? options.queryVectorLiteral
+        : await this.getQueryVectorLiteral(normalized, access, llmContext);
 
     if (!vectorLiteral) {
       throw new Error('Embedding generation failed');
@@ -1467,10 +1737,11 @@ Rules:
     normalized: NormalizedRecommendationSearchRequest,
     ignoreUserFilters = false,
     access?: RecommendationAccessScope,
-    llmContext?: RecommendationSearchRequest['llmContext']
+    llmContext?: RecommendationSearchRequest['llmContext'],
+    options: SearchExecutionOptions = {}
   ): Promise<SearchExecutionResult> {
     const [vectorResult, fullTextResult] = await Promise.allSettled([
-      this.searchByVector(normalized, ignoreUserFilters, access, llmContext),
+      this.searchByVector(normalized, ignoreUserFilters, access, llmContext, options),
       this.searchByFullText(normalized, ignoreUserFilters, access),
     ]);
 
@@ -1503,14 +1774,40 @@ Rules:
       request.usePublicationContext === true;
     const profileContext = usePersonalContext ? request.profileContext || null : null;
     const normalized = this.applyProfileContextToQuery(normalizeRecommendationSearchRequest(request), profileContext);
-    const execution = await this.executeSearch(normalized, false, request.access, request.llmContext);
-    let best = await this.buildResponseFromExecution(normalized, execution, request.access, profileContext);
+    const queryVectorLiteral = await this.getQueryVectorLiteral(normalized, request.access, request.llmContext);
+    const execution = await this.executeSearch(
+      normalized,
+      false,
+      request.access,
+      request.llmContext,
+      { queryVectorLiteral }
+    );
+    let best = await this.buildResponseFromExecution(
+      normalized,
+      execution,
+      request.access,
+      profileContext,
+      { llmContext: request.llmContext, queryVectorLiteral }
+    );
 
     if ((best.response.totalResults === 0 || best.response.lowConfidence) && normalized.inputMode === 'research_area') {
       const enriched = await this.enrichResearchAreaRequest(normalized, request.llmContext);
       if (enriched) {
-        const enrichedExecution = await this.executeSearch(enriched, false, request.access, request.llmContext);
-        const enrichedResult = await this.buildResponseFromExecution(enriched, enrichedExecution, request.access, profileContext);
+        const enrichedQueryVectorLiteral = await this.getQueryVectorLiteral(enriched, request.access, request.llmContext);
+        const enrichedExecution = await this.executeSearch(
+          enriched,
+          false,
+          request.access,
+          request.llmContext,
+          { queryVectorLiteral: enrichedQueryVectorLiteral }
+        );
+        const enrichedResult = await this.buildResponseFromExecution(
+          enriched,
+          enrichedExecution,
+          request.access,
+          profileContext,
+          { llmContext: request.llmContext, queryVectorLiteral: enrichedQueryVectorLiteral }
+        );
 
         if (
           enrichedResult.response.totalResults > best.response.totalResults ||

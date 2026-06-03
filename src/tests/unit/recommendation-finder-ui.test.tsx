@@ -329,7 +329,7 @@ describe('finder trust recovery UI', () => {
         message={createAssistantMessage(results.map((result) => result.id))}
         runs={[createRun(results)]}
         strictRecoveryAction={{
-          summary: 'The last grounded search found no matches with these filters: Host countries: Germany.',
+          summary: 'The last search found no matches with these filters: Host countries: Germany.',
           onRetry: () => undefined,
         }}
       />

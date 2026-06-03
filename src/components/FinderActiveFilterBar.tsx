@@ -63,7 +63,7 @@ export default function FinderActiveFilterBar({
             Active Search State
           </div>
           <p className="mt-2 text-sm text-slate-600">
-            Filters changed through chat or the filter panel always appear here, so the conversation stays grounded in visible search state.
+            Filters changed through chat or the filter panel always appear here, so the conversation stays tied to visible search state.
           </p>
         </div>
 
