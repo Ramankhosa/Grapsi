@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
+  featureFindUniqueMock,
   usageMeterUpsertMock,
   usageMeterFindFirstMock,
   usageMeterCreateMock,
   usageMeterUpdateMock,
 } = vi.hoisted(() => ({
+  featureFindUniqueMock: vi.fn(),
   usageMeterUpsertMock: vi.fn(),
   usageMeterFindFirstMock: vi.fn(),
   usageMeterCreateMock: vi.fn(),
@@ -14,6 +16,9 @@ const {
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
+    feature: {
+      findUnique: featureFindUniqueMock,
+    },
     usageMeter: {
       upsert: usageMeterUpsertMock,
       findFirst: usageMeterFindFirstMock,
@@ -28,6 +33,7 @@ import { createMeteringService } from '@/lib/metering/metering'
 
 describe('metering usage meter writes', () => {
   beforeEach(() => {
+    featureFindUniqueMock.mockReset()
     usageMeterUpsertMock.mockReset()
     usageMeterFindFirstMock.mockReset()
     usageMeterCreateMock.mockReset()
@@ -73,6 +79,50 @@ describe('metering usage meter writes', () => {
         periodType: 'DAILY',
         currentUsage: 2920,
       }),
+    })
+  })
+
+  it('reads usage by feature id without validating the id as a feature code', async () => {
+    featureFindUniqueMock.mockResolvedValueOnce({ id: 'feature-grant-prep' })
+    usageMeterFindFirstMock.mockResolvedValueOnce({ currentUsage: 42 })
+
+    const service = createMeteringService(defaultConfig)
+    await expect(
+      service.getCurrentUsage('tenant-1', 'feature-grant-prep', 'MONTHLY')
+    ).resolves.toBe(42)
+
+    expect(featureFindUniqueMock).toHaveBeenCalledTimes(1)
+    expect(featureFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: 'feature-grant-prep' },
+      select: { id: true },
+    })
+    expect(usageMeterFindFirstMock).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        tenantId: 'tenant-1',
+        featureId: 'feature-grant-prep',
+        periodType: 'MONTHLY',
+      }),
+    })
+  })
+
+  it('falls back to a feature-code lookup when the input is not a feature id', async () => {
+    featureFindUniqueMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'feature-grant-prep' })
+    usageMeterFindFirstMock.mockResolvedValueOnce({ currentUsage: 17 })
+
+    const service = createMeteringService(defaultConfig)
+    await expect(
+      service.getCurrentUsage('tenant-1', 'GRANT_PREP', 'DAILY')
+    ).resolves.toBe(17)
+
+    expect(featureFindUniqueMock).toHaveBeenNthCalledWith(1, {
+      where: { id: 'GRANT_PREP' },
+      select: { id: true },
+    })
+    expect(featureFindUniqueMock).toHaveBeenNthCalledWith(2, {
+      where: { code: 'GRANT_PREP' },
+      select: { id: true },
     })
   })
 })

@@ -27,6 +27,24 @@ function getCurrentPeriod(type: 'DAILY' | 'MONTHLY'): { key: string, start: Date
 }
 
 export function createMeteringService(config: MeteringConfig): MeteringService {
+  const resolveFeatureId = async (featureRef: string): Promise<string | null> => {
+    const featureById = await prisma.feature.findUnique({
+      where: { id: featureRef },
+      select: { id: true }
+    })
+
+    if (featureById) {
+      return featureById.id
+    }
+
+    const featureByCode = await prisma.feature.findUnique({
+      where: { code: featureRef as any },
+      select: { id: true }
+    })
+
+    return featureByCode?.id || null
+  }
+
   const writeUsageMeter = async (
     reservation: any,
     periodType: 'DAILY' | 'MONTHLY',
@@ -389,22 +407,18 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
     async getCurrentUsage(tenantId: string, featureCode?: string, periodType: 'DAILY' | 'MONTHLY' = 'MONTHLY'): Promise<number> {
       const { key } = getCurrentPeriod(periodType)
-      const feature = featureCode
-        ? await prisma.feature.findFirst({
-            where: {
-              OR: [
-                { id: featureCode },
-                { code: featureCode as any }
-              ]
-            },
-            select: { id: true }
-          })
+      const featureId = featureCode
+        ? await resolveFeatureId(featureCode)
         : null
+
+      if (featureCode && !featureId) {
+        return 0
+      }
 
       const meter = await prisma.usageMeter.findFirst({
         where: {
           tenantId,
-          featureId: feature?.id,
+          featureId: featureId || undefined,
           periodType,
           periodKey: key
         }
