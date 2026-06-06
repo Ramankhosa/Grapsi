@@ -930,10 +930,6 @@ CRITICAL RULES:
     }
 
     const sectionPlan = this.normalizeSectionPlan(blueprint.sectionPlan as unknown as SectionPlanItem[]);
-    if (!sectionPlan || sectionPlan.length < 3) {
-      issues.push('Section plan must have at least 3 sections');
-    }
-
     try {
       this.validateNoCyclicDependencies(sectionPlan);
     } catch (error) {

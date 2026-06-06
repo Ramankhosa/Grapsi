@@ -13,7 +13,9 @@ async function seedPlansAndHierarchy() {
       { code: 'PATENT_DRAFTING', name: 'AI-Assisted Patent Drafting', unit: 'tokens' },
       { code: 'DIAGRAM_GENERATION', name: 'Technical Diagram Generation', unit: 'diagrams' },
       { code: 'IDEA_BANK', name: 'Idea Bank Access', unit: 'reservations' },
-      { code: 'PERSONA_SYNC', name: 'PersonaSync Style Learning', unit: 'trainings' }
+      { code: 'PERSONA_SYNC', name: 'PersonaSync Style Learning', unit: 'trainings' },
+      { code: 'GRANT_PREP', name: 'Grant Prep', unit: 'sessions' },
+      { code: 'GRANT_DRAFTING', name: 'Grant Drafting', unit: 'tokens' }
     ];
 
     const createdFeatures = {};
@@ -45,7 +47,10 @@ async function seedPlansAndHierarchy() {
       { code: 'IDEA_BANK_ACCESS', name: 'Idea Bank Access', linkedFeature: 'IDEA_BANK' },
       { code: 'IDEA_BANK_RESERVE', name: 'Idea Reservation', linkedFeature: 'IDEA_BANK' },
       { code: 'IDEA_BANK_EDIT', name: 'Idea Editing', linkedFeature: 'IDEA_BANK' },
-      { code: 'PERSONA_SYNC_LEARN', name: 'Style Learning', linkedFeature: 'PERSONA_SYNC' }
+      { code: 'PERSONA_SYNC_LEARN', name: 'Style Learning', linkedFeature: 'PERSONA_SYNC' },
+      { code: 'GRANT_PREP_CHAT', name: 'Grant Prep Chat', linkedFeature: 'GRANT_PREP' },
+      { code: 'GRANT_BLUEPRINT_GENERATE', name: 'Grant Blueprint Generation', linkedFeature: 'GRANT_PREP' },
+      { code: 'GRANT_SECTION_GENERATE', name: 'Grant Section Generation', linkedFeature: 'GRANT_DRAFTING' }
     ];
 
     const createdTasks = {};
@@ -150,19 +155,25 @@ async function seedPlansAndHierarchy() {
       // BASIC PLAN (FREE_PLAN) - Patent drafting + novelty search
       { planCode: 'FREE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 50, dailyQuota: 10 },
       { planCode: 'FREE_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 1000, dailyQuota: 100 },
+      { planCode: 'FREE_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'FREE_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: 25, dailyQuota: 5, monthlyTokenLimit: 500000, dailyTokenLimit: 50000 },
 
       // PRO PLAN - Basic services + Idea Bank + Diagram generation
       { planCode: 'PRO_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 1000, dailyQuota: 100 },
       { planCode: 'PRO_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 10000, dailyQuota: 1000 },
       { planCode: 'PRO_PLAN', featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 200, dailyQuota: 40 },
       { planCode: 'PRO_PLAN', featureCode: 'IDEA_BANK', monthlyQuota: 50, dailyQuota: 10 },
+      { planCode: 'PRO_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'PRO_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: 250, dailyQuota: 50, monthlyTokenLimit: 5000000, dailyTokenLimit: 500000 },
 
       // ENTERPRISE PLAN - Everything (all features)
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 5000, dailyQuota: 500 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 50000, dailyQuota: 5000 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 500, dailyQuota: 100 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'IDEA_BANK', monthlyQuota: 200, dailyQuota: 50 },
-      { planCode: 'ENTERPRISE_PLAN', featureCode: 'PERSONA_SYNC', monthlyQuota: 50, dailyQuota: 10 }
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'PERSONA_SYNC', monthlyQuota: 50, dailyQuota: 10 },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: null, dailyQuota: null, monthlyTokenLimit: null, dailyTokenLimit: null }
     ];
 
     for (const pfData of planFeatures) {
@@ -179,7 +190,9 @@ async function seedPlansAndHierarchy() {
             planId: createdPlans[pfData.planCode].id,
             featureId: createdFeatures[pfData.featureCode].id,
             monthlyQuota: pfData.monthlyQuota,
-            dailyQuota: pfData.dailyQuota
+            dailyQuota: pfData.dailyQuota,
+            monthlyTokenLimit: pfData.monthlyTokenLimit,
+            dailyTokenLimit: pfData.dailyTokenLimit
           }
         });
         console.log(`✅ Added ${pfData.featureCode} to ${pfData.planCode}`);
@@ -195,6 +208,9 @@ async function seedPlansAndHierarchy() {
       { planCode: 'FREE_PLAN', taskCode: 'LLM4_NOVELTY_SCREEN', allowedClasses: ['BASE_S'], defaultClass: 'BASE_S' },
       { planCode: 'FREE_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', allowedClasses: ['BASE_S'], defaultClass: 'BASE_S' },
       { planCode: 'FREE_PLAN', taskCode: 'LLM6_REPORT_GENERATION', allowedClasses: ['BASE_S'], defaultClass: 'BASE_S' },
+      { planCode: 'FREE_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+      { planCode: 'FREE_PLAN', taskCode: 'GRANT_BLUEPRINT_GENERATE', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+      { planCode: 'FREE_PLAN', taskCode: 'GRANT_SECTION_GENERATE', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
 
       // PRO PLAN - Basic services + Idea Bank + Diagram generation
       { planCode: 'PRO_PLAN', taskCode: 'LLM1_PRIOR_ART', allowedClasses: ['BASE_S', 'BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
@@ -206,6 +222,9 @@ async function seedPlansAndHierarchy() {
       { planCode: 'PRO_PLAN', taskCode: 'IDEA_BANK_ACCESS', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'PRO_PLAN', taskCode: 'IDEA_BANK_RESERVE', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'PRO_PLAN', taskCode: 'IDEA_BANK_EDIT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+      { planCode: 'PRO_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
+      { planCode: 'PRO_PLAN', taskCode: 'GRANT_BLUEPRINT_GENERATE', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
+      { planCode: 'PRO_PLAN', taskCode: 'GRANT_SECTION_GENERATE', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
 
       // ENTERPRISE PLAN - All access (everything)
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM1_PRIOR_ART', allowedClasses: ['BASE_S', 'BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'ADVANCED' },
@@ -217,7 +236,10 @@ async function seedPlansAndHierarchy() {
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'IDEA_BANK_ACCESS', allowedClasses: ['BASE_S', 'BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'IDEA_BANK_RESERVE', allowedClasses: ['BASE_S', 'BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'IDEA_BANK_EDIT', allowedClasses: ['BASE_S', 'BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
-      { planCode: 'ENTERPRISE_PLAN', taskCode: 'PERSONA_SYNC_LEARN', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'ADVANCED' }
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'PERSONA_SYNC_LEARN', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'ADVANCED' },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'GRANT_BLUEPRINT_GENERATE', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'GRANT_SECTION_GENERATE', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' }
     ];
 
     for (const accessData of llmAccess) {

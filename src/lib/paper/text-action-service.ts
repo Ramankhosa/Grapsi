@@ -413,6 +413,7 @@ export async function performTextAction(request: TextActionRequest): Promise<Tex
           sessionId,
           sectionKey: request.sectionKey,
           purpose: `paper_text_action_${action}`,
+          skipFeaturePolicy: true,
         }
       }
     );

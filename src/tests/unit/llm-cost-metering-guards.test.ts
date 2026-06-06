@@ -134,12 +134,12 @@ describe('LLM cost metering guards', () => {
     expect(joined).not.toMatch(/generateFromGemini|generateFromOpenAI|generateJsonFromDeepSeek/)
   })
 
-  it('classifies grant budget generation as grant section generation', () => {
+  it('routes grant budget generation through the section drafting model policy', () => {
     const source = readRepoFile('src/lib/grants/drafting.ts')
 
-    expect(source).toContain("taskCode: 'GRANT_SECTION_GENERATE'")
-    expect(source).toContain("stageCode: 'GRANT_BUDGET_DRAFT'")
-    expect(source).not.toContain("taskCode: 'LLM2_DRAFT'")
+    expect(source).toContain("taskCode: 'LLM2_DRAFT'")
+    expect(source).toContain("stageCode: 'PAPER_SECTION_DRAFT'")
+    expect(source).not.toContain("stageCode: 'GRANT_BUDGET_DRAFT'")
   })
 
   it('seeds Gemini embedding pricing from Google online request pricing', () => {

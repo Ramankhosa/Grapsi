@@ -26,6 +26,11 @@ import {
   normalizeGrantTemplate,
   sortAndDeduplicateGrantTemplate,
 } from './utils';
+import {
+  buildStandardGrantApplicationTemplate,
+  STANDARD_GRANT_TEMPLATE_FALLBACK_WARNING,
+  STANDARD_GRANT_TEMPLATE_VERSION,
+} from './standardGrantTemplate';
 
 const TEMPLATE_UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads', 'funding-templates');
 type TemplateRevisionType =
@@ -238,6 +243,20 @@ async function ensureTemplateRecord(fundingCallId: string, operator: IntakeOpera
   return { call, template };
 }
 
+async function findApprovedTemplateRevision(templateId: string) {
+  return prisma.fundingCallTemplateRevision.findFirst({
+    where: {
+      OR: [
+        { templateId, status: 'APPROVED' },
+        { templateId, approved_state: 'approved' },
+        { template_id: templateId, status: 'APPROVED' },
+        { template_id: templateId, approved_state: 'approved' },
+      ],
+    },
+    orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
+  });
+}
+
 async function createRevision(
   tx: Prisma.TransactionClient,
   template: FundingCallTemplate,
@@ -316,6 +335,101 @@ async function deleteLocalAssetIfPresent(storagePathValue?: string | null) {
 }
 
 export class FundingTemplateService {
+  async ensureStandardFallbackTemplate(fundingCallId: string, operator: IntakeOperator) {
+    await ensureFundingCall(fundingCallId);
+
+    const existingTemplate = await prisma.fundingCallTemplate.findUnique({
+      where: { fundingCallId: fundingCallId },
+    });
+
+    if (existingTemplate?.status === 'approved') {
+      return {
+        created: false,
+        template: existingTemplate,
+        reason: 'approved_template_exists' as const,
+      };
+    }
+
+    if (existingTemplate) {
+      const approvedRevision = await findApprovedTemplateRevision(existingTemplate.id);
+      if (approvedRevision) {
+        return {
+          created: false,
+          template: existingTemplate,
+          reason: 'approved_revision_exists' as const,
+        };
+      }
+    }
+
+    const fallbackTemplate = buildStandardGrantApplicationTemplate();
+    const compatibility = buildCompatibilitySummary(fallbackTemplate, [
+      STANDARD_GRANT_TEMPLATE_FALLBACK_WARNING,
+      `fallback_template_version:${STANDARD_GRANT_TEMPLATE_VERSION}`,
+    ]);
+    const now = new Date();
+    const operatorEmail = operator.email || operator.userId || 'system';
+
+    const template = await prisma.$transaction(async (tx) => {
+      const templateRecord = existingTemplate || await tx.fundingCallTemplate.create({
+        data: {
+          fundingCallId: fundingCallId,
+          status: 'draft',
+          grant_template_json: asJson(createEmptyGrantTemplate()),
+          compatibility_json: asJson(buildCompatibilitySummary(createEmptyGrantTemplate())),
+          compiledGrantTemplateJson: Prisma.DbNull,
+          current_revision_no: 0,
+          last_edited_by: operatorEmail,
+          last_edited_at: now,
+        },
+      });
+      const previousTemplate = existingTemplate
+        ? normalizeGrantTemplate(existingTemplate.grant_template_json)
+        : null;
+      const revisionNo = await createRevision(tx, templateRecord, {
+        revisionType: 'manual_create',
+        grantTemplate: fallbackTemplate,
+        compatibility,
+        editorUserId: operator.userId,
+        approvedState: 'approved',
+        changeNotes: `${STANDARD_GRANT_TEMPLATE_VERSION}: standard fallback grant application template`,
+        diffSummary: generateDiffSummary(previousTemplate, fallbackTemplate),
+      });
+
+      await tx.fundingCallTemplate.update({
+        where: { id: templateRecord.id },
+        data: {
+          status: 'approved',
+          grant_template_json: asJson(fallbackTemplate),
+          compatibility_json: asJson(compatibility),
+          compiledGrantTemplateJson: Prisma.DbNull,
+          current_revision_no: revisionNo,
+          last_edited_by: operatorEmail,
+          last_edited_at: now,
+          approved_by: operatorEmail,
+          approved_at: now,
+        },
+      });
+
+      await tx.fundingCall.update({
+        where: { id: fundingCallId },
+        data: {
+          template_status: 'approved',
+          active_template_id: templateRecord.id,
+        },
+      });
+
+      return tx.fundingCallTemplate.findUnique({
+        where: { id: templateRecord.id },
+      });
+    });
+
+    return {
+      created: true,
+      template,
+      reason: 'standard_fallback_created' as const,
+    };
+  }
+
   async getTemplateBundle(fundingCallId: string) {
     const call = await ensureFundingCall(fundingCallId);
 

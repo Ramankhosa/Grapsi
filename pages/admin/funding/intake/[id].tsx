@@ -218,9 +218,13 @@ function formatDateTime(value: string | null | undefined) {
 function formatJobErrorCode(errorCode: string | null | undefined) {
   switch (errorCode) {
     case 'LLM_RATE_LIMITED':
-      return 'LLM rate limited';
+      return 'LLM rate limit or quota reached';
     case 'pdf_intake_requires_gemini':
-      return 'Gemini required for PDF intake';
+      return 'PDF extraction needs Gemini multimodal configuration';
+    case 'SOURCE_PREPARATION_FAILED':
+      return 'Source could not be prepared';
+    case 'PROCESSING_FAILED':
+      return 'Call details extraction failed';
     default:
       return errorCode || 'Processing failed';
   }
@@ -341,6 +345,11 @@ export default function FundingIntakeJobPage() {
   const [guidelineBusy, setGuidelineBusy] = useState<string | null>(null);
   const [templateBusy, setTemplateBusy] = useState<string | null>(null);
   const [callBusy, setCallBusy] = useState<string | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState<string | null>(null);
+  const [recoveryMode, setRecoveryMode] = useState<'url' | 'text' | 'pdf'>('text');
+  const [recoverySourceUrl, setRecoverySourceUrl] = useState('');
+  const [recoverySourceText, setRecoverySourceText] = useState('');
+  const [recoverySourcePdf, setRecoverySourcePdf] = useState<File | null>(null);
   const [deletingJob, setDeletingJob] = useState(false);
 
   const userRoles = user?.roles || [];
@@ -362,6 +371,15 @@ export default function FundingIntakeJobPage() {
     () => details && ['queued', 'fetching', 'extracting'].includes(details.job.status),
     [details]
   );
+  const isCallBasicsLlmInProcess = useMemo(
+    () =>
+      Boolean(
+        details &&
+        details.job.status === 'extracting' &&
+        (!details.job.processing_phase || details.job.processing_phase === 'core_extraction')
+      ),
+    [details]
+  );
   const activeGuidelineRuns = useMemo(
     () => (details?.guidelines?.runs || []).filter((run) => run.status === 'queued' || run.status === 'extracting'),
     [details?.guidelines?.runs]
@@ -380,7 +398,7 @@ export default function FundingIntakeJobPage() {
       Boolean(
         details &&
         !callId &&
-        ['needs_review', 'draft_created'].includes(details.job.status) &&
+        ['needs_review', 'draft_created', 'failed'].includes(details.job.status) &&
         !hasPendingDuplicates &&
         hasDraftMinimumFields(draftValues)
       ),
@@ -388,6 +406,9 @@ export default function FundingIntakeJobPage() {
   );
   const canWorkOnGuidelines = canWriteFundingIntake && Boolean(callId || canAutoCreateDraft);
   const canWorkOnTemplates = canWriteFundingIntake && Boolean(callId || canAutoCreateDraft);
+  const canSaveDraftFromCurrentStatus = Boolean(
+    details && ['needs_review', 'draft_created', 'failed'].includes(details.job.status)
+  );
   const intakeTemplateAssetIds = useMemo(
     () =>
       (details?.template?.assets || [])
@@ -691,6 +712,63 @@ export default function FundingIntakeJobPage() {
     }
     toast.success(`Job ${action}ed.`);
     await loadDetails(false);
+  }
+
+  async function handleRecoveryRetry(mode: 'same' | 'url' | 'text' | 'pdf') {
+    if (!canWriteFundingIntake) {
+      toast.error('Write access required. You have viewer-only access.');
+      return;
+    }
+
+    if (!id) {
+      return;
+    }
+
+    setRecoveryBusy(mode);
+    try {
+      let response: Response;
+      if (mode === 'same') {
+        response = await fetch(`/api/admin/funding/intake/${id}/retry`, { method: 'POST' });
+      } else if (mode === 'pdf') {
+        if (!recoverySourcePdf) {
+          throw new Error('Choose a recovery PDF first.');
+        }
+        const formData = new FormData();
+        formData.append('sourceMode', 'pdf');
+        formData.append('file', recoverySourcePdf);
+        response = await fetch(`/api/admin/funding/intake/${id}/retry`, {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        response = await fetch(`/api/admin/funding/intake/${id}/retry`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            mode === 'url'
+              ? { sourceMode: 'url', sourceUrl: recoverySourceUrl }
+              : { sourceMode: 'text', sourceText: recoverySourceText }
+          ),
+        });
+      }
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to restart call details extraction');
+      }
+
+      toast.success(mode === 'same' ? 'Retry started from the original source.' : 'Recovery extraction started from the alternate source.');
+      setRecoverySourcePdf(null);
+      await loadDetails(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to restart call details extraction');
+    } finally {
+      setRecoveryBusy(null);
+    }
+  }
+
+  function scrollToCallBasics() {
+    document.getElementById('call-basics')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   async function handleDeleteJob() {
@@ -1118,6 +1196,169 @@ export default function FundingIntakeJobPage() {
   const guidelineSummary = details.guidelines?.guideline?.summary_json;
   const templateCounts = getTemplateCounts(details.template?.template?.grant_template_json);
   const templateConflicts = details.template?.template?.compatibility_json?.conflicts || [];
+  const callBasicsFieldKeys = new Set(['agency_name', 'scheme_title', 'description', 'open_date', 'close_date', 'official_urls']);
+  const callBasicsFields = FUNDING_FIELD_DEFINITIONS.filter((field) => callBasicsFieldKeys.has(field.key));
+  const secondaryFieldGroups = [
+    {
+      title: 'Eligibility and Fit',
+      description: 'Fields used for search filters, matching, and applicant fit.',
+      keys: [
+        'geography_scope',
+        'eligible_countries',
+        'eligible_regions',
+        'host_countries',
+        'funder_country',
+        'funding_kinds',
+        'institution_types',
+        'career_stages',
+        'citizenship_requirements',
+        'residency_requirements',
+        'application_languages',
+        'disciplines',
+        'sponsor_type',
+      ],
+    },
+    {
+      title: 'Funding and Timing',
+      description: 'Amounts, duration, rolling status, and currency fields.',
+      keys: [
+        'is_rolling',
+        'amount_min',
+        'amount_max',
+        'currency',
+        'project_duration_min_months',
+        'project_duration_max_months',
+        'project_duration_text',
+      ],
+    },
+    {
+      title: 'Application Text and Contact',
+      description: 'Long-form eligibility, deliverables, and contact notes.',
+      keys: ['eligibility_text', 'expected_deliverables_text', 'contact_info'],
+    },
+  ];
+
+  function renderFundingField(field: (typeof FUNDING_FIELD_DEFINITIONS)[number]) {
+    const extracted = extractedFields[field.key];
+    const currentValue = draftValues[field.key];
+    const evidenceLines = formatEvidenceAnchors(extracted?.evidence);
+    const statusTone = extracted?.status === 'supported'
+      ? 'bg-emerald-50 text-emerald-700'
+      : extracted?.status === 'ambiguous'
+        ? 'bg-amber-50 text-amber-700'
+        : 'bg-slate-100 text-slate-600';
+
+    return (
+      <div key={field.key} className="rounded-2xl border border-slate-200 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">{field.label}</h3>
+            <p className="mt-1 text-xs text-slate-500">{field.description || field.key}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {field.requiredForDraft && (
+              <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-medium uppercase tracking-wide text-rose-700">
+                required
+              </span>
+            )}
+            {extracted?.status && (
+              <span className={`rounded-full px-3 py-1 text-xs font-medium uppercase tracking-wide ${statusTone}`}>
+                {extracted.status}
+              </span>
+            )}
+            {typeof extracted?.confidence === 'number' && (
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-wide text-slate-700">
+                {Math.round(extracted.confidence * 100)}% confidence
+              </span>
+            )}
+          </div>
+        </div>
+        {field.type === 'textarea' ? (
+          <textarea
+            value={String(currentValue || '')}
+            onChange={(event) => updateDraftValue(field.key, event.target.value)}
+            rows={field.requiredForDraft ? 6 : 4}
+            disabled={!canWriteFundingIntake}
+            className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 disabled:bg-slate-50"
+          />
+        ) : field.type === 'number' ? (
+          <input
+            type="number"
+            value={currentValue ?? ''}
+            onChange={(event) => updateDraftValue(field.key, event.target.value === '' ? null : Number(event.target.value))}
+            disabled={!canWriteFundingIntake}
+            className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 disabled:bg-slate-50"
+          />
+        ) : field.type === 'date' ? (
+          <input
+            type="date"
+            value={currentValue || ''}
+            onChange={(event) => updateDraftValue(field.key, event.target.value || null)}
+            disabled={!canWriteFundingIntake}
+            className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 disabled:bg-slate-50"
+          />
+        ) : field.type === 'boolean' ? (
+          <label className="mt-4 inline-flex items-center gap-3 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={Boolean(currentValue)}
+              onChange={(event) => updateDraftValue(field.key, event.target.checked)}
+              disabled={!canWriteFundingIntake}
+              className="h-4 w-4 rounded border-slate-300 text-emerald-600"
+            />
+            True
+          </label>
+        ) : field.type === 'array' ? (
+          <div className="mt-4 space-y-3">
+            {field.suggestions && field.suggestions.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {field.suggestions.map((option) => {
+                  const selectedValues = Array.isArray(currentValue) ? currentValue.map((item) => String(item)) : [];
+                  const selected = selectedValues.includes(option);
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => updateDraftValue(field.key, toggleArrayValue(currentValue, option))}
+                      disabled={!canWriteFundingIntake}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium disabled:opacity-50 ${
+                        selected ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-300 bg-white text-slate-700'
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <textarea
+              value={Array.isArray(currentValue) ? currentValue.join('\n') : ''}
+              onChange={(event) => updateDraftValue(field.key, toTextArray(event.target.value))}
+              rows={4}
+              disabled={!canWriteFundingIntake}
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 disabled:bg-slate-50"
+              placeholder={field.placeholder}
+            />
+          </div>
+        ) : (
+          <input
+            type={NUMERIC_FIELD_KEYS.has(field.key as any) ? 'number' : BOOLEAN_FIELD_KEYS.has(field.key as any) ? 'text' : 'text'}
+            value={Array.isArray(currentValue) ? currentValue.join(', ') : currentValue ?? ''}
+            onChange={(event) => updateDraftValue(field.key, event.target.value)}
+            disabled={!canWriteFundingIntake}
+            className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 disabled:bg-slate-50"
+            placeholder={field.placeholder}
+          />
+        )}
+
+        {evidenceLines.length > 0 && (
+          <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+            Evidence: {evidenceLines.join(' | ')}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1149,54 +1390,88 @@ export default function FundingIntakeJobPage() {
               </div>
             )}
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/admin/funding/intake" className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
-              Back to Intake
-            </Link>
-            {callId && isPublishedLinkedCall && (
-              <button
-                type="button"
-                onClick={() => handleCallAction('archive')}
-                disabled={!canPublishFunding || callBusy !== null}
-                className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+          <div className="flex flex-col gap-3 lg:items-end">
+            {isCallBasicsLlmInProcess && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="w-full rounded-2xl border-2 border-red-600 bg-red-50 p-4 text-red-900 shadow-sm lg:min-w-[34rem]"
               >
-                {callBusy === 'archive' ? 'Archiving...' : 'Archive Published Call'}
-              </button>
+                <div className="flex items-start gap-3">
+                  <span className="relative mt-1 flex h-3 w-3 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+                    <span className="relative inline-flex h-3 w-3 rounded-full bg-red-600" />
+                  </span>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-red-700">In Process</div>
+                    <div className="mt-1 text-sm font-semibold text-red-950">
+                      Waiting for LLM response for basic call details.
+                    </div>
+                    <div className="mt-1 text-xs text-red-800">
+                      Stage: {(details.job.processing_phase || details.job.status).replace(/_/g, ' ')}
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
-            {!isActiveJob && !isPublishedLinkedCall && (
-              <button
-                type="button"
-                onClick={handleDeleteJob}
-                disabled={!canWriteFundingIntake || deletingJob}
-                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {deletingJob ? 'Deleting...' : 'Delete Intake Job'}
-              </button>
-            )}
-            {callId && !details.job.linked_funding_call_id && (
-              <Link href={`/admin/funding/catalog/${callId}`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
-                Open Catalog Record
-              </Link>
-            )}
-            {details.job.status === 'failed' && (
-              <button
-                type="button"
-                onClick={() => handleJobAction('retry')}
-                disabled={!canWriteFundingIntake}
-                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Retry Job
-              </button>
-            )}
-            {['queued', 'fetching', 'extracting'].includes(details.job.status) && (
-              <button
-                type="button"
-                onClick={() => handleJobAction('cancel')}
-                disabled={!canWriteFundingIntake}
-                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Cancel Job
-              </button>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Navigation</div>
+              <div className="flex flex-wrap gap-2">
+                <Link href="/admin/funding/intake" className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
+                  Back to Intake
+                </Link>
+                {callId && (
+                  <>
+                    <Link href={`/admin/funding/catalog/${callId}`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
+                      Open Catalog Record
+                    </Link>
+                    <Link href={`/admin/funding/catalog/${callId}/guidelines`} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900">
+                      Open Guidelines
+                    </Link>
+                    <Link href={`/admin/funding/catalog/${callId}/template`} className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900">
+                      Open Template
+                    </Link>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {(isActiveJob || !isPublishedLinkedCall || (callId && isPublishedLinkedCall)) && (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-rose-700">Danger Zone</div>
+                <div className="flex flex-wrap gap-2">
+                  {callId && isPublishedLinkedCall && (
+                    <button
+                      type="button"
+                      onClick={() => handleCallAction('archive')}
+                      disabled={!canPublishFunding || callBusy !== null}
+                      className="rounded-lg border border-sky-200 bg-white px-4 py-2 text-sm font-medium text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {callBusy === 'archive' ? 'Archiving...' : 'Archive Published Call'}
+                    </button>
+                  )}
+                  {['queued', 'fetching', 'extracting'].includes(details.job.status) && (
+                    <button
+                      type="button"
+                      onClick={() => handleJobAction('cancel')}
+                      disabled={!canWriteFundingIntake}
+                      className="rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Cancel Active Job
+                    </button>
+                  )}
+                  {!isActiveJob && !isPublishedLinkedCall && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteJob}
+                      disabled={!canWriteFundingIntake || deletingJob}
+                      className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {deletingJob ? 'Deleting...' : 'Delete Intake Job'}
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -1225,7 +1500,13 @@ export default function FundingIntakeJobPage() {
           </div>
         )}
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Status Summary</p>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">Current intake state</h2>
+            <p className="mt-1 text-sm text-slate-600">Use this snapshot to decide whether to recover, review, or publish.</p>
+          </div>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm">
             <div className="text-xs uppercase tracking-[0.18em] text-slate-300">Publish readiness</div>
             <div className="mt-2 text-2xl font-semibold">{details.publishReadiness?.ready ? 'Ready' : 'Needs fields'}</div>
@@ -1243,8 +1524,282 @@ export default function FundingIntakeJobPage() {
             <div className="mt-2 text-2xl font-semibold">{details.call?.template_status || 'none'}</div>
           </div>
         </div>
+        </section>
+
+        {details.job.status === 'failed' && (
+          <section className="mt-8 rounded-2xl border border-rose-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-700">Recovery</p>
+                <h2 className="mt-2 text-xl font-semibold text-slate-900">Call details extraction failed</h2>
+                <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                  Retry the same source, rerun call basics from a cleaner URL/text/PDF source, or continue by filling the required basics manually.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleRecoveryRetry('same')}
+                disabled={!canWriteFundingIntake || recoveryBusy !== null}
+                className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {recoveryBusy === 'same' ? 'Retrying...' : 'Retry Same Source'}
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+              <div className="font-medium">{formatJobErrorCode(details.job.error_code)}</div>
+              <div className="mt-2">{details.job.error_message || 'No extra error details were recorded.'}</div>
+            </div>
+
+            <div className="mt-6 grid gap-5 lg:grid-cols-[16rem,minmax(0,1fr)]">
+              <div className="space-y-2">
+                {(['text', 'url', 'pdf'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setRecoveryMode(mode)}
+                    className={`w-full rounded-xl border px-4 py-3 text-left text-sm font-medium ${
+                      recoveryMode === mode
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    Rerun From {mode.toUpperCase()}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={scrollToCallBasics}
+                  className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left text-sm font-medium text-emerald-900"
+                >
+                  Continue Manually
+                </button>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-5">
+                {recoveryMode === 'url' ? (
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Alternate funding opportunity URL</span>
+                    <input
+                      value={recoverySourceUrl}
+                      onChange={(event) => setRecoverySourceUrl(event.target.value)}
+                      disabled={!canWriteFundingIntake}
+                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900"
+                      placeholder="https://agency.example.org/funding/call"
+                    />
+                  </label>
+                ) : recoveryMode === 'text' ? (
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Alternate call text</span>
+                    <textarea
+                      value={recoverySourceText}
+                      onChange={(event) => setRecoverySourceText(event.target.value)}
+                      rows={8}
+                      disabled={!canWriteFundingIntake}
+                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900"
+                      placeholder="Paste clean call announcement text here"
+                    />
+                  </label>
+                ) : (
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Alternate PDF</span>
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      onChange={(event) => setRecoverySourcePdf(event.target.files?.[0] || null)}
+                      disabled={!canWriteFundingIntake}
+                      className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900"
+                    />
+                    <span className="mt-2 block text-xs text-slate-500">{recoverySourcePdf ? recoverySourcePdf.name : 'PDF recovery uses the same intake upload checks.'}</span>
+                  </label>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleRecoveryRetry(recoveryMode)}
+                  disabled={!canWriteFundingIntake || recoveryBusy !== null}
+                  className="mt-4 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {recoveryBusy === recoveryMode ? 'Starting Recovery...' : `Rerun From ${recoveryMode.toUpperCase()}`}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section id="call-basics" className="mt-8 scroll-mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Required Basics</p>
+              <h2 className="mt-2 text-xl font-semibold text-slate-900">Verify call basics</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Agency name, scheme title, and description are required before a draft can be saved. Failed jobs can continue manually from here.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Draft</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSaveDraft(false)}
+                  disabled={!canWriteFundingIntake || savingDraft || !canSaveDraftFromCurrentStatus}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingDraft ? 'Saving...' : 'Save Draft'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveDraft(true)}
+                  disabled={!canWriteFundingIntake || savingDraft || !canSaveDraftFromCurrentStatus}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingDraft ? 'Saving...' : details.job.input_type === 'json' ? 'Save Draft + Import JSON' : 'Save Draft + Extract All'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExtractAll}
+                  disabled={!canWriteFundingIntake || extractingAll || !callId}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {extractingAll ? 'Running...' : details.job.input_type === 'json' ? 'Import JSON Artifacts' : 'Extract All From Source'}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            {callBasicsFields.map((field) => renderFundingField(field))}
+          </div>
+        </section>
+
+        {(details.duplicates.length > 0 || (details.domainDuplicates && details.domainDuplicates.length > 0)) && (
+          <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Duplicate Review</p>
+              <h2 className="mt-2 text-xl font-semibold text-slate-900">Resolve possible duplicate calls</h2>
+              <p className="mt-1 text-sm text-slate-600">Choose how to handle each candidate before saving a new draft.</p>
+            </div>
+
+            <div className="mt-5 grid gap-5 lg:grid-cols-2">
+              <div className="space-y-3">
+                {details.duplicates.map((duplicate) => (
+                  <div key={duplicate.id} className="rounded-xl border border-slate-200 p-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{duplicate.candidate?.scheme_title || 'Existing funding call'}</div>
+                        <div className="mt-1 text-sm text-slate-600">{duplicate.candidate?.agency_name || 'Unknown agency'}</div>
+                        <div className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">
+                          {duplicate.match_type.replace(/_/g, ' ')} | {Math.round(duplicate.match_score * 100)}% match
+                        </div>
+                      </div>
+                      <select
+                        value={duplicateResolutions[duplicate.id] || 'pending'}
+                        onChange={(event) =>
+                          setDuplicateResolutions((current) => ({
+                            ...current,
+                            [duplicate.id]: event.target.value,
+                          }))
+                        }
+                        disabled={!canWriteFundingIntake}
+                        className="w-full max-w-xs rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      >
+                        <option value="pending">Pending</option>
+                        <option value="ignored">Ignore candidate</option>
+                        <option value="create_new_anyway">Create new anyway</option>
+                        <option value="merged_to_existing">Use existing funding call</option>
+                      </select>
+                    </div>
+                  </div>
+                ))}
+                {details.duplicates.length === 0 && (
+                  <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-900">No blocking duplicate candidates were detected.</div>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                {(details.domainDuplicates || []).map((duplicate) => (
+                  <div key={duplicate.candidate_funding_call_id} className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+                    <div className="font-medium text-slate-900">{duplicate.candidate.scheme_title}</div>
+                    <div className="mt-1">{duplicate.candidate.agency_name}</div>
+                    <div className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">
+                      {duplicate.source_domain} | {Math.round(duplicate.match_score * 100)}% | {duplicate.strong_similarity ? 'strong' : 'review'}
+                    </div>
+                  </div>
+                ))}
+                {(!details.domainDuplicates || details.domainDuplicates.length === 0) && (
+                  <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No same-domain matches.</div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Secondary Metadata</p>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">Complete search and matching details</h2>
+            <p className="mt-1 text-sm text-slate-600">These fields improve recommendations, filtering, and downstream drafting context.</p>
+          </div>
+          <div className="mt-6 space-y-4">
+            {secondaryFieldGroups.map((group) => {
+              const groupFields = FUNDING_FIELD_DEFINITIONS.filter((field) => group.keys.includes(field.key));
+              return (
+                <details key={group.title} className="rounded-2xl border border-slate-200 p-5" open={group.title === 'Eligibility and Fit'}>
+                  <summary className="cursor-pointer text-base font-semibold text-slate-900">
+                    {group.title}
+                    <span className="ml-3 text-sm font-normal text-slate-500">{group.description}</span>
+                  </summary>
+                  <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                    {groupFields.map((field) => renderFundingField(field))}
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Next Steps</p>
+              <h2 className="mt-2 text-xl font-semibold text-slate-900">Guidelines and template</h2>
+              <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                Guidelines and Template have dedicated workspaces. Use these cards after the call draft exists.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {callId ? (
+                <>
+                  <Link href={`/admin/funding/catalog/${callId}/guidelines`} className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900">
+                    Open Guidelines
+                  </Link>
+                  <Link href={`/admin/funding/catalog/${callId}/template`} className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900">
+                    Open Template
+                  </Link>
+                </>
+              ) : (
+                <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">Save the call draft to unlock Guidelines and Template.</div>
+              )}
+            </div>
+          </div>
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+              <div className="text-xs uppercase tracking-[0.18em] text-amber-700">Guidelines</div>
+              <div className="mt-2 text-2xl font-semibold text-amber-950">{details.call?.guideline_status || 'none'}</div>
+              <div className="mt-3 text-sm text-amber-900">Recent runs: {(details.guidelines?.runs || []).length}</div>
+              <div className="mt-1 text-sm text-amber-900">Rules: {guidelineSummary?.totalRules || 0}</div>
+            </div>
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 p-5">
+              <div className="text-xs uppercase tracking-[0.18em] text-sky-700">Template</div>
+              <div className="mt-2 text-2xl font-semibold text-sky-950">{details.call?.template_status || 'none'}</div>
+              <div className="mt-3 text-sm text-sky-900">Assets: {(details.template?.assets || []).length}</div>
+              <div className="mt-1 text-sm text-sky-900">Items: {templateCounts.questions + templateCounts.sections + templateCounts.attachments + templateCounts.evaluationCriteria + templateCounts.submissionRules + templateCounts.budget}</div>
+            </div>
+          </div>
+        </section>
 
         <div className="mt-8 space-y-8">
+          {details && ((details) => false && (
+            <div className="hidden">
+            <>
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -1252,16 +1807,9 @@ export default function FundingIntakeJobPage() {
                 <p className="mt-1 text-sm text-slate-600">Canonical source text for this intake job. URL, text, PDF, and JSON all feed the same review workspace. Guideline and template-specific extraction happens in the dedicated tabs or from the uploaded JSON artifacts.</p>
               </div>
               <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                Latest extraction: {details.extraction ? formatDateTime(details.extraction.created_at) : 'Not available'}
+                Latest extraction: {formatDateTime(details.extraction?.created_at)}
               </div>
             </div>
-
-            {details.job.status === 'failed' && (
-              <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                <div className="font-medium">{formatJobErrorCode(details.job.error_code)}</div>
-                <div className="mt-2">{details.job.error_message || 'No extra error details were recorded.'}</div>
-              </div>
-            )}
 
             {extractionWarnings.length > 0 && (
               <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -1397,7 +1945,7 @@ export default function FundingIntakeJobPage() {
                   disabled={!canWriteFundingIntake || savingDraft || !['needs_review', 'draft_created'].includes(details.job.status)}
                   className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingDraft ? 'Saving...' : 'Save Draft Only'}
+                  {savingDraft ? 'Saving...' : 'Save Draft'}
                 </button>
                 <button
                   type="button"
@@ -1451,11 +1999,11 @@ export default function FundingIntakeJobPage() {
                   </div>
                 </div>
 
-                {details.domainDuplicates && details.domainDuplicates.length > 0 && (
+                {(details.domainDuplicates || []).length > 0 && (
                   <div className="rounded-2xl border border-slate-200 p-5">
                     <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-700">Same-domain matches</h3>
                     <div className="mt-4 space-y-3">
-                      {details.domainDuplicates.map((duplicate) => (
+                      {(details.domainDuplicates || []).map((duplicate) => (
                         <div key={duplicate.candidate_funding_call_id} className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
                           <div className="font-medium text-slate-900">{duplicate.candidate.scheme_title}</div>
                           <div className="mt-1">{duplicate.candidate.agency_name}</div>
@@ -1580,6 +2128,9 @@ export default function FundingIntakeJobPage() {
               </div>
             </div>
           </section>
+            </>
+            </div>
+          ))(details)}
 
           {false && (
             <>
@@ -2018,43 +2569,53 @@ export default function FundingIntakeJobPage() {
                 <h2 className="text-xl font-semibold text-slate-900">Publish</h2>
                 <p className="mt-1 text-sm text-slate-600">Publish remains warning-only for incomplete guidelines or templates, but the readiness split is visible here. Guideline and template statuses below come from their dedicated tabs, not from any inline editor on this page.</p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleCallAction('publish')}
-                  disabled={!canPublishFunding || !callId || callBusy !== null || !details.publishReadiness?.ready}
-                  className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {callBusy === 'publish' ? 'Publishing...' : 'Publish'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleCallAction('archive')}
-                  disabled={!canPublishFunding || !callId || callBusy !== null}
-                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {callBusy === 'archive' ? 'Archiving...' : 'Archive'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleCallAction('reject')}
-                  disabled={!canPublishFunding || !callId || callBusy !== null}
-                  className="rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {callBusy === 'reject' ? 'Rejecting...' : 'Reject'}
-                </button>
-                <Link
-                  href="/admin/funding/intake"
-                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"
-                >
-                  Back to Intake Dashboard
-                </Link>
-                <Link
-                  href="/admin/funding/intake#submit-intake-source"
-                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800"
-                >
-                  Initiate Another Call
-                </Link>
+              <div className="flex flex-col gap-3 lg:items-end">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">Publishing</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleCallAction('publish')}
+                      disabled={!canPublishFunding || !callId || callBusy !== null || !details.publishReadiness?.ready}
+                      className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {callBusy === 'publish' ? 'Publishing...' : 'Publish'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCallAction('archive')}
+                      disabled={!canPublishFunding || !callId || callBusy !== null}
+                      className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {callBusy === 'archive' ? 'Archiving...' : 'Archive'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCallAction('reject')}
+                      disabled={!canPublishFunding || !callId || callBusy !== null}
+                      className="rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {callBusy === 'reject' ? 'Rejecting...' : 'Reject'}
+                    </button>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Navigation</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link
+                      href="/admin/funding/intake"
+                      className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"
+                    >
+                      Back to Intake Dashboard
+                    </Link>
+                    <Link
+                      href="/admin/funding/intake#submit-intake-source"
+                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800"
+                    >
+                      Initiate Another Call
+                    </Link>
+                  </div>
+                </div>
               </div>
             </div>
 

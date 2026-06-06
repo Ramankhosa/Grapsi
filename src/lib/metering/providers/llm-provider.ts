@@ -2,6 +2,14 @@
 // Abstract interface for all LLM providers
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
+import { AnthropicProvider } from './anthropic-provider'
+import { DeepSeekProvider } from './deepseek-provider'
+import { GeminiProvider } from './gemini-provider'
+import { GrokProvider } from './grok-provider'
+import { GroqProvider } from './groq-provider'
+import { OpenAIProvider } from './openai-provider'
+import { QwenProvider } from './qwen-provider'
+import { ZhipuProvider } from './zhipu-provider'
 
 export interface LLMProvider {
   name: string
@@ -37,28 +45,20 @@ export function createLLMProvider(type: ProviderType, config: ProviderConfig): L
   switch (type) {
     case 'gemini':
     case 'gemini-flash-lite':
-      const { GeminiProvider } = require('./gemini-provider')
       return new GeminiProvider(config, type)
     case 'openai':
-      const { OpenAIProvider } = require('./openai-provider')
       return new OpenAIProvider(config)
     case 'anthropic':
-      const { AnthropicProvider } = require('./anthropic-provider')
       return new AnthropicProvider(config)
     case 'deepseek':
-      const { DeepSeekProvider } = require('./deepseek-provider')
       return new DeepSeekProvider(config)
     case 'groq':
-      const { GroqProvider } = require('./groq-provider')
       return new GroqProvider(config)
     case 'grok':
-      const { GrokProvider } = require('./grok-provider')
       return new GrokProvider(config)
     case 'zhipu':
-      const { ZhipuProvider } = require('./zhipu-provider')
       return new ZhipuProvider(config)
     case 'qwen':
-      const { QwenProvider } = require('./qwen-provider')
       return new QwenProvider(config)
     default:
       throw new Error(`Unsupported provider type: ${type}`)

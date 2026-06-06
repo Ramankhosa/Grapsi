@@ -18,7 +18,50 @@ const jsonSchema = z.object({
   sourceText: z.string().optional(),
 })
 
-async function stageTemplateUpload(file: File) {
+const MAX_TEMPLATE_UPLOAD_BYTES = 20 * 1024 * 1024
+const SUPPORTED_TEMPLATE_UPLOAD_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+])
+
+function inferTemplateUploadMimeType(file: File) {
+  const declaredType = file.type?.split(';')[0]?.trim().toLowerCase()
+  if (declaredType && SUPPORTED_TEMPLATE_UPLOAD_MIME_TYPES.has(declaredType)) {
+    return declaredType
+  }
+
+  const fileName = file.name.toLowerCase()
+  if (fileName.endsWith('.pdf')) return 'application/pdf'
+  if (fileName.endsWith('.png')) return 'image/png'
+  if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) return 'image/jpeg'
+  if (fileName.endsWith('.webp')) return 'image/webp'
+
+  return declaredType || 'application/octet-stream'
+}
+
+function validateTemplateUpload(file: File) {
+  if (file.size > MAX_TEMPLATE_UPLOAD_BYTES) {
+    return {
+      ok: false as const,
+      message: 'Template file is too large. Upload a PDF or image under 20 MB.',
+    }
+  }
+
+  const mimeType = inferTemplateUploadMimeType(file)
+  if (!SUPPORTED_TEMPLATE_UPLOAD_MIME_TYPES.has(mimeType)) {
+    return {
+      ok: false as const,
+      message: 'Template file must be a PDF, PNG, JPG, JPEG, or WebP image.',
+    }
+  }
+
+  return { ok: true as const, mimeType }
+}
+
+async function stageTemplateUpload(file: File, mimeType: string) {
   const bytes = Buffer.from(await file.arrayBuffer())
   const checksum = crypto.createHash('sha256').update(bytes).digest('hex')
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -27,7 +70,7 @@ async function stageTemplateUpload(file: File) {
 
   return {
     originalName: file.name || 'template-upload',
-    mimeType: file.type || 'application/octet-stream',
+    mimeType,
     size: file.size,
     tempFilePath: targetPath,
     checksum,
@@ -56,9 +99,14 @@ export async function POST(
         return NextResponse.json({ message: 'Upload a template file to continue' }, { status: 400 })
       }
 
+      const validation = validateTemplateUpload(file)
+      if (!validation.ok) {
+        return NextResponse.json({ message: validation.message }, { status: 400 })
+      }
+
       asset = await fundingTemplateService.createUploadedAsset(
         params.callId,
-        await stageTemplateUpload(file),
+        await stageTemplateUpload(file, validation.mimeType),
         auth.operator
       )
     } else {

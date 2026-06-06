@@ -79,7 +79,7 @@ type GrantDimensionTargetBundle = {
   targets: IndexedGrantDimensionTarget[];
 };
 
-const GRANT_STRATEGY_MAX_QUERY_COUNT = 10;
+const GRANT_STRATEGY_MAX_QUERY_COUNT = 14;
 const GRANT_STRATEGY_MAX_TARGETS_PER_QUERY = 4;
 const GRANT_STRATEGY_FOCUSED_QUERY_RESERVE = 8;
 const GRANT_STRATEGY_RESULTS_PER_QUERY = GRANT_SEARCH_RESULT_LIMIT;
@@ -487,8 +487,16 @@ function buildGrantDimensionStrategyPrompt(input: {
       dimension: target.dimension,
     })),
   }));
-  const queryCount = input.bundles.length;
-  const targetPaperCount = queryCount * GRANT_STRATEGY_RESULTS_PER_QUERY;
+  const minimumQueryCount = Math.min(
+    GRANT_STRATEGY_MAX_QUERY_COUNT,
+    Math.max(
+      input.bundles.length,
+      input.bundles.length + Math.min(4, Math.ceil(input.bundles.length / 2))
+    )
+  );
+  const maximumQueryCount = GRANT_STRATEGY_MAX_QUERY_COUNT;
+  const targetPaperCountMin = minimumQueryCount * GRANT_STRATEGY_RESULTS_PER_QUERY;
+  const targetPaperCountMax = maximumQueryCount * GRANT_STRATEGY_RESULTS_PER_QUERY;
 
   return `You are an expert academic research librarian creating a literature search strategy for a grant-backed literature review.
 
@@ -504,43 +512,48 @@ BLUEPRINT DIMENSION BUNDLES:
 ${JSON.stringify(bundlePayload)}
 
 TASK:
-Generate exactly ${queryCount} high-quality academic search queries, one query per bundle.
-The app will retrieve about ${GRANT_STRATEGY_RESULTS_PER_QUERY} papers per query, so the total search pool should stay around ${targetPaperCount} papers before deduplication and relevance filtering.
+Generate ${minimumQueryCount}-${maximumQueryCount} high-quality academic search queries.
+The app will retrieve about ${GRANT_STRATEGY_RESULTS_PER_QUERY} papers per query, so the total search pool should stay around ${targetPaperCountMin}-${targetPaperCountMax} papers before deduplication and relevance filtering.
 
 Rules:
 - Each output query must use one bundleId from the input.
-- Each bundleId must be used exactly once.
-- Use the bundle's targetIds exactly. Do not invent ids and do not split a bundle into multiple queries.
-- Write short keyword search phrases, usually 4-8 words.
+- Each bundleId must appear at least once. Important bundles may appear 2-3 times using different wording.
+- Use only targetIds from the selected bundleId. Do not invent ids.
+- Write short keyword search phrases, usually 3-8 words.
 - Do not use question format.
 - Build the query from the bundle evidenceTheme, queryFocus, bundleMode, and dimensions. Optional domain anchors are context, not a checklist.
 - Do not stuff keywords from the grant prep. Never paste long lists of project-specific phrases into a query.
 - Avoid administrative grant terms, dates, budgets, output counts, internal milestones, section labels, and exact proposal deliverables.
 - Avoid generic phrases like "literature review", "grant", "proposal", or "project" unless genuinely useful.
-- For bundleMode "focused", make a selective query tied to the target dimensions and one evidence role such as need, gap, feasibility, validation, impact, precedent, policy fit, or evidence boundary.
+- Generate a recall-first variant before a highly specific variant for the central evidence theme. Use researcher search vocabulary likely to appear in titles and abstracts.
+- Include synonym variants for the core technical/social construct when relevant. Examples: "generative AI", "ChatGPT", "large language models", "LLM", "GPT", "automation", "AI tools".
+- Include domain/labor vocabulary when relevant. Examples: "job market", "employment", "workforce", "occupational exposure", "job displacement", "augmentation", "skills", "reskilling", "software developers", "coding jobs", "programmers".
+- Keep geography such as India, Taiwan, district names, or institution names out of the first recall query unless the bundle specifically needs country-policy evidence. Put geography in a separate policy/comparative query.
+- For bundleMode "focused", make at least one selective query tied to the target dimensions and one evidence role such as need, gap, feasibility, validation, impact, precedent, policy fit, or evidence boundary.
 - For bundleMode "broad", use academic title/abstract language that may not match the proposal wording exactly. Prefer broader population, setting, intervention, method, policy, evaluation, or outcome terms.
 - Prefer terms that will find empirical evidence, intervention studies, implementation evidence, comparisons, policy evidence, evaluation metrics, or evidence boundaries relevant to the targetIds.
 - A good query should have one clear academic construct plus one domain/population/method anchor.
-- If a bundle contains multiple dimensions, write the query around their shared evidence family. Do not combine unrelated concepts in one phrase.
-- Keep the strategy selective. It should support selecting 20-30 final Grant Citations from roughly ${targetPaperCount} candidate papers, not broad harvesting.
+- If a bundle contains multiple dimensions, write each query around their shared evidence family or a valid subset of targetIds. Do not combine unrelated concepts in one phrase.
+- Do not overfit to proposal wording like "socio-technical resilience" if papers are more likely indexed under "labor market adjustment", "occupational exposure", "workforce transition", or another standard academic phrase.
+- The strategy should support selecting 20-30 final Grant Citations from roughly ${targetPaperCountMin}-${targetPaperCountMax} candidate papers with enough recall to avoid missing obvious relevant work.
 - searchIntent must start with "focused_" for focused bundles and "broad_discovery_" for broad bundles.
 
 Respond in JSON format ONLY:
 {
   "summary": "<1-2 sentence overview of how the queries cover the grant dimensions>",
-  "estimatedPapers": ${targetPaperCount},
+  "estimatedPapers": <number between ${targetPaperCountMin} and ${targetPaperCountMax}>,
   "queries": [
     {
       "bundleId": "B1",
       "queryText": "<keyword search phrase>",
       "category": "<CORE_CONCEPTS|DOMAIN_APPLICATION|METHODOLOGY|THEORETICAL_FOUNDATION|SURVEYS_REVIEWS|COMPETING_APPROACHES|RECENT_ADVANCES|GAP_IDENTIFICATION>",
       "description": "<what evidence this query should find for the mapped dimensions>",
-      "priority": <1-${queryCount}>,
+      "priority": <1-${maximumQueryCount}>,
       "suggestedSources": ["semantic_scholar", "openalex", "crossref"],
       "suggestedYearFrom": <optional year>,
       "suggestedYearTo": <optional year>,
       "searchIntent": "<focused_or_broad_discovery_snake_case_intent>",
-      "targetIds": ["exact ids from that bundle"]
+      "targetIds": ["one or more exact ids from that bundle"]
     }
   ]
 }`;
@@ -614,6 +627,94 @@ function resolveGrantSearchIntent(value: unknown, bundle: GrantDimensionTargetBu
   return `${prefix}_${unprefixed || 'grant_evidence'}`.slice(0, 80);
 }
 
+function buildGrantFallbackQueryText(bundle: GrantDimensionTargetBundle): string {
+  const text = normalizeGrantSearchText([
+    bundle.theme,
+    bundle.queryFocus,
+    ...bundle.targets.map((target) => target.dimension),
+  ].join(' '));
+
+  const phrases: string[] = [];
+  if (/\b(?:generative|chatgpt|gpt|llm|language models?)\b/i.test(text)) {
+    phrases.push('generative AI');
+  } else if (/\bai\b|artificial intelligence/i.test(text)) {
+    phrases.push('artificial intelligence');
+  }
+
+  if (/\b(?:labor|labour|employment|jobs?|workforce|occupational)\b/i.test(text)) {
+    phrases.push('labor market workforce');
+  }
+  if (/\b(?:software|coding|programmer|developer|it sector)\b/i.test(text)) {
+    phrases.push('software developers jobs');
+  }
+  if (/\b(?:skill|reskill|upskill|training)\b/i.test(text)) {
+    phrases.push('reskilling skills');
+  }
+  if (/\b(?:policy|roadmap|framework|government|institutional)\b/i.test(text)) {
+    phrases.push('policy framework');
+  }
+  if (/\b(?:barrier|gap|challenge|constraint)\b/i.test(text)) {
+    phrases.push('barriers challenges');
+  }
+  if (/\b(?:survey|methodology|method|evaluation|assessment)\b/i.test(text)) {
+    phrases.push('survey methodology');
+  }
+
+  const fallbackTokens = [...grantSearchTokens(text)].slice(0, 7);
+  const query = [...phrases.join(' ').split(/\s+/), ...fallbackTokens]
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(query)).slice(0, 8).join(' ') || 'grant evidence implementation outcomes';
+}
+
+function limitGrantQueriesPreservingCoverage(
+  queries: GeneratedQuery[],
+  bundles: GrantDimensionTargetBundle[]
+): GeneratedQuery[] {
+  const sorted = [...queries].sort((left, right) => left.priority - right.priority);
+  if (sorted.length <= GRANT_STRATEGY_MAX_QUERY_COUNT) {
+    return sorted.map((query, index) => ({ ...query, priority: index + 1 }));
+  }
+
+  const selected: GeneratedQuery[] = [];
+  const selectedKeys = new Set<string>();
+  const uncoveredTargetIds = new Set(bundles.flatMap((bundle) => bundle.targets.map((target) => target.id)));
+
+  const addQuery = (query: GeneratedQuery | undefined) => {
+    if (!query) return;
+    const key = query.queryText.toLowerCase();
+    if (selectedKeys.has(key)) return;
+    selected.push(query);
+    selectedKeys.add(key);
+    for (const targetId of query.targetIds || []) {
+      uncoveredTargetIds.delete(targetId);
+    }
+  };
+
+  while (uncoveredTargetIds.size > 0 && selected.length < GRANT_STRATEGY_MAX_QUERY_COUNT) {
+    const next = sorted
+      .filter((query) => !selectedKeys.has(query.queryText.toLowerCase()))
+      .map((query) => ({
+        query,
+        coverage: (query.targetIds || []).filter((targetId) => uncoveredTargetIds.has(targetId)).length,
+      }))
+      .filter((candidate) => candidate.coverage > 0)
+      .sort((left, right) => right.coverage - left.coverage || left.query.priority - right.query.priority)[0]?.query;
+    if (!next) break;
+    addQuery(next);
+  }
+
+  for (const query of sorted) {
+    if (selected.length >= GRANT_STRATEGY_MAX_QUERY_COUNT) break;
+    addQuery(query);
+  }
+
+  return selected
+    .slice(0, GRANT_STRATEGY_MAX_QUERY_COUNT)
+    .map((query, index) => ({ ...query, priority: index + 1 }));
+}
+
 function parseStrategyResponse(output: string): LLMStrategyResponse {
   const parsed = parseJsonFromOutput(output);
   
@@ -648,69 +749,105 @@ function parseGrantDimensionStrategyResponse(
     throw new Error('Invalid response: missing queries array');
   }
 
-  if (rawQueries.length < bundles.length) {
-    throw new Error(`Invalid response: expected ${bundles.length} bundled queries, received ${rawQueries.length}`);
+  const targetById = new Map(bundles.flatMap((bundle) => bundle.targets).map((target) => [target.id, target]));
+  const bundleById = new Map(bundles.map((bundle) => [bundle.id, bundle]));
+  const coveredTargetIds = new Set<string>();
+  const seenQueryTexts = new Set<string>();
+
+  const queries: GeneratedQuery[] = [];
+
+  rawQueries.forEach((q: any, idx: number) => {
+    const requestedBundleId = String(q?.bundleId || '').trim();
+    const expectedBundle = bundleById.get(requestedBundleId) || bundles[idx % bundles.length];
+    if (!expectedBundle) return;
+
+    const expectedTargetIds = expectedBundle.targets.map((target) => target.id);
+    const expectedTargetSet = new Set(expectedTargetIds);
+    const rawTargetIds: string[] = Array.isArray(q?.targetIds)
+      ? q.targetIds
+          .map((value: unknown) => String(value || '').trim())
+          .filter((targetId: string) => targetById.has(targetId) && expectedTargetSet.has(targetId))
+      : [];
+    const targetIds: string[] = rawTargetIds.length > 0 ? Array.from(new Set(rawTargetIds)) : expectedTargetIds;
+    const queryText = normalizeGrantGeneratedQueryText(q?.queryText);
+    const queryKey = queryText.toLowerCase();
+    if (queryText.trim().length < 2 || seenQueryTexts.has(queryKey)) return;
+
+    seenQueryTexts.add(queryKey);
+    targetIds.forEach((targetId: string) => coveredTargetIds.add(targetId));
+
+    queries.push({
+      queryText,
+      category: normalizeSearchCategory(q?.category),
+      description: String(q?.description || 'Search query').slice(0, 500),
+      priority: Number(q?.priority) || idx + 1,
+      suggestedSources: Array.isArray(q?.suggestedSources) && q.suggestedSources.length > 0
+        ? q.suggestedSources.map((source: unknown) => String(source || '').trim()).filter(Boolean)
+        : DEFAULT_SEARCH_SOURCES,
+      suggestedYearFrom: q?.suggestedYearFrom ? Number(q.suggestedYearFrom) : undefined,
+      suggestedYearTo: q?.suggestedYearTo ? Number(q.suggestedYearTo) : undefined,
+      searchIntent: resolveGrantSearchIntent(q?.searchIntent || expectedBundle.theme, expectedBundle),
+      resultLimit: GRANT_STRATEGY_RESULTS_PER_QUERY,
+      targetIds,
+      dimensionTargets: targetIds.map((targetId: string) => {
+        const target = targetById.get(targetId)!;
+        return {
+          sectionKey: target.sectionKey,
+          dimension: target.dimension,
+          ...(target.dimensionType ? { dimensionType: target.dimensionType } : {}),
+        };
+      }),
+    });
+  });
+
+  for (const bundle of bundles) {
+    const missingTargetIds = bundle.targets
+      .map((target) => target.id)
+      .filter((targetId) => !coveredTargetIds.has(targetId));
+    if (missingTargetIds.length === 0) continue;
+
+    const queryText = normalizeGrantGeneratedQueryText(buildGrantFallbackQueryText(bundle));
+    const queryKey = queryText.toLowerCase();
+    if (seenQueryTexts.has(queryKey)) continue;
+
+    seenQueryTexts.add(queryKey);
+    missingTargetIds.forEach((targetId) => coveredTargetIds.add(targetId));
+    queries.push({
+      queryText,
+      category: normalizeSearchCategory(bundle.targets[0]?.dimensionType === 'gap' ? 'GAP_IDENTIFICATION' : 'CORE_CONCEPTS'),
+      description: `Fallback recall query for ${bundle.theme}.`.slice(0, 500),
+      priority: queries.length + 1,
+      suggestedSources: DEFAULT_SEARCH_SOURCES,
+      searchIntent: resolveGrantSearchIntent(bundle.theme, bundle),
+      resultLimit: GRANT_STRATEGY_RESULTS_PER_QUERY,
+      targetIds: missingTargetIds,
+      dimensionTargets: missingTargetIds.map((targetId: string) => {
+        const target = targetById.get(targetId)!;
+        return {
+          sectionKey: target.sectionKey,
+          dimension: target.dimension,
+          ...(target.dimensionType ? { dimensionType: target.dimensionType } : {}),
+        };
+      }),
+    });
   }
 
-  const targetById = new Map(bundles.flatMap((bundle) => bundle.targets).map((target) => [target.id, target]));
-  const coveredTargetIds = new Set<string>();
+  const limitedQueries = limitGrantQueriesPreservingCoverage(queries, bundles);
 
-  const queries = bundles
-    .map((expectedBundle, idx): GeneratedQuery => {
-      const q = rawQueries.find((candidate: any) =>
-        String(candidate?.bundleId || '').trim() === expectedBundle.id
-      ) || rawQueries[idx];
-
-      const rawTargetIds = Array.isArray(q?.targetIds)
-        ? q.targetIds
-            .map((value: unknown) => String(value || '').trim())
-            .filter((targetId: string) => targetById.has(targetId))
-        : [];
-      const rawTargetSet = new Set(rawTargetIds);
-      const expectedTargetIds = expectedBundle.targets.map((target) => target.id);
-      const targetIds = expectedTargetIds.every((targetId) => rawTargetSet.has(targetId))
-        ? rawTargetIds.filter((targetId: string) => expectedTargetIds.includes(targetId))
-        : expectedTargetIds;
-
-      targetIds.forEach((targetId: string) => coveredTargetIds.add(targetId));
-
-      return {
-        queryText: normalizeGrantGeneratedQueryText(q?.queryText),
-        category: normalizeSearchCategory(q?.category),
-        description: String(q?.description || 'Search query').slice(0, 500),
-        priority: idx + 1,
-        suggestedSources: Array.isArray(q?.suggestedSources) && q.suggestedSources.length > 0
-          ? q.suggestedSources.map((source: unknown) => String(source || '').trim()).filter(Boolean)
-          : DEFAULT_SEARCH_SOURCES,
-        suggestedYearFrom: q?.suggestedYearFrom ? Number(q.suggestedYearFrom) : undefined,
-        suggestedYearTo: q?.suggestedYearTo ? Number(q.suggestedYearTo) : undefined,
-        searchIntent: resolveGrantSearchIntent(q?.searchIntent || expectedBundle.theme, expectedBundle),
-        resultLimit: GRANT_STRATEGY_RESULTS_PER_QUERY,
-        targetIds,
-        dimensionTargets: targetIds.map((targetId: string) => {
-          const target = targetById.get(targetId)!;
-          return {
-            sectionKey: target.sectionKey,
-            dimension: target.dimension,
-            ...(target.dimensionType ? { dimensionType: target.dimensionType } : {}),
-          };
-        }),
-      };
-    })
-
-  const emptyQuery = queries.find((query) => query.queryText.trim().length < 2);
+  const emptyQuery = limitedQueries.find((query) => query.queryText.trim().length < 2);
   if (emptyQuery) {
     throw new Error('Invalid response: one or more bundled queries omitted queryText');
   }
 
-  if (coveredTargetIds.size < targetById.size) {
-    throw new Error(`Invalid response: omitted ${targetById.size - coveredTargetIds.size} blueprint dimension targets`);
+  const finalCoveredTargetIds = new Set(limitedQueries.flatMap((query) => query.targetIds || []));
+  if (finalCoveredTargetIds.size < targetById.size) {
+    throw new Error(`Invalid response: omitted ${targetById.size - finalCoveredTargetIds.size} blueprint dimension targets`);
   }
 
   return {
     summary: String(parsed.summary || `Search strategy covering ${targetById.size} blueprint dimensions`),
-    estimatedPapers: queries.length * GRANT_STRATEGY_RESULTS_PER_QUERY,
-    queries,
+    estimatedPapers: Number(parsed.estimatedPapers) || limitedQueries.length * GRANT_STRATEGY_RESULTS_PER_QUERY,
+    queries: limitedQueries,
   };
 }
 

@@ -781,6 +781,18 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const initialHtml = useMemo(() => markdownToHtml(value || '', citationDisplayMeta, figureDisplayMeta), []);
 
+  const getWindowScroll = useCallback((): { x: number; y: number } | null => {
+    if (typeof window === 'undefined') return null;
+    return { x: window.scrollX, y: window.scrollY };
+  }, []);
+
+  const restoreScrollAfterDomUpdate = useCallback((position: { x: number; y: number } | null) => {
+    if (!position || typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ left: position.x, top: position.y, behavior: 'auto' });
+    });
+  }, []);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -823,7 +835,13 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
     onSelectionUpdate: ({ editor: ed }) => {
       const { from, to } = ed.state.selection;
       if (from === to) {
-        onSelectionChange?.(null);
+        // Only clear the parent selection when the user intentionally collapses
+        // it inside the editor. Clicking toolbar/panel controls can blur the
+        // editor and collapse the live ProseMirror selection while the saved
+        // range is still the intended target for the action.
+        if (ed.isFocused) {
+          onSelectionChange?.(null);
+        }
         return;
       }
       const text = ed.state.doc.textBetween(from, to, ' ').trim();
@@ -855,19 +873,24 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
   useEffect(() => {
     if (!editor) return;
     const markdown = lastMarkdownRef.current || '';
+    const hasCitationMarker = /\[CITE:/i.test(markdown);
+    const hasFigureMarker = FIGURE_MARKER_REGEX.test(markdown);
+    if (!hasCitationMarker && !hasFigureMarker) return;
+    const nextHtml = markdownToHtml(markdown, citationDisplayMetaRef.current, figureDisplayMetaRef.current);
+    if (nextHtml === editor.getHTML()) return;
+    const scrollPosition = getWindowScroll();
     isProgrammaticUpdateRef.current = true;
-    editor.commands.setContent(
-      markdownToHtml(markdown, citationDisplayMetaRef.current, figureDisplayMetaRef.current),
-      { emitUpdate: false }
-    );
+    editor.commands.setContent(nextHtml, { emitUpdate: false });
     isProgrammaticUpdateRef.current = false;
-  }, [editor, citationMetaSignature, figureMetaSignature]);
+    restoreScrollAfterDomUpdate(scrollPosition);
+  }, [editor, citationMetaSignature, figureMetaSignature, getWindowScroll, restoreScrollAfterDomUpdate]);
 
   // Sync external value changes into the editor
   useEffect(() => {
     if (!editor) return;
     const normalized = polishDraftMarkdown(value || '');
     if (normalized === lastMarkdownRef.current) return;
+    const scrollPosition = getWindowScroll();
     lastMarkdownRef.current = normalized;
     isProgrammaticUpdateRef.current = true;
     editor.commands.setContent(
@@ -875,7 +898,8 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
       { emitUpdate: false }
     );
     isProgrammaticUpdateRef.current = false;
-  }, [value, editor]);
+    restoreScrollAfterDomUpdate(scrollPosition);
+  }, [value, editor, getWindowScroll, restoreScrollAfterDomUpdate]);
 
   // Save/restore selection helpers for external consumers (e.g., FloatingWritingPanel)
   const saveSelection = useCallback((): { from: number; to: number } | null => {
@@ -889,8 +913,10 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
 
   const restoreSelection = useCallback((range: { from: number; to: number }) => {
     if (!editor) return;
-    editor.chain().focus().setTextSelection(range).run();
-  }, [editor]);
+    const scrollPosition = getWindowScroll();
+    editor.chain().focus(undefined, { scrollIntoView: false }).setTextSelection(range).run();
+    restoreScrollAfterDomUpdate(scrollPosition);
+  }, [editor, getWindowScroll, restoreScrollAfterDomUpdate]);
 
   const handleEditorClickCapture = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (typeof onFigureClick !== 'function') return;
@@ -908,7 +934,11 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
   }, [onFigureClick]);
 
   const resolveInsertContent = useCallback((text: string): string => {
-    return text;
+    return convertMarkersToInlineHtml(
+      text,
+      citationDisplayMetaRef.current,
+      figureDisplayMetaRef.current
+    ) || text;
   }, []);
 
   // Repair effect: convert plain-text [CITE:key]/[Figure N] markers left in
@@ -923,6 +953,7 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
     const citationInHtml = /\[CITE:/i.test(currentHtml);
     const figureInHtml = FIGURE_MARKER_REGEX.test(currentHtml);
     if (!citationInHtml && !figureInHtml) return;
+    const scrollPosition = getWindowScroll();
     lastMarkdownRef.current = normalized;
     isProgrammaticUpdateRef.current = true;
     editor.commands.setContent(
@@ -930,31 +961,39 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
       { emitUpdate: false }
     );
     isProgrammaticUpdateRef.current = false;
-  }, [editor, value, citationMetaSignature, figureMetaSignature]);
+    restoreScrollAfterDomUpdate(scrollPosition);
+  }, [editor, value, citationMetaSignature, figureMetaSignature, getWindowScroll, restoreScrollAfterDomUpdate]);
 
   useImperativeHandle(
     ref,
     () => ({
-      focus: () => editor?.chain().focus().run(),
+      focus: () => {
+        const scrollPosition = getWindowScroll();
+        editor?.chain().focus(undefined, { scrollIntoView: false }).run();
+        restoreScrollAfterDomUpdate(scrollPosition);
+      },
 
       insertTextAtCursor: (text: string) => {
         if (!editor) return;
-        editor.chain().focus().insertContent(resolveInsertContent(text)).run();
+        const scrollPosition = getWindowScroll();
+        editor.chain().focus(undefined, { scrollIntoView: false }).insertContent(resolveInsertContent(text)).run();
+        restoreScrollAfterDomUpdate(scrollPosition);
       },
 
       replaceSelection: (text: string) => {
         if (!editor) return;
         const { from, to } = editor.state.selection;
         const contentToInsert = resolveInsertContent(text);
+        const scrollPosition = getWindowScroll();
 
         if (from !== to) {
           // Active selection exists - delete it and insert replacement
-          editor.chain().focus().deleteSelection().insertContent(contentToInsert).run();
+          editor.chain().focus(undefined, { scrollIntoView: false }).deleteSelection().insertContent(contentToInsert).run();
         } else if (savedSelectionRef.current) {
           // No active selection, but we have a saved one from before blur
           const saved = savedSelectionRef.current;
           editor.chain()
-            .focus()
+            .focus(undefined, { scrollIntoView: false })
             .setTextSelection(saved)
             .deleteSelection()
             .insertContent(contentToInsert)
@@ -962,18 +1001,21 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
           savedSelectionRef.current = null;
         } else {
           // Fallback: just insert at cursor
-          editor.chain().focus().insertContent(contentToInsert).run();
+          editor.chain().focus(undefined, { scrollIntoView: false }).insertContent(contentToInsert).run();
         }
+        restoreScrollAfterDomUpdate(scrollPosition);
       },
 
       replaceRange: (from: number, to: number, text: string) => {
         if (!editor) return;
+        const scrollPosition = getWindowScroll();
         editor.chain()
-          .focus()
+          .focus(undefined, { scrollIntoView: false })
           .setTextSelection({ from, to })
           .deleteSelection()
           .insertContent(resolveInsertContent(text))
           .run();
+        restoreScrollAfterDomUpdate(scrollPosition);
       },
 
       getSelectedText: () => {
@@ -990,7 +1032,7 @@ const PaperMarkdownEditor = forwardRef<PaperMarkdownEditorRef, PaperMarkdownEdit
       saveSelection,
       restoreSelection
     }),
-    [editor, saveSelection, restoreSelection, resolveInsertContent]
+    [editor, saveSelection, restoreSelection, resolveInsertContent, getWindowScroll, restoreScrollAfterDomUpdate]
   );
 
   const applyNormalFormatting = useCallback(() => {

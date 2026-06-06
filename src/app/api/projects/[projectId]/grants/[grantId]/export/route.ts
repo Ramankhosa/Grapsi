@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { buildGrantProposalDocxSections } from '@/lib/grants/export'
+import { formatGrantProposalDocxCitations } from '@/lib/grants/exportCitationFormatting'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 import { validateGrantFinalExportReadiness } from '@/lib/grants/draftContextContract'
 import { buildPaperDocxBuffer } from '@/lib/export/paper-docx-export'
+import { prisma } from '@/lib/prisma'
+import { citationService } from '@/lib/services/citation-service'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -16,6 +19,55 @@ function sanitizeFilenamePart(value: string) {
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'grant-proposal'
+}
+
+async function formatSectionsWithGrantCitations(input: {
+  grantId: string
+  tenantId: string
+  draftingSessionId?: string | null
+  sections: ReturnType<typeof buildGrantProposalDocxSections>['sections']
+}) {
+  const draftingSessionId = String(input.draftingSessionId || '').trim()
+  if (!draftingSessionId) {
+    return input.sections
+  }
+
+  const draftingSession = await prisma.draftingSession.findUnique({
+    where: { id: draftingSessionId },
+    include: {
+      citationStyle: true,
+      grantSession: {
+        select: {
+          id: true,
+          tenantId: true,
+        },
+      },
+    },
+  })
+
+  if (
+    !draftingSession
+    || draftingSession.grantSession?.id !== input.grantId
+    || draftingSession.grantSession?.tenantId !== input.tenantId
+  ) {
+    return input.sections
+  }
+
+  const citations = await citationService.getCitationsForSession(draftingSessionId)
+  if (citations.length === 0) {
+    return input.sections
+  }
+
+  try {
+    return await formatGrantProposalDocxCitations({
+      sections: input.sections,
+      citations,
+      styleCode: draftingSession.citationStyle?.code,
+    })
+  } catch (error) {
+    console.warn('[Grant Export] skipped citation formatting:', error)
+    return input.sections
+  }
 }
 
 export async function GET(
@@ -67,7 +119,13 @@ export async function GET(
       }
     }
 
-    const { sections } = buildGrantProposalDocxSections(workspace.blueprint.sectionDrafts)
+    const { sections: rawSections } = buildGrantProposalDocxSections(workspace.blueprint.sectionDrafts)
+    const sections = await formatSectionsWithGrantCitations({
+      grantId,
+      tenantId: actor.tenantId,
+      draftingSessionId: workspace.grantSession.draftingSessionId,
+      sections: rawSections,
+    })
 
     const buffer = await buildPaperDocxBuffer({
       title: workspace.grantSession.project.name,

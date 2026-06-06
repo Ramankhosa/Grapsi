@@ -16,6 +16,9 @@ const generateSchema = z.object({
   userInstructions: z.string().max(5000).optional(),
   allowInstructionAmounts: z.boolean().optional().default(false),
   overwriteAmounts: z.boolean().optional().default(false),
+  useCurrentBudgetValues: z.boolean().optional().default(false),
+  bibliographyStyle: z.string().max(64).optional(),
+  bibliographySortOrder: z.enum(['alphabetical', 'order_of_appearance']).optional(),
 })
 
 const saveSchema = z.object({
@@ -23,6 +26,8 @@ const saveSchema = z.object({
   structuredData: z.unknown().optional(),
   markReviewed: z.boolean().optional().default(false),
 })
+
+const GRANT_SECTION_ROUTE_QUOTA_CHECKS_DISABLED = true
 
 export async function GET(
   request: NextRequest,
@@ -63,14 +68,16 @@ export async function POST(
   const operationId = `grant-section-generation:${grantId}:${sectionKey}:${Date.now()}`
   try {
     const payload = generateSchema.parse(await request.json())
-    await reserveServiceUsage({
-      tenantId: actor.tenantId,
-      userId: actor.id,
-      serviceType: 'GRANT_DRAFTING',
-      operationId,
-      operationType: 'grant_section_generation',
-      metadata: { grantSessionId: grantId, sectionKey, action: payload.action }
-    })
+    if (!GRANT_SECTION_ROUTE_QUOTA_CHECKS_DISABLED) {
+      await reserveServiceUsage({
+        tenantId: actor.tenantId,
+        userId: actor.id,
+        serviceType: 'GRANT_DRAFTING',
+        operationId,
+        operationType: 'grant_section_generation',
+        metadata: { grantSessionId: grantId, sectionKey, action: payload.action }
+      })
+    }
 
     const section = await generateGrantSectionDraft({
       projectId,
@@ -81,21 +88,28 @@ export async function POST(
       userInstructions: payload.userInstructions,
       allowInstructionAmounts: payload.allowInstructionAmounts,
       overwriteAmounts: payload.overwriteAmounts,
+      useCurrentBudgetValues: payload.useCurrentBudgetValues,
+      bibliographyStyle: payload.bibliographyStyle,
+      bibliographySortOrder: payload.bibliographySortOrder,
     })
 
-    await trackServiceUsage({
-      tenantId: actor.tenantId,
-      userId: actor.id,
-      serviceType: 'GRANT_DRAFTING',
-      operationId,
-      operationType: 'grant_section_generation',
-      isCompleted: true,
-      metadata: { grantSessionId: grantId, sectionKey, action: payload.action }
-    })
+    if (!GRANT_SECTION_ROUTE_QUOTA_CHECKS_DISABLED) {
+      await trackServiceUsage({
+        tenantId: actor.tenantId,
+        userId: actor.id,
+        serviceType: 'GRANT_DRAFTING',
+        operationId,
+        operationType: 'grant_section_generation',
+        isCompleted: true,
+        metadata: { grantSessionId: grantId, sectionKey, action: payload.action }
+      })
+    }
 
     return NextResponse.json({ section })
   } catch (error) {
-    await releaseReservedServiceUsage(actor.tenantId, 'GRANT_DRAFTING', operationId).catch(() => undefined)
+    if (!GRANT_SECTION_ROUTE_QUOTA_CHECKS_DISABLED) {
+      await releaseReservedServiceUsage(actor.tenantId, 'GRANT_DRAFTING', operationId).catch(() => undefined)
+    }
     console.error('[Grant Section] generate error:', error)
     return NextResponse.json(
       {
@@ -108,6 +122,8 @@ export async function POST(
           ? 404
           : error instanceof Error && error.message.includes('literature workspace')
           ? 409
+          : error instanceof Error && error.message.includes('active citations')
+            ? 409
           : error instanceof Error && error.message.includes('Only budget sections')
             ? 409
           : 500,

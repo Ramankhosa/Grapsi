@@ -126,11 +126,13 @@ export async function POST(request: NextRequest) {
       sourceFile: parsed.inputType === 'pdf' ? parsed.sourceFile : undefined,
       operatorNotes: parsed.operatorNotes,
     })
+    const details = await fundingIntakeService.getJobDetails(job.id, auth.operator)
 
     return NextResponse.json(
       {
         jobId: job.id,
         status: job.status,
+        fundingCallId: details?.job.linked_funding_call_id || null,
       },
       { status: 201 }
     )

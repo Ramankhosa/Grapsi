@@ -982,6 +982,88 @@ describe('grant blueprint enrichment', () => {
     expect(enriched[1].suggestedCitationCount).toBe(0);
   });
 
+  it('preserves a user citation override on a normally no-citation app_draft section', () => {
+    const enriched = enrichGrantBlueprintSections([
+      makeSection({
+        sectionKey: 'objectives',
+        label: 'Objectives',
+        sectionType: 'short_answer',
+        wordBudget: 100,
+        purpose: 'State the aims and measurable objectives of the project.',
+        citationMode: 'mapped_evidence',
+        suggestedCitationCount: 4,
+        dimensions: ['Outcome evidence for measurable project objectives'],
+        dimensionTyping: {
+          'Outcome evidence for measurable project objectives': 'empirical',
+        },
+      }),
+    ], {
+      projectTitle: 'Climate Resilient Agriculture Platform',
+      fundingCallTitle: 'Climate Resilient Agriculture Research Grant',
+      globalKeywords: ['climate resilience', 'smallholder farming'],
+    }, 'hydrate');
+
+    expect(enriched[0].grantSemantic).toBe('objectives');
+    expect(enriched[0].citationMode).toBe('mapped_evidence');
+    expect(enriched[0].suggestedCitationCount).toBe(4);
+    expect(enriched[0].dimensions).toEqual(['Outcome evidence for measurable project objectives']);
+    expect(enriched[0].thematicBlueprint?.suggestedCitationCount).toBe(4);
+    expect(enriched[0].thematicBlueprint?.dimensions).toEqual(enriched[0].dimensions);
+  });
+
+  it('lets the LLM generate dimensions for a user-overridden no-citation section while keeping the user count', async () => {
+    const mockedGateway = vi.mocked(llmGateway.executeLLMOperation);
+    mockedGateway.mockResolvedValueOnce({
+      success: true,
+      response: {
+        output: JSON.stringify({
+          sections: [
+            {
+              sectionKey: 'objectives',
+              citationMode: 'mapped_evidence',
+              suggestedCitationCount: 2,
+              dimensions: [
+                'Evidence for measurable climate resilience objectives',
+                'Outcome indicators for smallholder farming interventions',
+              ],
+            },
+          ],
+        }),
+      },
+    } as any);
+
+    const result = await generateGrantBlueprintWithLlm({
+      baseSectionPlan: [
+        makeSection({
+          sectionKey: 'objectives',
+          label: 'Objectives',
+          sectionType: 'short_answer',
+          wordBudget: 100,
+          purpose: 'State the aims and measurable objectives of the project.',
+          citationMode: 'mapped_evidence',
+          suggestedCitationCount: 4,
+        }),
+      ],
+      context: {
+        projectTitle: 'Climate Resilient Agriculture Platform',
+        fundingCallTitle: 'Climate Resilient Agriculture Research Grant',
+        globalKeywords: ['climate resilience', 'smallholder farming'],
+      },
+      tenantContext: { tenantId: 'tenant_1' } as any,
+      sessionId: 'prep_session_1',
+    });
+
+    const objectives = result.sectionPlan.find((section) => section.sectionKey === 'objectives');
+
+    expect(mockedGateway).toHaveBeenCalledTimes(1);
+    expect(objectives?.citationMode).toBe('mapped_evidence');
+    expect(objectives?.suggestedCitationCount).toBe(4);
+    expect(objectives?.dimensions).toEqual([
+      'Evidence for measurable climate resilience objectives',
+      'Outcome indicators for smallholder farming interventions',
+    ]);
+  });
+
   it('keeps simple prep-backed narrative sections in direct draft mode', () => {
     const enriched = enrichGrantBlueprintSections([
       makeSection({

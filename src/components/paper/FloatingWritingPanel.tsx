@@ -153,6 +153,7 @@ interface FloatingWritingPanelProps {
   onNavigateToStage?: (stageKey: string) => void;
   onOpenBibliographyPanel?: () => void;
   isVisible?: boolean;
+  documentLabel?: string;
   // Bibliography management (merged from Citations Panel)
   bibliographyStyle?: string;
   onBibliographyStyleChange?: (style: string) => void;
@@ -161,6 +162,8 @@ interface FloatingWritingPanelProps {
   onGenerateBibliography?: () => void;
   generatingBibliography?: boolean;
   usedCitationCount?: number;
+  usedCitationKeys?: string[];
+  usedCitationCountsByKey?: Record<string, number>;
   isNumericStyleBibliography?: boolean;
   sequenceInfo?: {
     styleCode: string;
@@ -466,6 +469,8 @@ function TextActionButton({
     <div className="space-y-1">
       <div className="flex items-center gap-1">
         <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
             if (!isExpanded) {
               onClick();
@@ -487,6 +492,8 @@ function TextActionButton({
         
         {/* Remarks toggle button */}
         <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
             onToggleExpand(isExpanded ? null : actionId);
@@ -582,6 +589,7 @@ export default function FloatingWritingPanel({
   onNavigateToStage,
   onOpenBibliographyPanel,
   isVisible = true,
+  documentLabel = 'Paper',
   // Bibliography management props
   bibliographyStyle = 'APA7',
   onBibliographyStyleChange,
@@ -590,11 +598,18 @@ export default function FloatingWritingPanel({
   onGenerateBibliography,
   generatingBibliography = false,
   usedCitationCount = 0,
+  usedCitationKeys = [],
+  usedCitationCountsByKey = {},
   isNumericStyleBibliography = false,
   sequenceInfo = null,
   onAddCitationViaPicker,
   onCitationsUpdated,
 }: FloatingWritingPanelProps) {
+  const documentLabelText = String(documentLabel || 'Paper').trim() || 'Paper';
+  const documentLabelLower = documentLabelText.toLowerCase();
+  const hasDocumentScopedUsage = documentLabelLower !== 'paper'
+    || usedCitationKeys.length > 0
+    || Object.keys(usedCitationCountsByKey || {}).length > 0;
   // Panel state
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('figures');
@@ -755,14 +770,19 @@ export default function FloatingWritingPanel({
         newHeight = resizeRef.current.startHeight + deltaY;
       }
       if (direction === 'top' || direction === 'top-left-corner') {
-        // Resize from top while keeping the bottom edge stable.
+        // Keep the panel anchored while changing height from the top handle.
         newHeight = resizeRef.current.startHeight - deltaY;
-        newY = resizeRef.current.startPosY + deltaY;
+        newY = resizeRef.current.startPosY;
       }
 
       // Apply constraints
       newWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth));
-      newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, newHeight));
+      const panelTop = 24 + resizeRef.current.startPosY;
+      const anchoredMaxHeight = Math.max(
+        MIN_HEIGHT,
+        Math.min(MAX_HEIGHT, viewportSize.height - panelTop - 32)
+      );
+      newHeight = Math.max(MIN_HEIGHT, Math.min(anchoredMaxHeight, newHeight));
 
       const nextSize = { width: newWidth, height: newHeight };
       const nextPos = clampPanelPosition({ x: resizeRef.current.startPosX, y: newY }, nextSize);
@@ -779,7 +799,7 @@ export default function FloatingWritingPanel({
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [MAX_HEIGHT, clampPanelPosition, panelSize.height, panelSize.width, position.x, position.y]);
+  }, [MAX_HEIGHT, clampPanelPosition, panelSize.height, panelSize.width, position.x, position.y, viewportSize.height]);
 
   // Toggle fullscreen
   const toggleFullscreen = useCallback(() => {
@@ -939,6 +959,18 @@ export default function FloatingWritingPanel({
   // Enrich panel citations with usage extracted from section content.
   // `citationUsageByKey` is computed server-side from draft section markers.
   const enrichedCitations = useMemo(() => {
+    const usedKeySet = new Set(
+      usedCitationKeys
+        .map((key) => String(key || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const normalizedUsedCounts: Record<string, number> = {};
+    for (const [key, value] of Object.entries(usedCitationCountsByKey || {})) {
+      const normalizedKey = String(key || '').trim().toLowerCase();
+      const count = Number(value || 0);
+      if (!normalizedKey || !Number.isFinite(count) || count <= 0) continue;
+      normalizedUsedCounts[normalizedKey] = Math.max(normalizedUsedCounts[normalizedKey] || 0, Math.trunc(count));
+    }
     const parentMap = new Map<string, any>();
     for (const c of citations) {
       const key = c.citationKey || c.id;
@@ -952,9 +984,12 @@ export default function FloatingWritingPanel({
       seenIds.add(pc.id);
       const parent = parentMap.get(pc.citationKey);
       const normalizedKey = String(pc.citationKey || '').trim().toLowerCase();
-      const usageCount = pc.source === 'paper'
+      const extractedUsageCount = pc.source === 'paper'
         ? Number(citationUsageByKey[normalizedKey] || 0)
         : Number(pc.usageCount || 0);
+      const usageCount = hasDocumentScopedUsage
+        ? normalizedUsedCounts[normalizedKey] ?? (usedKeySet.has(normalizedKey) ? 1 : 0)
+        : Math.max(extractedUsageCount, usedKeySet.has(normalizedKey) ? 1 : 0);
       merged.push({
         ...pc,
         usageCount,
@@ -968,6 +1003,10 @@ export default function FloatingWritingPanel({
       if (seenIds.has(c.id)) continue;
       seenIds.add(c.id);
       const normalizedKey = String(c.citationKey || '').trim().toLowerCase();
+      const extractedUsageCount = Number(citationUsageByKey[normalizedKey] || 0);
+      const localUsageCount = hasDocumentScopedUsage
+        ? normalizedUsedCounts[normalizedKey] ?? (usedKeySet.has(normalizedKey) ? 1 : 0)
+        : Math.max(extractedUsageCount, usedKeySet.has(normalizedKey) ? 1 : 0);
       merged.push({
         id: c.id,
         title: typeof c.title === 'string' ? c.title : String(c.title || ''),
@@ -978,7 +1017,7 @@ export default function FloatingWritingPanel({
         citationKey: c.citationKey || '',
         source: 'paper' as const,
         sourceType: c.sourceType,
-        usageCount: Number(citationUsageByKey[normalizedKey] || 0),
+        usageCount: localUsageCount,
         abstract: typeof c.abstract === 'string' ? c.abstract : '',
         usages: c.usages ?? [],
         tags: c.tags ?? [],
@@ -986,21 +1025,21 @@ export default function FloatingWritingPanel({
     }
 
     return merged;
-  }, [paperCitations, citations, citationUsageByKey]);
+  }, [hasDocumentScopedUsage, paperCitations, citations, citationUsageByKey, usedCitationCountsByKey, usedCitationKeys]);
 
   // Usage summary for paper citations - uses full enriched set
   const usageSummary = useMemo(() => {
     const paperItems = enrichedCitations.filter(c => c.source === 'paper');
     const used = paperItems.filter(c => Number(c.usageCount || 0) > 0).length;
-    // Also consider the parent-provided usedCitationCount (client-side extraction)
-    // which may be more up-to-date than DB-backed CitationUsage records
-    const effectiveUsed = Math.max(used, usedCitationCount);
+    const effectiveUsed = hasDocumentScopedUsage
+      ? Math.min(paperItems.length, usedCitationCount || used)
+      : Math.max(used, usedCitationCount);
     return {
       total: paperItems.length,
       used: effectiveUsed,
       unused: Math.max(0, paperItems.length - effectiveUsed),
     };
-  }, [enrichedCitations, usedCitationCount]);
+  }, [enrichedCitations, hasDocumentScopedUsage, usedCitationCount]);
 
   // Apply usage filter on top of source filter
   const displayCitations = useMemo(() => {
@@ -1856,6 +1895,8 @@ export default function FloatingWritingPanel({
               {tabs.map(tab => (
                 <button
                   key={tab.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => { setActiveTab(tab.id); setIsCollapsed(false); }}
                   className={`relative w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${
                     activeTab === tab.id ? 'bg-blue-100 text-blue-600' : 'hover:bg-slate-100 text-slate-500'
@@ -1924,6 +1965,8 @@ export default function FloatingWritingPanel({
                 {tabs.map(tab => (
                   <button
                     key={tab.id}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setActiveTab(tab.id)}
                     className={`flex-1 py-2 text-xs font-medium transition-colors relative ${
                       activeTab === tab.id 
@@ -2464,7 +2507,7 @@ export default function FloatingWritingPanel({
                         <div className="flex items-center gap-1.5">
                           <p className="text-xs font-medium text-slate-600">Citations</p>
                           <span className="text-[10px] text-slate-400">
-                            ({paperCitationCount} in paper)
+                            ({paperCitationCount} in {documentLabelLower})
                           </span>
                           {usageSummary.used > 0 && (
                             <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium flex items-center gap-0.5">
@@ -2478,7 +2521,7 @@ export default function FloatingWritingPanel({
                             <button
                               onClick={onAddCitationViaPicker}
                               className="p-1.5 rounded-md hover:bg-blue-100 text-blue-500 transition-colors"
-                            title="Search and pick Grant Citations"
+                              title={`Search and pick ${documentLabelText} Citations`}
                             >
                               <Search className="w-3.5 h-3.5" />
                             </button>
@@ -2490,7 +2533,7 @@ export default function FloatingWritingPanel({
                                 ? 'bg-emerald-100 text-emerald-600' 
                                 : 'hover:bg-slate-100 text-slate-500'
                             }`}
-                            title="Add Grant Citation via DOI or BibTeX"
+                            title={`Add ${documentLabelText} Citation via DOI or BibTeX`}
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
@@ -2598,7 +2641,7 @@ export default function FloatingWritingPanel({
                                   }}
                                   disabled={generatingBibliography}
                                   className="w-full flex items-center justify-center gap-2 text-[11px] font-medium text-purple-600 hover:text-purple-700 py-1.5 border border-purple-200 rounded-lg hover:bg-purple-50 disabled:opacity-50 bg-white"
-                                  title="Generates bibliography only for citations used in the paper"
+                                  title={`Generates bibliography only for citations used in the ${documentLabelLower}`}
                                 >
                                   {generatingBibliography ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpen className="w-3 h-3" />}
                                   Generate Bibliography ({usedCitationCount} used)
@@ -2692,7 +2735,7 @@ export default function FloatingWritingPanel({
                       <div className="flex p-0.5 bg-slate-100 rounded-lg">
                         {[
                           { id: 'all' as const, label: 'All', count: citationCounts.total },
-                          { id: 'paper' as const, label: 'Paper', count: citationCounts.paper },
+                          { id: 'paper' as const, label: documentLabelText, count: citationCounts.paper },
                           { id: 'library' as const, label: 'Library', count: citationCounts.library },
                         ].map((filter) => (
                           <button
@@ -2785,7 +2828,7 @@ export default function FloatingWritingPanel({
                                 <div className="flex items-start gap-1.5">
                                   {/* Usage indicator symbol - always visible */}
                                   {!isLibrary && (
-                                    <div className="flex-shrink-0 mt-0.5" title={usageCount > 0 ? `Cited ${usageCount} time${usageCount > 1 ? 's' : ''} in paper` : 'Not yet cited in paper'}>
+                                    <div className="flex-shrink-0 mt-0.5" title={usageCount > 0 ? `Cited ${usageCount} time${usageCount > 1 ? 's' : ''} in ${documentLabelLower}` : `Not yet cited in ${documentLabelLower}`}>
                                       {usageCount > 0 ? (
                                         <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
                                       ) : (
@@ -2808,7 +2851,7 @@ export default function FloatingWritingPanel({
                                         }
                                       }}
                                       className="w-full text-left"
-                                      title={isLibrary ? 'Import to paper & insert' : 'Insert citation at cursor'}
+                                      title={isLibrary ? `Import to ${documentLabelLower} & insert` : 'Insert citation at cursor'}
                                     >
                                       <p className={`text-xs font-medium line-clamp-2 ${
                                         isLibrary ? 'text-amber-800' : 'text-blue-800'
@@ -2828,7 +2871,7 @@ export default function FloatingWritingPanel({
                                       <span className={`text-[9px] px-1 py-0.5 rounded-full ${
                                         isLibrary ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'
                                       }`}>
-                                        {isLibrary ? 'Library' : 'Paper'}
+                                        {isLibrary ? 'Library' : documentLabelText}
                                       </span>
                                       {!isLibrary && usageCount > 0 && (
                                         <span className="text-[9px] px-1 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
@@ -2845,7 +2888,7 @@ export default function FloatingWritingPanel({
                                         onClick={() => handleImportCitation(citation.id)}
                                         disabled={importingCitation === citation.id}
                                         className="p-1.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-700 transition-colors disabled:opacity-50"
-                                        title="Import to paper & insert"
+                                        title={`Import to ${documentLabelLower} & insert`}
                                       >
                                         {importingCitation === citation.id ? (
                                           <Loader2 className="w-3 h-3 animate-spin" />
@@ -3006,7 +3049,7 @@ export default function FloatingWritingPanel({
                       ) : citationCounts.total === 0 ? (
                         <div className="text-center py-4 flex-1 flex flex-col items-center justify-center">
                           <BookOpen className="w-6 h-6 text-slate-300 mb-1" />
-                          <p className="text-xs text-slate-500">No Grant Citations yet</p>
+                          <p className="text-xs text-slate-500">No {documentLabelText} Citations yet</p>
                           <p className="text-[10px] text-slate-400 mt-0.5">Use + button to add via DOI or BibTeX</p>
                         </div>
                       ) : (

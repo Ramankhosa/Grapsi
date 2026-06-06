@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { prisma } from '@/lib/prisma'
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
-import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import { isGrantBibliographySection, isGrantSectionAiGenerated } from '@/lib/grants/workflowMode'
 import { hasMeaningfulSectionContent, normalizeStringArray } from '@/lib/reviewer/content'
 
 export const runtime = 'nodejs'
@@ -137,6 +137,10 @@ function extractSectionRecommendations(section: any, appDraftKeys: Set<string>) 
   return uniqueByText(recommendations as any[])
 }
 
+function isReviewerActionableGrantSection(section: any): boolean {
+  return !isGrantBibliographySection(section?.sectionKey) && isGrantSectionAiGenerated(section)
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; grantId: string }> }
@@ -156,7 +160,7 @@ export async function GET(
 
   const appDraftKeys = new Set(
     (workspace.blueprint.sectionPlan || [])
-      .filter((section) => isGrantSectionAutoDraftable(section))
+      .filter(isReviewerActionableGrantSection)
       .map((section) => normalizeKey(section.sectionKey))
   )
 
@@ -250,7 +254,7 @@ export async function PATCH(
 
   const appDraftKeys = new Set(
     (workspace.blueprint.sectionPlan || [])
-      .filter((section) => isGrantSectionAutoDraftable(section))
+      .filter(isReviewerActionableGrantSection)
       .map((section) => normalizeKey(section.sectionKey))
   )
 

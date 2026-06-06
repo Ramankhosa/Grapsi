@@ -20,6 +20,7 @@ import PaperVerticalStageNav from '@/components/stages/PaperVerticalStageNav'
 import LoadingBird from '@/components/ui/loading-bird'
 import { useAuth } from '@/lib/auth-context'
 import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
+import { isGrantBibliographySection } from '@/lib/grants/workflowMode'
 import { withGrantWorkspaceStage } from '@/lib/grants/workspaceNavigation'
 
 const STAGES = [
@@ -35,6 +36,7 @@ const STAGES = [
 const WORKSPACE_NAV_COLLAPSED_KEY_PREFIX = 'grant-workspace-nav-collapsed'
 
 type StageKey = typeof STAGES[number]['key']
+const DEFAULT_GRANT_WORKSPACE_STAGE: StageKey = 'SECTION_DRAFTING'
 
 type GrantSection = {
   id?: string
@@ -46,7 +48,7 @@ type GrantSection = {
   citationMode?: 'mapped_evidence' | 'direct_draft' | 'no_citations'
   status: string
   content: string | null
-  structuredResponses?: Array<{ responseJson?: unknown }>
+  structuredResponses?: Array<{ fieldKey?: string; responseJson?: unknown }>
 }
 
 type GrantWorkspaceResponse = {
@@ -86,6 +88,11 @@ function countWords(value: string): number {
   return text ? text.split(/\s+/).filter(Boolean).length : 0
 }
 
+function getStructuredResponseJson(section: GrantSection): unknown {
+  return section.structuredResponses?.find((response) => response.fieldKey === 'structuredData')?.responseJson
+    ?? section.structuredResponses?.[0]?.responseJson
+}
+
 function getDraftingStatus(section: GrantSection): 'completed' | 'in_progress' | 'pending' {
   if (section.status === 'REVIEWED' || section.status === 'COMPLETED') {
     return 'completed'
@@ -98,7 +105,7 @@ function getDraftingStatus(section: GrantSection): 'completed' | 'in_progress' |
     return 'pending'
   }
 
-  const responseJson = section.structuredResponses?.[0]?.responseJson
+  const responseJson = getStructuredResponseJson(section)
   if (responseJson && JSON.stringify(responseJson) !== '{}' && JSON.stringify(responseJson) !== '[]') {
     return section.status === 'DRAFT' ? 'in_progress' : 'completed'
   }
@@ -116,7 +123,7 @@ function serializeGrantSectionContent(section: GrantSection): string {
     return directContent
   }
 
-  const responseJson = section.structuredResponses?.[0]?.responseJson
+  const responseJson = getStructuredResponseJson(section)
   if (!responseJson) {
     return ''
   }
@@ -182,12 +189,12 @@ export default function GrantWorkspacePage() {
   const [shadowSession, setShadowSession] = useState<PaperSession | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [currentStage, setCurrentStage] = useState<StageKey>('GRANTMENTOR')
+  const [currentStage, setCurrentStage] = useState<StageKey>(DEFAULT_GRANT_WORKSPACE_STAGE)
   const [hasHydratedStage, setHasHydratedStage] = useState(false)
   const [stageWarning, setStageWarning] = useState<string | null>(null)
   const [stageLockDialog, setStageLockDialog] = useState<string | null>(null)
   const [selectedSection, setSelectedSection] = useState<string>('')
-  const [sectionFilter, setSectionFilter] = useState<'all' | 'app_draft' | 'team_draft' | 'evidence'>('all')
+  const [sectionFilter, setSectionFilter] = useState<'all' | 'app_draft'>('all')
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [launchingBlueprint, setLaunchingBlueprint] = useState(false)
   const autoLaunchAttemptedRef = useRef(false)
@@ -205,11 +212,11 @@ export default function GrantWorkspacePage() {
     })
   }, [])
 
-  const visibleStageKeys = useMemo(() => STAGES.map((stage) => stage.key), [])
+  const visibleStageKeys = useMemo<StageKey[]>(() => STAGES.map((stage) => stage.key), [])
   const stageFromQuery = searchParams?.get('stage') || null
   const resolvedCurrentStage = visibleStageKeys.includes(currentStage)
     ? currentStage
-    : 'GRANTMENTOR'
+    : DEFAULT_GRANT_WORKSPACE_STAGE
 
   const loadWorkspace = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!projectId || !grantId || !user) return
@@ -270,7 +277,7 @@ export default function GrantWorkspacePage() {
     const targetGrantId = payload.grantSessionId || workspace?.grantSession?.id || grantId
     const targetUrl = withGrantWorkspaceStage(
       payload.launchUrl || `/projects/${projectId}/grants/${targetGrantId}/workspace`,
-      'BLUEPRINT'
+      DEFAULT_GRANT_WORKSPACE_STAGE
     )
 
     if (targetGrantId !== grantId) {
@@ -285,7 +292,7 @@ export default function GrantWorkspacePage() {
     }
 
     setStageWarning(null)
-    setCurrentStage('BLUEPRINT')
+    setCurrentStage(DEFAULT_GRANT_WORKSPACE_STAGE)
     router.replace(targetUrl, { scroll: false })
   }, [grantId, loadWorkspace, projectId, router, workspace?.grantSession?.id])
 
@@ -351,8 +358,10 @@ export default function GrantWorkspacePage() {
     return sections.map((section) => ({
       key: section.sectionKey,
       label: section.label,
-      description: section.sectionType === 'budget_rows'
-        ? 'Generated by the app from the extracted budget template'
+      description: isGrantBibliographySection(section.sectionKey)
+        ? 'Generated from active citations'
+        : section.sectionType === 'budget_rows'
+        ? 'Generated by the app from the extracted table format'
         : section.workflowMode === 'app_draft'
           ? 'Drafted through the shadow paper engine'
         : 'Edited directly in the grant workspace',
@@ -559,7 +568,7 @@ export default function GrantWorkspacePage() {
         if (!draftingSessionId) return 'Shadow drafting session is not available yet.'
         return null
       case 'SECTION_DRAFTING':
-        return hasFrozenBlueprint ? null : 'Freeze the grant blueprint before continuing.'
+        return null
       case 'REVIEWER':
         if (!hasFrozenBlueprint) return 'Freeze the grant blueprint before preparing the reviewer.'
         if (draftedGrantContentCount <= 0) return 'Draft at least one grant section before preparing the reviewer.'
@@ -665,10 +674,10 @@ export default function GrantWorkspacePage() {
         workspaceTitle="Grant Workspace"
         visibleStageKeys={visibleStageKeys}
         stageMetaOverrides={{
-          GRANTMENTOR: { label: 'GrantMentor', description: 'Grant prep and mentoring (call-aware)' },
-          BLUEPRINT: { label: 'Blueprint', description: 'Define grant structure & dimensions' },
+          GRANTMENTOR: { label: 'Grant Prep', description: 'Grant prep and mentoring (call-aware)' },
+          BLUEPRINT: { label: 'Blueprint', description: 'Define grant structure and dimensions' },
           FULL_TEXT_EVIDENCE_EXTRACTION: { label: 'Deep Analysis' },
-          REVIEWER: { label: 'Reviewer', description: 'Map draft sections into reviewer checks' },
+          REVIEWER: { label: 'Grant Review', description: 'Map draft sections into reviewer checks' },
         }}
         draftingSections={draftingSections}
         onNavigateToStage={handleNavigateToStage}

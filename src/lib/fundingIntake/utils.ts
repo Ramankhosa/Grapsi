@@ -2,6 +2,7 @@ import axios from 'axios';
 import { convert } from 'html-to-text';
 import crypto from 'crypto';
 import dns from 'dns/promises';
+import https from 'https';
 import net from 'net';
 import { URL } from 'url';
 import {
@@ -77,16 +78,16 @@ function isPrivateIp(ip: string): boolean {
 
 export async function assertSafePublicHttpsUrl(input: string): Promise<URL> {
   const url = new URL(input);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('Only http and https URLs are allowed');
+  }
+
   const isTestLocalUrl =
     process.env.NODE_ENV === 'test' &&
     ['127.0.0.1', 'localhost'].includes(url.hostname.toLowerCase());
 
   if (isTestLocalUrl) {
     return url;
-  }
-
-  if (url.protocol !== 'https:') {
-    throw new Error('Only https URLs are allowed');
   }
 
   const { address } = await dns.lookup(url.hostname);
@@ -97,16 +98,41 @@ export async function assertSafePublicHttpsUrl(input: string): Promise<URL> {
   return url;
 }
 
+const INSECURE_TLS_RETRY_AGENT = new https.Agent({ rejectUnauthorized: false });
+const TLS_CERTIFICATE_ERROR_CODES = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'CERT_HAS_EXPIRED',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+function isTlsCertificateError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const record = error as Record<string, unknown>;
+  const code = typeof record.code === 'string' ? record.code : '';
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+
+  return (
+    TLS_CERTIFICATE_ERROR_CODES.has(code) ||
+    message.includes('unable to verify the first certificate') ||
+    message.includes('self-signed certificate') ||
+    message.includes('certificate has expired')
+  );
+}
+
 export async function fetchReadableUrlContent(input: string): Promise<{
   rawText: string;
   normalizedText: string;
   fetchMetadata: Record<string, unknown>;
 }> {
   const safeUrl = await assertSafePublicHttpsUrl(input);
-
-  const response = await axios.get(safeUrl.toString(), {
+  const baseRequestOptions = {
     timeout: FETCH_TIMEOUT_MS,
-    responseType: 'text',
+    responseType: 'text' as const,
     maxContentLength: MAX_FETCH_BYTES,
     maxBodyLength: MAX_FETCH_BYTES,
     maxRedirects: 3,
@@ -114,7 +140,26 @@ export async function fetchReadableUrlContent(input: string): Promise<{
       'User-Agent': 'GrantMentor Funding Intake/1.0',
       Accept: 'text/html, text/plain, application/xhtml+xml',
     },
-  });
+  };
+
+  let tlsVerification: 'verified' | 'disabled_after_certificate_error' = 'verified';
+  let tlsVerificationError: string | null = null;
+  let response;
+
+  try {
+    response = await axios.get(safeUrl.toString(), baseRequestOptions);
+  } catch (error) {
+    if (!isTlsCertificateError(error)) {
+      throw error;
+    }
+
+    tlsVerification = 'disabled_after_certificate_error';
+    tlsVerificationError = error instanceof Error ? error.message : 'TLS certificate verification failed';
+    response = await axios.get(safeUrl.toString(), {
+      ...baseRequestOptions,
+      httpsAgent: INSECURE_TLS_RETRY_AGENT,
+    });
+  }
 
   const contentType = String(response.headers['content-type'] || '');
   const responseUrl = String(response.request?.res?.responseUrl || safeUrl.toString());
@@ -144,6 +189,8 @@ export async function fetchReadableUrlContent(input: string): Promise<{
       httpStatus: response.status,
       domain: finalUrl.hostname,
       contentLength: Buffer.byteLength(sourceText, 'utf8'),
+      tlsVerification,
+      ...(tlsVerificationError ? { tlsVerificationError } : {}),
     },
   };
 }

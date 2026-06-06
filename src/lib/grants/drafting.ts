@@ -2,18 +2,30 @@ import crypto from 'crypto'
 
 import prisma from '@/lib/prisma'
 import { llmGateway } from '@/lib/metering'
+import { formatBibliographyMarkdown } from '@/lib/markdown-draft-formatter'
+import { citationStyleService, type CitationData } from '@/lib/services/citation-style-service'
 import {
   buildBudgetDraftingPrompt,
   buildBudgetStructuredScaffold,
   buildFallbackBudgetTemplate,
+  mergeBudgetTemplateWithStructuredTable,
   validateBudgetDraftLlmResult,
 } from '@/lib/grants/budgetTemplate'
+import { collectUsedGrantCitationKeysForBibliography } from '@/lib/grants/bibliography'
 import {
   getGrantWorkspace,
   resolveGrantTenantContext,
 } from '@/lib/grants/workspace'
-import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import {
+  GRANT_BIBLIOGRAPHY_SECTION_KEY,
+  isGrantBibliographySection,
+  isGrantSectionAutoDraftable,
+} from '@/lib/grants/workflowMode'
 import type { GrantBlueprintPlanSection } from '@/types/grant'
+
+const NUMERIC_BIBLIOGRAPHY_STYLES = new Set(['IEEE', 'VANCOUVER'])
+
+type BibliographySortOrder = 'alphabetical' | 'order_of_appearance'
 
 function getStructuredResponseValue(sectionDraft: {
   structuredResponses?: Array<{ fieldKey: string; responseJson: unknown }>
@@ -89,6 +101,172 @@ function stringifyStructuredSection(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
+function toCitationData(citation: any): CitationData {
+  return {
+    id: citation.id,
+    title: citation.title,
+    authors: Array.isArray(citation.authors) ? citation.authors : [],
+    year: citation.year || undefined,
+    venue: citation.venue || undefined,
+    volume: citation.volume || undefined,
+    issue: citation.issue || undefined,
+    pages: citation.pages || undefined,
+    doi: citation.doi || undefined,
+    url: citation.url || undefined,
+    isbn: citation.isbn || undefined,
+    publisher: citation.publisher || undefined,
+    edition: citation.edition || undefined,
+    sourceType: citation.sourceType || undefined,
+    editors: Array.isArray(citation.editors) ? citation.editors : undefined,
+    publicationPlace: citation.publicationPlace || undefined,
+    publicationDate: citation.publicationDate || undefined,
+    accessedDate: citation.accessedDate || undefined,
+    articleNumber: citation.articleNumber || undefined,
+    issn: citation.issn || undefined,
+    journalAbbreviation: citation.journalAbbreviation || undefined,
+    pmid: citation.pmid || undefined,
+    pmcid: citation.pmcid || undefined,
+    arxivId: citation.arxivId || undefined,
+    citationKey: citation.citationKey,
+  }
+}
+
+async function resolveBibliographyStyle(
+  preferredStyleCode?: string | null,
+  preferredSortOrder?: BibliographySortOrder | null
+): Promise<{
+  styleCode: string
+  sortOrder: BibliographySortOrder
+}> {
+  const preferred = String(preferredStyleCode || process.env.DEFAULT_CITATION_STYLE || 'APA7').trim() || 'APA7'
+  const preferredStyle = await citationStyleService.getCitationStyle(preferred)
+  const style = preferredStyle || (preferred.toUpperCase() === 'APA7'
+    ? null
+    : await citationStyleService.getCitationStyle('APA7'))
+  const styleCode = style?.code || 'APA7'
+  const normalizedStyleCode = styleCode.toUpperCase()
+  const sortOrder = NUMERIC_BIBLIOGRAPHY_STYLES.has(normalizedStyleCode)
+    ? 'order_of_appearance'
+    : preferredSortOrder === 'order_of_appearance'
+      ? 'order_of_appearance'
+    : style?.bibliographySortOrder === 'order_of_appearance'
+      ? 'order_of_appearance'
+      : 'alphabetical'
+
+  return { styleCode, sortOrder }
+}
+
+async function generateGrantBibliographySectionDraft(input: {
+  projectId: string
+  grantSessionId: string
+  tenantId: string
+  userId: string
+  draftingSessionId: string | null
+  sectionDrafts?: Array<{
+    sectionKey: string
+    content?: string | null
+    structuredResponses?: Array<{ responseJson?: unknown }> | null
+  }>
+  styleCode?: string | null
+  sortOrder?: BibliographySortOrder | null
+}) {
+  const draftingSessionId = String(input.draftingSessionId || '').trim()
+  if (!draftingSessionId) {
+    throw new Error('No linked literature workspace is available for bibliography generation.')
+  }
+
+  const draftingSession = await prisma.draftingSession.findUnique({
+    where: { id: draftingSessionId },
+    include: {
+      citationStyle: true,
+      citations: {
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+      },
+    },
+  })
+  if (!draftingSession || draftingSession.tenantId !== input.tenantId) {
+    throw new Error('No linked literature workspace is available for bibliography generation.')
+  }
+  if (draftingSession.citations.length === 0) {
+    throw new Error('No active citations are available for bibliography generation.')
+  }
+
+  const persistedGrantSectionDrafts = await prisma.grantSectionDraft.findMany({
+    where: {
+      grantSessionId: input.grantSessionId,
+      tenantId: input.tenantId,
+    },
+    orderBy: { sectionOrder: 'asc' },
+    include: {
+      structuredResponses: {
+        select: {
+          responseJson: true,
+        },
+      },
+    },
+  })
+
+  const usedCitationKeys = collectUsedGrantCitationKeysForBibliography(
+    persistedGrantSectionDrafts.length > 0 ? persistedGrantSectionDrafts : input.sectionDrafts || [],
+    draftingSession.citations.map((citation) => citation.citationKey)
+  )
+  if (usedCitationKeys.length === 0) {
+    return saveGrantSectionDraft({
+      projectId: input.projectId,
+      grantSessionId: input.grantSessionId,
+      tenantId: input.tenantId,
+      sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+      userId: input.userId,
+      content: '',
+      markReviewed: false,
+    })
+  }
+
+  const citationsByKey = new Map(
+    draftingSession.citations.map((citation) => [String(citation.citationKey || '').trim(), citation])
+  )
+  const usedCitations = usedCitationKeys
+    .map((key) => citationsByKey.get(key))
+    .filter(Boolean)
+
+  if (usedCitations.length === 0) {
+    return saveGrantSectionDraft({
+      projectId: input.projectId,
+      grantSessionId: input.grantSessionId,
+      tenantId: input.tenantId,
+      sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+      userId: input.userId,
+      content: '',
+      markReviewed: false,
+    })
+  }
+
+  const { styleCode, sortOrder } = await resolveBibliographyStyle(
+    input.styleCode || draftingSession.citationStyle?.code,
+    input.sortOrder
+  )
+  const rawBibliography = await citationStyleService.generateBibliography(
+    usedCitations.map(toCitationData),
+    styleCode,
+    { sortOrder }
+  )
+  const bibliography = formatBibliographyMarkdown(rawBibliography, sortOrder)
+  if (!bibliography) {
+    throw new Error('No bibliography content could be generated from the active citations.')
+  }
+
+  return saveGrantSectionDraft({
+    projectId: input.projectId,
+    grantSessionId: input.grantSessionId,
+    tenantId: input.tenantId,
+    sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+    userId: input.userId,
+    content: bibliography,
+    markReviewed: false,
+  })
+}
+
 export async function generateGrantSectionDraft(input: {
   projectId: string
   grantSessionId: string
@@ -98,6 +276,9 @@ export async function generateGrantSectionDraft(input: {
   userInstructions?: string | null
   allowInstructionAmounts?: boolean
   overwriteAmounts?: boolean
+  useCurrentBudgetValues?: boolean
+  bibliographyStyle?: string | null
+  bibliographySortOrder?: BibliographySortOrder | null
 }) {
   const workspace = await getGrantWorkspace({
     grantSessionId: input.grantSessionId,
@@ -117,6 +298,19 @@ export async function generateGrantSectionDraft(input: {
     throw new Error('Freeze the blueprint before generating draft sections.')
   }
 
+  if (isGrantBibliographySection(input.sectionKey)) {
+    return generateGrantBibliographySectionDraft({
+      projectId: input.projectId,
+      grantSessionId: input.grantSessionId,
+      tenantId: input.tenantId,
+      userId: input.userId,
+      draftingSessionId: workspace.grantSession.draftingSessionId,
+      sectionDrafts: blueprint.sectionDrafts,
+      styleCode: input.bibliographyStyle,
+      sortOrder: input.bibliographySortOrder,
+    })
+  }
+
   const sectionDraft = blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
   if (!sectionDraft) {
     throw new Error('Grant section not found')
@@ -129,6 +323,7 @@ export async function generateGrantSectionDraft(input: {
 
   if (sectionDraft.sectionType !== 'budget_rows') {
     if (isGrantSectionAutoDraftable({
+      sectionKey: sectionDraft.sectionKey,
       sectionType: sectionDraft.sectionType,
       workflowMode: (sectionDraft as { workflowMode?: string }).workflowMode,
     })) {
@@ -138,21 +333,30 @@ export async function generateGrantSectionDraft(input: {
   }
 
   const currency = workspace.grantSession.fundingCall?.currency || null
-  const currentData = getStructuredResponseValue(sectionDraft)
-    || buildBudgetStructuredScaffold({
-      section: sectionPlan,
-      currency,
-    })
+  const scaffoldData = buildBudgetStructuredScaffold({
+    section: sectionPlan,
+    currency,
+  })
+  const savedStructuredData = getStructuredResponseValue(sectionDraft)
+  const useCurrentBudgetValues = input.useCurrentBudgetValues === true
+  const budgetContextData = useCurrentBudgetValues && savedStructuredData
+    ? savedStructuredData
+    : scaffoldData
   const budgetTemplate = sectionPlan.budgetTemplate
     ? { ...sectionPlan.budgetTemplate, currency: sectionPlan.budgetTemplate.currency || currency }
     : buildFallbackBudgetTemplate(currency)
+  const generationBudgetTemplate = useCurrentBudgetValues
+    ? mergeBudgetTemplateWithStructuredTable(budgetTemplate, budgetContextData)
+    : budgetTemplate
   const prompt = buildBudgetDraftingPrompt({
-    budgetTemplate,
-    currentData,
+    budgetTemplate: generationBudgetTemplate,
+    currentData: budgetContextData,
     grantContextSummary: summarizeFundingContext(workspace),
     prepFacts: collectBudgetPrepFacts(sectionPlan),
     userInstructions: input.userInstructions || null,
     allowInstructionAmounts: input.allowInstructionAmounts === true,
+    overwriteAmounts: input.overwriteAmounts === true,
+    useCurrentBudgetValues,
   })
   const tenantContext = await resolveGrantTenantContext(input.tenantId, input.userId)
   if (!tenantContext) {
@@ -162,8 +366,8 @@ export async function generateGrantSectionDraft(input: {
   const result = await llmGateway.executeLLMOperation(
     { tenantContext },
     {
-      taskCode: 'GRANT_SECTION_GENERATE',
-      stageCode: 'GRANT_BUDGET_DRAFT',
+      taskCode: 'LLM2_DRAFT',
+      stageCode: 'PAPER_SECTION_DRAFT',
       prompt,
       parameters: {
         purpose: 'grant_budget_structured_draft',
@@ -174,6 +378,7 @@ export async function generateGrantSectionDraft(input: {
         grantSessionId: input.grantSessionId,
         sectionKey: input.sectionKey,
         purpose: 'grant_budget_structured_draft',
+        skipFeaturePolicy: true,
       },
     }
   )
@@ -184,10 +389,10 @@ export async function generateGrantSectionDraft(input: {
 
   const structuredData = validateBudgetDraftLlmResult({
     rawOutput: result.response.output,
-    template: budgetTemplate,
-    currentData,
+    template: generationBudgetTemplate,
+    currentData: budgetContextData,
     allowNewNumericValues: input.allowInstructionAmounts === true || input.overwriteAmounts === true,
-    preserveCurrentNumericValues: input.overwriteAmounts !== true,
+    preserveCurrentNumericValues: useCurrentBudgetValues && input.overwriteAmounts !== true,
   })
 
   return saveGrantSectionDraft({
@@ -227,13 +432,6 @@ export async function saveGrantSectionDraft(input: {
   const sectionDraft = blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
   if (!sectionDraft) {
     throw new Error('Grant section not found')
-  }
-
-  if (isGrantSectionAutoDraftable({
-    sectionType: sectionDraft.sectionType,
-    workflowMode: sectionDraft.workflowMode,
-  })) {
-    throw new Error('App draft sections are edited in the linked literature workspace.')
   }
 
   return prisma.$transaction(async (tx) => {

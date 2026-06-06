@@ -36,7 +36,9 @@ async function seedProductionPlans() {
       { code: 'PERSONA_SYNC', name: 'PersonaSync Style Learning', unit: 'trainings' },
       { code: 'IDEATION', name: 'Patent Ideation Engine', unit: 'sessions' },
       { code: 'PAPER_DRAFTING', name: 'Academic Paper Drafting', unit: 'tokens' },
-      { code: 'FUNDING_DISCOVERY', name: 'Funding Discovery', unit: 'calls' }
+      { code: 'FUNDING_DISCOVERY', name: 'Funding Discovery', unit: 'calls' },
+      { code: 'GRANT_PREP', name: 'Grant Prep', unit: 'sessions' },
+      { code: 'GRANT_DRAFTING', name: 'Grant Drafting', unit: 'tokens' }
     ]
 
     const featuresByCode = {}
@@ -78,7 +80,11 @@ async function seedProductionPlans() {
       { code: 'FUNDING_CALL_INGEST', name: 'Funding Call Ingestion', linkedFeature: 'FUNDING_DISCOVERY' },
       { code: 'FUNDING_CHAT', name: 'AI Fund Finder Chat', linkedFeature: 'FUNDING_DISCOVERY' },
       { code: 'FUNDING_TEMPLATE_EXTRACT', name: 'Funding Template Extraction', linkedFeature: 'FUNDING_DISCOVERY' },
-      { code: 'FUNDING_GUIDELINE_EXTRACT', name: 'Funding Guideline Extraction', linkedFeature: 'FUNDING_DISCOVERY' }
+      { code: 'FUNDING_GUIDELINE_EXTRACT', name: 'Funding Guideline Extraction', linkedFeature: 'FUNDING_DISCOVERY' },
+      // GRANT_PREP and GRANT_DRAFTING tasks
+      { code: 'GRANT_PREP_CHAT', name: 'Grant Prep Chat', linkedFeature: 'GRANT_PREP' },
+      { code: 'GRANT_BLUEPRINT_GENERATE', name: 'Grant Blueprint Generation', linkedFeature: 'GRANT_PREP' },
+      { code: 'GRANT_SECTION_GENERATE', name: 'Grant Section Generation', linkedFeature: 'GRANT_DRAFTING' }
     ]
 
     for (const def of taskDefs) {
@@ -169,6 +175,8 @@ async function seedProductionPlans() {
       { planCode: 'FREE_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 1000, dailyQuota: 100 },
       { planCode: 'FREE_PLAN', featureCode: 'PAPER_DRAFTING', monthlyQuota: 1000, dailyQuota: 100 },
       { planCode: 'FREE_PLAN', featureCode: 'FUNDING_DISCOVERY', monthlyQuota: 250, dailyQuota: 25 },
+      { planCode: 'FREE_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'FREE_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: 25, dailyQuota: 5, monthlyTokenLimit: 500000, dailyTokenLimit: 50000 },
 
       // PRO PLAN - Basic services + Idea Bank + Diagram generation + Ideation + Paper Drafting
       { planCode: 'PRO_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 1000, dailyQuota: 100 },
@@ -178,6 +186,8 @@ async function seedProductionPlans() {
       { planCode: 'PRO_PLAN', featureCode: 'IDEATION', monthlyQuota: 500, dailyQuota: 50, monthlyTokenLimit: 5000000, dailyTokenLimit: 500000 },
       { planCode: 'PRO_PLAN', featureCode: 'PAPER_DRAFTING', monthlyQuota: 10000, dailyQuota: 1000, monthlyTokenLimit: 10000000, dailyTokenLimit: 1000000 },
       { planCode: 'PRO_PLAN', featureCode: 'FUNDING_DISCOVERY', monthlyQuota: 2500, dailyQuota: 250 },
+      { planCode: 'PRO_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'PRO_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: 250, dailyQuota: 50, monthlyTokenLimit: 5000000, dailyTokenLimit: 500000 },
 
       // ENTERPRISE PLAN - Everything (all features)
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 5000, dailyQuota: 500 },
@@ -187,7 +197,9 @@ async function seedProductionPlans() {
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PERSONA_SYNC', monthlyQuota: 50, dailyQuota: 10 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'IDEATION', monthlyQuota: 2000, dailyQuota: 200, monthlyTokenLimit: 20000000, dailyTokenLimit: 2000000 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PAPER_DRAFTING', monthlyQuota: 50000, dailyQuota: 5000, monthlyTokenLimit: 50000000, dailyTokenLimit: 5000000 },
-      { planCode: 'ENTERPRISE_PLAN', featureCode: 'FUNDING_DISCOVERY', monthlyQuota: null, dailyQuota: null }
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'FUNDING_DISCOVERY', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: null, dailyQuota: null, monthlyTokenLimit: null, dailyTokenLimit: null }
     ]
 
     for (const def of planFeatureDefs) {
@@ -243,6 +255,9 @@ async function seedProductionPlans() {
       { planCode: 'FREE_PLAN', taskCode: 'FUNDING_CHAT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'FREE_PLAN', taskCode: 'FUNDING_TEMPLATE_EXTRACT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'FREE_PLAN', taskCode: 'FUNDING_GUIDELINE_EXTRACT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+      { planCode: 'FREE_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+      { planCode: 'FREE_PLAN', taskCode: 'GRANT_BLUEPRINT_GENERATE', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+      { planCode: 'FREE_PLAN', taskCode: 'GRANT_SECTION_GENERATE', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
 
       // PRO PLAN - Basic services + Idea Bank + Diagram generation
       { planCode: 'PRO_PLAN', taskCode: 'LLM1_PRIOR_ART', allowedClasses: ['BASE_S', 'BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
@@ -269,6 +284,9 @@ async function seedProductionPlans() {
       { planCode: 'PRO_PLAN', taskCode: 'FUNDING_CHAT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'PRO_PLAN', taskCode: 'FUNDING_TEMPLATE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'PRO_PLAN', taskCode: 'FUNDING_GUIDELINE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
+      { planCode: 'PRO_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
+      { planCode: 'PRO_PLAN', taskCode: 'GRANT_BLUEPRINT_GENERATE', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
+      { planCode: 'PRO_PLAN', taskCode: 'GRANT_SECTION_GENERATE', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
 
       // ENTERPRISE PLAN - All access (everything)
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM1_PRIOR_ART', allowedClasses: ['BASE_S', 'BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'ADVANCED' },
@@ -295,7 +313,10 @@ async function seedProductionPlans() {
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_CALL_INGEST', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_CHAT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_TEMPLATE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
-      { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_GUIDELINE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' }
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_GUIDELINE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'GRANT_BLUEPRINT_GENERATE', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'GRANT_SECTION_GENERATE', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' }
     ]
 
     for (const def of llmAccessDefs) {

@@ -100,9 +100,13 @@ function readApiErrorMessage(data: any, fallback: string) {
 function formatJobErrorCode(errorCode: string | null | undefined) {
   switch (errorCode) {
     case 'LLM_RATE_LIMITED':
-      return 'Gemini rate limited';
+      return 'LLM rate limit or quota reached';
     case 'pdf_intake_requires_gemini':
-      return 'Gemini required for PDF intake';
+      return 'PDF extraction needs Gemini multimodal configuration';
+    case 'SOURCE_PREPARATION_FAILED':
+      return 'Source could not be prepared';
+    case 'PROCESSING_FAILED':
+      return 'Call details extraction failed';
     default:
       return errorCode || 'Processing failed';
   }
@@ -590,7 +594,7 @@ export default function FundingIntakeAdminPage() {
                   onClick={() => setInputType('json')}
                   className={`rounded-full px-4 py-2 text-sm font-medium ${inputType === 'json' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
                 >
-                  JSON Uploading
+                  JSON Upload
                 </button>
               </div>
 
@@ -1036,7 +1040,7 @@ export default function FundingIntakeAdminPage() {
                             href={`/admin/funding/intake/${job.id}`}
                             className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800"
                           >
-                            Open
+                            {job.status === 'failed' ? 'Open Recovery' : 'Open'}
                           </Link>
                           {job.linked_funding_call_id && (
                             <Link

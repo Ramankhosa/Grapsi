@@ -284,6 +284,7 @@ export function validateGrantFinalExportReadiness(input: {
   for (const section of input.sections) {
     const paperDraftable = section.sectionType
       ? isGrantSectionAutoDraftable({
+          sectionKey: section.sectionKey,
           sectionType: section.sectionType,
           workflowMode: section.workflowMode,
         })

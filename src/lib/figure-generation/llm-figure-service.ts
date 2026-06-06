@@ -1126,6 +1126,7 @@ async function callLLM(
   metadata?: Record<string, any>
 ): Promise<{ response: string; tokensUsed: number; model: string }> {
   try {
+    const skipFeaturePolicy = metadata?.skipFeaturePolicy === true || stageCode === 'PAPER_DIAGRAM_GENERATOR'
     const result = await llmGateway.executeLLMOperation(
       { headers: requestHeaders },
       {
@@ -1139,7 +1140,8 @@ async function callLLM(
         metadata: {
           module: 'paper-figures',
           stageCode,
-          ...metadata
+          ...metadata,
+          ...(skipFeaturePolicy ? { skipFeaturePolicy: true } : {})
         }
       }
     )

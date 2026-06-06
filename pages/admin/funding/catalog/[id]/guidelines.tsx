@@ -486,6 +486,7 @@ export default function FundingGuidelineWorkspacePage() {
   const [applyingRunId, setApplyingRunId] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [reverting, setReverting] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRevisionNo, setSelectedRevisionNo] = useState<number | null>(null);
   const [sourceMode, setSourceMode] = useState<'intake' | 'url' | 'text' | 'pdf'>('intake');
   const [sourceUrl, setSourceUrl] = useState('');
@@ -522,6 +523,12 @@ export default function FundingGuidelineWorkspacePage() {
   const latestRunPack = useMemo(() => {
     return bundle?.runs.find((run) => run.guideline_pack_json)?.guideline_pack_json || null;
   }, [bundle]);
+  const selectedRun = useMemo(() => {
+    return bundle?.runs.find((run) => run.id === selectedRunId) || null;
+  }, [bundle, selectedRunId]);
+  const selectedRunPack = useMemo(() => {
+    return selectedRun?.guideline_pack_json || null;
+  }, [selectedRun]);
   const latestReviewableRun = useMemo(() => {
     return bundle?.runs.find((run) => run.status === 'needs_review') || null;
   }, [bundle]);
@@ -540,6 +547,20 @@ export default function FundingGuidelineWorkspacePage() {
 
     return () => window.clearInterval(interval);
   }, [id, activeRuns.length]);
+
+  useEffect(() => {
+    if (!bundle) {
+      return;
+    }
+
+    setSelectedRunId((current) => {
+      if (current && bundle.runs.some((run) => run.id === current)) {
+        return current;
+      }
+
+      return bundle.runs.find((run) => run.guideline_pack_json)?.id || null;
+    });
+  }, [bundle]);
 
   async function loadBundle(showSpinner = true) {
     if (!id) {
@@ -633,6 +654,7 @@ export default function FundingGuidelineWorkspacePage() {
       }
 
       await loadBundle(false);
+      setSelectedRunId(data.run?.id || null);
       setSourcePdf(null);
       toast.success('Guideline extraction started. It will continue if you switch tabs.');
     } catch (error) {
@@ -658,6 +680,7 @@ export default function FundingGuidelineWorkspacePage() {
       }
       setBundle(data);
       setGuidelinePack(normalizeGuidelinePack(data.guideline?.guideline_pack_json || createEmptyGuidelinePack()));
+      setSelectedRunId(runId);
       toast.success('Guideline run applied to the live draft');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to apply guideline run');
@@ -821,14 +844,14 @@ export default function FundingGuidelineWorkspacePage() {
             <button type="button" onClick={handleSave} disabled={saving} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
               {saving ? 'Saving...' : 'Save Guidelines'}
             </button>
-            {latestReviewableRun && (
+            {selectedRun?.status === 'needs_review' && (
               <button
                 type="button"
-                onClick={() => void handleApplyRun(latestReviewableRun.id)}
+                onClick={() => void handleApplyRun(selectedRun.id)}
                 disabled={applyingRunId !== null}
                 className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
               >
-                {applyingRunId === latestReviewableRun.id ? 'Applying Run...' : 'Apply Latest Run'}
+                {applyingRunId === selectedRun.id ? 'Applying Run...' : 'Apply Selected Run'}
               </button>
             )}
             <button type="button" onClick={handleApprove} disabled={approving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
@@ -978,16 +1001,27 @@ export default function FundingGuidelineWorkspacePage() {
                     </div>
                     {run.extractor_model && <div className="mt-3 text-xs text-slate-500">Model: {run.extractor_model}</div>}
                     {run.error_message && <div className="mt-3 text-sm text-rose-700">{run.error_message}</div>}
-                    {run.status === 'needs_review' && (
-                      <button
-                        type="button"
-                        onClick={() => void handleApplyRun(run.id)}
-                        disabled={applyingRunId !== null}
-                        className="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
-                      >
-                        {applyingRunId === run.id ? 'Applying...' : 'Apply This Run'}
-                      </button>
-                    )}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {run.guideline_pack_json && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRunId((current) => current === run.id ? null : run.id)}
+                          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"
+                        >
+                          {selectedRunId === run.id ? 'Hide Preview' : 'Preview'}
+                        </button>
+                      )}
+                      {run.status === 'needs_review' && (
+                        <button
+                          type="button"
+                          onClick={() => void handleApplyRun(run.id)}
+                          disabled={applyingRunId !== null}
+                          className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
+                        >
+                          {applyingRunId === run.id ? 'Applying...' : 'Apply This Run'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1057,9 +1091,13 @@ export default function FundingGuidelineWorkspacePage() {
             />
 
             <GuidelinePreviewCard
-              title="Preview Latest Extraction Run"
-              subtitle="This shows the latest extracted guideline draft from the automated LLM pass."
-              pack={latestRunPack ? normalizeGuidelinePack(latestRunPack) : null}
+              title={selectedRun ? 'Preview Selected Extraction Run' : 'Preview Latest Extraction Run'}
+              subtitle={
+                selectedRun
+                  ? `Run ${selectedRun.id} is ${selectedRun.status.replace('_', ' ')}. Apply it only after reviewing the extracted rules.`
+                  : 'This shows the latest extracted guideline draft from the automated LLM pass.'
+              }
+              pack={selectedRunPack ? normalizeGuidelinePack(selectedRunPack) : latestRunPack ? normalizeGuidelinePack(latestRunPack) : null}
               emptyMessage="No extraction run has produced a guideline draft yet."
             />
 

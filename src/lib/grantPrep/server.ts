@@ -3,6 +3,7 @@ import type { GrantPrepSession } from '@prisma/client';
 import { prisma } from '../prisma';
 import type { FundingCallContext, ProjectFundingContextBinding } from '../fundingContext';
 import { fundingGuidelineService } from '../fundingGuidelines/service';
+import { fundingTemplateService } from '../fundingTemplates/service';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { resolveProjectFundingContext } from '../fundingContext';
 import { buildGrantWorkspaceUrl } from '../grants/workspaceNavigation';
@@ -551,6 +552,18 @@ export async function loadGrantPrepSession(input: {
   });
 }
 
+function buildGrantPrepTemplateFallbackOperator(input: {
+  user: { id: string; email?: string | null };
+  tenantId?: string | null;
+}) {
+  return {
+    userId: input.user.id,
+    email: input.user.email || input.user.id,
+    role: 'USER' as const,
+    tenantId: input.tenantId || null,
+  };
+}
+
 async function ensureGrantSessionAnchor(input: {
   projectId: string;
   tenantId: string;
@@ -680,8 +693,23 @@ export async function createOrReuseGrantPrepSession(input: {
     grantSessionId: linkedGrantSession?.id || (!input.restart ? existingSession?.grant_session_id || null : null),
     fundingCallId: input.fundingCallId || (!input.restart ? existingSession?.funding_call_id || null : null),
   };
-  const context = await resolveGrantPrepContext(input.projectId, input.user, contextBinding);
+  let context = await resolveGrantPrepContext(input.projectId, input.user, contextBinding);
   const effectiveFundingCallId = input.fundingCallId || context.fundingCallId || existingSession?.funding_call_id || null;
+
+  if (effectiveFundingCallId && !context.draftingContext?.approvedTemplate) {
+    await fundingTemplateService.ensureStandardFallbackTemplate(
+      effectiveFundingCallId,
+      buildGrantPrepTemplateFallbackOperator({
+        user: input.user,
+        tenantId: input.tenantId,
+      })
+    );
+    context = await resolveGrantPrepContext(input.projectId, input.user, {
+      ...contextBinding,
+      fundingCallId: effectiveFundingCallId,
+    });
+  }
+
   if (!linkedGrantSession && effectiveFundingCallId) {
     linkedGrantSession = await ensureGrantSessionAnchor({
       projectId: input.projectId,
@@ -698,11 +726,32 @@ export async function createOrReuseGrantPrepSession(input: {
       existingSession.status,
       linkedGrantSession?.status
     );
+    const warning = buildGrantPrepModeWarning(context.mode, context.fundingContext.warning);
+    const needsContextRefresh = (
+      existingSession.mode !== context.mode ||
+      existingSession.engagement_mode !== normalizedEngagementMode ||
+      existingSession.template_revision_id !== context.templateRevisionId ||
+      existingSession.guideline_revision_id !== context.guidelineRevisionId
+    );
+    const refreshedPersistence = needsContextRefresh
+      ? normalizeGrantPrepForPersistence(
+          refreshGrantPrepSessionContext({
+            sessionContext: inflateGrantPrepSessionContext(existingSession, { warning }),
+            templateJson: context.draftingContext?.approvedTemplate?.grant_template_json || null,
+            guidelinePack:
+              ((context.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as unknown) as GuidelinePackDocument | null) ||
+              null,
+            fundingContext: context.fundingContext,
+            warning,
+          })
+        )
+      : null;
     let hydrated = null;
 
     if (
       (effectiveGrantSessionId && existingSession.grant_session_id !== effectiveGrantSessionId) ||
-      existingSession.papsi_launch_url !== launchUrl
+      existingSession.papsi_launch_url !== launchUrl ||
+      needsContextRefresh
     ) {
       hydrated = await prisma.grantPrepSession.update({
         where: { id: existingSession.id },
@@ -711,6 +760,13 @@ export async function createOrReuseGrantPrepSession(input: {
           grant_session_id: effectiveGrantSessionId,
           papsi_launch_url: launchUrl,
           ...(effectiveFundingCallId ? { funding_call_id: effectiveFundingCallId } : {}),
+          ...(refreshedPersistence || {}),
+          ...(needsContextRefresh
+            ? {
+                template_revision_id: context.templateRevisionId,
+                guideline_revision_id: context.guidelineRevisionId,
+              }
+            : {}),
         },
         include: {
           messages: {

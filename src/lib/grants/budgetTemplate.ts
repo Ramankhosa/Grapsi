@@ -314,6 +314,47 @@ function findCandidateRow(
   return rows[index] || {}
 }
 
+export function mergeBudgetTemplateWithStructuredTable(
+  template: GrantBudgetTemplateScaffold,
+  currentData?: unknown
+): GrantBudgetTemplateScaffold {
+  const current = asRecord(currentData)
+  const currentColumns = budgetColumnsFromStructuredData(current)
+  const columns = currentColumns.length > 0 ? currentColumns : template.columns
+  const categoryColumnKey = getCategoryColumnKey(columns)
+  const templateCategories = normalizeBudgetCategories(template.categories)
+  const templateCategoryByLabel = new Map(
+    templateCategories.map((category) => [category.label.toLowerCase(), category])
+  )
+  const currentRows = Array.isArray(current.rows) ? current.rows.map((row) => asRecord(row)) : []
+  const currentCategories: GrantBudgetTemplateCategory[] = []
+  const seenCategoryLabels = new Set<string>()
+
+  if (categoryColumnKey) {
+    currentRows.forEach((row, index) => {
+      const label = cleanText(row[categoryColumnKey])
+      const identity = label.toLowerCase()
+      if (!label || seenCategoryLabels.has(identity)) return
+      seenCategoryLabels.add(identity)
+      const existing = templateCategoryByLabel.get(identity)
+      currentCategories.push(existing || {
+        key: slugify(label, `budget_${index + 1}`),
+        label,
+        cap: null,
+        notes: null,
+        sourceAnchors: [],
+      })
+    })
+  }
+
+  return {
+    ...template,
+    currency: cleanText(current.currency) || template.currency || null,
+    columns,
+    categories: currentCategories.length > 0 ? currentCategories : templateCategories,
+  }
+}
+
 export function validateBudgetDraftLlmResult(input: {
   rawOutput: string
   template: GrantBudgetTemplateScaffold
@@ -323,10 +364,15 @@ export function validateBudgetDraftLlmResult(input: {
 }): JsonRecord {
   const parsed = strictParseJsonObject(input.rawOutput)
   const current = asRecord(input.currentData)
+  const currentColumns = budgetColumnsFromStructuredData(current)
+  const templateCategories = normalizeBudgetCategories(input.template.categories)
   const templateScaffold = {
     ...input.template,
-    columns: ensureUsableBudgetColumns(input.template.columns, input.template.categories.length > 0),
-    categories: normalizeBudgetCategories(input.template.categories),
+    columns: ensureUsableBudgetColumns(
+      currentColumns.length > 0 ? currentColumns : input.template.columns,
+      templateCategories.length > 0
+    ),
+    categories: templateCategories,
   }
   const columns = templateScaffold.columns
   const categoryColumnKey = getCategoryColumnKey(columns)
@@ -337,22 +383,41 @@ export function validateBudgetDraftLlmResult(input: {
     ? current.rows.map((row) => asRecord(row))
     : []
   const fixedCategories = templateScaffold.fixedCategories && templateScaffold.categories.length > 0
-  const rowSource = fixedCategories
-    ? templateScaffold.categories
-    : candidateRows.map((_, index) => ({ key: `row_${index + 1}`, label: '', cap: null, notes: null, sourceAnchors: [] }))
+  const currentRowSource = currentRows.map((row, index) => ({
+    index,
+    label: categoryColumnKey ? cleanText(row[categoryColumnKey]) : '',
+    currentBacked: true,
+  }))
+  const templateRowSource = fixedCategories
+    ? templateScaffold.categories.map((category, index) => ({
+        index,
+        label: category.label,
+        currentBacked: false,
+      }))
+    : candidateRows.map((_, index) => ({
+        index,
+        label: '',
+        currentBacked: false,
+      }))
+  const rowSource = currentRowSource.length > 0 ? currentRowSource : templateRowSource
 
-  const rows = rowSource.map((category, index) => {
-    const candidateRow = fixedCategories
-      ? findCandidateRow(candidateRows, category.label, categoryColumnKey, index)
-      : candidateRows[index] || {}
-    const currentRow = fixedCategories
-      ? findCandidateRow(currentRows, category.label, categoryColumnKey, index)
-      : currentRows[index] || {}
+  const rows = rowSource.map((source) => {
+    const candidateRow = source.label
+      ? findCandidateRow(candidateRows, source.label, categoryColumnKey, source.index)
+      : candidateRows[source.index] || {}
+    const currentRow = source.currentBacked
+      ? currentRows[source.index] || {}
+      : source.label
+        ? findCandidateRow(currentRows, source.label, categoryColumnKey, source.index)
+        : currentRows[source.index] || {}
     const row: JsonRecord = {}
 
     for (const column of columns) {
-      if (column.key === categoryColumnKey && fixedCategories) {
-        row[column.key] = category.label
+      if (column.key === categoryColumnKey) {
+        row[column.key] = cleanCellValue(candidateRow[column.key])
+          || cleanCellValue(currentRow[column.key])
+          || source.label
+          || null
         continue
       }
 
@@ -362,13 +427,14 @@ export function validateBudgetDraftLlmResult(input: {
           row[column.key] = existing
           continue
         }
-        row[column.key] = input.allowNewNumericValues
+        const candidate = input.allowNewNumericValues
           ? cleanNumericCellValue(candidateRow[column.key])
           : null
+        row[column.key] = candidate || existing || null
         continue
       }
 
-      row[column.key] = cleanCellValue(candidateRow[column.key])
+      row[column.key] = cleanCellValue(candidateRow[column.key]) || cleanCellValue(currentRow[column.key])
     }
 
     return row
@@ -402,30 +468,55 @@ export function buildBudgetDraftingPrompt(input: {
   prepFacts: string[]
   userInstructions?: string | null
   allowInstructionAmounts?: boolean
+  overwriteAmounts?: boolean
+  useCurrentBudgetValues?: boolean
 }): string {
+  const userInstructions = String(input.userInstructions || '').trim()
+  const useCurrentBudgetValues = input.useCurrentBudgetValues === true
   return [
-    'You are completing a structured grant budget table.',
+    'You are completing the Budget section as a structured grant table.',
+    'Populate the table according to the provided section table format.',
     'Return ONLY raw JSON. No markdown, no code fences, no prose outside JSON.',
+    '',
+    'USER INSTRUCTIONS (AUTHORITATIVE):',
+    userInstructions || '- None.',
+    userInstructions
+      ? 'Apply these instructions to the matching rows and columns. If an instruction cannot be applied without breaking the table format or funder rules, put that issue in openQuestions.'
+      : 'No user-specific budget instructions were provided.',
     '',
     'HARD RULES:',
     '- Preserve the provided column keys exactly.',
-    '- Preserve extracted category rows unless the template has no fixed categories.',
+    '- Preserve extracted section/table category rows unless the format has no fixed categories.',
     '- Do not invent amounts, totals, rates, salaries, co-funding, or contribution values.',
     input.allowInstructionAmounts
-      ? '- You may transcribe confirmed numeric amounts from user instructions; do not infer amounts beyond those instructions.'
+      ? '- You may transcribe confirmed numeric values from the funding call, section format, current table, Grant Prep facts, or user instructions; do not infer values.'
       : '- Do not place numeric amounts from user instructions into table cells unless they already appear in the current structured budget.',
+    input.overwriteAmounts
+      ? '- If user instructions provide confirmed values that conflict with current table cells, follow the user instructions and replace the conflicting cells.'
+      : useCurrentBudgetValues
+        ? '- Preserve current numeric cells when they already contain confirmed values; use instructions to fill blanks and text/justification cells.'
+        : '- Use user instructions to fill numeric and text cells only when the values are confirmed by instructions, Grant Prep facts, or funder rules.',
+    useCurrentBudgetValues
+      ? '- Current table values are included below. Manipulate the existing row values as needed to satisfy the user instructions while preserving the table format.'
+      : '- Current table values are intentionally not included. Generate values from the section format, funder rules, Grant Prep facts, and user instructions only.',
+    input.overwriteAmounts
+      ? '- If the user specifies an overall or total budget, adjust the component line-item amount cells so the visible row values reconcile with that total; do not only change a final total row.'
+      : '- If totals are present, keep them consistent with the visible line-item amount cells.',
     '- Leave unknown numeric cells null.',
-    '- Fill justification and notes cells only from project facts, Grant Prep facts, or user instructions.',
+    '- Fill category, justification, and notes cells only from the section format, project facts, Grant Prep facts, or user instructions.',
+    '- When user instructions name a budget split, category, currency, or justification, make the output table visibly reflect it.',
     '- Put uncertainties in openQuestions, not inside table cells.',
     '',
     'OUTPUT JSON SHAPE:',
     '{"currency":"string|null","columns":[{"key":"string","label":"string","kind":"string|null"}],"rows":[{"...columnKey":"string|null"}],"notes":"string|null","openQuestions":["string"]}',
     '',
-    'BUDGET TEMPLATE:',
+    'SECTION TABLE FORMAT:',
     JSON.stringify(input.budgetTemplate, null, 2),
     '',
     'CURRENT STRUCTURED BUDGET:',
-    JSON.stringify(input.currentData || null, null, 2),
+    useCurrentBudgetValues
+      ? JSON.stringify(input.currentData || null, null, 2)
+      : 'Not provided. The user did not enable current-table-value context.',
     '',
     'FUNDING CALL SUMMARY:',
     input.grantContextSummary.length > 0
@@ -437,8 +528,5 @@ export function buildBudgetDraftingPrompt(input: {
       ? input.prepFacts.map((item) => `- ${item}`).join('\n')
       : '- None available.',
     '',
-    input.userInstructions
-      ? `USER INSTRUCTIONS:\n${input.userInstructions}`
-      : 'USER INSTRUCTIONS:\n- None.',
   ].join('\n')
 }

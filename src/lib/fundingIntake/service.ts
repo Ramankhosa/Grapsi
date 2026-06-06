@@ -979,12 +979,15 @@ async function persistDraft(
   operator: IntakeOperator,
   latestExtraction: any
 ) {
+  const extractionOfficialUrls = latestExtraction
+    ? buildDraftValuesFromExtraction(latestExtraction.extracted_json as any, {
+        sourceUrl: job.source_url || null,
+        fetchedUrl: readFetchedUrl(job.fetch_metadata_json),
+      }).official_urls
+    : [];
   const deterministicDraftValues = {
     ...draftValues,
-    official_urls: buildDraftValuesFromExtraction(latestExtraction?.extracted_json as any, {
-      sourceUrl: job.source_url || null,
-      fetchedUrl: readFetchedUrl(job.fetch_metadata_json),
-    }).official_urls,
+    official_urls: extractionOfficialUrls.length > 0 ? extractionOfficialUrls : draftValues.official_urls,
   };
   const isTenantPrivateDraft = operator.role === 'USER' && Boolean(operator.tenantId);
   const sharedData = {
@@ -1830,7 +1833,7 @@ class FundingIntakeService {
     };
   }
 
-  async retryJob(jobId: string, operator: IntakeOperator) {
+  async retryJob(jobId: string, operator: IntakeOperator, retrySourceInput?: Partial<IntakeSubmitInput> | null) {
     const job = await prisma.fundingIntakeJob.findUnique({
       where: { id: jobId },
     });
@@ -1843,10 +1846,80 @@ class FundingIntakeService {
       throw new Error('Only failed jobs can be retried');
     }
 
+    let recoverySource: Awaited<ReturnType<typeof prepareJobSourceData>> | null = null;
+    let recoverySourceKey = job.details_source_key || 'source_1';
+    const previousDetailsSourceKey = job.details_source_key || 'source_1';
+
+    if (retrySourceInput?.inputType) {
+      const existingSources = await this.ensureJobSources(job);
+      const usedSourceKeys = new Set(existingSources.map((source) => source.source_key));
+      recoverySourceKey =
+        BATCH_SOURCE_KEYS.find((sourceKey) => !usedSourceKeys.has(sourceKey)) ||
+        previousDetailsSourceKey;
+      const sequenceNo = BATCH_SOURCE_KEYS.indexOf(recoverySourceKey);
+
+      recoverySource = await prepareJobSourceData(
+        {
+          ...sourceToIntakeSource(retrySourceInput as IntakeSubmitInput),
+          sourceKey: recoverySourceKey,
+        },
+        sequenceNo >= 0 ? sequenceNo : existingSources.length
+      );
+
+      await prisma.fundingIntakeJobSource.upsert({
+        where: {
+          job_id_source_key: {
+            job_id: jobId,
+            source_key: recoverySource.source_key,
+          },
+        },
+        create: {
+          job_id: jobId,
+          ...recoverySource,
+        } as any,
+        update: {
+          sequence_no: recoverySource.sequence_no,
+          input_type: recoverySource.input_type,
+          source_url: recoverySource.source_url,
+          source_text_hash: recoverySource.source_text_hash,
+          source_file_path: recoverySource.source_file_path,
+          raw_text: recoverySource.raw_text,
+          normalized_text: recoverySource.normalized_text,
+          fetch_metadata_json: recoverySource.fetch_metadata_json as any,
+          status: recoverySource.status,
+          error_code: null,
+          error_message: null,
+        } as any,
+      });
+    }
+
+    const nextGuidelineSourceKey =
+      recoverySource && (job.guidelines_source_key || previousDetailsSourceKey) === previousDetailsSourceKey
+        ? recoverySource.source_key
+        : job.guidelines_source_key || previousDetailsSourceKey;
+    const nextTemplateSourceKey =
+      recoverySource && (job.template_source_key || previousDetailsSourceKey) === previousDetailsSourceKey
+        ? recoverySource.source_key
+        : job.template_source_key || previousDetailsSourceKey;
+
     await prisma.fundingIntakeJob.update({
       where: { id: jobId },
       data: {
         status: 'queued',
+        ...(recoverySource
+          ? {
+              input_type: recoverySource.input_type,
+              source_url: recoverySource.source_url,
+              source_text_hash: recoverySource.source_text_hash,
+              source_file_path: recoverySource.source_file_path,
+              raw_text: recoverySource.raw_text,
+              normalized_text: recoverySource.normalized_text,
+              fetch_metadata_json: recoverySource.fetch_metadata_json as any,
+              details_source_key: recoverySource.source_key,
+              guidelines_source_key: nextGuidelineSourceKey,
+              template_source_key: nextTemplateSourceKey,
+            }
+          : {}),
         error_code: null,
         error_message: null,
         completed_at: null,
@@ -1868,7 +1941,9 @@ class FundingIntakeService {
     await recordJobEvent(jobId, 'queued', 'retry_requested', {
       actorUserId: operator.userId,
       previousStatus: job.status,
-      message: 'Funding intake job retried',
+      message: recoverySource
+        ? `Funding intake job retried from alternate ${recoverySource.input_type} source ${recoverySource.source_key}`
+        : 'Funding intake job retried',
     });
 
     this.enqueue(jobId);
@@ -2117,8 +2192,8 @@ class FundingIntakeService {
       throw new Error('Funding intake job not found');
     }
 
-    if (!['needs_review', 'draft_created'].includes(details.job.status)) {
-      throw new Error('Draft can only be saved after extraction reaches review stage');
+    if (!['needs_review', 'draft_created', 'failed'].includes(details.job.status)) {
+      throw new Error('Draft can only be saved after extraction reaches review stage or from a failed recovery state');
     }
 
     for (const resolution of duplicateResolutions) {
@@ -2213,8 +2288,18 @@ class FundingIntakeService {
       duplicateStatus: details.duplicates.length > 0 ? 'resolved' : details.job.duplicate_status,
       linkedFundingCallId: fundingCall.id,
       completedAt: new Date(),
-      message: 'Draft funding call saved',
+      message: details.job.status === 'failed'
+        ? 'Manual recovery draft saved after failed extraction'
+        : 'Draft funding call saved',
     });
+
+    if (details.job.status === 'failed') {
+      await recordJobEvent(jobId, 'draft_created', 'manual_recovery_draft_saved', {
+        actorUserId: operator.userId,
+        previousStatus: 'failed',
+        message: 'Required call basics were saved manually after failed extraction',
+      });
+    }
 
     const extractAllResult = extractAll || details.job.input_type === 'json'
       ? await this.runExtractAllForFundingCall(details.job, fundingCall.id, operator)
@@ -2599,7 +2684,7 @@ class FundingIntakeService {
         detailsSource.source_url,
         readFetchedUrl(detailsSource.fetch_metadata_json),
         operator,
-        latestJob.linked_funding_call_id
+        latestState.linked_funding_call_id
       );
 
       const latestJob = await getJobForProcessing(jobId);

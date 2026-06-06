@@ -79,10 +79,13 @@ class CitationStyleService {
     HARVARD: 'HARVARD',
     VANCOUVER: 'VANCOUVER'
   };
+  private readonly BUILTIN_STYLES = new Set(['APA7', 'IEEE', 'CHICAGO', 'MLA9', 'HARVARD', 'VANCOUVER']);
   private readonly NUMERIC_STYLES = new Set(['IEEE', 'VANCOUVER']);
 
   /**
-   * Get citation style by code with caching
+   * Get citation style by code with caching.
+   * Falls back to a synthetic definition for built-in styles (APA7, IEEE, etc.)
+   * when no DB entry exists, so formatting never fails for known styles.
    */
   async getCitationStyle(code: string): Promise<CitationStyleDefinition | null> {
     const requestedCode = String(code || '').trim().toUpperCase();
@@ -105,6 +108,13 @@ class CitationStyleService {
     }
 
     if (!style || !style.isActive) {
+      if (this.BUILTIN_STYLES.has(normalizedCode)) {
+        const synthetic = this.buildSyntheticStyleDefinition(normalizedCode);
+        this.styleCache.set(normalizedCode, synthetic);
+        this.styleCache.set(requestedCode, synthetic);
+        this.cacheTimestamp = now;
+        return synthetic;
+      }
       return null;
     }
 
@@ -114,6 +124,24 @@ class CitationStyleService {
     this.cacheTimestamp = now;
 
     return style;
+  }
+
+  private buildSyntheticStyleDefinition(code: string): CitationStyleDefinition {
+    const isNumeric = this.NUMERIC_STYLES.has(code);
+    return {
+      id: `builtin_${code.toLowerCase()}`,
+      code,
+      name: code,
+      inTextFormatTemplate: isNumeric ? '[{number}]' : '({authors}, {year})',
+      bibliographyRules: {},
+      bibliographySortOrder: isNumeric ? 'order_of_appearance' : 'alphabetical',
+      supportsShortTitles: false,
+      maxAuthorsBeforeEtAl: code === 'APA7' ? 20 : 3,
+      sortOrder: 0,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as CitationStyleDefinition;
   }
 
   /**

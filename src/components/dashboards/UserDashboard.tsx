@@ -212,7 +212,7 @@ export default function UserDashboard() {
         </div>
       </button>
       <button
-        onClick={() => router.push('/finder?upload=1')}
+        onClick={() => router.push('/projects/new/grant')}
         className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-amber-200 hover:bg-amber-50 transition-colors text-left"
       >
         <div className="p-2 bg-amber-100 rounded-lg">
@@ -300,7 +300,7 @@ export default function UserDashboard() {
                         )}
                       </div>
                       <button
-                        onClick={() => router.push(`/finder?upload=1&jobId=${encodeURIComponent(job.id)}`)}
+                        onClick={() => router.push(`/projects/new/grant?jobId=${encodeURIComponent(job.id)}`)}
                         className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-white hover:bg-slate-700"
                       >
                         Resume

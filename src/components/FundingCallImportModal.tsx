@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   FaAlignLeft,
@@ -25,6 +25,7 @@ type FundingImportDetails = {
     id: string;
     status: string;
     duplicate_status: string;
+    linked_funding_call_id?: string | null;
     error_code?: string | null;
     error_message?: string | null;
   };
@@ -68,6 +69,27 @@ type ExistingFundingCall = {
   isRolling: boolean | null;
 };
 
+type FundingCallSearchResult = {
+  id: string;
+  title: string;
+  agencyName?: string | null;
+  sourceUrl?: string | null;
+  summary?: string | null;
+  deadlineAt?: string | null;
+  updatedAt: string;
+};
+
+type FundingImportCreateResponse = {
+  jobId?: string;
+  fundingCallId?: string | null;
+  job?: {
+    id?: string;
+    resultFundingCallId?: string | null;
+  } | null;
+  status?: string;
+  existingCall?: ExistingFundingCall;
+};
+
 type ArtifactState = {
   status: ArtifactStatus;
   run?: any;
@@ -78,7 +100,16 @@ type ArtifactState = {
 type FundingCallImportModalProps = {
   open: boolean;
   onClose: () => void;
-  onBeginWriting: (fundingCallId: string) => void;
+  onBeginWriting: (fundingCallId: string, options?: { projectName?: string }) => void;
+  importEndpoint?: '/api/funding/import' | '/api/funding/imports';
+  allowedCallModes?: ImportMode[];
+  allowedGuidelineModes?: SourceMode[];
+  allowedTemplateModes?: SourceMode[];
+  storageKey?: string;
+  eyebrow?: string;
+  title?: string;
+  description?: string;
+  showProjectNameField?: boolean;
 };
 
 const waitMessages = [
@@ -100,11 +131,65 @@ const templateWaitMessages = [
   'Preparing the template for your review.',
 ];
 
-const wizardStorageKey = 'funding-call-upload-wizard-v1';
+const defaultWizardStorageKey = 'funding-call-upload-wizard-v1';
 const emptyArtifactState: ArtifactState = { status: 'idle', error: null };
+const defaultCallModes: ImportMode[] = ['url', 'file', 'text'];
+const defaultGuidelineModes: SourceMode[] = ['intake', 'file', 'url', 'text', 'skip'];
+const defaultTemplateModes: SourceMode[] = ['intake', 'file', 'url', 'text', 'skip'];
+const quickSearchStopWords = new Set([
+  'about',
+  'after',
+  'against',
+  'also',
+  'and',
+  'application',
+  'applications',
+  'available',
+  'call',
+  'calls',
+  'can',
+  'deadline',
+  'for',
+  'from',
+  'funding',
+  'grant',
+  'grants',
+  'guideline',
+  'guidelines',
+  'into',
+  'may',
+  'must',
+  'not',
+  'only',
+  'proposal',
+  'proposals',
+  'research',
+  'shall',
+  'should',
+  'submit',
+  'submission',
+  'that',
+  'the',
+  'their',
+  'this',
+  'through',
+  'under',
+  'with',
+]);
 
 async function apiRequest<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options);
+  const headers = new Headers(options?.headers);
+  const token = typeof window !== 'undefined' ? window.localStorage.getItem('auth_token') : null;
+
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    credentials: options?.credentials || 'include',
+    headers,
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(payload?.message || payload?.error || payload?.details || 'Request failed');
@@ -151,6 +236,44 @@ function formatValue(value: unknown, fallback = 'Not found yet') {
   }
 
   return fallback;
+}
+
+function formatShortDate(value?: string | null) {
+  if (!value) return 'Deadline not specified';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function buildCompactCallSearchQuery(text: string) {
+  const normalized = text.replace(/https?:\/\/\S+/gi, ' ').replace(/\s+/g, ' ').trim();
+  if (!normalized || normalized.length < 40) return '';
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line.length >= 8 && line.length <= 180)
+    .slice(0, 40);
+  const titleLikeLine = lines.find((line) =>
+    /\b(call|proposal|proposals|programme|program|scheme|funding|opportunity|fellowship|grant)\b/i.test(line)
+  ) || lines[0] || '';
+
+  const counts = new Map<string, number>();
+  for (const token of normalized.toLowerCase().slice(0, 2500).match(/[\p{L}\p{N}][\p{L}\p{N}._/-]{1,}/gu) || []) {
+    if (quickSearchStopWords.has(token)) continue;
+    counts.set(token, (counts.get(token) || 0) + 1);
+  }
+
+  const keywords = Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || right[0].length - left[0].length)
+    .slice(0, 8)
+    .map(([token]) => token);
+
+  return [titleLikeLine, ...keywords]
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 220);
 }
 
 function formatMoneyRange(draftValues?: Record<string, any>) {
@@ -287,79 +410,126 @@ export default function FundingCallImportModal({
   open,
   onClose,
   onBeginWriting,
+  importEndpoint = '/api/funding/import',
+  allowedCallModes = defaultCallModes,
+  allowedGuidelineModes = defaultGuidelineModes,
+  allowedTemplateModes = defaultTemplateModes,
+  storageKey = defaultWizardStorageKey,
+  eyebrow = 'User upload',
+  title = 'Upload New Call For Proposal',
+  description = 'Add a call, review the extracted details, then optionally add guidelines and templates before grant writing.',
+  showProjectNameField = false,
 }: FundingCallImportModalProps) {
   const [step, setStep] = useState<WizardStep>('source');
-  const [mode, setMode] = useState<ImportMode>('url');
+  const [mode, setMode] = useState<ImportMode>(() => allowedCallModes[0] || 'text');
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceText, setSourceText] = useState('');
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [quickSearchInput, setQuickSearchInput] = useState('');
+  const [quickSearchResults, setQuickSearchResults] = useState<FundingCallSearchResult[]>([]);
+  const [quickSearchLoading, setQuickSearchLoading] = useState(false);
+  const [quickSearchError, setQuickSearchError] = useState<string | null>(null);
+  const [quickSearchQuery, setQuickSearchQuery] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const [details, setDetails] = useState<FundingImportDetails | null>(null);
   const [existingCall, setExistingCall] = useState<ExistingFundingCall | null>(null);
   const [fundingCallId, setFundingCallId] = useState<string | null>(null);
-  const [guidelineMode, setGuidelineMode] = useState<SourceMode>('intake');
+  const [guidelineMode, setGuidelineMode] = useState<SourceMode>(() => allowedGuidelineModes[0] || 'skip');
   const [guidelineUrl, setGuidelineUrl] = useState('');
   const [guidelineText, setGuidelineText] = useState('');
   const [guidelineFile, setGuidelineFile] = useState<File | null>(null);
   const [guidelineState, setGuidelineState] = useState<ArtifactState>(emptyArtifactState);
-  const [templateMode, setTemplateMode] = useState<SourceMode>('skip');
+  const [templateMode, setTemplateMode] = useState<SourceMode>(() => allowedTemplateModes[0] || 'skip');
   const [templateUrl, setTemplateUrl] = useState('');
   const [templateText, setTemplateText] = useState('');
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [templateState, setTemplateState] = useState<ArtifactState>(emptyArtifactState);
+  const [projectName, setProjectName] = useState('');
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importPollNonce, setImportPollNonce] = useState(0);
+  const parallelExtractionStartedFor = useRef<string | null>(null);
+  const startParallelArtifactExtractionRef = useRef<(callId: string) => void>(() => undefined);
 
   const importing = Boolean(details && ['queued', 'fetching', 'extracting'].includes(details.job.status));
   const callWaitMessage = useWaitMessage(loading || importing, waitMessages);
   const guidelineWaitMessage = useWaitMessage(guidelineState.status === 'extracting', guidelineWaitMessages);
   const templateWaitMessage = useWaitMessage(templateState.status === 'extracting', templateWaitMessages);
   const [resumeNotice, setResumeNotice] = useState<string | null>(null);
+  const activeMode = allowedCallModes.includes(mode) ? mode : allowedCallModes[0] || 'text';
+  const activeGuidelineMode = allowedGuidelineModes.includes(guidelineMode) ? guidelineMode : allowedGuidelineModes[0] || 'skip';
+  const activeTemplateMode = allowedTemplateModes.includes(templateMode) ? templateMode : allowedTemplateModes[0] || 'skip';
+  const callTextOnly = allowedCallModes.length === 1 && allowedCallModes[0] === 'text';
+  const guidelineTextOnly = allowedGuidelineModes.every((candidate) => candidate === 'text' || candidate === 'skip');
+  const templateFileOrTextOnly = allowedTemplateModes.every((candidate) => candidate === 'file' || candidate === 'text' || candidate === 'skip');
+  const compactPastedCallQuery = activeMode === 'text' ? buildCompactCallSearchQuery(sourceText) : '';
+  const effectiveQuickSearchQuery = (quickSearchInput.trim() || compactPastedCallQuery).trim();
+  const quickSearchSourceLabel = quickSearchInput.trim() ? 'manual search' : 'pasted text';
 
   const clearSavedProgress = () => {
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(wizardStorageKey);
+      window.localStorage.removeItem(storageKey);
     }
     setResumeNotice(null);
   };
 
-  const resetWizardState = () => {
+  const resetWizardState = useCallback(() => {
     setStep('source');
-    setMode('url');
+    setMode(allowedCallModes[0] || 'text');
     setSourceUrl('');
     setSourceText('');
     setSourceFile(null);
+    setQuickSearchInput('');
+    setQuickSearchResults([]);
+    setQuickSearchLoading(false);
+    setQuickSearchError(null);
+    setQuickSearchQuery('');
     setJobId(null);
     setDetails(null);
     setExistingCall(null);
     setFundingCallId(null);
-    setGuidelineMode('intake');
+    setGuidelineMode(allowedGuidelineModes[0] || 'skip');
     setGuidelineUrl('');
     setGuidelineText('');
     setGuidelineFile(null);
     setGuidelineState(emptyArtifactState);
-    setTemplateMode('skip');
+    setTemplateMode(allowedTemplateModes[0] || 'skip');
     setTemplateUrl('');
     setTemplateText('');
     setTemplateFile(null);
     setTemplateState(emptyArtifactState);
+    setProjectName('');
     setLoading(false);
     setActionLoading(false);
     setError(null);
+    setImportPollNonce(0);
     setResumeNotice(null);
-  };
+    parallelExtractionStartedFor.current = null;
+  }, [allowedCallModes, allowedGuidelineModes, allowedTemplateModes]);
 
   useEffect(() => {
     if (!open) {
       resetWizardState();
     }
-  }, [open]);
+  }, [open, resetWizardState]);
+
+  useEffect(() => {
+    if (!allowedCallModes.includes(mode)) {
+      setMode(allowedCallModes[0] || 'text');
+    }
+    if (!allowedGuidelineModes.includes(guidelineMode)) {
+      setGuidelineMode(allowedGuidelineModes[0] || 'skip');
+    }
+    if (!allowedTemplateModes.includes(templateMode)) {
+      setTemplateMode(allowedTemplateModes[0] || 'skip');
+    }
+  }, [allowedCallModes, allowedGuidelineModes, allowedTemplateModes, guidelineMode, mode, templateMode]);
 
   useEffect(() => {
     if (!open || typeof window === 'undefined') return;
 
-    const raw = window.localStorage.getItem(wizardStorageKey);
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return;
 
     try {
@@ -382,11 +552,12 @@ export default function FundingCallImportModal({
       setTemplateUrl(saved.templateUrl || '');
       setTemplateText(saved.templateText || '');
       setTemplateState(saved.templateState || emptyArtifactState);
+      setProjectName(saved.projectName || '');
       setResumeNotice('Restored your previous upload progress. You can continue from here.');
     } catch {
-      window.localStorage.removeItem(wizardStorageKey);
+      window.localStorage.removeItem(storageKey);
     }
-  }, [open]);
+  }, [open, storageKey]);
 
   useEffect(() => {
     if (!open || typeof window === 'undefined') return;
@@ -395,30 +566,34 @@ export default function FundingCallImportModal({
     if (!hasProgress) return;
 
     window.localStorage.setItem(
-      wizardStorageKey,
+      storageKey,
       JSON.stringify({
         step,
-        mode,
+        mode: activeMode,
         sourceUrl,
         sourceText: sourceText.length > 12000 ? sourceText.slice(0, 12000) : sourceText,
         jobId,
         details,
         existingCall,
         fundingCallId,
-        guidelineMode,
+        guidelineMode: activeGuidelineMode,
         guidelineUrl,
         guidelineText: guidelineText.length > 12000 ? guidelineText.slice(0, 12000) : guidelineText,
         guidelineState,
-        templateMode,
+        templateMode: activeTemplateMode,
         templateUrl,
         templateText: templateText.length > 12000 ? templateText.slice(0, 12000) : templateText,
         templateState,
+        projectName,
         savedAt: new Date().toISOString(),
       })
     );
   }, [
     details,
     existingCall,
+    activeGuidelineMode,
+    activeMode,
+    activeTemplateMode,
     fundingCallId,
     guidelineMode,
     guidelineState,
@@ -427,12 +602,14 @@ export default function FundingCallImportModal({
     jobId,
     mode,
     open,
+    projectName,
     sourceText,
     sourceUrl,
     step,
     templateMode,
     templateState,
     templateText,
+    storageKey,
     templateUrl,
   ]);
 
@@ -446,6 +623,10 @@ export default function FundingCallImportModal({
         const nextDetails = await apiRequest<FundingImportDetails>(`/api/funding/import/${jobId}`);
         if (canceled) return;
         setDetails(nextDetails);
+        if (nextDetails.job.linked_funding_call_id) {
+          setFundingCallId(nextDetails.job.linked_funding_call_id);
+          startParallelArtifactExtractionRef.current(nextDetails.job.linked_funding_call_id);
+        }
 
         if (['queued', 'fetching', 'extracting'].includes(nextDetails.job.status)) {
           timeoutId = setTimeout(poll, 2000);
@@ -468,7 +649,53 @@ export default function FundingCallImportModal({
       canceled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [open, jobId]);
+  }, [open, jobId, importPollNonce]);
+
+  useEffect(() => {
+    if (!open || step !== 'source') return undefined;
+
+    const query = effectiveQuickSearchQuery;
+    if (query.length < 3) {
+      setQuickSearchResults([]);
+      setQuickSearchError(null);
+      setQuickSearchLoading(false);
+      setQuickSearchQuery('');
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(async () => {
+      setQuickSearchLoading(true);
+      setQuickSearchError(null);
+      setQuickSearchQuery(query);
+
+      try {
+        const params = new URLSearchParams({ limit: '8' });
+        if (quickSearchInput.trim()) {
+          params.set('title', query);
+        } else {
+          params.set('text', query);
+        }
+        const payload = await apiRequest<{ calls?: FundingCallSearchResult[] }>(`/api/funding/calls?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        setQuickSearchResults(Array.isArray(payload.calls) ? payload.calls : []);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setQuickSearchResults([]);
+        setQuickSearchError(err instanceof Error ? err.message : 'Failed to search existing funding calls');
+      } finally {
+        if (!controller.signal.aborted) {
+          setQuickSearchLoading(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timeoutId);
+    };
+  }, [effectiveQuickSearchQuery, open, quickSearchInput, step]);
 
   const duplicateCandidates = useMemo(() => {
     return [
@@ -495,14 +722,25 @@ export default function FundingCallImportModal({
   const failedImportMessage = details?.job.error_message
     || (details?.job.error_code === 'LLM_RATE_LIMITED'
       ? 'The AI provider is rate limiting requests right now. Retry the import in about a minute.'
-      : 'Import failed. Try a different URL, upload the PDF, or paste the call text instead.');
-  const canSubmit = mode === 'url'
+      : callTextOnly
+        ? 'Import failed. Paste the call text again and retry.'
+        : 'Import failed. Try a different URL, upload the PDF, or paste the call text instead.');
+  const canSubmit = activeMode === 'url'
     ? sourceUrl.trim().length > 0
-    : mode === 'file'
+    : activeMode === 'file'
       ? Boolean(sourceFile)
       : sourceText.trim().length >= 80;
   const guidelineSummary = buildGuidelineSummary(guidelineState.run);
   const templateSummary = buildTemplateSummary(templateState.run);
+  const isGuidelineComplete = (status = guidelineState.status) => status === 'accepted' || status === 'skipped';
+  const isTemplateComplete = (status = templateState.status) => status === 'accepted' || status === 'skipped';
+  const hasFailedImport = details?.job.status === 'failed';
+  const hasFailedGuidelines = guidelineState.status === 'failed';
+  const hasFailedTemplate = templateState.status === 'failed';
+  const failedRequestCount = [hasFailedImport, hasFailedGuidelines, hasFailedTemplate].filter(Boolean).length;
+  const hasFailedRequests = failedRequestCount > 0;
+  const retryFailedLabel = failedRequestCount > 1 ? 'Retry failed requests' : 'Retry failed request';
+  const activeFundingCallId = fundingCallId || details?.job.linked_funding_call_id || null;
 
   const submitImport = async () => {
     setLoading(true);
@@ -512,25 +750,26 @@ export default function FundingCallImportModal({
     setExistingCall(null);
 
     try {
-      let response: { jobId?: string; status: string; existingCall?: ExistingFundingCall };
+      let response: FundingImportCreateResponse;
 
-      if (mode === 'file') {
+      if (activeMode === 'file') {
         if (!sourceFile) return;
         const formData = new FormData();
         formData.append('inputType', 'file');
         formData.append('file', sourceFile);
-        response = await apiRequest('/api/funding/import', {
+        response = await apiRequest(importEndpoint, {
           method: 'POST',
           body: formData,
         });
       } else {
-        response = await apiRequest('/api/funding/import', {
+        response = await apiRequest(importEndpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            inputType: mode,
-            sourceUrl: mode === 'url' ? sourceUrl : undefined,
-            sourceText: mode === 'text' ? sourceText : undefined,
+            inputType: activeMode,
+            sourceUrl: activeMode === 'url' ? sourceUrl : undefined,
+            sourceText: activeMode === 'text' ? sourceText : undefined,
+            rawText: activeMode === 'text' ? sourceText : undefined,
           }),
         });
       }
@@ -540,8 +779,15 @@ export default function FundingCallImportModal({
         return;
       }
 
-      if (response.jobId) {
-        setJobId(response.jobId);
+      const nextJobId = response.jobId || response.job?.id || null;
+      if (nextJobId) {
+        setJobId(nextJobId);
+      }
+
+      const nextFundingCallId = response.fundingCallId || response.job?.resultFundingCallId || null;
+      if (nextFundingCallId) {
+        setFundingCallId(nextFundingCallId);
+        startParallelArtifactExtraction(nextFundingCallId);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start import');
@@ -573,7 +819,8 @@ export default function FundingCallImportModal({
 
       if (action === 'create_private_draft' && response.fundingCallId) {
         setFundingCallId(response.fundingCallId);
-        setStep('guidelines');
+        startParallelArtifactExtraction(response.fundingCallId);
+        setStep(isGuidelineComplete() && isTemplateComplete() ? 'ready' : isGuidelineComplete() ? 'template' : 'guidelines');
         return;
       }
 
@@ -595,12 +842,96 @@ export default function FundingCallImportModal({
     decide('use_existing', callId);
   };
 
-  const extractGuidelines = async () => {
-    if (!fundingCallId) return;
-    if (guidelineMode === 'skip') {
+  async function retryImportJob() {
+    if (!jobId) return;
+    await apiRequest(`/api/funding/imports/${encodeURIComponent(jobId)}/retry`, {
+      method: 'POST',
+    });
+    setDetails((current) => current
+      ? {
+          ...current,
+          job: {
+            ...current.job,
+            status: 'queued',
+            error_code: null,
+            error_message: null,
+          },
+        }
+      : current
+    );
+    setImportPollNonce((current) => current + 1);
+  }
+
+  async function retryFailedRequests() {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const tasks: Promise<void>[] = [];
+      if (hasFailedImport && jobId) {
+        tasks.push(retryImportJob());
+      }
+      if (activeFundingCallId && hasFailedGuidelines) {
+        tasks.push(extractGuidelinesForCall(activeFundingCallId, { advanceOnSkip: false }));
+      }
+      if (activeFundingCallId && hasFailedTemplate) {
+        tasks.push(extractTemplateForCall(activeFundingCallId, { advanceOnSkip: false }));
+      }
+
+      if (tasks.length === 0) {
+        return;
+      }
+
+      const results = await Promise.allSettled(tasks);
+      const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (rejected) {
+        throw rejected.reason;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to retry failed requests');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function startParallelArtifactExtraction(callId: string, options: { includeFailed?: boolean } = {}) {
+    if (!options.includeFailed && parallelExtractionStartedFor.current === callId) return;
+    parallelExtractionStartedFor.current = callId;
+
+    const tasks: Promise<void>[] = [];
+    if (guidelineState.status === 'idle' || (options.includeFailed && guidelineState.status === 'failed')) {
+      tasks.push(extractGuidelinesForCall(callId, { advanceOnSkip: false, skipMissingInput: true }));
+    }
+    if (templateState.status === 'idle' || (options.includeFailed && templateState.status === 'failed')) {
+      tasks.push(extractTemplateForCall(callId, { advanceOnSkip: false, skipMissingInput: true }));
+    }
+
+    if (tasks.length > 0) {
+      void Promise.allSettled(tasks);
+    }
+  }
+  startParallelArtifactExtractionRef.current = startParallelArtifactExtraction;
+
+  async function extractGuidelinesForCall(
+    callId: string,
+    options: { advanceOnSkip?: boolean; skipMissingInput?: boolean } = { advanceOnSkip: true }
+  ) {
+    if (activeGuidelineMode === 'skip') {
       setGuidelineState({ status: 'skipped', error: null });
-      setStep('template');
+      if (options.advanceOnSkip) {
+        setStep(isTemplateComplete() ? 'ready' : 'template');
+      }
       return;
+    }
+
+    if (options.skipMissingInput) {
+      const missingFile = activeGuidelineMode === 'file' && !guidelineFile;
+      const missingUrl = activeGuidelineMode === 'url' && !guidelineUrl.trim();
+      const missingText = activeGuidelineMode === 'text' && guidelineText.trim().length < 40;
+      if (missingFile || missingUrl || missingText) {
+        setGuidelineState({ status: 'skipped', error: null });
+        return;
+      }
     }
 
     setGuidelineState({ status: 'extracting', error: null });
@@ -608,22 +939,22 @@ export default function FundingCallImportModal({
 
     try {
       let response: { run: any };
-      if (guidelineMode === 'file') {
+      if (activeGuidelineMode === 'file') {
         if (!guidelineFile) throw new Error('Upload a guideline PDF first');
         const formData = new FormData();
         formData.append('file', guidelineFile);
-        response = await apiRequest(`/api/funding/calls/${fundingCallId}/user-guidelines/extract`, {
+        response = await apiRequest(`/api/funding/calls/${callId}/user-guidelines/extract`, {
           method: 'POST',
           body: formData,
         });
       } else {
-        response = await apiRequest(`/api/funding/calls/${fundingCallId}/user-guidelines/extract`, {
+        response = await apiRequest(`/api/funding/calls/${callId}/user-guidelines/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            sourceMode: guidelineMode,
-            sourceUrl: guidelineMode === 'url' ? guidelineUrl : undefined,
-            sourceText: guidelineMode === 'text' ? guidelineText : undefined,
+            sourceMode: activeGuidelineMode,
+            sourceUrl: activeGuidelineMode === 'url' ? guidelineUrl : undefined,
+            sourceText: activeGuidelineMode === 'text' ? guidelineText : undefined,
           }),
         });
       }
@@ -632,6 +963,11 @@ export default function FundingCallImportModal({
     } catch (err) {
       setGuidelineState({ status: 'failed', error: err instanceof Error ? err.message : 'Failed to extract guidelines' });
     }
+  }
+
+  const extractGuidelines = async () => {
+    if (!fundingCallId) return;
+    await extractGuidelinesForCall(fundingCallId, { advanceOnSkip: true });
   };
 
   const acceptGuidelines = async () => {
@@ -646,7 +982,7 @@ export default function FundingCallImportModal({
         body: JSON.stringify({ runId: guidelineState.run.id }),
       });
       setGuidelineState((current) => ({ ...current, status: 'accepted', bundle: response.bundle, error: null }));
-      setStep('template');
+      setStep(isTemplateComplete() ? 'ready' : 'template');
     } catch (err) {
       setGuidelineState((current) => ({ ...current, error: err instanceof Error ? err.message : 'Failed to accept guidelines' }));
     } finally {
@@ -654,12 +990,26 @@ export default function FundingCallImportModal({
     }
   };
 
-  const extractTemplate = async () => {
-    if (!fundingCallId) return;
-    if (templateMode === 'skip') {
+  async function extractTemplateForCall(
+    callId: string,
+    options: { advanceOnSkip?: boolean; skipMissingInput?: boolean } = { advanceOnSkip: true }
+  ) {
+    if (activeTemplateMode === 'skip') {
       setTemplateState({ status: 'skipped', error: null });
-      setStep('ready');
+      if (options.advanceOnSkip) {
+        setStep(isGuidelineComplete() ? 'ready' : 'guidelines');
+      }
       return;
+    }
+
+    if (options.skipMissingInput) {
+      const missingFile = activeTemplateMode === 'file' && !templateFile;
+      const missingUrl = activeTemplateMode === 'url' && !templateUrl.trim();
+      const missingText = activeTemplateMode === 'text' && templateText.trim().length < 40;
+      if (missingFile || missingUrl || missingText) {
+        setTemplateState({ status: 'skipped', error: null });
+        return;
+      }
     }
 
     setTemplateState({ status: 'extracting', error: null });
@@ -667,22 +1017,22 @@ export default function FundingCallImportModal({
 
     try {
       let response: { asset?: any; run: any };
-      if (templateMode === 'file') {
+      if (activeTemplateMode === 'file') {
         if (!templateFile) throw new Error('Upload a template file first');
         const formData = new FormData();
         formData.append('file', templateFile);
-        response = await apiRequest(`/api/funding/calls/${fundingCallId}/user-template/extract`, {
+        response = await apiRequest(`/api/funding/calls/${callId}/user-template/extract`, {
           method: 'POST',
           body: formData,
         });
       } else {
-        response = await apiRequest(`/api/funding/calls/${fundingCallId}/user-template/extract`, {
+        response = await apiRequest(`/api/funding/calls/${callId}/user-template/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            sourceType: templateMode,
-            sourceUrl: templateMode === 'url' ? templateUrl : undefined,
-            sourceText: templateMode === 'text' ? templateText : undefined,
+            sourceType: activeTemplateMode,
+            sourceUrl: activeTemplateMode === 'url' ? templateUrl : undefined,
+            sourceText: activeTemplateMode === 'text' ? templateText : undefined,
           }),
         });
       }
@@ -691,6 +1041,11 @@ export default function FundingCallImportModal({
     } catch (err) {
       setTemplateState({ status: 'failed', error: err instanceof Error ? err.message : 'Failed to extract template' });
     }
+  }
+
+  const extractTemplate = async () => {
+    if (!fundingCallId) return;
+    await extractTemplateForCall(fundingCallId, { advanceOnSkip: true });
   };
 
   const acceptTemplate = async () => {
@@ -705,7 +1060,7 @@ export default function FundingCallImportModal({
         body: JSON.stringify({ runId: templateState.run.id }),
       });
       setTemplateState((current) => ({ ...current, status: 'accepted', bundle: response.bundle, error: null }));
-      setStep('ready');
+      setStep(isGuidelineComplete() ? 'ready' : 'guidelines');
     } catch (err) {
       setTemplateState((current) => ({ ...current, error: err instanceof Error ? err.message : 'Failed to accept template' }));
     } finally {
@@ -716,7 +1071,9 @@ export default function FundingCallImportModal({
   const startGrantWriting = () => {
     if (fundingCallId) {
       clearSavedProgress();
-      onBeginWriting(fundingCallId);
+      onBeginWriting(fundingCallId, {
+        projectName: showProjectNameField ? projectName.trim() || undefined : undefined,
+      });
     }
   };
 
@@ -733,11 +1090,11 @@ export default function FundingCallImportModal({
             <div>
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
                 <FaUpload />
-                User upload
+                {eyebrow}
               </div>
-              <h2 className="mt-2 text-xl font-semibold text-slate-950">Upload New Call For Proposal</h2>
+              <h2 className="mt-2 text-xl font-semibold text-slate-950">{title}</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Add a call, review the extracted details, then optionally add guidelines and templates before grant writing.
+                {description}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -786,23 +1143,108 @@ export default function FundingCallImportModal({
               <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm font-semibold text-slate-950">Add the call source</div>
                 <p className="mt-1 text-sm text-slate-600">
-                  Use the official URL when available. If the call is only in a document, upload the PDF.
+                  {callTextOnly
+                    ? 'Paste the funding call text. URL and PDF uploads are disabled for this project creation flow.'
+                    : 'Use the official URL when available. HTTP and HTTPS URLs are supported. If the call is only in a document, upload the PDF.'}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <SourceButton active={mode === 'url'} icon={<FaLink />} label="URL" onClick={() => setMode('url')} />
-                  <SourceButton active={mode === 'file'} icon={<FaFilePdf />} label="PDF" onClick={() => setMode('file')} />
-                  <SourceButton active={mode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setMode('text')} />
+                  {allowedCallModes.includes('url') ? (
+                    <SourceButton active={activeMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setMode('url')} />
+                  ) : null}
+                  {allowedCallModes.includes('file') ? (
+                    <SourceButton active={activeMode === 'file'} icon={<FaFilePdf />} label="PDF" onClick={() => setMode('file')} />
+                  ) : null}
+                  {allowedCallModes.includes('text') ? (
+                    <SourceButton active={activeMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setMode('text')} />
+                  ) : null}
+                </div>
+
+                <div className="mt-4 rounded-md border border-amber-200 bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-950">Check if this call already exists</div>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Search by call title or funder. If you paste the call text, we also run a compact keyword check automatically.
+                      </p>
+                    </div>
+                    {quickSearchLoading ? (
+                      <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                        <FaSpinner className="animate-spin" />
+                        Searching
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <input
+                    value={quickSearchInput}
+                    onChange={(event) => setQuickSearchInput(event.target.value)}
+                    placeholder="Search existing calls by title, funder, or keywords"
+                    className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-amber-500"
+                  />
+                  {compactPastedCallQuery && !quickSearchInput.trim() ? (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Auto-checking from pasted text: <span className="font-medium text-slate-700">{compactPastedCallQuery}</span>
+                    </div>
+                  ) : null}
+                  {quickSearchError ? (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {quickSearchError}
+                    </div>
+                  ) : null}
+                  {quickSearchResults.length > 0 ? (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50">
+                      <div className="border-b border-amber-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
+                        Possible existing calls found from {quickSearchSourceLabel}. Review before uploading.
+                      </div>
+                      <div className="max-h-72 overflow-y-auto">
+                        {quickSearchResults.map((call) => (
+                          <div key={call.id} className="border-b border-amber-100 bg-white px-3 py-3 last:border-b-0">
+                            <div className="text-sm font-semibold text-slate-950">{call.title}</div>
+                            <div className="mt-1 text-xs text-slate-600">
+                              {[call.agencyName, formatShortDate(call.deadlineAt)].filter(Boolean).join(' • ')}
+                            </div>
+                            {call.summary ? (
+                              <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-600">{call.summary}</div>
+                            ) : null}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <a
+                                href={`/finder/calls/${encodeURIComponent(call.id)}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                <FaLink />
+                                Show details
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => handleExistingCall(call.id)}
+                                className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700"
+                              >
+                                <FaPlay />
+                                Use this call
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : quickSearchQuery && !quickSearchLoading && !quickSearchError ? (
+                    <div className="mt-2 text-xs text-slate-500">
+                      No existing calls matched “{quickSearchQuery}”.
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="mt-4">
-                  {mode === 'url' ? (
+                  {activeMode === 'url' ? (
                     <input
                       value={sourceUrl}
                       onChange={(event) => setSourceUrl(event.target.value)}
                       placeholder="https://funder.example/calls/example"
                       className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                     />
-                  ) : mode === 'file' ? (
+                  ) : activeMode === 'file' ? (
                     <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-white px-4 py-8 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
                       <FaFilePdf className="mb-3 text-2xl text-emerald-700" />
                       <span className="font-semibold text-slate-900">{sourceFile ? sourceFile.name : 'Upload call PDF'}</span>
@@ -823,6 +1265,166 @@ export default function FundingCallImportModal({
                       className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                     />
                   )}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-emerald-100 bg-emerald-50 p-4">
+                <div className="text-sm font-semibold text-emerald-950">Parallel extraction inputs</div>
+                <p className="mt-1 text-sm text-emerald-800">
+                  Add guidelines and a proposal template now. After the call source is submitted, GrantMentor starts the available LLM extraction jobs in parallel.
+                </p>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-md border border-slate-200 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-950">Guidelines</div>
+                      <p className="mt-1 text-sm text-slate-600">
+                        {guidelineTextOnly
+                          ? 'Paste separate guideline text if available, or skip.'
+                          : 'Use the call source, upload a separate PDF, provide a URL, paste text, or skip.'}
+                      </p>
+                    </div>
+                    {guidelineState.status !== 'idle' ? (
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                        {guidelineState.status}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {allowedGuidelineModes.includes('intake') ? (
+                      <SourceButton active={activeGuidelineMode === 'intake'} icon={<FaFileAlt />} label="Use call source" onClick={() => setGuidelineMode('intake')} />
+                    ) : null}
+                    {allowedGuidelineModes.includes('file') ? (
+                      <SourceButton active={activeGuidelineMode === 'file'} icon={<FaFilePdf />} label="PDF" onClick={() => setGuidelineMode('file')} />
+                    ) : null}
+                    {allowedGuidelineModes.includes('url') ? (
+                      <SourceButton active={activeGuidelineMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setGuidelineMode('url')} />
+                    ) : null}
+                    {allowedGuidelineModes.includes('text') ? (
+                      <SourceButton active={activeGuidelineMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setGuidelineMode('text')} />
+                    ) : null}
+                    {allowedGuidelineModes.includes('skip') ? (
+                      <SourceButton active={activeGuidelineMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setGuidelineMode('skip')} />
+                    ) : null}
+                  </div>
+                  <div className="mt-4">
+                    {activeGuidelineMode === 'file' ? (
+                      <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
+                        <FaFilePdf className="mb-3 text-xl text-emerald-700" />
+                        <span className="font-semibold text-slate-900">{guidelineFile ? guidelineFile.name : 'Upload guideline PDF'}</span>
+                        <input
+                          type="file"
+                          accept="application/pdf"
+                          className="hidden"
+                          onChange={(event) => setGuidelineFile(event.target.files?.[0] || null)}
+                        />
+                      </label>
+                    ) : activeGuidelineMode === 'url' ? (
+                      <input
+                        value={guidelineUrl}
+                        onChange={(event) => setGuidelineUrl(event.target.value)}
+                        placeholder="https://funder.example/guidelines"
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                      />
+                    ) : activeGuidelineMode === 'text' ? (
+                      <textarea
+                        value={guidelineText}
+                        onChange={(event) => setGuidelineText(event.target.value)}
+                        rows={5}
+                        placeholder="Paste the guideline text here"
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                      />
+                    ) : activeGuidelineMode === 'skip' ? (
+                      <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                        Guidelines will be skipped for now.
+                      </div>
+                    ) : (
+                      <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                        Guidelines will be extracted from the call source in parallel.
+                      </div>
+                    )}
+                  </div>
+                  {guidelineState.error ? (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{guidelineState.error}</div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-md border border-slate-200 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-950">Proposal template</div>
+                      <p className="mt-1 text-sm text-slate-600">
+                        {templateFileOrTextOnly
+                          ? 'Upload a funder template as PDF or image, paste template text, or skip to use the standard fallback template.'
+                          : 'Upload a funder template when available. If skipped, the standard fallback template is used.'}
+                      </p>
+                    </div>
+                    {templateState.status !== 'idle' ? (
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                        {templateState.status}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {allowedTemplateModes.includes('intake') ? (
+                      <SourceButton active={activeTemplateMode === 'intake'} icon={<FaFileAlt />} label="Use call source" onClick={() => setTemplateMode('intake')} />
+                    ) : null}
+                    {allowedTemplateModes.includes('file') ? (
+                      <SourceButton active={activeTemplateMode === 'file'} icon={<FaUpload />} label="PDF/image" onClick={() => setTemplateMode('file')} />
+                    ) : null}
+                    {allowedTemplateModes.includes('url') ? (
+                      <SourceButton active={activeTemplateMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setTemplateMode('url')} />
+                    ) : null}
+                    {allowedTemplateModes.includes('text') ? (
+                      <SourceButton active={activeTemplateMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setTemplateMode('text')} />
+                    ) : null}
+                    {allowedTemplateModes.includes('skip') ? (
+                      <SourceButton active={activeTemplateMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setTemplateMode('skip')} />
+                    ) : null}
+                  </div>
+                  <div className="mt-4">
+                    {activeTemplateMode === 'file' ? (
+                      <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
+                        <FaUpload className="mb-3 text-xl text-emerald-700" />
+                        <span className="font-semibold text-slate-900">{templateFile ? templateFile.name : 'Upload template file'}</span>
+                        <span className="mt-1 text-xs text-slate-500">PDF, PNG, JPG, JPEG, or WebP files are supported.</span>
+                        <input
+                          type="file"
+                          accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp"
+                          className="hidden"
+                          onChange={(event) => setTemplateFile(event.target.files?.[0] || null)}
+                        />
+                      </label>
+                    ) : activeTemplateMode === 'url' ? (
+                      <input
+                        value={templateUrl}
+                        onChange={(event) => setTemplateUrl(event.target.value)}
+                        placeholder="https://funder.example/template"
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                      />
+                    ) : activeTemplateMode === 'text' ? (
+                      <textarea
+                        value={templateText}
+                        onChange={(event) => setTemplateText(event.target.value)}
+                        rows={5}
+                        placeholder="Paste the proposal template text here"
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                      />
+                    ) : activeTemplateMode === 'skip' ? (
+                      <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                        The standard grant application template will be used as fallback.
+                      </div>
+                    ) : (
+                      <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                        Proposal structure will be extracted from the call source in parallel.
+                      </div>
+                    )}
+                  </div>
+                  {templateState.error ? (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{templateState.error}</div>
+                  ) : null}
                 </div>
               </div>
 
@@ -866,12 +1468,16 @@ export default function FundingCallImportModal({
 
               <button
                 type="button"
-                onClick={submitImport}
-                disabled={loading || importing || !canSubmit}
+                onClick={hasFailedRequests ? retryFailedRequests : submitImport}
+                disabled={loading || importing || (!hasFailedRequests && !canSubmit)}
                 className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading || importing ? <FaSpinner className="animate-spin" /> : <FaMagic />}
-                {loading || importing ? 'Extracting call details...' : 'Extract call details'}
+                {loading || importing
+                  ? 'Extracting...'
+                  : hasFailedRequests
+                    ? retryFailedLabel
+                    : 'Start parallel extraction'}
               </button>
             </div>
           ) : null}
@@ -913,6 +1519,35 @@ export default function FundingCallImportModal({
                 </div>
               </div>
 
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-md border border-slate-200 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Guidelines extraction</div>
+                  <div className={`mt-2 flex items-center gap-2 text-sm font-semibold ${
+                    guidelineState.status === 'ready' || guidelineState.status === 'accepted'
+                      ? 'text-emerald-700'
+                      : guidelineState.status === 'failed'
+                        ? 'text-red-700'
+                        : 'text-slate-600'
+                  }`}>
+                    {guidelineState.status === 'extracting' ? <FaSpinner className="animate-spin" /> : guidelineState.status === 'ready' || guidelineState.status === 'accepted' ? <FaCheckCircle /> : <FaArrowRight />}
+                    {guidelineState.status === 'idle' ? 'Waiting for call shell' : guidelineState.status}
+                  </div>
+                </div>
+                <div className="rounded-md border border-slate-200 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Template extraction</div>
+                  <div className={`mt-2 flex items-center gap-2 text-sm font-semibold ${
+                    templateState.status === 'ready' || templateState.status === 'accepted'
+                      ? 'text-emerald-700'
+                      : templateState.status === 'failed'
+                        ? 'text-red-700'
+                        : 'text-slate-600'
+                  }`}>
+                    {templateState.status === 'extracting' ? <FaSpinner className="animate-spin" /> : templateState.status === 'ready' || templateState.status === 'accepted' ? <FaCheckCircle /> : <FaArrowRight />}
+                    {templateState.status === 'idle' ? 'Waiting for call shell' : templateState.status === 'skipped' ? 'standard fallback' : templateState.status}
+                  </div>
+                </div>
+              </div>
+
               {duplicateCandidates.length > 0 ? (
                 <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
                   <div className="text-sm font-semibold text-amber-950">Possible existing calls</div>
@@ -940,6 +1575,17 @@ export default function FundingCallImportModal({
               ) : null}
 
               <div className="flex flex-wrap gap-2">
+                {hasFailedRequests ? (
+                  <button
+                    type="button"
+                    onClick={retryFailedRequests}
+                    disabled={loading || importing || actionLoading}
+                    className="inline-flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
+                  >
+                    {loading || importing ? <FaSpinner className="animate-spin" /> : <FaMagic />}
+                    {retryFailedLabel}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => decide('create_private_draft')}
@@ -966,18 +1612,30 @@ export default function FundingCallImportModal({
               <div className="rounded-md border border-slate-200 p-4">
                 <div className="text-sm font-semibold text-slate-950">Add guidelines</div>
                 <p className="mt-1 text-sm text-slate-600">
-                  Guidelines help Grant Prep follow priorities, word limits, budgets, review criteria, and submission rules.
+                  {guidelineTextOnly
+                    ? 'Guidelines help Grant Prep follow priorities, word limits, budgets, review criteria, and submission rules. Paste guideline text if available, or skip.'
+                    : 'Guidelines help Grant Prep follow priorities, word limits, budgets, review criteria, and submission rules. HTTP and HTTPS URLs are supported.'}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <SourceButton active={guidelineMode === 'intake'} icon={<FaFileAlt />} label="Use call source" onClick={() => setGuidelineMode('intake')} />
-                  <SourceButton active={guidelineMode === 'file'} icon={<FaFilePdf />} label="PDF" onClick={() => setGuidelineMode('file')} />
-                  <SourceButton active={guidelineMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setGuidelineMode('url')} />
-                  <SourceButton active={guidelineMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setGuidelineMode('text')} />
-                  <SourceButton active={guidelineMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setGuidelineMode('skip')} />
+                  {allowedGuidelineModes.includes('intake') ? (
+                    <SourceButton active={activeGuidelineMode === 'intake'} icon={<FaFileAlt />} label="Use call source" onClick={() => setGuidelineMode('intake')} />
+                  ) : null}
+                  {allowedGuidelineModes.includes('file') ? (
+                    <SourceButton active={activeGuidelineMode === 'file'} icon={<FaFilePdf />} label="PDF" onClick={() => setGuidelineMode('file')} />
+                  ) : null}
+                  {allowedGuidelineModes.includes('url') ? (
+                    <SourceButton active={activeGuidelineMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setGuidelineMode('url')} />
+                  ) : null}
+                  {allowedGuidelineModes.includes('text') ? (
+                    <SourceButton active={activeGuidelineMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setGuidelineMode('text')} />
+                  ) : null}
+                  {allowedGuidelineModes.includes('skip') ? (
+                    <SourceButton active={activeGuidelineMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setGuidelineMode('skip')} />
+                  ) : null}
                 </div>
 
                 <div className="mt-4">
-                  {guidelineMode === 'file' ? (
+                  {activeGuidelineMode === 'file' ? (
                     <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-7 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
                       <FaFilePdf className="mb-3 text-xl text-emerald-700" />
                       <span className="font-semibold text-slate-900">{guidelineFile ? guidelineFile.name : 'Upload guideline PDF'}</span>
@@ -988,14 +1646,14 @@ export default function FundingCallImportModal({
                         onChange={(event) => setGuidelineFile(event.target.files?.[0] || null)}
                       />
                     </label>
-                  ) : guidelineMode === 'url' ? (
+                  ) : activeGuidelineMode === 'url' ? (
                     <input
                       value={guidelineUrl}
                       onChange={(event) => setGuidelineUrl(event.target.value)}
                       placeholder="https://funder.example/guidelines"
                       className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                     />
-                  ) : guidelineMode === 'text' ? (
+                  ) : activeGuidelineMode === 'text' ? (
                     <textarea
                       value={guidelineText}
                       onChange={(event) => setGuidelineText(event.target.value)}
@@ -1003,7 +1661,7 @@ export default function FundingCallImportModal({
                       placeholder="Paste the guideline text here"
                       className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                     />
-                  ) : guidelineMode === 'skip' ? (
+                  ) : activeGuidelineMode === 'skip' ? (
                     <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
                       You can continue without guidelines. Grant Prep will use the call details and lighter guidance.
                     </div>
@@ -1054,7 +1712,7 @@ export default function FundingCallImportModal({
                       type="button"
                       onClick={() => {
                         setGuidelineState({ status: 'skipped', error: null });
-                        setStep('template');
+                        setStep(isTemplateComplete() ? 'ready' : 'template');
                       }}
                       disabled={actionLoading}
                       className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
@@ -1074,7 +1732,7 @@ export default function FundingCallImportModal({
                     className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                   >
                     {guidelineState.status === 'extracting' ? <FaSpinner className="animate-spin" /> : <FaMagic />}
-                    {guidelineMode === 'skip' ? 'Continue without guidelines' : 'Extract guidelines'}
+                    {activeGuidelineMode === 'skip' ? 'Continue without guidelines' : 'Extract guidelines'}
                   </button>
                 </div>
               ) : null}
@@ -1086,37 +1744,49 @@ export default function FundingCallImportModal({
               <div className="rounded-md border border-slate-200 p-4">
                 <div className="text-sm font-semibold text-slate-950">Add proposal template</div>
                 <p className="mt-1 text-sm text-slate-600">
-                  Templates help Grant Prep write into the right sections and keep required attachments visible.
+                  {templateFileOrTextOnly
+                    ? 'Templates help Grant Prep write into the right sections and keep required attachments visible. Upload a PDF/image template, paste text, or skip.'
+                    : 'Templates help Grant Prep write into the right sections and keep required attachments visible. HTTP and HTTPS URLs are supported.'}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <SourceButton active={templateMode === 'intake'} icon={<FaFileAlt />} label="Use call source" onClick={() => setTemplateMode('intake')} />
-                  <SourceButton active={templateMode === 'file'} icon={<FaFilePdf />} label="File" onClick={() => setTemplateMode('file')} />
-                  <SourceButton active={templateMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setTemplateMode('url')} />
-                  <SourceButton active={templateMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setTemplateMode('text')} />
-                  <SourceButton active={templateMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setTemplateMode('skip')} />
+                  {allowedTemplateModes.includes('intake') ? (
+                    <SourceButton active={activeTemplateMode === 'intake'} icon={<FaFileAlt />} label="Use call source" onClick={() => setTemplateMode('intake')} />
+                  ) : null}
+                  {allowedTemplateModes.includes('file') ? (
+                    <SourceButton active={activeTemplateMode === 'file'} icon={<FaUpload />} label="PDF/image" onClick={() => setTemplateMode('file')} />
+                  ) : null}
+                  {allowedTemplateModes.includes('url') ? (
+                    <SourceButton active={activeTemplateMode === 'url'} icon={<FaLink />} label="URL" onClick={() => setTemplateMode('url')} />
+                  ) : null}
+                  {allowedTemplateModes.includes('text') ? (
+                    <SourceButton active={activeTemplateMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setTemplateMode('text')} />
+                  ) : null}
+                  {allowedTemplateModes.includes('skip') ? (
+                    <SourceButton active={activeTemplateMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setTemplateMode('skip')} />
+                  ) : null}
                 </div>
 
                 <div className="mt-4">
-                  {templateMode === 'file' ? (
+                  {activeTemplateMode === 'file' ? (
                     <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-7 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
-                      <FaFilePdf className="mb-3 text-xl text-emerald-700" />
+                      <FaUpload className="mb-3 text-xl text-emerald-700" />
                       <span className="font-semibold text-slate-900">{templateFile ? templateFile.name : 'Upload template file'}</span>
-                      <span className="mt-1 text-xs text-slate-500">PDF or image files are supported by the current extractor.</span>
+                      <span className="mt-1 text-xs text-slate-500">PDF, PNG, JPG, JPEG, or WebP files are supported.</span>
                       <input
                         type="file"
-                        accept="application/pdf,image/*"
+                        accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp"
                         className="hidden"
                         onChange={(event) => setTemplateFile(event.target.files?.[0] || null)}
                       />
                     </label>
-                  ) : templateMode === 'url' ? (
+                  ) : activeTemplateMode === 'url' ? (
                     <input
                       value={templateUrl}
                       onChange={(event) => setTemplateUrl(event.target.value)}
                       placeholder="https://funder.example/template"
                       className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                     />
-                  ) : templateMode === 'text' ? (
+                  ) : activeTemplateMode === 'text' ? (
                     <textarea
                       value={templateText}
                       onChange={(event) => setTemplateText(event.target.value)}
@@ -1124,9 +1794,9 @@ export default function FundingCallImportModal({
                       placeholder="Paste the proposal template text here"
                       className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                     />
-                  ) : templateMode === 'skip' ? (
+                  ) : activeTemplateMode === 'skip' ? (
                     <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
-                      You can continue without a template. Grant Prep will use the standard grant-writing flow.
+                      You can continue without a funder template. Grant Prep will use the standard grant application template as a fallback.
                     </div>
                   ) : (
                     <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
@@ -1175,12 +1845,12 @@ export default function FundingCallImportModal({
                       type="button"
                       onClick={() => {
                         setTemplateState({ status: 'skipped', error: null });
-                        setStep('ready');
+                        setStep(isGuidelineComplete() ? 'ready' : 'guidelines');
                       }}
                       disabled={actionLoading}
                       className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                     >
-                      Skip template
+                      Use standard template
                     </button>
                   </div>
                 </div>
@@ -1194,7 +1864,7 @@ export default function FundingCallImportModal({
                   className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
                   {templateState.status === 'extracting' ? <FaSpinner className="animate-spin" /> : <FaMagic />}
-                  {templateMode === 'skip' ? 'Continue without template' : 'Extract template'}
+                  {activeTemplateMode === 'skip' ? 'Use standard template' : 'Extract template'}
                 </button>
               ) : null}
             </div>
@@ -1231,10 +1901,29 @@ export default function FundingCallImportModal({
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Template</div>
                   <div className={`mt-2 flex items-center gap-2 text-sm font-semibold ${templateState.status === 'accepted' ? 'text-emerald-700' : 'text-slate-600'}`}>
                     {templateState.status === 'accepted' ? <FaCheckCircle /> : <FaArrowRight />}
-                    {templateState.status === 'accepted' ? 'Accepted' : 'Skipped'}
+                    {templateState.status === 'accepted' ? 'Accepted' : 'Standard fallback'}
                   </div>
                 </div>
               </div>
+
+              {showProjectNameField ? (
+                <div className="rounded-md border border-slate-200 p-4">
+                  <label htmlFor="grantProjectName" className="text-sm font-semibold text-slate-950">
+                    Project name
+                  </label>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Leave this blank to use the funding call title.
+                  </p>
+                  <input
+                    id="grantProjectName"
+                    value={projectName}
+                    onChange={(event) => setProjectName(event.target.value)}
+                    maxLength={200}
+                    placeholder="e.g., Rural Diabetes Implementation Grant"
+                    className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                  />
+                </div>
+              ) : null}
 
               <button
                 type="button"

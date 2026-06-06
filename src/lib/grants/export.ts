@@ -1,5 +1,9 @@
 import type { PaperDocxBlock, PaperDocxSection } from '@/lib/export/paper-docx-export'
 import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
+import {
+  resolveCitationKeyFromLookup,
+  splitCitationKeyList,
+} from '@/lib/utils/citation-key-normalization'
 
 export const GRANT_EXPORT_EMPTY_PLACEHOLDER = 'Not prepared yet.'
 
@@ -16,6 +20,8 @@ export interface GrantProposalDocxSectionsResult {
   sections: PaperDocxSection[]
   emptySectionCount: number
 }
+
+const CITE_MARKER_PATTERN = '\\[CITE:([^\\]]+)\\]'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -213,6 +219,44 @@ function flattenBlocks(blocks: PaperDocxBlock[]): string {
     .join('\n\n')
 }
 
+function extractCitationKeysFromText(
+  text: string,
+  canonicalLookup?: Map<string, string>
+): string[] {
+  const ordered: string[] = []
+  const seen = new Set<string>()
+  const markerRegex = new RegExp(CITE_MARKER_PATTERN, 'gi')
+  let match: RegExpExecArray | null = null
+
+  while ((match = markerRegex.exec(text || '')) !== null) {
+    const keys = splitCitationKeyList(match[1] || '')
+    for (const key of keys) {
+      const canonical = canonicalLookup
+        ? resolveCitationKeyFromLookup(key, canonicalLookup) || key
+        : key
+      const identity = canonical.toLocaleLowerCase('en-US')
+      if (!canonical || seen.has(identity)) continue
+      seen.add(identity)
+      ordered.push(canonical)
+    }
+  }
+
+  return ordered
+}
+
+function appendOrderedCitationKeys(
+  target: string[],
+  seen: Set<string>,
+  keys: string[]
+) {
+  for (const key of keys) {
+    const identity = key.toLocaleLowerCase('en-US')
+    if (!key || seen.has(identity)) continue
+    seen.add(identity)
+    target.push(key)
+  }
+}
+
 function sectionHasPreparedContent(blocks: PaperDocxBlock[]): boolean {
   return blocks.some((block) => {
     if (block.type === 'paragraph') return cleanText(block.text) !== GRANT_EXPORT_EMPTY_PLACEHOLDER
@@ -245,6 +289,76 @@ export function buildGrantProposalDocxSections(
     })
 
   return { sections, emptySectionCount }
+}
+
+export function extractOrderedCitationKeysFromGrantDocxSections(
+  sections: PaperDocxSection[],
+  canonicalLookup?: Map<string, string>
+): string[] {
+  const ordered: string[] = []
+  const seen = new Set<string>()
+
+  for (const section of sections) {
+    const blocks = section.blocks && section.blocks.length > 0
+      ? section.blocks
+      : [{ type: 'paragraph' as const, text: section.content || '' }]
+
+    for (const block of blocks) {
+      if (block.type === 'paragraph') {
+        appendOrderedCitationKeys(ordered, seen, extractCitationKeysFromText(block.text, canonicalLookup))
+      } else if (block.type === 'bullets') {
+        for (const item of block.items) {
+          appendOrderedCitationKeys(ordered, seen, extractCitationKeysFromText(item, canonicalLookup))
+        }
+      } else if (block.type === 'table') {
+        for (const header of block.headers) {
+          appendOrderedCitationKeys(ordered, seen, extractCitationKeysFromText(header, canonicalLookup))
+        }
+        for (const row of block.rows) {
+          for (const cell of row) {
+            appendOrderedCitationKeys(ordered, seen, extractCitationKeysFromText(cell, canonicalLookup))
+          }
+        }
+      }
+    }
+  }
+
+  return ordered
+}
+
+export async function mapGrantProposalDocxSectionText(
+  sections: PaperDocxSection[],
+  mapText: (text: string) => Promise<string>
+): Promise<PaperDocxSection[]> {
+  return Promise.all(sections.map(async (section) => {
+    if (section.blocks && section.blocks.length > 0) {
+      const blocks = await Promise.all(section.blocks.map(async (block): Promise<PaperDocxBlock> => {
+        if (block.type === 'paragraph') {
+          return { ...block, text: await mapText(block.text) }
+        }
+        if (block.type === 'bullets') {
+          return { ...block, items: await Promise.all(block.items.map((item) => mapText(item))) }
+        }
+        return {
+          ...block,
+          headers: await Promise.all(block.headers.map((header) => mapText(header))),
+          rows: await Promise.all(block.rows.map((row) =>
+            Promise.all(row.map((cell) => mapText(cell)))
+          )),
+        }
+      }))
+      return {
+        ...section,
+        blocks,
+        content: flattenBlocks(blocks),
+      }
+    }
+
+    return {
+      ...section,
+      content: await mapText(section.content || ''),
+    }
+  }))
 }
 
 export function renderGrantSectionForExport(sectionDraft: {

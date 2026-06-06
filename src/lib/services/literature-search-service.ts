@@ -336,10 +336,10 @@ class LiteratureSearchService {
     // Deduplicate by DOI
     const deduplicatedResults = this.deduplicateResults(flattenedResults);
 
-    // Sort by relevance (citation count, then year)
+    // Sort by query relevance first, then citation signal and recency.
     const sortedResults = deduplicatedResults.sort((a, b) => {
-      const aScore = (a.citationCount || 0) + (a.year ? (new Date().getFullYear() - a.year) * 0.1 : 0);
-      const bScore = (b.citationCount || 0) + (b.year ? (new Date().getFullYear() - b.year) * 0.1 : 0);
+      const aScore = this.calculateMergedResultScore(query, a);
+      const bScore = this.calculateMergedResultScore(query, b);
       return bScore - aScore;
     });
 
@@ -497,6 +497,68 @@ class LiteratureSearchService {
   private recordRequest(providerName: string): void {
     // Additional logging/metrics could go here
     console.log(`Search request completed for ${providerName}`);
+  }
+
+  private calculateMergedResultScore(query: string, result: SearchResult): number {
+    const tokens = this.extractQueryTokens(query);
+    const title = this.normalizeSearchText(result.title);
+    const abstract = this.normalizeSearchText(result.abstract || '');
+    const fields = this.normalizeSearchText((result.fieldsOfStudy || []).join(' '));
+    const venue = this.normalizeSearchText(result.venue || '');
+
+    let lexicalScore = 0;
+    for (const token of tokens) {
+      if (title.includes(token)) lexicalScore += 10;
+      else if (abstract.includes(token)) lexicalScore += 4;
+      else if (fields.includes(token) || venue.includes(token)) lexicalScore += 2;
+    }
+
+    for (const phrase of this.extractQueryPhrases(tokens)) {
+      if (title.includes(phrase)) lexicalScore += 14;
+      else if (abstract.includes(phrase)) lexicalScore += 5;
+    }
+
+    const citationScore = Math.log10((result.citationCount || 0) + 1) * 2;
+    const currentYear = new Date().getFullYear();
+    const age = result.year ? Math.max(0, currentYear - result.year) : 20;
+    const recencyScore = Math.max(0, 8 - age) * 0.35;
+
+    return lexicalScore + citationScore + recencyScore;
+  }
+
+  private normalizeSearchText(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private extractQueryTokens(query: string): string[] {
+    const stopWords = new Set([
+      'and', 'the', 'for', 'with', 'that', 'this', 'from', 'into', 'using', 'based',
+      'impact', 'effect', 'effects', 'study', 'studies', 'analysis', 'review', 'evidence',
+      'project', 'proposal', 'grant', 'research', 'paper', 'method', 'methods',
+    ]);
+
+    const tokens = this.normalizeSearchText(query)
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) =>
+        token
+        && (token.length > 2 || token === 'ai' || token === 'it')
+        && !stopWords.has(token)
+      );
+
+    return Array.from(new Set(tokens)).slice(0, 12);
+  }
+
+  private extractQueryPhrases(tokens: string[]): string[] {
+    const phrases: string[] = [];
+    for (let index = 0; index < tokens.length - 1; index += 1) {
+      phrases.push(`${tokens[index]} ${tokens[index + 1]}`);
+    }
+    return phrases;
   }
 
   private deduplicateResults(results: SearchResult[]): SearchResult[] {

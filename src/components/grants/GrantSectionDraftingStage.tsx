@@ -1,24 +1,38 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type ChangeEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  BookOpen,
   Download,
   Loader2,
-  Save,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
   Sparkles,
 } from 'lucide-react'
 
-import SectionDraftingStage from '@/components/stages/SectionDraftingStage'
+import FloatingWritingPanel from '@/components/paper/FloatingWritingPanel'
+import PaperMarkdownEditor, {
+  type PaperCitationDisplayMeta,
+  type PaperFigureDisplayMeta,
+  type PaperMarkdownEditorRef,
+} from '@/components/paper/PaperMarkdownEditor'
 import {
-  getGrantWorkflowBadgeLabel,
-  getGrantWorkflowManualDetail,
+  collectUsedGrantCitationKeysForBibliography,
+  countUsedGrantCitationKeysForBibliography,
+} from '@/lib/grants/bibliography'
+import {
+  isGrantBibliographySection,
   isGrantSectionAiGenerated,
 } from '@/lib/grants/workflowMode'
 import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 
 type StructuredResponse = {
   id?: string
+  fieldKey?: string
   responseJson?: unknown
 }
 
@@ -53,29 +67,28 @@ type SectionsResponse = {
   sections: GrantSection[]
 }
 
-export type DraftingFilter = 'all' | 'app_draft' | 'team_draft' | 'evidence'
-
-type GrantReviewerRecommendation = {
-  id: string
-  sectionKey: string
-  priority: 'high' | 'medium' | 'low'
-  issue: string
-  recommendation: string
-  suggestedRemark: string
-  autoFixable: boolean
-  actionable?: boolean
-  status?: 'pending' | 'resolved' | 'ignored'
-  statusUpdatedAt?: string | null
-  linkedRuleKeys?: string[]
-  reviewerSectionId?: string
-  reviewerSectionTitle?: string
+type SectionSaveResponse = {
+  section?: GrantSection
+  message?: string
 }
 
-type RecommendationStatusUpdate = {
+type BibliographySortOrder = 'alphabetical' | 'order_of_appearance'
+
+type FigurePlan = {
   id: string
-  reviewerSectionId?: string
-  status: 'pending' | 'resolved' | 'ignored'
+  figureNo: number
+  title: string
+  caption?: string
+  description?: string
+  imagePath?: string
+  status: 'PLANNED' | 'GENERATING' | 'GENERATED' | 'FAILED'
+  category?: string
+  figureType?: string
 }
+
+export type DraftingFilter = 'all' | 'app_draft'
+
+const NUMERIC_BIBLIOGRAPHY_STYLES = new Set(['IEEE', 'VANCOUVER'])
 
 interface GrantSectionDraftingStageProps {
   projectId: string
@@ -90,8 +103,13 @@ interface GrantSectionDraftingStageProps {
   onSectionFilterChange?: (filter: DraftingFilter) => void
 }
 
+function getStructuredResponseJson(section: GrantSection) {
+  return section.structuredResponses?.find((response) => response.fieldKey === 'structuredData')?.responseJson
+    ?? section.structuredResponses?.[0]?.responseJson
+}
+
 function structuredJson(section: GrantSection) {
-  return JSON.stringify(section.structuredResponses?.[0]?.responseJson || {}, null, 2)
+  return JSON.stringify(getStructuredResponseJson(section) || {}, null, 2)
 }
 
 export function isNarrativeSection(section: GrantSection) {
@@ -99,11 +117,17 @@ export function isNarrativeSection(section: GrantSection) {
 }
 
 export function isPaperBackedSection(section: GrantSection) {
-  return section.workflowMode === 'app_draft' && isNarrativeSection(section)
+  return section.workflowMode === 'app_draft'
+    && isNarrativeSection(section)
+    && !isGrantBibliographySection(section.sectionKey)
 }
 
 export function isAiGeneratedSection(section: GrantSection) {
-  return isGrantSectionAiGenerated(section)
+  return isGrantSectionAiGenerated({
+    sectionKey: section.sectionKey,
+    sectionType: section.sectionType,
+    workflowMode: section.workflowMode,
+  })
 }
 
 function sectionWordCount(section: GrantSection) {
@@ -112,7 +136,7 @@ function sectionWordCount(section: GrantSection) {
 }
 
 function hasStructuredResponse(section: GrantSection) {
-  const responseJson = section.structuredResponses?.[0]?.responseJson
+  const responseJson = getStructuredResponseJson(section)
   if (!responseJson) return false
   if (section.sectionType === 'budget_rows') {
     return budgetStructuredDataHasMeaningfulRows(responseJson)
@@ -167,36 +191,350 @@ function hasPreparedStructuredExportContent(value: unknown, sectionType?: GrantS
 
 function hasPreparedExportContent(section: GrantSection) {
   if (isNarrativeSection(section)) return sectionWordCount(section) > 0
-  return hasPreparedStructuredExportContent(section.structuredResponses?.[0]?.responseJson, section.sectionType)
-}
-
-function statusLabel(section: GrantSection) {
-  if (section.status === 'REVIEWED' || section.status === 'COMPLETED') return 'Reviewed'
-  if (hasSectionContent(section)) return 'Draft in progress'
-  return 'Not started'
-}
-
-function statusClasses(section: GrantSection) {
-  if (section.status === 'REVIEWED' || section.status === 'COMPLETED') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800'
-  }
-  if (hasSectionContent(section)) {
-    return 'border-sky-200 bg-sky-50 text-sky-800'
-  }
-  return 'border-slate-200 bg-slate-50 text-slate-600'
-}
-
-function workflowClasses(workflowMode: GrantSection['workflowMode']) {
-  if (workflowMode === 'app_draft') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
-  if (workflowMode === 'app_support') return 'border-sky-200 bg-sky-50 text-sky-800'
-  return 'border-amber-200 bg-amber-50 text-amber-900'
+  return hasPreparedStructuredExportContent(getStructuredResponseJson(section), section.sectionType)
 }
 
 export function filterMatches(section: GrantSection, filter: DraftingFilter) {
   if (filter === 'app_draft') return isAiGeneratedSection(section)
-  if (filter === 'team_draft') return !isAiGeneratedSection(section)
-  if (filter === 'evidence') return isPaperBackedSection(section) && (section.dimensions || []).length > 0
   return true
+}
+
+type StructuredTableColumn = { key: string; label: string; kind?: string | null; [key: string]: any }
+
+function AutoSizeTextarea({
+  value,
+  onChange,
+  onClick,
+  className,
+  placeholder,
+  disabled,
+  minHeight = 260,
+}: {
+  value: string
+  onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void
+  onClick?: (event: MouseEvent<HTMLTextAreaElement>) => void
+  className?: string
+  placeholder?: string
+  disabled?: boolean
+  minHeight?: number
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null)
+
+  useLayoutEffect(() => {
+    const textarea = ref.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.max(minHeight, textarea.scrollHeight)}px`
+  }, [minHeight, value])
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={onChange}
+      onClick={onClick}
+      disabled={disabled}
+      className={`${className || ''} overflow-hidden`}
+      placeholder={placeholder}
+      style={{ minHeight }}
+    />
+  )
+}
+
+function safeParseStructuredObject(raw: string): Record<string, any> {
+  try {
+    const parsed = JSON.parse(raw || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function humanizeColumnKey(key: string): string {
+  return key
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function inferStructuredColumnKind(label: string): string | null {
+  const text = String(label || '').trim().toLowerCase().replace(/[_-]+/g, ' ')
+  if (!text) return null
+  if (/\b(category|head|item|expense)\b/.test(text)) return 'category'
+  if (/\b(justification|rationale|basis|description)\b/.test(text)) return 'justification'
+  if (/\b(co funding|cofunding|matching|match|cost share|contribution)\b/.test(text)) return 'co_funding'
+  if (/\b(total|subtotal|grand total)\b/.test(text)) return 'total'
+  if (/\b(year|yr|fy|fiscal year|financial year)\b/.test(text)) return 'year'
+  if (/\b(amount|cost|budget|requested|funds|salary|fee|rate)\b/.test(text)) return 'amount'
+  if (/\b(note|remark|comment)\b/.test(text)) return 'notes'
+  if (/\b(number|qty|quantity|unit)\b/.test(text)) return 'number'
+  return 'text'
+}
+
+function slugifyStructuredColumnKey(value: string, fallback: string): string {
+  const key = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60)
+  return key || fallback
+}
+
+function buildUniqueStructuredColumnKey(columns: StructuredTableColumn[], label: string): string {
+  const existing = new Set(columns.map((column) => String(column.key || '').trim()).filter(Boolean))
+  const base = slugifyStructuredColumnKey(label, 'column')
+  let candidate = base
+  let index = 2
+  while (existing.has(candidate)) {
+    candidate = `${base}_${index}`
+    index += 1
+  }
+  return candidate
+}
+
+function deriveStructuredColumns(rows: Array<Record<string, any>>): StructuredTableColumn[] {
+  const seen = new Set<string>()
+  const keys: string[] = []
+  for (const row of rows) {
+    for (const key of Object.keys(row || {})) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      keys.push(key)
+    }
+  }
+  return keys.map((key) => ({ key, label: humanizeColumnKey(key) }))
+}
+
+function appendMarker(content: string, marker: string): string {
+  const current = String(content || '')
+  if (!current.trim()) return marker
+  const separator = /[\s\n]$/.test(current) ? '' : ' '
+  return `${current}${separator}${marker}`
+}
+
+function budgetInstructionsMayOverwriteAmounts(value: string): boolean {
+  const text = String(value || '').trim().toLowerCase()
+  if (!text) return false
+  return /[\d$₹€£]/.test(text)
+    || /\b(amount|cost|costs|budget|total|subtotal|split|allocate|allocation|salary|stipend|fee|rate|funds|funding|lakh|lac|crore|million|thousand|zero|nil)\b/.test(text)
+}
+
+function isNumericBibliographyStyle(styleCode: string): boolean {
+  return NUMERIC_BIBLIOGRAPHY_STYLES.has(String(styleCode || '').trim().toUpperCase())
+}
+
+// Renders structured JSON rows as an editable table so users do not edit raw JSON.
+function StructuredTableEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string
+  onChange: (next: string) => void
+  disabled?: boolean
+}) {
+  const obj = safeParseStructuredObject(value)
+  const rows: Array<Record<string, any>> = Array.isArray(obj.rows) ? obj.rows : []
+  const columns: StructuredTableColumn[] = Array.isArray(obj.columns) && obj.columns.length > 0
+    ? obj.columns
+        .map((column: any) => {
+          const columnRecord = column && typeof column === 'object' && !Array.isArray(column) ? column : {}
+          return {
+            ...columnRecord,
+            key: String(column?.key ?? column?.label ?? ''),
+            label: String(column?.label ?? column?.key ?? ''),
+            kind: column?.kind ?? null,
+          }
+        })
+        .filter((column: StructuredTableColumn) => column.key)
+    : deriveStructuredColumns(rows)
+
+  const commitTable = (
+    nextRows: Array<Record<string, any>>,
+    nextColumns: StructuredTableColumn[] = columns
+  ) => {
+    onChange(
+      JSON.stringify(
+        {
+          ...obj,
+          columns: nextColumns,
+          rows: nextRows,
+        },
+        null,
+        2
+      )
+    )
+  }
+
+  const setCell = (rowIndex: number, key: string, cellValue: string) => {
+    const nextRows = rows.map((row, index) =>
+      index === rowIndex ? { ...row, [key]: cellValue === '' ? null : cellValue } : row
+    )
+    commitTable(nextRows)
+  }
+
+  const setColumnLabel = (columnIndex: number, label: string) => {
+    const nextColumns = columns.map((column, index) =>
+      index === columnIndex
+        ? {
+            ...column,
+            label,
+            kind: inferStructuredColumnKind(label) || column.kind || 'text',
+          }
+        : column
+    )
+    commitTable(rows, nextColumns)
+  }
+
+  const addRow = () => {
+    const blank: Record<string, any> = {}
+    for (const column of columns) blank[column.key] = null
+    commitTable([...rows, blank])
+  }
+
+  const removeLastRow = () => {
+    if (rows.length === 0) return
+    commitTable(rows.slice(0, -1))
+  }
+
+  const addColumn = () => {
+    const label = `Column ${columns.length + 1}`
+    const key = buildUniqueStructuredColumnKey(columns, label)
+    const nextColumn: StructuredTableColumn = {
+      key,
+      label,
+      kind: inferStructuredColumnKind(label),
+    }
+    const nextRows = rows.map((row) => ({ ...row, [key]: null }))
+    commitTable(nextRows, [...columns, nextColumn])
+  }
+
+  const removeLastColumn = () => {
+    if (columns.length === 0) return
+    const columnToRemove = columns[columns.length - 1]
+    const nextRows = rows.map((row) => {
+      const nextRow = { ...row }
+      delete nextRow[columnToRemove.key]
+      return nextRow
+    })
+    commitTable(nextRows, columns.slice(0, -1))
+  }
+
+  if (columns.length === 0) {
+    return (
+      <div className="mt-4" onClick={(e) => e.stopPropagation()}>
+        <p className="text-sm italic text-slate-500">
+          No table format yet. Add a column or generate this section with AI to populate the table.
+        </p>
+        <button
+          type="button"
+          onClick={addColumn}
+          disabled={disabled}
+          className="mt-2 inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add column
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+      {obj.currency ? (
+        <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">Currency: {String(obj.currency)}</div>
+      ) : null}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse font-sans text-[13.5px] leading-5 text-slate-950">
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th
+                  key={column.key}
+                  className="border border-slate-300 bg-slate-100 p-0 text-left font-semibold text-slate-950"
+                >
+                  <input
+                    value={column.label}
+                    onChange={(event) => setColumnLabel(columns.indexOf(column), event.target.value)}
+                    disabled={disabled}
+                    aria-label={`Column heading ${column.label || column.key}`}
+                    className="block w-full min-w-[120px] border-0 bg-transparent px-2 py-1 font-sans text-[13px] font-semibold text-slate-950 outline-none disabled:opacity-60"
+                  />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={columns.length} className="border border-slate-300 px-2 py-2 text-center text-sm italic text-slate-500">
+                  No rows yet. Add a row or generate this table with AI.
+                </td>
+              </tr>
+            ) : (
+              rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {columns.map((column) => (
+                    <td key={column.key} className="border border-slate-300 align-top">
+                      <AutoSizeTextarea
+                        value={row[column.key] == null ? '' : String(row[column.key])}
+                        onChange={(event) => setCell(rowIndex, column.key, event.target.value)}
+                        disabled={disabled}
+                        minHeight={28}
+                        className="block w-full resize-none border-0 bg-transparent px-2 py-1 font-sans text-[13.5px] leading-5 text-slate-950 outline-none disabled:opacity-60"
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={addRow}
+          disabled={disabled}
+          className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add row
+        </button>
+        <button
+          type="button"
+          onClick={addColumn}
+          disabled={disabled}
+          className="inline-flex items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add column
+        </button>
+        {rows.length > 0 ? (
+          <button
+            type="button"
+            onClick={removeLastRow}
+            disabled={disabled}
+            className="inline-flex items-center border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            Remove last row
+          </button>
+        ) : null}
+        {columns.length > 1 ? (
+          <button
+            type="button"
+            onClick={removeLastColumn}
+            disabled={disabled}
+            className="inline-flex items-center border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            Remove last column
+          </button>
+        ) : null}
+      </div>
+      {obj.notes ? <p className="mt-2 text-xs leading-5 text-slate-500">Notes: {String(obj.notes)}</p> : null}
+    </div>
+  )
 }
 
 export default function GrantSectionDraftingStage({
@@ -222,16 +560,52 @@ export default function GrantSectionDraftingStage({
   const [draftValues, setDraftValues] = useState<Record<string, string>>({})
   const [structuredValues, setStructuredValues] = useState<Record<string, string>>({})
   const [budgetInstructions, setBudgetInstructions] = useState<Record<string, string>>({})
-  const [allowInstructionAmounts, setAllowInstructionAmounts] = useState<Record<string, boolean>>({})
-  const [reviewerRecommendations, setReviewerRecommendations] = useState<GrantReviewerRecommendation[]>([])
+  const [budgetUseCurrentValues, setBudgetUseCurrentValues] = useState<Record<string, boolean>>({})
   const [exportingDraft, setExportingDraft] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [focusMode, setFocusMode] = useState(false)
+  const [panelVisible, setPanelVisible] = useState(true)
+  const [figures, setFigures] = useState<FigurePlan[]>([])
+  const [citations, setCitations] = useState<any[]>([])
+  const [bibliographyStyle, setBibliographyStyle] = useState('APA7')
+  const [bibliographySortOrder, setBibliographySortOrder] = useState<BibliographySortOrder>('alphabetical')
+  const [generatingBibliography, setGeneratingBibliography] = useState(false)
+  const [urgentSaveSectionKey, setUrgentSaveSectionKey] = useState<string | null>(null)
+  const [selectedText, setSelectedText] = useState<{
+    text: string
+    start: number
+    end: number
+    sectionKey: string
+  } | null>(null)
+  const editorRefs = useRef<Record<string, PaperMarkdownEditorRef | null>>({})
+  const lastAutoBibliographySignatureRef = useRef<string | null>(null)
+  const hasLoadedSectionsRef = useRef(false)
+  const pendingScrollRestoreRef = useRef<{ x: number; y: number } | null>(null)
+
+  const preserveScrollOnNextPaint = useCallback(() => {
+    if (typeof window === 'undefined') return
+    pendingScrollRestoreRef.current = { x: window.scrollX, y: window.scrollY }
+  }, [])
+
+  useLayoutEffect(() => {
+    const pending = pendingScrollRestoreRef.current
+    if (!pending || typeof window === 'undefined') return
+    pendingScrollRestoreRef.current = null
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ left: pending.x, top: pending.y, behavior: 'auto' })
+    })
+  })
 
   const loadSections = useCallback(async () => {
     if (!authToken) return
+    const showBlockingLoader = !hasLoadedSectionsRef.current
 
     try {
-      setLoading(true)
+      if (showBlockingLoader) {
+        setLoading(true)
+      } else {
+        preserveScrollOnNextPaint()
+      }
       setError(null)
       const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/sections`, {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -255,60 +629,100 @@ export default function GrantSectionDraftingStage({
       setDraftValues(nextDrafts)
       setStructuredValues(nextStructured)
       onSectionsUpdated?.(nextSections)
+      hasLoadedSectionsRef.current = true
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to load grant sections')
     } finally {
-      setLoading(false)
+      if (showBlockingLoader) {
+        setLoading(false)
+      }
     }
-  }, [authToken, grantId, onSectionsUpdated, projectId])
+  }, [authToken, grantId, onSectionsUpdated, preserveScrollOnNextPaint, projectId])
 
   useEffect(() => {
     void loadSections()
   }, [loadSections])
 
-  const loadReviewerRecommendations = useCallback(async () => {
-    if (!authToken) return
-
+  const loadCitations = useCallback(async () => {
+    if (!authToken || !draftingSessionId) return
     try {
-      const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/reviewer/recommendations`, {
+      const response = await fetch(`/api/papers/${draftingSessionId}/citations`, {
         headers: { Authorization: `Bearer ${authToken}` },
       })
-      const payload = await response.json().catch(() => ({})) as { recommendations?: GrantReviewerRecommendation[] }
       if (!response.ok) return
-      setReviewerRecommendations(Array.isArray(payload.recommendations) ? payload.recommendations : [])
+      const payload = await response.json().catch(() => ({}))
+      setCitations(Array.isArray(payload.citations) ? payload.citations : [])
+      const nextStyle = typeof payload.citationStyle === 'string' && payload.citationStyle.trim()
+        ? payload.citationStyle.trim()
+        : ''
+      if (nextStyle) {
+        setBibliographyStyle(nextStyle)
+      }
+      const nextSortOrder = payload.citationStyleMeta?.sortOrder
+      if (nextSortOrder === 'alphabetical' || nextSortOrder === 'order_of_appearance') {
+        setBibliographySortOrder(nextSortOrder)
+      } else if (nextStyle && isNumericBibliographyStyle(nextStyle)) {
+        setBibliographySortOrder('order_of_appearance')
+      }
     } catch {
-      // Recommendations are advisory; drafting stays available if this read fails.
+      // Panel data is auxiliary; the editor remains usable if this read fails.
     }
-  }, [authToken, grantId, projectId])
+  }, [authToken, draftingSessionId])
+
+  const loadFigures = useCallback(async () => {
+    if (!authToken || !draftingSessionId) return
+    try {
+      const response = await fetch(`/api/papers/${draftingSessionId}/figures`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+      if (!response.ok) return
+      const payload = await response.json().catch(() => ({}))
+      const nextFigures = Array.isArray(payload.figures)
+        ? payload.figures.map((figure: any): FigurePlan => ({
+            id: String(figure.id || ''),
+            figureNo: Number(figure.figureNo || 0),
+            title: String(figure.title || 'Figure'),
+            caption: figure.caption || figure.nodes?.caption || figure.description || undefined,
+            description: figure.description || undefined,
+            imagePath: figure.imagePath || figure.nodes?.imagePath || undefined,
+            status: figure.status || figure.nodes?.status || (figure.imagePath ? 'GENERATED' : 'PLANNED'),
+            category: figure.category || figure.nodes?.category || 'CHART',
+            figureType: figure.figureType || figure.nodes?.figureType || 'auto',
+          })).filter((figure: FigurePlan) => figure.id)
+        : []
+      setFigures(nextFigures)
+    } catch {
+      // Panel data is auxiliary; the editor remains usable if this read fails.
+    }
+  }, [authToken, draftingSessionId])
 
   useEffect(() => {
-    void loadReviewerRecommendations()
-  }, [loadReviewerRecommendations])
+    if (!draftingSessionId) return
+    void loadCitations()
+    void loadFigures()
+  }, [draftingSessionId, loadCitations, loadFigures])
 
-  const updateReviewerRecommendationStatuses = useCallback(async (updates: RecommendationStatusUpdate[]) => {
-    if (!authToken || updates.length === 0) return
+  const isNumericStyleBibliography = useMemo(
+    () => isNumericBibliographyStyle(bibliographyStyle),
+    [bibliographyStyle]
+  )
 
-    const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/reviewer/recommendations`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ updates }),
-    })
-    const payload = await response.json().catch(() => ({})) as { message?: string }
-    if (!response.ok) {
-      throw new Error(payload.message || 'Failed to update reviewer recommendation status')
+  useEffect(() => {
+    if (isNumericStyleBibliography && bibliographySortOrder !== 'order_of_appearance') {
+      setBibliographySortOrder('order_of_appearance')
     }
+  }, [bibliographySortOrder, isNumericStyleBibliography])
 
-    const updatedAt = new Date().toISOString()
-    setReviewerRecommendations(prev => prev.map(item => {
-      const update = updates.find(next => next.id === item.id)
-      return update
-        ? { ...item, status: update.status, statusUpdatedAt: updatedAt }
-        : item
-    }))
-  }, [authToken, grantId, projectId])
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const previousOverflow = document.body.style.overflow
+    if (focusMode) {
+      document.body.style.overflow = 'hidden'
+    }
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [focusMode])
 
   useEffect(() => {
     if (!onSectionSelect || sections.length === 0) return
@@ -332,6 +746,287 @@ export default function GrantSectionDraftingStage({
     return sections.find((section) => section.sectionKey === selectedSection) || sections[0]
   }, [sections, selectedSection])
 
+  const currentContent = useMemo(() => {
+    if (!currentSection) return ''
+    return isNarrativeSection(currentSection)
+      ? draftValues[currentSection.sectionKey] || ''
+      : structuredValues[currentSection.sectionKey] || ''
+  }, [currentSection, draftValues, structuredValues])
+
+  const availableSectionContexts = useMemo(() => {
+    return sections
+      .map((section) => ({
+        sectionKey: section.sectionKey,
+        label: section.label,
+        content: isNarrativeSection(section)
+          ? draftValues[section.sectionKey] || ''
+          : structuredValues[section.sectionKey] || '',
+      }))
+      .filter((section) => section.content.trim().length > 0)
+  }, [draftValues, sections, structuredValues])
+
+  const usedCitationKeys = useMemo(() => {
+    return collectUsedGrantCitationKeysForBibliography(
+      sections.map((section) => ({
+        sectionKey: section.sectionKey,
+        content: isNarrativeSection(section) ? draftValues[section.sectionKey] || '' : '',
+        structuredResponses: isNarrativeSection(section)
+          ? []
+          : [{ responseJson: safeParseStructuredObject(structuredValues[section.sectionKey] || '{}') }],
+      })),
+      citations.map((citation) => String(citation?.citationKey || '')).filter(Boolean)
+    )
+  }, [citations, draftValues, sections, structuredValues])
+
+  const usedCitationCountsByKey = useMemo(() => {
+    return countUsedGrantCitationKeysForBibliography(
+      sections.map((section) => ({
+        sectionKey: section.sectionKey,
+        content: isNarrativeSection(section) ? draftValues[section.sectionKey] || '' : '',
+        structuredResponses: isNarrativeSection(section)
+          ? []
+          : [{ responseJson: safeParseStructuredObject(structuredValues[section.sectionKey] || '{}') }],
+      })),
+      citations.map((citation) => String(citation?.citationKey || '')).filter(Boolean)
+    )
+  }, [citations, draftValues, sections, structuredValues])
+
+  const usedCitationSignature = useMemo(
+    () => Object.entries(usedCitationCountsByKey)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, count]) => `${key}:${count}`)
+      .join('|'),
+    [usedCitationCountsByKey]
+  )
+
+  const citationDisplayMeta = useMemo<PaperCitationDisplayMeta>(() => {
+    const displayByKey: Record<string, string> = {}
+    const orderByKey: Record<string, number> = {}
+    const usedOrderByKey = new Map<string, number>()
+    usedCitationKeys.forEach((key, index) => {
+      usedOrderByKey.set(String(key || '').trim().toLocaleLowerCase('en-US'), index + 1)
+    })
+    citations.forEach((citation, index) => {
+      const key = String(citation?.citationKey || '').trim()
+      if (!key) return
+      const authors = String(citation?.authors || '').split(/[;,]/)[0]?.trim()
+      const year = citation?.year ? String(citation.year).trim() : ''
+      const displayOrder = usedOrderByKey.get(key.toLocaleLowerCase('en-US')) || index + 1
+      displayByKey[key] = isNumericStyleBibliography
+        ? `[${displayOrder}]`
+        : authors && year
+          ? `[${authors}, ${year}]`
+          : `[${key}]`
+      orderByKey[key] = displayOrder
+    })
+    return {
+      styleCode: bibliographyStyle,
+      displayByKey,
+      orderByKey,
+      signature: [
+        bibliographyStyle,
+        isNumericStyleBibliography ? usedCitationSignature : '',
+        citations.map((citation) => `${citation?.citationKey || ''}:${citation?.year || ''}`).join('|'),
+      ].join('::'),
+    }
+  }, [bibliographyStyle, citations, isNumericStyleBibliography, usedCitationKeys, usedCitationSignature])
+
+  const figureDisplayMeta = useMemo<PaperFigureDisplayMeta>(() => {
+    const byNo: PaperFigureDisplayMeta['byNo'] = {}
+    figures.forEach((figure) => {
+      if (!figure.figureNo) return
+      byNo[figure.figureNo] = {
+        title: figure.title,
+        imagePath: figure.imagePath,
+      }
+    })
+    return {
+      byNo,
+      signature: figures.map((figure) => `${figure.figureNo}:${figure.title}:${figure.imagePath || ''}`).join('|'),
+    }
+  }, [figures])
+
+  const appendToCurrentNarrativeSection = useCallback((marker: string) => {
+    const targetSection = currentSection
+    if (!targetSection || !isNarrativeSection(targetSection)) return
+    const editor = editorRefs.current[targetSection.sectionKey]
+    if (editor) {
+      preserveScrollOnNextPaint()
+      editor.insertTextAtCursor(marker)
+      const syncEditorMarkdown = () => {
+        const nextMarkdown = editor.getMarkdown()
+        setDraftValues((current) => {
+          if ((current[targetSection.sectionKey] || '') === nextMarkdown) return current
+          return { ...current, [targetSection.sectionKey]: nextMarkdown }
+        })
+      }
+      syncEditorMarkdown()
+      if (typeof window !== 'undefined') {
+        window.requestAnimationFrame(syncEditorMarkdown)
+      }
+      setUrgentSaveSectionKey(targetSection.sectionKey)
+      return
+    }
+    preserveScrollOnNextPaint()
+    setDraftValues((current) => ({
+      ...current,
+      [targetSection.sectionKey]: appendMarker(current[targetSection.sectionKey] || '', marker),
+    }))
+    setUrgentSaveSectionKey(targetSection.sectionKey)
+  }, [currentSection, preserveScrollOnNextPaint])
+
+  const handleInsertFigure = useCallback((figureId: string) => {
+    const figure = figures.find((entry) => entry.id === figureId)
+    if (!figure?.figureNo) return
+    appendToCurrentNarrativeSection(`[Figure ${figure.figureNo}]`)
+  }, [appendToCurrentNarrativeSection, figures])
+
+  const handleInsertCitation = useCallback((citation: any) => {
+    const citationKey = String(citation?.citationKey || '').trim()
+    if (!citationKey) return
+    appendToCurrentNarrativeSection(`[CITE:${citationKey}]`)
+  }, [appendToCurrentNarrativeSection])
+
+  const handleTextAction = useCallback(async (
+    action: 'rewrite' | 'expand' | 'condense' | 'formal' | 'simple' | 'create_sections',
+    text: string,
+    customInstructions?: string
+  ): Promise<string> => {
+    if (!authToken || !draftingSessionId || !text.trim()) {
+      throw new Error('Missing required parameters')
+    }
+
+    const targetSectionKey = selectedText?.sectionKey || currentSection?.sectionKey
+    const targetSection = sections.find((section) => section.sectionKey === targetSectionKey)
+    if (!targetSectionKey || !targetSection || !isNarrativeSection(targetSection)) {
+      throw new Error('Please select text in a narrative grant section first')
+    }
+
+    const editor = editorRefs.current[targetSectionKey]
+    const savedRange = editor?.saveSelection() || (
+      selectedText && selectedText.sectionKey === targetSectionKey
+        ? { from: selectedText.start, to: selectedText.end }
+        : null
+    )
+
+    try {
+      setError(null)
+      const response = await fetch(`/api/papers/${draftingSessionId}/text-action`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          action,
+          selectedText: text,
+          context: (draftValues[targetSectionKey] || '').slice(0, 500),
+          sectionKey: targetSectionKey,
+          customInstructions,
+        }),
+      })
+      const payload = await response.json().catch(() => ({})) as { transformedText?: string; error?: string }
+      if (!response.ok) {
+        throw new Error(payload.error || 'Text action failed')
+      }
+
+      const transformedText = String(payload.transformedText || '')
+      if (!transformedText.trim()) {
+        throw new Error('Text action returned empty content')
+      }
+
+      preserveScrollOnNextPaint()
+      if (editor && savedRange && savedRange.from !== savedRange.to) {
+        editor.replaceRange(savedRange.from, savedRange.to, transformedText)
+        const syncEditorMarkdown = () => {
+          const nextMarkdown = editor.getMarkdown()
+          setDraftValues((current) => {
+            if ((current[targetSectionKey] || '') === nextMarkdown) return current
+            return { ...current, [targetSectionKey]: nextMarkdown }
+          })
+        }
+        syncEditorMarkdown()
+        if (typeof window !== 'undefined') {
+          window.requestAnimationFrame(syncEditorMarkdown)
+        }
+      } else {
+        setDraftValues((current) => {
+          const currentValue = current[targetSectionKey] || ''
+          const nextValue = currentValue.includes(text)
+            ? currentValue.replace(text, transformedText)
+            : appendMarker(currentValue, transformedText)
+          return { ...current, [targetSectionKey]: nextValue }
+        })
+      }
+
+      setSelectedText(null)
+      setUrgentSaveSectionKey(targetSectionKey)
+      return transformedText
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Text action failed')
+      throw nextError
+    }
+  }, [
+    authToken,
+    currentSection?.sectionKey,
+    draftingSessionId,
+    draftValues,
+    preserveScrollOnNextPaint,
+    sections,
+    selectedText,
+  ])
+
+  const handleGenerateFigure = useCallback(async (description: string, meta?: Record<string, any>) => {
+    if (!authToken || !draftingSessionId || !description.trim()) return
+    const title = String(meta?.title || description.trim().slice(0, 100) || 'Generated figure')
+    const createResponse = await fetch(`/api/papers/${draftingSessionId}/figures`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        title,
+        caption: String(meta?.caption || description.trim()),
+        generationPrompt: description,
+        category: meta?.category || 'DIAGRAM',
+        figureType: meta?.suggestedType || 'auto',
+        notes: '',
+        suggestionMeta: meta || null,
+      }),
+    })
+    const createPayload = await createResponse.json().catch(() => ({}))
+    if (!createResponse.ok) {
+      throw new Error(createPayload.error || createPayload.message || 'Failed to create figure')
+    }
+
+    const figureId = createPayload.figure?.id
+    if (figureId) {
+      const generateResponse = await fetch(`/api/papers/${draftingSessionId}/figures/${figureId}/generate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+      if (!generateResponse.ok) {
+        const generatePayload = await generateResponse.json().catch(() => ({}))
+        throw new Error(generatePayload.error || generatePayload.message || 'Failed to generate figure')
+      }
+    }
+    await loadFigures()
+  }, [authToken, draftingSessionId, loadFigures])
+
+  const handleGenerateExistingFigure = useCallback(async (figureId: string) => {
+    if (!authToken || !draftingSessionId || !figureId) return
+    const response = await fetch(`/api/papers/${draftingSessionId}/figures/${figureId}/generate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      throw new Error(payload.error || payload.message || 'Failed to generate figure')
+    }
+    await loadFigures()
+  }, [authToken, draftingSessionId, loadFigures])
+
   const refreshShadowSession = useCallback(async () => {
     if (!authToken || !draftingSessionId || !onSessionUpdated) return
     try {
@@ -347,6 +1042,41 @@ export default function GrantSectionDraftingStage({
       // Best-effort shell refresh.
     }
   }, [authToken, draftingSessionId, onSessionUpdated])
+
+  const applyPersistedSection = useCallback((
+    updatedSection: GrantSection,
+    options: { syncLocalValue?: boolean; preserveScroll?: boolean } = {}
+  ) => {
+    if (options.preserveScroll) {
+      preserveScrollOnNextPaint()
+    }
+    setSections((current) => {
+      const nextSections = current.map((section) =>
+        section.sectionKey === updatedSection.sectionKey
+          ? {
+              ...section,
+              ...updatedSection,
+              sectionOrder: updatedSection.sectionOrder ?? section.sectionOrder,
+            }
+          : section
+      )
+      onSectionsUpdated?.(nextSections)
+      return nextSections
+    })
+    if (options.syncLocalValue) {
+      if (isNarrativeSection(updatedSection)) {
+        setDraftValues((current) => ({
+          ...current,
+          [updatedSection.sectionKey]: updatedSection.content || '',
+        }))
+      } else {
+        setStructuredValues((current) => ({
+          ...current,
+          [updatedSection.sectionKey]: structuredJson(updatedSection),
+        }))
+      }
+    }
+  }, [onSectionsUpdated, preserveScrollOnNextPaint])
 
   const persistSection = useCallback(async (section: GrantSection, markReviewed: boolean) => {
     if (!authToken) throw new Error('You must be signed in to save grant sections')
@@ -364,26 +1094,17 @@ export default function GrantSectionDraftingStage({
       },
       body: JSON.stringify(body),
     })
-    const payload = await response.json().catch(() => ({})) as { message?: string }
+    const payload = await response.json().catch(() => ({})) as SectionSaveResponse
     if (!response.ok) {
       throw new Error(payload.message || 'Failed to save grant section')
     }
 
-    return payload
-  }, [authToken, draftValues, grantId, projectId, structuredValues])
-
-  const saveSection = useCallback(async (section: GrantSection) => {
-    try {
-      setSavingKey(section.sectionKey)
-      await persistSection(section, true)
-      await loadSections()
-      await refreshShadowSession()
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Failed to save grant section')
-    } finally {
-      setSavingKey(null)
+    if (payload.section) {
+      applyPersistedSection(payload.section)
     }
-  }, [loadSections, persistSection, refreshShadowSession])
+
+    return payload
+  }, [applyPersistedSection, authToken, draftValues, grantId, projectId, structuredValues])
 
   const hasLocalGrantSectionChange = useCallback((section: GrantSection) => {
     if (isNarrativeSection(section)) {
@@ -405,6 +1126,7 @@ export default function GrantSectionDraftingStage({
         await persistSection(section, false)
       }
 
+      const instructionText = budgetInstructions[section.sectionKey] || ''
       const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/sections/${section.sectionKey}`, {
         method: 'POST',
         headers: {
@@ -413,44 +1135,291 @@ export default function GrantSectionDraftingStage({
         },
         body: JSON.stringify({
           action: hasSectionContent(section) ? 'regenerate' : 'generate',
-          userInstructions: budgetInstructions[section.sectionKey] || undefined,
-          allowInstructionAmounts: Boolean(allowInstructionAmounts[section.sectionKey]),
-          overwriteAmounts: false,
+          userInstructions: instructionText || undefined,
+          allowInstructionAmounts: true,
+          overwriteAmounts: budgetInstructionsMayOverwriteAmounts(instructionText),
+          useCurrentBudgetValues: budgetUseCurrentValues[section.sectionKey] === true,
         }),
       })
-      const payload = await response.json().catch(() => ({})) as { message?: string }
+      const payload = await response.json().catch(() => ({})) as SectionSaveResponse
       if (!response.ok) {
-        throw new Error(payload.message || 'Failed to generate the budget section')
+        throw new Error(payload.message || 'Failed to generate the table section')
       }
 
-      await loadSections()
+      if (payload.section) {
+        applyPersistedSection(payload.section, { syncLocalValue: true, preserveScroll: true })
+      }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Failed to generate the budget section')
+      setError(nextError instanceof Error ? nextError.message : 'Failed to generate the table section')
     } finally {
       setGeneratingKey(null)
     }
   }, [
     authToken,
-    allowInstructionAmounts,
     budgetInstructions,
+    budgetUseCurrentValues,
     grantId,
     hasLocalGrantSectionChange,
-    loadSections,
+    applyPersistedSection,
     persistSection,
     projectId,
   ])
 
   const persistLocalGrantSectionChanges = useCallback(async () => {
-    const changedSections = sections.filter((section) =>
-      !isPaperBackedSection(section) && hasLocalGrantSectionChange(section)
-    )
+    const changedSections = sections.filter((section) => hasLocalGrantSectionChange(section))
     if (changedSections.length === 0) return
 
     for (const section of changedSections) {
       await persistSection(section, false)
     }
-    await loadSections()
-  }, [hasLocalGrantSectionChange, loadSections, persistSection, sections])
+  }, [hasLocalGrantSectionChange, persistSection, sections])
+
+  const bibliographySectionExists = useMemo(
+    () => sections.some((section) => isGrantBibliographySection(section.sectionKey)),
+    [sections]
+  )
+
+  const refreshBibliographySection = useCallback(async (
+    silent = false,
+    override?: {
+      style?: string
+      sortOrder?: BibliographySortOrder
+    }
+  ) => {
+    if (!authToken || !bibliographySectionExists) return false
+    if (savingKey !== null || generatingKey !== null || exportingDraft) {
+      if (!silent) {
+        setError('Please wait for the current save or generation to finish before updating bibliography.')
+      }
+      return false
+    }
+
+    const nextStyle = String(override?.style || bibliographyStyle || 'APA7').trim() || 'APA7'
+    const nextSortOrder = override?.sortOrder
+      || (isNumericBibliographyStyle(nextStyle) ? 'order_of_appearance' : bibliographySortOrder)
+
+    try {
+      setGeneratingBibliography(true)
+      if (!silent) setError(null)
+      await persistLocalGrantSectionChanges()
+
+      const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/sections/bibliography`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          action: 'generate',
+          bibliographyStyle: nextStyle,
+          bibliographySortOrder: nextSortOrder,
+        }),
+      })
+      const payload = await response.json().catch(() => ({})) as SectionSaveResponse
+      if (!response.ok) {
+        throw new Error(payload.message || 'Failed to update bibliography')
+      }
+
+      if (payload.section) {
+        applyPersistedSection(payload.section, { syncLocalValue: true, preserveScroll: true })
+      }
+      await loadCitations()
+      return true
+    } catch (nextError) {
+      if (!silent) {
+        setError(nextError instanceof Error ? nextError.message : 'Failed to update bibliography')
+      } else {
+        console.warn('[GrantSectionDraftingStage] Bibliography auto-refresh failed:', nextError)
+      }
+      return false
+    } finally {
+      setGeneratingBibliography(false)
+    }
+  }, [
+    authToken,
+    bibliographySectionExists,
+    bibliographySortOrder,
+    bibliographyStyle,
+    exportingDraft,
+    generatingKey,
+    grantId,
+    applyPersistedSection,
+    loadCitations,
+    persistLocalGrantSectionChanges,
+    projectId,
+    savingKey,
+  ])
+
+  const handleBibliographyStyleChange = useCallback(async (style: string) => {
+    if (!authToken || !draftingSessionId) return
+
+    const nextStyle = String(style || 'APA7').trim() || 'APA7'
+    const nextSortOrder: BibliographySortOrder = isNumericBibliographyStyle(nextStyle)
+      ? 'order_of_appearance'
+      : bibliographySortOrder
+
+    setBibliographyStyle(nextStyle)
+    setBibliographySortOrder(nextSortOrder)
+
+    try {
+      const response = await fetch(`/api/papers/${draftingSessionId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ citationStyleCode: nextStyle }),
+      })
+      const payload = await response.json().catch(() => ({})) as { session?: any; error?: string }
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to update citation style')
+      }
+      if (payload.session) {
+        onSessionUpdated?.(payload.session)
+      }
+      await loadCitations()
+      await refreshBibliographySection(false, { style: nextStyle, sortOrder: nextSortOrder })
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to update citation style')
+    }
+  }, [
+    authToken,
+    bibliographySortOrder,
+    draftingSessionId,
+    loadCitations,
+    onSessionUpdated,
+    refreshBibliographySection,
+  ])
+
+  const handleBibliographySortOrderChange = useCallback((order: BibliographySortOrder) => {
+    const nextOrder = isNumericStyleBibliography ? 'order_of_appearance' : order
+    setBibliographySortOrder(nextOrder)
+    void refreshBibliographySection(false, { sortOrder: nextOrder })
+  }, [isNumericStyleBibliography, refreshBibliographySection])
+
+  useEffect(() => {
+    if (!authToken || !bibliographySectionExists || loading || exportingDraft) return
+    const signature = [
+      usedCitationSignature,
+      bibliographyStyle,
+      bibliographySortOrder,
+    ].join('::')
+    if (lastAutoBibliographySignatureRef.current === signature) return
+
+    const timer = window.setTimeout(() => {
+      void refreshBibliographySection(true).then((updated) => {
+        if (updated) {
+          lastAutoBibliographySignatureRef.current = signature
+        }
+      })
+    }, 1800)
+
+    return () => window.clearTimeout(timer)
+  }, [
+    authToken,
+    bibliographySectionExists,
+    bibliographySortOrder,
+    bibliographyStyle,
+    exportingDraft,
+    generatingKey,
+    loading,
+    refreshBibliographySection,
+    savingKey,
+    usedCitationSignature,
+  ])
+
+  const autosaveChangedSections = useCallback(async () => {
+    if (!authToken || savingKey !== null || generatingKey !== null || exportingDraft) return
+
+    const changedSections = sections.filter((section) => hasLocalGrantSectionChange(section))
+    if (changedSections.length === 0) return
+
+    try {
+      setError(null)
+      for (const section of changedSections) {
+        setSavingKey(section.sectionKey)
+        await persistSection(section, false)
+      }
+      await refreshShadowSession()
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to autosave grant section')
+    } finally {
+      setSavingKey(null)
+    }
+  }, [
+    authToken,
+    exportingDraft,
+    generatingKey,
+    hasLocalGrantSectionChange,
+    persistSection,
+    refreshShadowSession,
+    savingKey,
+    sections,
+  ])
+
+  useEffect(() => {
+    if (!urgentSaveSectionKey || !authToken || loading || savingKey !== null || generatingKey !== null || exportingDraft) return
+    const section = sections.find((entry) => entry.sectionKey === urgentSaveSectionKey)
+    if (!section) {
+      setUrgentSaveSectionKey(null)
+      return
+    }
+    if (!hasLocalGrantSectionChange(section)) {
+      setUrgentSaveSectionKey(null)
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          setError(null)
+          setSavingKey(section.sectionKey)
+          await persistSection(section, false)
+          await refreshShadowSession()
+          setUrgentSaveSectionKey((current) => current === section.sectionKey ? null : current)
+        } catch (nextError) {
+          setError(nextError instanceof Error ? nextError.message : 'Failed to save inserted marker')
+        } finally {
+          setSavingKey(null)
+        }
+      })()
+    }, 120)
+
+    return () => window.clearTimeout(timer)
+  }, [
+    authToken,
+    exportingDraft,
+    generatingKey,
+    hasLocalGrantSectionChange,
+    loading,
+    persistSection,
+    refreshShadowSession,
+    savingKey,
+    sections,
+    urgentSaveSectionKey,
+  ])
+
+  useEffect(() => {
+    if (!authToken || loading || savingKey !== null || generatingKey !== null || exportingDraft) return
+    if (!sections.some((section) => hasLocalGrantSectionChange(section))) return
+
+    const autosaveTimer = window.setTimeout(() => {
+      void autosaveChangedSections()
+    }, 900)
+
+    return () => window.clearTimeout(autosaveTimer)
+  }, [
+    authToken,
+    autosaveChangedSections,
+    draftValues,
+    exportingDraft,
+    generatingKey,
+    hasLocalGrantSectionChange,
+    loading,
+    savingKey,
+    sections,
+    structuredValues,
+  ])
 
   const downloadFile = useCallback((blob: Blob, filename: string) => {
     const url = window.URL.createObjectURL(blob)
@@ -496,6 +1465,13 @@ export default function GrantSectionDraftingStage({
     return `Includes all ${sections.length || 0} sections; ${suffix}`
   }, [sections])
 
+  const filterTabs = useMemo(() => ([
+    { key: 'all' as const, label: 'All sections', count: sections.length },
+    { key: 'app_draft' as const, label: 'App draft', count: sections.filter((section) => filterMatches(section, 'app_draft')).length },
+  ]), [sections])
+
+  const editorMaxWidthClass = focusMode ? 'max-w-[980px]' : 'max-w-[850px]'
+
   if (loading) {
     return (
       <div className="flex min-h-[420px] items-center justify-center text-slate-600">
@@ -525,173 +1501,253 @@ export default function GrantSectionDraftingStage({
     )
   }
 
-  const paperBacked = isPaperBackedSection(currentSection)
-
-  if (paperBacked && draftingSessionId) {
-    return (
-      <div className="min-h-[720px] bg-slate-50" style={{ scrollBehavior: 'smooth' }}>
-        {error ? (
-          <div className="mx-6 mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            {error}
-          </div>
-        ) : null}
-
-        <SectionDraftingStage
-          sessionId={draftingSessionId}
-          authToken={authToken}
-          onSessionUpdated={onSessionUpdated}
-          selectedSection={currentSection.sectionKey}
-          onSectionSelect={onSectionSelect}
-          grantReviewerRecommendations={reviewerRecommendations}
-          onGrantReviewerRecommendationStatusChange={updateReviewerRecommendationStatuses}
-          draftExportAction={{
-            label: 'Export Word',
-            helperText: draftExportSummary,
-            error: exportError,
-            exporting: exportingDraft,
-            onExport: exportDraftWord,
-          }}
-        />
-      </div>
-    )
-  }
-
-  const isNarrative = isNarrativeSection(currentSection)
-
   return (
-    <div className="min-h-[720px] bg-slate-50" style={{ scrollBehavior: 'smooth' }}>
+    <div
+      className={focusMode ? 'fixed inset-0 z-[80] overflow-y-auto bg-slate-50' : 'min-h-[720px] bg-slate-50'}
+    >
       {error ? (
         <div className="mx-6 mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {error}
         </div>
       ) : null}
 
-      <div className="bg-white px-6 py-7">
-        <div
-          id={`section-${currentSection.sectionKey}`}
-          className={`mx-auto max-w-[850px] rounded-sm border border-gray-100/70 bg-white px-12 py-12 shadow-[0_1px_12px_rgba(0,0,0,0.08)] ${
-            isPaperBackedSection(currentSection) ? 'border-l-4 border-l-emerald-300 bg-emerald-50/20' : ''
-          }`}
-        >
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-5">
-            <div>
-              <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
-                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">
-                  {currentSection.sectionType}
-                </span>
-                <span className={`rounded-full border px-2 py-1 ${workflowClasses(currentSection.workflowMode)}`}>
-                  {getGrantWorkflowBadgeLabel(currentSection.workflowMode)}
-                </span>
-                <span className="rounded-full bg-violet-50 px-2 py-1 text-violet-800">
-                  {(currentSection.citationMode || 'direct_draft').replace(/_/g, ' ')}
-                </span>
-                <span className={`rounded-full border px-2 py-1 ${statusClasses(currentSection)}`}>
-                  {statusLabel(currentSection)}
-                </span>
-              </div>
-              <h2 className="mt-4 font-serif text-2xl font-semibold text-slate-950">{currentSection.label}</h2>
-              {currentSection.workflowMode !== 'app_draft' ? (
-                <p className="mt-2 text-sm text-slate-500">
-                  {getGrantWorkflowManualDetail(currentSection.workflowMode) || 'Grant-owned section editor.'}
-                </p>
-              ) : null}
-            </div>
-
+      <div className={focusMode ? 'min-h-screen bg-white px-6 py-7' : 'bg-white px-6 py-7'}>
+        <div className={`mx-auto mb-4 flex ${editorMaxWidthClass} flex-wrap items-center justify-between gap-3`}>
+          <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+            {filterTabs.map((tab) => {
+              const isActive = sectionFilter === tab.key
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setSectionFilter(tab.key)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
+                    isActive
+                      ? 'bg-white text-slate-950 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-950'
+                  }`}
+                >
+                  {tab.label} {tab.count}
+                </button>
+              )
+            })}
+          </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void saveSection(currentSection)}
-              disabled={savingKey !== null || generatingKey !== null}
-              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              onClick={() => setPanelVisible((current) => !current)}
+              disabled={!draftingSessionId}
+              title={panelVisible ? 'Hide writing panel' : 'Show writing panel'}
+              aria-label={panelVisible ? 'Hide writing panel' : 'Show writing panel'}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {savingKey === currentSection.sectionKey ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Save Section
+              {panelVisible ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
             </button>
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={() => void exportDraftWord()}
-                disabled={savingKey !== null || generatingKey !== null || exportingDraft}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                {exportingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                {exportingDraft ? 'Exporting...' : 'Export Word'}
-              </button>
-              <div className="mt-1 text-xs text-slate-500">{draftExportSummary}</div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setFocusMode((current) => !current)}
+              title={focusMode ? 'Exit full screen' : 'Full screen editor'}
+              aria-label={focusMode ? 'Exit full screen' : 'Full screen editor'}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            >
+              {focusMode ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportDraftWord()}
+              disabled={savingKey !== null || generatingKey !== null || exportingDraft}
+              title={draftExportSummary}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              {exportingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              {exportingDraft ? 'Exporting...' : 'Export Word'}
+            </button>
           </div>
-          {exportError ? (
-            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-              {exportError}
-            </div>
-          ) : null}
+        </div>
+        {!panelVisible && draftingSessionId ? (
+          <button
+            type="button"
+            onClick={() => setPanelVisible(true)}
+            className="fixed bottom-6 right-6 z-[95] inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-lg hover:bg-slate-50"
+          >
+            <BookOpen className="h-4 w-4" />
+            Writing panel
+          </button>
+        ) : null}
+        {exportError ? (
+          <div className={`mx-auto ${editorMaxWidthClass} mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800`}>
+            {exportError}
+          </div>
+        ) : null}
 
-          {isNarrative ? (
-            <textarea
-              value={draftValues[currentSection.sectionKey] || ''}
-              onChange={(event) =>
-                setDraftValues((current) => ({ ...current, [currentSection.sectionKey]: event.target.value }))
-              }
-              className="mt-6 min-h-[420px] w-full resize-y border-0 px-0 py-0 font-serif text-[16px] leading-8 text-slate-800 outline-none"
-              placeholder="Write this grant section here."
-            />
-          ) : (
-            <>
-              {currentSection.sectionType === 'budget_rows' ? (
-                <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                  <div className="text-sm font-semibold text-emerald-900">AI-generated structured budget</div>
-                  <div className="mt-1 text-sm text-emerald-800">
-                    The app sends the extracted budget template, current rows, funding-call limits, and Grant Prep facts to the budget drafting stage.
+        <div className="space-y-6">
+          {filteredSections.map((section) => {
+            const sectionIsNarrative = isNarrativeSection(section)
+            const sectionIsBibliography = isGrantBibliographySection(section.sectionKey)
+            const sectionIsBudget = section.sectionType === 'budget_rows'
+            const sectionIsTable = section.sectionType === 'table' || sectionIsBudget
+            const isSelected = selectedSection === section.sectionKey
+
+            return (
+              <div
+                key={section.sectionKey}
+                id={`section-${section.sectionKey}`}
+                onClick={() => onSectionSelect?.(section.sectionKey)}
+                className={`mx-auto ${editorMaxWidthClass} cursor-pointer rounded-sm border bg-white px-12 py-10 shadow-[0_1px_12px_rgba(0,0,0,0.08)] transition-all ${
+                  isSelected
+                    ? 'border-blue-300 ring-2 ring-blue-100'
+                    : 'border-gray-100/70 hover:border-slate-200'
+                }`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-4">
+                  <div>
+                    <h2 className="font-sans text-xl font-semibold text-slate-950">{section.label}</h2>
                   </div>
-                  <textarea
-                    value={budgetInstructions[currentSection.sectionKey] || ''}
-                    onChange={(event) =>
-                      setBudgetInstructions((current) => ({
-                        ...current,
-                        [currentSection.sectionKey]: event.target.value,
-                      }))
-                    }
-                    className="mt-4 min-h-[84px] w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-emerald-500"
-                    placeholder="Optional: provide confirmed amounts or budget-specific instructions."
-                  />
-                  <label className="mt-3 flex items-center gap-2 text-sm text-emerald-900">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(allowInstructionAmounts[currentSection.sectionKey])}
-                      onChange={(event) =>
-                        setAllowInstructionAmounts((current) => ({
-                          ...current,
-                          [currentSection.sectionKey]: event.target.checked,
-                        }))
-                      }
-                      className="h-4 w-4 rounded border-emerald-300 text-emerald-700 focus:ring-emerald-600"
-                    />
-                    <span>Use confirmed amounts from these instructions.</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => void generateBudgetSection(currentSection)}
-                    disabled={savingKey !== null || generatingKey !== null}
-                    className="mt-3 inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-                  >
-                    {generatingKey === currentSection.sectionKey
-                      ? <Loader2 className="h-4 w-4 animate-spin" />
-                      : <Sparkles className="h-4 w-4" />}
-                    {generatingKey === currentSection.sectionKey ? 'Generating Budget...' : 'Generate Budget With AI'}
-                  </button>
                 </div>
-              ) : null}
-              <textarea
-                value={structuredValues[currentSection.sectionKey] || '{}'}
-                onChange={(event) =>
-                  setStructuredValues((current) => ({ ...current, [currentSection.sectionKey]: event.target.value }))
-                }
-                className="mt-6 min-h-[380px] w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm leading-6 text-slate-700 outline-none focus:border-slate-500"
-                placeholder="Enter the structured response JSON for this section."
-              />
-            </>
-          )}
+
+                {sectionIsNarrative ? (
+                  <div className="mt-4 text-justify font-sans text-[15px] leading-7 text-slate-950" onClick={(e) => e.stopPropagation()}>
+                    <PaperMarkdownEditor
+                      ref={(editor) => { editorRefs.current[section.sectionKey] = editor }}
+                      value={draftValues[section.sectionKey] || ''}
+                      onChange={(markdown) =>
+                        setDraftValues((current) => ({ ...current, [section.sectionKey]: markdown }))
+                      }
+                      onFocus={() => {
+                        onSectionSelect?.(section.sectionKey)
+                        setSelectedText((current) =>
+                          current && current.sectionKey !== section.sectionKey ? null : current
+                        )
+                      }}
+                      onSelectionChange={(selection) => {
+                        if (!selection || !selection.text) {
+                          if (selectedSection === section.sectionKey) setSelectedText(null)
+                          return
+                        }
+                        onSectionSelect?.(section.sectionKey)
+                        setSelectedText({
+                          text: selection.text,
+                          start: selection.start,
+                          end: selection.end,
+                          sectionKey: section.sectionKey,
+                        })
+                        editorRefs.current[section.sectionKey]?.saveSelection()
+                      }}
+                      citationDisplayMeta={citationDisplayMeta}
+                      figureDisplayMeta={figureDisplayMeta}
+                      onFigureClick={(figureNo) => {
+                        const figure = figures.find((entry) => entry.figureNo === figureNo)
+                        if (figure?.imagePath) {
+                          window.open(figure.imagePath, '_blank', 'noopener,noreferrer')
+                        }
+                      }}
+                      className="min-h-[260px] border-0 bg-transparent px-0 py-0"
+                      disabled={generatingKey === section.sectionKey}
+                      placeholder={sectionIsBibliography ? 'Generate or edit the bibliography for this grant.' : 'Write this grant section here.'}
+                    />
+                  </div>
+                ) : sectionIsTable ? (
+                  <>
+                    {sectionIsBudget ? (
+                      <div className="mt-3 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
+                        <AutoSizeTextarea
+                          value={budgetInstructions[section.sectionKey] || ''}
+                          onChange={(event) =>
+                            setBudgetInstructions((current) => ({
+                              ...current,
+                              [section.sectionKey]: event.target.value,
+                            }))
+                          }
+                          minHeight={44}
+                          className="w-full resize-none border border-slate-300 bg-white px-2.5 py-1.5 text-sm leading-5 text-slate-900 outline-none placeholder:text-slate-400"
+                          placeholder="Budget instructions for AI generation, e.g. use INR 12 lakh total and split equipment/personnel/travel."
+                        />
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800">
+                            <input
+                              type="checkbox"
+                              checked={budgetUseCurrentValues[section.sectionKey] === true}
+                              onChange={(event) =>
+                                setBudgetUseCurrentValues((current) => ({
+                                  ...current,
+                                  [section.sectionKey]: event.target.checked,
+                                }))
+                              }
+                              className="h-4 w-4 border-slate-400 text-slate-900 focus:ring-slate-700"
+                            />
+                            Use current table values
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => void generateBudgetSection(section)}
+                            disabled={savingKey !== null || generatingKey !== null}
+                            className="inline-flex items-center gap-2 border border-slate-400 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-60"
+                          >
+                            {generatingKey === section.sectionKey
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <Sparkles className="h-3.5 w-3.5" />}
+                            {generatingKey === section.sectionKey ? 'Generating Table...' : 'Generate Table With AI'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    <StructuredTableEditor
+                      value={structuredValues[section.sectionKey] || '{}'}
+                      onChange={(next) =>
+                        setStructuredValues((current) => ({ ...current, [section.sectionKey]: next }))
+                      }
+                      disabled={generatingKey === section.sectionKey}
+                    />
+                  </>
+                ) : (
+                  <AutoSizeTextarea
+                    value={structuredValues[section.sectionKey] || '{}'}
+                    onChange={(event) =>
+                      setStructuredValues((current) => ({ ...current, [section.sectionKey]: event.target.value }))
+                    }
+                    onClick={(e) => e.stopPropagation()}
+                    minHeight={180}
+                    className="mt-4 w-full resize-none border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-6 text-slate-700 outline-none"
+                    placeholder="Enter the structured response JSON for this section."
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
+      {draftingSessionId ? (
+        <FloatingWritingPanel
+          sessionId={draftingSessionId}
+          authToken={authToken}
+          currentSection={currentSection?.sectionKey}
+          currentContent={currentContent}
+          availableSectionContexts={availableSectionContexts}
+          figures={figures}
+          citations={citations}
+          onInsertFigure={handleInsertFigure}
+          onInsertCitation={handleInsertCitation}
+          onTextAction={handleTextAction}
+          onGenerateFigure={handleGenerateFigure}
+          onGenerateExistingFigure={handleGenerateExistingFigure}
+          selectedText={selectedText}
+          onRefreshFigures={loadFigures}
+          onRefreshCitations={loadCitations}
+          isVisible={panelVisible}
+          documentLabel="Grant"
+          bibliographyStyle={bibliographyStyle}
+          onBibliographyStyleChange={handleBibliographyStyleChange}
+          bibliographySortOrder={bibliographySortOrder}
+          onBibliographySortOrderChange={handleBibliographySortOrderChange}
+          onGenerateBibliography={() => void refreshBibliographySection(false)}
+          generatingBibliography={generatingBibliography}
+          usedCitationCount={usedCitationKeys.length}
+          usedCitationKeys={usedCitationKeys}
+          usedCitationCountsByKey={usedCitationCountsByKey}
+          isNumericStyleBibliography={isNumericStyleBibliography}
+          onCitationsUpdated={setCitations}
+        />
+      ) : null}
     </div>
   )
 }

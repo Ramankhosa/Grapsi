@@ -944,7 +944,10 @@ function GrantApplicationSectionCard({
   onUpdateSection: (sectionKey: string, updated: SectionPlanItem) => void;
 }) {
   const evidenceMapped = isGrantEvidenceMappingSection(section);
-  const canEditDimensions = evidenceMapped && isGrantAppDraftSection(section) && !isLocked;
+  const appDraftSection = isGrantAppDraftSection(section);
+  const canEditCitationMode = appDraftSection && !isLocked;
+  const canEditDimensions = evidenceMapped && appDraftSection && !isLocked;
+  const currentCitationMode = section.citationMode || (evidenceMapped ? 'mapped_evidence' : 'direct_draft');
   const limitLabel = getGrantLimitLabel(section);
   const contract = section.grantSectionComplianceContract;
   const ruleProfile = section.grantRuleProfile;
@@ -975,15 +978,42 @@ function GrantApplicationSectionCard({
     const cleanDimensions = uniqueGrantList(nextDimensions, 20);
     onUpdateSection(section.sectionKey, {
       ...section,
+      citationMode: 'mapped_evidence',
       dimensions: cleanDimensions,
       dimensionTyping: updateGrantDimensionTyping(section, cleanDimensions, oldDimension, newDimension),
+      suggestedCitationCount: section.suggestedCitationCount && section.suggestedCitationCount > 0
+        ? section.suggestedCitationCount
+        : Math.max(2, cleanDimensions.length),
     });
   };
 
   const updateCitationTarget = (nextCount: number) => {
     onUpdateSection(section.sectionKey, {
       ...section,
+      citationMode: 'mapped_evidence',
       suggestedCitationCount: Math.max(0, Math.min(50, nextCount)),
+    });
+  };
+
+  const updateCitationMode = (nextMode: NonNullable<SectionPlanItem['citationMode']>) => {
+    if (nextMode === 'mapped_evidence') {
+      onUpdateSection(section.sectionKey, {
+        ...section,
+        citationMode: 'mapped_evidence',
+        suggestedCitationCount: section.suggestedCitationCount && section.suggestedCitationCount > 0
+          ? section.suggestedCitationCount
+          : 2,
+        dimensions: section.dimensions || [],
+      });
+      return;
+    }
+
+    onUpdateSection(section.sectionKey, {
+      ...section,
+      citationMode: nextMode,
+      suggestedCitationCount: 0,
+      dimensions: [],
+      dimensionTyping: undefined,
     });
   };
 
@@ -1118,6 +1148,26 @@ function GrantApplicationSectionCard({
                 </div>
               ) : null}
             </div>
+
+            {appDraftSection ? (
+              <div className="mb-3 rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900 dark:bg-slate-950">
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
+                  Citation mode
+                </label>
+                <select
+                  value={currentCitationMode}
+                  onChange={(event) => updateCitationMode(event.target.value as NonNullable<SectionPlanItem['citationMode']>)}
+                  disabled={!canEditCitationMode}
+                  className="mt-2 w-full rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-60 dark:border-indigo-900 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  {CITATION_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
             {evidenceMapped && (section.dimensions?.length || 0) === 0 ? (
               <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">

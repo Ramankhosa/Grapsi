@@ -2,8 +2,9 @@ import crypto from 'crypto'
 
 import { Prisma } from '@/lib/prisma-generated'
 import prisma from '@/lib/prisma'
+import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
-import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import { isGrantBibliographySection, isGrantSectionAiGenerated } from '@/lib/grants/workflowMode'
 import { hasMeaningfulSectionContent } from '@/lib/reviewer/content'
 import { normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
 import type { GrantBlueprintPlanSection, GrantTemplateIntent } from '@/types/grant'
@@ -477,15 +478,21 @@ export async function buildReviewerContextFromFundingCall(input: {
   }
 }
 
-function serializeGrantDraft(section: any): string {
+function serializeGrantDraft(section: any, sectionType?: string): string {
   const content = asString(section?.content)
   if (hasMeaningfulSectionContent(content)) return content
 
   const responses = Array.isArray(section?.structuredResponses) ? section.structuredResponses : []
   const serialized = responses
-    .map((response: any) => {
-      const payload = response?.responseJson
-      if (!payload) return ''
+    .map((response: any) => response?.responseJson)
+    .filter((payload: unknown) => {
+      if (!payload) return false
+      if (sectionType === 'budget_rows') {
+        return budgetStructuredDataHasMeaningfulRows(payload)
+      }
+      return true
+    })
+    .map((payload: unknown) => {
       try {
         return JSON.stringify(payload, null, 2)
       } catch {
@@ -500,6 +507,14 @@ function serializeGrantDraft(section: any): string {
 
 function resolvePlanSection(section: any, sectionPlanByKey: Map<string, GrantBlueprintPlanSection>) {
   return sectionPlanByKey.get(String(section?.sectionKey || '')) || null
+}
+
+function isReviewerMappableGrantSection(input: {
+  sectionKey?: string | null
+  sectionType: string
+  workflowMode: unknown
+}): boolean {
+  return !isGrantBibliographySection(input.sectionKey) && isGrantSectionAiGenerated(input)
 }
 
 export function buildReviewerSectionMappings(input: {
@@ -520,13 +535,15 @@ export function buildReviewerSectionMappings(input: {
     if (!sectionKey) continue
 
     const planSection = resolvePlanSection(draft, sectionPlanByKey)
+    const sectionType = asString(planSection?.sectionType) || asString(draft?.sectionType)
     const workflowMode = asString(planSection?.workflowMode) || asString(draft?.workflowMode)
-    if (!isGrantSectionAutoDraftable({
-      sectionType: asString(planSection?.sectionType) || asString(draft?.sectionType),
+    if (!isReviewerMappableGrantSection({
+      sectionKey,
+      sectionType,
       workflowMode,
     })) continue
 
-    const content = serializeGrantDraft(draft)
+    const content = serializeGrantDraft(draft, sectionType)
     if (!hasMeaningfulSectionContent(content)) continue
 
     const overrideBucket = manualRubric.mappingOverrides[sectionKey]
@@ -574,7 +591,9 @@ export function buildReviewerSectionMappings(input: {
     group.aggregateContent = group.linkedSections
       .map((link) => {
         const draft = orderedDrafts.find((item) => asString(item?.sectionKey) === link.sectionKey)
-        const content = serializeGrantDraft(draft)
+        const planSection = draft ? resolvePlanSection(draft, sectionPlanByKey) : null
+        const sectionType = asString(planSection?.sectionType) || asString(draft?.sectionType)
+        const content = serializeGrantDraft(draft, sectionType)
         return `## ${link.label} [${link.sectionKey}]\n${content}`
       })
       .join('\n\n')

@@ -2285,6 +2285,8 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
               },
               idempotencyKey: `lit-relevance-${searchRunId}-${Date.now()}-${batchIndex}-${depth}-${attempt}`,
               metadata: {
+                skipFeaturePolicy: true,
+                action: 'LITERATURE_AI_ANALYSIS',
                 sessionId,
                 searchRunId,
                 paperCount: batch.length,

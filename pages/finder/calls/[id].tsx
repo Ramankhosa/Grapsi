@@ -144,6 +144,7 @@ function JsonPanel({ title, value }: { title: string; value: unknown }) {
 export default function FundingCallDetailsPage() {
   const router = useRouter()
   const { id } = router.query
+  const projectId = typeof router.query.projectId === 'string' ? router.query.projectId : null
   const { user, isLoading, authFetch } = useAuth()
   const [details, setDetails] = useState<FundingCallBundle | null>(null)
   const [loading, setLoading] = useState(true)
@@ -158,6 +159,7 @@ export default function FundingCallDetailsPage() {
   const call = details?.call || null
   const templateWorkspace = details?.templateWorkspace || null
   const guidelineWorkspace = details?.guidelineWorkspace || null
+  const finderBackHref = projectId ? `/finder?projectId=${encodeURIComponent(projectId)}` : '/finder'
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -205,18 +207,26 @@ export default function FundingCallDetailsPage() {
     setStartingGrantPrep(true)
     setError(null)
     try {
-      const response = await authFetch(`/api/funding/calls/${call.id}/start-grant-prep`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ engagementMode: 'guided' }),
-      })
+      const response = await authFetch(
+        projectId
+          ? `/api/projects/${encodeURIComponent(projectId)}/grants`
+          : `/api/funding/calls/${encodeURIComponent(call.id)}/start-grant-prep`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            engagementMode: 'guided',
+            ...(projectId ? { fundingCallId: call.id } : {}),
+          }),
+        }
+      )
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
         throw new Error(payload?.error || payload?.message || 'Failed to start grant prep')
       }
-      await router.push(payload.launchUrl)
+      await router.push(payload.launchUrl || payload.prepUrl || (projectId ? `/projects/${projectId}/grants` : '/projects'))
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to start grant prep')
     } finally {
@@ -234,7 +244,7 @@ export default function FundingCallDetailsPage() {
         <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-8 shadow-sm">
           <div className="text-lg font-semibold text-slate-900">Funding call unavailable</div>
           <p className="mt-3 text-sm text-slate-600">{error || 'The funding call could not be loaded.'}</p>
-          <Link href="/finder" className="mt-6 inline-flex rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
+          <Link href={finderBackHref} className="mt-6 inline-flex rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
             Back to Finder
           </Link>
         </div>
@@ -255,7 +265,7 @@ export default function FundingCallDetailsPage() {
 
       <div className="mx-auto max-w-6xl">
         <div className="mb-5 flex items-center justify-between gap-3">
-          <Link href="/finder" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 hover:text-emerald-950">
+          <Link href={finderBackHref} className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 hover:text-emerald-950">
             <FaArrowLeft />
             Back to Finder
           </Link>

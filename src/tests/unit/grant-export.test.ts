@@ -177,4 +177,51 @@ describe('grant proposal DOCX section assembly', () => {
     ])
     expect(result.emptySectionCount).toBe(1)
   })
+
+  it('exports generated bibliography as the final grant section when present', () => {
+    const result = buildGrantProposalDocxSections([
+      {
+        sectionKey: 'technical_plan',
+        label: 'Technical Plan',
+        sectionType: 'narrative',
+        sectionOrder: 1,
+        content: 'Technical plan content.',
+        structuredResponses: [],
+      },
+      {
+        sectionKey: 'bibliography',
+        label: 'Bibliography',
+        sectionType: 'narrative',
+        sectionOrder: 99,
+        content: '- Smith, J. (2024). Example source.',
+        structuredResponses: [],
+      },
+    ])
+
+    expect(result.sections.map((section) => section.key)).toEqual([
+      'technical_plan',
+      'bibliography',
+    ])
+    expect(result.sections.at(-1)).toMatchObject({
+      key: 'bibliography',
+      title: 'Bibliography',
+      content: '- Smith, J. (2024). Example source.',
+    })
+  })
+
+  it('omits bibliography from export assembly when the workspace does not provide it', () => {
+    const result = buildGrantProposalDocxSections([
+      {
+        sectionKey: 'technical_plan',
+        label: 'Technical Plan',
+        sectionType: 'narrative',
+        sectionOrder: 1,
+        content: 'Technical plan content.',
+        structuredResponses: [],
+      },
+    ])
+
+    expect(result.sections.map((section) => section.key)).toEqual(['technical_plan'])
+    expect(result.sections.map((section) => section.key)).not.toContain('bibliography')
+  })
 })

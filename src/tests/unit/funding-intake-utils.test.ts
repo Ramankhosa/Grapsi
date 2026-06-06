@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  assertSafePublicHttpsUrl,
   buildDraftValuesFromExtraction,
   normalizeDraftInput,
   normalizeExtractionPayload,
@@ -10,6 +11,20 @@ import { prepareFundingJsonIntake } from '@/lib/fundingIntake/jsonIngestion'
 import { parseCoreExtractorPayload } from '@/lib/fundingIntake/coreExtractionPayload'
 
 describe('funding intake normalization', () => {
+  it('allows http and https URL intake schemes while rejecting non-web protocols', async () => {
+    await expect(assertSafePublicHttpsUrl('http://localhost:3010/call')).resolves.toMatchObject({
+      protocol: 'http:',
+      hostname: 'localhost',
+    })
+    await expect(assertSafePublicHttpsUrl('https://localhost:3010/call')).resolves.toMatchObject({
+      protocol: 'https:',
+      hostname: 'localhost',
+    })
+    await expect(assertSafePublicHttpsUrl('ftp://example.org/call')).rejects.toThrow(
+      'Only http and https URLs are allowed'
+    )
+  })
+
   it('builds description deterministically from evidence-backed segments', () => {
     const payload = normalizeExtractionPayload(
       {

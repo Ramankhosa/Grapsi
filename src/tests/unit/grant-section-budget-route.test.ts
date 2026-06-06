@@ -63,6 +63,7 @@ describe('grant section budget generation route', () => {
         userInstructions: 'Use entered costs only.',
         allowInstructionAmounts: true,
         overwriteAmounts: false,
+        useCurrentBudgetValues: true,
       }),
       headers: { 'content-type': 'application/json' },
     })
@@ -83,7 +84,70 @@ describe('grant section budget generation route', () => {
       userInstructions: 'Use entered costs only.',
       allowInstructionAmounts: true,
       overwriteAmounts: false,
+      useCurrentBudgetValues: true,
+      bibliographyStyle: undefined,
+      bibliographySortOrder: undefined,
     })
+  })
+
+  it('generates bibliography sections through POST', async () => {
+    generateGrantSectionDraftMock.mockResolvedValue({
+      sectionKey: 'bibliography',
+      sectionType: 'narrative',
+      content: '- Smith, J. (2024). Example source.',
+    })
+
+    const { POST } = await import('@/app/api/projects/[projectId]/grants/[grantId]/sections/[sectionKey]/route')
+    const request = new NextRequest('http://localhost/api/projects/project-1/grants/grant-1/sections/bibliography', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'generate' }),
+      headers: { 'content-type': 'application/json' },
+    })
+
+    const response = await POST(request, {
+      params: Promise.resolve({ projectId: 'project-1', grantId: 'grant-1', sectionKey: 'bibliography' }),
+    })
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.section).toMatchObject({
+      sectionKey: 'bibliography',
+      sectionType: 'narrative',
+    })
+    expect(generateGrantSectionDraftMock).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      grantSessionId: 'grant-1',
+      tenantId: 'tenant-1',
+      sectionKey: 'bibliography',
+      userId: 'user-1',
+      userInstructions: undefined,
+      allowInstructionAmounts: false,
+      overwriteAmounts: false,
+      useCurrentBudgetValues: false,
+      bibliographyStyle: undefined,
+      bibliographySortOrder: undefined,
+    })
+  })
+
+  it('returns a clear conflict when bibliography generation has no active citations', async () => {
+    generateGrantSectionDraftMock.mockRejectedValue(
+      new Error('No active citations are available for bibliography generation.')
+    )
+
+    const { POST } = await import('@/app/api/projects/[projectId]/grants/[grantId]/sections/[sectionKey]/route')
+    const request = new NextRequest('http://localhost/api/projects/project-1/grants/grant-1/sections/bibliography', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'generate' }),
+      headers: { 'content-type': 'application/json' },
+    })
+
+    const response = await POST(request, {
+      params: Promise.resolve({ projectId: 'project-1', grantId: 'grant-1', sectionKey: 'bibliography' }),
+    })
+    const payload = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(payload.message).toContain('active citations')
   })
 
   it('keeps app-draft section generation blocked for the linked literature workspace', async () => {

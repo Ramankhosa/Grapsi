@@ -61,6 +61,7 @@ interface SectionDraftingStageProps {
   onNavigateToStage?: (stageKey: string) => void;
   grantReviewerRecommendations?: GrantReviewerRecommendation[];
   onGrantReviewerRecommendationStatusChange?: (updates: RecommendationStatusUpdate[]) => Promise<void>;
+  onBibliographyGenerated?: (bibliography: string) => void;
   draftExportAction?: {
     label?: string;
     helperText?: string;
@@ -896,7 +897,7 @@ const AUTO_SAVE_DELAY = 3000;
 // Main Component
 // ============================================================================
 
-export default function SectionDraftingStage({ 
+export default function SectionDraftingStage({
   sessionId,
   authToken,
   onSessionUpdated,
@@ -904,6 +905,7 @@ export default function SectionDraftingStage({
   selectedSection,
   grantReviewerRecommendations = [],
   onGrantReviewerRecommendationStatusChange,
+  onBibliographyGenerated,
   draftExportAction,
 }: SectionDraftingStageProps) {
   // Session State
@@ -2351,7 +2353,7 @@ export default function SectionDraftingStage({
       return;
     }
     await startDimensionFlow(sectionKey);
-  }, [generateDimensionDraft, getDimensionState, showMsg, startDimensionFlow]);
+  }, [generateDimensionDraft, getDimensionState, showMsg, startDimensionFlow, supportsDimensionFlowForSection]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -3430,7 +3432,7 @@ export default function SectionDraftingStage({
       stale: reasons.length > 0,
       reasons
     };
-  }, [buildFigureInjectionPayload, figures, formatFigureLabelById]);
+  }, [buildFigureInjectionPayload, figures, formatFigureLabelById, supportsPass1FigureInjectionForSection]);
 
   const renderPass1FigureConfigurator = (sectionKey: string) => {
     if (!supportsPass1FigureInjectionForSection(sectionKey)) return null;
@@ -3717,7 +3719,7 @@ export default function SectionDraftingStage({
       const data = await res.json();
       if (res.ok && data.bibliography) {
         setBibliographyContent(data.bibliography);
-        // Also update references section if it exists
+        onBibliographyGenerated?.(data.bibliography);
         if (sectionConfigs?.some(s => s.keys.includes('references'))) {
           setContent(prev => ({ ...prev, references: data.bibliography }));
           await saveSection('references', data.bibliography);
@@ -3774,7 +3776,8 @@ export default function SectionDraftingStage({
     citations,
     pendingChanges,
     content,
-    loadCitations
+    loadCitations,
+    onBibliographyGenerated
   ]);
 
   // ============================================================================
@@ -3867,7 +3870,7 @@ export default function SectionDraftingStage({
           </div>
           <div className="space-y-3 text-sm">
             <div><h4 className="font-semibold text-gray-900 mb-1">✍️ Always-Edit Mode</h4><p className="text-gray-600 text-xs">Content is always editable. Changes auto-save after 2 seconds of inactivity or when you click away.</p></div>
-            <div><h4 className="font-semibold text-gray-900 mb-1">💬 Instructions</h4><p className="text-gray-600 text-xs">Add custom instructions per section. Toggle ON/OFF to control when they're used. Use "Save for all papers" to reuse across drafts.</p></div>
+            <div><h4 className="font-semibold text-gray-900 mb-1">💬 Instructions</h4><p className="text-gray-600 text-xs">Add custom instructions per section. Toggle ON/OFF to control when they are used. Use &quot;Save for all papers&quot; to reuse across drafts.</p></div>
             <div><h4 className="font-semibold text-gray-900 mb-1">📚 Citations</h4><p className="text-gray-600 text-xs">Click the citation button in section toolbar to insert. Generate bibliography uses your selected citation style.</p></div>
             <div><h4 className="font-semibold text-gray-900 mb-1">Review And Improve</h4><p className="text-gray-600 text-xs">After drafting, use the Review stage for the manuscript audit and the Improve stage to preview and apply revision diffs.</p></div>
           </div>

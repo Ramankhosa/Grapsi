@@ -148,6 +148,7 @@ export function resolveGrantBackedDraftingStrategy(
   }
 
   if (!isGrantSectionAutoDraftable({
+    sectionKey: section.sectionKey,
     sectionType: section.sectionType || '',
     workflowMode: section.workflowMode || 'app_draft',
   })) {

@@ -7,6 +7,7 @@ import {
   budgetStructuredDataHasMeaningfulRows,
   budgetStructuredDataHasNumericColumns,
   getBudgetStructuredOpenQuestions,
+  mergeBudgetTemplateWithStructuredTable,
   validateBudgetDraftLlmResult,
 } from '@/lib/grants/budgetTemplate'
 import type { GrantBlueprintPlanSection, GrantBudgetTemplateScaffold } from '@/types/grant'
@@ -110,9 +111,11 @@ describe('grant budget template scaffold and drafting contract', () => {
     })
 
     expect(prompt).toContain('Return ONLY raw JSON')
+    expect(prompt).toContain('USER INSTRUCTIONS (AUTHORITATIVE)')
     expect(prompt).toContain('Preserve the provided column keys exactly')
     expect(prompt).toContain('Do not invent amounts')
     expect(prompt).toContain('Do not place numeric amounts from user instructions')
+    expect(prompt).toContain('make the output table visibly reflect it')
     expect(prompt).toContain('"key": "year_1"')
     expect(prompt).toContain('Use prototype hardware for Equipment.')
 
@@ -123,8 +126,84 @@ describe('grant budget template scaffold and drafting contract', () => {
       prepFacts: [],
       userInstructions: 'Equipment is confirmed at 2500.',
       allowInstructionAmounts: true,
+      overwriteAmounts: true,
     })
-    expect(confirmedAmountPrompt).toContain('You may transcribe confirmed numeric amounts')
+    expect(confirmedAmountPrompt).toContain('You may transcribe confirmed numeric values')
+    expect(confirmedAmountPrompt).toContain('follow the user instructions and replace the conflicting cells')
+    expect(confirmedAmountPrompt).toContain('adjust the component line-item amount cells')
+  })
+
+  it('only includes current budget values in the prompt when enabled', () => {
+    const uncheckedPrompt = buildBudgetDraftingPrompt({
+      budgetTemplate: budgetTemplate(),
+      currentData: { rows: [{ category: 'Equipment', year_1: '123456' }] },
+      grantContextSummary: [],
+      prepFacts: [],
+      userInstructions: 'Set the overall budget to 700000.',
+      allowInstructionAmounts: true,
+      overwriteAmounts: true,
+      useCurrentBudgetValues: false,
+    })
+
+    expect(uncheckedPrompt).toContain('Current table values are intentionally not included')
+    expect(uncheckedPrompt).toContain('Not provided. The user did not enable current-table-value context.')
+    expect(uncheckedPrompt).not.toContain('123456')
+
+    const checkedPrompt = buildBudgetDraftingPrompt({
+      budgetTemplate: budgetTemplate(),
+      currentData: { rows: [{ category: 'Equipment', year_1: '123456' }] },
+      grantContextSummary: [],
+      prepFacts: [],
+      userInstructions: 'Set the overall budget to 700000.',
+      allowInstructionAmounts: true,
+      overwriteAmounts: true,
+      useCurrentBudgetValues: true,
+    })
+
+    expect(checkedPrompt).toContain('Current table values are included below')
+    expect(checkedPrompt).toContain('123456')
+  })
+
+  it('uses user-modified table columns and rows as the budget format when current table context is enabled', () => {
+    const currentTable = {
+      currency: 'USD',
+      columns: [
+        { key: 'category', label: 'Category', kind: 'category' },
+        { key: 'year_1', label: 'Year 1', kind: 'year' },
+        { key: 'gst', label: 'GST', kind: 'amount' },
+        { key: 'justification', label: 'Justification', kind: 'justification' },
+      ],
+      rows: [
+        { category: 'Equipment', year_1: '1200', gst: null, justification: '' },
+        { category: 'Personnel', year_1: '5000', gst: null, justification: '' },
+        { category: 'Travel', year_1: null, gst: null, justification: '' },
+      ],
+    }
+    const effectiveTemplate = mergeBudgetTemplateWithStructuredTable(budgetTemplate(), currentTable)
+
+    expect(effectiveTemplate.columns.map((column) => column.key)).toEqual([
+      'category',
+      'year_1',
+      'gst',
+      'justification',
+    ])
+    expect(effectiveTemplate.categories.map((category) => category.label)).toEqual([
+      'Equipment',
+      'Personnel',
+      'Travel',
+    ])
+
+    const prompt = buildBudgetDraftingPrompt({
+      budgetTemplate: effectiveTemplate,
+      currentData: currentTable,
+      grantContextSummary: [],
+      prepFacts: [],
+      userInstructions: 'Add GST for each row.',
+      useCurrentBudgetValues: true,
+    })
+
+    expect(prompt).toContain('"key": "gst"')
+    expect(prompt).toContain('"label": "Travel"')
   })
 
   it('validates LLM output, strips unknown columns, and preserves existing numeric values', () => {
@@ -173,6 +252,48 @@ describe('grant budget template scaffold and drafting contract', () => {
     ])
     expect(JSON.stringify(result.rows)).not.toContain('remove me')
     expect(result.openQuestions).toEqual(['Confirm personnel amount.'])
+  })
+
+  it('preserves user-added budget columns and rows during LLM validation', () => {
+    const currentTable = {
+      columns: [
+        { key: 'category', label: 'Category', kind: 'category' },
+        { key: 'year_1', label: 'Year 1', kind: 'year' },
+        { key: 'gst', label: 'GST', kind: 'amount' },
+        { key: 'justification', label: 'Justification', kind: 'justification' },
+      ],
+      rows: [
+        { category: 'Equipment', year_1: '1200', gst: null, justification: '' },
+        { category: 'Personnel', year_1: '5000', gst: null, justification: '' },
+        { category: 'Travel', year_1: null, gst: null, justification: '' },
+      ],
+    }
+    const effectiveTemplate = mergeBudgetTemplateWithStructuredTable(budgetTemplate(), currentTable)
+    const result = validateBudgetDraftLlmResult({
+      template: effectiveTemplate,
+      currentData: currentTable,
+      rawOutput: JSON.stringify({
+        rows: [
+          { category: 'Equipment', year_1: '2000', gst: '216', justification: 'Updated equipment.' },
+          { category: 'Personnel', year_1: '6000', gst: '0', justification: 'Staff time.' },
+          { category: 'Travel', year_1: '1000', gst: '108', justification: 'Field visit.' },
+        ],
+      }),
+      allowNewNumericValues: true,
+      preserveCurrentNumericValues: false,
+    })
+
+    expect((result.columns as Array<{ key: string }>).map((column) => column.key)).toEqual([
+      'category',
+      'year_1',
+      'gst',
+      'justification',
+    ])
+    expect(result.rows).toEqual([
+      { category: 'Equipment', year_1: '2000', gst: '216', justification: 'Updated equipment.' },
+      { category: 'Personnel', year_1: '6000', gst: '0', justification: 'Staff time.' },
+      { category: 'Travel', year_1: '1000', gst: '108', justification: 'Field visit.' },
+    ])
   })
 
   it('does not accept new numeric values from generic instructions', () => {
@@ -260,6 +381,31 @@ describe('grant budget template scaffold and drafting contract', () => {
       year_1: '9999',
       year_2: '3000',
     })
+  })
+
+  it('keeps existing numeric cells in overwrite mode when the model provides no replacement', () => {
+    const result = validateBudgetDraftLlmResult({
+      template: budgetTemplate(),
+      currentData: {
+        rows: [
+          { category: 'Equipment', year_1: '1200', year_2: '800', justification: '' },
+          { category: 'Personnel', year_1: '5000', year_2: null, justification: '' },
+        ],
+      },
+      rawOutput: JSON.stringify({
+        rows: [
+          { category: 'Equipment', year_1: null, year_2: '', justification: 'Updated hardware.' },
+          { category: 'Personnel', year_1: '7000', year_2: null, justification: 'Staff time.' },
+        ],
+      }),
+      allowNewNumericValues: true,
+      preserveCurrentNumericValues: false,
+    })
+
+    expect(result.rows).toEqual([
+      { category: 'Equipment', year_1: '1200', year_2: '800', justification: 'Updated hardware.' },
+      { category: 'Personnel', year_1: '7000', year_2: null, justification: 'Staff time.' },
+    ])
   })
 
   it('detects meaningful budget rows and unresolved questions honestly', () => {

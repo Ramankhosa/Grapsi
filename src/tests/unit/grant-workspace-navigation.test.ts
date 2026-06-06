@@ -9,19 +9,20 @@ import {
   withGrantWorkspaceStage,
 } from '@/lib/grants/workspaceNavigation'
 import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
+import { draftingFilterMatches } from '@/components/stages/PaperVerticalStageNav'
 
 describe('grant workspace navigation', () => {
-  it('opens active prep sessions on GrantMentor and launched sessions on Blueprint', () => {
+  it('opens active prep sessions on GrantMentor and launched sessions on Section Drafting', () => {
     expect(resolveGrantWorkspaceStageForPrepStatus('active')).toBe('GRANTMENTOR')
     expect(resolveGrantWorkspaceStageForPrepStatus('ready')).toBe('GRANTMENTOR')
-    expect(resolveGrantWorkspaceStageForPrepStatus('launched')).toBe('BLUEPRINT')
-    expect(resolveGrantWorkspaceStageForPrepStatus('handed_off')).toBe('BLUEPRINT')
+    expect(resolveGrantWorkspaceStageForPrepStatus('launched')).toBe('SECTION_DRAFTING')
+    expect(resolveGrantWorkspaceStageForPrepStatus('handed_off')).toBe('SECTION_DRAFTING')
   })
 
   it('maps grant session statuses onto the unified workspace stages', () => {
-    expect(resolveGrantWorkspaceStageForGrantStatus('BLUEPRINT')).toBe('BLUEPRINT')
+    expect(resolveGrantWorkspaceStageForGrantStatus('BLUEPRINT')).toBe('SECTION_DRAFTING')
     expect(resolveGrantWorkspaceStageForGrantStatus('DRAFTING')).toBe('SECTION_DRAFTING')
-    expect(resolveGrantWorkspaceStageForGrantStatus('REVIEW')).toBe('REVIEWER')
+    expect(resolveGrantWorkspaceStageForGrantStatus('REVIEW')).toBe('SECTION_DRAFTING')
     expect(resolveGrantWorkspaceStageForGrantStatus('PREP_OPTIONAL')).toBeNull()
     expect(resolveGrantWorkspaceStageForGrantStatus('SETUP')).toBeNull()
   })
@@ -35,7 +36,7 @@ describe('grant workspace navigation', () => {
     expect(resolveGrantWorkspaceStage({
       prepStatus: 'active',
       grantStatus: 'REVIEW',
-    })).toBe('REVIEWER')
+    })).toBe('SECTION_DRAFTING')
 
     expect(resolveGrantWorkspaceStage({
       prepStatus: 'active',
@@ -54,7 +55,7 @@ describe('grant workspace navigation', () => {
       projectId: 'project-1',
       grantSessionId: 'grant-1',
       prepStatus: 'launched',
-    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
 
     expect(buildGrantWorkspaceUrl({
       projectId: 'project-1',
@@ -84,7 +85,7 @@ describe('grant workspace navigation', () => {
         id: 'grant-1',
         status: 'BLUEPRINT',
       },
-    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
 
     expect(buildGrantProjectOpenUrl({
       projectId: 'project-1',
@@ -96,7 +97,7 @@ describe('grant workspace navigation', () => {
         id: 'grant-1',
         status: 'REVIEW',
       },
-    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=REVIEWER')
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
 
     expect(buildGrantProjectOpenUrl({
       projectId: 'project-1',
@@ -135,5 +136,29 @@ describe('grant workspace navigation', () => {
     expect(resolveMutableGrantPrepStatus({ currentStatus: 'handed_off', isReady: true })).toBe('handed_off')
     expect(resolveMutableGrantPrepStatus({ currentStatus: 'active', isReady: true })).toBe('ready')
     expect(resolveMutableGrantPrepStatus({ currentStatus: 'ready', isReady: false })).toBe('active')
+  })
+
+  it('includes structured budget sections in the App drafting filter', () => {
+    const budgetSection = {
+      key: 'budget',
+      workflowMode: 'team_manual',
+      sectionType: 'budget_rows',
+      dimensions: [],
+    }
+
+    expect(draftingFilterMatches(budgetSection, 'all')).toBe(true)
+    expect(draftingFilterMatches(budgetSection, 'app_draft')).toBe(true)
+  })
+
+  it('includes bibliography in App drafting', () => {
+    const bibliographySection = {
+      key: 'bibliography',
+      workflowMode: 'app_draft',
+      sectionType: 'narrative',
+      dimensions: ['background'],
+    }
+
+    expect(draftingFilterMatches(bibliographySection, 'all')).toBe(true)
+    expect(draftingFilterMatches(bibliographySection, 'app_draft')).toBe(true)
   })
 })

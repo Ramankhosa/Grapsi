@@ -10,15 +10,22 @@ import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import type { GrantPrepStageKey } from '@/lib/grantPrep/types'
 import { normalizeGrantPrepEngagementMode } from '@/lib/grantPrep/types'
 import { buildGrantWorkspaceUrl } from '@/lib/grants/workspaceNavigation'
+import {
+  STANDARD_GRANT_TEMPLATE_FALLBACK_WARNING,
+  STANDARD_GRANT_TEMPLATE_VERSION,
+} from '@/lib/fundingTemplates/standardGrantTemplate'
 
 const createGrantSchema = z.object({
   fundingCallId: z.string().min(1).optional().nullable(),
+  useDefaultGrantFormat: z.boolean().optional().default(false),
   engagementMode: z.preprocess(normalizeGrantPrepEngagementMode, z.enum(['expert', 'express'])).default('expert'),
   selectedThrustAreaRuleKeys: z.array(z.string()).default([]),
   enabledStageKeys: z.array(z.string()).optional(),
   disabledStageKeys: z.array(z.string()).optional(),
   restart: z.boolean().optional().default(false),
 })
+
+const DEFAULT_GRANT_FORMAT_SOURCE_PREFIX = 'default-grant-format'
 
 async function requireProjectGrantActor(request: NextRequest, projectId: string, capability: 'read' | 'editContent') {
   const { user, error } = await authenticateUser(request)
@@ -53,6 +60,85 @@ async function requireProjectGrantActor(request: NextRequest, projectId: string,
     roles: user.roles || [],
     tenantId: user.tenantId,
   }
+}
+
+async function ensureDefaultGrantFormatFundingCall(
+  projectId: string,
+  actor: { id: string; email?: string | null; tenantId: string }
+) {
+  const sourceFingerprint = `${DEFAULT_GRANT_FORMAT_SOURCE_PREFIX}:${projectId}`
+  const existing = await prisma.fundingCall.findFirst({
+    where: {
+      tenantId: actor.tenantId,
+      visibility: 'TENANT_PRIVATE',
+      sourceFingerprint,
+      createdByUserId: actor.id,
+    },
+    select: { id: true },
+  })
+
+  if (existing) {
+    return existing.id
+  }
+
+  const project = await prisma.project.findFirst({
+    where: {
+      id: projectId,
+      tenantId: actor.tenantId,
+    },
+    select: { name: true },
+  })
+
+  const titleBase = project?.name?.trim() || 'Grant Project'
+  const title = `Default Grant Format - ${titleBase}`.slice(0, 200)
+  const agencyName = 'Default Grant Format'
+
+  const fundingCall = await prisma.fundingCall.create({
+    data: {
+      tenantId: actor.tenantId,
+      visibility: 'TENANT_PRIVATE',
+      status: 'READY_FOR_REVIEW',
+      catalog_status: 'DRAFT',
+      title,
+      agencyName,
+      scheme_title: title,
+      agency_name: agencyName,
+      summary: 'Private default grant-format scaffold for drafting without a specific funder opportunity.',
+      description:
+        'This private placeholder call lets Grant Prep use the standard grant application fallback template when no funding opportunity has been selected.',
+      sourceType: 'MANUAL',
+      sourceFingerprint,
+      source: DEFAULT_GRANT_FORMAT_SOURCE_PREFIX,
+      uploaded_by: actor.email || null,
+      is_active: true,
+      metadata: {
+        kind: 'default_grant_format',
+        project_id: projectId,
+        template_version: STANDARD_GRANT_TEMPLATE_VERSION,
+        fallback_template_reason: STANDARD_GRANT_TEMPLATE_FALLBACK_WARNING,
+        owner_user_id: actor.id,
+        user_import: {
+          owner_user_id: actor.id,
+          user_id: actor.id,
+          source: DEFAULT_GRANT_FORMAT_SOURCE_PREFIX,
+          verification_status: 'not_applicable',
+        },
+      },
+      extractedFacts: {
+        kind: 'default_grant_format',
+        templateVersion: STANDARD_GRANT_TEMPLATE_VERSION,
+      },
+      normalizedMetadata: {
+        defaultGrantFormat: true,
+        fallbackTemplate: STANDARD_GRANT_TEMPLATE_VERSION,
+      },
+      createdByUserId: actor.id,
+      updatedByUserId: actor.id,
+    },
+    select: { id: true },
+  })
+
+  return fundingCall.id
 }
 
 export async function GET(
@@ -135,11 +221,15 @@ export async function POST(
 
   try {
     const payload = createGrantSchema.parse(await request.json())
+    const effectiveFundingCallId =
+      payload.fundingCallId ||
+      (payload.useDefaultGrantFormat ? await ensureDefaultGrantFormatFundingCall(projectId, actor) : null)
+
     const result = await createOrReuseGrantPrepSession({
       projectId,
       tenantId: actor.tenantId,
       user: actor,
-      fundingCallId: payload.fundingCallId ?? null,
+      fundingCallId: effectiveFundingCallId,
       engagementMode: payload.engagementMode,
       selectedThrustAreaRuleKeys: payload.selectedThrustAreaRuleKeys,
       enabledStageKeys: payload.enabledStageKeys as GrantPrepStageKey[] | undefined,
@@ -151,10 +241,18 @@ export async function POST(
       return NextResponse.json({ message: 'Failed to create Grant Prep session' }, { status: 500 })
     }
 
+    if (effectiveFundingCallId) {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { projectType: 'GRANT' },
+      })
+    }
+
     return NextResponse.json(
       {
         session: serializeGrantPrepSession(result.session),
         reused: result.reused,
+        fundingCallId: effectiveFundingCallId,
         grantSessionId: result.grantSessionId || null,
         launchUrl: result.launchUrl || null,
         prepUrl: result.prepUrl || null,

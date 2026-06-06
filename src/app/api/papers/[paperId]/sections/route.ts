@@ -440,6 +440,7 @@ export async function PUT(
       isGrantBackedPaperTypeCode(paperTypeCode) &&
       grantSectionPlan &&
       isGrantSectionAutoDraftable({
+        sectionKey: grantSectionPlan.sectionKey,
         sectionType: grantSectionPlan.sectionType || 'narrative',
         workflowMode: grantSectionPlan.workflowMode,
       })

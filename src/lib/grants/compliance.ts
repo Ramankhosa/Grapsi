@@ -437,6 +437,7 @@ function buildProposalSectionMaps(sections: ProposalReportSection[]) {
 function isDraftableProposalSection(section: ProposalReportSection) {
   return section.sectionType
     ? isGrantSectionAutoDraftable({
+        sectionKey: section.sectionKey,
         sectionType: section.sectionType,
         workflowMode: section.workflowMode,
       })

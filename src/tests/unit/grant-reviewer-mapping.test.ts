@@ -228,6 +228,128 @@ describe('template-backed grant reviewer mapping', () => {
     expect(mappings[0].aggregateContent).not.toContain('Upload CVs and signatures')
   })
 
+  it('maps meaningful structured budget rows into the budget reviewer section', async () => {
+    const { buildReviewerSectionMappings } = await import('@/lib/reviewer/template-bridge')
+
+    const mappings = buildReviewerSectionMappings({
+      sectionPlan: [
+        {
+          sectionKey: 'budget',
+          label: 'Budget',
+          order: 1,
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          required: true,
+          wordBudget: null,
+          characterLimit: null,
+          purpose: '',
+          reviewerIntent: 'Check whether the requested costs are justified.',
+          dependencies: [],
+          sourceTemplatePointer: 'budget',
+          seededContext: '',
+          templateIntent: 'budget',
+          mustCover: [],
+          mustAvoid: [],
+        },
+      ],
+      sectionDrafts: [
+        {
+          id: 'draft-budget',
+          sectionKey: 'budget',
+          label: 'Budget',
+          sectionOrder: 1,
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          content: null,
+          structuredResponses: [
+            {
+              fieldKey: 'structuredData',
+              responseJson: {
+                columns: [
+                  { key: 'category', label: 'Category', kind: 'category' },
+                  { key: 'amount', label: 'Amount', kind: 'amount' },
+                  { key: 'justification', label: 'Justification', kind: 'justification' },
+                ],
+                rows: [
+                  {
+                    category: 'Equipment',
+                    amount: '1200',
+                    justification: 'Prototype hardware.',
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    } as any)
+
+    expect(mappings).toHaveLength(1)
+    expect(mappings[0].bucketKey).toBe('budget')
+    expect(mappings[0].linkedSections.map((link) => link.sectionKey)).toEqual(['budget'])
+    expect(mappings[0].aggregateContent).toContain('## Budget [budget]')
+    expect(mappings[0].aggregateContent).toContain('Prototype hardware.')
+  })
+
+  it('does not map blank budget scaffolds as reviewer-ready drafts', async () => {
+    const { buildReviewerSectionMappings } = await import('@/lib/reviewer/template-bridge')
+
+    const mappings = buildReviewerSectionMappings({
+      sectionPlan: [
+        {
+          sectionKey: 'budget',
+          label: 'Budget',
+          order: 1,
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          required: true,
+          wordBudget: null,
+          characterLimit: null,
+          purpose: '',
+          reviewerIntent: null,
+          dependencies: [],
+          sourceTemplatePointer: 'budget',
+          seededContext: '',
+          templateIntent: 'budget',
+          mustCover: [],
+          mustAvoid: [],
+        },
+      ],
+      sectionDrafts: [
+        {
+          id: 'draft-budget',
+          sectionKey: 'budget',
+          label: 'Budget',
+          sectionOrder: 1,
+          sectionType: 'budget_rows',
+          workflowMode: 'app_draft',
+          content: null,
+          structuredResponses: [
+            {
+              fieldKey: 'structuredData',
+              responseJson: {
+                columns: [
+                  { key: 'category', label: 'Category', kind: 'category' },
+                  { key: 'amount', label: 'Amount', kind: 'amount' },
+                  { key: 'justification', label: 'Justification', kind: 'justification' },
+                ],
+                rows: [
+                  {
+                    category: 'Equipment',
+                    amount: null,
+                    justification: '',
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    } as any)
+
+    expect(mappings).toHaveLength(0)
+  })
+
   it('builds reviewer context from approved template and manual rubric only', async () => {
     const { buildReviewerContextFromFundingCall } = await import('@/lib/reviewer/template-bridge')
 

@@ -76,6 +76,7 @@ interface FundingDirectoryPanelProps {
   activeSelections: ActiveSelection[];
   onOpenAdvancedFilters: () => void;
   onBeginWriting?: (result: RecommendationRawResultItem) => void;
+  getCallDetailsHref?: (result: RecommendationRawResultItem) => string;
   preferences: FinderPreferenceValues;
   onChangePreferences: (preferences: FinderPreferenceValues) => void;
 }
@@ -84,13 +85,16 @@ function ExpandableCard({
   result,
   defaultExpanded,
   onBeginWriting,
+  getCallDetailsHref,
 }: {
   result: RecommendationRawResultItem;
   defaultExpanded?: boolean;
   onBeginWriting?: (result: RecommendationRawResultItem) => void;
+  getCallDetailsHref?: (result: RecommendationRawResultItem) => string;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded || false);
   const amount = formatAmount(result);
+  const callDetailsHref = getCallDetailsHref?.(result) || `/finder/calls/${encodeURIComponent(result.id)}`;
   const geography =
     result.eligibleCountries.slice(0, 3).join(', ') ||
     result.eligibleRegions.slice(0, 3).join(', ') ||
@@ -196,7 +200,7 @@ function ExpandableCard({
             ) : null}
           </div>
 
-          {result.officialUrls[0] || onBeginWriting ? (
+          {result.officialUrls[0] || onBeginWriting || callDetailsHref ? (
             <div className="mt-4 flex flex-wrap gap-2">
               {onBeginWriting ? (
                 <button
@@ -207,6 +211,14 @@ function ExpandableCard({
                   Begin writing
                 </button>
               ) : null}
+              <a
+                href={callDetailsHref}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800"
+              >
+                Show Details
+              </a>
               {result.officialUrls[0] ? (
               <a
                 href={result.officialUrls[0]}
@@ -249,6 +261,7 @@ export default function FundingDirectoryPanel({
   activeSelections,
   onOpenAdvancedFilters,
   onBeginWriting,
+  getCallDetailsHref,
   preferences,
   onChangePreferences,
 }: FundingDirectoryPanelProps) {
@@ -512,7 +525,12 @@ export default function FundingDirectoryPanel({
               {/* Card grid */}
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {results.map((result) => (
-                  <ExpandableCard key={result.id} result={result} onBeginWriting={onBeginWriting} />
+                  <ExpandableCard
+                    key={result.id}
+                    result={result}
+                    onBeginWriting={onBeginWriting}
+                    getCallDetailsHref={getCallDetailsHref}
+                  />
                 ))}
               </div>
 

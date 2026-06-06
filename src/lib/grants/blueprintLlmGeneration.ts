@@ -19,7 +19,7 @@ import { GRANT_CITATION_MODES } from '@/types/grant'
 const sectionSchema = z.object({
   sectionKey: z.string().min(1),
   citationMode: z.enum(GRANT_CITATION_MODES).optional(),
-  suggestedCitationCount: z.number().int().min(0).max(20).nullable().optional(),
+  suggestedCitationCount: z.number().int().min(0).max(50).nullable().optional(),
   dimensions: z.array(z.string().min(1)).optional(),
   citationDecisionRationale: z.string().optional(),
 })
@@ -151,7 +151,7 @@ function buildPrompt(input: {
     'Do not create dimensions for simple summary, objectives, alignment, workplan, team, budget, attachment, or prep-only response sections unless they are explicitly present in the eligible payload.',
     'Avoid duplicating dimensions across sections unless the same literature pillar genuinely supports multiple sections.',
     'Return 2-5 dimensions per section, fewer for short sections and more only when citation count or section scope justifies it.',
-    'For mapped_evidence sections, suggestedCitationCount should usually be 2-6; use 1-3 for short answers and never exceed 7.',
+    'For mapped_evidence sections, honor an existing positive suggestedCitationCount from the candidate payload; otherwise use 2-6 by default and fewer for short answers.',
     'Every dimension must be a searchable concept or anchor point, not a final draft sentence. It should be searchable in paper titles, abstracts, methods, findings, or policy literature.',
     'Do not write generic headings such as "Evidence for the problem", "Methodology overview", "Background", or "Expected impact".',
     'Prefer pillar labels like "Role of nutrition in child physical development", "Current state of art of malnutrition in India", "Implementation feasibility of school-based nutrition programs", or "Validation methods for child growth and cognitive outcomes".',
@@ -195,14 +195,15 @@ function clampLlmCitationCount(
 ): number {
   const numeric = Number(value)
   const raw = Number.isFinite(numeric) ? Math.round(numeric) : fallback
-  const max = section.sectionType === 'short_answer' ? 3 : 7
+  const max = section.sectionType === 'short_answer' ? 10 : 50
   return Math.max(0, Math.min(max, raw))
 }
 
 function applyLlmCitationDecision(
   section: GrantBlueprintPlanSection,
   llmSection: z.infer<typeof sectionSchema> | undefined,
-  candidateSectionKeys: Set<string>
+  candidateSectionKeys: Set<string>,
+  explicitCitationTarget?: number
 ): GrantBlueprintPlanSection {
   if (!llmSection || !candidateSectionKeys.has(section.sectionKey)) {
     return section
@@ -233,15 +234,22 @@ function applyLlmCitationDecision(
     }
   }
 
-  const citationWorthy = isGrantBlueprintSectionCitationWorthy(section)
+  const currentMode = normalizeGrantCitationMode(section.citationMode, {
+    sectionType: section.sectionType,
+    workflowMode: section.workflowMode,
+    suggestedCitationCount: section.suggestedCitationCount,
+  })
+  const citationWorthy = currentMode === 'mapped_evidence' || isGrantBlueprintSectionCitationWorthy(section)
   const fallbackCount = typeof section.suggestedCitationCount === 'number'
     ? section.suggestedCitationCount
     : Math.max(2, nextDimensions.length)
-  const suggestedCitationCount = clampLlmCitationCount(
-    llmSection.suggestedCitationCount,
-    section,
-    fallbackCount
-  )
+  const suggestedCitationCount = typeof explicitCitationTarget === 'number' && explicitCitationTarget > 0
+    ? clampLlmCitationCount(explicitCitationTarget, section, explicitCitationTarget)
+    : clampLlmCitationCount(
+        llmSection.suggestedCitationCount,
+        section,
+        fallbackCount
+      )
 
   if (!citationWorthy || nextDimensions.length === 0 || suggestedCitationCount <= 0) {
     return {
@@ -325,6 +333,16 @@ export async function generateGrantBlueprintWithLlm(input: {
   )
   const fallbackFoundation = input.proposalFoundationHint
     || buildGeneratedGrantProposalFoundation(fallbackSectionPlan, input.context)
+  const explicitCitationTargetsByKey = new Map(
+    input.baseSectionPlan
+      .map((section) => [
+        section.sectionKey,
+        typeof section.suggestedCitationCount === 'number' && section.suggestedCitationCount > 0
+          ? section.suggestedCitationCount
+          : null,
+      ] as const)
+      .filter((entry): entry is readonly [string, number] => typeof entry[1] === 'number')
+  )
   const candidateSectionKeys = new Set(
     fallbackSectionPlan
       .filter(isLlmCitationDecisionCandidateSection)
@@ -443,7 +461,8 @@ export async function generateGrantBlueprintWithLlm(input: {
         applyLlmCitationDecision(
           section,
           llmSectionsByKey.get(section.sectionKey),
-          candidateSectionKeys
+          candidateSectionKeys,
+          explicitCitationTargetsByKey.get(section.sectionKey)
         )
       ),
       input.context,

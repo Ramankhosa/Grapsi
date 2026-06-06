@@ -174,6 +174,7 @@ function buildSavedResearchAreaQueryText(area: FinderSavedResearchArea) {
 export default function FinderPage() {
   const { user, isLoading, authFetch, logout } = useAuth();
   const router = useRouter();
+  const projectId = typeof router.query.projectId === 'string' ? router.query.projectId : null;
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -847,12 +848,19 @@ export default function FinderPage() {
     setAttachMenuOpen(false);
   }
 
+  function buildFundingCallDetailHref(fundingCallId: string) {
+    const encodedCallId = encodeURIComponent(fundingCallId);
+    return projectId
+      ? `/finder/calls/${encodedCallId}?projectId=${encodeURIComponent(projectId)}`
+      : `/finder/calls/${encodedCallId}`;
+  }
+
   async function handleExplainResult(payload: { runId: string; resultId: string; ordinal: number }) {
     await handleSendMessage(`Explain result ${payload.ordinal}.`);
   }
 
   async function handleBeginWritingFromCall(fundingCallId: string) {
-    const callbackUrl = `/finder/calls/${encodeURIComponent(fundingCallId)}`;
+    const callbackUrl = buildFundingCallDetailHref(fundingCallId);
     if (!user) {
       router.push(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
       return;
@@ -860,16 +868,21 @@ export default function FinderPage() {
 
     setError(null);
     try {
-      const payload = await apiRequest<{ launchUrl: string }>(
+      const payload = await apiRequest<{ launchUrl?: string | null; prepUrl?: string | null }>(
         authFetch,
-        `/api/funding/calls/${fundingCallId}/start-grant-prep`,
+        projectId
+          ? `/api/projects/${encodeURIComponent(projectId)}/grants`
+          : `/api/funding/calls/${encodeURIComponent(fundingCallId)}/start-grant-prep`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ engagementMode: 'guided' }),
+          body: JSON.stringify({
+            engagementMode: 'guided',
+            ...(projectId ? { fundingCallId } : {}),
+          }),
         }
       );
-      await router.push(payload.launchUrl);
+      await router.push(payload.launchUrl || payload.prepUrl || (projectId ? `/projects/${projectId}/grants` : '/projects'));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start grant prep');
     }
@@ -902,9 +915,9 @@ export default function FinderPage() {
       <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3">
-            <Link href="/dashboard" className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 transition-colors hover:text-emerald-950">
+            <Link href={projectId ? `/projects/${encodeURIComponent(projectId)}` : '/dashboard'} className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 transition-colors hover:text-emerald-950">
               <FaArrowLeft />
-              Back to Dashboard
+              {projectId ? 'Back to Project' : 'Back to Dashboard'}
             </Link>
             <Link href="/profile/researcher" className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 transition-colors hover:border-emerald-300">
               Research Profile
@@ -1002,6 +1015,7 @@ export default function FinderPage() {
             activeSelections={directorySelections}
             onOpenAdvancedFilters={() => setManualFilterDrawerOpen(true)}
             onBeginWriting={(result) => handleBeginWritingFromCall(result.id)}
+            getCallDetailsHref={(result) => buildFundingCallDetailHref(result.id)}
             preferences={preferences}
             onChangePreferences={handlePreferenceChange}
           />
@@ -1156,6 +1170,7 @@ export default function FinderPage() {
                         runs={conversation.runs}
                         onExplainResult={handleExplainResult}
                         onBeginWriting={({ resultId }) => handleBeginWritingFromCall(resultId)}
+                        getCallDetailsHref={buildFundingCallDetailHref}
                         strictRecoveryAction={
                           message.id === latestAssistantMessageId &&
                           activeRun?.noResultsReason === 'filters_too_strict' &&

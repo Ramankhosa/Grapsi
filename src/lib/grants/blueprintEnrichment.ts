@@ -681,6 +681,10 @@ function resolveCitationModeForEnrichedSection(input: {
     return 'no_citations'
   }
 
+  if (currentMode === 'mapped_evidence') {
+    return 'mapped_evidence'
+  }
+
   if (
     input.evidenceNeed !== 'none'
     && input.dimensions.length > 0
@@ -1530,24 +1534,29 @@ function enrichOneSection(
   })
   const regenerate = mode === 'generate' || shouldRegenerateDimensions(section)
   const evidenceNeed = inferCitationEvidenceNeed(section, semantic)
-  const citationDisabled = normalizeGrantCitationMode(section.citationMode, {
+  const currentCitationMode = normalizeGrantCitationMode(section.citationMode, {
     sectionType: section.sectionType,
     workflowMode: section.workflowMode,
     suggestedCitationCount: section.suggestedCitationCount,
-  }) === 'no_citations'
-  const generatedDimensions = evidenceNeed === 'none' || citationDisabled
+  })
+  const citationDisabled = currentCitationMode === 'no_citations'
+  const citationForced = currentCitationMode === 'mapped_evidence'
+  const effectiveEvidenceNeed = citationForced && evidenceNeed === 'none'
+    ? 'light'
+    : evidenceNeed
+  const generatedDimensions = effectiveEvidenceNeed === 'none' || citationDisabled
     ? []
     : buildSeedDimensions({
         ...section,
         mustCover: grantSectionComplianceContract.requiredPoints.length > 0
           ? grantSectionComplianceContract.requiredPoints
           : section.mustCover,
-      }, context, semantic, grantRuleProfile?.evaluationFocus || []).slice(0, targetDimensionCount(section, evidenceNeed))
+      }, context, semantic, grantRuleProfile?.evaluationFocus || []).slice(0, targetDimensionCount(section, effectiveEvidenceNeed))
 
   const mustCover = dedupeStrings(section.mustCover)
   const dimensions = regenerate
     ? generatedDimensions.map((item) => item.dimension)
-    : evidenceNeed === 'none' || citationDisabled
+    : effectiveEvidenceNeed === 'none' || citationDisabled
       ? []
       : dedupeStrings(section.dimensions || [])
   const dimensionTyping = regenerate
@@ -1558,13 +1567,19 @@ function enrichOneSection(
         section.dimensionTyping || section.thematicBlueprint?.dimensionTyping
       )
   const suggestedCitationCount = regenerate
-    ? suggestCitationCount(section, generatedDimensions, evidenceNeed, semantic)
-    : evidenceNeed === 'none' || citationDisabled
+    ? (
+        citationForced
+        && typeof section.suggestedCitationCount === 'number'
+        && section.suggestedCitationCount > 0
+          ? section.suggestedCitationCount
+          : suggestCitationCount(section, generatedDimensions, effectiveEvidenceNeed, semantic)
+      )
+    : effectiveEvidenceNeed === 'none' || citationDisabled
       ? 0
       : section.suggestedCitationCount ?? section.thematicBlueprint?.suggestedCitationCount
   const citationMode = resolveCitationModeForEnrichedSection({
     section,
-    evidenceNeed,
+    evidenceNeed: effectiveEvidenceNeed,
     dimensions,
     suggestedCitationCount,
   })

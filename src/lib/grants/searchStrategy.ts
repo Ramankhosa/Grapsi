@@ -46,7 +46,7 @@ export interface GrantBackedGeneratedQuery {
 }
 
 export const GRANT_SEARCH_STRATEGY_VERSION = 'grant_search_v3_hybrid'
-export const GRANT_SEARCH_RESULT_LIMIT = 10
+export const GRANT_SEARCH_RESULT_LIMIT = 25
 
 const STOP_WORDS = new Set([
   'and', 'the', 'for', 'with', 'that', 'this', 'into', 'from', 'across', 'through',

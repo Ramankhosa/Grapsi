@@ -8,10 +8,8 @@ import { motion } from 'framer-motion'
 import { 
   FolderOpen, 
   Plus, 
-  FileText, 
   ArrowLeft, 
   Sparkles, 
-  Building2,
   ChevronRight,
   Layers,
   Zap
@@ -26,10 +24,6 @@ interface Project {
   latestGrantSession?: { id: string; status?: string; fundingCallId?: string | null } | null
   latestGrantPrepSession?: { id: string; status?: string; funding_call_id?: string | null } | null
   createdAt: string
-  patents?: { id: string; title?: string; status?: string }[]
-  collaborators?: { id: string; user: { name: string; email: string } }[]
-  applicantProfile?: { applicantLegalName: string }
-  _count?: { patents: number; collaborators?: number }
 }
 
 export default function ProjectsPage() {
@@ -68,15 +62,6 @@ export default function ProjectsPage() {
       console.error('Failed to fetch projects:', error)
     } finally {
       setIsLoading(false)
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'DRAFT': return 'bg-amber-500/10 text-amber-600 border-amber-500/20'
-      case 'IN_PROGRESS': return 'bg-blue-500/10 text-blue-600 border-blue-500/20'
-      case 'COMPLETED': return 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-      default: return 'bg-slate-500/10 text-slate-600 border-slate-500/20'
     }
   }
 
@@ -221,7 +206,8 @@ export default function ProjectsPage() {
                   </div>
                   <h2 className="text-2xl font-bold text-white">Create a New Project</h2>
                   <p className="text-slate-400 max-w-lg">
-                    Launch a new project workspace for patent drafting or funding-linked grant preparation without mixing the two workflows.
+                    Create the project workspace first. Inside the project, upload the funding call, add guidelines,
+                    attach an optional template, and start Grant Prep.
                   </p>
                 </div>
                 <button
@@ -270,7 +256,7 @@ export default function ProjectsPage() {
             </div>
             <h3 className="text-xl font-semibold text-slate-800 mb-2">No projects yet</h3>
             <p className="text-slate-500 mb-8 max-w-md mx-auto">
-              Initialize your first project to begin organizing patent work or funding-linked grant preparation.
+              Create your first project, then upload the funding call from inside that project workspace.
             </p>
             <button
               onClick={() => router.push('/projects/new')}
@@ -309,7 +295,7 @@ export default function ProjectsPage() {
                         </p>
                         <div className="mt-2">
                           <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${project.projectType === 'GRANT' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
-                            {project.projectType === 'GRANT' ? 'Grant Project' : 'Patent Project'}
+                            {project.projectType === 'GRANT' ? 'Grant Project' : 'Setup Project'}
                           </span>
                         </div>
                       </div>
@@ -318,17 +304,7 @@ export default function ProjectsPage() {
                       </div>
                     </div>
 
-                    {/* Stats Row */}
                     <div className="space-y-3 mb-5">
-                      {/* Applicant Info */}
-                      {project.applicantProfile && (
-                        <div className="flex items-center gap-2 text-sm text-slate-600">
-                          <Building2 className="w-4 h-4 text-slate-400" />
-                          <span className="truncate">{project.applicantProfile.applicantLegalName}</span>
-                        </div>
-                      )}
-
-                      {/* Patents Count */}
                       {project.projectType === 'GRANT' ? (
                         <div className="flex items-center gap-2 text-sm text-slate-600">
                           <Sparkles className="w-4 h-4 text-emerald-500" />
@@ -336,33 +312,8 @@ export default function ProjectsPage() {
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 text-sm text-slate-600">
-                          <FileText className="w-4 h-4 text-slate-400" />
-                          <span>
-                            {(project as any)._count?.patents ?? project.patents?.length ?? 0} patent
-                            {((project as any)._count?.patents ?? project.patents?.length ?? 0) !== 1 ? 's' : ''}
-                          </span>
-                        </div>
-                      )}
-
-                      {/* Patents Status Tags */}
-                      {project.projectType !== 'GRANT' && project.patents && project.patents.length > 0 && project.patents.some((p: any) => (p as any).status) && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {project.patents
-                            .filter((p: any) => (p as any).status)
-                            .slice(0, 3)
-                            .map((patent: any) => (
-                              <span 
-                                key={patent.id} 
-                                className={`px-2 py-0.5 text-[10px] font-medium rounded-full border ${getStatusColor(patent.status)}`}
-                              >
-                                {String(patent.status).replace('_', ' ')}
-                              </span>
-                            ))}
-                          {project.patents.length > 3 && (
-                            <span className="px-2 py-0.5 text-[10px] font-medium text-slate-500 bg-slate-100 rounded-full">
-                              +{project.patents.length - 3}
-                            </span>
-                          )}
+                          <Sparkles className="w-4 h-4 text-amber-500" />
+                          <span>Needs a funding call upload before Grant Prep</span>
                         </div>
                       )}
                     </div>

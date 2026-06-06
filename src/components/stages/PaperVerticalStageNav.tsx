@@ -26,13 +26,14 @@ import {
 } from 'lucide-react'
 import { isGrantBackedPaperTypeCode } from '@/lib/grants/blueprintMetadata'
 import { getGrantBackedSectionPlan } from '@/lib/grants/paperSectionConfig'
+import { isGrantSectionAiGenerated } from '@/lib/grants/workflowMode'
 import { countPendingRewriteIssues, getLatestPaperReview } from '@/lib/paper-review-utils'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type DraftingFilter = 'all' | 'app_draft' | 'team_draft' | 'evidence'
+type DraftingFilter = 'all' | 'app_draft'
 
 interface PaperVerticalStageNavProps {
   session: any
@@ -914,17 +915,19 @@ function StatusIcon({ status, size = 'md' }: StatusIconProps) {
 // Main Component
 // ============================================================================
 
-function isDraftingSectionAppDraft(section: { workflowMode?: string; sectionType?: string }): boolean {
-  return section.workflowMode === 'app_draft' && (section.sectionType === 'narrative' || section.sectionType === 'short_answer')
+export function isDraftingSectionAppDraft(section: { key?: string; sectionKey?: string; workflowMode?: string; sectionType?: string }): boolean {
+  return isGrantSectionAiGenerated({
+    sectionKey: section.sectionKey || section.key,
+    sectionType: section.sectionType || '',
+    workflowMode: section.workflowMode,
+  })
 }
 
-function draftingFilterMatches(
-  section: { workflowMode?: string; sectionType?: string; dimensions?: string[] },
+export function draftingFilterMatches(
+  section: { key?: string; sectionKey?: string; workflowMode?: string; sectionType?: string; dimensions?: string[] },
   filter: DraftingFilter
 ): boolean {
   if (filter === 'app_draft') return isDraftingSectionAppDraft(section)
-  if (filter === 'team_draft') return !isDraftingSectionAppDraft(section)
-  if (filter === 'evidence') return isDraftingSectionAppDraft(section) && (section.dimensions || []).length > 0
   return true
 }
 
@@ -1218,7 +1221,21 @@ export default function PaperVerticalStageNav({
           const isPast = stageIndex < currentIndex
           const isFullyComplete = completion.requiredTotal > 0 && completion.requiredCompleted === completion.requiredTotal
           const isCompleted = isPast && isFullyComplete
-          const subStages = getStageSubStages(stage, session)
+          // For grant Section Drafting, drive the list from the grant blueprint
+          // sections (which include grant-only sections such as Budget and
+          // Bibliography). The paper section plan omits those, so without this
+          // they would never render in grant category filters.
+          const subStages = stage.key === 'SECTION_DRAFTING' && draftingSections && draftingSections.length > 0
+            ? draftingSections.map((draftSection): SubStageDefinition => ({
+                key: draftSection.key,
+                label: draftSection.label,
+                icon: FileText,
+                description: draftSection.description
+                  || (draftSection.required ? 'Required section' : 'Optional section'),
+                required: draftSection.required === true,
+                getStatus: () => draftSection.status,
+              }))
+            : getStageSubStages(stage, session)
 
           if (collapsed) {
             return (
@@ -1335,13 +1352,11 @@ export default function PaperVerticalStageNav({
                   {/* Section Drafting filter pills */}
                   {stage.key === 'SECTION_DRAFTING' && draftingSections && onSectionFilterChange && (
                     <div className="flex flex-wrap gap-1 pb-2 mb-1 border-b border-slate-100">
-                      {(['all', 'app_draft', 'team_draft', 'evidence'] as const).map((filterKey) => {
+                      {(['all', 'app_draft'] as const).map((filterKey) => {
                         const isActive = sectionFilter === filterKey
                         const labels: Record<DraftingFilter, string> = {
-                          all: 'All',
-                          app_draft: 'App',
-                          team_draft: 'Team',
-                          evidence: 'Evidence',
+                          all: 'All sections',
+                          app_draft: 'App draft',
                         }
                         const count = filterKey === 'all'
                           ? draftingSections.length

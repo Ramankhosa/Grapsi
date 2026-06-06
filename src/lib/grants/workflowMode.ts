@@ -1,6 +1,12 @@
 import { GRANT_WORKFLOW_MODES, type CompiledGrantTemplateSectionType, type GrantWorkflowMode } from '@/types/grant'
 
+export const GRANT_BIBLIOGRAPHY_SECTION_KEY = 'bibliography'
+
 const WORKFLOW_MODE_SET = new Set<string>(GRANT_WORKFLOW_MODES)
+
+export function isGrantBibliographySection(sectionKey: unknown): boolean {
+  return String(sectionKey || '').trim().toLowerCase() === GRANT_BIBLIOGRAPHY_SECTION_KEY
+}
 
 export function normalizeGrantWorkflowMode(
   value: unknown,
@@ -45,25 +51,21 @@ export function getGrantWorkflowManualDetail(workflowMode: unknown): string | nu
 }
 
 export function isGrantSectionAutoDraftable(input: {
+  sectionKey?: string | null
   sectionType: CompiledGrantTemplateSectionType | string
   workflowMode: unknown
 }): boolean {
   return (
+    !isGrantBibliographySection(input.sectionKey) &&
     normalizeGrantSectionWorkflowMode(input) === 'app_draft'
     && (input.sectionType === 'narrative' || input.sectionType === 'short_answer')
   )
 }
 
 export function isGrantSectionAiGenerated(input: {
+  sectionKey?: string | null
   sectionType: CompiledGrantTemplateSectionType | string
   workflowMode: unknown
 }): boolean {
-  return (
-    normalizeGrantSectionWorkflowMode(input) === 'app_draft'
-    && (
-      input.sectionType === 'narrative'
-      || input.sectionType === 'short_answer'
-      || input.sectionType === 'budget_rows'
-    )
-  )
+  return normalizeGrantSectionWorkflowMode(input) === 'app_draft'
 }

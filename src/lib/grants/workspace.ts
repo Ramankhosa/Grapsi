@@ -20,6 +20,8 @@ import {
 } from '@/lib/grants/blueprintMetadata'
 import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType'
 import {
+  GRANT_BIBLIOGRAPHY_SECTION_KEY,
+  isGrantBibliographySection,
   isGrantSectionAutoDraftable,
   normalizeGrantSectionWorkflowMode,
   normalizeGrantWorkflowMode,
@@ -88,6 +90,8 @@ export interface GrantProposalFoundation {
   status: string | null
   version: number | null
 }
+
+const GRANT_BIBLIOGRAPHY_SECTION_LABEL = 'Bibliography'
 
 function asJson(value: unknown) {
   return value as Prisma.InputJsonValue
@@ -800,6 +804,7 @@ function buildStructuredScaffold(
 
 function isDraftableGrantSection(
   input: {
+    sectionKey?: string | null
     sectionType: CompiledGrantTemplateSectionType | string
     workflowMode: unknown
   }
@@ -848,7 +853,7 @@ function enrichGrantSectionPlan(
   }))
 }
 
-function enrichGrantSectionDrafts<T extends { sectionKey: string }>(
+function enrichGrantSectionDrafts<T extends { sectionKey: string; sectionType?: string }>(
   drafts: T[],
   sectionPlan: GrantBlueprintPlanSection[]
 ) {
@@ -856,6 +861,7 @@ function enrichGrantSectionDrafts<T extends { sectionKey: string }>(
     sectionPlan.map((section) => [
       section.sectionKey,
       {
+        sectionType: section.sectionType,
         workflowMode: normalizeGrantSectionWorkflowMode({
           sectionType: section.sectionType,
           workflowMode: section.workflowMode,
@@ -871,9 +877,160 @@ function enrichGrantSectionDrafts<T extends { sectionKey: string }>(
 
   return drafts.map((draft) => ({
     ...draft,
+    sectionType: sectionMetaByKey.get(draft.sectionKey)?.sectionType || draft.sectionType || 'narrative',
     workflowMode: sectionMetaByKey.get(draft.sectionKey)?.workflowMode || 'team_manual',
     citationMode: sectionMetaByKey.get(draft.sectionKey)?.citationMode || 'direct_draft',
   }))
+}
+
+export function buildGrantBibliographyPlanSection(
+  sectionPlan: Array<Pick<GrantBlueprintPlanSection, 'order'>>
+): GrantBlueprintPlanSection {
+  const maxOrder = sectionPlan.reduce((current, section) => {
+    const order = Number(section.order || 0)
+    return Number.isFinite(order) ? Math.max(current, order) : current
+  }, 0)
+
+  return {
+    sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+    label: GRANT_BIBLIOGRAPHY_SECTION_LABEL,
+    order: maxOrder + 1,
+    sectionType: 'narrative',
+    workflowMode: 'app_draft',
+    citationMode: 'direct_draft',
+    required: false,
+    wordBudget: null,
+    characterLimit: null,
+    purpose: 'Generated bibliography for active grant citations.',
+    reviewerIntent: 'Provide a complete bibliography for cited sources in the grant proposal.',
+    dependencies: [],
+    sourceTemplatePointer: null,
+    mustCover: [],
+    mustAvoid: [],
+    dimensions: [],
+    dimensionTyping: {},
+    mustCoverTyping: {},
+    suggestedCitationCount: null,
+    thematicBlueprint: null,
+    seededContext: '',
+    grantSemantic: 'default',
+    prepContextBlock: null,
+    authoritativePrepBundle: null,
+    relatedPrepAwareness: null,
+    grantRuleProfile: null,
+    grantTemplateGuidance: null,
+    budgetTemplate: null,
+    grantSectionComplianceContract: null,
+    grantComplianceReport: null,
+    reviewerReadinessReport: null,
+  }
+}
+
+export function appendGrantBibliographySectionIfNeeded(
+  sectionPlan: GrantBlueprintPlanSection[],
+  activeCitationCount: number
+): GrantBlueprintPlanSection[] {
+  if (activeCitationCount <= 0) {
+    return sectionPlan.filter((section) => section.sectionKey !== GRANT_BIBLIOGRAPHY_SECTION_KEY)
+  }
+  if (sectionPlan.some((section) => section.sectionKey === GRANT_BIBLIOGRAPHY_SECTION_KEY)) {
+    const bibliographySection = buildGrantBibliographyPlanSection(
+      sectionPlan.filter((section) => section.sectionKey !== GRANT_BIBLIOGRAPHY_SECTION_KEY)
+    )
+    return sectionPlan.map((section) =>
+      section.sectionKey === GRANT_BIBLIOGRAPHY_SECTION_KEY
+        ? bibliographySection
+        : section
+    )
+  }
+  return [
+    ...sectionPlan,
+    buildGrantBibliographyPlanSection(sectionPlan),
+  ]
+}
+
+async function countActiveGrantCitations(draftingSessionId: string | null | undefined): Promise<number> {
+  const sessionId = String(draftingSessionId || '').trim()
+  if (!sessionId) return 0
+  return prisma.citation.count({
+    where: {
+      sessionId,
+      isActive: true,
+    },
+  })
+}
+
+async function ensureGrantBibliographyDraftRecord(input: {
+  grantSessionId: string
+  blueprintId: string
+  tenantId: string
+  projectId: string
+  userId: string
+  sectionPlan: GrantBlueprintPlanSection[]
+}) {
+  const bibliographySection = input.sectionPlan.find((section) => section.sectionKey === GRANT_BIBLIOGRAPHY_SECTION_KEY)
+  if (!bibliographySection) return false
+
+  const existing = await prisma.grantSectionDraft.findUnique({
+    where: {
+      grantSessionId_sectionKey: {
+        grantSessionId: input.grantSessionId,
+        sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+      },
+    },
+    select: {
+      id: true,
+      label: true,
+      sectionOrder: true,
+      blueprintId: true,
+      sectionType: true,
+      required: true,
+    },
+  })
+
+  const metadata = {
+    blueprintId: input.blueprintId,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    label: bibliographySection.label,
+    sectionType: bibliographySection.sectionType,
+    sectionOrder: bibliographySection.order,
+    required: bibliographySection.required,
+    wordBudget: bibliographySection.wordBudget,
+    characterLimit: bibliographySection.characterLimit,
+    purpose: bibliographySection.purpose,
+    reviewerIntent: bibliographySection.reviewerIntent,
+    dependenciesJson: asJson(bibliographySection.dependencies),
+    mustCoverJson: asJson(bibliographySection.mustCover),
+    mustAvoidJson: asJson(bibliographySection.mustAvoid),
+    sourceTemplatePointer: bibliographySection.sourceTemplatePointer,
+    updatedByUserId: input.userId,
+  }
+
+  if (existing) {
+    const needsUpdate = existing.blueprintId !== input.blueprintId
+      || existing.label !== bibliographySection.label
+      || existing.sectionType !== bibliographySection.sectionType
+      || existing.sectionOrder !== bibliographySection.order
+      || existing.required !== bibliographySection.required
+    if (!needsUpdate) return false
+
+    await prisma.grantSectionDraft.update({
+      where: { id: existing.id },
+      data: metadata,
+    })
+    return true
+  }
+
+  await prisma.grantSectionDraft.create({
+    data: {
+      grantSessionId: input.grantSessionId,
+      sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+      ...metadata,
+      createdByUserId: input.userId,
+    },
+  })
+  return true
 }
 
 function buildGrantPaperTypeCode(templateRevisionId: string | null | undefined) {
@@ -1770,6 +1927,7 @@ export async function getGrantWorkspace(input: {
     }
   }
 
+  const activeCitationCount = await countActiveGrantCitations(grantSession.draftingSessionId)
   const rawSectionPlan = Array.isArray(grantSession.blueprint?.sectionPlanJson)
     ? (grantSession.blueprint?.sectionPlanJson as unknown as GrantBlueprintPlanSection[])
     : []
@@ -1790,7 +1948,7 @@ export async function getGrantWorkspace(input: {
           suggestedCitationCount: (section as Partial<GrantBlueprintPlanSection>).suggestedCitationCount,
         }),
       }))
-  const sectionPlan = grantSession.blueprint
+  let sectionPlan = grantSession.blueprint
     ? enrichGrantBlueprintSections(
         baseSectionPlan,
         buildGrantBlueprintHydrationContext({
@@ -1803,6 +1961,24 @@ export async function getGrantWorkspace(input: {
         'hydrate'
       )
     : baseSectionPlan
+  sectionPlan = appendGrantBibliographySectionIfNeeded(sectionPlan, activeCitationCount)
+  if (grantSession.blueprint && activeCitationCount > 0) {
+    const bibliographyDraftChanged = await ensureGrantBibliographyDraftRecord({
+      grantSessionId: grantSession.id,
+      blueprintId: grantSession.blueprint.id,
+      tenantId: grantSession.tenantId,
+      projectId: grantSession.projectId,
+      userId: grantSession.updatedByUserId,
+      sectionPlan,
+    })
+    if (bibliographyDraftChanged) {
+      const refreshedGrantSession = await loadGrantWorkspaceRecord(input)
+      if (!refreshedGrantSession) {
+        return null
+      }
+      grantSession = refreshedGrantSession
+    }
+  }
   const activeSectionKeys = new Set(sectionPlan.map((section) => section.sectionKey))
   const baseSectionDrafts = enrichGrantSectionDrafts(
     (grantSession.blueprint?.sectionDrafts || []).filter((draft) =>
@@ -1821,6 +1997,7 @@ export async function getGrantWorkspace(input: {
   }
   const sectionDrafts = baseSectionDrafts.map((draft) => {
     if (!isGrantSectionAutoDraftable({
+      sectionKey: draft.sectionKey,
       sectionType: draft.sectionType,
       workflowMode: draft.workflowMode,
     })) {
@@ -1830,14 +2007,19 @@ export async function getGrantWorkspace(input: {
     const paperSection = paperSectionsByKey.get(draft.sectionKey)
     const paperValidationReport = asObject(paperSection?.validationReport)
     const draftRecord = asObject(draft)
+    const persistedGrantContent = typeof draft.content === 'string' && draft.content.trim().length > 0
+      ? draft.content
+      : ''
     const shadowContent = typeof paperSection?.content === 'string' && paperSection.content.trim().length > 0
       ? paperSection.content
       : paperDraftSections[draft.sectionKey] || ''
 
     return {
       ...draft,
-      content: shadowContent || null,
-      status: String(paperSection?.status || draft.status || 'NOT_STARTED'),
+      content: persistedGrantContent || shadowContent || null,
+      status: persistedGrantContent
+        ? String(draft.status || 'NOT_STARTED')
+        : String(paperSection?.status || draft.status || 'NOT_STARTED'),
       isStale: Boolean(paperSection?.isStale),
       validationReport: paperValidationReport,
       grantComplianceReport:
@@ -1943,12 +2125,20 @@ export async function updateBlueprintPlan(input: {
     throw new Error('Cannot update a frozen grant blueprint. Unfreeze it first.')
   }
 
-  const nextSections = input.sections || workspace.blueprint.sectionPlan
+  const persistedSectionPlan = workspace.blueprint.sectionPlan.filter((section) =>
+    !isGrantBibliographySection(section.sectionKey)
+  )
+  const nextSections = (input.sections || persistedSectionPlan).filter((section) =>
+    !isGrantBibliographySection(section.sectionKey)
+  )
   if (!input.sections && !input.foundation) {
     throw new Error('No blueprint changes were provided')
   }
+  if (input.sections && nextSections.length === 0) {
+    throw new Error('Blueprint section updates must include at least one grant template section.')
+  }
 
-  const existingPlan = workspace.blueprint.sectionPlan
+  const existingPlan = persistedSectionPlan
   const existingPlanByKey = new Map(existingPlan.map((section) => [section.sectionKey, section]))
   const lockedSectionMeta = new Map(
     existingPlan.map((section) => [
@@ -2117,7 +2307,9 @@ export async function generateBlueprintLiteratureDimensions(input: {
   })
   const tenantContext = await resolveGrantTenantContext(input.tenantId, input.userId)
   const generated = await generateGrantBlueprintWithLlm({
-    baseSectionPlan: workspace.blueprint.sectionPlan,
+    baseSectionPlan: workspace.blueprint.sectionPlan.filter((section) =>
+      !isGrantBibliographySection(section.sectionKey)
+    ),
     context: enrichmentContext,
     proposalFoundationHint: {
       thesisStatement: workspace.proposalFoundation.thesisStatement || '',

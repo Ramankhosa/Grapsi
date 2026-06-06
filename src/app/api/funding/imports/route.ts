@@ -123,7 +123,10 @@ export async function POST(request: NextRequest) {
     })
 
     const details = await fundingIntakeService.getJobDetails(job.id, auth.operator)
-    return NextResponse.json({ job: details ? toFundingImportJobView(details) : null }, { status: 201 })
+    return NextResponse.json({
+      job: details ? toFundingImportJobView(details) : null,
+      fundingCallId: details?.job.linked_funding_call_id || null,
+    }, { status: 201 })
   } catch (error) {
     console.error('[Funding/Imports] POST error:', error)
 

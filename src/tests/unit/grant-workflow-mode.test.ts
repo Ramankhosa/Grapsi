@@ -13,8 +13,12 @@ import {
   shouldTrustTemplateIntent,
 } from '@/lib/grants/templateIntent'
 import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType'
-import { buildPaperSectionPlanFromGrantSections } from '@/lib/grants/workspace'
 import {
+  appendGrantBibliographySectionIfNeeded,
+  buildPaperSectionPlanFromGrantSections,
+} from '@/lib/grants/workspace'
+import {
+  GRANT_BIBLIOGRAPHY_SECTION_KEY,
   isGrantSectionAiGenerated,
   isGrantSectionAutoDraftable,
 } from '@/lib/grants/workflowMode'
@@ -588,5 +592,44 @@ describe('grant workflow mode extraction and runtime', () => {
     expect(isGrantSectionAutoDraftable({ sectionType: 'short_answer', workflowMode: 'team_manual' })).toBe(false)
     expect(isGrantSectionAutoDraftable({ sectionType: 'budget_rows', workflowMode: 'app_draft' })).toBe(false)
     expect(isGrantSectionAiGenerated({ sectionType: 'budget_rows', workflowMode: 'team_manual' })).toBe(true)
+    expect(isGrantSectionAiGenerated({ sectionType: 'table', workflowMode: 'app_draft' })).toBe(true)
+    expect(isGrantSectionAiGenerated({ sectionType: 'table', workflowMode: 'team_manual' })).toBe(false)
+    expect(isGrantSectionAutoDraftable({
+      sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+      sectionType: 'narrative',
+      workflowMode: 'app_draft',
+    })).toBe(false)
+    expect(isGrantSectionAiGenerated({
+      sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+      sectionType: 'narrative',
+      workflowMode: 'app_draft',
+    })).toBe(true)
+  })
+
+  it('appends the dynamic bibliography section last only when active citations exist', () => {
+    const basePlan = [
+      { sectionKey: 'aims', label: 'Aims', order: 1 },
+      { sectionKey: 'budget', label: 'Budget', order: 4 },
+    ] as GrantBlueprintPlanSection[]
+
+    expect(appendGrantBibliographySectionIfNeeded(basePlan, 0).map((section) => section.sectionKey)).toEqual([
+      'aims',
+      'budget',
+    ])
+
+    const withBibliography = appendGrantBibliographySectionIfNeeded(basePlan, 2)
+    expect(withBibliography.map((section) => section.sectionKey)).toEqual([
+      'aims',
+      'budget',
+      GRANT_BIBLIOGRAPHY_SECTION_KEY,
+    ])
+    expect(withBibliography.at(-1)).toMatchObject({
+      sectionKey: GRANT_BIBLIOGRAPHY_SECTION_KEY,
+      label: 'Bibliography',
+      order: 5,
+      sectionType: 'narrative',
+      workflowMode: 'app_draft',
+      required: false,
+    })
   })
 })

@@ -196,7 +196,8 @@ Figure metadata:
           module: 'paper-figures',
           stageCode: FIGURE_METADATA_STAGE_CODE,
           category: params.category,
-          figureType: params.figureType
+          figureType: params.figureType,
+          skipFeaturePolicy: true
         }
       }
     )
