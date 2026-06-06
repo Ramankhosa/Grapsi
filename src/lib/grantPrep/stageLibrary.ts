@@ -16,6 +16,28 @@ function points(items: Array<[string, string, 'P1' | 'P2' | 'P3', string, string
 
 export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
   {
+    key: 'ideation',
+    title: 'Idea & Angle',
+    category: 'framing',
+    description: 'Shape a distinctive, funder-aligned grant idea before defining the problem.',
+    askStyle: 'Coach the idea angle before validating downstream proposal facts.',
+    defaultEnabled: true,
+    pickable: true,
+    guidelineBlocks: [],
+    steeringRule: 'Help the user explore fit, distinctiveness, feasibility, and significance. Do not treat this as a completion checkpoint; keep the user in exploration until they choose to lock in an angle.',
+    dependencies: [],
+    defaultPoints: points([
+      ['idea_core', 'Core idea and angle', 'P1', 'The project idea, target angle, and what the user wants to explore.', []],
+      ['fundability_signals', 'Fundability signals', 'P2', 'Confirmed signals about fit, distinctiveness, feasibility, or significance.', []],
+      ['selected_priority_fit', 'Selected priority area fit', 'P2', 'How the idea aligns with the selected target priority areas.', []],
+    ]),
+    reviewerRubric: {
+      strong: 'The idea has a clear core angle, a plausible fit with the selected call priority areas, an identifiable distinctive edge, and an early feasibility or significance signal worth developing.',
+      adequate: 'The idea is understandable and potentially relevant, but the angle, selected-priority fit, or distinctive contribution still needs sharper positioning.',
+      weak: 'The idea is generic, only loosely connected to the selected priority areas, or lacks a plausible path to fundability.',
+    },
+  },
+  {
     key: 'problem_definition',
     title: 'Problem Definition',
     category: 'framing',

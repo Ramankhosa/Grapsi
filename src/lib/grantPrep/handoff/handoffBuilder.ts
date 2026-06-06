@@ -109,7 +109,13 @@ export function buildGrantPrepFreezePayload(input: {
     return acc;
   }, {} as Record<string, GrantPrepEvidenceItem[]>);
 
-  const globalCaptureSummary = prepEvidence
+  const selectedPrioritySummary = input.session.selectedThrustAreaRuleKeys.length > 0
+    ? [`Selected target priority areas: ${input.session.selectedThrustAreaRuleKeys.join(', ')}`]
+    : [];
+
+  const globalCaptureSummary = [
+    ...selectedPrioritySummary,
+    ...prepEvidence
     .slice(0, 12)
     .map((item) => {
       const factLine = item.factBullets.length > 0
@@ -117,7 +123,8 @@ export function buildGrantPrepFreezePayload(input: {
         : item.keywords.slice(0, 5).join(', ');
       const noteLine = item.ruleNotes.length > 0 ? ` | Rule note: ${item.ruleNotes[0]}` : '';
       return `${item.label}: ${factLine || 'captured in prep'}${noteLine}`;
-    });
+    }),
+  ];
 
   const blockers = Object.values(input.session.stageStates).flatMap((stage) =>
     stage.points

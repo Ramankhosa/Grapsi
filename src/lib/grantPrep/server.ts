@@ -29,7 +29,11 @@ import {
   recomputeStageState,
   stageHasCapturedContent,
 } from './sessionState';
-import { buildGrantPrepStageMapping } from './templateMapper';
+import { buildGrantPrepStageMapping, normalizeGrantPrepStageMapping } from './templateMapper';
+import {
+  deriveGrantPrepPriorityAreaOptions,
+  normalizeGrantPrepPriorityAreaSelection,
+} from './priorityAreas';
 import type {
   GrantPrepEngagementMode,
   GrantPrepSessionContext,
@@ -49,6 +53,10 @@ function asStageKeyArray(value: unknown): GrantPrepStageKey[] {
 
 function getConfigurableStageKeys(stageKeys: GrantPrepStageKey[] = []) {
   return sortStageKeys(stageKeys.filter((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable));
+}
+
+function sameStringArray(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function deriveManualOverridesFromExplicitSelection(input: {
@@ -92,6 +100,10 @@ function mergeStageStates(
     const typedStageKey = stageKey as GrantPrepStageKey;
     const currentStage = currentStageStates[typedStageKey];
     const nextStage = baseStageStates[typedStageKey];
+    if (!currentStage) {
+      acc[typedStageKey] = nextStage;
+      return acc;
+    }
     const nextPointKeys = new Set(nextStage.points.map((point) => point.key));
     const preservedPoints = nextStage.points.map((point) => {
       const currentPoint = currentStage.points.find((item) => item.key === point.key);
@@ -467,9 +479,12 @@ export function inflateGrantPrepSessionContext(session: Pick<
   | 'stage_states_json'
   | 'global_keywords_json'
 >, options?: { warning?: string | null }) {
-  const stageMapping = ((session.stage_mapping_json || {}) as unknown) as GrantPrepStageMapping;
+  const stageMapping = normalizeGrantPrepStageMapping(
+    ((session.stage_mapping_json || {}) as unknown) as Partial<GrantPrepStageMapping>
+  );
   const stageStates = normalizeGrantPrepStageStates(
-    ((session.stage_states_json || {}) as unknown) as GrantPrepStageStates
+    ((session.stage_states_json || {}) as unknown) as GrantPrepStageStates,
+    stageMapping
   );
   const roleAlignedStageStates = applyGrantPrepPointRolesFromMapping(stageStates, stageMapping);
   const storedGlobalKeywords = asStringArray(session.global_keywords_json);
@@ -719,6 +734,19 @@ export async function createOrReuseGrantPrepSession(input: {
     });
   }
 
+  const priorityAreaOptions = deriveGrantPrepPriorityAreaOptions(context.fundingContext);
+  const prioritySelectionInputProvided = Array.isArray(input.selectedThrustAreaRuleKeys);
+  const prioritySelectionResult = normalizeGrantPrepPriorityAreaSelection({
+    selectedPriorityAreas: input.selectedThrustAreaRuleKeys || [],
+    availablePriorityAreas: priorityAreaOptions,
+    autoSelectSingle: true,
+  });
+  if (prioritySelectionResult.invalidPriorityAreas.length > 0) {
+    throw new Error(
+      `Selected target priority areas are not available for this funding call: ${prioritySelectionResult.invalidPriorityAreas.join(', ')}`
+    );
+  }
+
   if (existingSession && !input.restart) {
     const effectiveGrantSessionId = linkedGrantSession?.id || existingSession.grant_session_id || null;
     const launchUrl = resolveWorkspaceLaunchUrl(
@@ -727,23 +755,42 @@ export async function createOrReuseGrantPrepSession(input: {
       linkedGrantSession?.status
     );
     const warning = buildGrantPrepModeWarning(context.mode, context.fundingContext.warning);
+    const existingPrepContext = inflateGrantPrepSessionContext(existingSession, { warning });
+    const shouldUpdatePriorityAreas =
+      prioritySelectionInputProvided ||
+      (
+        prioritySelectionResult.selectedPriorityAreas.length === 1 &&
+        existingPrepContext.selectedThrustAreaRuleKeys.length === 0
+      );
+    const priorityAlignedPrepContext = shouldUpdatePriorityAreas
+      ? {
+          ...existingPrepContext,
+          selectedThrustAreaRuleKeys: prioritySelectionResult.selectedPriorityAreas,
+        }
+      : existingPrepContext;
+    const prioritySelectionChanged = !sameStringArray(
+      existingPrepContext.selectedThrustAreaRuleKeys,
+      priorityAlignedPrepContext.selectedThrustAreaRuleKeys
+    );
     const needsContextRefresh = (
       existingSession.mode !== context.mode ||
       existingSession.engagement_mode !== normalizedEngagementMode ||
       existingSession.template_revision_id !== context.templateRevisionId ||
       existingSession.guideline_revision_id !== context.guidelineRevisionId
     );
-    const refreshedPersistence = needsContextRefresh
+    const refreshedPersistence = needsContextRefresh || prioritySelectionChanged
       ? normalizeGrantPrepForPersistence(
-          refreshGrantPrepSessionContext({
-            sessionContext: inflateGrantPrepSessionContext(existingSession, { warning }),
-            templateJson: context.draftingContext?.approvedTemplate?.grant_template_json || null,
-            guidelinePack:
-              ((context.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as unknown) as GuidelinePackDocument | null) ||
-              null,
-            fundingContext: context.fundingContext,
-            warning,
-          })
+          needsContextRefresh
+            ? refreshGrantPrepSessionContext({
+                sessionContext: priorityAlignedPrepContext,
+                templateJson: context.draftingContext?.approvedTemplate?.grant_template_json || null,
+                guidelinePack:
+                  ((context.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as unknown) as GuidelinePackDocument | null) ||
+                  null,
+                fundingContext: context.fundingContext,
+                warning,
+              })
+            : priorityAlignedPrepContext
         )
       : null;
     let hydrated = null;
@@ -751,7 +798,8 @@ export async function createOrReuseGrantPrepSession(input: {
     if (
       (effectiveGrantSessionId && existingSession.grant_session_id !== effectiveGrantSessionId) ||
       existingSession.papsi_launch_url !== launchUrl ||
-      needsContextRefresh
+      needsContextRefresh ||
+      prioritySelectionChanged
     ) {
       hydrated = await prisma.grantPrepSession.update({
         where: { id: existingSession.id },
@@ -826,7 +874,7 @@ export async function createOrReuseGrantPrepSession(input: {
       ((context.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as unknown) as GuidelinePackDocument | null) ||
       null,
     fundingContext: context.fundingContext,
-    selectedThrustAreaRuleKeys: input.selectedThrustAreaRuleKeys || [],
+    selectedThrustAreaRuleKeys: prioritySelectionResult.selectedPriorityAreas,
     warning,
     enabledStageKeys: input.enabledStageKeys,
     disabledStageKeys: input.disabledStageKeys,

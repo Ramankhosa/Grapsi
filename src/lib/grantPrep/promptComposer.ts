@@ -2,6 +2,7 @@ import type { FundingCallContext } from '../fundingContext';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY } from './stageLibrary';
 import { getMarkerTags } from './marker';
+import { deriveGrantPrepPriorityAreaOptions } from './priorityAreas';
 import {
   buildGrantPrepConversationBundle,
   formatGrantPrepConversationBundle,
@@ -119,6 +120,38 @@ function buildGuidelineBlock(guidelinePack: GuidelinePackDocument | null | undef
 
   const lines = stage.guidelineBlocks.map((blockKey) => compactList(blockKey, (guidelinePack as any)?.[blockKey], 4));
   return lines.join('\n');
+}
+
+function formatInlineList(values: string[], fallback = 'Not specified') {
+  return values.length > 0 ? values.join(', ') : fallback;
+}
+
+function buildPriorityAreaPromptLines(session: GrantPrepSessionContext, fundingContext: FundingCallContext) {
+  const availablePriorityAreas = deriveGrantPrepPriorityAreaOptions(fundingContext);
+  const selectedPriorityAreas = session.selectedThrustAreaRuleKeys || [];
+
+  return [
+    `Available call priority areas: ${formatInlineList(availablePriorityAreas)}`,
+    `User-selected target priority areas: ${formatInlineList(selectedPriorityAreas, 'None selected')}`,
+  ];
+}
+
+function buildPriorityAreaPromptRules(session: GrantPrepSessionContext) {
+  const selectedPriorityAreas = session.selectedThrustAreaRuleKeys || [];
+  if (selectedPriorityAreas.length === 0) {
+    return [
+      'Priority area use:',
+      '- If the user has not selected target priority areas, use available call priority areas only as background fit signals.',
+      '- Do not broaden the proposal into unrelated priority areas.',
+    ].join('\n');
+  }
+
+  return [
+    'Priority area use:',
+    '- Treat user-selected target priority areas as preferred strategic alignment anchors.',
+    '- Do not broaden to unselected priority areas unless the user asks for it or the selected fit is weak.',
+    '- For thrust_alignment captures, prefer selected priority area labels in thrustLinkage when they accurately match the user-confirmed facts.',
+  ].join('\n');
 }
 
 function getConcreteFactTargets(stageKey: GrantPrepStageKey): string[] {
@@ -288,6 +321,104 @@ function getResponseRules(engagementMode: GrantPrepEngagementMode, stageKey: Gra
   return rules.join('\n');
 }
 
+export function buildIdeationPrompt(input: {
+  session: GrantPrepSessionContext;
+  stageKey: GrantPrepStageKey;
+  project: { title: string; description: string | null };
+  fundingContext: FundingCallContext;
+  guidelinePack: GuidelinePackDocument | null | undefined;
+  conversation: Array<{ role: string; content: string }>;
+  userMessage: string;
+}) {
+  const stage = GRANT_PREP_STAGE_BY_KEY[input.stageKey];
+  const stageState = input.session.stageStates[input.stageKey];
+  const markerTags = getMarkerTags();
+  const currentConversation = input.conversation
+    .slice(-10)
+    .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
+    .join('\n');
+  const allowedPointKeys = (stageState?.points || []).map((point) => point.key);
+  const pendingPoints = (stageState?.points || [])
+    .filter((point) => point.status !== 'covered')
+    .map((point) => `- pointKey=${point.key} | label=${point.label} | help=${point.label}`)
+    .join('\n');
+  const rubric = stage.reviewerRubric;
+
+  return [
+    'You are Grant Prep in Idea & Angle mode, acting as a grant idea coach.',
+    'Your job is to help the user shape a distinctive, funder-aligned idea before they move into Problem Definition.',
+    'Do not validate the idea as finished. Coach the strategic angle and help the user decide whether to keep exploring or lock in the direction.',
+    '',
+    'Each turn must do the following:',
+    '1. Acknowledge the user\'s idea in one concise sentence.',
+    '2. Diagnose 1-2 fundability signals from fit, distinctiveness, feasibility, and significance.',
+    '3. Use the selected target priority areas to judge call alignment.',
+    '4. Offer 2-3 exploratory directions. Each direction should be concrete, meaningfully different, and written as a possible strategic angle.',
+    '5. End by giving the user a clear choice to keep exploring or lock in and continue.',
+    '',
+    'Priority area use:',
+    '- Treat selected target priority areas as preferred alignment anchors.',
+    '- Do not broaden to unselected areas unless the user asks or the selected fit is weak.',
+    '- If no selected target priority area is available, use the available call priority areas only as background fit signals.',
+    '',
+    'Current project:',
+    `Title: ${input.project.title}`,
+    `Description: ${input.project.description || 'Not provided'}`,
+    '',
+    'Funding call facts:',
+    `Call title: ${input.fundingContext.title || 'Not specified'}`,
+    `Agency: ${input.fundingContext.agencyName || 'Not specified'}`,
+    `Deadline: ${input.fundingContext.deadline || 'Not specified'}`,
+    `Funding: ${input.fundingContext.funding || 'Not specified'}`,
+    `Duration: ${input.fundingContext.projectDuration || 'Not specified'}`,
+    `Eligibility: ${input.fundingContext.eligibility || 'Not specified'}`,
+    `Focus areas: ${formatInlineList(input.fundingContext.focusAreas || [])}`,
+    ...buildPriorityAreaPromptLines(input.session, input.fundingContext),
+    `Warning: ${input.fundingContext.warning || 'None'}`,
+    '',
+    `Current stage: ${stage.title}`,
+    `Stage goal: ${stage.description}`,
+    `Stage steering rule: ${stage.steeringRule}`,
+    ...(rubric
+      ? [
+          'Stage quality rubric:',
+          `- Strong: ${rubric.strong}`,
+          `- Adequate: ${rubric.adequate}`,
+          `- Weak: ${rubric.weak}`,
+        ]
+      : []),
+    'Ideation facts that can be captured once user-confirmed:',
+    pendingPoints || '- None',
+    `Allowed point keys for this stage: ${allowedPointKeys.join(', ') || 'none'}`,
+    '',
+    'Conversation so far:',
+    currentConversation || 'No prior messages.',
+    '',
+    `Latest user message: ${input.userMessage}`,
+    '',
+    'After your prose, append a valid JSON marker exactly once.',
+    'The marker is mandatory. If you omit it, the response is unusable and the session will not save progress.',
+    `Wrap it with ${markerTags.open} and ${markerTags.close}.`,
+    'The marker must follow this schema and must not introduce any extra top-level fields:',
+    '{',
+    '  "version": "brainstorm_marker_v1",',
+    '  "stageKey": "ideation",',
+    '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": ["selected priority area label if confirmed"], "factBullets": ["specific user-confirmed ideation fact"], "ruleNotes": ["fit, distinctiveness, feasibility, or significance caveat"], "confidence": 0.85, "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
+    '  "currentPoint": "pointKey this turn is exploring" | null,',
+    '  "suggestedAnswers": [{ "label": "A", "text": "Exploratory direction text", "rationale": "Why this direction scores better on fit, distinctiveness, feasibility, or significance" }],',
+    '  "qualityAssessment": "strong" | "adequate" | "weak" | null,',
+    '  "steeringEvents": [{ "level": "hard_block"|"gentle_redirect"|"awareness_nudge", "message": "...", "pointKey": "..." | null }]',
+    '}',
+    'Use suggestedAnswers for exploratory directions only. Return 2-3 directions with labels A, B, and optionally C.',
+    'Use pointsCovered only for facts the user has confirmed in their own message or by selecting a direction.',
+    'For selected priority fit, put selected priority area labels in thrustLinkage only when the alignment is defensible.',
+    'Do not invent new point keys. Use only the allowed point keys listed above.',
+    'Example ending:',
+    `${markerTags.open}{"version":"brainstorm_marker_v1","stageKey":"ideation","pointsCovered":[],"currentPoint":"idea_core","suggestedAnswers":[{"label":"A","text":"Focus the idea on a sharper beneficiary and implementation setting.","rationale":"This improves fit and feasibility."}],"qualityAssessment":"adequate","steeringEvents":[]}${markerTags.close}`,
+    'Do not include markdown code fences around the marker.',
+  ].join('\n');
+}
+
 export function buildGrantPrepPrompt(input: {
   session: GrantPrepSessionContext;
   stageKey: GrantPrepStageKey;
@@ -406,7 +537,10 @@ export function buildGrantPrepPrompt(input: {
     `Duration: ${input.fundingContext.projectDuration || 'Not specified'}`,
     `Eligibility: ${input.fundingContext.eligibility || 'Not specified'}`,
     `Focus areas: ${(input.fundingContext.focusAreas || []).join(', ') || 'Not specified'}`,
+    ...buildPriorityAreaPromptLines(input.session, input.fundingContext),
     `Warning: ${input.fundingContext.warning || 'None'}`,
+    '',
+    buildPriorityAreaPromptRules(input.session),
     '',
     'Previously captured facts from other stages:',
     buildCrossStageContext(input.session.stageStates, input.stageKey, input.session.engagementMode),

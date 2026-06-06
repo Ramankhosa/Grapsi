@@ -25,9 +25,11 @@ type Props = {
   onRetry?: (content: string) => void;
   sessionLocked: boolean;
   currentPointLabel?: string | null;
+  activeStageKey?: string;
   activeStageTitle?: string;
   activeStageDescription?: string;
   pendingPoints?: Array<{ key: string; label: string; helpText?: string }>;
+  onLockIdeation?: () => void | Promise<void>;
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
 };
@@ -170,9 +172,11 @@ export default function GrantPrepChatPane({
   onRetry,
   sessionLocked,
   currentPointLabel,
+  activeStageKey,
   activeStageTitle,
   activeStageDescription,
   pendingPoints,
+  onLockIdeation,
   onToggleFullscreen,
   isFullscreen = false,
 }: Props) {
@@ -206,6 +210,7 @@ export default function GrantPrepChatPane({
 
   const isInputDisabled = sessionLocked || !!sendCooldown;
   const canSend = !sending && !sendCooldown && !!input.trim() && !sessionLocked;
+  const isIdeationStage = activeStageKey === 'ideation';
   const hasOrphanMessage =
     messages.length > 0 && messages[messages.length - 1].role === 'user' && !sending;
 
@@ -220,10 +225,16 @@ export default function GrantPrepChatPane({
             </div>
             <div>
               <div className="text-lg font-semibold text-slate-900">
-                {activeStageTitle ? `Let\u2019s work on ${activeStageTitle}` : "Let\u2019s prepare your grant"}
+                {isIdeationStage
+                  ? 'Shape the idea and angle'
+                  : activeStageTitle
+                    ? `Let\u2019s work on ${activeStageTitle}`
+                    : "Let\u2019s prepare your grant"}
               </div>
               <div className="mt-1 text-sm text-slate-500">
-                {activeStageDescription || "Answer a few questions for each stage. I\u2019ll capture the key points as we go."}
+                {isIdeationStage
+                  ? 'Share the idea you are considering. I will help sharpen the angle before the prep stages.'
+                  : activeStageDescription || "Answer a few questions for each stage. I\u2019ll capture the key points as we go."}
               </div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
@@ -266,7 +277,9 @@ export default function GrantPrepChatPane({
               message.content || ''
             );
             const hasStructuredAnswers = isLastAssistant && structuredAnswers.length > 0;
-            const optionCombinations = hasStructuredAnswers ? buildOptionCombinations(structuredAnswers) : [];
+            const optionCombinations = hasStructuredAnswers && !isIdeationStage
+              ? buildOptionCombinations(structuredAnswers)
+              : [];
 
             return (
             <div key={message.id}>
@@ -280,7 +293,9 @@ export default function GrantPrepChatPane({
               {hasStructuredAnswers ? (
                 <div className="mt-3 flex flex-col gap-2 pl-9">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                    Approval bundles &mdash; approve as-is, edit, or write your own
+                    {isIdeationStage
+                      ? 'Idea directions - explore one, edit it, or write your own'
+                      : 'Approval bundles - approve as-is, edit, or write your own'}
                   </div>
                   {structuredAnswers.map((option, i) => (
                     <div
@@ -327,7 +342,7 @@ export default function GrantPrepChatPane({
                           disabled={sessionLocked}
                           className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                         >
-                          Edit bundle
+                          {isIdeationStage ? 'Edit direction' : 'Edit bundle'}
                         </button>
                         <button
                           type="button"
@@ -335,7 +350,7 @@ export default function GrantPrepChatPane({
                           disabled={sessionLocked || sending || !!sendCooldown}
                           className="rounded-lg bg-prep-accent px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
                         >
-                          Approve and send
+                          {isIdeationStage ? 'Explore this direction' : 'Approve and send'}
                         </button>
                       </div>
                     </div>
@@ -432,6 +447,21 @@ export default function GrantPrepChatPane({
           </div>
         ) : (
           <>
+            {isIdeationStage && onLockIdeation ? (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
+                <span className="text-xs font-medium text-emerald-900">
+                  Ready to move from idea shaping into proposal prep?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onLockIdeation()}
+                  disabled={sending || !!sendCooldown}
+                  className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  Lock it in & continue
+                </button>
+              </div>
+            ) : null}
             <div className="flex items-end gap-2">
               <div className="flex flex-1 items-end gap-2 rounded-xl border border-slate-200 bg-prep-inputBg px-3 py-2 focus-within:border-prep-accent focus-within:ring-2 focus-within:ring-emerald-100">
                 <textarea

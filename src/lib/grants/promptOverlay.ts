@@ -48,11 +48,18 @@ export function summarizeGrantFreezePayload(value: unknown): string[] {
   const globalKeywords = Array.isArray(record.globalKeywords)
     ? record.globalKeywords.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
     : []
+  const guidance = record.guidance && typeof record.guidance === 'object' && !Array.isArray(record.guidance)
+    ? record.guidance as Record<string, unknown>
+    : {}
+  const selectedPriorityAreas = Array.isArray(guidance.selectedThrustAreaRuleKeys)
+    ? guidance.selectedThrustAreaRuleKeys.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
+    : []
 
   return [
     String(project.title || '').trim() ? `Project: ${String(project.title).trim()}` : '',
     String(fundingCall.title || '').trim() ? `Funding call: ${String(fundingCall.title).trim()}` : '',
     String(fundingCall.agencyName || '').trim() ? `Agency: ${String(fundingCall.agencyName).trim()}` : '',
+    selectedPriorityAreas.length > 0 ? `Selected target priority areas: ${selectedPriorityAreas.join(', ')}` : '',
     globalKeywords.length > 0 ? `Prep keywords: ${globalKeywords.join(', ')}` : '',
   ].filter(Boolean)
 }

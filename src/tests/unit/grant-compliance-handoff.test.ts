@@ -136,6 +136,34 @@ describe('grant prep freeze payload', () => {
     expect(result.payload.globalCaptureSummary[0]).toContain('Rule note')
   })
 
+  it('carries selected target priority areas into freeze guidance and summary', () => {
+    const session = {
+      mode: 'template_driven',
+      engagementMode: 'expert',
+      selectedThrustAreaRuleKeys: ['Economic', 'Sustainability'],
+      stageMapping: {},
+      globalKeywords: [],
+      stageStates: {},
+    } as unknown as GrantPrepSessionContext
+
+    const result = buildGrantPrepFreezePayload({
+      project: {
+        id: 'project_1',
+        title: 'Regional Innovation Program',
+        description: null,
+      },
+      fundingContext,
+      session,
+      guidelineRevisionId: 'guideline_rev_1',
+      templateRevisionId: 'template_rev_1',
+    })
+
+    expect(result.payload.guidance.selectedThrustAreaRuleKeys).toEqual(['Economic', 'Sustainability'])
+    expect(result.payload.globalCaptureSummary[0]).toBe(
+      'Selected target priority areas: Economic, Sustainability'
+    )
+  })
+
   it('blocks launch when required-stage P2 detail keeps readiness below threshold', () => {
     const session = {
       mode: 'template_driven',

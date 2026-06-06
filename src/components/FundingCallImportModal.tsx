@@ -14,6 +14,7 @@ import {
   FaTimes,
   FaUpload,
 } from 'react-icons/fa';
+import { deriveGrantPrepPriorityAreaOptions } from '@/lib/grantPrep/priorityAreas';
 
 type ImportMode = 'url' | 'file' | 'text';
 type SourceMode = 'intake' | 'file' | 'url' | 'text' | 'skip';
@@ -100,7 +101,7 @@ type ArtifactState = {
 type FundingCallImportModalProps = {
   open: boolean;
   onClose: () => void;
-  onBeginWriting: (fundingCallId: string, options?: { projectName?: string }) => void;
+  onBeginWriting: (fundingCallId: string, options?: { projectName?: string; selectedPriorityAreas?: string[] }) => void;
   importEndpoint?: '/api/funding/import' | '/api/funding/imports';
   allowedCallModes?: ImportMode[];
   allowedGuidelineModes?: SourceMode[];
@@ -445,6 +446,7 @@ export default function FundingCallImportModal({
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [templateState, setTemplateState] = useState<ArtifactState>(emptyArtifactState);
   const [projectName, setProjectName] = useState('');
+  const [selectedPriorityAreas, setSelectedPriorityAreas] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -500,6 +502,7 @@ export default function FundingCallImportModal({
     setTemplateFile(null);
     setTemplateState(emptyArtifactState);
     setProjectName('');
+    setSelectedPriorityAreas([]);
     setLoading(false);
     setActionLoading(false);
     setError(null);
@@ -553,6 +556,7 @@ export default function FundingCallImportModal({
       setTemplateText(saved.templateText || '');
       setTemplateState(saved.templateState || emptyArtifactState);
       setProjectName(saved.projectName || '');
+      setSelectedPriorityAreas(Array.isArray(saved.selectedPriorityAreas) ? saved.selectedPriorityAreas : []);
       setResumeNotice('Restored your previous upload progress. You can continue from here.');
     } catch {
       window.localStorage.removeItem(storageKey);
@@ -585,6 +589,7 @@ export default function FundingCallImportModal({
         templateText: templateText.length > 12000 ? templateText.slice(0, 12000) : templateText,
         templateState,
         projectName,
+        selectedPriorityAreas,
         savedAt: new Date().toISOString(),
       })
     );
@@ -603,6 +608,7 @@ export default function FundingCallImportModal({
     mode,
     open,
     projectName,
+    selectedPriorityAreas,
     sourceText,
     sourceUrl,
     step,
@@ -716,9 +722,35 @@ export default function FundingCallImportModal({
     ].filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index);
   }, [details]);
 
+  const draftValues = details?.draftValues || {};
+  const priorityAreaOptions = useMemo(
+    () => deriveGrantPrepPriorityAreaOptions({
+      disciplines: draftValues.disciplines,
+      focusAreas: draftValues.focusAreas || draftValues.focus_areas,
+    }),
+    [draftValues.disciplines, draftValues.focusAreas, draftValues.focus_areas]
+  );
+  const priorityAreaOptionsKey = priorityAreaOptions.join('\u0001');
+
+  useEffect(() => {
+    if (!open) return;
+
+    if (priorityAreaOptions.length === 1) {
+      setSelectedPriorityAreas(priorityAreaOptions);
+      return;
+    }
+
+    if (priorityAreaOptions.length > 1) {
+      setSelectedPriorityAreas((current) =>
+        current.filter((selected) =>
+          priorityAreaOptions.some((option) => option.toLowerCase() === selected.toLowerCase())
+        )
+      );
+    }
+  }, [open, priorityAreaOptions, priorityAreaOptionsKey]);
+
   if (!open) return null;
 
-  const draftValues = details?.draftValues || {};
   const failedImportMessage = details?.job.error_message
     || (details?.job.error_code === 'LLM_RATE_LIMITED'
       ? 'The AI provider is rate limiting requests right now. Retry the import in about a minute.'
@@ -741,6 +773,24 @@ export default function FundingCallImportModal({
   const hasFailedRequests = failedRequestCount > 0;
   const retryFailedLabel = failedRequestCount > 1 ? 'Retry failed requests' : 'Retry failed request';
   const activeFundingCallId = fundingCallId || details?.job.linked_funding_call_id || null;
+  const requiresPriorityAreaSelection = priorityAreaOptions.length > 1;
+  const canStartGrantWriting = Boolean(fundingCallId) &&
+    (!requiresPriorityAreaSelection || selectedPriorityAreas.length > 0);
+
+  const togglePriorityArea = (area: string) => {
+    if (priorityAreaOptions.length === 1) {
+      setSelectedPriorityAreas(priorityAreaOptions);
+      return;
+    }
+
+    setSelectedPriorityAreas((current) => {
+      const selected = current.some((item) => item.toLowerCase() === area.toLowerCase());
+      if (selected) {
+        return current.filter((item) => item.toLowerCase() !== area.toLowerCase());
+      }
+      return [...current, area];
+    });
+  };
 
   const submitImport = async () => {
     setLoading(true);
@@ -1069,10 +1119,16 @@ export default function FundingCallImportModal({
   };
 
   const startGrantWriting = () => {
+    if (requiresPriorityAreaSelection && selectedPriorityAreas.length === 0) {
+      setError('Select at least one target priority area before starting Grant Prep.');
+      return;
+    }
+
     if (fundingCallId) {
       clearSavedProgress();
       onBeginWriting(fundingCallId, {
         projectName: showProjectNameField ? projectName.trim() || undefined : undefined,
+        selectedPriorityAreas,
       });
     }
   };
@@ -1906,6 +1962,43 @@ export default function FundingCallImportModal({
                 </div>
               </div>
 
+              {priorityAreaOptions.length > 0 ? (
+                <div className="rounded-md border border-slate-200 p-4">
+                  <div className="text-sm font-semibold text-slate-950">Target Priority Areas</div>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {priorityAreaOptions.length === 1
+                      ? 'This call has one basic-call priority area, so it will be used as the Grant Prep alignment anchor.'
+                      : 'Select the basic-call priority areas this grant should target.'}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {priorityAreaOptions.map((area) => {
+                      const selected = priorityAreaOptions.length === 1 ||
+                        selectedPriorityAreas.some((item) => item.toLowerCase() === area.toLowerCase());
+                      return (
+                        <button
+                          key={area}
+                          type="button"
+                          onClick={() => togglePriorityArea(area)}
+                          disabled={priorityAreaOptions.length === 1 || actionLoading}
+                          className={`rounded-md border px-3 py-2 text-sm font-semibold transition-colors ${
+                            selected
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                              : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50'
+                          } ${priorityAreaOptions.length === 1 || actionLoading ? 'cursor-not-allowed opacity-75' : ''}`}
+                        >
+                          {area}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {requiresPriorityAreaSelection && selectedPriorityAreas.length === 0 ? (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                      Select at least one target priority area to start Grant Prep.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               {showProjectNameField ? (
                 <div className="rounded-md border border-slate-200 p-4">
                   <label htmlFor="grantProjectName" className="text-sm font-semibold text-slate-950">
@@ -1928,7 +2021,7 @@ export default function FundingCallImportModal({
               <button
                 type="button"
                 onClick={startGrantWriting}
-                disabled={!fundingCallId}
+                disabled={!canStartGrantWriting}
                 className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <FaPlay />

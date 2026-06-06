@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, BrainCircuit, ExternalLink, FileText, Loader2, Plus, Sparkles } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
+import { deriveGrantPrepPriorityAreaOptions } from '@/lib/grantPrep/priorityAreas'
 
 type PrepSession = {
   id: string
@@ -43,6 +44,8 @@ export default function ProjectGrantsPage() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [creatingForGrant, setCreatingForGrant] = useState<string | null>(null)
+  const [callPriorityOptions, setCallPriorityOptions] = useState<string[]>([])
+  const [selectedPriorityAreas, setSelectedPriorityAreas] = useState<string[]>([])
 
   const loadSessions = useCallback(async () => {
     try {
@@ -78,6 +81,58 @@ export default function ProjectGrantsPage() {
     }
   }, [authLoading, user, projectId, router, loadSessions])
 
+  useEffect(() => {
+    if (!user || !fundingCallId) {
+      setCallPriorityOptions([])
+      setSelectedPriorityAreas([])
+      return
+    }
+
+    let canceled = false
+    const loadCallPriorityOptions = async () => {
+      try {
+        const response = await fetch(`/api/funding/calls/${encodeURIComponent(fundingCallId)}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
+          },
+        })
+        if (!response.ok) return
+        const data = await response.json()
+        if (canceled) return
+        const options = deriveGrantPrepPriorityAreaOptions({
+          disciplines: data.call?.disciplines,
+          focusAreas: data.call?.focusAreas,
+        })
+        setCallPriorityOptions(options)
+        setSelectedPriorityAreas(options.length === 1 ? options : [])
+      } catch {
+        if (!canceled) {
+          setCallPriorityOptions([])
+          setSelectedPriorityAreas([])
+        }
+      }
+    }
+
+    void loadCallPriorityOptions()
+    return () => {
+      canceled = true
+    }
+  }, [fundingCallId, user])
+
+  function togglePriorityArea(area: string) {
+    if (callPriorityOptions.length === 1) {
+      setSelectedPriorityAreas(callPriorityOptions)
+      return
+    }
+
+    setSelectedPriorityAreas((current) => {
+      const selected = current.some((item) => item.toLowerCase() === area.toLowerCase())
+      return selected
+        ? current.filter((item) => item.toLowerCase() !== area.toLowerCase())
+        : [...current, area]
+    })
+  }
+
   async function startGrantPrep(selectedFundingCallId?: string | null) {
     try {
       const effectiveFundingCallId =
@@ -87,6 +142,9 @@ export default function ProjectGrantsPage() {
         null
       if (!effectiveFundingCallId) {
         throw new Error('This grant project needs a linked funding call before GrantMentor can open.')
+      }
+      if (fundingCallId && callPriorityOptions.length > 1 && selectedPriorityAreas.length === 0) {
+        throw new Error('Select at least one target priority area before starting Grant Prep.')
       }
 
       setCreating(true)
@@ -99,6 +157,7 @@ export default function ProjectGrantsPage() {
         body: JSON.stringify({
           engagementMode: 'expert',
           fundingCallId: effectiveFundingCallId,
+          selectedPriorityAreas: fundingCallId ? selectedPriorityAreas : undefined,
         }),
       })
 
@@ -147,7 +206,7 @@ export default function ProjectGrantsPage() {
           </div>
           <button
             onClick={() => void startGrantPrep()}
-            disabled={creating}
+            disabled={creating || (Boolean(fundingCallId) && callPriorityOptions.length > 1 && selectedPriorityAreas.length === 0)}
             className="inline-flex items-center gap-2 rounded-lg bg-ai-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-ai-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -157,7 +216,40 @@ export default function ProjectGrantsPage() {
 
         {fundingCallId ? (
           <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-            This project can start grant prep directly from the selected funding call.
+            <div>This project can start grant prep directly from the selected funding call.</div>
+            {callPriorityOptions.length > 0 ? (
+              <div className="mt-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-800">
+                  Target Priority Areas
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {callPriorityOptions.map((area) => {
+                    const selected = callPriorityOptions.length === 1 ||
+                      selectedPriorityAreas.some((item) => item.toLowerCase() === area.toLowerCase())
+                    return (
+                      <button
+                        key={area}
+                        type="button"
+                        onClick={() => togglePriorityArea(area)}
+                        disabled={callPriorityOptions.length === 1 || creating}
+                        className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                          selected
+                            ? 'border-emerald-300 bg-white text-emerald-900'
+                            : 'border-emerald-200 bg-emerald-100 text-emerald-800 hover:bg-white'
+                        } ${callPriorityOptions.length === 1 || creating ? 'cursor-not-allowed opacity-75' : ''}`}
+                      >
+                        {area}
+                      </button>
+                    )
+                  })}
+                </div>
+                {callPriorityOptions.length > 1 && selectedPriorityAreas.length === 0 ? (
+                  <div className="mt-2 text-xs font-medium text-amber-800">
+                    Select at least one target priority area before starting.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
 

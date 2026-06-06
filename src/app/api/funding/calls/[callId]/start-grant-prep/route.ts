@@ -11,6 +11,8 @@ import { enforceServiceAccess } from '@/lib/service-access-middleware'
 const startGrantPrepSchema = z.object({
   engagementMode: z.preprocess(normalizeGrantPrepEngagementMode, z.enum(['expert', 'express'])).default('expert'),
   projectName: z.string().trim().min(1).max(200).optional(),
+  selectedThrustAreaRuleKeys: z.array(z.string()).optional(),
+  selectedPriorityAreas: z.array(z.string()).optional(),
 })
 
 function buildGrantProjectName(call: { scheme_title?: string | null; title?: string | null }) {
@@ -89,7 +91,7 @@ export async function POST(
         },
         fundingCallId: fundingCall.id,
         engagementMode: payload.engagementMode,
-        selectedThrustAreaRuleKeys: [],
+        selectedThrustAreaRuleKeys: payload.selectedPriorityAreas ?? payload.selectedThrustAreaRuleKeys,
         restart: false,
       })
 

@@ -4,6 +4,7 @@ import { Menu, Transition } from '@headlessui/react';
 import { HiChevronDown, HiChevronUp, HiEllipsisVertical, HiExclamationCircle } from 'react-icons/hi2';
 import { toast } from 'react-hot-toast';
 import { GRANT_PREP_STAGE_BY_KEY } from '../../lib/grantPrep/stageLibrary';
+import { deriveGrantPrepPriorityAreaOptions } from '../../lib/grantPrep/priorityAreas';
 import type { FundingGuidelineRuleItem, GuidelinePackDocument } from '../../lib/fundingGuidelines/types';
 import type {
   PointAction,
@@ -128,6 +129,7 @@ type Props = {
   onStageChange: (stageKey: string) => void;
   onJumpToKeyword: (keyword: string) => void;
   onPointAction: (action: PointAction) => Promise<void>;
+  onPriorityAreasChange?: (selectedPriorityAreas: string[]) => Promise<void>;
   onOpenPreview: () => void;
   topAccessory?: ReactNode;
 };
@@ -143,6 +145,7 @@ export default function GrantPrepContextPanel({
   onStageChange,
   onJumpToKeyword,
   onPointAction,
+  onPriorityAreasChange,
   onOpenPreview,
   topAccessory,
 }: Props) {
@@ -151,6 +154,7 @@ export default function GrantPrepContextPanel({
   const [editingKeywords, setEditingKeywords] = useState('');
   const [showAllKeywords, setShowAllKeywords] = useState(false);
   const [busyPointKey, setBusyPointKey] = useState<string | null>(null);
+  const [prioritySaving, setPrioritySaving] = useState(false);
   const pointRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const activeStage = prepContext.stageStates[prepContext.activeStageKey];
@@ -184,6 +188,14 @@ export default function GrantPrepContextPanel({
         : prepContext.selectedThrustAreaRuleKeys;
     return Array.from(new Set(values)).slice(0, 8);
   }, [activeStage.points, prepContext.selectedThrustAreaRuleKeys]);
+  const priorityAreaOptions = useMemo(
+    () => deriveGrantPrepPriorityAreaOptions(fundingContext),
+    [fundingContext]
+  );
+  const selectedPriorityAreas = useMemo(
+    () => prepContext.selectedThrustAreaRuleKeys || [],
+    [prepContext.selectedThrustAreaRuleKeys]
+  );
 
   const keywordFrequency = useMemo(() => {
     const counts = new Map<string, number>();
@@ -259,6 +271,27 @@ export default function GrantPrepContextPanel({
     }
   };
 
+  const handlePriorityAreaToggle = async (area: string) => {
+    if (!onPriorityAreasChange || sessionLocked || prioritySaving) return;
+
+    const isSelected = selectedPriorityAreas.some((selected) => selected.toLowerCase() === area.toLowerCase());
+    const nextSelection = isSelected
+      ? selectedPriorityAreas.filter((selected) => selected.toLowerCase() !== area.toLowerCase())
+      : [...selectedPriorityAreas, area];
+
+    if (priorityAreaOptions.length > 1 && nextSelection.length === 0) {
+      toast.error('Select at least one target priority area.');
+      return;
+    }
+
+    setPrioritySaving(true);
+    try {
+      await onPriorityAreasChange(nextSelection);
+    } finally {
+      setPrioritySaving(false);
+    }
+  };
+
   const userFacingPoints = activeStage.points.filter(isUserFacingPoint);
   const currentStageTotal = userFacingPoints.length;
   const currentStageCovered = userFacingPoints.filter(
@@ -271,6 +304,55 @@ export default function GrantPrepContextPanel({
       {topAccessory ? <div className="mb-2 flex justify-end">{topAccessory}</div> : null}
       {/* Scrollable sections */}
       <div className="prep-scrollbar flex-1 space-y-3 overflow-y-auto pb-3">
+      {priorityAreaOptions.length > 0 ? (
+        <CollapsibleSection
+          title="Target Priority Areas"
+          badge={
+            <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-700">
+              {selectedPriorityAreas.length || (priorityAreaOptions.length === 1 ? 1 : 0)} selected
+            </span>
+          }
+        >
+          <div className="text-xs leading-5 text-slate-500">
+            {priorityAreaOptions.length === 1
+              ? 'This call has one basic-call priority area.'
+              : 'Choose the call priority areas this grant will deliberately target.'}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {priorityAreaOptions.map((area) => {
+              const selected = priorityAreaOptions.length === 1 ||
+                selectedPriorityAreas.some((item) => item.toLowerCase() === area.toLowerCase());
+              return (
+                <button
+                  key={area}
+                  type="button"
+                  onClick={() => handlePriorityAreaToggle(area)}
+                  disabled={sessionLocked || prioritySaving || priorityAreaOptions.length === 1}
+                  className={clsx(
+                    'rounded-lg border px-3 py-2 text-left text-xs font-semibold transition-colors',
+                    selected
+                      ? 'border-teal-200 bg-teal-50 text-teal-800'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-teal-200 hover:bg-teal-50',
+                    (sessionLocked || prioritySaving || priorityAreaOptions.length === 1) &&
+                      'cursor-not-allowed opacity-70'
+                  )}
+                >
+                  {area}
+                </button>
+              );
+            })}
+          </div>
+          {priorityAreaOptions.length > 1 && selectedPriorityAreas.length === 0 ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Select at least one target priority area before continuing.
+            </div>
+          ) : null}
+          {prioritySaving ? (
+            <div className="mt-2 text-xs font-medium text-slate-500">Saving...</div>
+          ) : null}
+        </CollapsibleSection>
+      ) : null}
+
       {/* Section 1: Stage Progress */}
       <CollapsibleSection
         title="Stage Progress"

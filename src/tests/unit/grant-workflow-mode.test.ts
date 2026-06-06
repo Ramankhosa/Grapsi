@@ -473,6 +473,8 @@ describe('grant workflow mode extraction and runtime', () => {
     })
 
     expect(selector.autoEnabledStageKeys).toContain('methodology')
+    expect(selector.autoEnabledStageKeys[0]).toBe('ideation')
+    expect(selector.selectionLevels.ideation).toBe('required')
     expect(selector.autoEnabledStageKeys).not.toContain('problem_definition')
     expect(selector.autoEnabledStageKeys).not.toContain('root_cause')
     expect(selector.autoEnabledStageKeys).not.toContain('innovation')

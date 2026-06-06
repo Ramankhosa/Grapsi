@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildGrantPrepPrompt } from '@/lib/grantPrep/promptComposer'
+import { buildGrantPrepPrompt, buildIdeationPrompt } from '@/lib/grantPrep/promptComposer'
+import {
+  deriveGrantPrepPriorityAreaOptions,
+  normalizeGrantPrepPriorityAreaSelection,
+} from '@/lib/grantPrep/priorityAreas'
 import { parseGrantPrepResponse } from '@/lib/grantPrep/marker'
 import {
   buildGrantPrepConversationBundle,
@@ -39,11 +43,20 @@ function makeFundingContext() {
     projectDuration: '36 months',
     eligibility: 'Academic and clinical institutions',
     focusAreas: ['public health', 'implementation science'],
+    disciplines: ['public health', 'implementation science'],
+    fundingKinds: ['research grant'],
     warning: null,
   } as any
 }
 
 describe('grant prep prompt modes', () => {
+  it('starts new sessions on ideation before problem definition', () => {
+    const session = makeSession('expert')
+
+    expect(session.enabledStageKeys[0]).toBe('ideation')
+    expect(session.activeStageKey).toBe('ideation')
+  })
+
   it('builds a stricter expert prompt for framing stages', () => {
     const session = makeSession('expert')
 
@@ -382,6 +395,56 @@ describe('grant prep progression by mode', () => {
     const point = nextStates.beneficiaries.points.find((entry) => entry.key === 'direct_beneficiaries')
     expect(point?.status).toBe('pending')
     expect(point?.capture).toBeNull()
+  })
+
+  it('builds a dedicated ideation prompt with selected priority areas and existing marker fields', () => {
+    const session = {
+      ...makeSession('expert'),
+      selectedThrustAreaRuleKeys: ['implementation science'],
+    }
+
+    const prompt = buildIdeationPrompt({
+      session,
+      stageKey: 'ideation',
+      project: {
+        title: 'Rural Diabetes Adherence',
+        description: null,
+      },
+      fundingContext: makeFundingContext(),
+      guidelinePack: null,
+      conversation: [],
+      userMessage: 'We want to design a rural clinic adherence project.',
+    })
+
+    expect(prompt).toContain('Available call priority areas: public health, implementation science')
+    expect(prompt).toContain('User-selected target priority areas: implementation science')
+    expect(prompt).toContain('"suggestedAnswers"')
+    expect(prompt).toContain('"pointsCovered"')
+    expect(prompt).not.toMatch(/approval[- ]bundle/i)
+    expect(prompt).not.toMatch(/crossStagePointsCovered|cross-stage/i)
+    expect(prompt).not.toMatch(/template/i)
+    expect(prompt).not.toMatch(/"directions"|"ideaDiagnostic"/)
+  })
+})
+
+describe('grant prep priority areas', () => {
+  it('dedupes options and prefers disciplines over focus areas', () => {
+    const options = deriveGrantPrepPriorityAreaOptions({
+      disciplines: ['Economic', 'economic', 'Sustainability'],
+      focusAreas: ['Health', 'Research Grant'],
+    })
+
+    expect(options).toEqual(['Economic', 'Sustainability'])
+  })
+
+  it('normalizes selected priority areas to available call labels', () => {
+    const result = normalizeGrantPrepPriorityAreaSelection({
+      selectedPriorityAreas: ['economic', 'unknown'],
+      availablePriorityAreas: ['Economic', 'Sustainability'],
+    })
+
+    expect(result.selectedPriorityAreas).toEqual(['Economic'])
+    expect(result.invalidPriorityAreas).toEqual(['unknown'])
   })
 })
 

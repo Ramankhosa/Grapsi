@@ -54,6 +54,7 @@ export interface GrantBlueprintEnrichmentContext {
   globalKeywords?: string[]
   globalCaptureSummary?: string[]
   focusAreas?: string[]
+  selectedPriorityAreas?: string[]
   capturedKeywords?: string[]
   prepEvidence?: GrantPrepEvidenceItem[]
   prepEvidenceBySection?: Record<string, GrantPrepEvidenceItem[]>
@@ -514,6 +515,7 @@ function resolveGrantSectionSemantic(section: GrantBlueprintPlanSection): GrantS
 
 function buildTopicAnchor(context: GrantBlueprintEnrichmentContext): string {
   const keywordAnchor = dedupeStrings([
+    ...(context.selectedPriorityAreas || []),
     ...(context.focusAreas || []),
     ...(context.globalKeywords || []),
     ...(context.capturedKeywords || []),
@@ -1255,6 +1257,7 @@ function buildGrantSectionComplianceContract(
     context.fundingCallTitle ? `Funding call: ${context.fundingCallTitle}` : '',
     context.agencyName ? `Agency: ${context.agencyName}` : '',
     ...(context.globalCaptureSummary || []).slice(0, 4),
+    ...(context.selectedPriorityAreas || []).slice(0, 4).map((item) => `Selected target priority area: ${item}`),
     ...(context.focusAreas || []).slice(0, 4).map((item) => `Focus area: ${item}`),
   ].filter(Boolean))
 

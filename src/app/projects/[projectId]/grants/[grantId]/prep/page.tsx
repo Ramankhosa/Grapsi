@@ -358,8 +358,22 @@ export default function GrantPrepPage(props: any) {
         toast.error('Failed to switch stage');
       }
     },
-    [sessionData?.id, prepContext, sessionLocked]
+    [axiosConfig, sessionData?.id, prepContext, sessionLocked]
   );
+
+  const handleLockIdeation = useCallback(async () => {
+    if (!prepContext) return;
+
+    const nextStageKey = prepContext.stageStates.problem_definition?.enabled
+      ? 'problem_definition'
+      : prepContext.enabledStageKeys.find(
+          (stageKey) => stageKey !== 'ideation' && GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable
+        );
+
+    if (nextStageKey) {
+      await handleStageChange(nextStageKey);
+    }
+  }, [handleStageChange, prepContext]);
 
   const handleEngagementModeChange = useCallback(
     async (engagementMode: PrepEngagementMode) => {
@@ -563,7 +577,38 @@ export default function GrantPrepPage(props: any) {
         );
       }
     },
-    [sessionData?.id]
+    [axiosConfig, sessionData?.id]
+  );
+
+  const handlePriorityAreasChange = useCallback(
+    async (selectedPriorityAreas: string[]) => {
+      if (!sessionData?.id || !prepContext || sessionLocked) return;
+
+      const previousContext = prepContext;
+      setPrepContext({
+        ...prepContext,
+        selectedThrustAreaRuleKeys: selectedPriorityAreas,
+      });
+
+      try {
+        const response = await axios.put(
+          `/api/grant-prep/sessions/${sessionData.id}/priority-areas`,
+          { selectedPriorityAreas },
+          axiosConfig()
+        );
+        setPrepContext(response.data.prepContext);
+        setPreview(null);
+        setPreviewOpen(false);
+      } catch (error) {
+        setPrepContext(previousContext);
+        toast.error(
+          axios.isAxiosError(error) && error.response?.data?.message
+            ? error.response.data.message
+            : 'Failed to update target priority areas'
+        );
+      }
+    },
+    [axiosConfig, prepContext, sessionData?.id, sessionLocked]
   );
 
   const openPreview = useCallback(async () => {
@@ -750,6 +795,7 @@ export default function GrantPrepPage(props: any) {
       onStageChange={handleStageChange}
       onJumpToKeyword={handleJumpToKeyword}
       onPointAction={handlePointAction}
+      onPriorityAreasChange={handlePriorityAreasChange}
       onOpenPreview={openPreview}
       topAccessory={
         layoutMode === 'desktop' && !effectiveChatFullscreen ? (
@@ -897,9 +943,11 @@ export default function GrantPrepPage(props: any) {
                   onRetry={retryMessage}
                   sessionLocked={sessionLocked}
                   currentPointLabel={currentPointLabel}
+                  activeStageKey={prepContext.activeStageKey}
                   activeStageTitle={activeStage.title}
                   activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
                   pendingPoints={pendingPoints}
+                  onLockIdeation={handleLockIdeation}
                   onToggleFullscreen={toggleChatFullscreen}
                   isFullscreen={effectiveChatFullscreen}
                 />
@@ -930,9 +978,11 @@ export default function GrantPrepPage(props: any) {
                   onRetry={retryMessage}
                   sessionLocked={sessionLocked}
                   currentPointLabel={currentPointLabel}
+                  activeStageKey={prepContext.activeStageKey}
                   activeStageTitle={activeStage.title}
                   activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
                   pendingPoints={pendingPoints}
+                  onLockIdeation={handleLockIdeation}
                 />
               </div>
 

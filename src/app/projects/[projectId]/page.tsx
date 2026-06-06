@@ -113,7 +113,10 @@ export default function ProjectDashboardPage() {
     }
   }, [authLoading, user, router, projectId])
 
-  async function launchGrantPrep(payload: { fundingCallId?: string; useDefaultGrantFormat?: boolean }, action: LaunchingAction) {
+  async function launchGrantPrep(
+    payload: { fundingCallId?: string; useDefaultGrantFormat?: boolean; selectedPriorityAreas?: string[] },
+    action: LaunchingAction
+  ) {
     setLaunchingAction(action)
     setGrantLaunchError(null)
 
@@ -139,9 +142,9 @@ export default function ProjectDashboardPage() {
     }
   }
 
-  async function handleBeginWriting(fundingCallId: string) {
+  async function handleBeginWriting(fundingCallId: string, options?: { selectedPriorityAreas?: string[] }) {
     if (!fundingCallId) return
-    await launchGrantPrep({ fundingCallId }, 'upload')
+    await launchGrantPrep({ fundingCallId, selectedPriorityAreas: options?.selectedPriorityAreas }, 'upload')
   }
 
   async function handleUseDefaultGrantFormat() {

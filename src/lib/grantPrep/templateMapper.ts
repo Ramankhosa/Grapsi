@@ -142,7 +142,7 @@ function scoreItemForStage(item: TemplateLikeItem, stageKey: GrantPrepStageKey) 
 
 function getMatchedStages(item: TemplateLikeItem): GrantPrepStageKey[] {
   const scored = GRANT_PREP_STAGE_LIBRARY
-    .filter((stage) => stage.pickable)
+    .filter((stage) => stage.pickable && stage.key !== 'ideation')
     .map((stage) => ({ key: stage.key, score: scoreItemForStage(item, stage.key) }))
     .sort((a, b) => b.score - a.score);
   const trustedIntentMatches = shouldTrustTemplateIntent({
@@ -245,6 +245,16 @@ export function buildGrantPrepStageMapping(templateInput?: unknown | null): Gran
   }
 
   return mapping;
+}
+
+export function normalizeGrantPrepStageMapping(mappingInput?: Partial<GrantPrepStageMapping> | null): GrantPrepStageMapping {
+  const defaults = buildGrantPrepStageMapping(null);
+  const source = mappingInput || {};
+
+  return GRANT_PREP_STAGE_LIBRARY.reduce((acc, stage) => {
+    acc[stage.key] = source[stage.key] || defaults[stage.key];
+    return acc;
+  }, {} as GrantPrepStageMapping);
 }
 
 export function getNormalizedTemplate(templateInput?: unknown | null): GrantTemplateDocument | null {

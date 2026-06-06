@@ -11,7 +11,7 @@ import {
 } from '@/lib/service-usage-tracker'
 import { assertGrantPrepProjectCapability, requireGrantPrepActor } from '@/lib/grantPrep/access'
 import { generateGrantPrepText, resolveGrantPrepTenantContext } from '@/lib/grantPrep/llm'
-import { buildGrantPrepPrompt } from '@/lib/grantPrep/promptComposer'
+import { buildGrantPrepPrompt, buildIdeationPrompt } from '@/lib/grantPrep/promptComposer'
 import {
   buildGrantPrepModeWarning,
   inflateGrantPrepSessionContext,
@@ -398,7 +398,7 @@ export async function POST(
       })
     }
 
-    const prompt = buildGrantPrepPrompt({
+    const promptInput = {
       session: prepContext,
       stageKey,
       project: {
@@ -414,7 +414,10 @@ export async function POST(
             { role: 'user', content: payload.content },
           ],
       userMessage: payload.content,
-    })
+    }
+    const prompt = stageKey === 'ideation'
+      ? buildIdeationPrompt(promptInput)
+      : buildGrantPrepPrompt(promptInput)
 
     reservedOperationId = `grant-prep-message:${grantPrepSession.id}:${payload.clientMessageId || randomUUID()}`
     await reserveServiceUsage({

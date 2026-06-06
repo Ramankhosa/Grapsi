@@ -480,6 +480,10 @@ export function canAutoAdvanceGrantPrepStage(
   stageState: GrantPrepStageStates[GrantPrepStageKey],
   engagementMode: GrantPrepSessionContext['engagementMode']
 ) {
+  if (stageState.stageKey === 'ideation') {
+    return false;
+  }
+
   return stageState.readiness >= 0.65 && (!isExpertGrantPrepMode(engagementMode) || stageState.status !== 'needs_review');
 }
 
@@ -719,8 +723,58 @@ export function reassessGrantPrepStageStates(
   return nextStates;
 }
 
-export function normalizeGrantPrepStageStates(stageStates: GrantPrepStageStates) {
+export function normalizeGrantPrepStageStates(
+  stageStates: GrantPrepStageStates,
+  stageMapping?: GrantPrepStageMapping
+) {
   const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(stageStates || {}));
+
+  GRANT_PREP_STAGE_LIBRARY.forEach((stage) => {
+    if (nextStates[stage.key]) {
+      return;
+    }
+
+    const mappingPoints = stageMapping?.[stage.key]?.discussionPoints || [];
+    const isEnabled = stage.key === 'ideation' ? true : stage.defaultEnabled;
+    nextStates[stage.key] = {
+      stageKey: stage.key,
+      title: stage.title,
+      enabled: isEnabled,
+      pickable: stage.pickable,
+      selectionSource: isEnabled ? 'fallback' : null,
+      selectionLevel: stage.key === 'ideation'
+        ? 'required'
+        : stage.pickable
+          ? (isEnabled ? 'recommended' : 'optional')
+          : 'required',
+      readiness: 0,
+      status: isEnabled ? 'not_started' : 'disabled',
+      steeringEvents: [],
+      points: (mappingPoints.length > 0
+        ? mappingPoints
+        : stage.defaultPoints.map((point) => ({
+            key: point.key,
+            label: point.label,
+            priority: point.priority,
+            sourceTemplatePointer: null,
+            origin: 'default' as const,
+            helpText: point.helpText,
+          }))
+      ).map((point) => ({
+        key: point.key,
+        label: point.label,
+        priority: point.priority,
+        conversationRole: normalizeGrantPrepPointConversationRole(
+          'conversationRole' in point ? point.conversationRole : undefined,
+          point.priority === 'P3' ? 'ai_draftable' : point.sourceTemplatePointer ? 'can_infer_and_confirm' : 'user_required'
+        ),
+        status: 'pending',
+        sourceTemplatePointer: point.sourceTemplatePointer,
+        capture: null,
+      })),
+      lastUpdatedAt: null,
+    };
+  });
 
   Object.values(nextStates).forEach((stageState) => {
     if (
@@ -836,7 +890,7 @@ export function buildGrantPrepSessionContext(input: {
     .filter((stage) => !stage.enabled)
     .map((stage) => stage.stageKey);
   const activeStageKey = (enabledStageKeys.find((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey].pickable) ||
-    'problem_definition') as GrantPrepStageKey;
+    'ideation') as GrantPrepStageKey;
 
   return {
     mode: input.mode,

@@ -47,6 +47,17 @@ function makeSection(
 
 function makeStageStates(): GrantPrepStageStates {
   return {
+    ideation: {
+      stageKey: 'ideation',
+      title: 'Idea & Angle',
+      enabled: true,
+      pickable: true,
+      readiness: 1,
+      status: 'completed',
+      steeringEvents: [],
+      lastUpdatedAt: '2026-04-20T00:00:00.000Z',
+      points: [],
+    },
     problem_definition: {
       stageKey: 'problem_definition',
       title: 'Problem Definition',

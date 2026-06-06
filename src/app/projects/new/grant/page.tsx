@@ -50,7 +50,7 @@ export default function NewGrantProjectPage() {
     }
   }, [isLoading, router, user])
 
-  async function handleBeginWriting(fundingCallId: string, options?: { projectName?: string }) {
+  async function handleBeginWriting(fundingCallId: string, options?: { projectName?: string; selectedPriorityAreas?: string[] }) {
     if (!user) {
       router.push(`/login?callbackUrl=${encodeURIComponent('/projects/new/grant')}`)
       return
@@ -67,6 +67,7 @@ export default function NewGrantProjectPage() {
           body: JSON.stringify({
             engagementMode: 'expert',
             projectName: options?.projectName || undefined,
+            selectedPriorityAreas: options?.selectedPriorityAreas || [],
           }),
         })
       )

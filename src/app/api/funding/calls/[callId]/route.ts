@@ -179,6 +179,11 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       sanitizeStringArray(call.host_countries).join(', ') ||
       sanitizeText(call.funder_country) ||
       null
+    const disciplines = sanitizeStringArray(call.disciplines)
+    const fundingKinds = sanitizeStringArray(call.funding_kinds)
+    const focusAreas = [...disciplines, ...fundingKinds].filter(
+      (value, index, array) => value && array.indexOf(value) === index
+    )
 
     return NextResponse.json({
       call: {
@@ -196,13 +201,14 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         eligibleRegions: sanitizeStringArray(call.eligible_regions),
         hostCountries: sanitizeStringArray(call.host_countries),
         funderCountry: sanitizeText(call.funder_country),
-        fundingKinds: sanitizeStringArray(call.funding_kinds),
+        fundingKinds,
+        focusAreas,
         institutionTypes: sanitizeStringArray(call.institution_types),
         careerStages: sanitizeStringArray(call.career_stages),
         citizenshipRequirements: sanitizeStringArray(call.citizenship_requirements),
         residencyRequirements: sanitizeStringArray(call.residency_requirements),
         applicationLanguages: sanitizeStringArray(call.application_languages),
-        disciplines: sanitizeStringArray(call.disciplines),
+        disciplines,
         eligibilityText: sanitizeText(call.eligibility_text),
         expectedDeliverablesText: sanitizeText(call.expected_deliverables_text),
         officialUrls: sanitizeExternalUrls(call.official_urls),

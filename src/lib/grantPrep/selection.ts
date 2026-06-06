@@ -18,6 +18,7 @@ export const GRANT_PREP_INTERNAL_ALWAYS_ENABLED_STAGE_KEYS: GrantPrepStageKey[] 
   'handoff_complete',
 ];
 const REQUIRED_FOUNDATION_STAGE_KEYS: GrantPrepStageKey[] = [
+  'ideation',
   'problem_definition',
   'methodology',
   'outcomes',
@@ -315,6 +316,7 @@ function getFallbackAutoStageKeys(input: {
   fundingContext?: SelectorFundingContext | null;
 }) {
   const stageKeys = new Set<GrantPrepStageKey>([
+    'ideation',
     'problem_definition',
     'beneficiaries',
     'methodology',
@@ -384,6 +386,7 @@ export function buildGrantPrepSelectorResult(input: {
   autoOptional.forEach((stageKey) => {
     selectionLevels[stageKey] = 'optional';
   });
+  addSelection(autoEnabled, selectionSources, selectionLevels, 'ideation', 'fallback', 'required');
 
   const focusAreas = input.fundingContext?.focusAreas || [];
   const hasGuidelines = input.mode !== 'lightweight' && input.mode !== 'standalone' && Boolean(input.guidelinePack);

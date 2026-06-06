@@ -638,6 +638,9 @@ function buildSeededContext(
     payload.fundingCall.eligibility ? `Eligibility: ${payload.fundingCall.eligibility}` : null,
     payload.fundingCall.deliverables ? `Deliverables: ${payload.fundingCall.deliverables}` : null,
     payload.fundingCall.focusAreas.length > 0 ? `Focus areas: ${payload.fundingCall.focusAreas.join(', ')}` : null,
+    payload.guidance.selectedThrustAreaRuleKeys.length > 0
+      ? `Selected target priority areas: ${payload.guidance.selectedThrustAreaRuleKeys.join(', ')}`
+      : null,
     payload.globalKeywords.length > 0 ? `Global keywords: ${payload.globalKeywords.join(', ')}` : null,
     section.mustCover.length > 0 ? `This section must cover: ${section.mustCover.join('; ')}` : null,
     ...completedEvidence.map((item) => {
@@ -723,6 +726,7 @@ function buildGrantBlueprintEnrichmentContext(input: {
     agencyName: input.agencyName || input.payload.fundingCall.agencyName || null,
     globalKeywords: input.payload.globalKeywords,
     focusAreas: input.payload.fundingCall.focusAreas,
+    selectedPriorityAreas: input.payload.guidance.selectedThrustAreaRuleKeys,
     capturedKeywords: collectGrantCapturedKeywords(input.payload.stageStates),
     prepEvidence: input.payload.prepEvidence || [],
     prepEvidenceBySection: input.payload.prepEvidenceBySection || {},
@@ -758,6 +762,7 @@ function buildGrantBlueprintHydrationContext(input: {
       ? payloadKeywords
       : asStringArray(input.blueprint.globalKeywordsJson),
     focusAreas: asStringArray(fundingCall.focusAreas),
+    selectedPriorityAreas: asStringArray(asObject(payload.guidance).selectedThrustAreaRuleKeys),
     capturedKeywords: collectGrantCapturedKeywords(stageStates),
     prepEvidence: Array.isArray(payload.prepEvidence)
       ? payload.prepEvidence as GrantBlueprintEnrichmentContext['prepEvidence']

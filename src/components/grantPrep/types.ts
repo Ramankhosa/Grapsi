@@ -61,6 +61,8 @@ export type PrepFundingContext = {
   funding: string;
   projectDuration: string;
   focusAreas: string[];
+  disciplines?: string[];
+  fundingKinds?: string[];
 };
 
 export type PrepDraftingContext = {

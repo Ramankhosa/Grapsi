@@ -40,6 +40,7 @@ export type GrantPrepPointConversationRole =
   | 'context_only';
 
 export type GrantPrepStageKey =
+  | 'ideation'
   | 'problem_definition'
   | 'root_cause'
   | 'beneficiaries'
