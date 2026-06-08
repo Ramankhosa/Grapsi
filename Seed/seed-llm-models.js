@@ -253,6 +253,18 @@ async function main() {
       isActive: true,
       isDefault: false
     },
+    {
+      code: 'gemini-3-flash-preview',
+      displayName: 'Gemini 3 Flash Preview',
+      provider: 'google',
+      contextWindow: 1048576,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 50,     // $0.50
+      outputCostPer1M: 300,   // $3.00
+      isActive: true,
+      isDefault: false
+    },
     // Google - Gemini 3 Pro (Preview) + Thinking Alias
     // Note: "thinking" is enabled via a request parameter (thinking_level) and
     // represented in our system as a model-code alias for easy selection.

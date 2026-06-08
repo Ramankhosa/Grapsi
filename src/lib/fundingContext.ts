@@ -77,6 +77,33 @@ function formatDuration(call: {
   return ''
 }
 
+const fundingCallContextSelect = {
+  id: true,
+  catalog_status: true,
+  is_active: true,
+  agency_name: true,
+  scheme_title: true,
+  description: true,
+  close_date: true,
+  amount_min: true,
+  amount_max: true,
+  currency: true,
+  project_duration_min_months: true,
+  project_duration_max_months: true,
+  project_duration_text: true,
+  eligibility_text: true,
+  expected_deliverables_text: true,
+  official_urls: true,
+  source_url: true,
+  disciplines: true,
+  funding_kinds: true,
+  guideline_status: true,
+  template_status: true,
+  metadata: true,
+  uploaded_by: true,
+  active_template_id: true,
+} satisfies Prisma.FundingCallSelect
+
 export function getFundingCallOwnerUserId(metadata: Prisma.JsonValue | null | undefined) {
   const record = asRecord(metadata)
   return (
@@ -179,32 +206,7 @@ export async function resolveProjectFundingContext(
         take: 1,
         select: {
           fundingCall: {
-            select: {
-              id: true,
-              catalog_status: true,
-              is_active: true,
-              agency_name: true,
-              scheme_title: true,
-              description: true,
-              close_date: true,
-              amount_min: true,
-              amount_max: true,
-              currency: true,
-              project_duration_min_months: true,
-              project_duration_max_months: true,
-              project_duration_text: true,
-              eligibility_text: true,
-              expected_deliverables_text: true,
-              official_urls: true,
-              source_url: true,
-              disciplines: true,
-              funding_kinds: true,
-              guideline_status: true,
-              template_status: true,
-              metadata: true,
-              uploaded_by: true,
-              active_template_id: true,
-            },
+            select: fundingCallContextSelect,
           },
         },
       },
@@ -215,7 +217,14 @@ export async function resolveProjectFundingContext(
     throw new Error('Project not found')
   }
 
-  const call = project.grantSessions[0]?.fundingCall
+  const call = project.grantSessions[0]?.fundingCall || (
+    binding?.fundingCallId
+      ? await prisma.fundingCall.findUnique({
+          where: { id: binding.fundingCallId },
+          select: fundingCallContextSelect,
+        })
+      : null
+  )
   if (!call) {
     return {
       id: null,

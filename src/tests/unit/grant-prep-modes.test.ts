@@ -281,10 +281,35 @@ describe('grant prep progression by mode', () => {
     expect(merged[2].text).toBe('Use a hybrid model with clinic anchors and scheduled outreach camps.')
   })
 
+  it('uses fuller inline direction text when structured ideation answers are shorter', () => {
+    const merged = mergeGrantPrepSuggestedAnswersWithInline(
+      [
+        { label: 'A', text: 'Short marker privacy direction.', rationale: 'Increases ethical appeal.' },
+        { label: 'B', text: 'Short marker precision health direction.', rationale: 'Enhances clinical value.' },
+        { label: 'C', text: 'Short marker caregiver direction.', rationale: 'Improves support utility.' },
+      ],
+      [
+        'Here are three exploratory directions to refine the strategic angle:',
+        'Direction A: The "Privacy-First" Angle. Focus the project on edge computing, where the AI processes environmental data locally on the smartphone without uploading audio or sensitive data to the cloud. This addresses a major ethical hurdle in health tech.',
+        'Direction B: The "Precision Health" Angle. Focus the 12-month project on building personal sensory profiles. Instead of a universal alert, the AI learns which specific noise frequencies or light patterns trigger a specific individual.',
+        'Direction C: The "Caregiver Dashboard" Angle. Focus on the visualization of correlated data for clinicians or parents, helping caregivers understand the why behind a meltdown by showing environmental triggers alongside heart rate spikes.',
+        'Would you like to explore one of these directions further, or are you ready to lock in this angle?',
+      ].join('\n')
+    )
+
+    expect(merged.map((answer) => answer.label)).toEqual(['A', 'B', 'C'])
+    expect(merged[0].text).toContain('processes environmental data locally')
+    expect(merged[0].text).not.toContain('Short marker privacy direction')
+    expect(merged[0].rationale).toBe('Increases ethical appeal.')
+    expect(merged[2].text).toContain('helping caregivers understand the why')
+    expect(merged[2].text).not.toContain('Would you like')
+  })
+
   it('parses three inline options across common label formats', () => {
     const cases = [
       'A) Use clinic delivery.\nB) Use outreach delivery.\nC) Use a hybrid delivery model.',
       'Option A: Use clinic delivery.\nOption B: Use outreach delivery.\nOption C: Use a hybrid delivery model.',
+      'Direction A: Use clinic delivery.\nDirection B: Use outreach delivery.\nDirection C: Use a hybrid delivery model.',
       'A - Use clinic delivery.\nB - Use outreach delivery.\nC - Use a hybrid delivery model.',
       'Which model fits? A. Use clinic delivery. B. Use outreach delivery. C. Use a hybrid delivery model.',
     ]

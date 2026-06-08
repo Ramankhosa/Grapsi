@@ -25,6 +25,18 @@ const DEFAULT_PRICING: ModelPricing = {
   thoughtTokenCost: 0.000004
 }
 
+const GEMINI_3_FLASH_PRICING: ModelPricing = {
+  input: 0.0000005,
+  output: 0.000003,
+  thoughtTokenCost: 0.000003
+}
+
+const STATIC_MODEL_PRICING: Record<string, ModelPricing> = {
+  'gemini-3-flash-preview': GEMINI_3_FLASH_PRICING,
+  'gemini-3.1-flash': GEMINI_3_FLASH_PRICING,
+  'gemini-3.1-flash-preview': GEMINI_3_FLASH_PRICING,
+}
+
 // Contingency multiplier (10%)
 export const CONTINGENCY_MULTIPLIER = 1.10
 
@@ -35,6 +47,12 @@ export const USD_TO_INR = 95
 let dbPricingCache: Map<string, ModelPricing> | null = null
 let dbPricingLoadedAt: number = 0
 const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes cache
+
+const MODEL_PRICING_ALIASES: Record<string, string[]> = {
+  'gemini-3-flash-preview': ['gemini-3.1-flash', 'gemini-3.1-flash-preview'],
+  'gemini-3.1-flash': ['gemini-3-flash-preview', 'gemini-3.1-flash-preview'],
+  'gemini-3.1-flash-preview': ['gemini-3-flash-preview', 'gemini-3.1-flash'],
+}
 
 /**
  * Load pricing from database tables
@@ -176,6 +194,11 @@ function getPricingLookupCandidates(modelCode: string): string[] {
   if (!trimmedCode) return []
 
   const candidates = new Set<string>([trimmedCode, trimmedCode.toLowerCase()])
+  const aliasCodes = MODEL_PRICING_ALIASES[trimmedCode] || MODEL_PRICING_ALIASES[trimmedCode.toLowerCase()] || []
+  for (const aliasCode of aliasCodes) {
+    candidates.add(aliasCode)
+    candidates.add(aliasCode.toLowerCase())
+  }
 
   // Route/model aliases commonly suffix "-thinking", while pricing is stored for base model code.
   if (trimmedCode.toLowerCase().endsWith('-thinking')) {
@@ -226,6 +249,13 @@ export function getModelPricingSync(modelCode: string): ModelPricing {
       if (canonicalCandidates.has(canonicalizeModelCode(code))) {
         return applyThoughtTokenFallback(price)
       }
+    }
+  }
+
+  for (const candidate of getPricingLookupCandidates(modelCode)) {
+    const staticPrice = STATIC_MODEL_PRICING[candidate] || STATIC_MODEL_PRICING[candidate.toLowerCase()]
+    if (staticPrice) {
+      return applyThoughtTokenFallback(staticPrice)
     }
   }
   

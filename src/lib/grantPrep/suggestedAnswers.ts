@@ -1,7 +1,7 @@
 import type { GrantPrepSuggestedAnswer } from './types';
 
 const INLINE_OPTION_LABEL_PATTERN =
-  /(^|[\s\r\n])(?:[-*]\s*)?\*{0,2}(?:option\s+)?([A-C])(?:[.):]|\s*[-\u2013\u2014])\*{0,2}\s+/gi;
+  /(^|[\s\r\n])(?:[-*]\s*)?\*{0,2}(?:(?:option|direction)\s+)?([A-C])(?:[.):]|\s*[-\u2013\u2014])\*{0,2}\s+/gi;
 const APPROVAL_BUNDLE_PREFIX_PATTERN = new RegExp(`\\bI approve this ${'bundle'}:\\s*`, 'gi');
 
 function normalizeLabel(value: string | null | undefined, index: number) {
@@ -19,9 +19,14 @@ function normalizeText(value: string | null | undefined) {
   return (value || '')
     .replace(/\s+<grant_prep_marker>[\s\S]*$/i, '')
     .replace(/\s+<\/grant_prep_marker>[\s\S]*$/i, '')
+    .replace(/\n\s*(?:Would you like|Do you want|Which direction|Which option|Ready to|Are you ready)\b[\s\S]*$/i, '')
     .replace(APPROVAL_BUNDLE_PREFIX_PATTERN, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function shouldUseIncomingText(existingText: string, incomingText: string) {
+  return incomingText.length > existingText.length;
 }
 
 export function removeGrantPrepApprovalBundlePrefix(content: string) {
@@ -73,7 +78,7 @@ export function mergeGrantPrepSuggestedAnswersWithInline(
   limit = 3
 ): GrantPrepSuggestedAnswer[] {
   const merged: GrantPrepSuggestedAnswer[] = [];
-  const labels = new Set<string>();
+  const labelIndexes = new Map<string, number>();
   const addAnswer = (answer: GrantPrepSuggestedAnswer | null | undefined, index: number) => {
     if (!answer) {
       return;
@@ -86,11 +91,24 @@ export function mergeGrantPrepSuggestedAnswersWithInline(
 
     const label = normalizeLabel(answer?.label, index);
     const labelKey = label.toUpperCase();
-    if (labels.has(labelKey) || merged.length >= limit) {
+    const existingIndex = labelIndexes.get(labelKey);
+    if (typeof existingIndex === 'number') {
+      const existing = merged[existingIndex];
+      merged[existingIndex] = {
+        ...existing,
+        text: shouldUseIncomingText(existing.text, text) ? text : existing.text,
+        rationale: existing.rationale ?? answer.rationale ?? null,
+        coverageSummary: existing.coverageSummary ?? answer.coverageSummary ?? null,
+        covers: existing.covers ?? answer.covers,
+      };
       return;
     }
 
-    labels.add(labelKey);
+    if (merged.length >= limit) {
+      return;
+    }
+
+    labelIndexes.set(labelKey, merged.length);
     merged.push({
       ...answer,
       label,

@@ -16,6 +16,7 @@ import {
   launchGrantPrepToLocalWorkspace,
   setGrantBlueprintStatus,
   updateBlueprintPlan,
+  updateBlueprintSectionOverride,
 } from '@/lib/grants/workspace'
 
 const planSectionSchema = z.object({
@@ -72,9 +73,18 @@ const proposalFoundationSchema = z.object({
   keyContributions: z.array(z.string()).default([]),
 })
 
+const sectionOverrideSchema = z.object({
+  sectionKey: z.string().min(1),
+  citationMode: z.enum(GRANT_CITATION_MODES).nullable().optional(),
+  dimensions: z.array(z.string()).max(20).optional(),
+  dimensionTyping: z.record(z.string(), z.enum(GRANT_BLUEPRINT_DIMENSION_TYPES)).optional(),
+  suggestedCitationCount: z.number().int().min(0).max(50).nullable().optional(),
+})
+
 const updateBlueprintSchema = z.object({
   sections: z.array(planSectionSchema).min(1).optional(),
   foundation: proposalFoundationSchema.optional(),
+  sectionOverride: sectionOverrideSchema.optional(),
 })
 
 const blueprintActionSchema = z.object({
@@ -128,12 +138,37 @@ export async function PATCH(
 
   try {
     const payload = updateBlueprintSchema.parse(await request.json())
-    if (!payload.sections && !payload.foundation) {
+    if (!payload.sections && !payload.foundation && !payload.sectionOverride) {
       return NextResponse.json(
-        { message: 'Provide blueprint sections or proposal foundation updates.' },
+        { message: 'Provide blueprint sections, a section override, or proposal foundation updates.' },
         { status: 400 }
       )
     }
+    if (payload.sectionOverride && (payload.sections || payload.foundation)) {
+      return NextResponse.json(
+        { message: 'Section overrides must be sent separately from full blueprint updates.' },
+        { status: 400 }
+      )
+    }
+    if (payload.sectionOverride) {
+      const result = await updateBlueprintSectionOverride({
+        grantSessionId: grantId,
+        tenantId: actor.tenantId,
+        projectId,
+        userId: actor.id,
+        sectionOverride: payload.sectionOverride,
+      })
+
+      return NextResponse.json({
+        blueprint: {
+          id: result.blueprintId,
+          status: result.status,
+          version: result.version,
+        },
+        section: result.section,
+      })
+    }
+
     const sections = payload.sections?.map((section) => ({
       ...section,
       wordBudget: section.wordBudget ?? null,
@@ -189,6 +224,33 @@ export async function POST(
     const payload = blueprintActionSchema.parse(await request.json())
 
     let generationDiagnostics: unknown = null
+
+    if (payload.action === 'freeze' || payload.action === 'generate_dimensions') {
+      const workspace = await getGrantWorkspace({
+        grantSessionId: grantId,
+        tenantId: actor.tenantId,
+      })
+      if (workspace?.grantSession.projectId !== projectId) {
+        return NextResponse.json({ message: 'Grant workspace not found' }, { status: 404 })
+      }
+      if (workspace?.grantSession.prepSession) {
+        const launchPreview = await buildGrantPrepLocalLaunchPreview(workspace.grantSession.prepSession.id, actor)
+        if (!launchPreview.generationReady) {
+          return NextResponse.json(
+            {
+              message: launchPreview.generationBlockedMessage
+                || 'Grant Prep context is not complete enough to run generation yet.',
+              generationReadiness: {
+                overallReadiness: launchPreview.overallReadiness,
+                threshold: launchPreview.generationReadinessThreshold,
+                generationReady: launchPreview.generationReady,
+              },
+            },
+            { status: 409 }
+          )
+        }
+      }
+    }
 
     if (payload.action === 'freeze' || payload.action === 'unfreeze') {
       await setGrantBlueprintStatus({

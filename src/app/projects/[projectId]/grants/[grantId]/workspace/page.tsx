@@ -77,6 +77,10 @@ type GrantWorkspaceResponse = {
   launchPreview?: {
     blockers: Array<{ stageKey: string; pointKey: string; message: string }>
     canLaunch?: boolean
+    overallReadiness?: number
+    generationReady?: boolean
+    generationReadinessThreshold?: number
+    generationBlockedMessage?: string | null
     launchUrl?: string | null
   } | null
 }
@@ -86,6 +90,10 @@ type PaperSession = any
 function countWords(value: string): number {
   const text = String(value || '').replace(/<[^>]*>/g, ' ').trim()
   return text ? text.split(/\s+/).filter(Boolean).length : 0
+}
+
+function readinessPercent(value: number | null | undefined): string {
+  return `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`
 }
 
 function getStructuredResponseJson(section: GrantSection): unknown {
@@ -193,11 +201,13 @@ export default function GrantWorkspacePage() {
   const [hasHydratedStage, setHasHydratedStage] = useState(false)
   const [stageWarning, setStageWarning] = useState<string | null>(null)
   const [stageLockDialog, setStageLockDialog] = useState<string | null>(null)
+  const [incompleteBlueprintLaunchWarning, setIncompleteBlueprintLaunchWarning] = useState<string | null>(null)
   const [selectedSection, setSelectedSection] = useState<string>('')
   const [sectionFilter, setSectionFilter] = useState<'all' | 'app_draft'>('all')
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [launchingBlueprint, setLaunchingBlueprint] = useState(false)
   const autoLaunchAttemptedRef = useRef(false)
+  const incompleteBlueprintLaunchConfirmedRef = useRef(false)
 
   const handleGrantSectionsUpdated = useCallback((sections: GrantSection[]) => {
     setWorkspace((current) => {
@@ -254,7 +264,8 @@ export default function GrantWorkspacePage() {
           if (
             current === 'Preparing the grant blueprint workspace...' ||
             current === 'Preparing the grant blueprint workspace. Try opening the blueprint again in a moment.' ||
-            current === 'Cover the core GrantMentor points, then open the blueprint.'
+            current === 'Cover the core GrantMentor points, then open the blueprint.' ||
+            current === 'Open Grant Prep, review the launch warning, then open the blueprint.'
           ) {
             return null
           }
@@ -496,6 +507,10 @@ export default function GrantWorkspacePage() {
   const draftingSessionId = workspace?.grantSession.draftingSessionId || null
   const hasFrozenBlueprint = workspace?.blueprint?.status === 'FROZEN'
   const hasBlueprint = Boolean(workspace?.blueprint)
+  const prepGenerationDisabledReason = workspace?.launchPreview?.generationReady === false
+    ? workspace.launchPreview.generationBlockedMessage
+      || `Grant Prep is ${readinessPercent(workspace.launchPreview.overallReadiness)} complete. You can inspect this stage, but generation actions are disabled until Grant Prep reaches ${readinessPercent(workspace.launchPreview.generationReadinessThreshold ?? 0.5)}.`
+    : null
 
   useEffect(() => {
     if (!hasFrozenBlueprint) return
@@ -518,7 +533,7 @@ export default function GrantWorkspacePage() {
   }, [loadWorkspace])
 
   const launchBlueprintFromGrantMentor = useCallback(async () => {
-    if (!workspace?.launchPreview?.canLaunch || launchingBlueprint) {
+    if (!workspace?.launchPreview || launchingBlueprint) {
       return false
     }
 
@@ -548,15 +563,19 @@ export default function GrantWorkspacePage() {
     } finally {
       setLaunchingBlueprint(false)
     }
-  }, [authFetch, grantId, hydrateShadowSession, launchingBlueprint, projectId, workspace?.launchPreview?.canLaunch])
+  }, [authFetch, grantId, hydrateShadowSession, launchingBlueprint, projectId, workspace?.launchPreview])
 
   const getStageLockReason = useCallback((stageKey: StageKey): string | null => {
+    if (prepGenerationDisabledReason && stageKey !== 'GRANTMENTOR' && stageKey !== 'BLUEPRINT') {
+      return null
+    }
+
     switch (stageKey) {
       case 'GRANTMENTOR':
         return null
       case 'BLUEPRINT':
-        if (!draftingSessionId && !hasBlueprint && !workspace?.launchPreview?.canLaunch) {
-          return 'Cover the core GrantMentor points, then open the blueprint.'
+        if (!draftingSessionId && !hasBlueprint && !workspace?.launchPreview) {
+          return 'Open Grant Prep, review the launch warning, then open the blueprint.'
         }
         return null
       case 'FIGURE_PLANNER':
@@ -583,7 +602,16 @@ export default function GrantWorkspacePage() {
       default:
         return null
     }
-  }, [citationsCount, deepCandidatesCount, draftedGrantContentCount, draftingSessionId, hasBlueprint, hasFrozenBlueprint, workspace?.launchPreview?.canLaunch])
+  }, [citationsCount, deepCandidatesCount, draftedGrantContentCount, draftingSessionId, hasBlueprint, hasFrozenBlueprint, prepGenerationDisabledReason, workspace?.launchPreview])
+
+  const buildIncompleteBlueprintLaunchWarning = useCallback(() => {
+    const blockerCount = workspace?.launchPreview?.blockers.length || 0
+    const readiness = readinessPercent(workspace?.launchPreview?.overallReadiness)
+    const readinessMessage = workspace?.launchPreview?.generationReady === false
+      ? ` Grant Prep is ${readiness} complete, so generation actions will remain disabled until enough context is captured.`
+      : ''
+    return `${blockerCount} Grant Prep blocker${blockerCount === 1 ? '' : 's'} remain. You can open the blueprint now to inspect the workspace, but incomplete context will be recorded in the handoff snapshot.${readinessMessage}`
+  }, [workspace?.launchPreview])
 
   const handleNavigateToStage = useCallback(async (stageKey: string) => {
     const nextStage = stageKey as StageKey
@@ -602,16 +630,24 @@ export default function GrantWorkspacePage() {
           return
         }
       } else {
+        if (
+          workspace?.launchPreview
+          && workspace.launchPreview.canLaunch === false
+          && !incompleteBlueprintLaunchConfirmedRef.current
+        ) {
+          setIncompleteBlueprintLaunchWarning(buildIncompleteBlueprintLaunchWarning())
+          return
+        }
         const launched = await launchBlueprintFromGrantMentor()
         if (!launched) return
       }
     }
 
-    setStageWarning(null)
+    setStageWarning(nextStage !== 'GRANTMENTOR' ? prepGenerationDisabledReason : null)
     setStageLockDialog(null)
     setCurrentStage(nextStage)
     router.replace(`/projects/${projectId}/grants/${grantId}/workspace?stage=${nextStage}`, { scroll: false })
-  }, [draftingSessionId, getStageLockReason, grantId, launchBlueprintFromGrantMentor, loadWorkspace, projectId, router, workspace?.blueprint])
+  }, [buildIncompleteBlueprintLaunchWarning, draftingSessionId, getStageLockReason, grantId, launchBlueprintFromGrantMentor, loadWorkspace, prepGenerationDisabledReason, projectId, router, workspace?.blueprint, workspace?.launchPreview])
 
   useEffect(() => {
     if (!hasHydratedStage || resolvedCurrentStage !== 'BLUEPRINT' || draftingSessionId) return
@@ -625,8 +661,17 @@ export default function GrantWorkspacePage() {
       void launchBlueprintFromGrantMentor()
       return
     }
-    setStageWarning('Cover the core GrantMentor points, then open the blueprint.')
+    if (workspace?.launchPreview) {
+      const warning = buildIncompleteBlueprintLaunchWarning()
+      setStageWarning(warning)
+      if (workspace.launchPreview.canLaunch === false && !incompleteBlueprintLaunchConfirmedRef.current) {
+        setIncompleteBlueprintLaunchWarning(warning)
+      }
+      return
+    }
+    setStageWarning('Open Grant Prep, review the launch warning, then open the blueprint.')
   }, [
+    buildIncompleteBlueprintLaunchWarning,
     draftingSessionId,
     hasBlueprint,
     hasHydratedStage,
@@ -634,7 +679,7 @@ export default function GrantWorkspacePage() {
     launchBlueprintFromGrantMentor,
     loadWorkspace,
     resolvedCurrentStage,
-    workspace?.launchPreview?.canLaunch,
+    workspace?.launchPreview,
   ])
 
   if (authLoading || loading) {
@@ -761,6 +806,12 @@ export default function GrantWorkspacePage() {
             </div>
           ) : null}
 
+          {prepGenerationDisabledReason && resolvedCurrentStage !== 'GRANTMENTOR' && stageWarning !== prepGenerationDisabledReason ? (
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {prepGenerationDisabledReason}
+            </div>
+          ) : null}
+
           {draftedGrantContentCount > 0 && resolvedCurrentStage === 'BLUEPRINT' ? (
             <div
               className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
@@ -792,6 +843,7 @@ export default function GrantWorkspacePage() {
                   authToken={token}
                   projectId={projectId}
                   grantSessionId={grantId}
+                  generationDisabledReason={prepGenerationDisabledReason}
                   onSessionUpdated={handleBlueprintSessionUpdated}
                   onNavigateToStage={handleNavigateToStage}
                 />
@@ -866,6 +918,60 @@ export default function GrantWorkspacePage() {
           </div>
         </main>
       </div>
+
+      {incompleteBlueprintLaunchWarning ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="grant-incomplete-launch-title"
+            aria-describedby="grant-incomplete-launch-message"
+            className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-full bg-amber-100 p-2 text-amber-600">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 id="grant-incomplete-launch-title" className="text-base font-semibold text-slate-950">
+                  Open blueprint with incomplete Grant Prep?
+                </h2>
+                <p id="grant-incomplete-launch-message" className="mt-2 text-sm leading-6 text-slate-700">
+                  {incompleteBlueprintLaunchWarning}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIncompleteBlueprintLaunchWarning(null)}
+                className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIncompleteBlueprintLaunchWarning(null)}
+                className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Keep editing prep
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  incompleteBlueprintLaunchConfirmedRef.current = true
+                  setIncompleteBlueprintLaunchWarning(null)
+                  void handleNavigateToStage('BLUEPRINT')
+                }}
+                className="inline-flex items-center rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+              >
+                Continue to Blueprint
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {stageLockDialog ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">

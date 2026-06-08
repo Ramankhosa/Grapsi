@@ -44,6 +44,7 @@ import {
   loadGrantPrepSession,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
+import { computeOverallReadiness } from '@/lib/grantPrep/sessionState'
 import type { GuidelinePackDocument } from '@/lib/fundingGuidelines/types'
 import { normalizeGuidelinePack } from '@/lib/fundingGuidelines/utils'
 import type { GrantTemplateDocument, FundingTemplateItem } from '@/lib/fundingTemplates/types'
@@ -59,6 +60,8 @@ import type {
   CompiledGrantTemplateSection,
   CompiledGrantTemplateSectionType,
   GrantBlueprintPlanSection,
+  GrantBlueprintDimensionType,
+  GrantCitationMode,
   GrantComplianceReport,
   GrantThematicBlueprint,
   GrantWorkflowMode,
@@ -71,6 +74,10 @@ export interface LocalGrantLaunchPreview {
   blockers: Array<{ stageKey: string; pointKey: string; message: string }>
   payload: ReturnType<typeof buildGrantPrepFreezePayload>['payload']
   payloadHash: string
+  overallReadiness: number
+  generationReady: boolean
+  generationReadinessThreshold: number
+  generationBlockedMessage: string | null
   sectionPreview: Array<{
     sectionKey: string
     label: string
@@ -89,6 +96,16 @@ export interface GrantProposalFoundation {
   keyContributions: string[]
   status: string | null
   version: number | null
+}
+
+export const GRANT_PREP_GENERATION_READY_THRESHOLD = 0.5
+
+export interface GrantBlueprintSectionOverridePatch {
+  sectionKey: string
+  citationMode?: GrantCitationMode | null
+  dimensions?: string[]
+  dimensionTyping?: Record<string, GrantBlueprintDimensionType>
+  suggestedCitationCount?: number | null
 }
 
 const GRANT_BIBLIOGRAPHY_SECTION_LABEL = 'Bibliography'
@@ -1673,6 +1690,11 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
   const sectionPlan = enrichGrantBlueprintSections(baseSectionPlan, enrichmentContext, 'generate')
   const proposalFoundation = buildGeneratedGrantProposalFoundation(sectionPlan, enrichmentContext)
   const grantSessionId = prepSession.grant_session_id || null
+  const overallReadiness = computeOverallReadiness(prepContext.stageStates)
+  const generationReady = overallReadiness >= GRANT_PREP_GENERATION_READY_THRESHOLD
+  const generationBlockedMessage = generationReady
+    ? null
+    : `Grant Prep is ${Math.round(overallReadiness * 100)}% complete. You can open and inspect the workspace, but generation actions are held until Grant Prep reaches at least ${Math.round(GRANT_PREP_GENERATION_READY_THRESHOLD * 100)}% completion.`
 
   return {
     prepSession,
@@ -1685,6 +1707,9 @@ async function buildLaunchState(sessionId: string, actor: GrantPrepActor) {
     sectionPlan,
     proposalFoundation,
     grantSessionId,
+    overallReadiness,
+    generationReady,
+    generationBlockedMessage,
   }
 }
 
@@ -1700,6 +1725,10 @@ export async function buildGrantPrepLocalLaunchPreview(sessionId: string, actor:
     blockers: state.freeze.blockers,
     payload: state.freeze.payload,
     payloadHash: state.freeze.payloadHash,
+    overallReadiness: state.overallReadiness,
+    generationReady: state.generationReady,
+    generationReadinessThreshold: GRANT_PREP_GENERATION_READY_THRESHOLD,
+    generationBlockedMessage: state.generationBlockedMessage,
     sectionPreview: state.sectionPlan.map((section) => ({
       sectionKey: section.sectionKey,
       label: section.label,
@@ -1719,13 +1748,22 @@ export async function launchGrantPrepToLocalWorkspace(input: {
   overrideReason?: string | null
 }) {
   const state = await buildLaunchState(input.sessionId, input.actor)
-  if (state.freeze.blockers.length > 0 && !input.overrideReason?.trim()) {
-    throw new Error('Grant Prep still has blockers. Provide an override reason to continue.')
-  }
+  const overrideReason = input.overrideReason?.trim()
+    || (state.freeze.blockers.length > 0
+      ? 'User confirmed launch warning for incomplete Grant Prep.'
+      : state.generationReady
+        ? null
+        : 'User opened the grant workspace while Grant Prep completion was below the generation threshold.')
 
   const frozenPayload = {
     ...state.freeze.payload,
-    overrideReason: input.overrideReason?.trim() || null,
+    overrideReason,
+    generationReadiness: {
+      overallReadiness: state.overallReadiness,
+      threshold: GRANT_PREP_GENERATION_READY_THRESHOLD,
+      generationReady: state.generationReady,
+      message: state.generationBlockedMessage,
+    },
   }
   const tenantContext = await resolveGrantTenantContext(input.actor.tenantId, input.actor.id)
   const generatedBlueprint = await generateGrantBlueprintWithLlm({
@@ -1734,7 +1772,7 @@ export async function launchGrantPrepToLocalWorkspace(input: {
     proposalFoundationHint: state.proposalFoundation,
     tenantContext,
     sessionId: input.sessionId,
-    overrideReason: input.overrideReason?.trim() || undefined,
+    overrideReason: overrideReason || undefined,
   })
 
   return prisma.$transaction(async (tx) => {
@@ -2283,6 +2321,197 @@ export async function updateBlueprintPlan(input: {
       }
     }
   })
+}
+
+export function applyGrantBlueprintSectionOverride(
+  sectionPlan: GrantBlueprintPlanSection[],
+  patch: GrantBlueprintSectionOverridePatch
+): { sectionPlan: GrantBlueprintPlanSection[]; section: GrantBlueprintPlanSection } {
+  const sectionKey = String(patch.sectionKey || '').trim()
+  if (!sectionKey || isGrantBibliographySection(sectionKey)) {
+    throw new Error('A valid grant template section is required for section overrides.')
+  }
+
+  const sectionIndex = sectionPlan.findIndex((section) => section.sectionKey === sectionKey)
+  if (sectionIndex < 0) {
+    throw new Error(`Unknown blueprint section: ${sectionKey}`)
+  }
+
+  const existing = sectionPlan[sectionIndex]
+  const nextDimensions = patch.dimensions
+    ? dedupeStringList(patch.dimensions)
+    : dedupeStringList(existing.dimensions || existing.thematicBlueprint?.dimensions || [])
+  let suggestedCitationCount = normalizeGrantSuggestedCitationCount(
+    patch.suggestedCitationCount
+      ?? existing.suggestedCitationCount
+      ?? existing.thematicBlueprint?.suggestedCitationCount
+  )
+  const citationMode = normalizeGrantCitationMode(
+    patch.citationMode ?? existing.citationMode,
+    {
+      sectionType: existing.sectionType,
+      workflowMode: existing.workflowMode,
+      suggestedCitationCount,
+    }
+  )
+  const evidenceMapped = citationMode === 'mapped_evidence'
+  const dimensions = evidenceMapped ? nextDimensions : []
+
+  if (!evidenceMapped) {
+    suggestedCitationCount = 0
+  } else if (typeof suggestedCitationCount !== 'number' && dimensions.length > 0) {
+    suggestedCitationCount = Math.max(2, dimensions.length)
+  }
+
+  const dimensionTyping = evidenceMapped
+    ? normalizeGrantDimensionTyping(
+        dimensions,
+        patch.dimensionTyping
+          ?? existing.dimensionTyping
+          ?? existing.thematicBlueprint?.dimensionTyping
+      )
+    : undefined
+  const mustCoverTyping =
+    normalizeGrantMustCoverTyping(existing.mustCover, existing.mustCoverTyping)
+    || normalizeGrantMustCoverTyping(existing.mustCover, existing.thematicBlueprint?.mustCoverTyping)
+  const thematicBlueprint = buildGrantThematicBlueprint({
+    mustCover: existing.mustCover,
+    mustAvoid: existing.mustAvoid,
+    dimensions,
+    dimensionTyping,
+    mustCoverTyping,
+    suggestedCitationCount,
+  })
+  const section: GrantBlueprintPlanSection = {
+    ...existing,
+    dimensions,
+    citationMode,
+    ...(dimensionTyping ? { dimensionTyping } : { dimensionTyping: undefined }),
+    ...(mustCoverTyping ? { mustCoverTyping } : { mustCoverTyping: undefined }),
+    suggestedCitationCount: suggestedCitationCount ?? null,
+    thematicBlueprint,
+  }
+
+  const nextSectionPlan = sectionPlan.map((item, index) => (
+    index === sectionIndex ? section : item
+  ))
+
+  return {
+    sectionPlan: nextSectionPlan,
+    section,
+  }
+}
+
+export async function updateBlueprintSectionOverride(input: {
+  grantSessionId: string
+  tenantId: string
+  projectId?: string
+  userId: string
+  sectionOverride: GrantBlueprintSectionOverridePatch
+}) {
+  const grantSession = await prisma.grantSession.findFirst({
+    where: {
+      id: input.grantSessionId,
+      tenantId: input.tenantId,
+    },
+    select: {
+      id: true,
+      projectId: true,
+      draftingSessionId: true,
+      blueprint: {
+        select: {
+          id: true,
+          status: true,
+          version: true,
+          sectionPlanJson: true,
+        },
+      },
+      draftingSession: {
+        select: {
+          paperBlueprint: {
+            select: {
+              sessionId: true,
+              sectionPlan: true,
+            },
+          },
+        },
+      },
+    },
+  })
+
+  if (!grantSession?.blueprint) {
+    throw new Error('Grant blueprint not found')
+  }
+  if (input.projectId && grantSession.projectId !== input.projectId) {
+    throw new Error('Grant workspace not found')
+  }
+  if (grantSession.blueprint.status === 'FROZEN') {
+    throw new Error('Cannot update a frozen grant blueprint. Unfreeze it first.')
+  }
+
+  const persistedSectionPlan = Array.isArray(grantSession.blueprint.sectionPlanJson)
+    ? (grantSession.blueprint.sectionPlanJson as unknown as GrantBlueprintPlanSection[]).filter((section) =>
+        !isGrantBibliographySection(section.sectionKey)
+      )
+    : []
+  const { sectionPlan, section } = applyGrantBlueprintSectionOverride(
+    persistedSectionPlan,
+    input.sectionOverride
+  )
+  const paperBlueprint = grantSession.draftingSession?.paperBlueprint || null
+  const nextPaperSectionPlan = paperBlueprint
+    ? buildPaperSectionPlanFromGrantSections(sectionPlan, paperBlueprint.sectionPlan)
+    : null
+  const shouldUpdatePaperBlueprint = Boolean(
+    paperBlueprint
+    && nextPaperSectionPlan
+    && JSON.stringify(paperBlueprint.sectionPlan) !== JSON.stringify(nextPaperSectionPlan)
+  )
+
+  const updatedBlueprint = await prisma.$transaction(async (tx) => {
+    const updated = await tx.grantBlueprint.update({
+      where: { id: grantSession.blueprint!.id },
+      data: {
+        sectionPlanJson: asJson(sectionPlan),
+        status: 'DRAFT',
+        version: { increment: 1 },
+        updatedByUserId: input.userId,
+        frozenAt: null,
+      },
+      select: {
+        id: true,
+        status: true,
+        version: true,
+      },
+    })
+
+    if (paperBlueprint && nextPaperSectionPlan && shouldUpdatePaperBlueprint) {
+      await tx.paperBlueprint.update({
+        where: { sessionId: paperBlueprint.sessionId },
+        data: {
+          sectionPlan: asJson(nextPaperSectionPlan),
+          version: { increment: 1 },
+        },
+      })
+    }
+
+    await tx.grantSession.update({
+      where: { id: input.grantSessionId },
+      data: {
+        status: 'BLUEPRINT',
+        updatedByUserId: input.userId,
+      },
+    })
+
+    return updated
+  })
+
+  return {
+    blueprintId: updatedBlueprint.id,
+    status: updatedBlueprint.status,
+    version: updatedBlueprint.version,
+    section,
+  }
 }
 
 export async function generateBlueprintLiteratureDimensions(input: {

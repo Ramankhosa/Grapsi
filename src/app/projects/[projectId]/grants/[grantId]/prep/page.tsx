@@ -131,7 +131,6 @@ export default function GrantPrepPage(props: any) {
   const [sendCooldown, setSendCooldown] = useState(false);
   const [preview, setPreview] = useState<PrepHandoffPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [overrideReason, setOverrideReason] = useState('');
   const [launching, setLaunching] = useState(false);
   const [actioning, setActioning] = useState<null | 'refresh' | 'restart' | 'archive'>(null);
   const [confirmAction, setConfirmAction] = useState<null | 'restart' | 'archive'>(null);
@@ -418,7 +417,6 @@ export default function GrantPrepPage(props: any) {
       setStageEditorOpen(false);
       setPreview(null);
       setPreviewOpen(false);
-      setOverrideReason('');
       toast.success('Grant Prep mapping refreshed');
     } catch (error) {
       toast.error(
@@ -455,7 +453,6 @@ export default function GrantPrepPage(props: any) {
         setStageEditorOpen(false);
         setPreview(null);
         setPreviewOpen(false);
-        setOverrideReason('');
         setInput('');
         toast.success('Started a new Grant Prep revision');
       } catch (error) {
@@ -632,7 +629,7 @@ export default function GrantPrepPage(props: any) {
     try {
       const response = await axios.post(
         `/api/grant-prep/sessions/${sessionData.id}/handoff`,
-        { overrideReason: overrideReason.trim() || undefined },
+        {},
         axiosConfig()
       );
       toast.success('Local grant workspace created');
@@ -650,7 +647,7 @@ export default function GrantPrepPage(props: any) {
     } finally {
       setLaunching(false);
     }
-  }, [axiosConfig, onWorkspaceLaunched, overrideReason, router, sessionData?.id]);
+  }, [axiosConfig, onWorkspaceLaunched, router, sessionData?.id]);
 
   const handleJumpToKeyword = useCallback(
     async (keyword: string) => {
@@ -1031,8 +1028,6 @@ export default function GrantPrepPage(props: any) {
       <GrantPrepHandoffModal
         isOpen={previewOpen}
         preview={preview}
-        overrideReason={overrideReason}
-        onOverrideReasonChange={setOverrideReason}
         onClose={() => setPreviewOpen(false)}
         onLaunch={launchGrantWorkspace}
         launching={launching}

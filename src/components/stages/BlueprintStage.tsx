@@ -11,7 +11,7 @@
  * - Freeze blueprint when ready for section generation
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles,
@@ -182,6 +182,7 @@ interface BlueprintStageProps {
   authToken: string | null;
   onSessionUpdated?: (session: any) => void | Promise<void>;
   onNavigateToStage?: (stage: string) => void;
+  generationDisabledReason?: string | null;
   grantContext?: {
     grantSessionId: string;
     projectId: string;
@@ -635,6 +636,7 @@ interface GrantBlueprintApplicationViewProps {
   saving: boolean;
   generating: boolean;
   generatingDimensions: boolean;
+  generationDisabledReason?: string | null;
   onGenerate: () => void;
   onGenerateDimensions: () => void;
   onToggleFreeze: () => void;
@@ -649,6 +651,7 @@ function GrantBlueprintApplicationView({
   saving,
   generating,
   generatingDimensions,
+  generationDisabledReason,
   onGenerate,
   onGenerateDimensions,
   onToggleFreeze,
@@ -743,14 +746,20 @@ function GrantBlueprintApplicationView({
                 <Loader2 className="h-4 w-4 animate-spin" /> Saving
               </span>
             ) : null}
-            <Button variant="outline" onClick={onGenerate} disabled={generating || saving}>
+            <Button
+              variant="outline"
+              onClick={onGenerate}
+              disabled={generating || saving || Boolean(generationDisabledReason)}
+              title={generationDisabledReason || undefined}
+            >
               {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
               Regenerate
             </Button>
             <Button
               variant="outline"
               onClick={onGenerateDimensions}
-              disabled={generatingDimensions || generating || saving || isFrozen}
+              disabled={generatingDimensions || generating || saving || isFrozen || Boolean(generationDisabledReason)}
+              title={generationDisabledReason || undefined}
               className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-950"
             >
               {generatingDimensions ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
@@ -758,7 +767,8 @@ function GrantBlueprintApplicationView({
             </Button>
             <Button
               onClick={onToggleFreeze}
-              disabled={saving}
+              disabled={saving || (!isFrozen && Boolean(generationDisabledReason))}
+              title={!isFrozen ? generationDisabledReason || undefined : undefined}
               className={isFrozen ? '' : 'bg-emerald-600 text-white hover:bg-emerald-700'}
               variant={isFrozen ? 'outline' : 'default'}
             >
@@ -770,6 +780,11 @@ function GrantBlueprintApplicationView({
       </div>
 
       <main className="mx-auto max-w-7xl px-6 py-8">
+        {generationDisabledReason ? (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            {generationDisabledReason}
+          </div>
+        ) : null}
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0 flex-1">
@@ -947,6 +962,7 @@ function GrantApplicationSectionCard({
   const appDraftSection = isGrantAppDraftSection(section);
   const canEditCitationMode = appDraftSection && !isLocked;
   const canEditDimensions = evidenceMapped && appDraftSection && !isLocked;
+  const canStartEvidenceMapping = appDraftSection && !isLocked;
   const currentCitationMode = section.citationMode || (evidenceMapped ? 'mapped_evidence' : 'direct_draft');
   const limitLabel = getGrantLimitLabel(section);
   const contract = section.grantSectionComplianceContract;
@@ -1084,6 +1100,71 @@ function GrantApplicationSectionCard({
             ) : null}
           </div>
         </div>
+
+        {!isExpanded && appDraftSection ? (
+          <div
+            className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-white/70 bg-white/80 px-3 py-3 shadow-sm dark:border-slate-800 dark:bg-slate-950/70"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <div className="min-w-[180px] flex-1 sm:flex-none">
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Citation mode
+              </label>
+              <select
+                value={currentCitationMode}
+                onChange={(event) => updateCitationMode(event.target.value as NonNullable<SectionPlanItem['citationMode']>)}
+                disabled={!canEditCitationMode}
+                className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                {CITATION_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex min-h-9 items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-300">
+              <BookOpen className="h-3.5 w-3.5" />
+              {(section.dimensions?.length || 0)} pillars
+            </div>
+
+            {canStartEvidenceMapping ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => updateDimensions([...(section.dimensions || []), 'Add searchable evidence pillar'])}
+              >
+                <Plus className="mr-2 h-4 w-4" /> Add pillar
+              </Button>
+            ) : null}
+
+            {evidenceMapped ? (
+              <div className="flex h-9 items-center gap-2 rounded-lg border border-indigo-100 bg-white px-2 dark:border-indigo-900 dark:bg-slate-950">
+                <button
+                  type="button"
+                  onClick={() => updateCitationTarget((section.suggestedCitationCount || 0) - 1)}
+                  disabled={!canEditDimensions}
+                  className="rounded-md px-2 py-1 text-sm font-bold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                >
+                  -
+                </button>
+                <span className="min-w-[84px] text-center text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  {section.suggestedCitationCount || 0} citations
+                </span>
+                <button
+                  type="button"
+                  onClick={() => updateCitationTarget((section.suggestedCitationCount || 0) + 1)}
+                  disabled={!canEditDimensions}
+                  className="rounded-md px-2 py-1 text-sm font-bold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                >
+                  +
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {isExpanded ? (
@@ -2269,6 +2350,7 @@ export default function BlueprintStage({
   authToken,
   onSessionUpdated,
   onNavigateToStage,
+  generationDisabledReason,
   grantContext
 }: BlueprintStageProps) {
   // Debug: Log props on every render - this should appear in browser console
@@ -2283,6 +2365,7 @@ export default function BlueprintStage({
   const [error, setError] = useState<string | null>(null);
   const [grantManaged, setGrantManaged] = useState(false);
   const [freezeOverrideWarning, setFreezeOverrideWarning] = useState<FreezeOverrideWarning | null>(null);
+  const sectionOverrideRequestSeq = useRef<Record<string, number>>({});
   
   // Editing states
   const [editingThesis, setEditingThesis] = useState(false);
@@ -2364,6 +2447,10 @@ export default function BlueprintStage({
   // Generate blueprint
   const handleGenerate = async () => {
     if (!authToken) return;
+    if (generationDisabledReason) {
+      showToast({ type: 'error', title: 'Generation disabled', message: generationDisabledReason });
+      return;
+    }
     if (grantManaged && !isGrantWorkspace) {
       showToast({ type: 'error', title: 'Managed from grant', message: 'Use the grant blueprint to manage this blueprint.' });
       return;
@@ -2409,6 +2496,10 @@ export default function BlueprintStage({
 
   const handleGenerateDimensions = async () => {
     if (!authToken || !isGrantWorkspace) return;
+    if (generationDisabledReason) {
+      showToast({ type: 'error', title: 'Generation disabled', message: generationDisabledReason });
+      return;
+    }
     if (blueprint?.status === 'FROZEN') {
       showToast({ type: 'error', title: 'Blueprint frozen', message: 'Unfreeze the blueprint before generating literature dimensions.' });
       return;
@@ -2578,6 +2669,10 @@ export default function BlueprintStage({
   // Freeze/unfreeze blueprint
   const handleToggleFreeze = async () => {
     if (!authToken || !blueprint) return;
+    if (generationDisabledReason && blueprint.status !== 'FROZEN') {
+      showToast({ type: 'error', title: 'Generation disabled', message: generationDisabledReason });
+      return;
+    }
     if (grantManaged && !isGrantWorkspace) {
       showToast({ type: 'error', title: 'Managed from grant', message: 'Freeze and unfreeze this blueprint from the grant workspace.' });
       return;
@@ -2626,14 +2721,80 @@ export default function BlueprintStage({
     }
   };
 
+  const persistGrantSectionOverride = useCallback(async (
+    sectionKey: string,
+    updated: SectionPlanItem,
+    rollbackBlueprint: Blueprint
+  ) => {
+    if (!authToken) return;
+
+    const nextSeq = (sectionOverrideRequestSeq.current[sectionKey] || 0) + 1;
+    sectionOverrideRequestSeq.current[sectionKey] = nextSeq;
+
+    try {
+      const res = await fetch(blueprintApiUrl, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          sectionOverride: {
+            sectionKey,
+            citationMode: updated.citationMode ?? null,
+            dimensions: updated.dimensions || [],
+            ...(updated.dimensionTyping ? { dimensionTyping: updated.dimensionTyping } : {}),
+            suggestedCitationCount: typeof updated.suggestedCitationCount === 'number'
+              ? updated.suggestedCitationCount
+              : null,
+          }
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.message || 'Failed to save section override');
+
+      if (sectionOverrideRequestSeq.current[sectionKey] !== nextSeq) return;
+
+      setBlueprint((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          status: data.blueprint?.status || current.status,
+          version: Number(data.blueprint?.version || current.version),
+        };
+      });
+    } catch (err) {
+      if (sectionOverrideRequestSeq.current[sectionKey] === nextSeq) {
+        setBlueprint(rollbackBlueprint);
+      }
+      showToast({
+        type: 'error',
+        title: 'Save failed',
+        message: err instanceof Error ? err.message : 'Unknown error'
+      });
+    }
+  }, [authToken, blueprintApiUrl, showToast]);
+
   // Update section
   const handleUpdateSection = (sectionKey: string, updated: SectionPlanItem) => {
     if (!blueprint) return;
-    
+    const nextSection = syncThematicBlueprint(updated);
     const newSectionPlan = blueprint.sectionPlan.map(s =>
-      s.sectionKey === sectionKey ? syncThematicBlueprint(updated) : s
+      s.sectionKey === sectionKey ? nextSection : s
     );
-    
+
+    if (isGrantWorkspace) {
+      const rollbackBlueprint = blueprint;
+      setBlueprint({
+        ...blueprint,
+        status: 'DRAFT',
+        sectionPlan: newSectionPlan,
+      });
+      void persistGrantSectionOverride(sectionKey, nextSection, rollbackBlueprint);
+      return;
+    }
+
     handleSave({ sectionPlan: newSectionPlan } as any);
   };
 
@@ -2806,6 +2967,7 @@ export default function BlueprintStage({
           saving={saving}
           generating={generating}
           generatingDimensions={generatingDimensions}
+          generationDisabledReason={generationDisabledReason}
           onGenerate={handleGenerate}
           onGenerateDimensions={handleGenerateDimensions}
           onToggleFreeze={handleToggleFreeze}

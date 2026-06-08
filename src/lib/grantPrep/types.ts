@@ -280,6 +280,12 @@ export interface GrantPrepFreezePayload {
   globalCaptureSummary: string[];
   prepEvidence: GrantPrepEvidenceItem[];
   prepEvidenceBySection: Record<string, GrantPrepEvidenceItem[]>;
+  generationReadiness?: {
+    overallReadiness: number;
+    threshold: number;
+    generationReady: boolean;
+    message: string | null;
+  };
   blockers: Array<{
     stageKey: GrantPrepStageKey;
     pointKey: string;

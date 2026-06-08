@@ -154,4 +154,66 @@ describe('LLM cost metering guards', () => {
     expect(block).toContain('inputCostPer1M: 15')
     expect(block).toContain('outputCostPer1M: 0')
   })
+
+  it('resolves Gemini 3 Flash preview pricing from the internal Gemini 3.1 Flash alias', async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/prisma', () => ({
+      prisma: {
+        lLMModel: {
+          findMany: vi.fn(async () => [
+            { code: 'gemini-3.1-flash', inputCostPer1M: 50, outputCostPer1M: 300 },
+          ]),
+        },
+        lLMModelPrice: {
+          findMany: vi.fn(async () => []),
+        },
+      },
+    }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    try {
+      const { getModelPricing } = await import('@/lib/metering/cost-calculator')
+      const pricing = await getModelPricing('gemini-3-flash-preview')
+
+      expect(pricing.input * 1_000_000).toBe(0.5)
+      expect(pricing.output * 1_000_000).toBe(3)
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('Model not found in database: gemini-3-flash-preview')
+      )
+    } finally {
+      warnSpy.mockRestore()
+      vi.doUnmock('@/lib/prisma')
+      vi.resetModules()
+    }
+  })
+
+  it('uses known Gemini 3 Flash pricing instead of the generic fallback when the DB row is missing', async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/prisma', () => ({
+      prisma: {
+        lLMModel: {
+          findMany: vi.fn(async () => []),
+        },
+        lLMModelPrice: {
+          findMany: vi.fn(async () => []),
+        },
+      },
+    }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    try {
+      const { getModelPricing } = await import('@/lib/metering/cost-calculator')
+      const pricing = await getModelPricing('gemini-3-flash-preview')
+
+      expect(pricing.input * 1_000_000).toBe(0.5)
+      expect(pricing.output * 1_000_000).toBe(3)
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('using default pricing ($1/$4 per 1M)')
+      )
+    } finally {
+      warnSpy.mockRestore()
+      vi.doUnmock('@/lib/prisma')
+      vi.resetModules()
+    }
+  })
 })

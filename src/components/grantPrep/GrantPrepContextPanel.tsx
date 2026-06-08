@@ -247,7 +247,7 @@ export default function GrantPrepContextPanel({
 
   const ctaTone =
     overallReadiness < 0.3
-      ? 'disabled'
+      ? 'muted'
       : overallReadiness < 0.65
         ? 'muted'
         : overallReadiness < 0.85
@@ -821,17 +821,15 @@ export default function GrantPrepContextPanel({
         <button
           type="button"
           onClick={onOpenPreview}
-          disabled={sessionLocked || overallReadiness < 0.3}
+          disabled={sessionLocked}
           className={clsx(
             'mt-3 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-all',
-            ctaTone === 'disabled'
-              ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-              : ctaTone === 'muted'
+            ctaTone === 'muted'
                 ? 'bg-slate-800 text-white hover:bg-slate-700'
                 : ctaTone === 'enabled'
                   ? 'bg-prep-accent text-white hover:bg-prep-accentDark shadow-md'
                   : 'bg-prep-accent text-white hover:bg-prep-accentDark shadow-lg ring-2 ring-emerald-200 ring-offset-2',
-            (sessionLocked || overallReadiness < 0.3) && 'cursor-not-allowed'
+            sessionLocked && 'cursor-not-allowed'
           )}
         >
           {sessionLocked ? 'Session is locked' : 'Open Launch Preview'}
@@ -839,8 +837,8 @@ export default function GrantPrepContextPanel({
         <div className="mt-2 text-xs text-slate-500">
           {sessionLocked
             ? 'Open the local grant workspace, or restart prep to create a new revision.'
-            : ctaTone === 'disabled'
-              ? 'Keep working through the core stages before launch.'
+            : overallReadiness < 0.5
+              ? 'You can preview and open the workspace now, but generation will be disabled until Grant Prep reaches 50%.'
               : ctaTone === 'muted'
                 ? 'You can preview now, but some coverage is still thin.'
                 : ctaTone === 'enabled'

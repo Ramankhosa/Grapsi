@@ -15,6 +15,7 @@ import {
 import { resolveGrantTemplateSectionType } from '@/lib/grants/templateSectionType'
 import {
   appendGrantBibliographySectionIfNeeded,
+  applyGrantBlueprintSectionOverride,
   buildPaperSectionPlanFromGrantSections,
 } from '@/lib/grants/workspace'
 import {
@@ -606,6 +607,79 @@ describe('grant workflow mode extraction and runtime', () => {
       sectionType: 'narrative',
       workflowMode: 'app_draft',
     })).toBe(true)
+  })
+
+  it('applies grant blueprint section overrides without rebuilding section draft metadata', () => {
+    const sectionPlan: GrantBlueprintPlanSection[] = [
+      {
+        sectionKey: 'objectives',
+        label: 'Objectives',
+        order: 1,
+        sectionType: 'short_answer',
+        workflowMode: 'app_draft',
+        citationMode: 'direct_draft',
+        required: true,
+        wordBudget: 250,
+        characterLimit: null,
+        purpose: 'Draft the proposal objectives.',
+        reviewerIntent: null,
+        dependencies: [],
+        sourceTemplatePointer: 'objectives',
+        mustCover: ['Problem statement'],
+        mustAvoid: ['Avoid vague claims.'],
+        dimensions: [],
+        suggestedCitationCount: 0,
+        seededContext: '',
+      },
+    ]
+
+    const { sectionPlan: mappedPlan, section } = applyGrantBlueprintSectionOverride(sectionPlan, {
+      sectionKey: 'objectives',
+      citationMode: 'mapped_evidence',
+      dimensions: ['Noise and light triggers', 'noise and light triggers', 'Wearable stress signals'],
+      dimensionTyping: {
+        'Noise and light triggers': 'empirical',
+        'Wearable stress signals': 'comparative',
+      },
+      suggestedCitationCount: 5,
+    })
+
+    expect(section).toMatchObject({
+      sectionKey: 'objectives',
+      label: 'Objectives',
+      citationMode: 'mapped_evidence',
+      dimensions: ['Noise and light triggers', 'Wearable stress signals'],
+      dimensionTyping: {
+        'Noise and light triggers': 'empirical',
+        'Wearable stress signals': 'comparative',
+      },
+      suggestedCitationCount: 5,
+    })
+    expect(section.thematicBlueprint).toMatchObject({
+      mustCover: ['Problem statement'],
+      mustAvoid: ['Avoid vague claims.'],
+      dimensions: ['Noise and light triggers', 'Wearable stress signals'],
+      suggestedCitationCount: 5,
+    })
+
+    const shadowPlan = buildPaperSectionPlanFromGrantSections(mappedPlan, null)
+    expect(shadowPlan[0]).toMatchObject({
+      sectionKey: 'objectives',
+      citationMode: 'mapped_evidence',
+      dimensions: ['Noise and light triggers', 'Wearable stress signals'],
+      suggestedCitationCount: 5,
+    })
+
+    const { section: directDraftSection } = applyGrantBlueprintSectionOverride(mappedPlan, {
+      sectionKey: 'objectives',
+      citationMode: 'direct_draft',
+    })
+    expect(directDraftSection).toMatchObject({
+      citationMode: 'direct_draft',
+      dimensions: [],
+      suggestedCitationCount: 0,
+    })
+    expect(directDraftSection.dimensionTyping).toBeUndefined()
   })
 
   it('appends the dynamic bibliography section last only when active citations exist', () => {

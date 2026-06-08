@@ -9,18 +9,18 @@ import {
 type Props = {
   isOpen: boolean;
   preview: PrepHandoffPreview | null;
-  overrideReason: string;
-  onOverrideReasonChange: (value: string) => void;
   onClose: () => void;
   onLaunch: () => void;
   launching: boolean;
 };
 
+function percent(value: number | null | undefined) {
+  return `${Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)}%`;
+}
+
 export default function GrantPrepHandoffModal({
   isOpen,
   preview,
-  overrideReason,
-  onOverrideReasonChange,
   onClose,
   onLaunch,
   launching,
@@ -28,6 +28,8 @@ export default function GrantPrepHandoffModal({
   const previewSections = preview?.sectionPreview || [];
   const appDraftCount = previewSections.filter((section) => section.workflowMode === 'app_draft').length;
   const manualDraftCount = previewSections.length - appDraftCount;
+  const generationReady = preview?.generationReady !== false;
+  const overallReadiness = preview?.overallReadiness ?? null;
 
   return (
     <Transition.Root show={isOpen} as={Fragment}>
@@ -58,7 +60,7 @@ export default function GrantPrepHandoffModal({
               <Dialog.Panel className="w-full max-w-2xl rounded-2xl border border-slate-200/80 bg-white p-6 shadow-prep-float">
                 <Dialog.Title className="text-lg font-semibold text-slate-900">Launch Preview</Dialog.Title>
                 <div className="mt-2 text-sm text-slate-600">
-                  Review blockers before freezing the Grant Prep snapshot and launching the local Grapsi grant workspace.
+                  Review the warning before freezing the Grant Prep snapshot and opening the local Grapsi grant workspace.
                 </div>
                 {previewSections.length > 0 ? (
                   <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -118,15 +120,16 @@ export default function GrantPrepHandoffModal({
                           {blocker.message}
                         </div>
                       ))}
-                      <textarea
-                        value={overrideReason}
-                        onChange={(event) => onOverrideReasonChange(event.target.value)}
-                        rows={3}
-                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-prep-accent focus:ring-2 focus:ring-emerald-100"
-                        placeholder="Override reason for launching despite blockers."
-                      />
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        You can continue without completing these Grant Prep points. The workspace will open for review and exploration, and incomplete context will be recorded in the handoff snapshot.
+                      </div>
                     </>
                   )}
+                  {!generationReady ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                      Grant Prep is {percent(overallReadiness)} complete. You can visit the blueprint and downstream stages, but generation actions will stay disabled until Grant Prep reaches {percent(preview?.generationReadinessThreshold ?? 0.5)} completion.
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="mt-6 flex items-center justify-end gap-3">
@@ -140,10 +143,10 @@ export default function GrantPrepHandoffModal({
                   <button
                     type="button"
                     onClick={onLaunch}
-                    disabled={launching || (Boolean(preview?.blockers.length) && !overrideReason.trim())}
+                    disabled={launching}
                     className="rounded-xl bg-prep-accent px-4 py-2 text-sm font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
-                    {launching ? 'Launching...' : 'Confirm and Launch'}
+                    {launching ? 'Launching...' : preview?.blockers.length ? 'Confirm warning and launch' : 'Confirm and Launch'}
                   </button>
                 </div>
               </Dialog.Panel>

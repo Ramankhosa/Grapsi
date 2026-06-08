@@ -81,7 +81,7 @@ function buildOptionCombinations(options: SuggestedAnswer[]) {
  * Only applied to the last assistant message to avoid duplicate display.
  */
 function stripInlineOptions(text: string): string {
-  const firstOption = text.search(/(^|[\s\r\n])(?:[-*]\s*)?\*{0,2}(?:option\s+)?[A-C](?:[.):]|\s*[-\u2013\u2014])\*{0,2}\s+/i);
+  const firstOption = text.search(/(^|[\s\r\n])(?:[-*]\s*)?\*{0,2}(?:(?:option|direction)\s+)?[A-C](?:[.):]|\s*[-\u2013\u2014])\*{0,2}\s+/i);
   if (firstOption === -1) {
     return text.trimEnd();
   }
@@ -306,7 +306,7 @@ export default function GrantPrepChatPane({
                         type="button"
                         onClick={() => onInputChange(option.text)}
                         disabled={sessionLocked}
-                        className="w-full text-left disabled:opacity-50"
+                        className="w-full whitespace-pre-line text-left leading-relaxed disabled:opacity-50"
                       >
                         <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 group-hover:bg-emerald-100 group-hover:text-emerald-700">
                           {option.label}

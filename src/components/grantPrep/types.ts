@@ -80,6 +80,10 @@ export type PrepDraftingContext = {
 
 export type PrepHandoffPreview = {
   blockers: Array<{ stageKey: string; pointKey: string; message: string }>;
+  overallReadiness?: number;
+  generationReady?: boolean;
+  generationReadinessThreshold?: number;
+  generationBlockedMessage?: string | null;
   sectionPreview?: Array<{
     sectionKey: string;
     label: string;
