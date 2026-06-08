@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Loader2, Search, Globe, BookOpen } from 'lucide-react'
+import { readJsonResponse } from '@/lib/client/response-json'
 
 interface CitationPickerModalProps {
   open: boolean
@@ -184,7 +185,10 @@ export default function CitationPickerModal({
         })
       })
       
-      const data = await response.json()
+      const data = await readJsonResponse<{
+        results?: SearchResult[]
+        error?: string
+      }>(response)
       if (!response.ok) {
         throw new Error(data.error || 'Search failed')
       }

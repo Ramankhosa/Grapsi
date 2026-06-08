@@ -3831,6 +3831,15 @@ export default function SectionDraftingStage({
     );
   }
 
+  if (!authToken) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+        <span className="ml-3 text-slate-600">Connecting to your drafting session...</span>
+      </div>
+    );
+  }
+
   if (profileError || !paperTypeCode) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -4653,7 +4662,7 @@ export default function SectionDraftingStage({
                         )}
 
                         {!isWorking && !dimensionState.started && !hasDraftContent && (
-                          <div className="mt-2 flex items-center gap-2 text-xs opacity-60 transition-opacity duration-200 hover:opacity-100">
+                          <div className="mt-2 flex items-center gap-2 text-xs">
                             <button
                               type="button"
                               onClick={() => void handleGenerate([keyName])}

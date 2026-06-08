@@ -218,8 +218,8 @@ const SECTION_ICONS: Record<string, any> = {
 
 const CITATION_MODE_OPTIONS = [
   { value: 'mapped_evidence', label: 'Mapped Evidence' },
-  { value: 'direct_draft', label: 'Direct Draft' },
-  { value: 'no_citations', label: 'No Citations' },
+  { value: 'direct_draft', label: 'Draft from Grant Prep' },
+  { value: 'no_citations', label: 'Citations Not Allowed' },
 ] as const;
 
 const ALL_SECTIONS_FILTER = '__all_sections__';
@@ -591,6 +591,26 @@ function uniqueGrantList(items: unknown[], limit = 8): string[] {
     if (next.length >= limit) break;
   }
   return next;
+}
+
+function buildNewEvidencePillarLabel(existingDimensions: unknown[]): string {
+  const existing = new Set(
+    uniqueGrantList(existingDimensions, 20).map((dimension) => dimension.toLowerCase())
+  );
+  const baseLabel = 'New searchable evidence pillar';
+
+  if (!existing.has(baseLabel.toLowerCase())) {
+    return baseLabel;
+  }
+
+  for (let index = 2; index <= 20; index += 1) {
+    const label = `${baseLabel} ${index}`;
+    if (!existing.has(label.toLowerCase())) {
+      return label;
+    }
+  }
+
+  return `${baseLabel} ${existing.size + 1}`;
 }
 
 function renderGrantBulletList(items: string[] | undefined, emptyLabel: string, className = 'text-slate-700 dark:text-slate-200') {
@@ -1134,7 +1154,10 @@ function GrantApplicationSectionCard({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => updateDimensions([...(section.dimensions || []), 'Add searchable evidence pillar'])}
+                onClick={() => updateDimensions([
+                  ...(section.dimensions || []),
+                  buildNewEvidencePillarLabel(section.dimensions || []),
+                ])}
               >
                 <Plus className="mr-2 h-4 w-4" /> Add pillar
               </Button>
@@ -1294,7 +1317,10 @@ function GrantApplicationSectionCard({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => updateDimensions([...(section.dimensions || []), 'Add searchable evidence pillar'])}
+                      onClick={() => updateDimensions([
+                        ...(section.dimensions || []),
+                        buildNewEvidencePillarLabel(section.dimensions || []),
+                      ])}
                     >
                       <Plus className="mr-2 h-4 w-4" /> Add pillar
                     </Button>

@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import CitationManager from '@/components/paper/CitationManager';
 import { useToast } from '@/components/ui/toast';
 import { DocumentUploadDialog } from '@/components/library/DocumentUploadDialog';
+import { readJsonResponse } from '@/lib/client/response-json';
 
 interface LiteratureSearchStageProps {
   sessionId: string;
@@ -1414,7 +1415,11 @@ export default function LiteratureSearchStage({
         signal: abortController.signal
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<{
+        results?: any[];
+        searchRunId?: string | null;
+        error?: string;
+      }>(response);
       if (!response.ok) {
         throw new Error(data.error || 'Search failed');
       }
@@ -1443,9 +1448,10 @@ export default function LiteratureSearchStage({
       });
       
       // Track search run ID for this batch
-      if (data.searchRunId) {
-        setSearchRunId(data.searchRunId);
-        setSearchRunIds(prev => (prev.includes(data.searchRunId) ? prev : [...prev, data.searchRunId]));
+      if (typeof data.searchRunId === 'string' && data.searchRunId) {
+        const nextSearchRunId = data.searchRunId;
+        setSearchRunId(nextSearchRunId);
+        setSearchRunIds(prev => (prev.includes(nextSearchRunId) ? prev : [...prev, nextSearchRunId]));
       }
       
       // Show feedback about accumulation

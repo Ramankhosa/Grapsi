@@ -783,14 +783,18 @@ class SemanticScholarProvider implements SearchProvider {
   private readonly MIN_REQUEST_INTERVAL_MS = 1000; // 1 second between requests
   private readonly FETCH_TIMEOUT_MS = 30000; // 30 second timeout
 
-  private getHeaders(): Record<string, string> {
+  private hasApiKey(): boolean {
+    return Boolean(process.env.SEMANTIC_SCHOLAR_API_KEY?.trim());
+  }
+
+  private getHeaders(useApiKey: boolean = true): Record<string, string> {
     const headers: Record<string, string> = {
       'User-Agent': 'Research-Paper-Writing-App/1.0'
     };
     
     // Add API key if configured (enables higher rate limits)
-    const apiKey = process.env.SEMANTIC_SCHOLAR_API_KEY;
-    if (apiKey) {
+    const apiKey = process.env.SEMANTIC_SCHOLAR_API_KEY?.trim();
+    if (useApiKey && apiKey) {
       headers['x-api-key'] = apiKey;
     }
     
@@ -810,6 +814,26 @@ class SemanticScholarProvider implements SearchProvider {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  private async fetchWithAuthFallback(url: string, context: string): Promise<Response> {
+    const response = await this.fetchWithTimeout(url, {
+      headers: this.getHeaders(true)
+    });
+
+    if (response.status !== 403 || !this.hasApiKey()) {
+      return response;
+    }
+
+    const errorBody = await response.text().catch(() => 'Unable to read error body');
+    console.warn(
+      `[SemanticScholar] ${context} API key was rejected (403); retrying without SEMANTIC_SCHOLAR_API_KEY. ${errorBody.substring(0, 500)}`
+    );
+
+    this.lastRequestTime = Date.now();
+    return this.fetchWithTimeout(url, {
+      headers: this.getHeaders(false)
+    });
   }
 
   async search(query: string, options: SearchOptions): Promise<SearchResult[]> {
@@ -898,9 +922,7 @@ class SemanticScholarProvider implements SearchProvider {
         const url = `https://api.semanticscholar.org/graph/v1/paper/search?${params}`;
         console.log(`[SemanticScholar] Searching: ${url.substring(0, 200)}...`);
         
-        const response = await this.fetchWithTimeout(url, {
-          headers: this.getHeaders()
-        });
+        const response = await this.fetchWithAuthFallback(url, 'Search');
 
         if (response.status === 429) {
           // Rate limited - apply exponential backoff
@@ -911,6 +933,12 @@ class SemanticScholarProvider implements SearchProvider {
           console.warn(`Semantic Scholar rate limited (429). Waiting ${backoffMs}ms before retry ${attempt + 1}/${maxRetries}`);
           await new Promise(resolve => setTimeout(resolve, backoffMs));
           continue;
+        }
+
+        if (response.status === 403) {
+          const errorBody = await response.text().catch(() => 'Unable to read error body');
+          console.error(`[SemanticScholar] API forbidden (403) after auth fallback: ${errorBody.substring(0, 500)}`);
+          return [];
         }
 
         if (!response.ok) {
@@ -951,9 +979,10 @@ class SemanticScholarProvider implements SearchProvider {
         this.lastRequestTime = Date.now();
         const fields = 'title,authors,year,venue,journal,abstract,citationCount,externalIds,url,publicationTypes,isOpenAccess,fieldsOfStudy,openAccessPdf';
         // Try DOI first
-        const response = await this.fetchWithTimeout(`https://api.semanticscholar.org/graph/v1/paper/DOI:${identifier}?fields=${encodeURIComponent(fields)}`, {
-          headers: this.getHeaders()
-        });
+        const response = await this.fetchWithAuthFallback(
+          `https://api.semanticscholar.org/graph/v1/paper/DOI:${identifier}?fields=${encodeURIComponent(fields)}`,
+          'Identifier lookup'
+        );
 
         if (response.status === 429) {
           // Rate limited - apply exponential backoff

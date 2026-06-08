@@ -55,7 +55,7 @@ export default function SectionFloatingToolbar({
   disabled,
 }: SectionFloatingToolbarProps) {
   return (
-    <div className="section-float-toolbar pointer-events-none absolute -top-3 right-0 z-10 flex gap-0.5 rounded-lg border border-slate-200 bg-white px-1.5 py-1 shadow-[0_2px_8px_rgba(0,0,0,0.06)] opacity-0 transition-opacity duration-200 group-hover/section:opacity-100 group-focus-within/section:opacity-100">
+    <div className="section-float-toolbar pointer-events-none absolute -top-3 right-0 z-10 flex gap-0.5 rounded-lg border border-slate-200 bg-white px-1.5 py-1 shadow-[0_2px_8px_rgba(0,0,0,0.06)] opacity-70 transition-opacity duration-200 group-hover/section:opacity-100 group-focus-within/section:opacity-100">
       <div className="pointer-events-auto flex items-center gap-0.5">
         <ToolbarButton
           title="Generate"

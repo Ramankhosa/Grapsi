@@ -368,6 +368,129 @@ function deduplicatePapers(papers: any[]) {
   return unique;
 }
 
+function getPaperId(value: any): string {
+  return String(value?.id || value?.paperId || value?.citationKey || '').trim();
+}
+
+function buildPaperAnalysisKeys(paper: any): string[] {
+  if (!paper || typeof paper !== 'object') return [];
+
+  const keys = new Set<string>();
+  const paperId = getPaperId(paper);
+  const provider = normalizeProvider(paper.source || paper.paperSource || paper.importProvider);
+  const doi = normalizeDoi(paper.doi || paper.paperDoi);
+  const title = normalizeTitle(paper.title || paper.paperTitle);
+  const year = toYearOrNull(paper.year);
+  const firstAuthor = Array.isArray(paper.authors) && paper.authors.length > 0
+    ? normalizeAuthor(String(paper.authors[0]))
+    : normalizeAuthor(paper.firstAuthorNormalized);
+
+  if (paperId) keys.add(`id:${paperId.toLowerCase()}`);
+  if (doi) keys.add(`doi:${doi}`);
+  if (provider && paperId) keys.add(`provider:${provider}:${paperId.toLowerCase()}`);
+  if (title) {
+    keys.add(`title:${title}`);
+    keys.add(`title-year:${title}:${year ?? 'na'}`);
+    if (firstAuthor) {
+      keys.add(`title-year-author:${title}:${year ?? 'na'}:${firstAuthor}`);
+    }
+  }
+
+  const identityKey = typeof paper.paperIdentityKey === 'string' ? paper.paperIdentityKey.trim().toLowerCase() : '';
+  if (identityKey) keys.add(`identity:${identityKey}`);
+
+  return Array.from(keys);
+}
+
+function buildSuggestionAnalysisKeys(suggestion: any): string[] {
+  if (!suggestion || typeof suggestion !== 'object') return [];
+
+  const keys = new Set<string>();
+  const paperId = typeof suggestion.paperId === 'string' ? suggestion.paperId.trim() : '';
+  const providerPaperId = typeof suggestion.providerPaperId === 'string'
+    ? suggestion.providerPaperId.trim()
+    : '';
+  const provider = normalizeProvider(suggestion.paperSource);
+  const doi = normalizeDoi(suggestion.paperDoi);
+  const title = normalizeTitle(suggestion.paperTitle);
+
+  if (paperId) keys.add(`id:${paperId.toLowerCase()}`);
+  if (providerPaperId) keys.add(`id:${providerPaperId.toLowerCase()}`);
+  if (provider && providerPaperId) keys.add(`provider:${provider}:${providerPaperId.toLowerCase()}`);
+  if (doi) keys.add(`doi:${doi}`);
+  if (title) keys.add(`title:${title}`);
+
+  const identityKey = typeof suggestion.paperIdentityKey === 'string'
+    ? suggestion.paperIdentityKey.trim().toLowerCase()
+    : '';
+  if (identityKey) keys.add(`identity:${identityKey}`);
+
+  return Array.from(keys);
+}
+
+function buildAnalysisPaperIndex(papers: any[]): Map<string, any> {
+  const index = new Map<string, any>();
+  for (const paper of papers) {
+    for (const key of buildPaperAnalysisKeys(paper)) {
+      if (!index.has(key)) {
+        index.set(key, paper);
+      }
+    }
+  }
+  return index;
+}
+
+function buildRunResultIndex(results: any[]): Map<string, any> {
+  const byId = new Map<string, any>();
+  for (const result of results) {
+    const paperId = getPaperId(result);
+    if (paperId && !byId.has(paperId)) {
+      byId.set(paperId, result);
+    }
+  }
+  return byId;
+}
+
+function findIndexedPaper(keys: string[], index: Map<string, any>): any | null {
+  for (const key of keys) {
+    const paper = index.get(key);
+    if (paper) return paper;
+  }
+  return null;
+}
+
+function alignSuggestionToPaper(suggestion: any, paper: any): any {
+  const paperId = getPaperId(paper);
+  const normalizedDoi = normalizeDoi(paper?.doi);
+  const normalizedTitle = normalizeTitle(paper?.title);
+  const firstAuthor = Array.isArray(paper?.authors) && paper.authors.length > 0
+    ? normalizeAuthor(String(paper.authors[0]))
+    : 'na';
+  const identityKey = normalizedDoi
+    ? `doi:${normalizedDoi}`
+    : (normalizedTitle
+      ? `tfp:${normalizedTitle}|y:${paper?.year || 'na'}|fa:${firstAuthor || 'na'}`
+      : suggestion.paperIdentityKey);
+
+  return {
+    ...suggestion,
+    paperId: paperId || suggestion.paperId,
+    paperTitle: paper?.title || suggestion.paperTitle,
+    paperDoi: paper?.doi || suggestion.paperDoi,
+    paperSource: paper?.source || suggestion.paperSource,
+    providerPaperId: paperId || suggestion.providerPaperId,
+    paperIdentityKey: identityKey,
+    paperIsOpenAccess: typeof paper?.isOpenAccess === 'boolean'
+      ? paper.isOpenAccess
+      : (suggestion.paperIsOpenAccess ?? null),
+    paperPdfStatus: normalizePdfStatus(
+      typeof paper?.pdfStatus === 'string'
+        ? paper.pdfStatus.trim().toUpperCase()
+        : (paper?.pdfStatus || suggestion.paperPdfStatus)
+    )
+  };
+}
+
 async function getSessionForUser(
   sessionId: string,
   user: { id: string; roles?: string[]; tenantId?: string | null },
@@ -2038,37 +2161,83 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
     const existingRemoved = Array.isArray(existingAnalysis.removedResultIds)
       ? existingAnalysis.removedResultIds
       : [];
-    const existingSuggestions: any[] = Array.isArray(existingAnalysis.suggestions) ? existingAnalysis.suggestions : [];
-    const normalizedExistingSuggestions = existingSuggestions
-      .map(suggestion => normalizeSuggestionForOutput(suggestion, blueprint))
-      .filter(suggestion => Boolean(suggestion?.paperId));
-    const previouslyFailedIds = new Set<string>(
-      Array.isArray(existingAnalysis.analysisMeta?.failedPaperIds) ? existingAnalysis.analysisMeta.failedPaperIds : []
-    );
-    const alreadyAnalyzedIds = new Set<string>(
-      normalizedExistingSuggestions.map((s: any) => String(s.paperId || ''))
-    );
+    const analysisPaperIndex = buildAnalysisPaperIndex(papersToAnalyze);
+    const carriedSuggestionByPaperId = new Map<string, any>();
+    const previouslyFailedKeys = new Set<string>();
+
+    for (const run of allRuns) {
+      const runAnalysis = (run.aiAnalysis as any) || {};
+      const runResults = Array.isArray(run.results) ? run.results : [];
+      const runResultById = buildRunResultIndex(runResults);
+
+      const failedIds = Array.isArray(runAnalysis.analysisMeta?.failedPaperIds)
+        ? runAnalysis.analysisMeta.failedPaperIds
+        : [];
+      for (const failedIdRaw of failedIds) {
+        const failedId = String(failedIdRaw || '').trim();
+        if (!failedId) continue;
+
+        previouslyFailedKeys.add(`id:${failedId.toLowerCase()}`);
+        const failedRunResult = runResultById.get(failedId);
+        if (failedRunResult) {
+          for (const key of buildPaperAnalysisKeys(failedRunResult)) {
+            previouslyFailedKeys.add(key);
+          }
+        }
+      }
+
+      const runSuggestions: any[] = Array.isArray(runAnalysis.suggestions)
+        ? runAnalysis.suggestions
+        : [];
+      for (const suggestionRaw of runSuggestions) {
+        const normalizedSuggestion = normalizeSuggestionForOutput(suggestionRaw, blueprint);
+        if (!normalizedSuggestion?.paperId) continue;
+
+        const suggestionKeys = new Set<string>(buildSuggestionAnalysisKeys(normalizedSuggestion));
+        const sourceRunResult = runResultById.get(String(normalizedSuggestion.paperId || ''))
+          || runResultById.get(String(normalizedSuggestion.providerPaperId || ''));
+        if (sourceRunResult) {
+          for (const key of buildPaperAnalysisKeys(sourceRunResult)) {
+            suggestionKeys.add(key);
+          }
+        }
+
+        const currentPaper = findIndexedPaper(Array.from(suggestionKeys), analysisPaperIndex);
+        if (!currentPaper) continue;
+
+        const currentPaperId = getPaperId(currentPaper);
+        if (!currentPaperId || carriedSuggestionByPaperId.has(currentPaperId)) continue;
+
+        const alignedSuggestion = normalizeSuggestionForOutput(
+          alignSuggestionToPaper(normalizedSuggestion, currentPaper),
+          blueprint
+        );
+        carriedSuggestionByPaperId.set(currentPaperId, alignedSuggestion);
+      }
+    }
 
     let papersNeedingAnalysis: typeof papersToAnalyze;
     let carriedOverSuggestions: any[] = [];
 
-    if (forceReanalyze || existingSuggestions.length === 0) {
-      // First analysis or explicit re-analysis — send everything
+    if (forceReanalyze) {
+      // Explicit re-analysis sends everything.
       papersNeedingAnalysis = papersToAnalyze;
     } else {
-      // Incremental: only analyze papers that are NEW or previously FAILED
+      carriedOverSuggestions = Array.from(carriedSuggestionByPaperId.values());
       papersNeedingAnalysis = papersToAnalyze.filter((p: any) => {
-        const pid = String(p.id || p.paperId || p.citationKey || '');
-        return !alreadyAnalyzedIds.has(pid) || previouslyFailedIds.has(pid);
-      });
-      // Carry over successful suggestions from the previous run
-      carriedOverSuggestions = normalizedExistingSuggestions.filter((s: any) => {
-        const pid = String(s.paperId || '');
-        return !previouslyFailedIds.has(pid);
+        const paperId = getPaperId(p);
+        return !paperId || !carriedSuggestionByPaperId.has(paperId);
       });
     }
 
-    console.log(`[LiteratureRelevance] Analyzing ${papersNeedingAnalysis.length} papers (${papersWithAbstracts.length} with abstracts, ${skippedNoAbstract.length} skipped, ${carriedOverSuggestions.length} carried over from previous analysis, forceReanalyze=${forceReanalyze})`);
+    const previouslyFailedQueued = forceReanalyze
+      ? 0
+      : papersNeedingAnalysis.filter((paper: any) =>
+          buildPaperAnalysisKeys(paper).some(key => previouslyFailedKeys.has(key))
+        ).length;
+    const pendingQueued = Math.max(0, papersNeedingAnalysis.length - previouslyFailedQueued);
+
+    console.log(`[LiteratureRelevance] Analyzing ${papersNeedingAnalysis.length} papers (${pendingQueued} pending, ${previouslyFailedQueued} previously failed, ${papersWithAbstracts.length} with abstracts, ${skippedNoAbstract.length} skipped, ${carriedOverSuggestions.length} carried over from session analysis, forceReanalyze=${forceReanalyze})`);
 
     // If all papers were already analyzed and none need re-analysis, return the existing data
     if (papersNeedingAnalysis.length === 0 && carriedOverSuggestions.length > 0) {
@@ -2080,6 +2249,20 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       const blueprintCoverage = blueprint?.sectionPlan
         ? calculateBlueprintCoverage(blueprint, normalizedCarryOver)
         : undefined;
+      const completedCarryOverMeta = {
+        totalPapers: papersToAnalyze.length,
+        reviewedPapers: normalizedCarryOver.length,
+        failedPapers: 0,
+        failedPaperIds: [],
+        skippedNoAbstractIds,
+        skippedNoAbstractCount: skippedNoAbstractIds.length,
+        status: 'COMPLETED',
+        processedBatches: 0,
+        totalBatches: 0,
+        carriedOverPapers: normalizedCarryOver.length,
+        queuedPapers: 0,
+        progressUpdatedAt: new Date().toISOString()
+      };
       await prisma.literatureSearchRun.update({
         where: { id: searchRunId },
         data: {
@@ -2090,6 +2273,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
             blueprintCoverage,
             shortlistSummary,
             removedResultIds: existingRemoved,
+            analysisMeta: completedCarryOverMeta,
           } as any
         }
       });
@@ -2102,23 +2286,10 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           blueprintCoverage,
           shortlistSummary,
           analyzedAt: existingAnalysis.analyzedAt || new Date().toISOString(),
-          papersAnalyzed: papersToAnalyze.length,
+          papersAnalyzed: 0,
           blueprintIncluded: !!blueprint,
           parseError: false,
-          analysisMeta: existingAnalysis.analysisMeta || {
-            totalPapers: papersToAnalyze.length,
-            reviewedPapers: normalizedCarryOver.length,
-            failedPapers: 0,
-            failedPaperIds: [],
-            skippedNoAbstractIds,
-            skippedNoAbstractCount: skippedNoAbstractIds.length,
-            status: 'COMPLETED',
-            processedBatches: 0,
-            totalBatches: 0,
-            carriedOverPapers: normalizedCarryOver.length,
-            queuedPapers: 0,
-            progressUpdatedAt: new Date().toISOString()
-          }
+          analysisMeta: completedCarryOverMeta
         }
       });
     }
@@ -2586,7 +2757,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
             sectionCoverage: {}
           } : undefined,
           analyzedAt: new Date().toISOString(),
-          papersAnalyzed: papersToAnalyze.length,
+          papersAnalyzed: papersNeedingAnalysis.length,
           blueprintIncluded: !!blueprint,
           parseError: true,
           analysisMeta: finalAnalysisMeta
@@ -2754,7 +2925,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         resource: `literature_search_run:${searchRunId}`,
         meta: {
           sessionId,
-          papersAnalyzed: papersToAnalyze.length,
+          papersAnalyzed: papersNeedingAnalysis.length,
           suggestionsReturned: sortedSuggestions.length,
           tokensUsed: totalOutputTokens,
           blueprintIncluded: !!blueprint,
@@ -2773,7 +2944,7 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         blueprintCoverage,
         shortlistSummary,
         analyzedAt: new Date().toISOString(),
-        papersAnalyzed: papersToAnalyze.length,
+          papersAnalyzed: papersNeedingAnalysis.length,
         blueprintIncluded: !!blueprint,
         parseError: parseError || undefined,
         analysisMeta: finalAnalysisMeta
