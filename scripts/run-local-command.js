@@ -44,6 +44,25 @@ function loadDatabaseUrlFromRepoEnv() {
   }
 }
 
+function withNextBuildHeapLimit(env, command, args) {
+  if (command !== 'next' || args[0] !== 'build') {
+    return env;
+  }
+
+  const nodeOptions = env.NODE_OPTIONS || '';
+  if (/--max[-_]old[-_]space[-_]size(?:=|\s+)/.test(nodeOptions)) {
+    return env;
+  }
+
+  const requestedMb = Number.parseInt(env.NEXT_BUILD_MAX_OLD_SPACE_SIZE || '', 10);
+  const heapMb = Number.isFinite(requestedMb) && requestedMb > 0 ? requestedMb : 4096;
+
+  return {
+    ...env,
+    NODE_OPTIONS: `${nodeOptions} --max-old-space-size=${heapMb}`.trim(),
+  };
+}
+
 const [, , command, ...args] = process.argv;
 
 if (!command) {
@@ -56,7 +75,7 @@ loadDatabaseUrlFromRepoEnv();
 const result = spawnSync(command, args, {
   stdio: 'inherit',
   shell: process.platform === 'win32',
-  env: process.env,
+  env: withNextBuildHeapLimit(process.env, command, args),
 });
 
 if (result.error) {
