@@ -32,6 +32,7 @@ import type { UserRole, ServiceType, TeamRole } from '@/lib/prisma-generated'
 import { getPatentDraftingQuota } from './patent-drafting-tracker'
 import { checkServiceQuota, getServiceUsage } from './service-usage-tracker'
 import { checkTrialQuotaForService } from './trial-plan-service'
+import { ensureTenantEntitlementForSignup, getActiveTenantEntitlement } from './entitlement-service'
 
 // ============================================================================
 // Types
@@ -500,6 +501,13 @@ export async function checkServiceAccess(
       roles: true,
       status: true,
       tenantId: true,
+      signupAtiTokenId: true,
+      signupAtiToken: {
+        select: {
+          id: true,
+          planTier: true
+        }
+      },
       teamMemberships: {
         include: {
           team: {
@@ -653,30 +661,20 @@ export async function checkServiceAccess(
   }
   
   // 4. Check tenant plan
-  const tenantPlan = await prisma.tenantPlan.findFirst({
-    where: {
-      tenantId,
-      status: 'ACTIVE',
-      effectiveFrom: { lte: new Date() },
-      OR: [
-        { expiresAt: null },
-        { expiresAt: { gt: new Date() } }
-      ],
-      plan: { status: 'ACTIVE' }
-    },
-    include: {
-      plan: {
-        include: {
-          planFeatures: {
-            include: {
-              feature: true
-            }
-          }
-        }
-      }
-    },
-    orderBy: { effectiveFrom: 'desc' }
-  })
+  let tenantPlan = await getActiveTenantEntitlement(tenantId)
+
+  if (!tenantPlan) {
+    try {
+      await ensureTenantEntitlementForSignup({
+        tenantId,
+        atiTokenId: user.signupAtiToken?.id || user.signupAtiTokenId,
+        planTier: user.signupAtiToken?.planTier || null
+      })
+      tenantPlan = await getActiveTenantEntitlement(tenantId)
+    } catch (entitlementError) {
+      console.error('[ServiceAccess] Failed to provision missing tenant entitlement:', entitlementError)
+    }
+  }
   
   if (!tenantPlan) {
     return { allowed: false, reason: 'No active entitlement found for tenant' }

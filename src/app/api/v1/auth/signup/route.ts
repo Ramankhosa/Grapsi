@@ -8,6 +8,7 @@ import { verificationTemplate } from '@/lib/email-templates'
 import { validateInviteToken, recordSignupInTransaction } from '@/lib/trial-invite-service'
 import { assignTrialPlanToTenant } from '@/lib/trial-plan-service'
 import { ATIRedemptionError, assignSignupTeam, claimATITokenUse } from '@/lib/ati-redemption-service'
+import { ensureTenantEntitlementForSignup } from '@/lib/entitlement-service'
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -177,6 +178,12 @@ export async function POST(request: NextRequest) {
       // Claim token capacity before creating records. This guarded update prevents
       // concurrent signups from exceeding maxUses.
       await claimATITokenUse(tx, tokenValidation.atiToken!.id)
+
+      await ensureTenantEntitlementForSignup({
+        tenantId: tenant.id,
+        atiTokenId: tokenValidation.atiToken!.id,
+        planTier: fullToken?.planTier || tokenValidation.atiToken!.planTier || null
+      }, tx)
 
       const transactionExistingUsersCount = await tx.user.count({
         where: { tenantId: tenant.id }

@@ -5,6 +5,7 @@ import type { MeteringConfig, PolicyService, FeatureRequest, EnforcementDecision
 import { MeteringErrorUtils, MeteringError } from './errors'
 import { prisma } from '@/lib/prisma'
 import { getTrialQuotaStatus } from '@/lib/trial-plan-service'
+import { ensureTenantEntitlementForSignup, getActiveTenantEntitlement } from '@/lib/entitlement-service'
 import { createMeteringService } from './metering'
 import { createReservationService } from './reservation'
 import { isFeatureQuotaExempt, isPlanAgnosticFeature } from './plan-features'
@@ -54,28 +55,41 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
         }
 
         // 2. Get tenant's current active plan assignment
-        const tenantPlan = await prisma.tenantPlan.findFirst({
-          where: {
-            tenantId: request.tenantId,
-            status: 'ACTIVE',
-            effectiveFrom: { lte: new Date() },
-            OR: [
-              { expiresAt: null },
-              { expiresAt: { gt: new Date() } }
-            ]
-          },
-          include: {
-            plan: true
-          },
-          orderBy: {
-            effectiveFrom: 'desc'
+        let tenantPlan = await getActiveTenantEntitlement(request.tenantId)
+        const isPlanAgnostic = isPlanAgnosticFeature(request.featureCode)
+
+        if (!tenantPlan?.plan && !isPlanAgnostic) {
+          try {
+            const signupUser = request.userId
+              ? await prisma.user.findUnique({
+                  where: { id: request.userId },
+                  select: {
+                    signupAtiTokenId: true,
+                    signupAtiToken: {
+                      select: {
+                        id: true,
+                        planTier: true
+                      }
+                    }
+                  }
+                })
+              : null
+
+            await ensureTenantEntitlementForSignup({
+              tenantId: request.tenantId,
+              atiTokenId: signupUser?.signupAtiToken?.id || signupUser?.signupAtiTokenId,
+              planTier: signupUser?.signupAtiToken?.planTier || null
+            })
+            tenantPlan = await getActiveTenantEntitlement(request.tenantId)
+          } catch (entitlementError) {
+            console.error('[MeteringPolicy] Failed to provision missing tenant entitlement:', entitlementError)
           }
-        })
+        }
 
         if (!tenantPlan?.plan) {
           return {
-            allowed: false,
-            reason: 'No active plan found for tenant'
+            allowed: isPlanAgnostic,
+            reason: isPlanAgnostic ? 'Plan-agnostic grant workflow access' : 'No active plan found for tenant'
           }
         }
 
@@ -98,8 +112,8 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
 
         if (!plan) {
           return {
-            allowed: false,
-            reason: 'Plan not found or inactive'
+            allowed: isPlanAgnostic,
+            reason: isPlanAgnostic ? 'Plan-agnostic grant workflow access' : 'Plan not found or inactive'
           }
         }
 
@@ -107,7 +121,6 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
         const planFeature = plan.planFeatures.find(
           pf => pf.feature.code === request.featureCode
         )
-        const isPlanAgnostic = isPlanAgnosticFeature(request.featureCode)
 
         if (!planFeature && !isPlanAgnostic) {
           return {

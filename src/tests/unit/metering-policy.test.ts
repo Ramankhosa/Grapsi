@@ -78,7 +78,7 @@ describe('metering policy entitlement features', () => {
     createReservationMock.mockResolvedValue('reservation-1')
   })
 
-  it('denies Grant Prep when the active entitlement has no GRANT_PREP feature row', async () => {
+  it('allows Grant Prep when the active entitlement has no GRANT_PREP feature row', async () => {
     const policy = createPolicyService(defaultConfig)
 
     const decision = await policy.evaluateAccess({
@@ -88,10 +88,9 @@ describe('metering policy entitlement features', () => {
       userId: 'user-1',
     })
 
-    expect(decision.allowed).toBe(false)
-    expect(decision.reason).toBe("Feature 'GRANT_PREP' not available in plan 'PRO_PLAN'")
+    expect(decision.allowed).toBe(true)
     expect(checkQuotaMock).not.toHaveBeenCalled()
-    expect(createReservationMock).not.toHaveBeenCalled()
+    expect(createReservationMock).toHaveBeenCalled()
   })
 
   it('allows Grant Prep chat without checking quota when the entitlement includes the feature', async () => {
@@ -118,7 +117,7 @@ describe('metering policy entitlement features', () => {
     expect(checkQuotaMock).not.toHaveBeenCalled()
   })
 
-  it('still checks quota for Grant Blueprint generation', async () => {
+  it('allows Grant Blueprint generation without quota blocking', async () => {
     planFindFirstMock.mockResolvedValue({
       id: 'plan-1',
       code: 'PRO_PLAN',
@@ -138,7 +137,41 @@ describe('metering policy entitlement features', () => {
 
     expect(decision.allowed).toBe(true)
     expect(decision.reservationId).toBe('reservation-1')
-    expect(checkQuotaMock).toHaveBeenCalled()
+    expect(checkQuotaMock).not.toHaveBeenCalled()
+  })
+
+  it('does not block Grant Prep only because no active entitlement is present', async () => {
+    tenantPlanFindFirstMock.mockResolvedValue(null)
+
+    const policy = createPolicyService(defaultConfig)
+
+    const decision = await policy.evaluateAccess({
+      tenantId: 'tenant-1',
+      featureCode: 'GRANT_PREP',
+      taskCode: 'GRANT_BLUEPRINT_GENERATE',
+      userId: 'user-1',
+    })
+
+    expect(decision.allowed).toBe(true)
+    expect(decision.reason).toBe('Plan-agnostic grant workflow access')
+    expect(planFindFirstMock).not.toHaveBeenCalled()
+    expect(checkQuotaMock).not.toHaveBeenCalled()
+    expect(createReservationMock).not.toHaveBeenCalled()
+  })
+
+  it('allows Grant Section generation without a GRANT_DRAFTING plan feature row', async () => {
+    const policy = createPolicyService(defaultConfig)
+
+    const decision = await policy.evaluateAccess({
+      tenantId: 'tenant-1',
+      featureCode: 'GRANT_DRAFTING',
+      taskCode: 'GRANT_SECTION_GENERATE',
+      userId: 'user-1',
+    })
+
+    expect(decision.allowed).toBe(true)
+    expect(decision.reservationId).toBe('reservation-1')
+    expect(checkQuotaMock).not.toHaveBeenCalled()
   })
 
   it('keeps the missing-plan-feature denial for non-universal features', async () => {

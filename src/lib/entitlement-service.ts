@@ -1,3 +1,5 @@
+import type { Prisma } from '@/lib/prisma-generated'
+
 import { prisma } from './prisma'
 
 export const ENTITLEMENT_SOURCES = [
@@ -17,6 +19,52 @@ export interface GrantTenantEntitlementInput {
   effectiveFrom?: Date
   expiresAt?: Date | null
   metadata?: Record<string, unknown> | null
+}
+
+type EntitlementClient = typeof prisma | Prisma.TransactionClient
+
+const DEFAULT_SIGNUP_PLAN_CODE = 'FREE_PLAN'
+
+const SIGNUP_PLAN_ALIASES: Record<string, string> = {
+  BASIC: 'FREE_PLAN',
+  BASE: 'FREE_PLAN',
+  FREE: 'FREE_PLAN',
+  FREE_PLAN: 'FREE_PLAN',
+  STARTER: 'FREE_PLAN',
+  PRO: 'PRO_PLAN',
+  PROFESSIONAL: 'PRO_PLAN',
+  PRO_PLAN: 'PRO_PLAN',
+  ENTERPRISE: 'ENTERPRISE_PLAN',
+  ENTERPRISE_PLAN: 'ENTERPRISE_PLAN',
+  FULL_ACCESS: 'ENTERPRISE_PLAN',
+  ALL_FEATURES: 'ENTERPRISE_PLAN',
+  TRIAL: 'TRIAL'
+}
+
+export function resolveSignupPlanCode(planTier?: string | null) {
+  const rawPlanCode = planTier?.trim() || process.env.DEFAULT_ATI_SIGNUP_PLAN_CODE || DEFAULT_SIGNUP_PLAN_CODE
+  const normalized = rawPlanCode.toUpperCase().replace(/[\s-]+/g, '_')
+
+  return SIGNUP_PLAN_ALIASES[normalized] || normalized
+}
+
+async function findActiveTenantPlan(client: EntitlementClient, tenantId: string, now = new Date()) {
+  return client.tenantPlan.findFirst({
+    where: {
+      tenantId,
+      status: 'ACTIVE',
+      effectiveFrom: { lte: now },
+      OR: [
+        { expiresAt: null },
+        { expiresAt: { gt: now } }
+      ],
+      plan: { status: 'ACTIVE' }
+    },
+    include: {
+      plan: true
+    },
+    orderBy: { effectiveFrom: 'desc' }
+  })
 }
 
 export async function getActiveTenantEntitlement(tenantId: string, now = new Date()) {
@@ -42,6 +90,93 @@ export async function getActiveTenantEntitlement(tenantId: string, now = new Dat
     },
     orderBy: { effectiveFrom: 'desc' }
   })
+}
+
+async function resolveExistingPlan(client: EntitlementClient, requestedPlanCode: string) {
+  const requestedPlan = await client.plan.findUnique({
+    where: { code: requestedPlanCode },
+    select: { id: true, code: true, status: true }
+  })
+
+  if (requestedPlan?.status === 'ACTIVE') {
+    return requestedPlan
+  }
+
+  const fallbackPlanCode = resolveSignupPlanCode(process.env.DEFAULT_ATI_SIGNUP_PLAN_CODE || DEFAULT_SIGNUP_PLAN_CODE)
+  if (fallbackPlanCode === requestedPlanCode) {
+    return null
+  }
+
+  const fallbackPlan = await client.plan.findUnique({
+    where: { code: fallbackPlanCode },
+    select: { id: true, code: true, status: true }
+  })
+
+  return fallbackPlan?.status === 'ACTIVE' ? fallbackPlan : null
+}
+
+export async function ensureTenantEntitlementForSignup(
+  input: {
+    tenantId: string
+    atiTokenId?: string | null
+    planTier?: string | null
+  },
+  client: EntitlementClient = prisma
+) {
+  const now = new Date()
+  const existingActiveEntitlement = await findActiveTenantPlan(client, input.tenantId, now)
+
+  if (existingActiveEntitlement) {
+    return {
+      entitlement: existingActiveEntitlement,
+      created: false,
+      planCode: existingActiveEntitlement.plan.code
+    }
+  }
+
+  const requestedPlanCode = resolveSignupPlanCode(input.planTier)
+  const plan = await resolveExistingPlan(client, requestedPlanCode)
+
+  if (!plan) {
+    throw new Error(`No active signup entitlement plan found for '${requestedPlanCode}'`)
+  }
+
+  const sourceRef = input.atiTokenId
+    ? `ati-signup:${input.atiTokenId}`
+    : `ati-signup:${input.tenantId}`
+
+  const data = {
+    tenantId: input.tenantId,
+    planId: plan.id,
+    effectiveFrom: now,
+    expiresAt: null,
+    status: 'ACTIVE',
+    source: 'SUPERADMIN_GRANT',
+    sourceRef,
+    metadata: {
+      reason: 'ati_signup_default_entitlement',
+      atiTokenId: input.atiTokenId || null,
+      atiPlanTier: input.planTier || null,
+      requestedPlanCode
+    } as any
+  }
+
+  const existingBySource = await client.tenantPlan.findUnique({
+    where: { source_sourceRef: { source: data.source, sourceRef } }
+  })
+
+  if (existingBySource) {
+    const entitlement = await client.tenantPlan.update({
+      where: { id: existingBySource.id },
+      data
+    })
+
+    return { entitlement, created: false, planCode: plan.code }
+  }
+
+  const entitlement = await client.tenantPlan.create({ data })
+
+  return { entitlement, created: true, planCode: plan.code }
 }
 
 export async function grantTenantEntitlement(input: GrantTenantEntitlementInput) {

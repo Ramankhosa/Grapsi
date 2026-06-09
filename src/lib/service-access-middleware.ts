@@ -15,6 +15,23 @@ import { NextRequest, NextResponse } from 'next/server'
 import { checkServiceAccess, type ServiceAccessResult } from './org-access-service'
 import type { ServiceType } from '@prisma/client'
 
+const ENTITLEMENT_TOLERANT_SERVICES = new Set<ServiceType>([
+  'FUNDING_DISCOVERY',
+  'GRANT_PREP',
+  'GRANT_DRAFTING',
+])
+
+function isEntitlementConfigurationFailure(reason?: string | null): boolean {
+  const normalized = String(reason || '').toLowerCase()
+
+  return (
+    normalized.includes('no active entitlement') ||
+    normalized.includes('no active plan') ||
+    normalized.includes('not included in the active entitlement') ||
+    normalized.includes('not available in plan')
+  )
+}
+
 function getServiceDisplayName(serviceType: ServiceType): string {
   switch (serviceType) {
     case 'PATENT_DRAFTING':
@@ -57,6 +74,22 @@ export async function enforceServiceAccess(
     const result = await checkServiceAccess(userId, tenantId, serviceType)
     
     if (!result.allowed) {
+      if (ENTITLEMENT_TOLERANT_SERVICES.has(serviceType) && isEntitlementConfigurationFailure(result.reason)) {
+        console.warn(
+          `[ServiceAccessMiddleware] Allowing ${serviceType} despite entitlement configuration issue: ${result.reason}`
+        )
+
+        return {
+          allowed: true,
+          result: {
+            allowed: true,
+            reason: result.reason || 'Grant workflow entitlement configuration bypassed',
+            remainingQuota: { daily: null, monthly: null },
+            quotaSource: 'tenant',
+          }
+        }
+      }
+
       // Provide user-friendly error messages based on the reason
       let userMessage = 'Service access denied'
       let errorCode = 'SERVICE_ACCESS_DENIED'

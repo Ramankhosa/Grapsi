@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 
 import prisma from '@/lib/prisma'
+import { resolveGrantWorkflowTenantContext } from '@/lib/grantWorkflowTenantContext'
 import { buildGrantPrepFreezePayload } from '@/lib/grantPrep/handoff/handoffBuilder'
 import type { GrantPrepActor } from '@/lib/grantPrep/access'
 import {
@@ -1103,31 +1104,7 @@ export async function resolveGrantTenantContext(
   tenantId: string,
   userId: string
 ): Promise<TenantContext | null> {
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    include: {
-      tenantPlans: {
-        where: {
-          status: 'ACTIVE',
-          effectiveFrom: { lte: new Date() },
-          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        },
-        orderBy: { effectiveFrom: 'desc' },
-        take: 1,
-      },
-    },
-  })
-
-  if (!tenant || tenant.status !== 'ACTIVE' || !tenant.tenantPlans[0]) {
-    return null
-  }
-
-  return {
-    tenantId: tenant.id,
-    planId: tenant.tenantPlans[0].planId,
-    tenantStatus: tenant.status,
-    userId,
-  }
+  return resolveGrantWorkflowTenantContext(tenantId, userId)
 }
 
 export function buildPaperSectionPlanFromGrantSections(

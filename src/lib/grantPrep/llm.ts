@@ -1,4 +1,4 @@
-import { prisma } from '@/lib/prisma'
+import { resolveGrantWorkflowTenantContext } from '@/lib/grantWorkflowTenantContext'
 import { llmGateway, type TenantContext } from '@/lib/metering'
 
 export const GRANT_PREP_CHAT_TASK_CODE = 'GRANT_PREP_CHAT'
@@ -8,31 +8,7 @@ export async function resolveGrantPrepTenantContext(
   tenantId: string,
   userId: string
 ): Promise<TenantContext | null> {
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    include: {
-      tenantPlans: {
-        where: {
-          status: 'ACTIVE',
-          effectiveFrom: { lte: new Date() },
-          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        },
-        orderBy: { effectiveFrom: 'desc' },
-        take: 1,
-      },
-    },
-  })
-
-  if (!tenant || tenant.status !== 'ACTIVE' || !tenant.tenantPlans[0]) {
-    return null
-  }
-
-  return {
-    tenantId: tenant.id,
-    planId: tenant.tenantPlans[0].planId,
-    tenantStatus: tenant.status,
-    userId,
-  }
+  return resolveGrantWorkflowTenantContext(tenantId, userId)
 }
 
 export async function generateGrantPrepText(input: {

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { validateATIToken, generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { ATIRedemptionError, assignSignupTeam, claimATITokenUse } from '@/lib/ati-redemption-service'
+import { ensureTenantEntitlementForSignup } from '@/lib/entitlement-service'
 import { verifySocialSignupToken } from '@/lib/social-signup-token'
 
 const completeSignupSchema = z.object({
@@ -87,6 +88,12 @@ export async function POST(request: NextRequest) {
     const result = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`tenant-signup:${tenant.id}`}))`
       await claimATITokenUse(tx, tokenValidation.atiToken!.id)
+
+      await ensureTenantEntitlementForSignup({
+        tenantId: tenant.id,
+        atiTokenId: tokenValidation.atiToken!.id,
+        planTier: fullToken?.planTier || tokenValidation.atiToken!.planTier || null
+      }, tx)
 
       const transactionExistingUsersCount = await tx.user.count({
         where: { tenantId: tenant.id }
