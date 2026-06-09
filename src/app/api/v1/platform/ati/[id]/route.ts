@@ -10,7 +10,7 @@ const updateTokenSchema = z.object({
   max_uses: z.number().min(1).optional(),
   plan_tier: z.string().optional(),
   notes: z.string().optional(),
-  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER']).nullable().optional(),
+  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST']).nullable().optional(),
   assigned_team_id: z.string().nullable().optional()
 })
 

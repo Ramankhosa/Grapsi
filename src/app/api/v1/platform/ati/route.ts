@@ -12,7 +12,7 @@ const createTokenSchema = z.object({
   max_uses: z.number().int().min(1).optional(),
   plan_tier: z.string().optional(),
   notes: z.string().optional(),
-  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER']).optional(),
+  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST']).optional(),
   assigned_team_id: z.string().optional()
 })
 

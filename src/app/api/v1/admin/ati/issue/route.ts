@@ -9,7 +9,7 @@ const issueSchema = z.object({
   max_uses: z.number().optional(),
   notes: z.string().optional(),
   // New: Explicit role and team assignment for granular control
-  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER']).optional(),
+  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST']).optional(),
   assigned_team_id: z.string().optional()
 })
 

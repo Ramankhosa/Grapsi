@@ -78,14 +78,14 @@ export async function POST(request: NextRequest) {
     let userRole = 'ANALYST'
     let roleReason = 'default'
 
-    if (fullToken?.assignedRole && !['SUPER_ADMIN', 'SUPER_ADMIN_VIEWER'].includes(fullToken.assignedRole)) {
+    if (fullToken?.assignedRole && ['ADMIN', 'MANAGER', 'ANALYST'].includes(fullToken.assignedRole)) {
       userRole = fullToken.assignedRole
       roleReason = 'ati_token_explicit_role'
     }
 
     // Create user with social OAuth data
     const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`tenant-signup:${tenant.id}`}))`
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`tenant-signup:${tenant.id}`}))`
       await claimATITokenUse(tx, tokenValidation.atiToken!.id)
 
       const transactionExistingUsersCount = await tx.user.count({

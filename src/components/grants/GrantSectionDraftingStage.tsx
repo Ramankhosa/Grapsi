@@ -4,6 +4,7 @@ import { type ChangeEvent, type MouseEvent, useCallback, useEffect, useLayoutEff
 import {
   AlertCircle,
   BookOpen,
+  Copy,
   Download,
   Loader2,
   Maximize2,
@@ -11,6 +12,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  RefreshCcw,
   Sparkles,
 } from 'lucide-react'
 
@@ -192,6 +194,33 @@ function hasPreparedStructuredExportContent(value: unknown, sectionType?: GrantS
 function hasPreparedExportContent(section: GrantSection) {
   if (isNarrativeSection(section)) return sectionWordCount(section) > 0
   return hasPreparedStructuredExportContent(getStructuredResponseJson(section), section.sectionType)
+}
+
+async function writeClipboardText(text: string) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is not available')
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('Clipboard copy failed')
+    }
+  } finally {
+    document.body.removeChild(textarea)
+  }
 }
 
 export function filterMatches(section: GrantSection, filter: DraftingFilter) {
@@ -563,6 +592,7 @@ export default function GrantSectionDraftingStage({
   const [budgetUseCurrentValues, setBudgetUseCurrentValues] = useState<Record<string, boolean>>({})
   const [exportingDraft, setExportingDraft] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [copiedSectionKey, setCopiedSectionKey] = useState<string | null>(null)
   const [focusMode, setFocusMode] = useState(false)
   const [panelVisible, setPanelVisible] = useState(true)
   const [figures, setFigures] = useState<FigurePlan[]>([])
@@ -1113,6 +1143,162 @@ export default function GrantSectionDraftingStage({
     return (structuredValues[section.sectionKey] || '{}') !== structuredJson(section)
   }, [draftValues, structuredValues])
 
+  const getLocalGrantSectionText = useCallback((section: GrantSection) => {
+    if (isNarrativeSection(section)) {
+      return draftValues[section.sectionKey] || section.content || ''
+    }
+    return structuredValues[section.sectionKey] || structuredJson(section)
+  }, [draftValues, structuredValues])
+
+  const hasLocalGrantSectionContent = useCallback((section: GrantSection) => {
+    const text = getLocalGrantSectionText(section)
+      .replace(/<[^>]*>/g, ' ')
+      .trim()
+    if (!text || text === '{}' || text === '[]') return false
+    if (isNarrativeSection(section)) {
+      return text.split(/\s+/).filter(Boolean).length > 0
+    }
+    return true
+  }, [getLocalGrantSectionText])
+
+  const copyGrantSectionContent = useCallback(async (section: GrantSection) => {
+    const text = getLocalGrantSectionText(section).trim()
+    if (!text || text === '{}' || text === '[]') {
+      setError('No content is available to copy for this section yet.')
+      return
+    }
+
+    try {
+      await writeClipboardText(text)
+      setCopiedSectionKey(section.sectionKey)
+      if (typeof window !== 'undefined') {
+        window.setTimeout(() => {
+          setCopiedSectionKey((current) => current === section.sectionKey ? null : current)
+        }, 1400)
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to copy section content')
+    }
+  }, [getLocalGrantSectionText])
+
+  const saveGeneratedNarrativeGrantSection = useCallback(async (section: GrantSection, content: string) => {
+    if (!authToken) throw new Error('You must be signed in to save grant sections')
+
+    const response = await fetch(`/api/projects/${projectId}/grants/${grantId}/sections/${section.sectionKey}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ content, markReviewed: false }),
+    })
+    const payload = await response.json().catch(() => ({})) as SectionSaveResponse
+    if (!response.ok) {
+      throw new Error(payload.message || 'Failed to save generated grant section')
+    }
+    if (payload.section) {
+      applyPersistedSection(payload.section, { syncLocalValue: true, preserveScroll: true })
+    }
+    return payload
+  }, [applyPersistedSection, authToken, grantId, projectId])
+
+  const syncPaperDraftSectionContent = useCallback(async (section: GrantSection, content: string) => {
+    if (!authToken || !draftingSessionId || !content.trim()) return
+
+    const response = await fetch(`/api/papers/${draftingSessionId}/drafting`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        action: 'save_section',
+        sectionKey: section.sectionKey,
+        content,
+      }),
+    })
+    const payload = await response.json().catch(() => ({})) as { error?: string; message?: string }
+    if (!response.ok) {
+      throw new Error(payload.error || payload.message || 'Failed to sync section content before generation')
+    }
+  }, [authToken, draftingSessionId])
+
+  const generateNarrativeGrantSection = useCallback(async (section: GrantSection, forceRegenerate = false) => {
+    if (!authToken) {
+      setError('You must be signed in to generate grant sections')
+      return
+    }
+    if (!draftingSessionId) {
+      setError('The linked drafting workspace is not available yet.')
+      return
+    }
+    if (!isPaperBackedSection(section)) {
+      setError('Only app draft narrative sections can be generated from this control.')
+      return
+    }
+
+    try {
+      setGeneratingKey(section.sectionKey)
+      setError(null)
+      preserveScrollOnNextPaint()
+
+      const localContent = getLocalGrantSectionText(section)
+      if (localContent.trim()) {
+        await syncPaperDraftSectionContent(section, localContent)
+      }
+
+      const response = await fetch(`/api/papers/${draftingSessionId}/drafting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          action: forceRegenerate || localContent.trim() ? 'regenerate_section' : 'generate_section',
+          sectionKey: section.sectionKey,
+          instructions: '',
+          useMappedEvidence: section.citationMode !== 'no_citations',
+          allowGrantEvidenceBypass: section.citationMode === 'no_citations',
+          autoCitationRepair: false,
+        }),
+      })
+      const payload = await response.json().catch(() => ({})) as {
+        content?: string
+        error?: string
+        message?: string
+        hint?: string
+      }
+      if (!response.ok) {
+        const hint = payload.hint ? ` ${payload.hint}` : ''
+        throw new Error(`${payload.error || payload.message || 'Failed to generate grant section'}${hint}`)
+      }
+
+      const generatedContent = String(payload.content || '').trim()
+      if (!generatedContent) {
+        throw new Error('Generation returned empty content')
+      }
+
+      setDraftValues((current) => ({
+        ...current,
+        [section.sectionKey]: generatedContent,
+      }))
+      await saveGeneratedNarrativeGrantSection(section, generatedContent)
+      await refreshShadowSession()
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to generate grant section')
+    } finally {
+      setGeneratingKey(null)
+    }
+  }, [
+    authToken,
+    draftingSessionId,
+    getLocalGrantSectionText,
+    preserveScrollOnNextPaint,
+    refreshShadowSession,
+    saveGeneratedNarrativeGrantSection,
+    syncPaperDraftSectionContent,
+  ])
+
   const generateBudgetSection = useCallback(async (section: GrantSection) => {
     if (!authToken) {
       setError('You must be signed in to generate grant sections')
@@ -1587,6 +1773,10 @@ export default function GrantSectionDraftingStage({
             const sectionIsBudget = section.sectionType === 'budget_rows'
             const sectionIsTable = section.sectionType === 'table' || sectionIsBudget
             const isSelected = selectedSection === section.sectionKey
+            const canUseNarrativeGeneration = sectionIsNarrative && isPaperBackedSection(section)
+            const sectionHasLocalContent = hasLocalGrantSectionContent(section)
+            const sectionIsGenerating = generatingKey === section.sectionKey
+            const sectionActionBusy = savingKey !== null || generatingKey !== null || exportingDraft
 
             return (
               <div
@@ -1603,6 +1793,40 @@ export default function GrantSectionDraftingStage({
                   <div>
                     <h2 className="font-sans text-xl font-semibold text-slate-950">{section.label}</h2>
                   </div>
+                  {canUseNarrativeGeneration ? (
+                    <div
+                      className="flex flex-wrap items-center justify-end gap-2"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void generateNarrativeGrantSection(section, false)}
+                        disabled={!authToken || !draftingSessionId || sectionActionBusy}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {sectionIsGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                        {sectionIsGenerating ? 'Generating...' : 'Generate'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void copyGrantSectionContent(section)}
+                        disabled={!sectionHasLocalContent}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        {copiedSectionKey === section.sectionKey ? 'Copied' : 'Copy'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void generateNarrativeGrantSection(section, true)}
+                        disabled={!authToken || !draftingSessionId || sectionActionBusy}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {sectionIsGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+                        Regenerate
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
 
                 {sectionIsNarrative ? (
@@ -1641,7 +1865,7 @@ export default function GrantSectionDraftingStage({
                           window.open(figure.imagePath, '_blank', 'noopener,noreferrer')
                         }
                       }}
-                      className="min-h-[260px] border-0 bg-transparent px-0 py-0"
+                      className="min-h-[260px] border-0 bg-transparent px-0 py-0 [&_.ProseMirror]:min-h-[240px]"
                       disabled={generatingKey === section.sectionKey}
                       placeholder={sectionIsBibliography ? 'Generate or edit the bibliography for this grant.' : 'Write this grant section here.'}
                     />

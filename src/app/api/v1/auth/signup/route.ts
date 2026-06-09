@@ -110,9 +110,9 @@ export async function POST(request: NextRequest) {
 
     if (fullToken?.assignedRole) {
       // Explicit role set on the ATI token (highest priority for non-first users)
-      // Validate the role is not SUPER_ADMIN or SUPER_ADMIN_VIEWER
+      // Only service-capable roles are honored for ATI signups.
       const explicitRole = fullToken.assignedRole
-      if (['SUPER_ADMIN', 'SUPER_ADMIN_VIEWER'].includes(explicitRole)) {
+      if (!['ADMIN', 'MANAGER', 'ANALYST'].includes(explicitRole)) {
         console.warn('ATI token has invalid assignedRole:', explicitRole)
         // Fall through to default logic
       } else {
@@ -172,7 +172,7 @@ export async function POST(request: NextRequest) {
 
     // Use a transaction to ensure atomicity - either everything succeeds or nothing does
     const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`tenant-signup:${tenant.id}`}))`
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`tenant-signup:${tenant.id}`}))`
 
       // Claim token capacity before creating records. This guarded update prevents
       // concurrent signups from exceeding maxUses.

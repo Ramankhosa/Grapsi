@@ -421,7 +421,6 @@ export default function SuperAdminATIDashboard() {
                   <option value="ADMIN">Admin</option>
                   <option value="MANAGER">Manager</option>
                   <option value="ANALYST">Analyst</option>
-                  <option value="VIEWER">Viewer</option>
                 </select>
                 <input
                   type="number"

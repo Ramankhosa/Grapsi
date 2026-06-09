@@ -4645,7 +4645,7 @@ export default function SectionDraftingStage({
                             }}
                             placeholder={isWorking ? 'Generating...' : 'Begin writing...'}
                             disabled={isWorking}
-                            className="min-h-[60px]"
+                            className={isWorking ? 'min-h-[360px] [&_.ProseMirror]:min-h-[340px]' : 'min-h-[60px]'}
                           />
                         </div>
 
