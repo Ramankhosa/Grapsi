@@ -19,8 +19,11 @@ import {
   canAutoAdvanceGrantPrepStage,
   computeStageReadiness,
   isGrantPrepSessionReady,
+  propagateDependentNeedsReview,
 } from '@/lib/grantPrep/sessionState'
 import { buildGrantPrepStageMapping } from '@/lib/grantPrep/templateMapper'
+import { refreshGrantPrepSessionContext } from '@/lib/grantPrep/server'
+import { runGrantPrepStageTidyPass } from '@/lib/grantPrep/tidyPass'
 
 function makeSession(engagementMode: 'expert' | 'express') {
   const stageMapping = buildGrantPrepStageMapping(null)
@@ -104,6 +107,214 @@ describe('grant prep prompt modes', () => {
     expect(prompt).toContain('The user is in Express mode.')
     expect(prompt).not.toContain('COMPETITIVE PROBING:')
     expect(prompt).not.toContain('Treat them as active reviewer constraints, not optional background.')
+  })
+
+  it('uses stage memory instead of completed-stage raw history and fallback fact blocks', () => {
+    const session = makeSession('expert')
+    session.stageStates.problem_definition = {
+      ...session.stageStates.problem_definition,
+      readiness: 0.85,
+      status: 'completed',
+      memory: {
+        version: 'stage_memory_v1',
+        updatedAt: '2026-06-11T00:00:00.000Z',
+        confirmedFacts: ['Memory says rural diabetes adherence is the confirmed problem.'],
+        openGaps: ['Memory says prevalence still needs a cited baseline.'],
+        reviewerRisks: ['Memory says generic rural framing is a reviewer risk.'],
+        keywords: ['rural diabetes adherence'],
+        source: 'deterministic',
+      },
+      points: session.stageStates.problem_definition.points.map((point) =>
+        point.key === 'problem_core'
+          ? {
+              ...point,
+              status: 'covered',
+              capture: {
+                keywords: ['fallback keyword'],
+                thrustLinkage: [],
+                factBullets: ['Fallback fact should not appear when memory exists.'],
+                ruleNotes: ['Fallback rule note should not appear when memory exists.'],
+                confidence: 0.9,
+                captureBasis: ['user_confirmed'],
+                sourceTemplatePointer: null,
+                ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
+                updatedAt: '2026-06-11T00:00:00.000Z',
+              },
+            }
+          : point
+      ),
+    } as any
+
+    const prompt = buildGrantPrepPrompt({
+      session,
+      stageKey: 'methodology',
+      project: {
+        title: 'Rural Diabetes Adherence',
+        description: null,
+      },
+      fundingContext: makeFundingContext(),
+      guidelinePack: null,
+      conversation: [
+        {
+          role: 'assistant',
+          stageKey: 'problem_definition',
+          content: 'Old completed-stage option bundle should not appear.',
+        },
+        {
+          role: 'user',
+          stageKey: 'methodology',
+          content: 'Now help with the method.',
+        },
+      ],
+      userMessage: 'Now help with the method.',
+    })
+
+    expect(prompt).toContain('Memory says rural diabetes adherence is the confirmed problem.')
+    expect(prompt).toContain('Memory says prevalence still needs a cited baseline.')
+    expect(prompt).toContain('Memory says generic rural framing is a reviewer risk.')
+    expect(prompt).not.toContain('Fallback fact should not appear')
+    expect(prompt).not.toContain('Old completed-stage option bundle should not appear.')
+  })
+
+  it('keeps latest suggested answers available across stage boundaries', () => {
+    const session = makeSession('expert')
+
+    const prompt = buildGrantPrepPrompt({
+      session,
+      stageKey: 'methodology',
+      project: {
+        title: 'Rural Diabetes Adherence',
+        description: null,
+      },
+      fundingContext: makeFundingContext(),
+      guidelinePack: null,
+      conversation: [
+        {
+          role: 'assistant',
+          stageKey: 'problem_definition',
+          content: 'A. Clinic anchor model.\nB. Mobile outreach model.\nC. Hybrid model.',
+          suggestedAnswers: [
+            { label: 'A', text: 'Clinic anchor model.' },
+            { label: 'B', text: 'Mobile outreach model.' },
+            { label: 'C', text: 'Hybrid model.' },
+          ],
+        },
+        {
+          role: 'user',
+          stageKey: 'methodology',
+          content: 'I choose B.',
+        },
+      ],
+      userMessage: 'I choose B.',
+    })
+
+    expect(prompt).toContain('A. Clinic anchor model.')
+    expect(prompt).toContain('B. Mobile outreach model.')
+    expect(prompt).toContain('I choose B.')
+  })
+
+  it('preserves stage memory during template refresh merges', () => {
+    const session = makeSession('expert')
+    session.stageStates.problem_definition.memory = {
+      version: 'stage_memory_v1',
+      updatedAt: '2026-06-11T00:00:00.000Z',
+      confirmedFacts: ['Problem memory survives refresh.'],
+      openGaps: [],
+      reviewerRisks: [],
+      keywords: ['problem memory'],
+      source: 'deterministic',
+    }
+
+    const refreshed = refreshGrantPrepSessionContext({
+      sessionContext: {
+        ...session,
+        stageSelectionVersion: 'v3',
+      },
+      templateJson: null,
+      guidelinePack: null,
+      fundingContext: makeFundingContext(),
+      warning: null,
+    })
+
+    expect(refreshed.stageStates.problem_definition.memory?.confirmedFacts).toContain('Problem memory survives refresh.')
+  })
+
+  it('marks downstream stage memory stale when upstream stages change', () => {
+    const session = makeSession('expert')
+    session.stageStates.root_cause.memory = {
+      version: 'stage_memory_v1',
+      updatedAt: '2026-06-11T00:00:00.000Z',
+      confirmedFacts: ['Root cause memory depends on the old problem framing.'],
+      openGaps: [],
+      reviewerRisks: [],
+      keywords: ['old root cause'],
+      source: 'deterministic',
+    }
+    session.stageStates.root_cause.points = session.stageStates.root_cause.points.map((point) =>
+      point.key === 'root_drivers'
+        ? {
+            ...point,
+            status: 'covered',
+            capture: {
+              keywords: [],
+              thrustLinkage: [],
+              factBullets: ['The old root cause depends on the old problem framing.'],
+              ruleNotes: [],
+              confidence: 0.9,
+              captureBasis: ['user_confirmed'],
+              sourceTemplatePointer: null,
+              ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
+              updatedAt: '2026-06-11T00:00:00.000Z',
+            },
+          }
+        : point
+    ) as any
+
+    const nextStates = propagateDependentNeedsReview(
+      session.stageStates,
+      'problem_definition',
+      'Problem Definition changed. Review downstream assumptions before handoff.'
+    )
+
+    expect(nextStates.root_cause.memory?.staleReason).toContain('Problem Definition changed')
+    expect(nextStates.root_cause.points.find((point) => point.key === 'root_drivers')?.status).toBe('needs_review')
+  })
+
+  it('backfills sentence facts from keyword-only captures during tidy fallback', async () => {
+    const session = makeSession('expert')
+    const stageState = {
+      ...session.stageStates.problem_definition,
+      points: session.stageStates.problem_definition.points.map((point) =>
+        point.key === 'problem_core'
+          ? {
+              ...point,
+              status: 'covered',
+              capture: {
+                keywords: ['rural diabetes adherence', 'missed follow-up'],
+                thrustLinkage: [],
+                factBullets: [],
+                ruleNotes: [],
+                confidence: 0.9,
+                captureBasis: ['user_confirmed'],
+                sourceTemplatePointer: null,
+                ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
+                updatedAt: '2026-06-11T00:00:00.000Z',
+              },
+            }
+          : point
+      ),
+    } as any
+
+    const tidied = await runGrantPrepStageTidyPass({
+      stageKey: 'problem_definition',
+      stageState,
+      tenantContext: null,
+    })
+    const tidiedPoint = tidied.points.find((point) => point.key === 'problem_core')
+
+    expect(tidiedPoint?.capture?.factBullets?.[0]).toContain('Core problem statement includes rural diabetes adherence')
+    expect(tidiedPoint?.capture?.factBullets?.[0]).toMatch(/\.$/)
+    expect(tidied.memory?.confirmedFacts.join(' ')).toContain('Core problem statement includes rural diabetes adherence')
   })
 })
 
@@ -443,6 +654,9 @@ describe('grant prep progression by mode', () => {
 
     expect(prompt).toContain('Available call priority areas: public health, implementation science')
     expect(prompt).toContain('User-selected target priority areas: implementation science')
+    expect(prompt).toContain('Funding agency alignment rules:')
+    expect(prompt).toContain('Return exactly 3 directions with labels A, B, and C.')
+    expect(prompt).toContain('Fits this call because')
     expect(prompt).toContain('"suggestedAnswers"')
     expect(prompt).toContain('"pointsCovered"')
     expect(prompt).not.toMatch(/approval[- ]bundle/i)
@@ -501,7 +715,7 @@ describe('grant prep conversation bundle planning', () => {
       latestUserMessage: 'We need a future funding and continuity plan after the grant.',
     })
 
-    expect(withoutSignal.paired.map((point) => point.stageKey)).not.toContain('sustainability_and_scale')
-    expect(withSignal.paired.map((point) => point.stageKey)).toContain('sustainability_and_scale')
+    expect(withoutSignal.paired.map((point) => point.stageKey)).not.toContain('innovation')
+    expect(withSignal.paired.map((point) => point.stageKey)).toContain('innovation')
   })
 })

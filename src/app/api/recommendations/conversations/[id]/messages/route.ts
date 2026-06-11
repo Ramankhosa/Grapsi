@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService'
-import { CHAT_RATE_LIMIT_MAX_REQUESTS, CHAT_RATE_LIMIT_WINDOW_MS } from '@/lib/recommendations/constants'
+import { CHAT_MESSAGE_MAX_LENGTH, CHAT_RATE_LIMIT_MAX_REQUESTS, CHAT_RATE_LIMIT_WINDOW_MS } from '@/lib/recommendations/constants'
 import { checkRateLimit } from '@/lib/recommendations/rateLimit'
 import { requireRecommendationTenantUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import type { RecommendationSearchFilters } from '@/lib/recommendations/types'
@@ -35,7 +35,7 @@ const filterSchema: z.ZodType<RecommendationSearchFilters> = z.object({
 })
 
 const requestSchema = z.object({
-  message: z.string().max(800).optional(),
+  message: z.string().max(CHAT_MESSAGE_MAX_LENGTH).optional(),
   clientTurnId: z.string().max(120).optional(),
   inputMode: z.enum(['research_area', 'paper_metadata']).optional(),
   manualQueryPatch: z.record(z.any()).optional(),

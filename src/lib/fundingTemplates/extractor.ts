@@ -362,7 +362,8 @@ async function callGeminiMultimodal(
     contentParts: await buildGatewayContentParts(assets),
     responseMimeType: 'application/json',
     temperature: 0,
-    maxTokensOut: 24000,
+    // Dense templates were hitting MAX_TOKENS at 24000, truncating the JSON payload.
+    maxTokensOut: 52000,
     promptCacheKey: `funding-intake:template:${TEMPLATE_PROMPT_VERSION}:multimodal`,
     promptCacheRetention: '24h',
     skipFeaturePolicy: true,

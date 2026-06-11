@@ -8,6 +8,7 @@ import type {
   GrantPrepStageState,
 } from '../types';
 import { isGrantPrepUserFacingPoint } from '../sessionState';
+import { expandGrantPrepStageAliases } from '../stageModel';
 import type { GrantPrepEvidenceItem } from '@/types/grant';
 
 function stableStringify(value: unknown): string {
@@ -75,9 +76,12 @@ export function buildGrantPrepFreezePayload(input: {
     return normalizeStringArray(matches);
   };
 
+  const shouldIncludeStageEvidence = (stage: GrantPrepStageState) =>
+    stage.enabled || stage.stageKey === 'final_pitch';
+
   const prepEvidence: GrantPrepEvidenceItem[] = Object.values(input.session.stageStates).flatMap((stage) =>
     stage.points
-      .filter((point) => stage.enabled && point.capture && (point.status === 'covered' || point.status === 'needs_review'))
+      .filter((point) => shouldIncludeStageEvidence(stage) && point.capture && (point.status === 'covered' || point.status === 'needs_review'))
       .map((point) => {
         const capture = point.capture!;
         const sourceTemplatePointer = capture.sourceTemplatePointer || point.sourceTemplatePointer || null;
@@ -112,6 +116,31 @@ export function buildGrantPrepFreezePayload(input: {
   const selectedPrioritySummary = input.session.selectedThrustAreaRuleKeys.length > 0
     ? [`Selected target priority areas: ${input.session.selectedThrustAreaRuleKeys.join(', ')}`]
     : [];
+  const evidenceForStage = (stageKeys: GrantPrepStageKey[], pointKeys?: string[]) => {
+    const allowedStages = new Set(expandGrantPrepStageAliases(stageKeys));
+    const allowedPoints = pointKeys ? new Set(pointKeys) : null;
+    return prepEvidence.find((item) =>
+      expandGrantPrepStageAliases([item.stageKey]).some((stageKey) => allowedStages.has(stageKey)) &&
+      (!allowedPoints || allowedPoints.has(item.pointKey)) &&
+      (item.factBullets.length > 0 || item.keywords.length > 0)
+    );
+  };
+  const synthesisEvidence = [
+    evidenceForStage(['ideation', 'final_pitch']),
+    evidenceForStage(['problem_definition']),
+    evidenceForStage(['methodology'], ['approach', 'activities', 'phases', 'deliverables']),
+    evidenceForStage(['outcomes']),
+    evidenceForStage(['fit_and_scope'], ['priority_match', 'reviewer_signal', 'call_fit']),
+  ].filter((item): item is GrantPrepEvidenceItem => Boolean(item));
+  const proposalSynthesis = synthesisEvidence.length > 0
+    ? [
+        `Proposal synthesis: ${synthesisEvidence
+          .map((item) => item.factBullets[0] || item.keywords.slice(0, 4).join(', '))
+          .filter(Boolean)
+          .slice(0, 5)
+          .join(' | ')}`,
+      ]
+    : [];
 
   const globalCaptureSummary = [
     ...selectedPrioritySummary,
@@ -124,11 +153,12 @@ export function buildGrantPrepFreezePayload(input: {
       const noteLine = item.ruleNotes.length > 0 ? ` | Rule note: ${item.ruleNotes[0]}` : '';
       return `${item.label}: ${factLine || 'captured in prep'}${noteLine}`;
     }),
+    ...proposalSynthesis,
   ];
 
   const blockers = Object.values(input.session.stageStates).flatMap((stage) =>
     stage.points
-      .filter((point) => isGrantPrepLaunchBlocker(stage, point))
+      .filter((point) => isGrantPrepLaunchBlocker(input.session, stage, point))
       .map((point) => ({
         stageKey: stage.stageKey,
         pointKey: point.key,
@@ -188,12 +218,24 @@ export function buildGrantPrepFreezePayload(input: {
   };
 }
 
-function isGrantPrepLaunchBlocker(stage: GrantPrepStageState, point: GrantPrepPointState) {
+function isGrantPrepLaunchBlocker(
+  session: GrantPrepSessionContext,
+  stage: GrantPrepStageState,
+  point: GrantPrepPointState
+) {
   if (!stage.enabled || !stage.pickable || stage.selectionLevel === 'optional') {
     return false;
   }
 
   if (!isGrantPrepUserFacingPoint(point) || point.status === 'covered') {
+    return false;
+  }
+
+  if (
+    stage.stageKey === 'ideation' &&
+    point.key === 'selected_priority_fit' &&
+    session.selectedThrustAreaRuleKeys.length === 0
+  ) {
     return false;
   }
 
@@ -203,6 +245,10 @@ function isGrantPrepLaunchBlocker(stage: GrantPrepStageState, point: GrantPrepPo
 
   if (point.status === 'needs_review') {
     return true;
+  }
+
+  if (point.conversationRole !== 'user_required') {
+    return false;
   }
 
   return point.priority !== 'P3';

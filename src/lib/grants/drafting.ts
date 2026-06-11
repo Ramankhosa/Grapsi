@@ -366,7 +366,7 @@ export async function generateGrantSectionDraft(input: {
   const result = await llmGateway.executeLLMOperation(
     { tenantContext },
     {
-      taskCode: 'LLM2_DRAFT',
+      taskCode: 'GRANT_SECTION_GENERATE',
       stageCode: 'PAPER_SECTION_DRAFT',
       prompt,
       parameters: {

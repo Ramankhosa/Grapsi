@@ -94,7 +94,7 @@ Guideline rule rules:
 - Use enforcementLevel="hard" for mandatory requirements, prohibitions, eligibility constraints, budget/duration caps, deadlines, page/word/format limits, and submission obligations. Use "soft" for priorities and reviewer preferences.
 - Use draftingVsSubmission="drafting" for narrative rules, "submission" for portal/upload/admin rules, and "both" for rules affecting both writing and compliance.
 - appliesTo should use section semantics such as summary, problem_need, objectives, methodology, workplan, innovation, evaluation, impact_outcomes, alignment, sustainability, risk, team, budget, eligibility, submission, attachments, institutional, or all.
-- draftingStage should use grant-prep stages such as problem_definition, root_cause, beneficiaries, fit_and_scope, thrust_alignment, methodology, workplan, team_and_partnerships, innovation, evaluation, outcomes, risk_and_ethics, budget_strategy, sustainability_and_scale, or final_pitch.
+- draftingStage should use visible grant-prep stages such as ideation, problem_definition, root_cause, beneficiaries, fit_and_scope, methodology, team_and_partnerships, outcomes, evaluation, risk_and_ethics, budget_strategy, or innovation. Use fit_and_scope for priority alignment, methodology for workplan/timeline/deliverables, and innovation for sustainability or scale.
 
 Call field rules:
 - Use null or [] when unsupported. Do not invent dates, amounts, eligibility, or contacts.

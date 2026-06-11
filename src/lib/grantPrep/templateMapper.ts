@@ -1,6 +1,7 @@
 import { normalizeGrantTemplate } from '../fundingTemplates/utils';
 import type { FundingTemplateItem, GrantTemplateDocument } from '../fundingTemplates/types';
 import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY } from './stageLibrary';
+import { getCanonicalGrantPrepStageKey, isVisibleGrantPrepStageKey } from './stageModel';
 import type { GrantPrepStageKey, GrantPrepStageMapping, GrantPrepStageMappingEntry } from './types';
 import {
   getPrepStageKeysForTemplateIntent,
@@ -130,10 +131,10 @@ function scoreItemForStage(item: TemplateLikeItem, stageKey: GrantPrepStageKey) 
   if (item.block === 'budget' && stageKey === 'budget_strategy') {
     score += 6;
   }
-  if (item.block === 'evaluationCriteria' && (stageKey === 'evaluation' || stageKey === 'thrust_alignment')) {
+  if (item.block === 'evaluationCriteria' && (stageKey === 'evaluation' || stageKey === 'fit_and_scope')) {
     score += 4;
   }
-  if (item.block === 'submissionRules' && (stageKey === 'workplan' || stageKey === 'fit_and_scope')) {
+  if (item.block === 'submissionRules' && (stageKey === 'methodology' || stageKey === 'fit_and_scope')) {
     score += 2;
   }
 
@@ -142,7 +143,7 @@ function scoreItemForStage(item: TemplateLikeItem, stageKey: GrantPrepStageKey) 
 
 function getMatchedStages(item: TemplateLikeItem): GrantPrepStageKey[] {
   const scored = GRANT_PREP_STAGE_LIBRARY
-    .filter((stage) => stage.pickable && stage.key !== 'ideation')
+    .filter((stage) => stage.pickable && isVisibleGrantPrepStageKey(stage.key) && stage.key !== 'ideation')
     .map((stage) => ({ key: stage.key, score: scoreItemForStage(item, stage.key) }))
     .sort((a, b) => b.score - a.score);
   const trustedIntentMatches = shouldTrustTemplateIntent({
@@ -153,6 +154,8 @@ function getMatchedStages(item: TemplateLikeItem): GrantPrepStageKey[] {
     sectionType: item.sectionType,
   })
     ? getPrepStageKeysForTemplateIntent(item.templateIntent)
+        .map(getCanonicalGrantPrepStageKey)
+        .filter(isVisibleGrantPrepStageKey)
     : [];
 
   if (trustedIntentMatches.length > 0) {
@@ -165,7 +168,7 @@ function getMatchedStages(item: TemplateLikeItem): GrantPrepStageKey[] {
     ) {
       matches.push(heuristicPrimary.key);
     }
-    return matches;
+    return Array.from(new Set(matches.map(getCanonicalGrantPrepStageKey).filter(isVisibleGrantPrepStageKey)));
   }
 
   const primary = scored[0];
@@ -175,10 +178,13 @@ function getMatchedStages(item: TemplateLikeItem): GrantPrepStageKey[] {
     return ['fit_and_scope'];
   }
 
-  const matches = [primary.key];
+  const matches = [getCanonicalGrantPrepStageKey(primary.key)].filter(isVisibleGrantPrepStageKey);
   const secondary = scored[1];
   if (secondary && secondary.score > 0 && primary.score - secondary.score <= 1) {
-    matches.push(secondary.key);
+    const secondaryKey = getCanonicalGrantPrepStageKey(secondary.key);
+    if (isVisibleGrantPrepStageKey(secondaryKey) && !matches.includes(secondaryKey)) {
+      matches.push(secondaryKey);
+    }
   }
 
   return matches;
@@ -200,6 +206,32 @@ function makeDefaultEntry(stageKey: GrantPrepStageKey): GrantPrepStageMappingEnt
     })),
     templatePointers: [],
     secondaryPointers: [],
+  };
+}
+
+function mergeDefaultDiscussionPoints(entry: GrantPrepStageMappingEntry, stageKey: GrantPrepStageKey) {
+  const stage = GRANT_PREP_STAGE_BY_KEY[stageKey];
+  if (!stage) {
+    return entry;
+  }
+
+  const seen = new Set(entry.discussionPoints.map((point) => point.key));
+  const mergedDefaults = stage.defaultPoints
+    .filter((point) => !seen.has(point.key))
+    .map((point) => ({
+      key: point.key,
+      label: point.label,
+      priority: point.priority,
+      sourceTemplatePointer: null,
+      origin: 'default' as const,
+      conversationRole: point.priority === 'P3' ? 'ai_draftable' as const : 'user_required' as const,
+      helpText: point.helpText,
+    }));
+
+  return {
+    ...entry,
+    stageTitle: stage.title,
+    discussionPoints: [...entry.discussionPoints, ...mergedDefaults],
   };
 }
 
@@ -252,7 +284,7 @@ export function normalizeGrantPrepStageMapping(mappingInput?: Partial<GrantPrepS
   const source = mappingInput || {};
 
   return GRANT_PREP_STAGE_LIBRARY.reduce((acc, stage) => {
-    acc[stage.key] = source[stage.key] || defaults[stage.key];
+    acc[stage.key] = mergeDefaultDiscussionPoints(source[stage.key] || defaults[stage.key], stage.key);
     return acc;
   }, {} as GrantPrepStageMapping);
 }

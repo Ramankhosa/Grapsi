@@ -9,6 +9,7 @@ import {
   loadGrantPrepSession,
   normalizeGrantPrepForPersistence,
   refreshGrantPrepSessionContext,
+  resolveGrantPrepIdeationContext,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
 import { isGrantPrepSessionReady } from '@/lib/grantPrep/sessionState'
@@ -95,6 +96,7 @@ export async function GET(
         approvedGuidelineRevision: serverContext.draftingContext?.approvedGuidelineRevision || null,
         approvedTemplate: serverContext.draftingContext?.approvedTemplate || null,
       },
+      ideationContext: await resolveGrantPrepIdeationContext(auth.actor.id),
       postLaunchImpact: await getGrantPrepPostLaunchImpact({
         tenantId: auth.actor.tenantId,
         grantSessionId: grantPrepSession.grant_session_id,

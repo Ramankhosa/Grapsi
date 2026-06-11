@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { assertGrantPrepProjectCapability, requireGrantPrepActor } from '@/lib/grantPrep/access'
 import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary'
+import { getCanonicalGrantPrepStageKey } from '@/lib/grantPrep/stageModel'
 import {
   inflateGrantPrepSessionContext,
   loadGrantPrepSession,
@@ -30,7 +31,8 @@ export async function PUT(
 
   try {
     const payload = requestSchema.parse(await request.json())
-    if (!GRANT_PREP_STAGE_BY_KEY[payload.stageKey as keyof typeof GRANT_PREP_STAGE_BY_KEY]) {
+    const stageKey = getCanonicalGrantPrepStageKey(payload.stageKey as keyof typeof GRANT_PREP_STAGE_BY_KEY)
+    if (!GRANT_PREP_STAGE_BY_KEY[stageKey]) {
       return NextResponse.json({ message: 'Unknown stage key' }, { status: 400 })
     }
 
@@ -48,14 +50,14 @@ export async function PUT(
     }
 
     const prepContext = inflateGrantPrepSessionContext(grantPrepSession)
-    const stageState = prepContext.stageStates[payload.stageKey as keyof typeof prepContext.stageStates]
+    const stageState = prepContext.stageStates[stageKey]
     if (!stageState?.enabled || !stageState?.pickable) {
       return NextResponse.json({ message: 'That stage is not available in this session' }, { status: 400 })
     }
 
     const nextContext = {
       ...prepContext,
-      activeStageKey: payload.stageKey as typeof prepContext.activeStageKey,
+      activeStageKey: stageKey,
     }
 
     await prisma.grantPrepSession.update({

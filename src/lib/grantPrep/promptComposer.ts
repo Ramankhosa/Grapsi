@@ -11,10 +11,22 @@ import {
 import { isGrantPrepUserFacingPoint } from './sessionState';
 import type {
   GrantPrepEngagementMode,
+  GrantPrepIdeationContext,
   GrantPrepSessionContext,
   GrantPrepStageKey,
   GrantPrepStageStates,
+  GrantPrepSuggestedAnswer,
 } from './types';
+import { getCanonicalGrantPrepStageKey } from './stageModel';
+import { stageMemoryIsUsable } from './stageMemory';
+
+export type GrantPrepPromptMessage = {
+  role: string;
+  content: string;
+  stageKey?: GrantPrepStageKey | string | null;
+  createdAt?: string | Date | null;
+  suggestedAnswers?: GrantPrepSuggestedAnswer[] | null;
+};
 
 function asStringArray(value: unknown): string[] {
   const source = Array.isArray(value)
@@ -42,6 +54,28 @@ function buildCrossStageContext(
     )
     .map((stage) => {
       const state = stageStates[stage.key];
+      if (stageMemoryIsUsable(state.memory)) {
+        const memory = state.memory;
+        const sections = [
+          memory.confirmedFacts.length > 0
+            ? `  Confirmed facts: ${memory.confirmedFacts.slice(0, 6).join(' ')}`
+            : null,
+          memory.openGaps.length > 0
+            ? `  Open gaps: ${memory.openGaps.slice(0, 4).join(' ')}`
+            : null,
+          memory.reviewerRisks.length > 0
+            ? `  Reviewer risks: ${memory.reviewerRisks.slice(0, 4).join(' ')}`
+            : null,
+          memory.keywords.length > 0
+            ? `  Keywords: ${memory.keywords.slice(0, 8).join(', ')}`
+            : null,
+        ].filter(Boolean);
+
+        if (sections.length > 0) {
+          return `${stage.title} (${Math.round(state.readiness * 100)}% ready):\n${sections.join('\n')}`;
+        }
+      }
+
       const visiblePoints = state.points
         .map((point) => ({
           status: point.status,
@@ -91,6 +125,57 @@ function buildCrossStageContext(
   return stageBlocks.join('\n\n');
 }
 
+function isCurrentStageMessage(message: GrantPrepPromptMessage, stageKey: GrantPrepStageKey) {
+  if (!message.stageKey) {
+    return true;
+  }
+
+  return getCanonicalGrantPrepStageKey(message.stageKey as GrantPrepStageKey) === stageKey;
+}
+
+function hasSuggestedAnswers(message: GrantPrepPromptMessage) {
+  return (
+    message.role === 'assistant' &&
+    Array.isArray(message.suggestedAnswers) &&
+    message.suggestedAnswers.length > 0
+  );
+}
+
+function formatPromptMessage(message: GrantPrepPromptMessage) {
+  const stageLabel = message.stageKey
+    ? ` [stage=${getCanonicalGrantPrepStageKey(message.stageKey as GrantPrepStageKey)}]`
+    : '';
+  return `${message.role.toUpperCase()}${stageLabel}: ${message.content}`;
+}
+
+function buildStageAwareConversation(
+  conversation: GrantPrepPromptMessage[],
+  stageKey: GrantPrepStageKey,
+  options?: { recentLimit?: number }
+) {
+  const recentLimit = options?.recentLimit ?? 8;
+  const indexed = conversation.map((message, index) => ({ message, index }));
+  const recentCurrent = indexed
+    .filter(({ message }) => isCurrentStageMessage(message, stageKey))
+    .slice(-recentLimit);
+  const latestSuggestedAnswerMessage = [...indexed]
+    .reverse()
+    .find(({ message }) => hasSuggestedAnswers(message));
+  const selected = new Map<number, GrantPrepPromptMessage>();
+
+  for (const item of recentCurrent) {
+    selected.set(item.index, item.message);
+  }
+  if (latestSuggestedAnswerMessage) {
+    selected.set(latestSuggestedAnswerMessage.index, latestSuggestedAnswerMessage.message);
+  }
+
+  return Array.from(selected.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([, message]) => formatPromptMessage(message))
+    .join('\n');
+}
+
 function formatGuidelineRule(item: { text?: string | null; enforcementLevel?: string | null; draftingVsSubmission?: string | null; rationale?: string | null }) {
   const flags = [
     String(item.enforcementLevel || '').trim(),
@@ -122,6 +207,63 @@ function buildGuidelineBlock(guidelinePack: GuidelinePackDocument | null | undef
   return lines.join('\n');
 }
 
+function buildIdeationGuidelineBlock(guidelinePack: GuidelinePackDocument | null | undefined) {
+  if (!guidelinePack) {
+    return 'Approved guideline pack: not attached.';
+  }
+
+  return ['priorities', 'mustAddress', 'evaluationCriteria', 'reviewerSignals', 'avoid']
+    .map((blockKey) => compactList(blockKey, (guidelinePack as any)?.[blockKey], 5))
+    .join('\n');
+}
+
+function buildIdeationContextBlock(context: GrantPrepIdeationContext | null | undefined) {
+  if (!context?.hasUsableContext) {
+    return [
+      'Researcher grounding context: none available.',
+      'If the user pasted publications in the latest message, use only the first five publications in that message as grounding.',
+      'If no publications or profile context are available, still recommend ideas from the funding call, selected priorities, and agency requirements, but say the personalization is limited.',
+    ].join('\n');
+  }
+
+  const profileLines = context.profile
+    ? [
+        context.profile.researchSummary ? `Research summary: ${context.profile.researchSummary}` : null,
+        context.profile.researchAreas.length ? `Research areas: ${context.profile.researchAreas.join(', ')}` : null,
+        context.profile.keywords.length ? `Keywords: ${context.profile.keywords.join(', ')}` : null,
+        context.profile.institutionName ? `Institution: ${context.profile.institutionName}` : null,
+        context.profile.institutionType ? `Institution type: ${context.profile.institutionType}` : null,
+        context.profile.careerStage ? `Career stage: ${context.profile.careerStage}` : null,
+      ].filter(Boolean)
+    : [];
+  const savedAreaLines = context.savedResearchAreas.slice(0, 5).map((area, index) => {
+    const details = [
+      area.researchArea,
+      area.keywords.length ? `keywords: ${area.keywords.join(', ')}` : null,
+      area.disciplines.length ? `disciplines: ${area.disciplines.join(', ')}` : null,
+      area.taxonomyPath ? `taxonomy: ${area.taxonomyPath}` : null,
+    ].filter(Boolean).join(' | ');
+    return `${index + 1}. ${area.label}${details ? ` - ${details}` : ''}`;
+  });
+  const publicationLines = context.publications.slice(0, 5).map((publication, index) => {
+    const details = [
+      publication.year ? String(publication.year) : null,
+      publication.venue,
+      publication.doi ? `doi: ${publication.doi}` : null,
+      publication.abstractSnippet ? `abstract: ${publication.abstractSnippet}` : null,
+    ].filter(Boolean).join(' | ');
+    return `${index + 1}. ${publication.title}${details ? ` - ${details}` : ''}`;
+  });
+
+  return [
+    `Researcher grounding context sources: ${context.sourceSummary.join(', ') || 'unspecified'}.`,
+    profileLines.length ? `Profile signals:\n${profileLines.map((line) => `- ${line}`).join('\n')}` : 'Profile signals: none.',
+    savedAreaLines.length ? `Saved research areas:\n${savedAreaLines.join('\n')}` : 'Saved research areas: none.',
+    publicationLines.length ? `Tagged publications:\n${publicationLines.join('\n')}` : 'Tagged publications: none.',
+    'Use this context only to ground feasible directions. Do not invent publication details, collaborators, track record, or applicant credentials.',
+  ].join('\n');
+}
+
 function formatInlineList(values: string[], fallback = 'Not specified') {
   return values.length > 0 ? values.join(', ') : fallback;
 }
@@ -150,7 +292,7 @@ function buildPriorityAreaPromptRules(session: GrantPrepSessionContext) {
     'Priority area use:',
     '- Treat user-selected target priority areas as preferred strategic alignment anchors.',
     '- Do not broaden to unselected priority areas unless the user asks for it or the selected fit is weak.',
-    '- For thrust_alignment captures, prefer selected priority area labels in thrustLinkage when they accurately match the user-confirmed facts.',
+      '- For fit_and_scope priority_match captures, prefer selected priority area labels in thrustLinkage when they accurately match the user-confirmed facts.',
   ].join('\n');
 }
 
@@ -188,6 +330,8 @@ function getConcreteFactTargets(stageKey: GrantPrepStageKey): string[] {
       'call priority, eligibility, or template requirement served',
       'scope boundary, geography, duration, or delivery setting',
       'why this funder is the right fit',
+      'selected thrust or priority area and exact fit',
+      'reviewer value signal being strengthened',
       'what the proposal will not attempt',
     ],
     thrust_alignment: [
@@ -200,6 +344,8 @@ function getConcreteFactTargets(stageKey: GrantPrepStageKey): string[] {
       'core intervention or technical approach components',
       'who does what, when, and with what assets',
       'data, validation, or evidence-generation method',
+      'phases, milestones, and time-bound deliverables',
+      'responsible owner or partner for each workstream',
       'feasibility proof, pilot, prototype, or delivery precedent',
       'method-specific risks and controls',
     ],
@@ -220,6 +366,8 @@ function getConcreteFactTargets(stageKey: GrantPrepStageKey): string[] {
       'distinctive mechanism, population, setting, or integration',
       'why the innovation is feasible now',
       'defensible advantage under review criteria',
+      'post-grant owner, adoption route, or institutional home',
+      'scale setting, beneficiary growth, or replication path',
     ],
     evaluation: [
       'success metrics, baselines, targets, or thresholds',
@@ -327,16 +475,14 @@ export function buildIdeationPrompt(input: {
   project: { title: string; description: string | null };
   fundingContext: FundingCallContext;
   guidelinePack: GuidelinePackDocument | null | undefined;
-  conversation: Array<{ role: string; content: string }>;
+  ideationContext?: GrantPrepIdeationContext | null;
+  conversation: GrantPrepPromptMessage[];
   userMessage: string;
 }) {
   const stage = GRANT_PREP_STAGE_BY_KEY[input.stageKey];
   const stageState = input.session.stageStates[input.stageKey];
   const markerTags = getMarkerTags();
-  const currentConversation = input.conversation
-    .slice(-10)
-    .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
-    .join('\n');
+  const currentConversation = buildStageAwareConversation(input.conversation, input.stageKey, { recentLimit: 8 });
   const allowedPointKeys = (stageState?.points || []).map((point) => point.key);
   const pendingPoints = (stageState?.points || [])
     .filter((point) => point.status !== 'covered')
@@ -350,16 +496,26 @@ export function buildIdeationPrompt(input: {
     'Do not validate the idea as finished. Coach the strategic angle and help the user decide whether to keep exploring or lock in the direction.',
     '',
     'Each turn must do the following:',
-    '1. Acknowledge the user\'s idea in one concise sentence.',
-    '2. Diagnose 1-2 fundability signals from fit, distinctiveness, feasibility, and significance.',
-    '3. Use the selected target priority areas to judge call alignment.',
-    '4. Offer 2-3 exploratory directions. Each direction should be concrete, meaningfully different, and written as a possible strategic angle.',
-    '5. End by giving the user a clear choice to keep exploring or lock in and continue.',
+    '1. Acknowledge the user\'s idea, pasted publication base, or request for recommendations in one concise sentence.',
+    '2. Diagnose 1-2 fundability signals from agency fit, distinctiveness, feasibility, and significance.',
+    '3. Use selected target priority areas and agency requirements to judge call alignment.',
+    '4. Offer exactly three exploratory idea cards labeled A, B, and C. Each card must be concrete, meaningfully different, and written as a possible strategic grant angle.',
+    '5. End by giving the user a clear choice to explore one card, ask for 3 more ideas, edit a card, or lock in and continue.',
     '',
     'Priority area use:',
     '- Treat selected target priority areas as preferred alignment anchors.',
     '- Do not broaden to unselected areas unless the user asks or the selected fit is weak.',
     '- If no selected target priority area is available, use the available call priority areas only as background fit signals.',
+    '',
+    'Funding agency alignment rules:',
+    '- Every suggested idea must satisfy the funding agency requirements visible in the call facts and guideline context.',
+    '- Do not suggest an idea that conflicts with eligibility, budget, duration, focus areas, selected priority areas, must-address rules, or explicit avoid rules.',
+    '- If an otherwise interesting idea has a fit risk, do not present it as a card. Replace it with a better-aligned option.',
+    '- Each card text must include the phrase "Fits this call because" followed by a specific agency-fit reason.',
+    '- Each card rationale must include compact scores in this format: "Fit x/5; Distinctiveness x/5; Feasibility x/5; Significance x/5."',
+    '- If the latest user message asks for more ideas, generate three new non-repeated ideas and avoid near-duplicates of prior cards in the conversation.',
+    '- If the latest user message contains pasted publications, use at most the first five publications as grounding and connect each idea to one or more of those publications where relevant.',
+    '- If more than five publications appear in the latest user message, ask the user to reduce the list to five before generating ideas.',
     '',
     'Current project:',
     `Title: ${input.project.title}`,
@@ -375,6 +531,12 @@ export function buildIdeationPrompt(input: {
     `Focus areas: ${formatInlineList(input.fundingContext.focusAreas || [])}`,
     ...buildPriorityAreaPromptLines(input.session, input.fundingContext),
     `Warning: ${input.fundingContext.warning || 'None'}`,
+    '',
+    'Selective guideline context for ideation:',
+    buildIdeationGuidelineBlock(input.guidelinePack),
+    '',
+    'Researcher and publication grounding:',
+    buildIdeationContextBlock(input.ideationContext),
     '',
     `Current stage: ${stage.title}`,
     `Stage goal: ${stage.description}`,
@@ -405,16 +567,17 @@ export function buildIdeationPrompt(input: {
     '  "stageKey": "ideation",',
     '  "pointsCovered": [{ "pointKey": "...", "keywords": ["..."], "thrustLinkage": ["selected priority area label if confirmed"], "factBullets": ["specific user-confirmed ideation fact"], "ruleNotes": ["fit, distinctiveness, feasibility, or significance caveat"], "confidence": 0.85, "captureBasis": ["user_confirmed"], "ruleCompliance": { "status": "ok", "reason": null, "rescopeNeeded": false } }],',
     '  "currentPoint": "pointKey this turn is exploring" | null,',
-    '  "suggestedAnswers": [{ "label": "A", "text": "Exploratory direction text", "rationale": "Why this direction scores better on fit, distinctiveness, feasibility, or significance" }],',
+    '  "suggestedAnswers": [{ "label": "A", "text": "Concrete grant idea card text including title, strategic angle, source grounding, and a sentence beginning Fits this call because...", "rationale": "Fit x/5; Distinctiveness x/5; Feasibility x/5; Significance x/5. Why this option is agency-aligned and competitive." }],',
     '  "qualityAssessment": "strong" | "adequate" | "weak" | null,',
     '  "steeringEvents": [{ "level": "hard_block"|"gentle_redirect"|"awareness_nudge", "message": "...", "pointKey": "..." | null }]',
     '}',
-    'Use suggestedAnswers for exploratory directions only. Return 2-3 directions with labels A, B, and optionally C.',
+    'Use suggestedAnswers for exploratory directions only. Return exactly 3 directions with labels A, B, and C.',
     'Use pointsCovered only for facts the user has confirmed in their own message or by selecting a direction.',
+    'For each covered point, include 1-3 short complete factBullets as the primary drafting facts. Keep keywords as compact tags only.',
     'For selected priority fit, put selected priority area labels in thrustLinkage only when the alignment is defensible.',
     'Do not invent new point keys. Use only the allowed point keys listed above.',
     'Example ending:',
-    `${markerTags.open}{"version":"brainstorm_marker_v1","stageKey":"ideation","pointsCovered":[],"currentPoint":"idea_core","suggestedAnswers":[{"label":"A","text":"Focus the idea on a sharper beneficiary and implementation setting.","rationale":"This improves fit and feasibility."}],"qualityAssessment":"adequate","steeringEvents":[]}${markerTags.close}`,
+    `${markerTags.open}{"version":"brainstorm_marker_v1","stageKey":"ideation","pointsCovered":[],"currentPoint":"idea_core","suggestedAnswers":[{"label":"A","text":"Rural Clinic Follow-up Risk Dashboard: Focus the proposal on a dashboard that helps rural clinics prioritize diabetes patients at risk of missed follow-up. Fits this call because it addresses implementation, public health delivery, and measurable adherence outcomes.","rationale":"Fit 5/5; Distinctiveness 4/5; Feasibility 4/5; Significance 4/5. Strong agency fit with a concrete delivery setting."},{"label":"B","text":"Community Health Worker AI Triage Tool: Focus the proposal on decision support for frontline workers who manage diabetes adherence visits. Fits this call because it converts prior intervention evidence into scalable public health implementation.","rationale":"Fit 5/5; Distinctiveness 5/5; Feasibility 3/5; Significance 4/5. Strongly aligned but needs scope control."},{"label":"C","text":"Low-Cost Adherence Prediction Pilot: Focus the proposal on a feasible pilot that predicts adherence drop-off and tests targeted reminders. Fits this call because it is duration-conscious and produces measurable implementation evidence.","rationale":"Fit 4/5; Distinctiveness 3/5; Feasibility 5/5; Significance 4/5. Practical and funder-readable."}],"qualityAssessment":"adequate","steeringEvents":[]}${markerTags.close}`,
     'Do not include markdown code fences around the marker.',
   ].join('\n');
 }
@@ -425,7 +588,7 @@ export function buildGrantPrepPrompt(input: {
   project: { title: string; description: string | null };
   fundingContext: FundingCallContext;
   guidelinePack: GuidelinePackDocument | null | undefined;
-  conversation: Array<{ role: string; content: string }>;
+  conversation: GrantPrepPromptMessage[];
   userMessage: string;
 }) {
   const stage = GRANT_PREP_STAGE_BY_KEY[input.stageKey];
@@ -458,10 +621,7 @@ export function buildGrantPrepPrompt(input: {
       return `- ${point.label} (${point.conversationRole || mappedPoint?.conversationRole || 'ai_draftable'}): ${mappedPoint?.helpText || 'Use as drafting context if relevant.'}`;
     });
 
-  const currentConversation = input.conversation
-    .slice(-10)
-    .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
-    .join('\n');
+  const currentConversation = buildStageAwareConversation(input.conversation, input.stageKey, { recentLimit: 8 });
 
   const systemRole = isExpertMode
     ? [
@@ -497,7 +657,7 @@ export function buildGrantPrepPrompt(input: {
         '1. VALIDATE: Is the user\'s answer specific, evidence-based, and aligned with the funding call? If vague or generic, do not accept it.',
         '2. CHALLENGE: If the answer has gaps, contradicts earlier stages, or makes unsupported claims, push back concisely. Say what\'s missing and why it matters to reviewers.',
         '3. CONNECT: Reference relevant captured facts from prior stages or the funding call to strengthen the conversation. Show the user you remember what they said.',
-        '4. CAPTURE: Extract concrete keywords and claims into the marker. Only capture substantive, specific content, never vague phrases.',
+        '4. CAPTURE: Extract 1-3 concrete factBullets per covered point and compact keywords as secondary tags. Only capture substantive, specific content, never vague phrases.',
         '5. ADVANCE: Ask one coverage-bundle approval question that moves multiple discussion points forward. Then provide exactly three possible approval bundles the user could give, formatted as labeled options (A, B, C). Each option should be:',
         '   - Specific and substantive (not vague or generic)',
         '   - Grounded in the funding call priorities, the user\'s prior answers, or domain conventions',
@@ -619,6 +779,6 @@ export function buildGrantPrepPrompt(input: {
     'Do not include markdown code fences around the marker.',
     'Never include more than 32 KB of JSON in the marker.',
     'Use only the allowed point keys listed above. Do not invent new point keys.',
-    'For each covered point, prefer 1-3 factBullets that capture usable section-drafting facts. Use ruleNotes for reviewer or guideline caveats.',
+    'For each covered point, include 1-3 factBullets that are short, complete, point-specific drafting facts. Keep keywords as compact tags only; they cannot replace factBullets. Use ruleNotes for reviewer or guideline caveats.',
   ].join('\n');
 }

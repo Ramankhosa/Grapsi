@@ -15,17 +15,17 @@ export const MAX_TRUSTED_TEMPLATE_INTENT_ALTERNATES = 1
 export const TEMPLATE_INTENT_TRUST_THRESHOLD = 0.75
 
 export const PREP_STAGE_KEYS_BY_GRANT_SEMANTIC: Record<GrantSectionSemantic, GrantPrepStageKey[]> = {
-  summary: ['final_pitch', 'thrust_alignment', 'fit_and_scope', 'outcomes'],
+  summary: ['ideation', 'fit_and_scope', 'outcomes'],
   problem_need: ['problem_definition', 'root_cause', 'beneficiaries', 'fit_and_scope'],
-  objectives: ['problem_definition', 'fit_and_scope', 'thrust_alignment', 'outcomes'],
+  objectives: ['problem_definition', 'fit_and_scope', 'outcomes'],
   methodology: ['methodology', 'innovation', 'evaluation', 'risk_and_ethics'],
-  workplan: ['workplan', 'methodology', 'budget_strategy', 'risk_and_ethics'],
-  innovation: ['innovation', 'methodology', 'thrust_alignment'],
+  workplan: ['methodology', 'budget_strategy', 'risk_and_ethics'],
+  innovation: ['innovation', 'methodology', 'fit_and_scope'],
   evaluation: ['evaluation', 'methodology', 'outcomes'],
-  impact_outcomes: ['outcomes', 'evaluation', 'sustainability_and_scale', 'beneficiaries'],
-  alignment: ['fit_and_scope', 'thrust_alignment', 'final_pitch'],
-  sustainability: ['sustainability_and_scale', 'outcomes', 'budget_strategy'],
-  risk: ['risk_and_ethics', 'methodology', 'workplan'],
+  impact_outcomes: ['outcomes', 'evaluation', 'innovation', 'beneficiaries'],
+  alignment: ['fit_and_scope', 'ideation'],
+  sustainability: ['innovation', 'outcomes', 'budget_strategy'],
+  risk: ['risk_and_ethics', 'methodology'],
   default: ['problem_definition', 'methodology', 'outcomes'],
 }
 

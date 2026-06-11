@@ -12,11 +12,13 @@ interface FinderChatMessageProps {
   runs: RecommendationConversationRunRecord[];
   onExplainResult?: (payload: { runId: string; resultId: string; ordinal: number }) => void;
   onBeginWriting?: (payload: { resultId: string }) => void;
+  onSuggestedReply?: (message: string) => void;
   getCallDetailsHref?: (resultId: string) => string;
   strictRecoveryAction?: {
     summary: string;
     onRetry: () => void;
   } | null;
+  suggestedReplyDisabled?: boolean;
 }
 
 function formatTime(value: string) {
@@ -104,8 +106,10 @@ export default function FinderChatMessage({
   runs,
   onExplainResult,
   onBeginWriting,
+  onSuggestedReply,
   getCallDetailsHref,
   strictRecoveryAction = null,
+  suggestedReplyDisabled = false,
 }: FinderChatMessageProps) {
   const citedRun = message.citations ? runs.find((run) => run.id === message.citations?.runId) : null;
   const citedResults = message.citations
@@ -138,6 +142,22 @@ export default function FinderChatMessage({
         </div>
 
         <div className={`mt-3 whitespace-pre-wrap text-sm leading-7 ${bodyClass}`}>{message.content}</div>
+
+        {assistant && onSuggestedReply && message.suggestedReplies?.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {message.suggestedReplies.map((reply) => (
+              <button
+                key={reply}
+                type="button"
+                onClick={() => onSuggestedReply(reply)}
+                disabled={suggestedReplyDisabled}
+                className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-900 transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {reply}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {assistant && strictRecoveryAction ? (
           <div className="mt-4 rounded-[20px] border border-amber-300 bg-amber-50 px-4 py-4">

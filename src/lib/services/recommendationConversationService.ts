@@ -108,6 +108,8 @@ type ConversationState = {
   lastTurnIndex: number;
 };
 
+type ChatParsePath = 'fast_path' | 'llm' | 'heuristic_fallback';
+
 type ParsedTurn = {
   intent: RecommendationConversationIntent;
   confidence: number;
@@ -122,6 +124,7 @@ type ParsedTurn = {
   assistantSuggestion?: string;
   reasoning?: string;
   inferredFromProfile?: string[];
+  parsePath?: ChatParsePath;
 };
 
 type TurnOutcome = {
@@ -136,6 +139,8 @@ type TurnOutcome = {
   pendingPatch?: RecommendationConversationPendingPatch | null;
   run?: InternalRecommendationSearchResponse;
   citations?: ResultCitation | null;
+  suggestedReplies?: string[];
+  parseDiagnostics?: NonNullable<RecommendationSearchDiagnostics['chat']>;
 };
 
 function normalizeInputMode(value: unknown): RecommendationInputMode {
@@ -231,7 +236,19 @@ function coerceSearchDiagnostics(rawDiagnostics: unknown): RecommendationSearchD
     };
   }
 
-  return result.strictFilterRecovery || result.profile ? result : null;
+  const rawChat =
+    diagnostics.chat && typeof diagnostics.chat === 'object'
+      ? (diagnostics.chat as Record<string, unknown>)
+      : null;
+  if (rawChat) {
+    result.chat = {
+      parsePath: typeof rawChat.parsePath === 'string' ? rawChat.parsePath : null,
+      intent: typeof rawChat.intent === 'string' ? rawChat.intent : null,
+      confidence: typeof rawChat.confidence === 'number' ? rawChat.confidence : null,
+    };
+  }
+
+  return result.strictFilterRecovery || result.profile || result.chat ? result : null;
 }
 
 function buildConversationState(record: ConversationPayload): ConversationState {
@@ -298,6 +315,15 @@ function mapConversationDetail(record: ConversationPayload): RecommendationConve
         message.citations_json && typeof message.citations_json === 'object'
           ? (message.citations_json as ResultCitation)
           : null,
+      suggestedReplies:
+        message.intent_json &&
+        typeof message.intent_json === 'object' &&
+        Array.isArray((message.intent_json as Record<string, unknown>).suggestedReplies)
+          ? ((message.intent_json as Record<string, unknown>).suggestedReplies as unknown[])
+              .map((value) => normalizeWhitespace(String(value || '')))
+              .filter(Boolean)
+              .slice(0, 4)
+          : undefined,
     })),
     runs: record.runs.map(mapRunRecord),
   };
@@ -392,7 +418,7 @@ function messageRequestsPublicationPreference(message: string) {
   );
 }
 
-function buildPreferenceOptInNotice(message: string, preferences: RecommendationPreferenceFlags) {
+function buildPreferenceOptInTip(message: string, preferences: RecommendationPreferenceFlags) {
   const needsEligibility = messageRequestsEligibilityPreference(message) && !preferences.useEligibilityProfile;
   const needsPublications = messageRequestsPublicationPreference(message) && !preferences.usePublicationContext;
   if (!needsEligibility && !needsPublications) {
@@ -405,10 +431,37 @@ function buildPreferenceOptInNotice(message: string, preferences: Recommendation
   ].filter(Boolean);
 
   return [
-    `I can use ${missing.join(' and ')} for this, but those preferences are currently off.`,
-    'Open My Preferences, turn on the context you want me to use, then send the request again.',
+    `Tip: turn on ${missing.join(' and ')} in My Preferences if you want me to rank future searches around your profile context.`,
     needsPublications ? 'For publication matching, tag your own library items with my-publication.' : '',
   ].filter(Boolean).join('\n\n');
+}
+
+function appendPreferenceOptInTip(content: string, tip: string | null) {
+  return tip ? `${content}\n\n${tip}` : content;
+}
+
+function parsePendingPatchDecision(message: string): 'confirm' | 'reject' | null {
+  const normalized = normalizeKey(message);
+  if (!normalized) return null;
+
+  if (/^(yes|y|yes please|confirm|confirmed|approve|approved|apply|apply them|apply it|go ahead|okay|ok|looks good|proceed|do it|run it|search)$/i.test(normalized)) {
+    return 'confirm';
+  }
+  if (/^(no|n|reject|decline|cancel|stop|not now|skip|keep current|leave unchanged|do not apply|dont apply|don't apply)$/i.test(normalized)) {
+    return 'reject';
+  }
+  return null;
+}
+
+function maybeGenericPreferenceResearchArea(message: string, researchArea: string) {
+  const normalizedResearchArea = normalizeKey(researchArea);
+  if (
+    (messageRequestsEligibilityPreference(message) || messageRequestsPublicationPreference(message)) &&
+    (!normalizedResearchArea || ['me', 'my', 'profile', 'eligible', 'eligibility'].includes(normalizedResearchArea))
+  ) {
+    return 'general research funding';
+  }
+  return researchArea;
 }
 
 function normalizeListMatch(message: string, aliases: Record<string, string>, allowedValues: readonly string[]) {
@@ -641,7 +694,7 @@ function deriveResearchAreaFromMessage(message: string) {
   cleaned = removeTermsFromText(cleaned, buildAliasRemovalTerms(CAREER_STAGE_ALIASES));
   cleaned = removeTermsFromText(cleaned, getLexiconRemovalTerms());
   cleaned = cleaned.replace(
-    /\b(researchers?|institutions?|universities|university|colleges?|students?|applicants?|countries?|country|eligible|only|just|any|add|remove|exclude|without|not|no|in|at|for|to|by|with|and)\b/gi,
+    /\b(researchers?|institutions?|universities|university|colleges?|students?|applicants?|countries?|country|eligible|eligibility|profile|me|my|mine|only|just|any|add|remove|exclude|without|not|no|in|at|for|to|by|with|and)\b/gi,
     ' '
   );
   cleaned = normalizeWhitespace(cleaned.replace(/[(),.;:]+/g, ' '));
@@ -650,7 +703,7 @@ function deriveResearchAreaFromMessage(message: string) {
     return cleaned;
   }
 
-  return cleaned.length >= 3 ? cleaned : normalizeWhitespace(message);
+  return cleaned.length >= 3 ? cleaned : '';
 }
 
 function isFreshSearchMessage(message: string, hasLatestRun: boolean) {
@@ -1097,6 +1150,50 @@ function buildDeterministicCompareSummary(results: RecommendationRawResultItem[]
   return lines.join('\n');
 }
 
+function uniqueSuggestedReplies(replies: string[]) {
+  const seen = new Set<string>();
+  return replies
+    .map((reply) => normalizeWhitespace(reply))
+    .filter((reply) => {
+      const key = reply.toLowerCase();
+      if (!reply || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 4);
+}
+
+function buildSuggestedRepliesForSearch(response: InternalRecommendationSearchResponse) {
+  const replies: string[] = [];
+  const filters = response.appliedFilters;
+
+  if (!filters.rollingOnly && response.rawResults.some((result) => result.isRolling)) {
+    replies.push('Only rolling opportunities');
+  }
+
+  if (filters.sort !== 'deadline_soonest' && response.rawResults.some((result) => result.closeDate)) {
+    replies.push('Sort by deadline soonest');
+  }
+
+  const fundingKind = response.rawResults
+    .flatMap((result) => result.fundingKinds || [])
+    .find((kind) => kind && !filters.fundingKinds.includes(kind));
+  if (fundingKind) {
+    replies.push(`Only ${fundingKind}`);
+  }
+
+  const eligibleCountry = response.rawResults
+    .flatMap((result) => result.eligibleCountries || [])
+    .find((country) => country && !filters.eligibleCountries.includes(country));
+  if (eligibleCountry) {
+    replies.push(`Open to researchers in ${eligibleCountry}`);
+  }
+
+  return uniqueSuggestedReplies(replies);
+}
+
 function sanitizeForPrompt(text: string) {
   return text
     .replace(/ignore\s+(all\s+)?previous\s+instructions/gi, '[REDACTED]')
@@ -1238,6 +1335,15 @@ ${JSON.stringify(phraseSignals)}`);
   if (f.amountMax !== null) activeFilters.push(`amountMax: ${f.amountMax}`);
   stateLines.push(activeFilters.length > 0 ? `Active filters:\n  ${activeFilters.join('\n  ')}` : 'Active filters: none');
   sections.push(`CURRENT SEARCH STATE:\n${stateLines.join('\n')}`);
+
+  if (params.state.pendingPatch) {
+    const pendingFilters = describeActiveFilters(params.state.pendingPatch.nextFilters);
+    sections.push(`PENDING FILTER CONFIRMATION:
+Summary: ${params.state.pendingPatch.summary}
+Pending input mode: ${params.state.pendingPatch.nextInputMode}
+Pending filters: ${pendingFilters.length > 0 ? pendingFilters.join('; ') : 'none'}
+If the user is confirming or rejecting this pending change, respect that pending state.`);
+  }
 
   if (params.latestRun && params.latestRun.results.length > 0) {
     const resultSummaries = params.latestRun.results.slice(0, CHAT_ORCHESTRATOR_RESULTS_LIMIT).map((r, i) => {
@@ -1386,10 +1492,8 @@ function extractDeadlinePatch(message: string) {
   }
 
   if (
-    normalized.includes('deadline this month') ||
-    normalized.includes('in this month') ||
-    normalized.includes('this month deadline') ||
-    normalized.includes('current month')
+    /\b(?:deadline|deadlines|due|closing|closes)\s+(?:this month|in this month|current month)\b/.test(normalized) ||
+    /\b(?:this month|current month)\s+(?:deadline|deadlines)\b/.test(normalized)
   ) {
     const start = new Date(today.getFullYear(), today.getMonth(), 1);
     const end = endOfMonth(today.getFullYear(), today.getMonth());
@@ -1397,9 +1501,8 @@ function extractDeadlinePatch(message: string) {
   }
 
   if (
-    normalized.includes('deadline next month') ||
-    normalized.includes('in next month') ||
-    normalized.includes('next month deadline')
+    /\b(?:deadline|deadlines|due|closing|closes)\s+(?:next month|in next month)\b/.test(normalized) ||
+    /\bnext month\s+(?:deadline|deadlines)\b/.test(normalized)
   ) {
     const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
     const end = endOfMonth(nextMonthStart.getFullYear(), nextMonthStart.getMonth());
@@ -1407,9 +1510,8 @@ function extractDeadlinePatch(message: string) {
   }
 
   if (
-    normalized.includes('deadline this week') ||
-    normalized.includes('in this week') ||
-    normalized.includes('current week')
+    /\b(?:deadline|deadlines|due|closing|closes)\s+(?:this week|in this week|current week)\b/.test(normalized) ||
+    /\b(?:this week|current week)\s+(?:deadline|deadlines)\b/.test(normalized)
   ) {
     const start = new Date(today);
     const day = start.getDay();
@@ -1421,9 +1523,8 @@ function extractDeadlinePatch(message: string) {
   }
 
   if (
-    normalized.includes('deadline this year') ||
-    normalized.includes('in this year') ||
-    normalized.includes('current year')
+    /\b(?:deadline|deadlines|due|closing|closes)\s+(?:this year|in this year|current year)\b/.test(normalized) ||
+    /\b(?:this year|current year)\s+(?:deadline|deadlines)\b/.test(normalized)
   ) {
     const start = new Date(today.getFullYear(), 0, 1);
     const end = new Date(today.getFullYear(), 11, 31);
@@ -1867,9 +1968,9 @@ RULES:
             )
           : {
               researchArea:
-                queryRewrite ||
+                maybeGenericPreferenceResearchArea(params.message, queryRewrite) ||
                 (safeIntent === 'new_search'
-                  ? normalizeWhitespace(params.message)
+                  ? maybeGenericPreferenceResearchArea(params.message, normalizeWhitespace(params.message))
                   : inputMode === params.state.inputMode
                     ? (cloneQuery(inputMode, params.state.query) as { researchArea: string }).researchArea
                     : ''),
@@ -1905,10 +2006,24 @@ RULES:
       return null;
     }
 
-    return ['compare_results', 'explain_result', 'browse_more', 'clear_filters'].includes(heuristic.intent) ||
-      heuristic.confidence >= 0.95
-      ? heuristic
-      : null;
+    if (['compare_results', 'explain_result', 'browse_more', 'clear_filters'].includes(heuristic.intent)) {
+      return heuristic;
+    }
+
+    if (heuristic.intent === 'new_search' && (extractClearAndSearchQuery(params.message) || extractPastedPaperMetadata(params.message))) {
+      return heuristic;
+    }
+
+    if (
+      heuristic.intent === 'refine_filters' &&
+      heuristic.nextState &&
+      heuristic.nextState.inputMode === params.state.inputMode &&
+      JSON.stringify(heuristic.nextState.query) === JSON.stringify(cloneQuery(params.state.inputMode, params.state.query))
+    ) {
+      return heuristic;
+    }
+
+    return null;
   }
 
   private applyParsedTurnGuard(
@@ -1950,7 +2065,7 @@ RULES:
     if (
       (normalizedMessage.includes('compare') ||
         normalizedMessage.includes('versus') ||
-        normalizedMessage.includes('vs') ||
+        /\bvs\b/.test(normalizedMessage) ||
         normalizedMessage.includes('which is better')) &&
       ordinals.length >= 2
     ) {
@@ -2084,15 +2199,15 @@ RULES:
     }
 
     if (modified) {
+      const nextInputMode = freshSearch ? 'research_area' : params.state.inputMode;
+      const nextQuery = freshSearch
+        ? { researchArea: maybeGenericPreferenceResearchArea(params.message, deriveResearchAreaFromMessage(params.message)) }
+        : cloneQuery(params.state.inputMode, params.state.query);
       return {
         intent: freshSearch ? 'new_search' : 'refine_filters',
         confidence: 0.95,
         requiresConfirmation: false,
-        nextState: applyStateNormalization(
-          'research_area',
-          { researchArea: freshSearch ? deriveResearchAreaFromMessage(params.message) : ((cloneQuery(params.state.inputMode, params.state.query) as { researchArea?: string }).researchArea || deriveResearchAreaFromMessage(params.message)) },
-          nextFilters
-        ),
+        nextState: applyStateNormalization(nextInputMode, nextQuery, nextFilters),
         summary: freshSearch
           ? 'I treated this as a new search, reset the old filters, and applied the new ones from your request.'
           : 'I applied your filter changes and updated the search.',
@@ -2111,7 +2226,11 @@ RULES:
         intent: 'new_search',
         confidence: 0.95,
         requiresConfirmation: false,
-        nextState: applyStateNormalization('research_area', { researchArea: deriveResearchAreaFromMessage(params.message) }, createDefaultFilters()),
+        nextState: applyStateNormalization(
+          'research_area',
+          { researchArea: maybeGenericPreferenceResearchArea(params.message, deriveResearchAreaFromMessage(params.message)) },
+          createDefaultFilters()
+        ),
         summary: 'I started a fresh search from your latest request and reset the previous filters.',
       };
     }
@@ -2129,14 +2248,14 @@ RULES:
   }) {
     const fastPath = this.parseFastPathTurn(params);
     if (fastPath) {
-      return this.applyParsedTurnGuard(fastPath, params);
+      return this.applyParsedTurnGuard({ ...fastPath, parsePath: 'fast_path' }, params);
     }
 
     const llmResult = await this.parseTurnWithLLM(params);
-    if (llmResult) return this.applyParsedTurnGuard(llmResult, params);
+    if (llmResult) return this.applyParsedTurnGuard({ ...llmResult, parsePath: 'llm' }, params);
 
     const heuristicResult = this.parseTurnHeuristically(params);
-    if (heuristicResult) return this.applyParsedTurnGuard(heuristicResult, params);
+    if (heuristicResult) return this.applyParsedTurnGuard({ ...heuristicResult, parsePath: 'heuristic_fallback' }, params);
 
     return {
       intent: 'clarification_needed' as RecommendationConversationIntent,
@@ -2229,19 +2348,64 @@ RULES:
         pendingPatch: null,
         run: searchResult,
         citations: { runId: '', resultIds: searchResult.rawResults.slice(0, CHAT_INLINE_RESULT_LIMIT).map((result) => result.id) },
+        suggestedReplies: buildSuggestedRepliesForSearch(searchResult),
       };
     }
 
     const message = normalizeWhitespace(params.input.message || '').slice(0, CHAT_MESSAGE_MAX_LENGTH);
-    const preferenceNotice = buildPreferenceOptInNotice(message, params.preferences);
-    if (preferenceNotice) {
-      return {
-        intent: 'clarification_needed',
-        messageType: 'assistant_notice',
-        assistantContent: preferenceNotice,
-        pendingPatch: null,
-      };
+    const preferenceTip = buildPreferenceOptInTip(message, params.preferences);
+
+    if (params.state.pendingPatch) {
+      const pendingDecision = parsePendingPatchDecision(message);
+      if (pendingDecision) {
+        const pendingPatch = params.state.pendingPatch;
+        const currentStateHash = buildConversationStateHash(params.state.inputMode, params.state.query, params.state.filters);
+        if (currentStateHash !== pendingPatch.baseStateHash) {
+          return {
+            intent: 'refine_filters',
+            messageType: 'assistant_notice',
+            assistantContent: 'That pending filter suggestion is stale, so I cleared it. Send the filter change again if you still want to apply it.',
+            pendingPatch: null,
+          };
+        }
+
+        if (pendingDecision === 'reject') {
+          return {
+            intent: 'refine_filters',
+            messageType: 'assistant_notice',
+            assistantContent: 'Okay, I left the active filters unchanged.',
+            pendingPatch: null,
+          };
+        }
+
+        const nextState = applyStateNormalization(
+          pendingPatch.nextInputMode,
+          pendingPatch.nextQuery,
+          pendingPatch.nextFilters
+        );
+        const run = isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)
+          ? await this.runGroundedSearch(nextState, params.access, params.profileSnapshot, params.llmContext)
+          : undefined;
+        return {
+          intent: 'refine_filters',
+          messageType: run ? 'assistant_response' : 'assistant_notice',
+          assistantContent: run
+            ? appendPreferenceOptInTip(
+                await buildNarrativeForSearch(run, 'I confirmed the suggested filter changes and searched again.', params.llmContext),
+                preferenceTip
+              )
+            : 'I applied the confirmed filter changes. Add a research area or paper details to search funding calls.',
+          nextState: run
+            ? { inputMode: nextState.inputMode, query: queryStateFromNormalized(nextState.inputMode, run.normalizedQuery), filters: run.appliedFilters }
+            : nextState,
+          pendingPatch: null,
+          run,
+          citations: run ? { runId: '', resultIds: run.rawResults.slice(0, CHAT_INLINE_RESULT_LIMIT).map((result) => result.id) } : null,
+          suggestedReplies: run ? buildSuggestedRepliesForSearch(run) : undefined,
+        };
+      }
     }
+
     if (
       messageRequestsPublicationPreference(message) &&
       params.preferences.usePublicationContext &&
@@ -2251,7 +2415,7 @@ RULES:
         intent: 'clarification_needed',
         messageType: 'assistant_notice',
         assistantContent: 'I can use your publications for matching, but I did not find any active library items tagged my-publication. Add that tag to your own papers in the library, then send this request again.',
-        pendingPatch: null,
+        pendingPatch: params.state.pendingPatch,
       };
     }
 
@@ -2263,6 +2427,11 @@ RULES:
       profileSnapshot: params.profileSnapshot,
       llmContext: params.llmContext,
     });
+    const parseDiagnostics = {
+      parsePath: parsed.parsePath || null,
+      intent: parsed.intent,
+      confidence: parsed.confidence,
+    };
 
     if (parsed.intent === 'compare_results') {
       const results = resolveOrdinalResults(params.latestRun, parsed.referencedOrdinals || []);
@@ -2271,7 +2440,7 @@ RULES:
           intent: 'compare_results',
           messageType: 'assistant_notice',
           assistantContent: 'I need two results from the current conversation to compare them. Try “compare 1 and 2” after running a search.',
-          pendingPatch: null,
+          pendingPatch: params.state.pendingPatch,
         };
       }
 
@@ -2279,7 +2448,7 @@ RULES:
         intent: 'compare_results',
         messageType: 'assistant_response',
         assistantContent: await buildNarrativeForCompare(results, parsed.referencedOrdinals || [], params.llmContext),
-        pendingPatch: null,
+        pendingPatch: params.state.pendingPatch,
         citations: { runId: params.latestRun.id, resultIds: results.map((result) => result.id) },
       };
     }
@@ -2292,7 +2461,7 @@ RULES:
           intent: 'explain_result',
           messageType: 'assistant_notice',
           assistantContent: 'I need a specific result from the current conversation to explain. Try “tell me more about result 2.”',
-          pendingPatch: null,
+          pendingPatch: params.state.pendingPatch,
         };
       }
 
@@ -2300,7 +2469,7 @@ RULES:
         intent: 'explain_result',
         messageType: 'assistant_response',
         assistantContent: await buildNarrativeForExplain(result, ordinal, params.llmContext),
-        pendingPatch: null,
+        pendingPatch: params.state.pendingPatch,
         citations: { runId: params.latestRun.id, resultIds: [result.id] },
       };
     }
@@ -2312,7 +2481,7 @@ RULES:
         assistantContent:
           parsed.assistantSuggestion ||
           'You can ask me to search for funding, narrow the filters, compare two results, or explain why a result matches.',
-        pendingPatch: null,
+        pendingPatch: params.state.pendingPatch,
       };
     }
 
@@ -2321,7 +2490,7 @@ RULES:
         intent: parsed.intent,
         messageType: 'assistant_notice',
         assistantContent: 'I could not build a search update from that request. Try being more specific.',
-        pendingPatch: null,
+        pendingPatch: params.state.pendingPatch,
       };
     }
 
@@ -2346,7 +2515,7 @@ RULES:
       if (message && parsed.nextState.inputMode === 'research_area' && !researchAreaQuery) {
         const fallbackState = applyStateNormalization(
           'research_area',
-          { researchArea: message },
+          { researchArea: maybeGenericPreferenceResearchArea(message, deriveResearchAreaFromMessage(message)) || message },
           parsed.nextState.filters
         );
 
@@ -2355,10 +2524,13 @@ RULES:
           return {
             intent: parsed.intent,
             messageType: 'assistant_response',
-            assistantContent: await buildNarrativeForSearch(
-              searchResult,
-              buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I searched funding opportunities from your latest request.', parsed.inferredFromProfile),
-              params.llmContext
+            assistantContent: appendPreferenceOptInTip(
+              await buildNarrativeForSearch(
+                searchResult,
+                buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I searched funding opportunities from your latest request.', parsed.inferredFromProfile),
+                params.llmContext
+              ),
+              preferenceTip
             ),
             nextState: {
               inputMode: fallbackState.inputMode,
@@ -2368,6 +2540,8 @@ RULES:
             pendingPatch: null,
             run: searchResult,
             citations: { runId: '', resultIds: searchResult.rawResults.slice(0, CHAT_INLINE_RESULT_LIMIT).map((result) => result.id) },
+            suggestedReplies: buildSuggestedRepliesForSearch(searchResult),
+            parseDiagnostics,
           };
         }
       }
@@ -2385,7 +2559,10 @@ RULES:
     return {
       intent: parsed.intent,
       messageType: 'assistant_response',
-      assistantContent: await buildNarrativeForSearch(searchResult, buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I updated the funding search.', parsed.inferredFromProfile), params.llmContext),
+      assistantContent: appendPreferenceOptInTip(
+        await buildNarrativeForSearch(searchResult, buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I updated the funding search.', parsed.inferredFromProfile), params.llmContext),
+        preferenceTip
+      ),
       nextState: {
         inputMode: parsed.nextState.inputMode,
         query: queryStateFromNormalized(parsed.nextState.inputMode, searchResult.normalizedQuery),
@@ -2394,6 +2571,8 @@ RULES:
       pendingPatch: null,
       run: searchResult,
       citations: { runId: '', resultIds: searchResult.rawResults.slice(0, CHAT_INLINE_RESULT_LIMIT).map((result) => result.id) },
+      suggestedReplies: buildSuggestedRepliesForSearch(searchResult),
+      parseDiagnostics,
     };
   }
 
@@ -2410,6 +2589,12 @@ RULES:
       let createdRunId: string | null = null;
 
       if (params.outcome.run) {
+        const searchDiagnostics = params.outcome.parseDiagnostics
+          ? {
+              ...(params.outcome.run.searchDiagnostics || {}),
+              chat: params.outcome.parseDiagnostics,
+            }
+          : params.outcome.run.searchDiagnostics;
         const latestRun = await tx.recommendationConversationRun.findFirst({
           where: { conversation_id: params.conversationId },
           orderBy: { run_index: 'desc' },
@@ -2430,8 +2615,8 @@ RULES:
             } as Prisma.InputJsonValue,
             result_snapshot_json: params.outcome.run.rawResults as unknown as Prisma.InputJsonValue,
             result_ids_json: params.outcome.run.rawResults.map((result) => result.id) as unknown as Prisma.InputJsonValue,
-            search_diagnostics_json: params.outcome.run.searchDiagnostics
-              ? (params.outcome.run.searchDiagnostics as unknown as Prisma.InputJsonValue)
+            search_diagnostics_json: searchDiagnostics
+              ? (searchDiagnostics as unknown as Prisma.InputJsonValue)
               : Prisma.DbNull,
             degraded_mode: params.outcome.run.degradedMode,
             low_confidence: params.outcome.run.lowConfidence,
@@ -2449,8 +2634,13 @@ RULES:
           role: 'assistant',
           message_type: params.outcome.messageType,
           content: params.outcome.assistantContent,
-          intent_json: { intent: params.outcome.intent } as Prisma.InputJsonValue,
-          proposed_filter_patch_json: params.outcome.pendingPatch ? (params.outcome.pendingPatch as unknown as Prisma.InputJsonValue) : undefined,
+          intent_json: {
+            intent: params.outcome.intent,
+            suggestedReplies: params.outcome.suggestedReplies || [],
+          } as Prisma.InputJsonValue,
+          proposed_filter_patch_json: params.outcome.messageType === 'assistant_confirmation' && params.outcome.pendingPatch
+            ? (params.outcome.pendingPatch as unknown as Prisma.InputJsonValue)
+            : undefined,
           applied_filter_snapshot_json: params.outcome.nextState
             ? ({ inputMode: params.outcome.nextState.inputMode, query: params.outcome.nextState.query, filters: params.outcome.nextState.filters } as Prisma.InputJsonValue)
             : undefined,
@@ -2519,7 +2709,7 @@ RULES:
 
     const outcome = await this.createTurnOutcome({
       input,
-      state: { ...state, pendingPatch: null },
+      state,
       latestRun: getLatestRun(conversation),
       turnIndex: reserved.turnIndex,
       conversationDetail: conversation,

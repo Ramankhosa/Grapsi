@@ -3,17 +3,30 @@ import type { ChangeEvent, FocusEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HiArrowsPointingIn, HiArrowsPointingOut, HiExclamationTriangle, HiPaperAirplane, HiSparkles } from 'react-icons/hi2';
-import type { PrepMessage } from './types';
+import type { PrepIdeationContext, PrepMessage } from './types';
 import {
   mergeGrantPrepSuggestedAnswersWithInline,
   removeGrantPrepApprovalBundlePrefix,
 } from '@/lib/grantPrep/suggestedAnswers';
+import {
+  buildGrantPrepPublicationRecommendationMessage,
+  GRANT_PREP_IDEA_RECOMMENDATION_REQUEST,
+  GRANT_PREP_MAX_IDEATION_PUBLICATIONS,
+  GRANT_PREP_MORE_IDEAS_REQUEST,
+  parseGrantPrepPublicationLines,
+} from '@/lib/grantPrep/ideationRecommendations';
 
 function clsx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
 }
 
 type SuggestedAnswer = NonNullable<PrepMessage['suggested_answers']>[number];
+
+type StageTransitionContext = {
+  ideaSummary?: string | null;
+  problemSummary?: string | null;
+  problemReady?: boolean;
+};
 
 type Props = {
   messages: PrepMessage[];
@@ -29,10 +42,14 @@ type Props = {
   activeStageTitle?: string;
   activeStageDescription?: string;
   pendingPoints?: Array<{ key: string; label: string; helpText?: string }>;
+  stageTransitionContext?: StageTransitionContext;
+  ideationContext?: PrepIdeationContext | null;
   onLockIdeation?: () => void | Promise<void>;
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
 };
+
+type PendingPoint = { key: string; label: string; helpText?: string };
 
 function SteeringBanner({ level, message }: { level: string; message: string }) {
   const tone =
@@ -55,8 +72,8 @@ function buildOptionCombinations(options: SuggestedAnswer[]) {
     for (let j = i + 1; j < usableOptions.length; j += 1) {
       const selected = [usableOptions[i], usableOptions[j]];
       combinations.push({
-        label: `${selected[0].label} + ${selected[1].label}`,
-        text: `Combined options ${selected[0].label} and ${selected[1].label}:\n\n${selected
+        label: `${selected[0].label}+${selected[1].label}`,
+        text: `${selected
           .map((option) => `${option.label}. ${option.text}`)
           .join('\n\n')}`,
       });
@@ -65,8 +82,8 @@ function buildOptionCombinations(options: SuggestedAnswer[]) {
 
   if (usableOptions.length > 2) {
     combinations.push({
-      label: 'All options',
-      text: `Combined options ${usableOptions.map((option) => option.label).join(', ')}:\n\n${usableOptions
+      label: 'All Three',
+      text: `${usableOptions
         .map((option) => `${option.label}. ${option.text}`)
         .join('\n\n')}`,
     });
@@ -91,6 +108,110 @@ function stripInlineOptions(text: string): string {
     .search(/\n\s*\*{0,2}(?:suggested|possible|choose|options?)[^:\n]*:\*{0,2}\s*$/i);
   const cutAt = headerStart >= 0 ? headerStart : firstOption;
   return text.slice(0, cutAt).trimEnd();
+}
+
+function buildStageAnswerPrompt(activeStageTitle: string | undefined, points: PendingPoint[]) {
+  const title = activeStageTitle || 'this stage';
+  return [
+    `For ${title}, here are the details I can provide:`,
+    '',
+    ...points.map((point) => {
+      const helpText = point.helpText ? ` (${point.helpText})` : '';
+      return `- ${point.label}${helpText}: `;
+    }),
+  ].join('\n');
+}
+
+function buildAiSuggestionPrompt(activeStageTitle: string | undefined, points: PendingPoint[]) {
+  const title = activeStageTitle || 'this stage';
+  const pointList = points.map((point) => point.label).join(', ');
+  return [
+    `Suggest the most suitable answers for ${title} using the selected direction, problem, funding call, and prior prep context.`,
+    pointList ? `Focus on: ${pointList}.` : '',
+    'If you infer anything, mark it as an assumption and give me editable options to confirm.',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function StageTransitionStarterCard({
+  activeStageKey,
+  activeStageTitle,
+  pendingPoints,
+  stageTransitionContext,
+  onAnswerInTextBox,
+  onSend,
+  disabled,
+}: {
+  activeStageKey?: string;
+  activeStageTitle?: string;
+  pendingPoints?: PendingPoint[];
+  stageTransitionContext?: StageTransitionContext;
+  onAnswerInTextBox: (value: string) => void;
+  onSend: (contentOverride?: string) => void;
+  disabled?: boolean;
+}) {
+  const isProblemDefinition = activeStageKey === 'problem_definition';
+  const pointsNeedingInput = (pendingPoints || []).slice(0, 5);
+  if (pointsNeedingInput.length === 0) {
+    return null;
+  }
+
+  const heading = isProblemDefinition
+    ? 'Now let\'s work on the problem specifics'
+    : `Next, connect this to ${activeStageTitle || 'the next stage'}`;
+  const body = isProblemDefinition
+    ? 'Now that the grant direction is clear, answer the items below in one message so the problem is ready for reviewers.'
+    : `The direction and problem are set. Answer the items below for ${activeStageTitle || 'this stage'} in one message, or let AI suggest draft answers from the existing context.`;
+
+  return (
+    <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 px-4 py-3 shadow-prep-card">
+      <div className="text-sm font-semibold text-emerald-950">{heading}</div>
+      <div className="mt-1 text-sm leading-5 text-emerald-900">{body}</div>
+      {stageTransitionContext?.ideaSummary ? (
+        <div className="mt-2 rounded-lg bg-white/75 px-3 py-2 text-xs text-emerald-900 ring-1 ring-emerald-100">
+          <span className="font-semibold">Direction:</span> {stageTransitionContext.ideaSummary}
+        </div>
+      ) : null}
+      {!isProblemDefinition && stageTransitionContext?.problemSummary ? (
+        <div className="mt-2 rounded-lg bg-white/75 px-3 py-2 text-xs text-emerald-900 ring-1 ring-emerald-100">
+          <span className="font-semibold">Problem:</span> {stageTransitionContext.problemSummary}
+        </div>
+      ) : null}
+
+      <div className="mt-3 rounded-lg border border-emerald-100 bg-white/80 px-3 py-2">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">What to answer next</div>
+        <ul className="mt-1.5 space-y-1.5 text-xs leading-5 text-emerald-950">
+          {pointsNeedingInput.map((point) => (
+            <li key={point.key}>
+              <span className="font-semibold">{point.label}:</span>{' '}
+              {point.helpText || `Provide the specific details reviewers need for ${point.label.toLowerCase()}.`}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onAnswerInTextBox(buildStageAnswerPrompt(activeStageTitle, pointsNeedingInput))}
+          disabled={disabled}
+          className="rounded-lg bg-prep-accent px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          Answer these in text box
+        </button>
+        <button
+          type="button"
+          onClick={() => onSend(buildAiSuggestionPrompt(activeStageTitle, pointsNeedingInput))}
+          disabled={disabled}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-900 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-400"
+        >
+          <HiSparkles className="h-3.5 w-3.5" />
+          Let AI suggest answers
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function MessageBubble({
@@ -162,6 +283,141 @@ function MessageBubble({
   );
 }
 
+function IdeationStartCard({
+  sending,
+  sendCooldown,
+  sessionLocked,
+  ideationContext,
+  onInputChange,
+  onSend,
+}: {
+  sending: boolean;
+  sendCooldown?: boolean;
+  sessionLocked: boolean;
+  ideationContext?: PrepIdeationContext | null;
+  onInputChange: (value: string) => void;
+  onSend: (contentOverride?: string) => void;
+}) {
+  const [publicationInput, setPublicationInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const hasContext = ideationContext?.hasUsableContext;
+  const disabled = sending || !!sendCooldown || sessionLocked;
+  const sourceText = ideationContext?.sourceSummary?.length
+    ? ideationContext.sourceSummary.join(', ')
+    : 'your saved profile context';
+
+  const handleRecommendFromContext = () => {
+    if (disabled) return;
+    onSend(GRANT_PREP_IDEA_RECOMMENDATION_REQUEST);
+  };
+
+  const handleRecommendFromPublications = () => {
+    if (disabled) return;
+    const publications = parseGrantPrepPublicationLines(publicationInput);
+    if (publications.length === 0) {
+      setError('Paste at least one publication title or short citation.');
+      return;
+    }
+    if (publications.length > GRANT_PREP_MAX_IDEATION_PUBLICATIONS) {
+      setError(`Use no more than ${GRANT_PREP_MAX_IDEATION_PUBLICATIONS} publications for this recommendation.`);
+      return;
+    }
+    setError(null);
+    onSend(buildGrantPrepPublicationRecommendationMessage(publications));
+  };
+
+  return (
+    <div className="flex flex-1 items-center justify-center px-3 py-8">
+      <div className="w-full max-w-2xl rounded-xl border border-emerald-100 bg-emerald-50/70 p-5 text-left shadow-prep-card">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-white text-prep-accent shadow-sm">
+            <HiSparkles className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-base font-semibold text-slate-900">Start with agency-aligned ideas</div>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              I can suggest three A/B/C grant ideas that fit the funding call requirements before you choose an angle.
+            </p>
+
+            {hasContext ? (
+              <div className="mt-4 rounded-lg border border-emerald-100 bg-white px-3 py-2 text-xs text-slate-600">
+                Using: {sourceText}.
+              </div>
+            ) : (
+              <div className="mt-4">
+                <label htmlFor="grant-prep-publications" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Optional publication base
+                </label>
+                <p className="mt-1 text-sm text-slate-600">
+                  Paste up to five publication titles or short citations if you want ideas grounded in your work.
+                </p>
+                <textarea
+                  id="grant-prep-publications"
+                  value={publicationInput}
+                  onChange={(event) => {
+                    setPublicationInput(event.target.value.slice(0, 3000));
+                    setError(null);
+                  }}
+                  disabled={disabled}
+                  rows={5}
+                  placeholder={[
+                    '1. AI-assisted diabetic retinopathy screening in rural clinics',
+                    '2. Community health worker-led diabetes adherence intervention',
+                    '3. Mobile reminders and glycemic control in low-resource settings',
+                  ].join('\n')}
+                  className="mt-2 w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-prep-accent focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+                />
+                <div className="mt-1 flex items-center justify-between gap-2 text-xs">
+                  <span className={error ? 'text-rose-600' : 'text-slate-400'}>
+                    {error || `${parseGrantPrepPublicationLines(publicationInput).length}/${GRANT_PREP_MAX_IDEATION_PUBLICATIONS} publications`}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleRecommendFromContext}
+                disabled={disabled}
+                className="rounded-lg bg-prep-accent px-3 py-2 text-sm font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                Recommend grant ideas
+              </button>
+              {!hasContext ? (
+                <button
+                  type="button"
+                  onClick={handleRecommendFromPublications}
+                  disabled={disabled}
+                  className="rounded-lg bg-prep-accent px-3 py-2 text-sm font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  Recommend from these papers
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onSend(GRANT_PREP_IDEA_RECOMMENDATION_REQUEST)}
+                disabled={disabled}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                >
+                  Brainstorm from the call only
+                </button>
+              <button
+                type="button"
+                onClick={() => onInputChange('I have finalized the idea already: ')}
+                disabled={disabled}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+              >
+                I have finalized the idea already
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function GrantPrepChatPane({
   messages,
   sending,
@@ -176,12 +432,15 @@ export default function GrantPrepChatPane({
   activeStageTitle,
   activeStageDescription,
   pendingPoints,
+  stageTransitionContext,
+  ideationContext,
   onLockIdeation,
   onToggleFullscreen,
   isFullscreen = false,
 }: Props) {
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const [expandedPromptInput, setExpandedPromptInput] = useState(false);
 
   // EC-2: auto-scroll to latest message
   useEffect(() => {
@@ -191,12 +450,13 @@ export default function GrantPrepChatPane({
   const handleTextAreaChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     onInputChange(event.target.value.slice(0, 4000));
     event.target.style.height = 'auto';
-    event.target.style.height = `${Math.min(event.target.scrollHeight, 200)}px`;
+    event.target.style.height = `${Math.min(event.target.scrollHeight, expandedPromptInput ? 360 : 200)}px`;
   };
 
   // EC-8: consistent height value
   const resetTextAreaHeight = (event: FocusEvent<HTMLTextAreaElement>) => {
     if (!event.target.value) {
+      setExpandedPromptInput(false);
       event.target.style.height = '44px';
     }
   };
@@ -204,13 +464,64 @@ export default function GrantPrepChatPane({
   const handleSend = () => {
     if (!sending && !sendCooldown && !sessionLocked && input.trim()) {
       onSend();
+      setExpandedPromptInput(false);
       if (chatInputRef.current) chatInputRef.current.style.height = '44px';
     }
   };
 
+  const handleStageAnswerPrompt = (value: string) => {
+    setExpandedPromptInput(true);
+    onInputChange(value);
+    const resizeInput = () => {
+      const inputEl = chatInputRef.current;
+      if (!inputEl) return;
+      inputEl.focus();
+      inputEl.style.height = 'auto';
+      inputEl.style.height = `${Math.min(inputEl.scrollHeight, 360)}px`;
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(resizeInput);
+    } else {
+      resizeInput();
+    }
+  };
+
+  useEffect(() => {
+    if (!input.trim()) {
+      setExpandedPromptInput(false);
+    }
+  }, [input]);
+
   const isInputDisabled = sessionLocked || !!sendCooldown;
   const canSend = !sending && !sendCooldown && !!input.trim() && !sessionLocked;
   const isIdeationStage = activeStageKey === 'ideation';
+  const ideationStageMessages = messages.filter(
+    (message) => message.stage_key === 'ideation' || (isIdeationStage && !message.stage_key)
+  );
+  const hasIdeationStageMessages = ideationStageMessages.length > 0;
+  const hasIdeationUserMessages = ideationStageMessages.some((message) => message.role === 'user');
+  const hasIdeationSuggestedAnswers = ideationStageMessages.some(
+    (message) =>
+      message.role !== 'user' &&
+      Array.isArray(message.suggested_answers) &&
+      message.suggested_answers.length > 0
+  );
+  const hasActiveStageMessages = activeStageKey
+    ? messages.some((message) => message.stage_key === activeStageKey)
+    : messages.length > 0;
+  const hasProblemDefinitionMessages = messages.some((message) => message.stage_key === 'problem_definition');
+  const showIdeationStartCard = isIdeationStage && !hasIdeationUserMessages && !hasIdeationSuggestedAnswers;
+  const showStageTransitionStarter =
+    !isIdeationStage &&
+    !!activeStageKey &&
+    !hasActiveStageMessages &&
+    !!pendingPoints &&
+    pendingPoints.length > 0 &&
+    messages.length > 0 &&
+    (activeStageKey === 'problem_definition'
+      ? hasIdeationStageMessages
+      : Boolean(stageTransitionContext?.problemReady && hasProblemDefinitionMessages));
   const hasOrphanMessage =
     messages.length > 0 && messages[messages.length - 1].role === 'user' && !sending;
 
@@ -218,7 +529,16 @@ export default function GrantPrepChatPane({
     <div className="relative flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200/80 bg-white shadow-prep-card">
       {/* Messages area */}
       <div className="prep-scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4">
-        {messages.length === 0 ? (
+        {showIdeationStartCard ? (
+          <IdeationStartCard
+            sending={sending}
+            sendCooldown={sendCooldown}
+            sessionLocked={sessionLocked}
+            ideationContext={ideationContext}
+            onInputChange={onInputChange}
+            onSend={onSend}
+          />
+        ) : messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-12 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50">
               <HiSparkles className="h-7 w-7 text-prep-accent" />
@@ -272,12 +592,14 @@ export default function GrantPrepChatPane({
         ) : (
           messages.map((message, index) => {
             const isLastAssistant = message.role !== 'user' && index === messages.length - 1;
+            const isCurrentStageMessage = !message.stage_key || message.stage_key === activeStageKey;
             const structuredAnswers = mergeGrantPrepSuggestedAnswersWithInline(
               Array.isArray(message.suggested_answers) ? message.suggested_answers : [],
               message.content || ''
             );
-            const hasStructuredAnswers = isLastAssistant && structuredAnswers.length > 0;
-            const optionCombinations = hasStructuredAnswers && !isIdeationStage
+            const hasAnyStructuredAnswers = isLastAssistant && structuredAnswers.length > 0;
+            const hasStructuredAnswers = hasAnyStructuredAnswers && isCurrentStageMessage;
+            const optionCombinations = hasStructuredAnswers
               ? buildOptionCombinations(structuredAnswers)
               : [];
 
@@ -286,7 +608,7 @@ export default function GrantPrepChatPane({
               <MessageBubble
                 message={message}
                 isLast={index === messages.length - 1}
-                structuredAnswerCount={hasStructuredAnswers ? structuredAnswers.length : 0}
+                structuredAnswerCount={hasAnyStructuredAnswers ? structuredAnswers.length : 0}
               />
 
               {/* B9: Answer Option Cards — only on last assistant message */}
@@ -320,7 +642,7 @@ export default function GrantPrepChatPane({
                               {option.coverageSummary}
                             </span>
                           ) : null}
-                          {Array.isArray(option.covers) ? option.covers.slice(0, 4).map((cover) => (
+                          {Array.isArray(option.covers) ? option.covers.map((cover) => (
                             <span
                               key={`${option.label}_${cover.stageKey}_${cover.pointKey}`}
                               className="rounded-full bg-slate-50 px-2 py-1 text-[11px] text-slate-600 ring-1 ring-slate-200"
@@ -363,11 +685,23 @@ export default function GrantPrepChatPane({
                           type="button"
                           onClick={() => onInputChange(combination.text)}
                           disabled={sessionLocked}
-                          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 shadow-prep-card transition hover:bg-emerald-100 disabled:opacity-50"
+                          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 shadow-prep-card transition hover:border-emerald-300 hover:bg-emerald-100 disabled:opacity-50"
                         >
                           {combination.label}
                         </button>
                       ))}
+                    </div>
+                  ) : null}
+                  {isIdeationStage ? (
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => onSend(GRANT_PREP_MORE_IDEAS_REQUEST)}
+                        disabled={sessionLocked || sending || !!sendCooldown}
+                        className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 shadow-prep-card transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Show 3 more ideas
+                      </button>
                     </div>
                   ) : null}
                 </div>
@@ -375,6 +709,7 @@ export default function GrantPrepChatPane({
 
               {/* B3: Follow-Up Suggestion Chips — only on last assistant message */}
               {isLastAssistant &&
+                isCurrentStageMessage &&
                 !hasStructuredAnswers &&
                 Array.isArray(message.suggested_follow_ups) &&
                 message.suggested_follow_ups.length > 0 ? (
@@ -396,6 +731,18 @@ export default function GrantPrepChatPane({
             );
           })
         )}
+
+        {showStageTransitionStarter ? (
+          <StageTransitionStarterCard
+            activeStageKey={activeStageKey}
+            activeStageTitle={activeStageTitle}
+            pendingPoints={pendingPoints}
+            stageTransitionContext={stageTransitionContext}
+            onAnswerInTextBox={handleStageAnswerPrompt}
+            onSend={onSend}
+            disabled={sessionLocked || sending || !!sendCooldown}
+          />
+        ) : null}
 
         {/* EC-1: orphan message indicator */}
         {hasOrphanMessage ? (
@@ -463,7 +810,12 @@ export default function GrantPrepChatPane({
               </div>
             ) : null}
             <div className="flex items-end gap-2">
-              <div className="flex flex-1 items-end gap-2 rounded-xl border border-slate-200 bg-prep-inputBg px-3 py-2 focus-within:border-prep-accent focus-within:ring-2 focus-within:ring-emerald-100">
+              <div
+                className={clsx(
+                  'flex flex-1 gap-2 rounded-xl border border-slate-200 bg-prep-inputBg px-3 py-2 focus-within:border-prep-accent focus-within:ring-2 focus-within:ring-emerald-100',
+                  expandedPromptInput ? 'items-start' : 'items-end'
+                )}
+              >
                 <textarea
                   ref={chatInputRef}
                   value={input}
@@ -478,7 +830,10 @@ export default function GrantPrepChatPane({
                   rows={1}
                   disabled={isInputDisabled}
                   className="flex-1 resize-none bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none disabled:cursor-not-allowed"
-                  style={{ minHeight: '44px', maxHeight: '200px' }}
+                  style={{
+                    minHeight: expandedPromptInput ? '150px' : '44px',
+                    maxHeight: expandedPromptInput ? '360px' : '200px',
+                  }}
                   placeholder={currentPointLabel ? `Tell me about ${currentPointLabel.toLowerCase()}...` : 'Type your response...'}
                 />
                 <button

@@ -1,7 +1,12 @@
 import type { FundingCallContext } from '../fundingContext';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { createEmptyGrantTemplate } from '../fundingTemplates/utils';
-import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY } from './stageLibrary';
+import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY, sortGrantPrepStageKeys } from './stageLibrary';
+import {
+  TERMINAL_GRANT_PREP_STAGE_KEYS,
+  getCanonicalGrantPrepStageKey,
+  isVisibleGrantPrepStageKey,
+} from './stageModel';
 import { buildGrantPrepStageMapping, getNormalizedTemplate } from './templateMapper';
 import type {
   GrantPrepMode,
@@ -22,7 +27,6 @@ const REQUIRED_FOUNDATION_STAGE_KEYS: GrantPrepStageKey[] = [
   'problem_definition',
   'methodology',
   'outcomes',
-  'final_pitch',
 ];
 
 type SelectionMode = 'template' | 'fallback';
@@ -54,8 +58,10 @@ function includesAnyText(haystack: string[], needles: string[]) {
 }
 
 export function sortStageKeys(stageKeys: Iterable<GrantPrepStageKey>) {
-  const set = new Set(stageKeys);
-  return GRANT_PREP_STAGE_LIBRARY.filter((stage) => set.has(stage.key)).map((stage) => stage.key);
+  const normalized = Array.from(stageKeys)
+    .map(getCanonicalGrantPrepStageKey)
+    .filter((stageKey) => isVisibleGrantPrepStageKey(stageKey) || TERMINAL_GRANT_PREP_STAGE_KEYS.includes(stageKey));
+  return sortGrantPrepStageKeys(normalized);
 }
 
 function makeTemplateItem(key: string, label: string, guidance: string) {
@@ -233,30 +239,39 @@ function addSelection(
   source: GrantPrepStageSelectionSource,
   level: GrantPrepStageSelectionLevel = 'recommended'
 ) {
-  if (!target.has(stageKey)) {
-    target.add(stageKey);
+  const canonicalStageKey = getCanonicalGrantPrepStageKey(stageKey);
+  if (!isVisibleGrantPrepStageKey(canonicalStageKey)) {
+    return;
   }
 
-  if (!selectionSources[stageKey]) {
-    selectionSources[stageKey] = source;
+  if (!target.has(canonicalStageKey)) {
+    target.add(canonicalStageKey);
   }
 
-  const currentLevel = selectionLevels[stageKey];
+  if (!selectionSources[canonicalStageKey]) {
+    selectionSources[canonicalStageKey] = source;
+  }
+
+  const currentLevel = selectionLevels[canonicalStageKey];
   if (level === 'required' || currentLevel !== 'required') {
-    selectionLevels[stageKey] = level;
+    selectionLevels[canonicalStageKey] = level;
   }
 }
 
 export function resolveUpstreamStageDependencies(stageKeys: Iterable<GrantPrepStageKey>) {
-  const resolved = new Set(stageKeys);
+  const resolved = new Set(sortStageKeys(stageKeys));
   const queue = Array.from(resolved);
 
   while (queue.length > 0) {
     const current = queue.shift() as GrantPrepStageKey;
     for (const dependency of GRANT_PREP_STAGE_BY_KEY[current].dependencies) {
-      if (!resolved.has(dependency)) {
-        resolved.add(dependency);
-        queue.push(dependency);
+      const canonicalDependency = getCanonicalGrantPrepStageKey(dependency);
+      if (!isVisibleGrantPrepStageKey(canonicalDependency)) {
+        continue;
+      }
+      if (!resolved.has(canonicalDependency)) {
+        resolved.add(canonicalDependency);
+        queue.push(canonicalDependency);
       }
     }
   }
@@ -321,7 +336,6 @@ function getFallbackAutoStageKeys(input: {
     'beneficiaries',
     'methodology',
     'outcomes',
-    'final_pitch',
   ]);
   const callFactTexts = collectCallFactTexts(input.fundingContext);
 
@@ -329,10 +343,10 @@ function getFallbackAutoStageKeys(input: {
     stageKeys.add('fit_and_scope');
   }
   if ((input.fundingContext?.focusAreas || []).length > 0) {
-    stageKeys.add('thrust_alignment');
+    stageKeys.add('fit_and_scope');
   }
   if (includesAnyText(callFactTexts, ['deliverable', 'milestone', 'timeline', 'duration'])) {
-    stageKeys.add('workplan');
+    stageKeys.add('methodology');
   }
   if (includesAnyText(callFactTexts, ['budget', 'cost', 'funding', 'cap'])) {
     stageKeys.add('budget_strategy');
@@ -397,7 +411,7 @@ export function buildGrantPrepSelectorResult(input: {
     focusAreas.length > 0 ||
     collectGuidelineTexts(input.guidelinePack, ['priorities']).length > 0
   ) {
-    addSelection(autoEnabled, selectionSources, selectionLevels, 'thrust_alignment', hasGuidelines ? 'guideline' : 'fallback');
+    addSelection(autoEnabled, selectionSources, selectionLevels, 'fit_and_scope', hasGuidelines ? 'guideline' : 'fallback');
   }
 
   if (hasGuidelines) {
@@ -451,15 +465,15 @@ export function buildGrantPrepSelectorResult(input: {
         'replication',
       ])
     ) {
-      addSelection(autoEnabled, selectionSources, selectionLevels, 'sustainability_and_scale', 'guideline');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'innovation', 'guideline');
     }
   } else if (input.mode === 'lightweight' && focusAreas.length > 0) {
-    addSelection(autoEnabled, selectionSources, selectionLevels, 'thrust_alignment', 'fallback');
+    addSelection(autoEnabled, selectionSources, selectionLevels, 'fit_and_scope', 'fallback');
   }
 
   if (input.mode === 'lightweight') {
     if (includesAnyText(callFactTexts, ['deliverable', 'milestone', 'timeline'])) {
-      addSelection(autoEnabled, selectionSources, selectionLevels, 'workplan', 'fallback');
+      addSelection(autoEnabled, selectionSources, selectionLevels, 'methodology', 'fallback');
     }
     if (includesAnyText(callFactTexts, ['budget', 'cost', 'funding'])) {
       addSelection(autoEnabled, selectionSources, selectionLevels, 'budget_strategy', 'fallback');

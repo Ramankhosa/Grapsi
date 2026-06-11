@@ -127,7 +127,9 @@ export async function POST(
       }
     }
 
-    const run = await fundingTemplateService.createExtractionRun(
+    // Run extraction in the background and let the client poll the run status.
+    // Multimodal PDF extraction can exceed proxy timeouts when awaited inline.
+    const run = await fundingTemplateService.startExtractionRun(
       params.callId,
       auth.operator,
       asset?.id ? [asset.id] : undefined

@@ -13,6 +13,10 @@ import type {
   GrantEnforcementLevel,
   GrantRuleClass,
 } from '@/types/grant'
+import {
+  getCanonicalGrantPrepStageKey,
+  isVisibleGrantPrepStageKey,
+} from '@/lib/grantPrep/stageModel'
 
 const HARD_RULE_PATTERN = /\b(must|shall|required|mandatory|cannot|may not|do not|should not|at least|at most|within|before submission|not exceed|deadline|max(?:imum)?|minimum)\b/i
 const SUBMISSION_RULE_PATTERN = /\b(portal|upload|attachment|annexure|signature|submit|submission|deadline|certificate|proof|letter of intent|loi|application form|enclosure|appendix)\b/i
@@ -38,18 +42,16 @@ const DRAFTING_STAGE_HINTS: Array<{ key: string; pattern: RegExp }> = [
   { key: 'problem_definition', pattern: /\b(problem|need|gap|challenge|burden|urgency)\b/i },
   { key: 'root_cause', pattern: /\b(root cause|driver|underlying|constraint|systemic)\b/i },
   { key: 'beneficiaries', pattern: /\b(beneficiar|target group|user|community|population|institution)\b/i },
-  { key: 'fit_and_scope', pattern: /\b(scope|eligib|fit|relevance|realistic|feasible|right-sized)\b/i },
-  { key: 'thrust_alignment', pattern: /\b(priority|theme|thrust|alignment|mission)\b/i },
+  { key: 'fit_and_scope', pattern: /\b(scope|eligib|fit|relevance|realistic|feasible|right-sized|priority|theme|thrust|alignment|mission)\b/i },
   { key: 'methodology', pattern: /\b(method|approach|technical|implementation|data|protocol)\b/i },
-  { key: 'workplan', pattern: /\b(work ?plan|timeline|phase|milestone|deliverable|schedule)\b/i },
+  { key: 'methodology', pattern: /\b(work ?plan|timeline|phase|milestone|deliverable|schedule)\b/i },
   { key: 'team_and_partnerships', pattern: /\b(team|partner|consortium|collaborat|expertise|capacity)\b/i },
-  { key: 'innovation', pattern: /\b(innovation|novel|differentiation|unique|advance)\b/i },
+  { key: 'innovation', pattern: /\b(innovation|novel|differentiation|unique|advance|sustainab|scale|continuity|replication|institutionalization)\b/i },
   { key: 'evaluation', pattern: /\b(evaluation|metric|indicator|monitor|assessment|validation)\b/i },
   { key: 'outcomes', pattern: /\b(outcome|impact|result|benefit|adoption)\b/i },
   { key: 'risk_and_ethics', pattern: /\b(risk|ethic|mitigation|contingency|safeguard)\b/i },
   { key: 'budget_strategy', pattern: /\b(budget|cost|finance|co-?fund|overhead|salary|equipment|travel|amount)\b/i },
-  { key: 'sustainability_and_scale', pattern: /\b(sustainab|scale|continuity|replication|institutionalization)\b/i },
-  { key: 'final_pitch', pattern: /\b(summary|pitch|overview|value proposition|why now)\b/i },
+  { key: 'ideation', pattern: /\b(summary|pitch|overview|value proposition|why now)\b/i },
 ]
 
 function normalizeStringArray(value: unknown, limit = 12): string[] {
@@ -71,6 +73,17 @@ function normalizeStringArray(value: unknown, limit = 12): string[] {
     if (next.length >= limit) break;
   }
   return next;
+}
+
+function normalizeDraftingStageList(value: unknown): string[] {
+  const normalized = normalizeStringArray(value, 8)
+    .map((item) => {
+      if (item.toLowerCase() === 'all') return 'all'
+      return getCanonicalGrantPrepStageKey(item)
+    })
+    .filter((item) => item === 'all' || isVisibleGrantPrepStageKey(item))
+
+  return normalizeStringArray(normalized, 8)
 }
 
 function normalizeRuleClass(value: unknown): GrantRuleClass | null {
@@ -178,9 +191,9 @@ function inferDraftingStages(block: FundingGuidelineBlockKey, text: string): str
   if (inferred.length > 0) return normalizeStringArray(inferred)
 
   if (block === 'budgetRules') return ['budget_strategy']
-  if (block === 'durationRules' || block === 'deliverableRules') return ['workplan']
+  if (block === 'durationRules' || block === 'deliverableRules') return ['methodology']
   if (block === 'evaluationCriteria') return ['evaluation']
-  if (block === 'priorities' || block === 'reviewerSignals') return ['thrust_alignment']
+  if (block === 'priorities' || block === 'reviewerSignals') return ['fit_and_scope']
   return []
 }
 
@@ -276,8 +289,8 @@ function normalizeRule(item: any, block: FundingGuidelineBlockKey): FundingGuide
     appliesTo: normalizeStringArray(item.appliesTo, 8).length > 0
       ? normalizeStringArray(item.appliesTo, 8)
       : inferAppliesTo(block, text),
-    draftingStage: normalizeStringArray(item.draftingStage, 8).length > 0
-      ? normalizeStringArray(item.draftingStage, 8)
+    draftingStage: normalizeDraftingStageList(item.draftingStage).length > 0
+      ? normalizeDraftingStageList(item.draftingStage)
       : inferDraftingStages(block, text),
     draftingVsSubmission:
       normalizeDraftingSubmissionMode(item.draftingVsSubmission)

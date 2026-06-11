@@ -1,6 +1,7 @@
 import type {
   GrantPrepEngagementMode,
   GrantPrepMappedPoint,
+  GrantPrepIdeationContext,
   GrantPrepPointCapture,
   GrantPrepSessionContext,
   GrantPrepStageKey,
@@ -114,3 +115,4 @@ export type PointLookup = Record<string, GrantPrepMappedPoint & { stageKey: Gran
 export type PrepContext = GrantPrepSessionContext;
 export type PrepPointCapture = GrantPrepPointCapture;
 export type PrepEngagementMode = GrantPrepEngagementMode;
+export type PrepIdeationContext = GrantPrepIdeationContext;

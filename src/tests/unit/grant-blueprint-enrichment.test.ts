@@ -525,7 +525,7 @@ describe('grant blueprint enrichment', () => {
     });
 
     expect(enriched[0].grantSemantic).toBe('methodology');
-    expect(enriched[0].prepContextBlock?.stageKeys).toEqual(['methodology']);
+    expect(enriched[0].prepContextBlock?.stageKeys).toEqual(['Methodology & Workplan']);
     expect(enriched[0].authoritativePrepBundle?.keywords).toContain('federated cyber range');
     expect(enriched[0].authoritativePrepBundle?.bullets.join(' ')).not.toContain('Do not use this yet');
     expect(enriched[0].relatedPrepAwareness?.stageKeys).toEqual(['evaluation']);

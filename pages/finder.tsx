@@ -30,9 +30,11 @@ import FundingDirectoryPanel from '@/components/FundingDirectoryPanel';
 import type {
   RecommendationConversationDetail,
   RecommendationConversationMessageRequest,
+  RecommendationConversationMutationResponse,
   RecommendationConversationRunRecord,
   RecommendationConversationSummary,
 } from '@/lib/recommendations/chatTypes';
+import { CHAT_MESSAGE_MAX_LENGTH } from '@/lib/recommendations/constants';
 import {
   buildArrayValueRemovedFilters,
   buildFinderConversationStarters,
@@ -277,6 +279,8 @@ export default function FinderPage() {
   }, [conversation]);
 
   const hasRenderableConversationMessages = Boolean((conversation?.messages.length || 0) > 0 || pendingTurn);
+  const composerLength = composer.length;
+  const composerOverLimit = composerLength > CHAT_MESSAGE_MAX_LENGTH;
 
   async function loadConversation(conversationId: string) {
     setLoadingConversation(true);
@@ -669,7 +673,7 @@ export default function FinderPage() {
 
     try {
       const previousFilters = conversation.currentFilters;
-      const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(authFetch, `/api/recommendations/conversations/${conversation.id}/messages`, {
+      const response = await apiRequest<RecommendationConversationMutationResponse>(authFetch, `/api/recommendations/conversations/${conversation.id}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -685,6 +689,10 @@ export default function FinderPage() {
       }
 
       updateConversationFromResponse(response.conversation);
+      if (response.stale) {
+        await loadConversation(response.conversation.id);
+        setError('This chat changed while the request was processing, so I reloaded the latest saved state.');
+      }
       if (options?.clearComposerOnSuccess) {
         setComposer('');
       }
@@ -714,6 +722,10 @@ export default function FinderPage() {
   async function handleSubmitComposer() {
     const trimmed = composer.trim();
     if (!trimmed) return;
+    if (trimmed.length > CHAT_MESSAGE_MAX_LENGTH) {
+      setError(`Chat messages are limited to ${CHAT_MESSAGE_MAX_LENGTH.toLocaleString()} characters.`);
+      return;
+    }
 
     await postConversationMessage(
       {
@@ -1170,6 +1182,8 @@ export default function FinderPage() {
                         runs={conversation.runs}
                         onExplainResult={handleExplainResult}
                         onBeginWriting={({ resultId }) => handleBeginWritingFromCall(resultId)}
+                        onSuggestedReply={handleSendMessage}
+                        suggestedReplyDisabled={sending || !conversation}
                         getCallDetailsHref={buildFundingCallDetailHref}
                         strictRecoveryAction={
                           message.id === latestAssistantMessageId &&
@@ -1337,6 +1351,7 @@ export default function FinderPage() {
                       ref={composerRef}
                       rows={2}
                       value={composer}
+                      maxLength={CHAT_MESSAGE_MAX_LENGTH}
                       onChange={(event) => setComposer(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' && !event.shiftKey) {
@@ -1348,9 +1363,13 @@ export default function FinderPage() {
                       className="min-h-[52px] flex-1 resize-none rounded-[22px] border-2 border-slate-200 bg-slate-50/50 px-4 py-3 text-sm leading-6 outline-none transition-colors placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
                     />
 
+                    <div className={`hidden shrink-0 text-right text-[11px] font-semibold uppercase tracking-[0.12em] sm:block ${composerOverLimit ? 'text-rose-600' : 'text-slate-400'}`}>
+                      {composerLength.toLocaleString()} / {CHAT_MESSAGE_MAX_LENGTH.toLocaleString()}
+                    </div>
+
                     <button
                       type="submit"
-                      disabled={sending || !conversation || !composer.trim()}
+                      disabled={sending || !conversation || !composer.trim() || composerOverLimit}
                       className="inline-flex h-12 shrink-0 items-center gap-2 rounded-2xl bg-emerald-600 px-5 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_4px_20px_rgba(16,185,129,0.4)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                     >
                       <FaPaperPlane />

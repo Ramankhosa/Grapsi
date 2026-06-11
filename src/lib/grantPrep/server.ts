@@ -7,7 +7,13 @@ import { fundingTemplateService } from '../fundingTemplates/service';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { resolveProjectFundingContext } from '../fundingContext';
 import { buildGrantWorkspaceUrl } from '../grants/workspaceNavigation';
-import { GRANT_PREP_STAGE_BY_KEY } from './stageLibrary';
+import {
+  GRANT_PREP_STAGE_BY_KEY,
+  getFirstEnabledPickableStageKey,
+  getNextEnabledPickableStageKey,
+  sortGrantPrepStageKeys,
+} from './stageLibrary';
+import { getCanonicalGrantPrepStageKey } from './stageModel';
 import {
   buildFinalEnabledStageKeys,
   buildGrantPrepSelectorResult,
@@ -20,13 +26,12 @@ import {
   buildGrantPrepSessionContext,
   buildInitialStageStates,
   normalizeGrantPrepStageStates,
-  normalizeGrantPrepKeywords,
   determineGrantPrepMode,
   collectGlobalKeywords,
   computeOverallReadiness,
-  getNextPickableStageKey,
   applyGrantPrepPointRolesFromMapping,
   recomputeStageState,
+  pointHasCapturedContent,
   stageHasCapturedContent,
 } from './sessionState';
 import { buildGrantPrepStageMapping, normalizeGrantPrepStageMapping } from './templateMapper';
@@ -36,23 +41,173 @@ import {
 } from './priorityAreas';
 import type {
   GrantPrepEngagementMode,
+  GrantPrepIdeationContext,
   GrantPrepSessionContext,
   GrantPrepStageKey,
   GrantPrepStageMapping,
   GrantPrepStageStates,
 } from './types';
 import { normalizeGrantPrepEngagementMode } from './types';
+import { markGrantPrepStageMemoryStale } from './stageMemory';
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
+function normalizeText(value: string | null | undefined) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function truncateText(value: string | null | undefined, maxLength: number) {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trim()}...` : normalized;
+}
+
+function emptyGrantPrepIdeationContext(): GrantPrepIdeationContext {
+  return {
+    hasUsableContext: false,
+    sourceSummary: [],
+    profile: null,
+    savedResearchAreas: [],
+    publications: [],
+  };
+}
+
+export async function resolveGrantPrepIdeationContext(userId: string): Promise<GrantPrepIdeationContext> {
+  if (!userId) {
+    return emptyGrantPrepIdeationContext();
+  }
+
+  try {
+    const client = prisma as any;
+    if (!client.researcherProfile || !client.researcherSavedResearchArea || !client.referenceLibrary) {
+      return emptyGrantPrepIdeationContext();
+    }
+
+    const [profile, savedResearchAreas, publications] = await Promise.all([
+      client.researcherProfile.findUnique({
+        where: { user_id: userId },
+        select: {
+          research_summary: true,
+          research_areas: true,
+          keywords: true,
+          institution_name: true,
+          institution_type: true,
+          career_stage: true,
+        },
+      }),
+      client.researcherSavedResearchArea.findMany({
+        where: {
+          user_id: userId,
+          use_for_alerts: true,
+        },
+        select: {
+          label: true,
+          research_area: true,
+          keywords: true,
+          disciplines: true,
+          taxonomy_level1_name: true,
+          taxonomy_level2_name: true,
+          is_default: true,
+          updated_at: true,
+        },
+        orderBy: [
+          { is_default: 'desc' },
+          { updated_at: 'desc' },
+        ],
+        take: 5,
+      }),
+      client.referenceLibrary.findMany({
+        where: {
+          userId,
+          isActive: true,
+          tags: { has: 'my-publication' },
+        },
+        select: {
+          title: true,
+          year: true,
+          venue: true,
+          doi: true,
+          abstract: true,
+          updatedAt: true,
+        },
+        orderBy: [
+          { year: 'desc' },
+          { updatedAt: 'desc' },
+        ],
+        take: 5,
+      }),
+    ]);
+
+    const normalizedProfile = profile
+      ? {
+          researchSummary: truncateText(profile.research_summary, 900),
+          researchAreas: asStringArray(profile.research_areas).slice(0, 8),
+          keywords: asStringArray(profile.keywords).slice(0, 12),
+          institutionName: normalizeText(profile.institution_name) || null,
+          institutionType: normalizeText(profile.institution_type) || null,
+          careerStage: normalizeText(profile.career_stage) || null,
+        }
+      : null;
+
+    const normalizedSavedAreas = (savedResearchAreas || [])
+      .map((area: any) => {
+        const taxonomyPath = [area.taxonomy_level1_name, area.taxonomy_level2_name]
+          .map(normalizeText)
+          .filter(Boolean)
+          .join(' / ');
+        return {
+          label: normalizeText(area.label),
+          researchArea: truncateText(area.research_area, 500) || '',
+          keywords: asStringArray(area.keywords).slice(0, 8),
+          disciplines: asStringArray(area.disciplines).slice(0, 6),
+          taxonomyPath: taxonomyPath || null,
+        };
+      })
+      .filter((area: GrantPrepIdeationContext['savedResearchAreas'][number]) => area.label || area.researchArea);
+
+    const normalizedPublications = (publications || [])
+      .map((publication: any) => ({
+        title: normalizeText(publication.title),
+        year: typeof publication.year === 'number' ? publication.year : null,
+        venue: normalizeText(publication.venue) || null,
+        doi: normalizeText(publication.doi) || null,
+        abstractSnippet: truncateText(publication.abstract, 360),
+      }))
+      .filter((publication: GrantPrepIdeationContext['publications'][number]) => publication.title);
+
+    const sourceSummary = [
+      normalizedProfile?.researchSummary ? 'profile summary' : null,
+      normalizedProfile?.researchAreas.length ? 'profile research areas' : null,
+      normalizedProfile?.keywords.length ? 'profile keywords' : null,
+      normalizedSavedAreas.length ? 'saved research areas' : null,
+      normalizedPublications.length ? 'tagged publications' : null,
+    ].filter((item): item is string => Boolean(item));
+
+    return {
+      hasUsableContext: sourceSummary.length > 0,
+      sourceSummary,
+      profile: normalizedProfile,
+      savedResearchAreas: normalizedSavedAreas,
+      publications: normalizedPublications,
+    };
+  } catch (error) {
+    console.warn('[Grant Prep] Failed to load ideation context:', error);
+    return emptyGrantPrepIdeationContext();
+  }
+}
+
 function asStageKeyArray(value: unknown): GrantPrepStageKey[] {
-  return asStringArray(value) as GrantPrepStageKey[];
+  return sortGrantPrepStageKeys(
+    (asStringArray(value) as GrantPrepStageKey[]).map(getCanonicalGrantPrepStageKey)
+  );
 }
 
 function getConfigurableStageKeys(stageKeys: GrantPrepStageKey[] = []) {
-  return sortStageKeys(stageKeys.filter((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable));
+  return sortStageKeys(stageKeys).filter((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable);
 }
 
 function sameStringArray(left: string[], right: string[]) {
@@ -125,7 +280,7 @@ function mergeStageStates(
     });
 
     const staleCapturedPoints = currentStage.points
-      .filter((point) => !nextPointKeys.has(point.key) && normalizeGrantPrepKeywords(point.capture?.keywords).length > 0)
+      .filter((point) => !nextPointKeys.has(point.key) && pointHasCapturedContent(point))
       .map((point) => ({
         ...point,
         status: 'needs_review' as const,
@@ -138,6 +293,7 @@ function mergeStageStates(
       steeringEvents: [...currentStage.steeringEvents],
       points: [...preservedPoints, ...staleCapturedPoints],
       lastUpdatedAt: currentStage.lastUpdatedAt,
+      memory: currentStage.memory || nextStage.memory || null,
     };
 
     if (staleCapturedPoints.length > 0) {
@@ -148,6 +304,10 @@ function mergeStageStates(
         pointKey: null,
         createdAt: new Date().toISOString(),
       });
+      refreshedStage.memory = markGrantPrepStageMemoryStale(
+        refreshedStage.memory,
+        'Some earlier captures no longer map cleanly to the current template and need review.'
+      );
     }
 
     recomputeStageState(refreshedStage);
@@ -161,19 +321,24 @@ function mergeStageStates(
 }
 
 function withResolvedActiveStage(context: GrantPrepSessionContext) {
-  const fallbackActiveStageKey = (
-    Object.values(context.stageStates).find((stage) => stage.enabled && stage.pickable)?.stageKey ||
-    context.activeStageKey
-  ) as GrantPrepStageKey;
-
-  const nextActiveStageKey = context.stageStates[context.activeStageKey]?.enabled &&
-    context.stageStates[context.activeStageKey]?.pickable
-    ? context.activeStageKey
-    : getNextPickableStageKey(context.stageStates, fallbackActiveStageKey);
+  const activeStageKey = getCanonicalGrantPrepStageKey(context.activeStageKey);
+  const currentStage = context.stageStates[activeStageKey];
+  const nextActiveStageKey = currentStage?.enabled && currentStage.pickable
+    ? activeStageKey
+    : (
+        getNextEnabledPickableStageKey(context.stageStates, activeStageKey) ||
+        getFirstEnabledPickableStageKey(context.stageStates) ||
+        'ideation'
+      );
 
   return {
     ...context,
     activeStageKey: nextActiveStageKey,
+    autoEnabledStageKeys: sortGrantPrepStageKeys(context.autoEnabledStageKeys),
+    manualEnabledStageKeys: sortGrantPrepStageKeys(context.manualEnabledStageKeys),
+    manualDisabledStageKeys: sortGrantPrepStageKeys(context.manualDisabledStageKeys),
+    enabledStageKeys: sortGrantPrepStageKeys(context.enabledStageKeys),
+    disabledStageKeys: sortGrantPrepStageKeys(context.disabledStageKeys),
   } satisfies GrantPrepSessionContext;
 }
 
@@ -478,7 +643,7 @@ export function inflateGrantPrepSessionContext(session: Pick<
   | 'stage_mapping_json'
   | 'stage_states_json'
   | 'global_keywords_json'
->, options?: { warning?: string | null }) {
+> & { messages?: Array<unknown> }, options?: { warning?: string | null }) {
   const stageMapping = normalizeGrantPrepStageMapping(
     ((session.stage_mapping_json || {}) as unknown) as Partial<GrantPrepStageMapping>
   );
@@ -491,18 +656,46 @@ export function inflateGrantPrepSessionContext(session: Pick<
   const globalKeywords = storedGlobalKeywords.length > 0
     ? storedGlobalKeywords
     : collectGlobalKeywords(roleAlignedStageStates);
+  const storedEnabledStageKeys = asStageKeyArray(session.enabled_stage_keys);
+  const storedDisabledStageKeys = asStageKeyArray(session.disabled_stage_keys);
+  const enabledStageKeys = storedEnabledStageKeys.length > 0
+    ? storedEnabledStageKeys
+    : sortGrantPrepStageKeys(
+        Object.values(roleAlignedStageStates)
+          .filter((stage) => stage.enabled)
+          .map((stage) => stage.stageKey)
+      );
+  const disabledStageKeys = storedDisabledStageKeys.length > 0
+    ? storedDisabledStageKeys
+    : sortGrantPrepStageKeys(
+        Object.values(roleAlignedStageStates)
+          .filter((stage) => !stage.enabled)
+          .map((stage) => stage.stageKey)
+      );
+  const storedActiveStageKey = getCanonicalGrantPrepStageKey(session.active_stage_key as GrantPrepStageKey);
+  const hasLoadedEmptyMessageList = Array.isArray(session.messages) && session.messages.length === 0;
+  const canStartAtIdeation = Boolean(roleAlignedStageStates.ideation?.enabled && roleAlignedStageStates.ideation?.pickable);
+  const activeStageKey = hasLoadedEmptyMessageList && canStartAtIdeation
+    ? 'ideation'
+    : roleAlignedStageStates[storedActiveStageKey]?.enabled && roleAlignedStageStates[storedActiveStageKey]?.pickable
+      ? storedActiveStageKey
+      : (
+          getNextEnabledPickableStageKey(roleAlignedStageStates, storedActiveStageKey) ||
+          getFirstEnabledPickableStageKey(roleAlignedStageStates) ||
+          'ideation'
+        );
 
   return {
     mode: session.mode as GrantPrepSessionContext['mode'],
     engagementMode: normalizeGrantPrepEngagementMode(session.engagement_mode),
     stageSelectionVersion: (session.stage_selection_version as GrantPrepSessionContext['stageSelectionVersion']) || 'v1',
-    activeStageKey: session.active_stage_key as GrantPrepStageKey,
+    activeStageKey,
     selectedThrustAreaRuleKeys: session.selected_thrust_area_rule_keys || [],
     autoEnabledStageKeys: asStageKeyArray(session.auto_enabled_stage_keys),
     manualEnabledStageKeys: asStageKeyArray(session.manual_enabled_stage_keys),
     manualDisabledStageKeys: asStageKeyArray(session.manual_disabled_stage_keys),
-    enabledStageKeys: asStageKeyArray(session.enabled_stage_keys),
-    disabledStageKeys: asStageKeyArray(session.disabled_stage_keys),
+    enabledStageKeys,
+    disabledStageKeys,
     stageMapping,
     stageStates: roleAlignedStageStates,
     globalKeywords,
@@ -514,21 +707,33 @@ export function normalizeGrantPrepForPersistence(context: GrantPrepSessionContex
   const stageStates = normalizeGrantPrepStageStates(context.stageStates);
   const overallReadiness = computeOverallReadiness(stageStates);
   const globalKeywords = collectGlobalKeywords(stageStates);
-  const enabledStageKeys = Object.values(stageStates)
-    .filter((stage) => stage.enabled)
-    .map((stage) => stage.stageKey);
-  const disabledStageKeys = Object.values(stageStates)
-    .filter((stage) => !stage.enabled)
-    .map((stage) => stage.stageKey);
+  const enabledStageKeys = sortGrantPrepStageKeys(
+    Object.values(stageStates)
+      .filter((stage) => stage.enabled)
+      .map((stage) => stage.stageKey)
+  );
+  const disabledStageKeys = sortGrantPrepStageKeys(
+    Object.values(stageStates)
+      .filter((stage) => !stage.enabled)
+      .map((stage) => stage.stageKey)
+  );
+  const requestedActiveStageKey = getCanonicalGrantPrepStageKey(context.activeStageKey);
+  const activeStageKey = stageStates[requestedActiveStageKey]?.enabled && stageStates[requestedActiveStageKey]?.pickable
+    ? requestedActiveStageKey
+    : (
+        getNextEnabledPickableStageKey(stageStates, requestedActiveStageKey) ||
+        getFirstEnabledPickableStageKey(stageStates) ||
+        'ideation'
+      );
 
   return {
     mode: context.mode,
     engagement_mode: normalizeGrantPrepEngagementMode(context.engagementMode),
     stage_selection_version: context.stageSelectionVersion,
-    auto_enabled_stage_keys: context.autoEnabledStageKeys,
-    manual_enabled_stage_keys: context.manualEnabledStageKeys,
-    manual_disabled_stage_keys: context.manualDisabledStageKeys,
-    active_stage_key: context.activeStageKey,
+    auto_enabled_stage_keys: sortGrantPrepStageKeys(context.autoEnabledStageKeys),
+    manual_enabled_stage_keys: sortGrantPrepStageKeys(context.manualEnabledStageKeys),
+    manual_disabled_stage_keys: sortGrantPrepStageKeys(context.manualDisabledStageKeys),
+    active_stage_key: activeStageKey,
     selected_thrust_area_rule_keys: context.selectedThrustAreaRuleKeys,
     enabled_stage_keys: enabledStageKeys,
     disabled_stage_keys: disabledStageKeys,

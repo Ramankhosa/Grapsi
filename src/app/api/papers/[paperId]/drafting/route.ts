@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { llmGateway } from '@/lib/metering/gateway';
+import { ERROR_STATUS_MAP, MeteringError } from '@/lib/metering/errors';
 import { citationService } from '@/lib/services/citation-service';
 import { citationStyleService, type CitationData } from '@/lib/services/citation-style-service';
 import { paperTypeService } from '@/lib/services/paper-type-service';
@@ -3998,13 +3999,204 @@ type PaperReviewProgressEmitter = (payload: {
 class DraftingRequestError extends Error {
   readonly status: number;
   readonly payload?: any;
+  readonly headers?: HeadersInit;
 
-  constructor(message: string, status: number, payload?: any) {
+  constructor(message: string, status: number, payload?: any, headers?: HeadersInit) {
     super(message);
     this.name = 'DraftingRequestError';
     this.status = status;
     this.payload = payload;
+    this.headers = headers;
   }
+}
+
+function resolveSectionGenerationTaskCode(grantBacked: boolean) {
+  return grantBacked ? 'GRANT_SECTION_GENERATE' as const : 'LLM2_DRAFT' as const;
+}
+
+type NormalizedMeteringFailure = {
+  code: string;
+  message: string;
+  status: number;
+  retryable: boolean;
+  details?: Record<string, unknown>;
+  retryAfter: number | null;
+};
+
+function readDraftingErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message;
+    }
+  }
+
+  return fallback;
+}
+
+function readRetryAfterFromResetMessage(message: string): number | null {
+  const match = message.match(/resets at\s+([0-9]{4}-[0-9]{2}-[0-9]{2}T[^\s]+)/i);
+  if (!match) return null;
+
+  const resetTime = Date.parse(match[1]);
+  if (!Number.isFinite(resetTime)) return null;
+
+  const retryAfterSeconds = Math.ceil((resetTime - Date.now()) / 1000);
+  return retryAfterSeconds > 0 ? retryAfterSeconds : null;
+}
+
+function normalizeMeteringFailure(error: unknown): NormalizedMeteringFailure | null {
+  if (error instanceof MeteringError) {
+    const isQuotaExceeded = /quota exceeded/i.test(error.message);
+    const retryAfter = readRetryAfterFromResetMessage(error.message) ?? error.getRetryAfter();
+    return {
+      code: isQuotaExceeded ? 'QUOTA_EXCEEDED' : error.code,
+      message: error.message,
+      status: isQuotaExceeded ? ERROR_STATUS_MAP.QUOTA_EXCEEDED : error.statusCode,
+      retryable: isQuotaExceeded ? false : error.isRetryable,
+      details: error.details,
+      retryAfter
+    };
+  }
+
+  if (error && typeof error === 'object') {
+    const candidate = error as {
+      code?: unknown;
+      message?: unknown;
+      statusCode?: unknown;
+      status?: unknown;
+      isRetryable?: unknown;
+      retryable?: unknown;
+      details?: unknown;
+      getRetryAfter?: unknown;
+    };
+    const rawCode = typeof candidate.code === 'string' ? candidate.code.trim().toUpperCase() : '';
+    if (rawCode && Object.prototype.hasOwnProperty.call(ERROR_STATUS_MAP, rawCode)) {
+      const code = rawCode as keyof typeof ERROR_STATUS_MAP;
+      const statusCode = typeof candidate.statusCode === 'number'
+        ? candidate.statusCode
+        : typeof candidate.status === 'number'
+          ? candidate.status
+        : ERROR_STATUS_MAP[code];
+      const message = typeof candidate.message === 'string' && candidate.message.trim()
+        ? candidate.message
+        : code.replace(/_/g, ' ').toLowerCase();
+      const isQuotaExceeded = /quota exceeded/i.test(message);
+      const retryAfter = typeof candidate.getRetryAfter === 'function'
+        ? candidate.getRetryAfter.call(candidate)
+        : null;
+      const retryAfterFromMessage = readRetryAfterFromResetMessage(message);
+      return {
+        code: isQuotaExceeded ? 'QUOTA_EXCEEDED' : code,
+        message,
+        status: isQuotaExceeded ? ERROR_STATUS_MAP.QUOTA_EXCEEDED : statusCode,
+        retryable: isQuotaExceeded ? false : candidate.isRetryable === true || candidate.retryable === true,
+        details: candidate.details && typeof candidate.details === 'object'
+          ? candidate.details as Record<string, unknown>
+          : undefined,
+        retryAfter: retryAfterFromMessage ?? (typeof retryAfter === 'number' && Number.isFinite(retryAfter)
+          ? retryAfter
+          : null)
+      };
+    }
+  }
+
+  const message = readDraftingErrorMessage(error, '');
+  if (/quota exceeded/i.test(message)) {
+    return {
+      code: 'QUOTA_EXCEEDED',
+      message,
+      status: ERROR_STATUS_MAP.QUOTA_EXCEEDED,
+      retryable: false,
+      retryAfter: readRetryAfterFromResetMessage(message)
+    };
+  }
+
+  return null;
+}
+
+function buildMeteringFailurePayload(failure: NormalizedMeteringFailure): Record<string, unknown> {
+  return {
+    success: false,
+    error: failure.message,
+    message: failure.message,
+    code: failure.code,
+    retryable: failure.retryable,
+    ...(failure.details ? { details: failure.details } : {})
+  };
+}
+
+function buildDraftingMeteringError(error: unknown): DraftingRequestError | null {
+  const failure = normalizeMeteringFailure(error);
+  if (!failure) return null;
+
+  return new DraftingRequestError(
+    failure.message,
+    failure.status,
+    buildMeteringFailurePayload(failure),
+    failure.retryAfter ? { 'Retry-After': String(failure.retryAfter) } : undefined
+  );
+}
+
+function createDraftingRequestErrorResponse(error: DraftingRequestError): NextResponse {
+  const init: ResponseInit = { status: error.status };
+  if (error.headers) {
+    init.headers = error.headers;
+  }
+
+  return NextResponse.json(
+    error.payload || { error: error.message },
+    init
+  );
+}
+
+function throwDraftingLLMFailure(
+  error: unknown,
+  fallbackMessage: string,
+  fallbackStatus: number = 502,
+  fallbackPayload?: Record<string, unknown>
+): never {
+  const meteringError = buildDraftingMeteringError(error);
+  if (meteringError) {
+    throw meteringError;
+  }
+
+  const message = readDraftingErrorMessage(error, fallbackMessage);
+  throw new DraftingRequestError(
+    message,
+    fallbackStatus,
+    {
+      ...(fallbackPayload || {}),
+      error: message,
+      message
+    }
+  );
+}
+
+function createDraftingLLMFailureResponse(
+  error: unknown,
+  fallbackMessage: string,
+  fallbackStatus: number = 500,
+  fallbackPayload?: Record<string, unknown>
+): NextResponse {
+  const meteringError = buildDraftingMeteringError(error);
+  if (meteringError) {
+    return createDraftingRequestErrorResponse(meteringError);
+  }
+
+  const message = readDraftingErrorMessage(error, fallbackMessage);
+  return NextResponse.json(
+    {
+      ...(fallbackPayload || {}),
+      error: message,
+      message
+    },
+    { status: fallbackStatus }
+  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -4030,14 +4222,16 @@ function createSSEStreamResponse(
         await streamHandler(send);
         send('done', { ok: true });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Generation failed';
-        if (error instanceof DraftingRequestError) {
+        const meteringError = buildDraftingMeteringError(error);
+        const handledError = meteringError || (error instanceof DraftingRequestError ? error : null);
+        if (handledError) {
           send('error', {
-            message,
-            status: error.status,
-            payload: error.payload
+            message: handledError.message,
+            status: handledError.status,
+            payload: handledError.payload
           });
         } else {
+          const message = readDraftingErrorMessage(error, 'Generation failed');
           send('error', { message });
         }
         send('done', { ok: false });
@@ -4313,7 +4507,7 @@ async function generateSection(
     if (llmTokensUsed === 0) llmTokensUsed = undefined;
   } else {
     const llmRequest = {
-      taskCode: 'LLM2_DRAFT' as const,
+      taskCode: resolveSectionGenerationTaskCode(grantBacked),
       stageCode: 'PAPER_SECTION_DRAFT',
       prompt,
       parameters: {
@@ -4339,8 +4533,8 @@ async function generateSection(
         paperId: sessionId,
         sectionKey,
         action: `generate_section_${sectionKey}`,
-        module: 'publication_ideation',
-        purpose: 'paper_section_generation'
+        module: grantBacked ? 'grant_drafting' : 'publication_ideation',
+        purpose: grantBacked ? 'grant_section_generation' : 'paper_section_generation'
       }
     };
 
@@ -4350,7 +4544,7 @@ async function generateSection(
       llmRequest
     );
     if (!result.success || !result.response) {
-      throw new Error(result.error?.message || 'Generation failed');
+      throwDraftingLLMFailure(result.error, 'Generation failed');
     }
 
     llmTokensUsed = result.response.outputTokens;
@@ -5210,13 +5404,14 @@ async function executeDraftSectionPrompt(params: {
   purpose: string;
   temperature?: number;
   stageCode?: string;
+  grantBacked?: boolean;
 }) {
   const result = await llmGateway.executeLLMOperation(
     params.tenantContext
       ? { tenantContext: params.tenantContext }
       : { headers: params.headers },
     {
-      taskCode: 'LLM2_DRAFT',
+      taskCode: resolveSectionGenerationTaskCode(params.grantBacked === true),
       stageCode: params.stageCode || 'PAPER_SECTION_DRAFT',
       prompt: params.prompt,
       parameters: {
@@ -5228,18 +5423,14 @@ async function executeDraftSectionPrompt(params: {
         paperId: params.sessionId,
         sectionKey: params.sectionKey,
         action: `${params.purpose}_${params.sectionKey}`,
-        module: 'publication_ideation',
+        module: params.grantBacked ? 'grant_drafting' : 'publication_ideation',
         purpose: params.purpose
       }
     }
   );
 
   if (!result.success || !result.response) {
-    throw new DraftingRequestError(
-      result.error?.message || 'Draft generation failed',
-      502,
-      { error: result.error?.message || 'Draft generation failed' }
-    );
+    throwDraftingLLMFailure(result.error, 'Draft generation failed');
   }
 
   return {
@@ -5656,8 +5847,9 @@ Return ONLY JSON:
     prompt,
     headers: params.headers,
     tenantContext: params.tenantContext,
-    purpose: 'paper_dimension_generation',
-    temperature: params.temperature
+    purpose: grantBackedDimension ? 'grant_dimension_generation' : 'paper_dimension_generation',
+    temperature: params.temperature,
+    grantBacked: grantBackedDimension
   });
 
   const extractedContent = extractDimensionContentFromOutput(generated.output);
@@ -6766,7 +6958,7 @@ async function runSectionBySectionPaperReview(params: {
       });
 
       if (!result.success || !result.response) {
-        throw new Error(result.error?.message || `Failed to review section ${sectionKey}`);
+        throwDraftingLLMFailure(result.error, `Failed to review section ${sectionKey}`, 500);
       }
 
       completedSections += 1;
@@ -7180,11 +7372,7 @@ async function executePaperManuscriptReview(params: {
     );
 
     if (!result.success || !result.response) {
-      throw new DraftingRequestError(
-        result.error?.message || 'Manuscript review failed',
-        500,
-        { success: false, error: result.error?.message || 'Manuscript review failed' }
-      );
+      throwDraftingLLMFailure(result.error, 'Manuscript review failed', 500, { success: false });
     }
 
     const parsed = extractJsonObjectFromModelOutput(result.response.output || '');
@@ -8942,10 +9130,12 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
         );
 
         if (!result.success || !result.response) {
-          return NextResponse.json({
-            success: false,
-            error: result.error?.message || 'Unable to preview manuscript improvement'
-          }, { status: 500 });
+          return createDraftingLLMFailureResponse(
+            result.error,
+            'Unable to preview manuscript improvement',
+            500,
+            { success: false }
+          );
         }
 
         const fixedContent = polishDraftMarkdown(String(result.response.output || '').trim());
@@ -9090,10 +9280,12 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
           );
 
           if (!result.success || !result.response) {
-            return NextResponse.json({
-              success: false,
-              error: result.error?.message || 'Unable to apply manuscript improvement'
-            }, { status: 500 });
+            return createDraftingLLMFailureResponse(
+              result.error,
+              'Unable to apply manuscript improvement',
+              500,
+              { success: false }
+            );
           }
 
           fixedContent = polishDraftMarkdown(String(result.response.output || '').trim());
@@ -9354,11 +9546,13 @@ export async function POST(request: NextRequest, context: { params: { paperId: s
       return NextResponse.json({ error: error.errors[0]?.message || 'Invalid request' }, { status: 400 });
     }
 
+    const meteringError = buildDraftingMeteringError(error);
+    if (meteringError) {
+      return createDraftingRequestErrorResponse(meteringError);
+    }
+
     if (error instanceof DraftingRequestError) {
-      return NextResponse.json(
-        error.payload || { error: error.message },
-        { status: error.status }
-      );
+      return createDraftingRequestErrorResponse(error);
     }
 
     console.error('[PaperDrafting] error:', error);

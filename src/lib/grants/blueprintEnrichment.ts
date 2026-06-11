@@ -17,6 +17,11 @@ import {
   templateIntentToGrantSemantic,
 } from '@/lib/grants/templateIntent'
 import {
+  expandGrantPrepStageAliases,
+  getCanonicalGrantPrepStageKey,
+  getGrantPrepStageDisplayTitle,
+} from '@/lib/grantPrep/stageModel'
+import {
   getGrantSemanticRoleOrder,
   inferGrantPersuasionRole,
   persuasionRoleToDimensionType,
@@ -759,7 +764,8 @@ function scorePrepEvidenceForSection(
   relevantStageKeys: Set<string>
 ): number {
   let score = 0
-  if (relevantStageKeys.has(item.stageKey)) score += 8
+  const itemStageKeys = expandGrantPrepStageAliases([item.stageKey])
+  if (itemStageKeys.some((stageKey) => relevantStageKeys.has(stageKey))) score += 8
   if ((item.confidence || 0) >= 0.85) score += 2
   else if ((item.confidence || 0) >= 0.7) score += 1
 
@@ -769,10 +775,16 @@ function scorePrepEvidenceForSection(
     if (sectionTokens.has(token)) score += 1
   }
 
-  if (semantic === 'summary' && ['final_pitch', 'thrust_alignment', 'fit_and_scope', 'outcomes'].includes(item.stageKey)) {
+  if (
+    semantic === 'summary' &&
+    itemStageKeys.some((stageKey) => ['final_pitch', 'ideation', 'thrust_alignment', 'fit_and_scope', 'outcomes'].includes(stageKey))
+  ) {
     score += 3
   }
-  if (semantic === 'sustainability' && ['sustainability_and_scale', 'outcomes', 'budget_strategy'].includes(item.stageKey)) {
+  if (
+    semantic === 'sustainability' &&
+    itemStageKeys.some((stageKey) => ['sustainability_and_scale', 'innovation', 'outcomes', 'budget_strategy'].includes(stageKey))
+  ) {
     score += 3
   }
 
@@ -854,7 +866,11 @@ function formatPrepEvidenceBundle(
   if (bullets.length === 0 && keywords.length === 0) return null
 
   return {
-    stageKeys: dedupeStrings(evidence.map((item) => item.stageKey)),
+    stageKeys: dedupeStrings(
+      evidence.map((item) =>
+        getGrantPrepStageDisplayTitle(getCanonicalGrantPrepStageKey(item.stageKey), item.stageKey)
+      )
+    ),
     bullets,
     keywords,
   }
@@ -864,10 +880,10 @@ function resolveRelevantPrepStageKeys(
   section: GrantBlueprintPlanSection,
   semantic: GrantSectionSemantic
 ): string[] {
-  return dedupeStrings([
+  return dedupeStrings(expandGrantPrepStageAliases([
     ...getPrepStageKeysForGrantSemantic(semantic),
     ...getPrepStageKeysForTemplateIntent(section.templateIntent),
-  ])
+  ]))
 }
 
 function buildRelatedPrepAwareness(
@@ -892,7 +908,7 @@ function buildRelatedPrepAwareness(
           return false
         }
         return (
-          relevantStageKeys.has(item.stageKey)
+          expandGrantPrepStageAliases([item.stageKey]).some((stageKey) => relevantStageKeys.has(stageKey))
           && !authoritativeEvidenceKeys.has(prepEvidenceKey(item))
         )
       })
@@ -982,8 +998,8 @@ function buildSectionRoutingTokens(
   add(section.sourceTemplatePointer)
   add(section.templateIntent)
   for (const alternate of section.templateIntentAlternates || []) add(alternate)
-  for (const stageKey of getPrepStageKeysForGrantSemantic(semantic)) add(stageKey)
-  for (const stageKey of getPrepStageKeysForTemplateIntent(section.templateIntent)) add(stageKey)
+  for (const stageKey of expandGrantPrepStageAliases(getPrepStageKeysForGrantSemantic(semantic))) add(stageKey)
+  for (const stageKey of expandGrantPrepStageAliases(getPrepStageKeysForTemplateIntent(section.templateIntent))) add(stageKey)
   for (const hint of SEMANTIC_HINTS[semantic] || []) add(hint)
 
   return tokens

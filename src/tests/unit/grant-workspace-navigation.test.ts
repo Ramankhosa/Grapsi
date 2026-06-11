@@ -12,15 +12,15 @@ import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
 import { draftingFilterMatches } from '@/components/stages/PaperVerticalStageNav'
 
 describe('grant workspace navigation', () => {
-  it('opens active prep sessions on GrantMentor and launched sessions on Section Drafting', () => {
+  it('opens active prep sessions on GrantMentor and launched sessions on Blueprint', () => {
     expect(resolveGrantWorkspaceStageForPrepStatus('active')).toBe('GRANTMENTOR')
     expect(resolveGrantWorkspaceStageForPrepStatus('ready')).toBe('GRANTMENTOR')
-    expect(resolveGrantWorkspaceStageForPrepStatus('launched')).toBe('SECTION_DRAFTING')
-    expect(resolveGrantWorkspaceStageForPrepStatus('handed_off')).toBe('SECTION_DRAFTING')
+    expect(resolveGrantWorkspaceStageForPrepStatus('launched')).toBe('BLUEPRINT')
+    expect(resolveGrantWorkspaceStageForPrepStatus('handed_off')).toBe('BLUEPRINT')
   })
 
   it('maps grant session statuses onto the unified workspace stages', () => {
-    expect(resolveGrantWorkspaceStageForGrantStatus('BLUEPRINT')).toBe('SECTION_DRAFTING')
+    expect(resolveGrantWorkspaceStageForGrantStatus('BLUEPRINT')).toBe('BLUEPRINT')
     expect(resolveGrantWorkspaceStageForGrantStatus('DRAFTING')).toBe('SECTION_DRAFTING')
     expect(resolveGrantWorkspaceStageForGrantStatus('REVIEW')).toBe('SECTION_DRAFTING')
     expect(resolveGrantWorkspaceStageForGrantStatus('PREP_OPTIONAL')).toBeNull()
@@ -28,6 +28,11 @@ describe('grant workspace navigation', () => {
   })
 
   it('prefers concrete grant workspace progress over prep status', () => {
+    expect(resolveGrantWorkspaceStage({
+      prepStatus: 'launched',
+      grantStatus: 'BLUEPRINT',
+    })).toBe('BLUEPRINT')
+
     expect(resolveGrantWorkspaceStage({
       prepStatus: 'launched',
       grantStatus: 'DRAFTING',
@@ -55,7 +60,14 @@ describe('grant workspace navigation', () => {
       projectId: 'project-1',
       grantSessionId: 'grant-1',
       prepStatus: 'launched',
-    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
+
+    expect(buildGrantWorkspaceUrl({
+      projectId: 'project-1',
+      grantSessionId: 'grant-1',
+      prepStatus: 'launched',
+      grantStatus: 'BLUEPRINT',
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
 
     expect(buildGrantWorkspaceUrl({
       projectId: 'project-1',
@@ -85,7 +97,7 @@ describe('grant workspace navigation', () => {
         id: 'grant-1',
         status: 'BLUEPRINT',
       },
-    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
+    })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
 
     expect(buildGrantProjectOpenUrl({
       projectId: 'project-1',

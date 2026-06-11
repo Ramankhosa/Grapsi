@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/lib/funding/llmRouting', () => ({
+  FUNDING_CHAT_NARRATIVE_STAGE_CODE: 'narrative',
+  FUNDING_CHAT_ORCHESTRATOR_STAGE_CODE: 'orchestrator',
+  FUNDING_CHAT_TASK_CODE: 'funding-chat',
+  runFundingGatewayText: vi.fn(async () => ({ rawText: '' })),
+}));
+
 import type {
   RecommendationConversationDetail,
   RecommendationConversationRunRecord,
 } from '@/lib/recommendations/chatTypes';
-import type { RecommendationRawResultItem } from '@/lib/recommendations/types';
+import type { InternalRecommendationSearchResponse, RecommendationRawResultItem } from '@/lib/recommendations/types';
 import {
+  buildConversationStateHash,
   createDefaultConversationState,
   createDefaultFilters,
 } from '@/lib/recommendations/conversationUtils';
@@ -62,6 +70,38 @@ function makeRun(results: RecommendationRawResultItem[]): RecommendationConversa
     profileDiagnostics: null,
     results,
   };
+}
+
+function makeSearchResponse(results: RecommendationRawResultItem[] = [makeResult('1')]): InternalRecommendationSearchResponse {
+  return {
+    normalizedQuery: {
+      inputMode: 'research_area',
+      title: null,
+      abstract: null,
+      keywords: [],
+      researchArea: 'general research funding',
+      truncated: false,
+      canonicalQueryText: 'general research funding',
+      semanticDocument: 'general research funding',
+      fullTextQuery: 'general research funding',
+      researchTags: ['general research funding'],
+      queryStrength: 'normal',
+    },
+    appliedFilters: createDefaultFilters(),
+    degradedMode: null,
+    lowConfidence: false,
+    noResultsReason: null,
+    relaxationSuggestions: [],
+    strictFilterRecovery: null,
+    searchDiagnostics: null,
+    results: results.map(({ fullDescription, description, amountMin, amountMax, currency, eligibilityText, contactInfo, geographyScope, funderCountry, citizenshipRequirements, residencyRequirements, applicationLanguages, semanticSimilarity, textRank, ...publicFields }) => publicFields),
+    rawResults: results,
+    totalResults: results.length,
+  };
+}
+
+function stubLlmFallback(service: RecommendationConversationService) {
+  return vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue(null);
 }
 
 function makeConversationDetail(run?: RecommendationConversationRunRecord): RecommendationConversationDetail {
@@ -193,8 +233,10 @@ describe('RecommendationConversationService', () => {
     expect(guarded.assistantSuggestion).toContain('selected preference context');
   });
 
-  it('asks the user to enable eligibility preferences before using profile data', async () => {
+  it('runs a generic search and nudges eligibility preferences when profile context is off', async () => {
     const service = new RecommendationConversationService();
+    stubLlmFallback(service);
+    vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(makeSearchResponse());
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -214,13 +256,15 @@ describe('RecommendationConversationService', () => {
       preferences: { useEligibilityProfile: false, usePublicationContext: false },
     });
 
-    expect(outcome.messageType).toBe('assistant_notice');
-    expect(outcome.assistantContent).toContain('Use eligibility profile');
-    expect(outcome.assistantContent).toContain('currently off');
+    expect(outcome.messageType).toBe('assistant_response');
+    expect(outcome.assistantContent).toContain('Tip: turn on Use eligibility profile');
+    expect(outcome.run).toBeTruthy();
   });
 
-  it('asks the user to enable publication preferences before using papers', async () => {
+  it('runs a generic search and nudges publication preferences when publication context is off', async () => {
     const service = new RecommendationConversationService();
+    stubLlmFallback(service);
+    vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(makeSearchResponse());
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -240,9 +284,10 @@ describe('RecommendationConversationService', () => {
       preferences: { useEligibilityProfile: false, usePublicationContext: false },
     });
 
-    expect(outcome.messageType).toBe('assistant_notice');
-    expect(outcome.assistantContent).toContain('Use my publications');
+    expect(outcome.messageType).toBe('assistant_response');
+    expect(outcome.assistantContent).toContain('Tip: turn on Use my publications');
     expect(outcome.assistantContent).toContain('my-publication');
+    expect(outcome.run).toBeTruthy();
   });
 
   it('promotes topic pivots to new_search and resets prior filters', () => {
@@ -313,7 +358,7 @@ describe('RecommendationConversationService', () => {
     expect(parsed.nextState?.filters.fundingKinds).toEqual(['Research Grant']);
   });
 
-  it('uses the fast path for compare, explain, show more, clear filters, and high-confidence refinements without invoking the LLM', async () => {
+  it('uses the fast path for compare, explain, show more, clear filters, and exact filter-only refinements without invoking the LLM', async () => {
     const service = new RecommendationConversationService();
     const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM');
     const latestRun = makeRun([makeResult('1'), makeResult('2')]);
@@ -350,9 +395,9 @@ describe('RecommendationConversationService', () => {
     }
   });
 
-  it('maps country phrases to eligible, host, and funder filters without using the LLM', async () => {
+  it('falls back to heuristic country-role mapping when the LLM parser returns no result', async () => {
     const service = new RecommendationConversationService();
-    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM');
+    const llmSpy = stubLlmFallback(service);
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -389,7 +434,7 @@ describe('RecommendationConversationService', () => {
       });
 
       expect(parsed.intent).toBe('new_search');
-      expect(llmSpy).not.toHaveBeenCalled();
+      expect(llmSpy).toHaveBeenCalled();
       expect(parsed.nextState?.filters[scenario.expectedKey]).toEqual(
         scenario.expectedKey === 'eligibleCountries' ? ['India'] : ['Germany']
       );
@@ -463,6 +508,7 @@ describe('RecommendationConversationService', () => {
 
   it('keeps a clean research area when search terms also include filters', async () => {
     const service = new RecommendationConversationService();
+    stubLlmFallback(service);
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -487,7 +533,7 @@ describe('RecommendationConversationService', () => {
 
   it('does not convert women-centric research funding into a Research Grant filter', async () => {
     const service = new RecommendationConversationService();
-    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM');
+    const llmSpy = stubLlmFallback(service);
     const latestRun = makeRun([makeResult('1')]);
     const state = {
       inputMode: 'research_area' as const,
@@ -509,7 +555,7 @@ describe('RecommendationConversationService', () => {
       profileSnapshot: null,
     });
 
-    expect(llmSpy).not.toHaveBeenCalled();
+    expect(llmSpy).toHaveBeenCalledTimes(1);
     expect(parsed.intent).toBe('new_search');
     expect((parsed.nextState?.query as { researchArea?: string }).researchArea).toBe('women centric');
     expect(parsed.nextState?.filters.fundingKinds).toEqual([]);
@@ -517,7 +563,7 @@ describe('RecommendationConversationService', () => {
 
   it('treats funding for women researchers as a fresh broad search after earlier results', async () => {
     const service = new RecommendationConversationService();
-    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM');
+    const llmSpy = stubLlmFallback(service);
     const latestRun = makeRun([makeResult('1')]);
     const state = {
       inputMode: 'research_area' as const,
@@ -539,7 +585,7 @@ describe('RecommendationConversationService', () => {
       profileSnapshot: null,
     });
 
-    expect(llmSpy).not.toHaveBeenCalled();
+    expect(llmSpy).toHaveBeenCalledTimes(1);
     expect(parsed.intent).toBe('new_search');
     expect((parsed.nextState?.query as { researchArea?: string }).researchArea).toBe('women');
     expect(parsed.nextState?.filters.fundingKinds).toEqual([]);
@@ -547,7 +593,7 @@ describe('RecommendationConversationService', () => {
 
   it('does not add Research Grant when the user asks for a specific grant type', async () => {
     const service = new RecommendationConversationService();
-    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM');
+    const llmSpy = stubLlmFallback(service);
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -573,7 +619,7 @@ describe('RecommendationConversationService', () => {
       profileSnapshot: null,
     });
 
-    expect(llmSpy).not.toHaveBeenCalled();
+    expect(llmSpy).toHaveBeenCalledTimes(2);
     expect(travelParsed.nextState?.filters.fundingKinds).toEqual(['Travel Grant']);
     expect(conferenceParsed.nextState?.filters.fundingKinds).toEqual(['Conference Grant']);
   });
@@ -609,6 +655,7 @@ describe('RecommendationConversationService', () => {
 
   it('preserves topic words that also appear in filter vocabularies', async () => {
     const service = new RecommendationConversationService();
+    stubLlmFallback(service);
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -633,7 +680,7 @@ describe('RecommendationConversationService', () => {
 
   it('applies Research Grant only for explicit research-grant language', async () => {
     const service = new RecommendationConversationService();
-    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM');
+    const llmSpy = stubLlmFallback(service);
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -659,7 +706,7 @@ describe('RecommendationConversationService', () => {
       profileSnapshot: null,
     });
 
-    expect(llmSpy).not.toHaveBeenCalled();
+    expect(llmSpy).toHaveBeenCalledTimes(2);
     expect(explicit.nextState?.filters.fundingKinds).toEqual(['Research Grant']);
     expect((explicit.nextState?.query as { researchArea?: string }).researchArea).toBe('infectious diseases');
     expect(broad.nextState?.filters.fundingKinds).toEqual([]);
@@ -668,7 +715,7 @@ describe('RecommendationConversationService', () => {
 
   it('maps research-community phrases to the intended filter roles', async () => {
     const service = new RecommendationConversationService();
-    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM');
+    const llmSpy = stubLlmFallback(service);
     const state = {
       inputMode: 'research_area' as const,
       query: { researchArea: '' },
@@ -702,7 +749,7 @@ describe('RecommendationConversationService', () => {
       profileSnapshot: null,
     });
 
-    expect(llmSpy).not.toHaveBeenCalled();
+    expect(llmSpy).toHaveBeenCalledTimes(3);
     expect(travel.nextState?.filters.fundingKinds).toEqual(['Travel Grant', 'Conference Grant']);
     expect(travel.nextState?.filters.hostCountries).toEqual(['Germany']);
     expect(funder.nextState?.filters.funderCountries).toEqual(['Germany']);
@@ -710,6 +757,121 @@ describe('RecommendationConversationService', () => {
     expect(eligibility.nextState?.filters.eligibleCountries).toEqual(['India']);
     expect(eligibility.nextState?.filters.careerStages).toEqual(['Postdoctoral']);
     expect((eligibility.nextState?.query as { researchArea?: string }).researchArea).toBe('biomedical');
+  });
+
+  it('does not treat Berlin next month as an explicit deadline filter in the heuristic fallback', async () => {
+    const service = new RecommendationConversationService();
+    stubLlmFallback(service);
+    const state = {
+      inputMode: 'research_area' as const,
+      query: { researchArea: '' },
+      filters: createDefaultFilters(),
+      pendingPatch: null,
+      lastRunId: null,
+      lastTurnIndex: 0,
+    };
+
+    const parsed = await (service as any).parseTurn({
+      message: "I'm presenting at a conference in Berlin next month",
+      state,
+      latestRun: undefined,
+      conversationDetail: makeConversationDetail(),
+      profileSnapshot: null,
+    });
+
+    expect(parsed.nextState?.filters.deadlineFrom).toBe('');
+    expect(parsed.nextState?.filters.deadlineTo).toBe('');
+  });
+
+  it('only treats vs as a compare cue when it is a standalone word', () => {
+    const service = new RecommendationConversationService();
+    const latestRun = makeRun([makeResult('1'), makeResult('2')]);
+    const state = {
+      inputMode: 'research_area' as const,
+      query: { researchArea: 'artificial intelligence' },
+      filters: createDefaultFilters(),
+      pendingPatch: null,
+      lastRunId: latestRun.id,
+      lastTurnIndex: 1,
+    };
+
+    const parsed = (service as any).parseTurnHeuristically({
+      message: 'canvas 1 and 2',
+      state,
+      latestRun,
+    });
+
+    expect(parsed?.intent).not.toBe('compare_results');
+  });
+
+  it('preserves paper metadata when refining a paper search with filter-only text', async () => {
+    const service = new RecommendationConversationService();
+    const latestRun = makeRun([makeResult('1')]);
+    const state = {
+      inputMode: 'paper_metadata' as const,
+      query: {
+        title: 'Federated learning for medical imaging diagnosis',
+        abstract: 'Privacy-preserving learning across hospitals.',
+        keywords: ['medical imaging'],
+      },
+      filters: createDefaultFilters(),
+      pendingPatch: null,
+      lastRunId: latestRun.id,
+      lastTurnIndex: 1,
+    };
+
+    const parsed = await (service as any).parseTurn({
+      message: 'only rolling ones',
+      state,
+      latestRun,
+      conversationDetail: makeConversationDetail(latestRun),
+      profileSnapshot: null,
+    });
+
+    expect(parsed.intent).toBe('refine_filters');
+    expect(parsed.nextState?.inputMode).toBe('paper_metadata');
+    expect((parsed.nextState?.query as { title?: string }).title).toBe('Federated learning for medical imaging diagnosis');
+    expect(parsed.nextState?.filters.rollingOnly).toBe(true);
+  });
+
+  it('applies a pending filter patch when the user types yes', async () => {
+    const service = new RecommendationConversationService();
+    const baseFilters = createDefaultFilters();
+    vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue({
+      ...makeSearchResponse(),
+      appliedFilters: { ...baseFilters, rollingOnly: true },
+    });
+    const state = {
+      inputMode: 'research_area' as const,
+      query: { researchArea: 'artificial intelligence' },
+      filters: baseFilters,
+      pendingPatch: {
+        baseStateHash: buildConversationStateHash('research_area', { researchArea: 'artificial intelligence' }, baseFilters),
+        turnIndex: 1,
+        requiresConfirmation: true,
+        summary: 'Confirm rolling opportunities.',
+        reason: 'Inferred from prior turn.',
+        nextInputMode: 'research_area' as const,
+        nextQuery: { researchArea: 'artificial intelligence' },
+        nextFilters: { ...baseFilters, rollingOnly: true },
+      },
+      lastRunId: null,
+      lastTurnIndex: 1,
+    };
+
+    const outcome = await (service as any).createTurnOutcome({
+      input: { message: 'yes' },
+      state,
+      latestRun: undefined,
+      turnIndex: 2,
+      conversationDetail: makeConversationDetail(),
+      profileSnapshot: null,
+      preferences: { useEligibilityProfile: false, usePublicationContext: false },
+    });
+
+    expect(outcome.messageType).toBe('assistant_response');
+    expect(outcome.pendingPatch).toBeNull();
+    expect(outcome.nextState.filters.rollingOnly).toBe(true);
   });
 
   it('removes ambiguous country mentions from every country-like filter', async () => {

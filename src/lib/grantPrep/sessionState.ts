@@ -1,6 +1,19 @@
 import crypto from 'crypto';
-import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY, getDefaultEnabledStageKeys } from './stageLibrary';
+import {
+  GRANT_PREP_STAGE_BY_KEY,
+  GRANT_PREP_STAGE_LIBRARY,
+  getDefaultEnabledStageKeys,
+  getFirstEnabledPickableStageKey,
+  getNextEnabledPickableStageKey,
+  sortGrantPrepStageKeys,
+} from './stageLibrary';
+import {
+  GRANT_PREP_STAGE_ALIAS_TO_CANONICAL,
+  getCanonicalGrantPrepStageKey,
+  isHiddenGrantPrepStageKey,
+} from './stageModel';
 import type {
+  GrantPrepMappedPoint,
   GrantPrepMarkerPayload,
   GrantPrepMode,
   GrantPrepPointConversationRole,
@@ -14,6 +27,10 @@ import type {
   GrantPrepSteeringEvent,
   PointPriority,
 } from './types';
+import {
+  markGrantPrepStageMemoryStale,
+  normalizeGrantPrepStageMemory,
+} from './stageMemory';
 
 function nowIso() {
   return new Date().toISOString();
@@ -73,6 +90,57 @@ export function isGrantPrepUserFacingPoint(point: {
 }) {
   const role = inferPointConversationRole(point);
   return role === 'user_required' || role === 'can_infer_and_confirm';
+}
+
+function normalizeStageKeySet(stageKeys?: GrantPrepStageKey[]) {
+  const source = stageKeys && stageKeys.length > 0 ? stageKeys : getDefaultEnabledStageKeys();
+  return new Set(source.map(getCanonicalGrantPrepStageKey));
+}
+
+function makeDefaultMappedPoint(point: {
+  key: string;
+  label: string;
+  priority: PointPriority;
+  sourceTemplatePointer?: string | null;
+  conversationRole?: unknown;
+  helpText?: string;
+}): GrantPrepMappedPoint {
+  return {
+    key: point.key,
+    label: point.label,
+    priority: point.priority,
+    sourceTemplatePointer: point.sourceTemplatePointer || null,
+    origin: 'default',
+    conversationRole: normalizeGrantPrepPointConversationRole(
+      point.conversationRole,
+      point.priority === 'P3' ? 'ai_draftable' : point.sourceTemplatePointer ? 'can_infer_and_confirm' : 'user_required'
+    ),
+    helpText: point.helpText || '',
+  };
+}
+
+function getStageMappedPointDefinitions(
+  stageKey: GrantPrepStageKey,
+  stageMapping?: GrantPrepStageMapping
+): GrantPrepMappedPoint[] {
+  const stage = GRANT_PREP_STAGE_BY_KEY[stageKey];
+  const definitions: GrantPrepMappedPoint[] = stage.defaultPoints.map((point) =>
+    makeDefaultMappedPoint({
+      ...point,
+      helpText: point.helpText,
+    })
+  );
+  const seen = new Set(definitions.map((point) => point.key));
+
+  for (const point of stageMapping?.[stageKey]?.discussionPoints || []) {
+    if (seen.has(point.key)) {
+      continue;
+    }
+    seen.add(point.key);
+    definitions.push(makeDefaultMappedPoint(point));
+  }
+
+  return definitions;
 }
 
 function coerceStringArray(value: unknown) {
@@ -216,9 +284,7 @@ export function buildInitialStageStates(
   selectionSources?: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionSource>>,
   selectionLevels?: Partial<Record<GrantPrepStageKey, GrantPrepStageSelectionLevel>>
 ): GrantPrepStageStates {
-  const enabled = enabledStageKeys && enabledStageKeys.length > 0
-    ? new Set(enabledStageKeys)
-    : new Set(getDefaultEnabledStageKeys());
+  const enabled = normalizeStageKeySet(enabledStageKeys);
 
   return GRANT_PREP_STAGE_LIBRARY.reduce((acc, stage) => {
     const isEnabled = enabled.has(stage.key);
@@ -234,7 +300,7 @@ export function buildInitialStageStates(
       readiness: 0,
       status: isEnabled ? 'not_started' : 'disabled',
       steeringEvents: [],
-      points: stageMapping[stage.key].discussionPoints.map((point) => ({
+      points: getStageMappedPointDefinitions(stage.key, stageMapping).map((point) => ({
         key: point.key,
         label: point.label,
         priority: point.priority,
@@ -247,6 +313,7 @@ export function buildInitialStageStates(
         capture: null,
       })),
       lastUpdatedAt: null,
+      memory: null,
     };
     return acc;
   }, {} as GrantPrepStageStates);
@@ -342,6 +409,7 @@ export function isExpertGrantPrepMode(engagementMode: GrantPrepSessionContext['e
 
 export function getGrantPrepPointStatus(input: {
   stageKey: GrantPrepStageKey;
+  pointKey?: string;
   capture: GrantPrepPointCapture;
   requiresThrustLinkage: boolean;
   engagementMode: GrantPrepSessionContext['engagementMode'];
@@ -366,7 +434,14 @@ export function getGrantPrepPointStatus(input: {
     };
   }
 
-  if (input.requiresThrustLinkage && input.stageKey === 'thrust_alignment' && input.capture.thrustLinkage.length === 0) {
+  if (
+    input.requiresThrustLinkage &&
+    (
+      input.stageKey === 'thrust_alignment' ||
+      (input.stageKey === 'fit_and_scope' && input.pointKey === 'priority_match')
+    ) &&
+    input.capture.thrustLinkage.length === 0
+  ) {
     return {
       status: 'needs_review' as const,
       steeringLevel: 'hard_block' as const,
@@ -378,7 +453,10 @@ export function getGrantPrepPointStatus(input: {
   const projectDurationUpperBound = extractDurationUpperBoundInMonths(input.projectDuration)
   const capturedDuration = extractDurationUpperBoundInMonths(captureText)
   if (
-    input.stageKey === 'workplan'
+    (
+      input.stageKey === 'workplan' ||
+      (input.stageKey === 'methodology' && (input.pointKey === 'phases' || input.pointKey === 'deliverables'))
+    )
     && projectDurationUpperBound
     && capturedDuration
     && capturedDuration > projectDurationUpperBound
@@ -529,6 +607,7 @@ export function applyMarkerToStageStates(
 
       const statusResult = getGrantPrepPointStatus({
         stageKey,
+        pointKey: point.key,
         capture,
         requiresThrustLinkage,
         engagementMode: options.engagementMode,
@@ -608,8 +687,11 @@ export function applyCrossStageMarkerToStageStates(
     : null;
 
   for (const pointUpdate of updates) {
-    const targetStageKey = pointUpdate.stageKey;
-    if (!targetStageKey || targetStageKey === marker.stageKey) {
+    const targetStageKey = pointUpdate.stageKey
+      ? getCanonicalGrantPrepStageKey(pointUpdate.stageKey)
+      : undefined;
+    const markerStageKey = getCanonicalGrantPrepStageKey(marker.stageKey);
+    if (!targetStageKey || targetStageKey === markerStageKey) {
       continue;
     }
     if (allowedCrossStagePointKeys && !allowedCrossStagePointKeys.has(`${targetStageKey}.${pointUpdate.pointKey}`)) {
@@ -631,6 +713,7 @@ export function applyCrossStageMarkerToStageStates(
 
     const statusResult = getGrantPrepPointStatus({
       stageKey: targetStageKey,
+      pointKey: point.key,
       capture,
       requiresThrustLinkage,
       engagementMode: options.engagementMode,
@@ -703,6 +786,7 @@ export function reassessGrantPrepStageStates(
 
       const statusResult = getGrantPrepPointStatus({
         stageKey: stageState.stageKey,
+        pointKey: point.key,
         capture: point.capture,
         requiresThrustLinkage,
         engagementMode: options.engagementMode,
@@ -723,6 +807,99 @@ export function reassessGrantPrepStageStates(
   return nextStates;
 }
 
+export function pointHasCapturedContent(point: GrantPrepStageStates[GrantPrepStageKey]['points'][number]) {
+  return Boolean(
+    point.capture &&
+    (
+      normalizeGrantPrepKeywords(point.capture.keywords).length > 0 ||
+      normalizeGrantPrepStringArray(point.capture.factBullets).length > 0 ||
+      normalizeGrantPrepStringArray(point.capture.ruleNotes).length > 0 ||
+      normalizeGrantPrepStringArray(point.capture.thrustLinkage).length > 0
+    )
+  );
+}
+
+function appendMissingStagePoints(
+  stageState: GrantPrepStageStates[GrantPrepStageKey],
+  stageMapping?: GrantPrepStageMapping
+) {
+  const definitions = getStageMappedPointDefinitions(stageState.stageKey, stageMapping);
+  const existingKeys = new Set(stageState.points.map((point) => point.key));
+  const missingPoints = definitions
+    .filter((point) => !existingKeys.has(point.key))
+    .map((point) => ({
+      key: point.key,
+      label: point.label,
+      priority: point.priority,
+      conversationRole: normalizeGrantPrepPointConversationRole(
+        point.conversationRole,
+        point.priority === 'P3' ? 'ai_draftable' : point.sourceTemplatePointer ? 'can_infer_and_confirm' : 'user_required'
+      ),
+      status: 'pending' as const,
+      sourceTemplatePointer: point.sourceTemplatePointer,
+      capture: null,
+    }));
+
+  stageState.points.push(...missingPoints);
+}
+
+function mergeLegacyStageCapturesIntoCanonical(
+  stageStates: GrantPrepStageStates,
+  stageMapping?: GrantPrepStageMapping
+) {
+  for (const [legacyStageKey, canonicalStageKey] of Object.entries(GRANT_PREP_STAGE_ALIAS_TO_CANONICAL)) {
+    const legacyState = stageStates[legacyStageKey as GrantPrepStageKey];
+    const canonicalState = stageStates[canonicalStageKey as GrantPrepStageKey];
+    if (!legacyState || !canonicalState) {
+      continue;
+    }
+
+    appendMissingStagePoints(canonicalState, stageMapping);
+    const canonicalPoints = new Map(canonicalState.points.map((point) => [point.key, point]));
+    let copiedCapture = false;
+
+    for (const legacyPoint of legacyState.points) {
+      if (!pointHasCapturedContent(legacyPoint)) {
+        continue;
+      }
+
+      const canonicalPoint = canonicalPoints.get(legacyPoint.key);
+      if (!canonicalPoint) {
+        canonicalState.points.push({
+          ...legacyPoint,
+          conversationRole: inferPointConversationRole(legacyPoint),
+        });
+        copiedCapture = true;
+        continue;
+      }
+
+      if (!canonicalPoint.capture) {
+        canonicalPoint.status = legacyPoint.status;
+        canonicalPoint.sourceTemplatePointer = canonicalPoint.sourceTemplatePointer || legacyPoint.sourceTemplatePointer;
+        canonicalPoint.capture = legacyPoint.capture
+          ? {
+              ...legacyPoint.capture,
+              sourceTemplatePointer:
+                canonicalPoint.sourceTemplatePointer ||
+                legacyPoint.capture.sourceTemplatePointer ||
+                legacyPoint.sourceTemplatePointer ||
+                null,
+            }
+          : null;
+        copiedCapture = true;
+      }
+    }
+
+    if (copiedCapture) {
+      canonicalState.enabled = canonicalState.selectionLevel !== 'excluded';
+      canonicalState.selectionLevel =
+        canonicalState.selectionLevel === 'required' ? 'required' : 'recommended';
+      canonicalState.selectionSource = canonicalState.selectionSource || legacyState.selectionSource || 'fallback';
+      recomputeStageState(canonicalState);
+    }
+  }
+}
+
 export function normalizeGrantPrepStageStates(
   stageStates: GrantPrepStageStates,
   stageMapping?: GrantPrepStageMapping
@@ -734,7 +911,6 @@ export function normalizeGrantPrepStageStates(
       return;
     }
 
-    const mappingPoints = stageMapping?.[stage.key]?.discussionPoints || [];
     const isEnabled = stage.key === 'ideation' ? true : stage.defaultEnabled;
     nextStates[stage.key] = {
       stageKey: stage.key,
@@ -750,17 +926,7 @@ export function normalizeGrantPrepStageStates(
       readiness: 0,
       status: isEnabled ? 'not_started' : 'disabled',
       steeringEvents: [],
-      points: (mappingPoints.length > 0
-        ? mappingPoints
-        : stage.defaultPoints.map((point) => ({
-            key: point.key,
-            label: point.label,
-            priority: point.priority,
-            sourceTemplatePointer: null,
-            origin: 'default' as const,
-            helpText: point.helpText,
-          }))
-      ).map((point) => ({
+      points: getStageMappedPointDefinitions(stage.key, stageMapping).map((point) => ({
         key: point.key,
         label: point.label,
         priority: point.priority,
@@ -773,10 +939,17 @@ export function normalizeGrantPrepStageStates(
         capture: null,
       })),
       lastUpdatedAt: null,
+      memory: null,
     };
   });
 
   Object.values(nextStates).forEach((stageState) => {
+    const stageDefinition = GRANT_PREP_STAGE_BY_KEY[stageState.stageKey];
+    if (stageDefinition) {
+      stageState.title = stageDefinition.title;
+      stageState.pickable = stageDefinition.pickable;
+    }
+
     if (
       stageState.selectionLevel !== 'required' &&
       stageState.selectionLevel !== 'recommended' &&
@@ -790,8 +963,9 @@ export function normalizeGrantPrepStageStates(
 
     if (!Array.isArray(stageState?.points)) {
       stageState.points = [];
-      return;
     }
+    appendMissingStagePoints(stageState, stageMapping);
+    stageState.memory = normalizeGrantPrepStageMemory(stageState.memory);
 
     stageState.points = stageState.points.map((point) => {
       const conversationRole = inferPointConversationRole(point);
@@ -830,7 +1004,19 @@ export function normalizeGrantPrepStageStates(
         },
       };
     });
+
+    if (isHiddenGrantPrepStageKey(stageState.stageKey)) {
+      stageState.enabled = false;
+      stageState.pickable = false;
+      stageState.selectionSource = null;
+      stageState.selectionLevel = 'excluded';
+      stageState.status = 'disabled';
+    } else {
+      recomputeStageState(stageState);
+    }
   });
+
+  mergeLegacyStageCapturesIntoCanonical(nextStates, stageMapping);
 
   return nextStates;
 }
@@ -883,14 +1069,17 @@ export function buildGrantPrepSessionContext(input: {
   selectedThrustAreaRuleKeys?: string[];
   warning?: string | null;
 }): GrantPrepSessionContext {
-  const enabledStageKeys = Object.values(input.stageStates)
-    .filter((stage) => stage.enabled)
-    .map((stage) => stage.stageKey);
-  const disabledStageKeys = Object.values(input.stageStates)
-    .filter((stage) => !stage.enabled)
-    .map((stage) => stage.stageKey);
-  const activeStageKey = (enabledStageKeys.find((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey].pickable) ||
-    'ideation') as GrantPrepStageKey;
+  const enabledStageKeys = sortGrantPrepStageKeys(
+    Object.values(input.stageStates)
+      .filter((stage) => stage.enabled)
+      .map((stage) => stage.stageKey)
+  );
+  const disabledStageKeys = sortGrantPrepStageKeys(
+    Object.values(input.stageStates)
+      .filter((stage) => !stage.enabled)
+      .map((stage) => stage.stageKey)
+  );
+  const activeStageKey = getFirstEnabledPickableStageKey(input.stageStates) || 'ideation';
 
   return {
     mode: input.mode,
@@ -898,9 +1087,9 @@ export function buildGrantPrepSessionContext(input: {
     stageSelectionVersion: input.stageSelectionVersion || 'v1',
     activeStageKey,
     selectedThrustAreaRuleKeys: input.selectedThrustAreaRuleKeys || [],
-    autoEnabledStageKeys: input.autoEnabledStageKeys || [],
-    manualEnabledStageKeys: input.manualEnabledStageKeys || [],
-    manualDisabledStageKeys: input.manualDisabledStageKeys || [],
+    autoEnabledStageKeys: sortGrantPrepStageKeys((input.autoEnabledStageKeys || []).map(getCanonicalGrantPrepStageKey)),
+    manualEnabledStageKeys: sortGrantPrepStageKeys((input.manualEnabledStageKeys || []).map(getCanonicalGrantPrepStageKey)),
+    manualDisabledStageKeys: sortGrantPrepStageKeys((input.manualDisabledStageKeys || []).map(getCanonicalGrantPrepStageKey)),
     enabledStageKeys,
     disabledStageKeys,
     stageMapping: input.stageMapping,
@@ -914,14 +1103,7 @@ export function getNextPickableStageKey(
   stageStates: GrantPrepStageStates,
   currentStageKey: GrantPrepStageKey
 ): GrantPrepStageKey {
-  const currentIndex = GRANT_PREP_STAGE_LIBRARY.findIndex((stage) => stage.key === currentStageKey);
-  for (let index = currentIndex + 1; index < GRANT_PREP_STAGE_LIBRARY.length; index += 1) {
-    const stage = GRANT_PREP_STAGE_LIBRARY[index];
-    if (stage.pickable && stageStates[stage.key].enabled) {
-      return stage.key;
-    }
-  }
-  return currentStageKey;
+  return getNextEnabledPickableStageKey(stageStates, currentStageKey) || currentStageKey;
 }
 
 export function markStageNeedsReview(
@@ -933,6 +1115,7 @@ export function markStageNeedsReview(
   const stageState = nextStates[stageKey];
   stageState.status = 'needs_review';
   stageState.steeringEvents.push(buildSteeringEvent(message, 'gentle_redirect', null));
+  stageState.memory = markGrantPrepStageMemoryStale(stageState.memory, message);
   return nextStates;
 }
 
@@ -955,7 +1138,7 @@ function getDependentStageKeys(stageKey: GrantPrepStageKey) {
 }
 
 export function stageHasCapturedContent(stageState: GrantPrepStageStates[GrantPrepStageKey]) {
-  return stageState.points.some((point) => normalizeGrantPrepKeywords(point.capture?.keywords).length > 0);
+  return stageState.points.some(pointHasCapturedContent);
 }
 
 export function hasStageContentChanged(
@@ -982,7 +1165,7 @@ export function propagateDependentNeedsReview(
 
     let changed = false;
     stageState.points = stageState.points.map((point) => {
-      if (normalizeGrantPrepKeywords(point.capture?.keywords).length === 0) {
+      if (!pointHasCapturedContent(point)) {
         return point;
       }
 
@@ -1002,6 +1185,7 @@ export function propagateDependentNeedsReview(
     }
 
     recomputeStageState(stageState);
+    stageState.memory = markGrantPrepStageMemoryStale(stageState.memory, reviewMessage);
     if (stageState.status !== 'disabled' && stageState.status === 'completed') {
       stageState.status = 'needs_review';
     }

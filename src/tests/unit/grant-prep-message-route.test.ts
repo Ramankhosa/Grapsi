@@ -172,5 +172,49 @@ describe('grant prep message route', () => {
     expect(payload.message.suggested_answers[2].text).toBe(
       'Use a hybrid model with clinic anchors and scheduled outreach camps.'
     )
-  })
+  }, 15000)
+
+  it('keeps the latest prior-stage suggested answers in the prompt after stage advance', async () => {
+    const session = makeGrantPrepSessionRecord()
+    session.messages = [
+      {
+        id: 'assistant-message-previous-stage',
+        session_id: session.id,
+        stage_key: 'problem_definition',
+        role: 'assistant',
+        content: 'A. Clinic anchor model.\nB. Mobile outreach model.\nC. Hybrid model.',
+        suggested_answers: [
+          { label: 'A', text: 'Clinic anchor model.' },
+          { label: 'B', text: 'Mobile outreach model.' },
+          { label: 'C', text: 'Hybrid model.' },
+        ],
+        created_at: new Date('2026-06-11T00:00:00.000Z'),
+      },
+    ] as any
+    mocks.loadGrantPrepSession.mockResolvedValue(session)
+    mocks.generateGrantPrepText.mockResolvedValue([
+      'That selection gives the methodology a concrete delivery channel.',
+      '<grant_prep_marker>{"version":"brainstorm_marker_v1","stageKey":"methodology","pointsCovered":[],"currentPoint":"approach","suggestedAnswers":null,"qualityAssessment":"adequate","steeringEvents":[]}</grant_prep_marker>',
+    ].join('\n'))
+
+    const { POST } = await import('@/app/api/grant-prep/sessions/[id]/message/route')
+    const request = new NextRequest('http://localhost/api/grant-prep/sessions/prep-session-1/message', {
+      method: 'POST',
+      body: JSON.stringify({
+        content: 'I choose B.',
+        clientMessageId: 'client-message-2',
+        stageKey: 'methodology',
+      }),
+      headers: { 'content-type': 'application/json' },
+    })
+
+    const response = await POST(request, {
+      params: Promise.resolve({ id: 'prep-session-1' }),
+    })
+
+    expect(response.status).toBe(200)
+    const firstPrompt = String(mocks.generateGrantPrepText.mock.calls[0]?.[0]?.prompt || '')
+    expect(firstPrompt).toContain('B. Mobile outreach model.')
+    expect(firstPrompt).toContain('I choose B.')
+  }, 15000)
 })

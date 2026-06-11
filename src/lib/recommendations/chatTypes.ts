@@ -54,6 +54,7 @@ export interface RecommendationConversationMessageRecord {
   content: string;
   createdAt: string;
   citations: RecommendationConversationCitation | null;
+  suggestedReplies?: string[];
 }
 
 export interface RecommendationConversationRunRecord {

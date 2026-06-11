@@ -49,7 +49,8 @@ describe('standard grant application fallback template', () => {
     expect(compatibility.warnings).toContain(`fallback_template_version:${STANDARD_GRANT_TEMPLATE_VERSION}`)
     expect(mapping.problem_definition.discussionPoints.some((point) => point.sourceTemplatePointer)).toBe(true)
     expect(mapping.methodology.discussionPoints.some((point) => point.sourceTemplatePointer)).toBe(true)
-    expect(mapping.workplan.discussionPoints.some((point) => point.sourceTemplatePointer)).toBe(true)
+    expect(mapping.methodology.templatePointers).toContain('sections.workplan')
+    expect(mapping.workplan.discussionPoints.some((point) => point.sourceTemplatePointer)).toBe(false)
     expect(mapping.budget_strategy.discussionPoints.some((point) => point.sourceTemplatePointer)).toBe(true)
   })
 

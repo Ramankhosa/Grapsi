@@ -14,7 +14,7 @@ import GrantPrepStageEditorModal from '@/components/grantPrep/GrantPrepStageEdit
 import GrantPrepStageNavigator from '@/components/grantPrep/GrantPrepStageNavigator';
 import GrantPrepTopBar from '@/components/grantPrep/GrantPrepTopBar';
 import type { GrantPrepStageKey, GrantPrepSuggestedAnswer } from '@/lib/grantPrep/types';
-import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary';
+import { GRANT_PREP_STAGE_BY_KEY, getNextEnabledPickableStageKey } from '@/lib/grantPrep/stageLibrary';
 import type {
   GrantPrepLayoutMode,
   PointAction,
@@ -23,6 +23,7 @@ import type {
   PrepEngagementMode,
   PrepFundingContext,
   PrepHandoffPreview,
+  PrepIdeationContext,
   PrepPostLaunchImpact,
   PrepSession,
 } from '@/components/grantPrep/types';
@@ -69,6 +70,35 @@ function isUserFacingPoint(point: { conversationRole?: string; sourceTemplatePoi
   return role === 'user_required' || role === 'can_infer_and_confirm';
 }
 
+function compactCaptureSummary(
+  stage: PrepContext['stageStates'][GrantPrepStageKey] | undefined,
+  preferredPointKeys: string[]
+) {
+  if (!stage) return null;
+  const preferred = preferredPointKeys
+    .map((key) => stage.points.find((point) => point.key === key))
+    .filter(Boolean) as typeof stage.points;
+  const candidates = [...preferred, ...stage.points.filter((point) => !preferredPointKeys.includes(point.key))];
+
+  for (const point of candidates) {
+    const capture = point.capture;
+    if (!capture) continue;
+    const text = [
+      ...(capture.factBullets || []),
+      ...(capture.keywords || []),
+      ...(capture.ruleNotes || []),
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .join(' ');
+    if (text) {
+      return text.length > 220 ? `${text.slice(0, 217).trim()}...` : text;
+    }
+  }
+
+  return null;
+}
+
 // EC-14: safe localStorage helpers
 function safeLocalStorage(key: string, fallback: string): string {
   try {
@@ -90,6 +120,7 @@ type GrantPrepPageProps = {
     launchUrl?: string | null;
   }) => Promise<void> | void;
   postLaunchImpactOverride?: PrepPostLaunchImpact | null;
+  onChatFullscreenChange?: (fullscreen: boolean) => void;
 };
 
 function buildPostLaunchWarning(impact: PrepPostLaunchImpact | null, sessionStatus?: string | null) {
@@ -110,6 +141,7 @@ export default function GrantPrepPage(props: any) {
   const {
     onWorkspaceLaunched,
     postLaunchImpactOverride,
+    onChatFullscreenChange,
   } = props || {};
   const params = useParams();
   const router = useRouter();
@@ -124,6 +156,7 @@ export default function GrantPrepPage(props: any) {
   const [prepContext, setPrepContext] = useState<PrepContext | null>(null);
   const [fundingContext, setFundingContext] = useState<PrepFundingContext | null>(null);
   const [draftingContext, setDraftingContext] = useState<PrepDraftingContext | null>(null);
+  const [ideationContext, setIdeationContext] = useState<PrepIdeationContext | null>(null);
   const [postLaunchImpact, setPostLaunchImpact] = useState<PrepPostLaunchImpact | null>(null);
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState('');
@@ -147,6 +180,7 @@ export default function GrantPrepPage(props: any) {
   const [headerHeight, setHeaderHeight] = useState(140);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const desktopShellRef = useRef<HTMLDivElement | null>(null);
+  const normalizedEmptySessionIdRef = useRef<string | null>(null);
 
   const axiosConfig = useCallback(
     () => ({
@@ -163,6 +197,7 @@ export default function GrantPrepPage(props: any) {
     setPrepContext(response.data.prepContext);
     setFundingContext(response.data.fundingContext);
     setDraftingContext(response.data.draftingContext);
+    setIdeationContext(response.data.ideationContext || null);
     setPostLaunchImpact(response.data.postLaunchImpact || null);
   }, [axiosConfig]);
 
@@ -234,6 +269,7 @@ export default function GrantPrepPage(props: any) {
         setPrepContext(response.data.prepContext);
         setFundingContext(response.data.fundingContext);
         setDraftingContext(response.data.draftingContext);
+        setIdeationContext(response.data.ideationContext || null);
         setPostLaunchImpact(response.data.postLaunchImpact || null);
       } catch (error) {
         toast.error(
@@ -279,7 +315,7 @@ export default function GrantPrepPage(props: any) {
 
   const layoutMode: GrantPrepLayoutMode =
     viewportWidth >= 1280 ? 'desktop' : viewportWidth >= 1024 ? 'tablet' : 'mobile';
-  const effectiveChatFullscreen = layoutMode === 'desktop' && chatFullscreen;
+  const effectiveChatFullscreen = chatFullscreen;
   const isContextOpen = effectiveChatFullscreen
     ? false
     : layoutMode === 'desktop'
@@ -288,9 +324,31 @@ export default function GrantPrepPage(props: any) {
         ? tabletContextOpen
         : mobileContextOpen;
 
+  useEffect(() => {
+    onChatFullscreenChange?.(effectiveChatFullscreen);
+  }, [effectiveChatFullscreen, onChatFullscreenChange]);
+
   const activeStage = prepContext ? prepContext.stageStates[prepContext.activeStageKey] : null;
   const sessionLocked =
     sessionData?.status === 'archived';
+
+  useEffect(() => {
+    if (!sessionData?.id || !prepContext) return;
+    if (normalizedEmptySessionIdRef.current === sessionData.id) return;
+
+    normalizedEmptySessionIdRef.current = sessionData.id;
+    if (sessionData.messages.length > 0 || prepContext.activeStageKey === 'ideation') return;
+
+    const ideationStage = prepContext.stageStates.ideation;
+    if (!ideationStage?.enabled || !ideationStage.pickable) return;
+
+    setPrepContext((current) =>
+      current && current.activeStageKey !== 'ideation'
+        ? { ...current, activeStageKey: 'ideation' }
+        : current
+    );
+  }, [prepContext, sessionData?.id, sessionData?.messages.length]);
+
   const effectivePostLaunchImpact = postLaunchImpactOverride ?? postLaunchImpact;
   const postLaunchWarning = buildPostLaunchWarning(effectivePostLaunchImpact, sessionData?.status);
   const pendingReviewCount = useMemo(() => {
@@ -331,30 +389,65 @@ export default function GrantPrepPage(props: any) {
       });
   }, [activeStage, prepContext]);
 
+  const stageTransitionContext = useMemo(() => {
+    if (!prepContext) {
+      return undefined;
+    }
+
+    const problemStage = prepContext.stageStates.problem_definition;
+    return {
+      ideaSummary: compactCaptureSummary(prepContext.stageStates.ideation, [
+        'idea_core',
+        'fundability_signals',
+        'selected_priority_fit',
+      ]),
+      problemSummary: compactCaptureSummary(problemStage, [
+        'problem_core',
+        'problem_scale',
+        'evidence_gap',
+      ]),
+      problemReady:
+        Boolean(problemStage?.enabled) &&
+        problemStage.readiness >= 0.65 &&
+        problemStage.status !== 'needs_review',
+    };
+  }, [prepContext]);
+
   const handleStageChange = useCallback(
     async (stageKey: string) => {
-      if (!sessionData?.id || !prepContext || stageKey === prepContext.activeStageKey) return;
+      if (!sessionData?.id || !prepContext || stageKey === prepContext.activeStageKey) return false;
 
       if (sessionLocked) {
-        setPrepContext({
-          ...prepContext,
-          activeStageKey: stageKey as typeof prepContext.activeStageKey,
-        });
-        return;
+        setPrepContext((current) =>
+          current
+            ? {
+                ...current,
+                activeStageKey: stageKey as typeof current.activeStageKey,
+              }
+            : current
+        );
+        return true;
       }
 
       try {
-        await axios.put(
+        const response = await axios.put(
           `/api/grant-prep/sessions/${sessionData.id}/active-stage`,
           { stageKey },
           axiosConfig()
         );
-        setPrepContext({
-          ...prepContext,
-          activeStageKey: stageKey as typeof prepContext.activeStageKey,
-        });
+        const nextStageKey = (response.data?.activeStageKey || stageKey) as typeof prepContext.activeStageKey;
+        setPrepContext((current) =>
+          current
+            ? {
+                ...current,
+                activeStageKey: nextStageKey,
+              }
+            : current
+        );
+        return true;
       } catch {
         toast.error('Failed to switch stage');
+        return false;
       }
     },
     [axiosConfig, sessionData?.id, prepContext, sessionLocked]
@@ -363,15 +456,14 @@ export default function GrantPrepPage(props: any) {
   const handleLockIdeation = useCallback(async () => {
     if (!prepContext) return;
 
-    const nextStageKey = prepContext.stageStates.problem_definition?.enabled
-      ? 'problem_definition'
-      : prepContext.enabledStageKeys.find(
-          (stageKey) => stageKey !== 'ideation' && GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable
-        );
+    const nextStageKey = getNextEnabledPickableStageKey(prepContext.stageStates, 'ideation');
 
-    if (nextStageKey) {
-      await handleStageChange(nextStageKey);
+    if (!nextStageKey) {
+      toast.error('No next Grant Prep stage is available for this template.');
+      return;
     }
+
+    await handleStageChange(nextStageKey);
   }, [handleStageChange, prepContext]);
 
   const handleEngagementModeChange = useCallback(
@@ -814,7 +906,7 @@ export default function GrantPrepPage(props: any) {
       {/* flex col fills the parent <main> which is flex-1 overflow-auto inside a h-screen flex */}
       <div className={clsx('flex flex-col bg-prep-surface', isEmbeddedGrantMentor ? 'h-screen' : 'h-full')}>
         {/* z-40 for header (EC-4) — not sticky since parent scrolls, this is a fixed header row */}
-        {!isEmbeddedGrantMentor ? (
+        {!isEmbeddedGrantMentor && !effectiveChatFullscreen ? (
           <div ref={headerRef} className="z-40 flex-shrink-0 bg-white/95 backdrop-blur-sm">
             <GrantPrepTopBar
               session={sessionData}
@@ -844,48 +936,43 @@ export default function GrantPrepPage(props: any) {
           className={clsx(
             'flex w-full flex-1 flex-col',
             isEmbeddedGrantMentor
-              ? 'px-4 py-4 sm:px-5 lg:px-6'
+              ? effectiveChatFullscreen
+                ? 'px-2 py-2 sm:px-3'
+                : 'px-3 py-3 sm:px-4 lg:px-5'
               : effectiveChatFullscreen
-                ? 'px-4 py-4 sm:px-6 lg:px-8'
+                ? 'px-2 py-2 sm:px-4 lg:px-6'
                 : 'mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8'
           )}
           style={{ minHeight: 0 }}
         >
-          {isEmbeddedGrantMentor && (prepContext.warning || sessionData.last_handoff_error || postLaunchWarning) ? (
-            <div className="mb-4 space-y-2">
+          {isEmbeddedGrantMentor && !effectiveChatFullscreen && (prepContext.warning || sessionData.last_handoff_error || postLaunchWarning) ? (
+            <div className="mb-2 space-y-1.5">
               {prepContext.warning ? (
-                <div className="rounded-2xl border border-amber-100 bg-amber-50/80 px-4 py-3 text-sm text-amber-800">
+                <div className="rounded-lg border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs leading-5 text-amber-800">
                   {prepContext.warning}
                 </div>
               ) : null}
               {postLaunchWarning ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
                   {postLaunchWarning}
                 </div>
               ) : null}
               {sessionData.last_handoff_error ? (
-                <div className="rounded-2xl border border-rose-100 bg-rose-50/80 px-4 py-3 text-sm text-rose-800">
+                <div className="rounded-lg border border-rose-100 bg-rose-50/80 px-3 py-2 text-xs leading-5 text-rose-800">
                   Last launch issue: {sessionData.last_handoff_error}
                 </div>
               ) : null}
             </div>
           ) : null}
-          {!isEmbeddedGrantMentor && postLaunchWarning ? (
+          {!isEmbeddedGrantMentor && !effectiveChatFullscreen && postLaunchWarning ? (
             <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               {postLaunchWarning}
             </div>
           ) : null}
           {isEmbeddedGrantMentor && !effectiveChatFullscreen ? (
-            <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-prep-card sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Engagement mode</div>
-                <div className="mt-1 text-sm text-slate-600">
-                  {
-                    ENGAGEMENT_MODE_OPTIONS.find((option) => option.key === prepContext.engagementMode)?.description
-                  }
-                </div>
-              </div>
-              <div className="inline-flex w-full items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5 sm:w-auto">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-prep-card">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Engagement mode</div>
+              <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
                 {ENGAGEMENT_MODE_OPTIONS.map((mode) => (
                   <button
                     key={mode.key}
@@ -894,7 +981,7 @@ export default function GrantPrepPage(props: any) {
                     disabled={sessionLocked}
                     title={mode.description}
                     className={clsx(
-                      'flex-1 rounded-md px-3 py-2 text-sm font-medium transition-all sm:flex-none',
+                      'rounded-md px-2.5 py-1 text-xs font-medium transition-all',
                       prepContext.engagementMode === mode.key
                         ? 'bg-white text-slate-900 shadow-sm'
                         : 'text-slate-500 hover:text-slate-700',
@@ -918,7 +1005,10 @@ export default function GrantPrepPage(props: any) {
 
           {layoutMode === 'desktop' ? (
             <div ref={desktopShellRef} className="flex min-h-0 flex-1 items-stretch gap-0">
-              <div style={{ width: `${isContextOpen ? desktopChatWidth : 100}%` }} className="relative flex min-w-0 flex-col pr-3">
+              <div
+                style={effectiveChatFullscreen ? undefined : { width: `${isContextOpen ? desktopChatWidth : 100}%` }}
+                className={clsx('relative flex min-w-0 flex-col', effectiveChatFullscreen ? 'flex-1 pr-2' : 'pr-3')}
+              >
                 {!isContextOpen && !effectiveChatFullscreen ? (
                   <div className="absolute right-4 top-3 z-10">
                     <button
@@ -944,11 +1034,22 @@ export default function GrantPrepPage(props: any) {
                   activeStageTitle={activeStage.title}
                   activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
                   pendingPoints={pendingPoints}
+                  stageTransitionContext={stageTransitionContext}
+                  ideationContext={ideationContext}
                   onLockIdeation={handleLockIdeation}
                   onToggleFullscreen={toggleChatFullscreen}
                   isFullscreen={effectiveChatFullscreen}
                 />
               </div>
+              {effectiveChatFullscreen ? (
+                <GrantPrepStageNavigator
+                  prepContext={prepContext}
+                  onStageChange={handleStageChange}
+                  disabled={sending || sendCooldown}
+                  variant="rail"
+                  expandOnHover
+                />
+              ) : null}
               {isContextOpen ? (
                 <>
                   <div
@@ -963,62 +1064,104 @@ export default function GrantPrepPage(props: any) {
             </div>
           ) : (
             <div className="relative flex min-h-0 flex-1 flex-col">
-              {/* EC-5: mobile bottom padding */}
-              <div className={clsx('flex min-h-0 flex-1 flex-col', layoutMode === 'mobile' && 'pb-20')}>
-                <GrantPrepChatPane
-                  messages={sessionData.messages}
-                  sending={sending}
-                  sendCooldown={sendCooldown}
-                  input={input}
-                  onInputChange={setInput}
-                  onSend={sendMessage}
-                  onRetry={retryMessage}
-                  sessionLocked={sessionLocked}
-                  currentPointLabel={currentPointLabel}
-                  activeStageKey={prepContext.activeStageKey}
-                  activeStageTitle={activeStage.title}
-                  activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
-                  pendingPoints={pendingPoints}
-                  onLockIdeation={handleLockIdeation}
-                />
-              </div>
-
-              {layoutMode === 'tablet' ? (
-                <>
-                  {isContextOpen ? (
-                    <div className="fixed inset-0 z-20 bg-slate-900/20" onClick={toggleContext} />
-                  ) : null}
-                  {/* EC-4: z-[35] for tablet aside */}
-                  <motion.aside
-                    initial={false}
-                    animate={{ x: isContextOpen ? 0 : 420 }}
-                    transition={{ type: 'spring', stiffness: 220, damping: 28 }}
-                    style={{ top: headerHeight }}
-                    className="fixed bottom-0 right-0 z-[35] w-[380px] overflow-y-auto border-l border-prep-border bg-prep-surface p-4 shadow-xl"
-                  >
-                    {contextPanel}
-                  </motion.aside>
-                </>
+              {effectiveChatFullscreen && layoutMode === 'tablet' ? (
+                <div className="flex min-h-0 flex-1 items-stretch gap-2">
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <GrantPrepChatPane
+                      messages={sessionData.messages}
+                      sending={sending}
+                      sendCooldown={sendCooldown}
+                      input={input}
+                      onInputChange={setInput}
+                      onSend={sendMessage}
+                      onRetry={retryMessage}
+                      sessionLocked={sessionLocked}
+                      currentPointLabel={currentPointLabel}
+                      activeStageKey={prepContext.activeStageKey}
+                      activeStageTitle={activeStage.title}
+                      activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
+                      pendingPoints={pendingPoints}
+                      stageTransitionContext={stageTransitionContext}
+                      ideationContext={ideationContext}
+                      onLockIdeation={handleLockIdeation}
+                      onToggleFullscreen={toggleChatFullscreen}
+                      isFullscreen={effectiveChatFullscreen}
+                    />
+                  </div>
+                  <GrantPrepStageNavigator
+                    prepContext={prepContext}
+                    onStageChange={handleStageChange}
+                    disabled={sending || sendCooldown}
+                    variant="rail"
+                    expandOnHover
+                  />
+                </div>
               ) : (
-                // EC-4: z-[35] for mobile sheet
-                <motion.div
-                  initial={false}
-                  animate={{ y: isContextOpen ? 0 : 'calc(100% - 64px)' }}
-                  transition={{ type: 'spring', stiffness: 220, damping: 28 }}
-                  className="fixed bottom-0 left-0 right-0 z-[35] h-[40vh] rounded-t-2xl border border-prep-border bg-prep-surface px-4 pb-4 pt-3 shadow-xl"
-                >
-                  <button
-                    type="button"
-                    onClick={toggleContext}
-                    className="mx-auto mb-3 flex w-full max-w-xs flex-col items-center"
-                  >
-                    <span className="h-1.5 w-16 rounded-full bg-slate-300" />
-                    <span className="mt-2 text-xs font-medium text-slate-500">
-                      {isContextOpen ? 'Hide context' : 'Show context'}
-                    </span>
-                  </button>
-                  <div className="h-[calc(100%-36px)] overflow-y-auto">{contextPanel}</div>
-                </motion.div>
+                <>
+                  {/* EC-5: mobile bottom padding */}
+                  <div className={clsx('flex min-h-0 flex-1 flex-col', layoutMode === 'mobile' && !effectiveChatFullscreen && 'pb-20')}>
+                    <GrantPrepChatPane
+                      messages={sessionData.messages}
+                      sending={sending}
+                      sendCooldown={sendCooldown}
+                      input={input}
+                      onInputChange={setInput}
+                      onSend={sendMessage}
+                      onRetry={retryMessage}
+                      sessionLocked={sessionLocked}
+                      currentPointLabel={currentPointLabel}
+                      activeStageKey={prepContext.activeStageKey}
+                      activeStageTitle={activeStage.title}
+                      activeStageDescription={GRANT_PREP_STAGE_BY_KEY[prepContext.activeStageKey]?.description}
+                      pendingPoints={pendingPoints}
+                      stageTransitionContext={stageTransitionContext}
+                      ideationContext={ideationContext}
+                      onLockIdeation={handleLockIdeation}
+                      onToggleFullscreen={toggleChatFullscreen}
+                      isFullscreen={effectiveChatFullscreen}
+                    />
+                  </div>
+
+                  {!effectiveChatFullscreen && layoutMode === 'tablet' ? (
+                    <>
+                      {isContextOpen ? (
+                        <div className="fixed inset-0 z-20 bg-slate-900/20" onClick={toggleContext} />
+                      ) : null}
+                      {/* EC-4: z-[35] for tablet aside */}
+                      <motion.aside
+                        initial={false}
+                        animate={{ x: isContextOpen ? 0 : 420 }}
+                        transition={{ type: 'spring', stiffness: 220, damping: 28 }}
+                        style={{ top: headerHeight }}
+                        className="fixed bottom-0 right-0 z-[35] w-[380px] overflow-y-auto border-l border-prep-border bg-prep-surface p-4 shadow-xl"
+                      >
+                        {contextPanel}
+                      </motion.aside>
+                    </>
+                  ) : null}
+
+                  {!effectiveChatFullscreen && layoutMode === 'mobile' ? (
+                    // EC-4: z-[35] for mobile sheet
+                    <motion.div
+                      initial={false}
+                      animate={{ y: isContextOpen ? 0 : 'calc(100% - 64px)' }}
+                      transition={{ type: 'spring', stiffness: 220, damping: 28 }}
+                      className="fixed bottom-0 left-0 right-0 z-[35] h-[40vh] rounded-t-2xl border border-prep-border bg-prep-surface px-4 pb-4 pt-3 shadow-xl"
+                    >
+                      <button
+                        type="button"
+                        onClick={toggleContext}
+                        className="mx-auto mb-3 flex w-full max-w-xs flex-col items-center"
+                      >
+                        <span className="h-1.5 w-16 rounded-full bg-slate-300" />
+                        <span className="mt-2 text-xs font-medium text-slate-500">
+                          {isContextOpen ? 'Hide context' : 'Show context'}
+                        </span>
+                      </button>
+                      <div className="h-[calc(100%-36px)] overflow-y-auto">{contextPanel}</div>
+                    </motion.div>
+                  ) : null}
+                </>
               )}
             </div>
           )}

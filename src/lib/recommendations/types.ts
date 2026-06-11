@@ -40,6 +40,11 @@ export interface RecommendationStrictFilterRecovery {
 export interface RecommendationSearchDiagnostics {
   strictFilterRecovery?: RecommendationStrictFilterRecovery | null;
   profile?: RecommendationProfileRunDiagnostics | null;
+  chat?: {
+    parsePath?: string | null;
+    intent?: string | null;
+    confidence?: number | null;
+  } | null;
 }
 
 export interface RecommendationPreferenceFlags {

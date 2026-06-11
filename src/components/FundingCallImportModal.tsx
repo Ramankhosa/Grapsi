@@ -1040,6 +1040,29 @@ export default function FundingCallImportModal({
     }
   };
 
+  // Template extraction now runs server-side in the background; poll the run
+  // until it reaches a terminal status so long PDF extractions survive proxy timeouts.
+  async function pollTemplateRun(callId: string, runId: string): Promise<any> {
+    const POLL_INTERVAL_MS = 3000;
+    const MAX_ATTEMPTS = 160; // ~8 minutes
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      const payload = await apiRequest<{ run: any }>(`/api/funding/calls/${callId}/user-template/runs/${runId}`);
+      const run = payload?.run;
+
+      if (run?.status === 'needs_review' || run?.status === 'applied') {
+        return run;
+      }
+      if (run?.status === 'failed') {
+        throw new Error(run.error_message || 'Template extraction failed. Try extracting again.');
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+
+    throw new Error('Template extraction is taking longer than expected. Use "Extract again" to retry.');
+  }
+
   async function extractTemplateForCall(
     callId: string,
     options: { advanceOnSkip?: boolean; skipMissingInput?: boolean } = { advanceOnSkip: true }
@@ -1087,7 +1110,13 @@ export default function FundingCallImportModal({
         });
       }
 
-      setTemplateState({ status: 'ready', run: response.run, error: null });
+      let run = response.run;
+      if (run?.id && (run.status === 'queued' || run.status === 'extracting')) {
+        setTemplateState({ status: 'extracting', run, error: null });
+        run = await pollTemplateRun(callId, run.id);
+      }
+
+      setTemplateState({ status: 'ready', run, error: null });
     } catch (err) {
       setTemplateState({ status: 'failed', error: err instanceof Error ? err.message : 'Failed to extract template' });
     }

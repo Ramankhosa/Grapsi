@@ -18,6 +18,7 @@ import {
   loadGrantPrepSession,
   normalizeGrantPrepForPersistence,
   refreshGrantPrepSessionContext,
+  resolveGrantPrepIdeationContext,
   resolveGrantPrepContext,
 } from '@/lib/grantPrep/server'
 import {
@@ -41,11 +42,13 @@ import {
   isGrantPrepSessionReady,
   propagateDependentNeedsReview,
 } from '@/lib/grantPrep/sessionState'
-import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary'
+import { GRANT_PREP_STAGE_BY_KEY, sortGrantPrepStageKeys } from '@/lib/grantPrep/stageLibrary'
+import { getCanonicalGrantPrepStageKey } from '@/lib/grantPrep/stageModel'
 import { runGrantPrepStageTidyPass } from '@/lib/grantPrep/tidyPass'
 import type {
   GrantPrepMarkerPayload,
   GrantPrepStageKey,
+  GrantPrepStageStates,
   GrantPrepStatus,
   GrantPrepSuggestedAnswer,
 } from '@/lib/grantPrep/types'
@@ -77,6 +80,46 @@ type GrantPrepTextGenerator = (
   action?: string,
   parameters?: Record<string, any>
 ) => Promise<string>
+
+function collectChangedStageKeys(
+  previousStageStates: GrantPrepStageStates,
+  nextStageStates: GrantPrepStageStates
+) {
+  return sortGrantPrepStageKeys(
+    Object.values(nextStageStates)
+      .filter((stage) =>
+        previousStageStates[stage.stageKey] &&
+        hasStageContentChanged(previousStageStates[stage.stageKey], stage)
+      )
+      .map((stage) => stage.stageKey)
+  )
+}
+
+async function refreshChangedStageMemories(input: {
+  stageStates: GrantPrepStageStates
+  changedStageKeys: GrantPrepStageKey[]
+  tenantContext: NonNullable<Awaited<ReturnType<typeof resolveGrantPrepTenantContext>>>
+}) {
+  let nextStageStates = input.stageStates
+
+  for (const changedStageKey of sortGrantPrepStageKeys(input.changedStageKeys)) {
+    const stageState = nextStageStates[changedStageKey]
+    if (!stageState?.pickable) {
+      continue
+    }
+
+    nextStageStates = {
+      ...nextStageStates,
+      [changedStageKey]: await runGrantPrepStageTidyPass({
+        stageKey: changedStageKey,
+        stageState,
+        tenantContext: input.tenantContext,
+      }),
+    }
+  }
+
+  return nextStageStates
+}
 
 function countWords(value: string) {
   return value.trim().split(/\s+/).filter(Boolean).length
@@ -119,6 +162,7 @@ async function inferMarkerFromTurn(input: {
     `Stage key: ${input.stageKey}`,
     `Allowed point keys: ${input.allowedPointKeys.join(', ')}`,
     'Use only allowed point keys.',
+    'For each covered point, include 1-3 short complete factBullets as the primary drafting facts. Keep keywords as compact tags only.',
     'Schema:',
     '{',
     '  "version": "brainstorm_marker_v1",',
@@ -192,12 +236,15 @@ function buildSelectedSuggestedAnswerMarker(
     return null
   }
 
+  const buildPointFact = (cover: NonNullable<GrantPrepSuggestedAnswer['covers']>[number]) =>
+    `${cover.label}: ${answerText}`
+
   const buildPoint = (cover: NonNullable<GrantPrepSuggestedAnswer['covers']>[number]) => ({
     stageKey: cover.stageKey,
     pointKey: cover.pointKey,
     keywords: [answer.coverageSummary || cover.label].filter(Boolean) as string[],
     thrustLinkage: [],
-    factBullets: [answerText],
+    factBullets: [buildPointFact(cover)],
     ruleNotes: answer.rationale ? [answer.rationale] : [],
     confidence: 0.92,
     captureBasis: ['user_confirmed'] as Array<'user_confirmed'>,
@@ -332,7 +379,9 @@ export async function POST(
     const duplicateUserMessage = payload.clientMessageId
       ? grantPrepSession.messages.find((message) => message.client_message_id === payload.clientMessageId)
       : null
-    const stageKey = (duplicateUserMessage?.stage_key || payload.stageKey || prepContext.activeStageKey) as GrantPrepStageKey
+    const stageKey = getCanonicalGrantPrepStageKey(
+      (duplicateUserMessage?.stage_key || payload.stageKey || prepContext.activeStageKey) as GrantPrepStageKey
+    )
     if (!GRANT_PREP_STAGE_BY_KEY[stageKey]) {
       return NextResponse.json({ message: 'Unknown stage key' }, { status: 400 })
     }
@@ -377,13 +426,26 @@ export async function POST(
         metadata: {
           sessionId: grantPrepSession.id,
           stageKey,
+          promptChars: llmPrompt.length,
+          promptContextMode: 'stage_memory_v1',
         },
       })
-    const toPromptMessage = (message: { role: string; content: string }) => ({
+    const toPromptMessage = (message: {
+      role: string
+      content: string
+      stage_key?: string | null
+      created_at?: Date | string | null
+      suggested_answers?: unknown
+    }) => ({
       role: message.role,
       content: message.role === 'assistant'
         ? removeGrantPrepApprovalBundlePrefix(message.content)
         : message.content,
+      stageKey: message.stage_key || null,
+      createdAt: message.created_at || null,
+      suggestedAnswers: Array.isArray(message.suggested_answers)
+        ? message.suggested_answers as GrantPrepSuggestedAnswer[]
+        : null,
     })
 
     if (!duplicateUserMessage) {
@@ -398,6 +460,9 @@ export async function POST(
       })
     }
 
+    const ideationContext = stageKey === 'ideation'
+      ? await resolveGrantPrepIdeationContext(auth.actor.id)
+      : null
     const promptInput = {
       session: prepContext,
       stageKey,
@@ -407,11 +472,12 @@ export async function POST(
       },
       fundingContext: serverContext.fundingContext,
       guidelinePack: (serverContext.draftingContext?.approvedGuidelineRevision?.guideline_pack_json as any) || null,
+      ideationContext,
       conversation: duplicateUserMessage
         ? grantPrepSession.messages.map(toPromptMessage)
         : [
             ...grantPrepSession.messages.map(toPromptMessage),
-            { role: 'user', content: payload.content },
+            { role: 'user', content: payload.content, stageKey, createdAt: new Date().toISOString(), suggestedAnswers: null },
           ],
       userMessage: payload.content,
     }
@@ -538,20 +604,12 @@ export async function POST(
       })
       const stageAfterMarker = nextStageStates[stageKey]
       const stageChanged = hasStageContentChanged(stageBeforeUpdate, stageAfterMarker)
-      const stageJustCompleted =
-        !canAutoAdvanceGrantPrepStage(stageBeforeUpdate, prepContext.engagementMode) &&
-        canAutoAdvanceGrantPrepStage(stageAfterMarker, prepContext.engagementMode)
-
-      if (stageJustCompleted) {
-        nextStageStates = {
-          ...nextStageStates,
-          [stageKey]: await runGrantPrepStageTidyPass({
-            stageKey,
-            stageState: nextStageStates[stageKey],
-            tenantContext,
-          }),
-        }
-      }
+      const changedStageKeys = collectChangedStageKeys(prepContext.stageStates, nextStageStates)
+      nextStageStates = await refreshChangedStageMemories({
+        stageStates: nextStageStates,
+        changedStageKeys,
+        tenantContext,
+      })
 
       if (stageChanged) {
         nextStageStates = propagateDependentNeedsReview(
@@ -564,7 +622,9 @@ export async function POST(
         new Set(
           (inferredMarker.crossStagePointsCovered || [])
             .map((point) => point.stageKey)
-            .filter((value): value is GrantPrepStageKey => Boolean(value) && value !== stageKey)
+            .filter((value): value is GrantPrepStageKey => Boolean(value))
+            .map(getCanonicalGrantPrepStageKey)
+            .filter((value) => value !== stageKey)
         )
       )
       for (const targetStageKey of crossStageChangedKeys) {
@@ -585,12 +645,16 @@ export async function POST(
         canAutoAdvanceGrantPrepStage(nextStageStates[stageKey], prepContext.engagementMode)
           ? getNextPickableStageKey(nextStageStates, stageKey)
           : stageKey
-      const enabledStageKeys = Object.values(nextStageStates)
-        .filter((stage) => stage.enabled)
-        .map((stage) => stage.stageKey)
-      const disabledStageKeys = Object.values(nextStageStates)
-        .filter((stage) => !stage.enabled)
-        .map((stage) => stage.stageKey)
+      const enabledStageKeys = sortGrantPrepStageKeys(
+        Object.values(nextStageStates)
+          .filter((stage) => stage.enabled)
+          .map((stage) => stage.stageKey)
+      )
+      const disabledStageKeys = sortGrantPrepStageKeys(
+        Object.values(nextStageStates)
+          .filter((stage) => !stage.enabled)
+          .map((stage) => stage.stageKey)
+      )
 
       nextContext = {
         ...prepContext,

@@ -8,12 +8,13 @@ export type GrantWorkspaceStage =
   | 'REVIEWER'
 
 export function resolveGrantWorkspaceStageForPrepStatus(status?: string | null): GrantWorkspaceStage {
-  return status === 'launched' || status === 'handed_off' ? 'SECTION_DRAFTING' : 'GRANTMENTOR'
+  return status === 'launched' || status === 'handed_off' ? 'BLUEPRINT' : 'GRANTMENTOR'
 }
 
 export function resolveGrantWorkspaceStageForGrantStatus(status?: string | null): GrantWorkspaceStage | null {
   switch (String(status || '').toUpperCase()) {
     case 'BLUEPRINT':
+      return 'BLUEPRINT'
     case 'DRAFTING':
     case 'REVIEW':
       return 'SECTION_DRAFTING'

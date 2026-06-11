@@ -50,8 +50,8 @@ export type GrantPrepStageKey =
   | 'workplan'
   | 'team_and_partnerships'
   | 'innovation'
-  | 'evaluation'
   | 'outcomes'
+  | 'evaluation'
   | 'risk_and_ethics'
   | 'budget_strategy'
   | 'sustainability_and_scale'
@@ -150,6 +150,17 @@ export interface GrantPrepPointState {
   capture: GrantPrepPointCapture | null;
 }
 
+export interface GrantPrepStageMemory {
+  version: 'stage_memory_v1';
+  updatedAt: string;
+  confirmedFacts: string[];
+  openGaps: string[];
+  reviewerRisks: string[];
+  keywords: string[];
+  source: 'deterministic' | 'tidy_llm';
+  staleReason?: string | null;
+}
+
 export interface GrantPrepStageState {
   stageKey: GrantPrepStageKey;
   title: string;
@@ -162,6 +173,7 @@ export interface GrantPrepStageState {
   steeringEvents: GrantPrepSteeringEvent[];
   points: GrantPrepPointState[];
   lastUpdatedAt: string | null;
+  memory?: GrantPrepStageMemory | null;
 }
 
 export type GrantPrepStageStates = Record<GrantPrepStageKey, GrantPrepStageState>;
@@ -202,6 +214,37 @@ export interface GrantPrepSuggestedAnswer {
   rationale?: string | null;
   covers?: GrantPrepSuggestedAnswerCoverage[];
   coverageSummary?: string | null;
+}
+
+export interface GrantPrepIdeationPublicationContext {
+  title: string;
+  year: number | null;
+  venue: string | null;
+  doi: string | null;
+  abstractSnippet: string | null;
+}
+
+export interface GrantPrepIdeationResearchAreaContext {
+  label: string;
+  researchArea: string;
+  keywords: string[];
+  disciplines: string[];
+  taxonomyPath: string | null;
+}
+
+export interface GrantPrepIdeationContext {
+  hasUsableContext: boolean;
+  sourceSummary: string[];
+  profile: {
+    researchSummary: string | null;
+    researchAreas: string[];
+    keywords: string[];
+    institutionName: string | null;
+    institutionType: string | null;
+    careerStage: string | null;
+  } | null;
+  savedResearchAreas: GrantPrepIdeationResearchAreaContext[];
+  publications: GrantPrepIdeationPublicationContext[];
 }
 
 export interface GrantPrepMarkerPayload {

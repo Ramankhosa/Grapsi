@@ -1,4 +1,5 @@
-import { GRANT_PREP_STAGE_BY_KEY, GRANT_PREP_STAGE_LIBRARY } from './stageLibrary';
+import { GRANT_PREP_STAGE_BY_KEY } from './stageLibrary';
+import { VISIBLE_GRANT_PREP_STAGE_KEYS } from './stageModel';
 import { isGrantPrepUserFacingPoint } from './sessionState';
 import type {
   GrantPrepMappedPoint,
@@ -44,18 +45,6 @@ export const GRANT_PREP_RELATED_STAGE_PAIRS: Partial<Record<GrantPrepStageKey, R
       note: 'If the driver changes the problem framing, update the problem facts conservatively.',
     },
   ],
-  methodology: [
-    {
-      stageKey: 'workplan',
-      note: 'If the user confirms the approach, also confirm phases, milestones, or deliverables that naturally follow.',
-    },
-  ],
-  workplan: [
-    {
-      stageKey: 'methodology',
-      note: 'If the delivery plan clarifies the approach, capture the method detail too.',
-    },
-  ],
   outcomes: [
     {
       stageKey: 'evaluation',
@@ -70,15 +59,15 @@ export const GRANT_PREP_RELATED_STAGE_PAIRS: Partial<Record<GrantPrepStageKey, R
   ],
   budget_strategy: [
     {
-      stageKey: 'sustainability_and_scale',
-      note: 'Only pair budget with sustainability when the user already mentions continuity, future funding, adoption, scale, or budget limits.',
+      stageKey: 'innovation',
+      note: 'Only pair budget with sustainability or scale when the user already mentions continuity, future funding, adoption, scale, or budget limits.',
       requiresUserSignal: /\b(sustainab\w*|continu\w*|future fund\w*|post[-\s]?grant|after funding|adopt\w*|scale\w*|replicat\w*|budget limit\w*|funding limit\w*|cap|ceiling)\b/i,
     },
   ],
-  sustainability_and_scale: [
+  innovation: [
     {
       stageKey: 'budget_strategy',
-      note: 'Only pair sustainability with budget when the user already mentions continuity, future funding, adoption, scale, or budget limits.',
+      note: 'Only pair innovation/sustainability with budget when the user already mentions continuity, future funding, adoption, scale, or budget limits.',
       requiresUserSignal: /\b(sustainab\w*|continu\w*|future fund\w*|post[-\s]?grant|after funding|adopt\w*|scale\w*|replicat\w*|budget limit\w*|funding limit\w*|cap|ceiling)\b/i,
     },
   ],
@@ -146,8 +135,10 @@ function getCandidateLookaheadStages(
   stageKey: GrantPrepStageKey,
   excludedStageKeys: Set<GrantPrepStageKey>
 ) {
-  const currentIndex = GRANT_PREP_STAGE_LIBRARY.findIndex((stage) => stage.key === stageKey);
-  const stagesAfterCurrent = GRANT_PREP_STAGE_LIBRARY.slice(Math.max(0, currentIndex + 1));
+  const currentIndex = VISIBLE_GRANT_PREP_STAGE_KEYS.findIndex((key) => key === stageKey);
+  const stagesAfterCurrent = VISIBLE_GRANT_PREP_STAGE_KEYS
+    .slice(currentIndex >= 0 ? currentIndex + 1 : 0)
+    .map((key) => GRANT_PREP_STAGE_BY_KEY[key]);
 
   return stagesAfterCurrent
     .map((stage) => session.stageStates[stage.key])

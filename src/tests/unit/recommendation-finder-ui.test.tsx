@@ -76,6 +76,13 @@ function createAssistantMessage(resultIds: string[]): RecommendationConversation
   };
 }
 
+function createAssistantMessageWithReplies(resultIds: string[], suggestedReplies: string[]): RecommendationConversationMessageRecord {
+  return {
+    ...createAssistantMessage(resultIds),
+    suggestedReplies,
+  };
+}
+
 function createRun(results: RecommendationRawResultItem[]): RecommendationConversationRunRecord {
   return {
     id: 'run-1',
@@ -341,5 +348,18 @@ describe('finder trust recovery UI', () => {
     expect(markup).toContain('Rolling');
     expect(markup).toContain('This archived scheme required institutional nomination.');
     expect(markup).toContain('Retry without these filters');
+  });
+
+  it('renders suggested reply chips on assistant messages', () => {
+    const markup = renderToStaticMarkup(
+      <FinderChatMessage
+        message={createAssistantMessageWithReplies(['result-1'], ['Only rolling opportunities', 'Sort by deadline soonest'])}
+        runs={[createRun([createResult()])]}
+        onSuggestedReply={() => undefined}
+      />
+    );
+
+    expect(markup).toContain('Only rolling opportunities');
+    expect(markup).toContain('Sort by deadline soonest');
   });
 });

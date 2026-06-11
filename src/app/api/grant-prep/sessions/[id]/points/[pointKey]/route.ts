@@ -12,7 +12,6 @@ import {
 } from '@/lib/grantPrep/server'
 import {
   addGrantPrepSteeringEvent,
-  canAutoAdvanceGrantPrepStage,
   collectGlobalKeywords,
   computeOverallReadiness,
   getGrantPrepPointStatus,
@@ -173,18 +172,8 @@ export async function PATCH(
     recomputeStageState(stageState)
 
     const stageChanged = hasStageContentChanged(stageBeforeUpdate, stageState)
-    const stageJustCompleted =
-      !canAutoAdvanceGrantPrepStage(stageBeforeUpdate, prepContext.engagementMode) &&
-      canAutoAdvanceGrantPrepStage(stageState, prepContext.engagementMode)
-    if (stageJustCompleted) {
-      const tenantContext = await resolveGrantPrepTenantContext(auth.actor.tenantId, auth.actor.id)
-      if (!tenantContext) {
-        return NextResponse.json(
-          { message: 'Grant Prep tidy pass requires an active tenant plan before LLM usage can be metered.' },
-          { status: 403 }
-        )
-      }
-
+    if (stageChanged) {
+      const tenantContext = await resolveGrantPrepTenantContext(auth.actor.tenantId, auth.actor.id).catch(() => null)
       nextStageStates = {
         ...nextStageStates,
         [stageKey]: await runGrantPrepStageTidyPass({
@@ -193,9 +182,6 @@ export async function PATCH(
           tenantContext,
         }),
       }
-    }
-
-    if (stageChanged) {
       nextStageStates = propagateDependentNeedsReview(
         nextStageStates,
         stageKey,

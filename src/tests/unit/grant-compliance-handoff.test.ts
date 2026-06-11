@@ -280,6 +280,131 @@ describe('grant prep freeze payload', () => {
       },
     ])
   })
+
+  it('does not block launch on missing inferable template points', () => {
+    const session = {
+      mode: 'template_driven',
+      engagementMode: 'expert',
+      selectedThrustAreaRuleKeys: [],
+      stageMapping: {},
+      globalKeywords: [],
+      stageStates: {
+        methodology: {
+          stageKey: 'methodology',
+          title: 'Methodology & Workplan',
+          enabled: true,
+          pickable: true,
+          readiness: 0.75,
+          status: 'completed',
+          steeringEvents: [],
+          lastUpdatedAt: '2026-04-21T00:00:00.000Z',
+          points: [
+            {
+              key: 'approach',
+              label: 'Core approach',
+              priority: 'P1',
+              status: 'covered',
+              sourceTemplatePointer: null,
+              conversationRole: 'user_required',
+              capture: {
+                keywords: ['phased pilot'],
+                thrustLinkage: [],
+                factBullets: ['The project will run as a phased pilot.'],
+                ruleNotes: [],
+                confidence: 0.9,
+                ruleCompliance: { status: 'ok' },
+                captureBasis: ['user_confirmed'],
+                sourceTemplatePointer: null,
+                updatedAt: '2026-04-21T00:00:00.000Z',
+              },
+            },
+            {
+              key: 'evaluationCriteria_methodological_feasibility',
+              label: 'Methodological Feasibility',
+              priority: 'P1',
+              status: 'pending',
+              sourceTemplatePointer: 'evaluationCriteria.methodological_feasibility',
+              conversationRole: 'can_infer_and_confirm',
+              capture: null,
+            },
+          ],
+        },
+      },
+    } as unknown as GrantPrepSessionContext
+
+    const result = buildGrantPrepFreezePayload({
+      project: { id: 'project_1', title: 'Cyber Centre of Excellence', description: null },
+      fundingContext,
+      session,
+      guidelineRevisionId: null,
+      templateRevisionId: null,
+    })
+
+    expect(result.blockers).toEqual([])
+  })
+
+  it('does not block selected priority fit when no priority area was selected', () => {
+    const session = {
+      mode: 'template_driven',
+      engagementMode: 'expert',
+      selectedThrustAreaRuleKeys: [],
+      stageMapping: {},
+      globalKeywords: [],
+      stageStates: {
+        ideation: {
+          stageKey: 'ideation',
+          title: 'Idea & Angle',
+          enabled: true,
+          pickable: true,
+          selectionLevel: 'required',
+          readiness: 0.56,
+          status: 'in_progress',
+          steeringEvents: [],
+          lastUpdatedAt: '2026-04-21T00:00:00.000Z',
+          points: [
+            {
+              key: 'idea_core',
+              label: 'Core idea and angle',
+              priority: 'P1',
+              status: 'covered',
+              sourceTemplatePointer: null,
+              conversationRole: 'user_required',
+              capture: {
+                keywords: ['cyber centre'],
+                thrustLinkage: [],
+                factBullets: ['The project will build a cyber centre.'],
+                ruleNotes: [],
+                confidence: 0.9,
+                ruleCompliance: { status: 'ok' },
+                captureBasis: ['user_confirmed'],
+                sourceTemplatePointer: null,
+                updatedAt: '2026-04-21T00:00:00.000Z',
+              },
+            },
+            {
+              key: 'selected_priority_fit',
+              label: 'Selected priority area fit',
+              priority: 'P2',
+              status: 'pending',
+              sourceTemplatePointer: null,
+              conversationRole: 'user_required',
+              capture: null,
+            },
+          ],
+        },
+      },
+    } as unknown as GrantPrepSessionContext
+
+    const result = buildGrantPrepFreezePayload({
+      project: { id: 'project_1', title: 'Cyber Centre of Excellence', description: null },
+      fundingContext,
+      session,
+      guidelineRevisionId: null,
+      templateRevisionId: null,
+    })
+
+    expect(result.blockers).toEqual([])
+  })
 })
 
 describe('proposal-level grant compliance', () => {

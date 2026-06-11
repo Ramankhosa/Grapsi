@@ -2,7 +2,14 @@ import type {
   GrantPrepDiscussionPointDefinition,
   GrantPrepStageDefinition,
   GrantPrepStageKey,
+  GrantPrepStageStates,
 } from './types';
+import {
+  HIDDEN_GRANT_PREP_STAGE_KEYS,
+  TERMINAL_GRANT_PREP_STAGE_KEYS,
+  VISIBLE_GRANT_PREP_STAGE_KEYS,
+  getGrantPrepStageDisplayTitle,
+} from './stageModel';
 
 function points(items: Array<[string, string, 'P1' | 'P2' | 'P3', string, string[]]>): GrantPrepDiscussionPointDefinition[] {
   return items.map(([key, label, priority, helpText, templateKeywords]) => ({
@@ -104,23 +111,25 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
   },
   {
     key: 'fit_and_scope',
-    title: 'Fit and Scope',
+    title: 'Fit, Scope & Priority',
     category: 'alignment',
-    description: 'Confirm the proposal fits the call, its scale, and the applicant profile.',
-    askStyle: 'Frame the work at the right scope for the funding call.',
+    description: 'Confirm call fit, right-sized scope, priority alignment, and reviewer value signal.',
+    askStyle: 'Frame the work at the right scope while using the call language precisely.',
     defaultEnabled: true,
     pickable: true,
-    guidelineBlocks: ['priorities', 'mustAddress', 'avoid'],
-    steeringRule: 'Flag out-of-scope ambitions or unqualified applicant framing.',
+    guidelineBlocks: ['priorities', 'mustAddress', 'avoid', 'evaluationCriteria', 'reviewerSignals'],
+    steeringRule: 'Flag out-of-scope ambitions, unqualified applicant framing, or priority claims that repeat call words without connecting to the proposed work.',
     dependencies: ['problem_definition', 'beneficiaries'],
     defaultPoints: points([
       ['call_fit', 'Why this call fits the project', 'P1', 'Explain fit to the scheme and agency.', ['fit', 'scheme', 'alignment']],
       ['scope_control', 'Right-sized scope', 'P1', 'Keep scope realistic for funding, time, and team.', ['scope', 'feasible', 'phased']],
+      ['priority_match', 'Priority or thrust alignment', 'P1', 'Name the relevant priorities and why they fit.', ['priority', 'theme', 'thrust']],
+      ['reviewer_signal', 'Reviewer value signal', 'P2', 'What reviewers are likely to reward here.', ['impact', 'fit', 'merit']],
     ]),
     reviewerRubric: {
-      strong: 'Clear mapping between project objectives and call priorities, scope is realistic for budget and timeline, applicant profile is justified.',
-      adequate: 'Fit claimed but not mapped to specific call criteria, scope seems reasonable but not explicitly justified.',
-      weak: 'No connection drawn between project and call, scope is either too ambitious or too narrow without explanation.',
+      strong: 'Clear mapping between project objectives and call priorities, scope is realistic for budget and timeline, applicant profile is justified, and reviewer value is specific rather than keyword-based.',
+      adequate: 'Fit claimed but not mapped to specific call criteria, scope seems reasonable but not explicitly justified, or the reviewer value signal is generic.',
+      weak: 'No connection drawn between project and call, scope is either too ambitious or too narrow without explanation, or priority language is repeated without connection to the work.',
     },
   },
   {
@@ -129,8 +138,8 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     category: 'alignment',
     description: 'Link the proposal to call priorities or thrust areas.',
     askStyle: 'Use the call language precisely, without keyword stuffing.',
-    defaultEnabled: true,
-    pickable: true,
+    defaultEnabled: false,
+    pickable: false,
     guidelineBlocks: ['priorities', 'evaluationCriteria', 'reviewerSignals'],
     steeringRule: 'Every priority claim must connect to the proposed work, not just repeat call words.',
     dependencies: ['fit_and_scope'],
@@ -146,24 +155,26 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
   },
   {
     key: 'methodology',
-    title: 'Methodology',
+    title: 'Methodology & Workplan',
     category: 'design',
-    description: 'Describe the core approach, methods, and implementation logic.',
-    askStyle: 'Keep it implementable and specific.',
+    description: 'Describe the core approach, implementation logic, phases, milestones, and deliverables.',
+    askStyle: 'Keep methods and delivery sequence implementable and specific.',
     defaultEnabled: true,
     pickable: true,
-    guidelineBlocks: ['mustAddress', 'evaluationCriteria', 'durationRules'],
-    steeringRule: 'Methodology must describe how the work is done, not just its goals.',
+    guidelineBlocks: ['mustAddress', 'evaluationCriteria', 'durationRules', 'deliverableRules'],
+    steeringRule: 'Methodology must describe how the work is done and sequenced, not just its goals. Milestones must fit the call duration and deliverable expectations.',
     dependencies: ['problem_definition', 'root_cause'],
     defaultPoints: points([
       ['approach', 'Core approach', 'P1', 'High-level method or intervention design.', ['approach', 'method', 'intervention']],
       ['activities', 'Key activities or work packages', 'P1', 'Main actions the team will take.', ['activity', 'work package', 'task']],
       ['evidence_generation', 'Data, validation, or evidence plan', 'P2', 'How the project generates proof or validation.', ['data', 'evaluation', 'pilot']],
+      ['phases', 'Project phases', 'P1', 'Major phases or milestones.', ['phase', 'milestone', 'timeline']],
+      ['deliverables', 'Expected outputs', 'P1', 'Concrete deliverables by phase or end state.', ['deliverable', 'output', 'report']],
     ]),
     reviewerRubric: {
-      strong: 'Clear intervention logic connecting problem to approach, named methods with justification, defined data collection or validation strategy, and feasibility evidence.',
-      adequate: 'Approach described but methods are generic, validation plan is vague, feasibility assumed without evidence.',
-      weak: 'Approach is a goal restatement, no described methods, no validation or evidence plan.',
+      strong: 'Clear intervention logic connecting problem to approach, named methods with justification, defined validation strategy, sequenced phases, concrete deliverables, and timeline feasibility evidence.',
+      adequate: 'Approach described but methods are generic, validation plan is vague, phases or deliverables are present but not tied to implementation logic.',
+      weak: 'Approach is a goal restatement, no described methods, no validation plan, no phasing, or deliverables are not specified.',
     },
   },
   {
@@ -172,8 +183,8 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     category: 'design',
     description: 'Lay out phases, milestones, and delivery rhythm.',
     askStyle: 'Sequence the work from start to finish.',
-    defaultEnabled: true,
-    pickable: true,
+    defaultEnabled: false,
+    pickable: false,
     guidelineBlocks: ['durationRules', 'deliverableRules'],
     steeringRule: 'Milestones must fit the call duration and deliverable expectations.',
     dependencies: ['methodology'],
@@ -210,44 +221,25 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
   },
   {
     key: 'innovation',
-    title: 'Innovation',
+    title: 'Innovation, Sustainability & Scale',
     category: 'alignment',
-    description: 'Describe what is novel or meaningfully better about the proposal.',
-    askStyle: 'Novelty must be comparative, not generic.',
+    description: 'Describe what is novel, why it is meaningfully better, and how value continues or scales after funding.',
+    askStyle: 'Novelty and sustainability must be comparative and operational, not generic.',
     defaultEnabled: true,
     pickable: true,
-    guidelineBlocks: ['evaluationCriteria', 'reviewerSignals'],
-    steeringRule: 'Innovation claims must say compared to what and why a reviewer would notice the difference.',
-    dependencies: ['methodology'],
+    guidelineBlocks: ['evaluationCriteria', 'reviewerSignals', 'mustAddress'],
+    steeringRule: 'Innovation claims must say compared to what and why a reviewer would notice the difference. Sustainability or scale claims need a plausible operational path.',
+    dependencies: ['methodology', 'outcomes'],
     defaultPoints: points([
       ['novelty_claim', 'What is different', 'P1', 'The novelty or meaningful advantage.', ['innovation', 'novel', 'advance']],
       ['comparative_value', 'Compared with current practice', 'P2', 'Why this is better than existing options.', ['compare', 'advantage', 'improvement']],
+      ['continuity', 'Continuation after funding', 'P2', 'How value persists after the grant ends.', ['sustainability', 'continuation', 'maintenance']],
+      ['scale_path', 'Adoption or scale path', 'P3', 'Who could adopt or expand the work.', ['scale', 'adoption', 'replication']],
     ]),
     reviewerRubric: {
-      strong: 'Innovation claim is specific, comparative against named current practice, and connected to a meaningful reviewer-visible advantage in outcomes, feasibility, or relevance.',
-      adequate: 'Claims novelty but comparison is generic, against an unstated baseline, or not clearly tied to why the difference matters.',
-      weak: 'Uses words like "innovative" or "novel" without any comparison, specificity, or reviewer-visible advantage.',
-    },
-  },
-  {
-    key: 'evaluation',
-    title: 'Evaluation',
-    category: 'delivery',
-    description: 'Define how success is assessed and evidenced.',
-    askStyle: 'Tie measures to outcomes and verification methods.',
-    defaultEnabled: true,
-    pickable: true,
-    guidelineBlocks: ['evaluationCriteria', 'mustAddress'],
-    steeringRule: 'Success measures must be observable or measurable.',
-    dependencies: ['methodology', 'outcomes'],
-    defaultPoints: points([
-      ['success_metrics', 'Success metrics', 'P1', 'Measures that show the project worked.', ['metric', 'indicator', 'measure']],
-      ['verification', 'Verification approach', 'P2', 'How outcomes will be verified or monitored.', ['monitoring', 'evaluation', 'verification']],
-    ]),
-    reviewerRubric: {
-      strong: 'Metrics are specific, measurable, tied to stated outcomes, with a named verification method and timeline.',
-      adequate: 'Metrics listed but not clearly tied to outcomes, verification approach is vague.',
-      weak: 'No defined metrics, success is described aspirationally without measurement.',
+      strong: 'Innovation claim is specific, comparative against named current practice, connected to reviewer-visible advantage, and paired with a concrete continuation or adoption pathway.',
+      adequate: 'Claims novelty but comparison is generic, or sustainability is mentioned as intent without an operational route.',
+      weak: 'Uses words like "innovative" or "sustainable" without comparison, specificity, reviewer-visible advantage, or any plausible continuation path.',
     },
   },
   {
@@ -269,6 +261,27 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
       strong: 'Outcomes are distinct from activities, near-term changes are specific and observable, longer-term effects have a plausible pathway.',
       adequate: 'Outcomes stated but conflated with activities, longer-term effects are aspirational without a pathway.',
       weak: 'Activities listed as outcomes, no distinction between short-term and long-term effects.',
+    },
+  },
+  {
+    key: 'evaluation',
+    title: 'Evaluation',
+    category: 'delivery',
+    description: 'Define how success is assessed and evidenced.',
+    askStyle: 'Tie measures to outcomes and verification methods.',
+    defaultEnabled: true,
+    pickable: true,
+    guidelineBlocks: ['evaluationCriteria', 'mustAddress'],
+    steeringRule: 'Success measures must be observable or measurable.',
+    dependencies: ['methodology', 'outcomes'],
+    defaultPoints: points([
+      ['success_metrics', 'Success metrics', 'P1', 'Measures that show the project worked.', ['metric', 'indicator', 'measure']],
+      ['verification', 'Verification approach', 'P2', 'How outcomes will be verified or monitored.', ['monitoring', 'evaluation', 'verification']],
+    ]),
+    reviewerRubric: {
+      strong: 'Metrics are specific, measurable, tied to stated outcomes, with a named verification method and timeline.',
+      adequate: 'Metrics listed but not clearly tied to outcomes, verification approach is vague.',
+      weak: 'No defined metrics, success is described aspirationally without measurement.',
     },
   },
   {
@@ -303,7 +316,7 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     pickable: true,
     guidelineBlocks: ['budgetRules', 'durationRules', 'avoid'],
     steeringRule: 'Budget logic must match the call size and rules.',
-    dependencies: ['workplan'],
+    dependencies: ['methodology'],
     defaultPoints: points([
       ['budget_logic', 'Budget logic', 'P1', 'How major cost categories connect to work.', ['budget', 'cost', 'resource']],
       ['budget_constraints', 'Call-specific budget constraints', 'P2', 'Caps, exclusions, or justification expectations.', ['cap', 'allowable', 'non-allowable']],
@@ -320,8 +333,8 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     category: 'delivery',
     description: 'Explain continuation, adoption, or scaling if relevant.',
     askStyle: 'Treat sustainability as operational, not aspirational.',
-    defaultEnabled: true,
-    pickable: true,
+    defaultEnabled: false,
+    pickable: false,
     guidelineBlocks: ['reviewerSignals', 'mustAddress'],
     steeringRule: 'Do not promise scale without a plausible path.',
     dependencies: ['outcomes'],
@@ -341,8 +354,8 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     category: 'delivery',
     description: 'Condense the strongest version of the proposal.',
     askStyle: 'Focus on sharp positioning for the handoff payload.',
-    defaultEnabled: true,
-    pickable: true,
+    defaultEnabled: false,
+    pickable: false,
     guidelineBlocks: ['priorities', 'reviewerSignals'],
     steeringRule: 'The summary must reflect captured facts, not new claims.',
     dependencies: ['outcomes', 'risk_and_ethics'],
@@ -366,7 +379,7 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     pickable: false,
     guidelineBlocks: [],
     steeringRule: 'This stage exists only as a checkpoint.',
-    dependencies: ['final_pitch'],
+    dependencies: [],
     defaultPoints: [],
   },
   {
@@ -391,9 +404,51 @@ export const GRANT_PREP_STAGE_BY_KEY: Record<GrantPrepStageKey, GrantPrepStageDe
   }, {} as Record<GrantPrepStageKey, GrantPrepStageDefinition>);
 
 export function getPickableGrantPrepStageKeys(): GrantPrepStageKey[] {
-  return GRANT_PREP_STAGE_LIBRARY.filter((stage) => stage.pickable).map((stage) => stage.key);
+  return VISIBLE_GRANT_PREP_STAGE_KEYS.filter((stageKey) => GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable);
 }
 
 export function getDefaultEnabledStageKeys(): GrantPrepStageKey[] {
-  return GRANT_PREP_STAGE_LIBRARY.filter((stage) => stage.defaultEnabled).map((stage) => stage.key);
+  return sortGrantPrepStageKeys(
+    GRANT_PREP_STAGE_LIBRARY.filter((stage) => stage.defaultEnabled).map((stage) => stage.key)
+  );
+}
+
+export function sortGrantPrepStageKeys(stageKeys: Iterable<GrantPrepStageKey>): GrantPrepStageKey[] {
+  const set = new Set(stageKeys);
+  return [
+    ...VISIBLE_GRANT_PREP_STAGE_KEYS,
+    ...TERMINAL_GRANT_PREP_STAGE_KEYS,
+    ...HIDDEN_GRANT_PREP_STAGE_KEYS,
+  ].filter((stageKey) => set.has(stageKey));
+}
+
+export function getFirstEnabledPickableStageKey(
+  stageStates: Partial<GrantPrepStageStates>
+): GrantPrepStageKey | null {
+  return (
+    VISIBLE_GRANT_PREP_STAGE_KEYS.find((stageKey) => {
+      const state = stageStates[stageKey];
+      return GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable && state?.enabled && state.pickable;
+    }) || null
+  );
+}
+
+export function getNextEnabledPickableStageKey(
+  stageStates: Partial<GrantPrepStageStates>,
+  currentStageKey: GrantPrepStageKey
+): GrantPrepStageKey | null {
+  const currentIndex = VISIBLE_GRANT_PREP_STAGE_KEYS.findIndex((stageKey) => stageKey === currentStageKey);
+  const startIndex = currentIndex >= 0 ? currentIndex + 1 : 0;
+  for (let index = startIndex; index < VISIBLE_GRANT_PREP_STAGE_KEYS.length; index += 1) {
+    const stageKey = VISIBLE_GRANT_PREP_STAGE_KEYS[index];
+    const state = stageStates[stageKey];
+    if (GRANT_PREP_STAGE_BY_KEY[stageKey]?.pickable && state?.enabled && state.pickable) {
+      return stageKey;
+    }
+  }
+  return null;
+}
+
+export function getGrantPrepStageTitle(stageKey: GrantPrepStageKey): string {
+  return getGrantPrepStageDisplayTitle(stageKey, GRANT_PREP_STAGE_BY_KEY[stageKey]?.title);
 }

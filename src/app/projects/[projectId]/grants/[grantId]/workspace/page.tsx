@@ -36,7 +36,7 @@ const STAGES = [
 const WORKSPACE_NAV_COLLAPSED_KEY_PREFIX = 'grant-workspace-nav-collapsed'
 
 type StageKey = typeof STAGES[number]['key']
-const DEFAULT_GRANT_WORKSPACE_STAGE: StageKey = 'SECTION_DRAFTING'
+const DEFAULT_GRANT_WORKSPACE_STAGE: StageKey = 'BLUEPRINT'
 
 type GrantSection = {
   id?: string
@@ -205,6 +205,7 @@ export default function GrantWorkspacePage() {
   const [selectedSection, setSelectedSection] = useState<string>('')
   const [sectionFilter, setSectionFilter] = useState<'all' | 'app_draft'>('all')
   const [navCollapsed, setNavCollapsed] = useState(false)
+  const [grantMentorChatFullscreen, setGrantMentorChatFullscreen] = useState(false)
   const [launchingBlueprint, setLaunchingBlueprint] = useState(false)
   const autoLaunchAttemptedRef = useRef(false)
   const incompleteBlueprintLaunchConfirmedRef = useRef(false)
@@ -507,6 +508,8 @@ export default function GrantWorkspacePage() {
   const draftingSessionId = workspace?.grantSession.draftingSessionId || null
   const hasFrozenBlueprint = workspace?.blueprint?.status === 'FROZEN'
   const hasBlueprint = Boolean(workspace?.blueprint)
+  const completedDraftingSectionsCount = draftingSections.filter((section) => section.status === 'completed').length
+  const hideWorkspaceHeader = resolvedCurrentStage === 'GRANTMENTOR' && grantMentorChatFullscreen
   const prepGenerationDisabledReason = workspace?.launchPreview?.generationReady === false
     ? workspace.launchPreview.generationBlockedMessage
       || `Grant Prep is ${readinessPercent(workspace.launchPreview.overallReadiness)} complete. You can inspect this stage, but generation actions are disabled until Grant Prep reaches ${readinessPercent(workspace.launchPreview.generationReadinessThreshold ?? 0.5)}.`
@@ -712,80 +715,127 @@ export default function GrantWorkspacePage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <PaperVerticalStageNav
-        session={navSession}
-        currentStage={resolvedCurrentStage}
-        paperId={workspace.grantSession.id}
-        workspaceTitle="Grant Workspace"
-        visibleStageKeys={visibleStageKeys}
-        stageMetaOverrides={{
-          GRANTMENTOR: { label: 'Grant Prep', description: 'Grant prep and mentoring (call-aware)' },
-          BLUEPRINT: { label: 'Blueprint', description: 'Define grant structure and dimensions' },
-          FULL_TEXT_EVIDENCE_EXTRACTION: { label: 'Deep Analysis' },
-          REVIEWER: { label: 'Grant Review', description: 'Map draft sections into reviewer checks' },
-        }}
-        draftingSections={draftingSections}
-        onNavigateToStage={handleNavigateToStage}
-        selectedSection={selectedSection}
-        onSectionSelect={setSelectedSection}
-        sectionFilter={sectionFilter}
-        onSectionFilterChange={setSectionFilter}
-        collapsed={navCollapsed}
-        onCollapsedChange={setNavCollapsed}
-        allowCollapse={true}
-      />
+      {!hideWorkspaceHeader ? (
+        <PaperVerticalStageNav
+          session={navSession}
+          currentStage={resolvedCurrentStage}
+          paperId={workspace.grantSession.id}
+          workspaceTitle="Grant Workspace"
+          visibleStageKeys={visibleStageKeys}
+          stageMetaOverrides={{
+            GRANTMENTOR: { label: 'Grant Prep', description: 'Grant prep and mentoring (call-aware)' },
+            BLUEPRINT: { label: 'Blueprint', description: 'Define grant structure and dimensions' },
+            FULL_TEXT_EVIDENCE_EXTRACTION: { label: 'Deep Analysis' },
+            REVIEWER: { label: 'Grant Review', description: 'Map draft sections into reviewer checks' },
+          }}
+          draftingSections={draftingSections}
+          onNavigateToStage={handleNavigateToStage}
+          selectedSection={selectedSection}
+          onSectionSelect={setSelectedSection}
+          sectionFilter={sectionFilter}
+          onSectionFilterChange={setSectionFilter}
+          collapsed={navCollapsed}
+          onCollapsedChange={setNavCollapsed}
+          allowCollapse={true}
+        />
+      ) : null}
 
-      <div className={`flex min-h-screen flex-col ${navCollapsed ? 'pl-20' : 'pl-72'}`}>
-        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-          <div className="mx-auto flex max-w-[98%] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
-            <div className="min-w-0">
-              <button
-                type="button"
-                onClick={() => router.push('/projects')}
-                className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900"
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Back to Projects
-              </button>
-              <h1 className="mt-2 truncate text-xl font-semibold text-slate-900">
-                {workspace.grantSession.project.name || 'Grant Workspace'}
-              </h1>
-              <div className="mt-2 flex flex-wrap gap-2 text-xs font-medium">
-                {workspace.grantSession.fundingCall?.scheme_title ? (
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
-                    {workspace.grantSession.fundingCall.scheme_title}
+      <div className={`flex min-h-screen flex-col ${hideWorkspaceHeader ? 'pl-0' : navCollapsed ? 'pl-20' : 'pl-72'}`}>
+        {!hideWorkspaceHeader ? (
+          <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+            {resolvedCurrentStage === 'GRANTMENTOR' ? (
+              <div className="mx-auto flex max-w-[98%] items-center gap-2 overflow-x-auto px-3 py-1.5 sm:px-4">
+                <button
+                  type="button"
+                  onClick={() => router.push('/projects')}
+                  className="inline-flex h-8 flex-shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  title="Back to Projects"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  <span className="hidden sm:inline">Projects</span>
+                </button>
+                <div className="flex min-w-[180px] flex-1 items-center gap-2">
+                  <h1 className="truncate text-sm font-semibold text-slate-900" title={workspace.grantSession.project.name || 'Grant Workspace'}>
+                    {workspace.grantSession.project.name || 'Grant Workspace'}
+                  </h1>
+                  {workspace.grantSession.fundingCall?.scheme_title ? (
+                    <span className="hidden max-w-[220px] truncate rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 md:inline">
+                      {workspace.grantSession.fundingCall.scheme_title}
+                    </span>
+                  ) : null}
+                  {workspace.grantSession.fundingCall?.agency_name ? (
+                    <span className="hidden max-w-[180px] truncate rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 lg:inline">
+                      {workspace.grantSession.fundingCall.agency_name}
+                    </span>
+                  ) : null}
+                  <span
+                    className={hasFrozenBlueprint
+                      ? 'flex-shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800'
+                      : 'flex-shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900'}
+                  >
+                    {hasFrozenBlueprint ? 'Frozen' : 'Not frozen'}
                   </span>
-                ) : null}
-                {workspace.grantSession.fundingCall?.agency_name ? (
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
-                    {workspace.grantSession.fundingCall.agency_name}
+                </div>
+                <div className="flex flex-shrink-0 items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5">{citationsCount} cit</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5">{deepCandidatesCount} deep</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5">
+                    {completedDraftingSectionsCount}/{draftingSections.length || 0} drafted
                   </span>
-                ) : null}
-                {hasFrozenBlueprint ? (
-                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-800">
-                    Blueprint frozen
-                  </span>
-                ) : (
-                  <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-900">
-                    Blueprint not frozen
-                  </span>
-                )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="mx-auto flex max-w-[98%] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+                <div className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => router.push('/projects')}
+                    className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Back to Projects
+                  </button>
+                  <h1 className="mt-2 truncate text-xl font-semibold text-slate-900">
+                    {workspace.grantSession.project.name || 'Grant Workspace'}
+                  </h1>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs font-medium">
+                    {workspace.grantSession.fundingCall?.scheme_title ? (
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                        {workspace.grantSession.fundingCall.scheme_title}
+                      </span>
+                    ) : null}
+                    {workspace.grantSession.fundingCall?.agency_name ? (
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                        {workspace.grantSession.fundingCall.agency_name}
+                      </span>
+                    ) : null}
+                    {hasFrozenBlueprint ? (
+                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-800">
+                        Blueprint frozen
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-900">
+                        Blueprint not frozen
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span className="rounded-full bg-slate-100 px-3 py-1">
-                {citationsCount} citations
-              </span>
-              <span className="rounded-full bg-slate-100 px-3 py-1">
-                {deepCandidatesCount} deep-analysis candidates
-              </span>
-              <span className="rounded-full bg-slate-100 px-3 py-1">
-                {draftingSections.filter((section) => section.status === 'completed').length}/{draftingSections.length || 0} sections drafted
-              </span>
-            </div>
-          </div>
-        </header>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span className="rounded-full bg-slate-100 px-3 py-1">
+                    {citationsCount} citations
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-3 py-1">
+                    {deepCandidatesCount} deep-analysis candidates
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-3 py-1">
+                    {completedDraftingSectionsCount}/{draftingSections.length || 0} sections drafted
+                  </span>
+                </div>
+              </div>
+            )}
+          </header>
+        ) : null}
 
         <main
           className={
@@ -794,11 +844,11 @@ export default function GrantWorkspacePage() {
               : 'mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6 lg:px-8'
           }
         >
-          {stageWarning ? (
+          {stageWarning && !hideWorkspaceHeader ? (
             <div
               className={
                 resolvedCurrentStage === 'GRANTMENTOR'
-                  ? 'mx-4 mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:mx-6 lg:mx-8'
+                  ? 'mx-3 mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 sm:mx-4 lg:mx-5'
                   : 'mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900'
               }
             >
@@ -832,6 +882,7 @@ export default function GrantWorkspacePage() {
                 <GrantPrepPage
                   onWorkspaceLaunched={handleGrantPrepWorkspaceLaunched}
                   postLaunchImpactOverride={prepPostLaunchImpact}
+                  onChatFullscreenChange={setGrantMentorChatFullscreen}
                 />
               </GrantPrepEmbedModeProvider>
             ) : null}

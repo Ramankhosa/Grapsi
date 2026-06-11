@@ -107,9 +107,11 @@ export class LLMGateway {
 
         if (!decision.allowed) {
           // This shouldn't happen anymore since policy now throws MeteringError
+          const reason = decision.reason || 'Access denied'
+          const code = /quota exceeded/i.test(reason) ? 'QUOTA_EXCEEDED' : 'POLICY_VIOLATION'
           return {
             success: false,
-            error: new MeteringError('POLICY_VIOLATION', decision.reason || 'Access denied')
+            error: new MeteringError(code, reason)
           }
         }
       }
