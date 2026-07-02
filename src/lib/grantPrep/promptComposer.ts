@@ -19,6 +19,7 @@ import type {
 } from './types';
 import { getCanonicalGrantPrepStageKey } from './stageModel';
 import { stageMemoryIsUsable } from './stageMemory';
+import { formatGrantPrepIdeaAnchorForPrompt } from './ideaAnchor';
 
 export type GrantPrepPromptMessage = {
   role: string;
@@ -489,6 +490,13 @@ export function buildIdeationPrompt(input: {
     .map((point) => `- pointKey=${point.key} | label=${point.label} | help=${point.label}`)
     .join('\n');
   const rubric = stage.reviewerRubric;
+  const ideationDecision = input.session.stageStates.ideation?.decision;
+  const ideaAnchorBlock = ideationDecision?.status === 'fixed' && ideationDecision.anchor
+    ? formatGrantPrepIdeaAnchorForPrompt(ideationDecision.anchor, ideationDecision.anchorHash)
+    : '';
+  const pendingIdeaAnchorNote = ideationDecision?.status === 'needs_revalidation'
+    ? 'IDEA PENDING RECONFIRMATION: Funding-call, guideline, template, or priority constraints changed. Treat the previous idea as context only until the user reconfirms it.'
+    : '';
 
   return [
     'You are Grant Prep in Idea & Angle mode, acting as a grant idea coach.',
@@ -538,6 +546,8 @@ export function buildIdeationPrompt(input: {
     'Researcher and publication grounding:',
     buildIdeationContextBlock(input.ideationContext),
     '',
+    ideaAnchorBlock || pendingIdeaAnchorNote,
+    '',
     `Current stage: ${stage.title}`,
     `Stage goal: ${stage.description}`,
     `Stage steering rule: ${stage.steeringRule}`,
@@ -569,8 +579,10 @@ export function buildIdeationPrompt(input: {
     '  "currentPoint": "pointKey this turn is exploring" | null,',
     '  "suggestedAnswers": [{ "label": "A", "text": "Concrete grant idea card text including title, strategic angle, source grounding, and a sentence beginning Fits this call because...", "rationale": "Fit x/5; Distinctiveness x/5; Feasibility x/5; Significance x/5. Why this option is agency-aligned and competitive." }],',
     '  "qualityAssessment": "strong" | "adequate" | "weak" | null,',
-    '  "steeringEvents": [{ "level": "hard_block"|"gentle_redirect"|"awareness_nudge", "message": "...", "pointKey": "..." | null }]',
+    '  "steeringEvents": [{ "level": "hard_block"|"gentle_redirect"|"awareness_nudge", "message": "...", "pointKey": "..." | null }],',
+    '  "anchorAssessment": { "status": "aligned"|"possible_conflict"|"conflict", "reason": "short explanation" } | null',
     '}',
+    ideaAnchorBlock ? 'When anchorAssessment.status="conflict", return no pointsCovered or crossStagePointsCovered and direct the user to Change chosen idea.' : '',
     'Use suggestedAnswers for exploratory directions only. Return exactly 3 directions with labels A, B, and C.',
     'Use pointsCovered only for facts the user has confirmed in their own message or by selecting a direction.',
     'For each covered point, include 1-3 short complete factBullets as the primary drafting facts. Keep keywords as compact tags only.',
@@ -622,6 +634,13 @@ export function buildGrantPrepPrompt(input: {
     });
 
   const currentConversation = buildStageAwareConversation(input.conversation, input.stageKey, { recentLimit: 8 });
+  const ideationDecision = input.session.stageStates.ideation?.decision;
+  const ideaAnchorBlock = ideationDecision?.status === 'fixed' && ideationDecision.anchor
+    ? formatGrantPrepIdeaAnchorForPrompt(ideationDecision.anchor, ideationDecision.anchorHash)
+    : '';
+  const pendingIdeaAnchorNote = ideationDecision?.status === 'needs_revalidation'
+    ? 'IDEA PENDING RECONFIRMATION: Do not enforce the previous idea as an identity lock. Ask the user to reconfirm or replace it before relying on it.'
+    : '';
 
   const systemRole = isExpertMode
     ? [
@@ -701,6 +720,9 @@ export function buildGrantPrepPrompt(input: {
     `Warning: ${input.fundingContext.warning || 'None'}`,
     '',
     buildPriorityAreaPromptRules(input.session),
+    '',
+    ideaAnchorBlock || pendingIdeaAnchorNote,
+    ideaAnchorBlock ? 'Assess the latest message against the finalized idea. Do not silently reshape the proposal identity.' : '',
     '',
     'Previously captured facts from other stages:',
     buildCrossStageContext(input.session.stageStates, input.stageKey, input.session.engagementMode),

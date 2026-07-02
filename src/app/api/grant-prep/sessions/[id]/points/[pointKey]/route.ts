@@ -92,6 +92,12 @@ export async function PATCH(
     if (!stageBeforeUpdate?.enabled) {
       return NextResponse.json({ message: 'Stage is not available in this session' }, { status: 400 })
     }
+    if (stageKey === 'ideation' && stageBeforeUpdate.decision?.status === 'fixed') {
+      return NextResponse.json(
+        { message: 'Use Change chosen idea to revise fixed ideation content.' },
+        { status: 409 }
+      )
+    }
 
     const pointBeforeUpdate = stageBeforeUpdate.points.find((point) => point.key === pointKey)
     if (!pointBeforeUpdate) {

@@ -1,14 +1,16 @@
 import Link from 'next/link';
 
-type StepKey = 'call' | 'guidelines' | 'template';
+type StepKey = 'call' | 'guidelines' | 'template' | 'documents';
 
 type FundingWorkspaceTabsProps = {
   current: StepKey;
   callHref?: string | null;
   guidelinesHref?: string | null;
   templateHref?: string | null;
+  documentsHref?: string | null;
   guidelineStatus?: string | null;
   templateStatus?: string | null;
+  documentStatus?: string | null;
 };
 
 type StepItem = {
@@ -41,11 +43,18 @@ export default function FundingWorkspaceTabs(props: FundingWorkspaceTabsProps) {
       href: props.templateHref || null,
       status: props.templateStatus || null,
     },
+    {
+      key: 'documents',
+      label: '4. Documents',
+      subtitle: 'Document evidence layer',
+      href: props.documentsHref || null,
+      status: props.documentStatus || null,
+    },
   ];
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-4">
         {steps.map((step) => {
           const active = step.key === props.current;
           const disabled = !step.href;

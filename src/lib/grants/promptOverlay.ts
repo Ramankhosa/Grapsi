@@ -7,6 +7,8 @@ import type {
   GrantSectionSemantic,
   GrantTemplateIntent,
 } from '@/types/grant'
+import type { GrantPrepIdeaAnchorV1 } from '@/lib/grantPrep/types'
+import { normalizeGrantPrepIdeaAnchor } from '@/lib/grantPrep/ideaAnchor'
 import { formatGrantComplianceContractForPrompt } from '@/lib/grants/compliance'
 import {
   buildGrantPromptProfile,
@@ -18,6 +20,21 @@ export interface GrantPromptSummary {
   fundingCallTitle?: string | null
   agencyName?: string | null
   freezeSummary?: string[]
+  ideaAnchor?: GrantPrepIdeaAnchorV1 | null
+  ideaAnchorHash?: string | null
+}
+
+export function getGrantIdeaAnchorFromFreezePayload(value: unknown): {
+  ideaAnchor: GrantPrepIdeaAnchorV1 | null
+  ideaAnchorHash: string | null
+} {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return {
+    ideaAnchor: normalizeGrantPrepIdeaAnchor(record.ideaAnchor),
+    ideaAnchorHash: String(record.ideaAnchorHash || '').trim() || null,
+  }
 }
 
 export interface SharedGrantPromptContext {
@@ -54,8 +71,11 @@ export function summarizeGrantFreezePayload(value: unknown): string[] {
   const selectedPriorityAreas = Array.isArray(guidance.selectedThrustAreaRuleKeys)
     ? guidance.selectedThrustAreaRuleKeys.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
     : []
+  const { ideaAnchor } = getGrantIdeaAnchorFromFreezePayload(record)
 
   return [
+    ideaAnchor ? `Finalized idea: ${ideaAnchor.oneSentenceSummary}` : '',
+    ideaAnchor?.coreApproach ? `Core approach: ${ideaAnchor.coreApproach}` : '',
     String(project.title || '').trim() ? `Project: ${String(project.title).trim()}` : '',
     String(fundingCall.title || '').trim() ? `Funding call: ${String(fundingCall.title).trim()}` : '',
     String(fundingCall.agencyName || '').trim() ? `Agency: ${String(fundingCall.agencyName).trim()}` : '',

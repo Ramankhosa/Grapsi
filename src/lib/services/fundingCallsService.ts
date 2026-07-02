@@ -69,6 +69,17 @@ function buildPublicationWhereClause(filters: SearchFilters): string {
   return whereConditions;
 }
 
+function getFundingCallEmbeddingColumn(taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY') {
+  const health = embeddingService.getHealth({ taskType });
+  return health.provider === 'voyage' && health.outputDimensionality === 1024
+    ? 'embedding_voyage_1024'
+    : 'embedding';
+}
+
+function fundingCallEmbeddingColumnSql(taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY') {
+  return Prisma.raw(getFundingCallEmbeddingColumn(taskType));
+}
+
 /**
  * Service for managing funding calls and performing vector-based searches
  */
@@ -210,7 +221,7 @@ export class FundingCallsService {
       // Update the embedding directly in the database using raw SQL
       await prisma.$executeRaw`
         UPDATE funding_calls
-        SET embedding = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)}
+        SET ${fundingCallEmbeddingColumnSql('RETRIEVAL_DOCUMENT')} = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)}
         WHERE id = ${id}
       `;
     } catch (error) {
@@ -283,9 +294,9 @@ export class FundingCallsService {
           contact_info as "contactInfo",
           created_at as "createdAt",
           updated_at as "updatedAt",
-          1 - (embedding <=> ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)}) as similarity
+          1 - (${fundingCallEmbeddingColumnSql('RETRIEVAL_QUERY')} <=> ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)}) as similarity
         FROM funding_calls
-        WHERE embedding IS NOT NULL ${Prisma.raw(whereConditions)}
+        WHERE ${fundingCallEmbeddingColumnSql('RETRIEVAL_QUERY')} IS NOT NULL ${Prisma.raw(whereConditions)}
         ORDER BY similarity DESC
         LIMIT ${queryLimit}
       `;

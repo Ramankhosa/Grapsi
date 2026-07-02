@@ -1,0 +1,7 @@
+﻿{
+    "createdAt":  "2026-07-02T13:21:07.5278096+05:30",
+    "reason":  "Before removing obsolete rolled-back Prisma migration metadata",
+    "file":  "grapsi_before_migration_repair.custom.dump",
+    "sha256":  "45bda199baa9a7fdc6d29f8bc748ff0048ea55825328caf54542c2013b7c8546",
+    "bytes":  6326489
+}

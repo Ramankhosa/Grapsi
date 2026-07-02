@@ -5,12 +5,27 @@ import {
   buildDraftValuesFromExtraction,
   normalizeDraftInput,
   normalizeExtractionPayload,
+  parseJsonResponse,
   validateFundingExtractionPayload,
 } from '@/lib/fundingIntake/utils'
 import { prepareFundingJsonIntake } from '@/lib/fundingIntake/jsonIngestion'
 import { parseCoreExtractorPayload } from '@/lib/fundingIntake/coreExtractionPayload'
 
 describe('funding intake normalization', () => {
+  it('recovers a complete JSON object from noisy or repeated fenced LLM output', () => {
+    expect(parseJsonResponse('analysis before\n```json\n{"rules":["one"]}\n```\nafter')).toEqual({
+      rules: ['one'],
+    })
+    expect(parseJsonResponse('prefix {not json} suffix {"ok":true,"text":"brace } in string"}')).toEqual({
+      ok: true,
+      text: 'brace } in string',
+    })
+  })
+
+  it('rejects empty LLM response text with a useful error', () => {
+    expect(() => parseJsonResponse('   ')).toThrow('LLM returned empty response text')
+  })
+
   it('allows http and https URL intake schemes while rejecting non-web protocols', async () => {
     await expect(assertSafePublicHttpsUrl('http://localhost:3010/call')).resolves.toMatchObject({
       protocol: 'http:',

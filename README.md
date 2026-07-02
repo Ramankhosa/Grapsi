@@ -40,3 +40,14 @@ The copied base app already contains:
 - quota and service access controls
 
 The next implementation phase is to add the funding/grant vertical on top of that base.
+
+## Funding Document Intelligence
+
+The funding-call document intelligence layer is controlled by `FEATURE_FUNDING_DOC_INTELLIGENCE` and is off by default. Related optional environment variables:
+
+- `FUNDING_DOCUMENTS_UPLOAD_PATH`: local storage root for uploaded funding-call PDF/DOCX files. Defaults to `public/uploads/funding-documents`.
+- `FUNDING_DOC_MAX_BYTES`: maximum upload size. Defaults to 20 MB.
+- `FUNDING_DOC_CHUNK_TOKENS`: target section-aware chunk size. Defaults to 512 estimated tokens.
+- `FUNDING_DOC_CHUNK_OVERLAP`: within-section chunk overlap. Defaults to 64 estimated tokens.
+
+Document embeddings use the existing `EMBEDDING_PROVIDER`, `VOYAGE_*`, and Google embedding variables through `EmbeddingService`.

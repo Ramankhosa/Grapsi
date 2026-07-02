@@ -20,7 +20,9 @@ import {
   computeStageReadiness,
   isGrantPrepSessionReady,
   propagateDependentNeedsReview,
+  seedGrantPrepStagePointsFromIdeaAnchor,
 } from '@/lib/grantPrep/sessionState'
+import { hashGrantPrepIdeaConstraints } from '@/lib/grantPrep/ideaAnchor'
 import { buildGrantPrepStageMapping } from '@/lib/grantPrep/templateMapper'
 import { refreshGrantPrepSessionContext } from '@/lib/grantPrep/server'
 import { runGrantPrepStageTidyPass } from '@/lib/grantPrep/tidyPass'
@@ -53,6 +55,21 @@ function makeFundingContext() {
 }
 
 describe('grant prep prompt modes', () => {
+  const ideaAnchor = {
+    version: 'idea_anchor_v1' as const,
+    title: 'Rural adherence pilot',
+    oneSentenceSummary: 'A rural clinic pilot will identify and reduce diabetes follow-up drop-off.',
+    problemOrOpportunity: 'Rural diabetes patients are lost during follow-up.',
+    coreApproach: 'Pilot a clinic-facing risk and reminder workflow.',
+    targetBeneficiariesOrSetting: 'Rural diabetes patients and their clinics',
+    funderFit: ['Supports implementation science in public health.'],
+    distinguishingFeatures: ['Combines risk stratification with clinic workflow redesign.'],
+    nonNegotiables: ['Keep the intervention clinic-led.'],
+    scopeBoundaries: ['Do not expand into national deployment.'],
+    unresolvedQuestions: ['Confirm participating districts.'],
+    keywords: ['diabetes', 'rural clinics'],
+  }
+
   it('starts new sessions on ideation before problem definition', () => {
     const session = makeSession('expert')
 
@@ -107,6 +124,76 @@ describe('grant prep prompt modes', () => {
     expect(prompt).toContain('The user is in Express mode.')
     expect(prompt).not.toContain('COMPETITIVE PROBING:')
     expect(prompt).not.toContain('Treat them as active reviewer constraints, not optional background.')
+  })
+
+  it('enforces an idea anchor only while its decision is fixed', () => {
+    const session = makeSession('expert')
+    session.stageStates.ideation.decision = {
+      status: 'fixed',
+      revision: 1,
+      fixedAt: '2026-07-02T00:00:00.000Z',
+      sourceMessageId: 'message_1',
+      clientRequestId: 'request_1',
+      selectedOption: { label: 'A', text: ideaAnchor.oneSentenceSummary, rationale: null },
+      anchor: ideaAnchor,
+      anchorHash: 'anchor_hash',
+      constraintHash: 'constraint_hash',
+      compilationSource: 'llm',
+    }
+
+    const fixedPrompt = buildGrantPrepPrompt({
+      session,
+      stageKey: 'problem_definition',
+      project: { title: 'Pilot', description: null },
+      fundingContext: makeFundingContext(),
+      guidelinePack: null,
+      conversation: [],
+      userMessage: 'Define the problem.',
+    })
+    expect(fixedPrompt).toContain('FINALIZED IDEA - DO NOT SILENTLY CHANGE')
+
+    session.stageStates.ideation.decision.status = 'needs_revalidation'
+    const pendingPrompt = buildGrantPrepPrompt({
+      session,
+      stageKey: 'problem_definition',
+      project: { title: 'Pilot', description: null },
+      fundingContext: makeFundingContext(),
+      guidelinePack: null,
+      conversation: [],
+      userMessage: 'Define the problem.',
+    })
+    expect(pendingPrompt).toContain('IDEA PENDING RECONFIRMATION')
+    expect(pendingPrompt).not.toContain('FINALIZED IDEA - DO NOT SILENTLY CHANGE')
+  })
+
+  it('prefills downstream anchor facts without marking them covered', () => {
+    const session = makeSession('expert')
+    const seeded = seedGrantPrepStagePointsFromIdeaAnchor({
+      stageStates: session.stageStates,
+      anchor: ideaAnchor,
+      selectedPriorityAreas: ['implementation science'],
+    })
+
+    expect(seeded.problem_definition.points.find((point) => point.key === 'problem_core')).toMatchObject({
+      status: 'needs_review',
+      capture: { captureBasis: ['from_pitch'] },
+    })
+    expect(seeded.beneficiaries.points.find((point) => point.key === 'direct_beneficiaries')?.capture?.factBullets)
+      .toContain('Rural diabetes patients and their clinics')
+    expect(seeded.methodology.points.find((point) => point.key === 'approach')?.status).toBe('needs_review')
+  })
+
+  it('changes the idea constraint hash when any governing revision changes', () => {
+    const base = {
+      fundingContext: makeFundingContext(),
+      selectedPriorityAreas: ['public health'],
+      guidelineRevisionId: 'guideline_1',
+      templateRevisionId: 'template_1',
+    }
+    expect(hashGrantPrepIdeaConstraints(base)).not.toBe(hashGrantPrepIdeaConstraints({
+      ...base,
+      guidelineRevisionId: 'guideline_2',
+    }))
   })
 
   it('uses stage memory instead of completed-stage raw history and fallback fact blocks', () => {

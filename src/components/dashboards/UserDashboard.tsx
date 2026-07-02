@@ -236,15 +236,15 @@ export default function UserDashboard() {
         </div>
       </button>
       <button
-        onClick={() => router.push('/profile/research-areas')}
+        onClick={() => router.push('/profile/research-fit')}
         className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-violet-200 hover:bg-violet-50 transition-colors text-left"
       >
         <div className="p-2 bg-violet-100 rounded-lg">
           <Compass className="w-4 h-4 text-violet-600" />
         </div>
         <div>
-          <div className="font-medium text-slate-900">Research Areas</div>
-          <div className="text-xs text-slate-500">Save focus areas and keywords for better funding matches</div>
+          <div className="font-medium text-slate-900">Research Fit</div>
+          <div className="text-xs text-slate-500">Manage focus areas and key publications for better funding matches</div>
         </div>
       </button>
     </div>

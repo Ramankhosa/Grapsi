@@ -14,6 +14,7 @@ import {
 } from './stageModel';
 import type {
   GrantPrepMappedPoint,
+  GrantPrepIdeaAnchorV1,
   GrantPrepMarkerPayload,
   GrantPrepMode,
   GrantPrepPointConversationRole,
@@ -27,6 +28,7 @@ import type {
   GrantPrepSteeringEvent,
   PointPriority,
 } from './types';
+import { normalizeGrantPrepIdeationDecision } from './ideaAnchor';
 import {
   markGrantPrepStageMemoryStale,
   normalizeGrantPrepStageMemory,
@@ -314,6 +316,7 @@ export function buildInitialStageStates(
       })),
       lastUpdatedAt: null,
       memory: null,
+      decision: null,
     };
     return acc;
   }, {} as GrantPrepStageStates);
@@ -563,6 +566,84 @@ export function canAutoAdvanceGrantPrepStage(
   }
 
   return stageState.readiness >= 0.65 && (!isExpertGrantPrepMode(engagementMode) || stageState.status !== 'needs_review');
+}
+
+export function seedGrantPrepStagePointsFromIdeaAnchor(input: {
+  stageStates: GrantPrepStageStates;
+  anchor: GrantPrepIdeaAnchorV1;
+  selectedPriorityAreas: string[];
+}) {
+  const nextStates: GrantPrepStageStates = JSON.parse(JSON.stringify(input.stageStates));
+  const fitFacts = [...input.anchor.funderFit, ...input.selectedPriorityAreas]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const seeds: Array<{
+    stageKey: GrantPrepStageKey;
+    pointKey: string;
+    facts: string[];
+    thrustLinkage?: string[];
+  }> = [
+    {
+      stageKey: 'problem_definition',
+      pointKey: 'problem_core',
+      facts: [input.anchor.problemOrOpportunity].filter(Boolean),
+    },
+    {
+      stageKey: 'beneficiaries',
+      pointKey: 'direct_beneficiaries',
+      facts: [input.anchor.targetBeneficiariesOrSetting || ''].filter(Boolean),
+    },
+    {
+      stageKey: 'fit_and_scope',
+      pointKey: 'call_fit',
+      facts: fitFacts,
+    },
+    {
+      stageKey: 'fit_and_scope',
+      pointKey: 'priority_match',
+      facts: fitFacts,
+      thrustLinkage: input.selectedPriorityAreas,
+    },
+    {
+      stageKey: 'methodology',
+      pointKey: 'approach',
+      facts: [input.anchor.coreApproach].filter(Boolean),
+    },
+  ];
+  const touched = new Set<GrantPrepStageKey>();
+
+  for (const seed of seeds) {
+    if (seed.facts.length === 0) continue;
+    const stage = nextStates[seed.stageKey];
+    const point = stage?.points.find((item) => item.key === seed.pointKey);
+    if (
+      !stage?.pickable
+      || !point
+      || point.status === 'covered'
+      || point.capture?.captureBasis.includes('user_confirmed')
+    ) continue;
+
+    point.capture = {
+      keywords: input.anchor.keywords.slice(0, 12),
+      thrustLinkage: seed.thrustLinkage || [],
+      factBullets: seed.facts.slice(0, 4),
+      ruleNotes: ['Prefilled from the finalized idea anchor; user confirmation is still required.'],
+      confidence: 0.8,
+      captureBasis: ['from_pitch'],
+      sourceTemplatePointer: point.sourceTemplatePointer,
+      ruleCompliance: {
+        status: 'needs_review',
+        reason: 'Confirm this idea-anchor prefill before treating it as covered.',
+        rescopeNeeded: false,
+      },
+      updatedAt: nowIso(),
+    };
+    point.status = 'needs_review';
+    touched.add(seed.stageKey);
+  }
+
+  for (const stageKey of touched) recomputeStageState(nextStates[stageKey]);
+  return nextStates;
 }
 
 export function isGrantPrepSessionReady(
@@ -940,6 +1021,7 @@ export function normalizeGrantPrepStageStates(
       })),
       lastUpdatedAt: null,
       memory: null,
+      decision: null,
     };
   });
 
@@ -966,6 +1048,9 @@ export function normalizeGrantPrepStageStates(
     }
     appendMissingStagePoints(stageState, stageMapping);
     stageState.memory = normalizeGrantPrepStageMemory(stageState.memory);
+    stageState.decision = stageState.stageKey === 'ideation'
+      ? normalizeGrantPrepIdeationDecision(stageState.decision)
+      : null;
 
     stageState.points = stageState.points.map((point) => {
       const conversationRole = inferPointConversationRole(point);

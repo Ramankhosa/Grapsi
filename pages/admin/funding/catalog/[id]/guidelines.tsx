@@ -811,6 +811,7 @@ export default function FundingGuidelineWorkspacePage() {
           callHref={bundle.fundingCall.intake_job_id ? `/admin/funding/intake/${bundle.fundingCall.intake_job_id}` : `/admin/funding/catalog/${bundle.fundingCall.id}`}
           guidelinesHref={`/admin/funding/catalog/${bundle.fundingCall.id}/guidelines`}
           templateHref={`/admin/funding/catalog/${bundle.fundingCall.id}/template`}
+          documentsHref={`/admin/funding/catalog/${bundle.fundingCall.id}/documents`}
           guidelineStatus={bundle.fundingCall.guideline_status}
           templateStatus={bundle.fundingCall.template_status}
         />

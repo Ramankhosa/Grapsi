@@ -20,11 +20,13 @@ export async function POST(
 
   const access = await requireUserManageablePrivateFundingCall(auth.actor, params.callId)
   if ('response' in access) return access.response
+  if (!access.isOwner) {
+    return NextResponse.json({ message: 'Only the owner can accept a template for this private funding call' }, { status: 403 })
+  }
 
   try {
     const payload = acceptSchema.parse(await request.json())
-    await fundingTemplateService.applyRun(params.callId, payload.runId, auth.operator, { mode: 'replace' })
-    const bundle = await fundingTemplateService.approveTemplate(params.callId, auth.operator)
+    const bundle = await fundingTemplateService.acceptRun(params.callId, payload.runId, auth.operator)
 
     return NextResponse.json({ bundle })
   } catch (error) {

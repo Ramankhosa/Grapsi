@@ -6,7 +6,7 @@ import GrantPrepChatPane from '@/components/grantPrep/GrantPrepChatPane';
 import type { PrepMessage } from '@/components/grantPrep/types';
 
 describe('grant prep chat pane', () => {
-  it('shows publication-grounded ideation start card when context is missing', () => {
+  it('shows a clear Research Fit start card when context is missing', () => {
     const markup = renderToStaticMarkup(
       <GrantPrepChatPane
         messages={[]}
@@ -26,15 +26,17 @@ describe('grant prep chat pane', () => {
       />
     );
 
-    expect(markup).toContain('Start with agency-aligned ideas');
-    expect(markup).toContain('Recommend grant ideas');
-    expect(markup).toContain('Brainstorm from the call only');
-    expect(markup).toContain('I have finalized the idea already');
-    expect(markup).toContain('Recommend from these papers');
-    expect(markup).toContain('up to five publication titles');
+    expect(markup).toContain('Start Grant Prep');
+    expect(markup).toContain('No saved research areas or key publications yet');
+    expect(markup).toContain('Open Research Fit');
+    expect(markup).toContain('Manual start');
+    expect(markup).toContain('Use pasted papers');
+    expect(markup).toContain('up to five titles');
+    expect(markup).toContain('Start from funding call only');
+    expect(markup).toContain('I already know the idea');
   });
 
-  it('offers direct recommendations when ideation context exists', () => {
+  it('offers direct Research Fit recommendations when ideation context exists', () => {
     const markup = renderToStaticMarkup(
       <GrantPrepChatPane
         messages={[]}
@@ -54,11 +56,57 @@ describe('grant prep chat pane', () => {
       />
     );
 
-    expect(markup).toContain('Recommend grant ideas');
-    expect(markup).toContain('Brainstorm from the call only');
-    expect(markup).toContain('I have finalized the idea already');
-    expect(markup).toContain('profile research areas, tagged publications');
-    expect(markup).not.toContain('Recommend from these papers');
+    expect(markup).toContain('Start Grant Prep');
+    expect(markup).toContain('Use all Research Fit context');
+    expect(markup).toContain('Use Research Fit');
+    expect(markup).toContain('Start from funding call only');
+    expect(markup).toContain('I already know the idea');
+    expect(markup).not.toContain('Use pasted papers');
+  });
+
+  it('shows saved research areas and key publications as explicit start choices', () => {
+    const markup = renderToStaticMarkup(
+      <GrantPrepChatPane
+        messages={[]}
+        sending={false}
+        input=""
+        onInputChange={() => undefined}
+        onSend={() => undefined}
+        sessionLocked={false}
+        activeStageKey="ideation"
+        ideationContext={{
+          hasUsableContext: true,
+          sourceSummary: ['saved research areas', 'tagged publications'],
+          profile: null,
+          savedResearchAreas: [
+            {
+              label: 'Medical imaging AI',
+              researchArea: 'Explainable AI for rural radiology triage',
+              keywords: ['radiology'],
+              disciplines: ['Computer science'],
+              taxonomyPath: 'Engineering / Medical engineering',
+            },
+          ],
+          publications: [
+            {
+              title: 'Federated learning for medical imaging diagnosis',
+              year: 2024,
+              venue: 'Journal of Medical AI',
+              doi: '10.1000/example',
+              abstractSnippet: 'Privacy-preserving diagnosis across hospital imaging datasets.',
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(markup).toContain('Research areas');
+    expect(markup).toContain('Medical imaging AI');
+    expect(markup).toContain('Use area');
+    expect(markup).toContain('Key publications');
+    expect(markup).toContain('Federated learning for medical imaging diagnosis');
+    expect(markup).toContain('Use publication');
+    expect(markup).toContain('1/5 key publication');
   });
 
   it('shows ideation start card even when other stages already have messages', () => {
@@ -90,10 +138,9 @@ describe('grant prep chat pane', () => {
       />
     );
 
-    expect(markup).toContain('Start with agency-aligned ideas');
-    expect(markup).toContain('Recommend grant ideas');
-    expect(markup).toContain('Brainstorm from the call only');
-    expect(markup).toContain('I have finalized the idea already');
+    expect(markup).toContain('Start Grant Prep');
+    expect(markup).toContain('Start from funding call only');
+    expect(markup).toContain('I already know the idea');
     expect(markup).not.toContain('Let us define the problem.');
   });
 
@@ -126,10 +173,9 @@ describe('grant prep chat pane', () => {
       />
     );
 
-    expect(markup).toContain('Start with agency-aligned ideas');
-    expect(markup).toContain('Recommend grant ideas');
-    expect(markup).toContain('Brainstorm from the call only');
-    expect(markup).toContain('I have finalized the idea already');
+    expect(markup).toContain('Start Grant Prep');
+    expect(markup).toContain('Start from funding call only');
+    expect(markup).toContain('I already know the idea');
     expect(markup).not.toContain('Share the idea you are considering.');
   });
 
@@ -309,7 +355,6 @@ describe('grant prep chat pane', () => {
           ideaSummary: 'Rural clinic adherence dashboard for missed follow-up risk.',
           problemReady: false,
         }}
-        onLockIdeation={() => undefined}
       />
     );
 

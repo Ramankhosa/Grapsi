@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
 import Header from '@/components/Header';
 import FundingWorkspaceTabs from '@/components/FundingWorkspaceTabs';
+import PdfPageSelector, { type PdfDocumentState } from '@/components/PdfPageSelector';
 import type {
   FundingTemplateItem,
   FundingTemplateItemType,
@@ -627,6 +628,11 @@ export default function FundingTemplatePage() {
   const [editorSource, setEditorSource] = useState<'template' | 'run'>('template');
   const [loading, setLoading] = useState(true);
   const [busyState, setBusyState] = useState<'idle' | 'create' | 'save' | 'approve' | 'asset' | 'extract' | 'apply'>('idle');
+  const [pendingAssetFile, setPendingAssetFile] = useState<File | null>(null);
+  const [assetSelectedPages, setAssetSelectedPages] = useState<number[]>([]);
+  const [assetPdfState, setAssetPdfState] = useState<PdfDocumentState>({ totalPages: null, loading: false, error: null });
+  const [assetPageError, setAssetPageError] = useState<string | null>(null);
+  const assetFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
@@ -866,13 +872,16 @@ export default function FundingTemplatePage() {
     }
   }
 
-  async function uploadAsset(files: File[] | FileList | null) {
+  async function uploadAsset(files: File[] | FileList | null, selectedPages: number[] = []) {
     if (!id || !files || files.length === 0) return;
     setBusyState('asset');
     try {
       for (const file of Array.from(files)) {
         const formData = new FormData();
         formData.append('file', file);
+        if ((file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) && selectedPages.length > 0) {
+          formData.append('selectedPages', JSON.stringify(selectedPages));
+        }
         const response = await fetch(`/api/admin/funding/calls/${id}/template/assets`, { method: 'POST', body: formData });
         const data = await response.json();
         if (!response.ok) {
@@ -897,6 +906,9 @@ export default function FundingTemplatePage() {
     try {
       const data = await postJson(`/api/admin/funding/calls/${id}/template/assets/intake`);
       await loadBundle(false);
+      setPendingAssetFile(null);
+      setAssetSelectedPages([]);
+      if (assetFileInputRef.current) assetFileInputRef.current.value = '';
       if (data.asset?.id && selectOnly) {
         setAssetSelectionTouched(true);
         setSelectedAssetIds([data.asset.id]);
@@ -995,6 +1007,7 @@ export default function FundingTemplatePage() {
           callHref={bundle.fundingCall.intake_job_id ? `/admin/funding/intake/${bundle.fundingCall.intake_job_id}` : `/admin/funding/catalog/${bundle.fundingCall.id}`}
           guidelinesHref={`/admin/funding/catalog/${bundle.fundingCall.id}/guidelines`}
           templateHref={`/admin/funding/catalog/${bundle.fundingCall.id}/template`}
+          documentsHref={`/admin/funding/catalog/${bundle.fundingCall.id}/documents`}
           guidelineStatus={bundle.fundingCall.guideline_status || null}
           templateStatus={bundle.fundingCall.template_status}
         />
@@ -1148,9 +1161,41 @@ export default function FundingTemplatePage() {
                     <textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} rows={5} className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm" placeholder="Paste template text" />
                     <div className="flex flex-wrap gap-2">
                       <button type="button" onClick={() => addAsset({ sourceType: 'text', sourceText })} disabled={busyState !== 'idle'} className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-50">Add Text</button>
-                      <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" multiple onChange={(event) => { void uploadAsset(event.target.files); event.target.value = ''; }} className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm" />
+                      <input
+                        ref={assetFileInputRef}
+                        type="file"
+                        accept="application/pdf,image/png,image/jpeg,image/webp"
+                        onChange={(event) => {
+                          setPendingAssetFile(event.target.files?.[0] || null);
+                          setAssetSelectedPages([]);
+                          setAssetPageError(null);
+                        }}
+                        className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm"
+                      />
                     </div>
-                    <div className="text-xs text-slate-500">Snapshot images and PDFs keep upload order. The extraction run uses that order to reconstruct the final template.</div>
+                    <PdfPageSelector
+                      file={pendingAssetFile}
+                      selectedPages={assetSelectedPages}
+                      onSelectedPagesChange={setAssetSelectedPages}
+                      onDocumentStateChange={setAssetPdfState}
+                      onValidationErrorChange={setAssetPageError}
+                    />
+                    {pendingAssetFile && (
+                      <button
+                        type="button"
+                        onClick={() => void uploadAsset([pendingAssetFile], assetSelectedPages)}
+                        disabled={
+                          busyState !== 'idle'
+                          || assetPdfState.loading
+                          || Boolean(assetPageError)
+                          || ((pendingAssetFile.type === 'application/pdf' || pendingAssetFile.name.toLowerCase().endsWith('.pdf')) && assetSelectedPages.length === 0)
+                        }
+                        className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-50"
+                      >
+                        {busyState === 'asset' ? 'Uploading...' : 'Add Selected File'}
+                      </button>
+                    )}
+                    <div className="text-xs text-slate-500">For PDFs, preview and select the original pages to extract. Add files one at a time to preserve source order.</div>
                   </div>
                 </details>
               </div>
@@ -1171,6 +1216,11 @@ export default function FundingTemplatePage() {
                             {readAssetMetadata(asset.source_metadata_json).auto_managed === true && (
                               <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-emerald-800">
                                 intake source
+                              </span>
+                            )}
+                            {Array.isArray(readAssetMetadata(asset.source_metadata_json).selected_pages) && (
+                              <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[11px] font-medium text-blue-800">
+                                Pages {(readAssetMetadata(asset.source_metadata_json).selected_pages as unknown[]).join(', ')}
                               </span>
                             )}
                           </div>

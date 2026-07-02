@@ -27,10 +27,63 @@ import { EmbeddingService } from './embeddingService';
 import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
 
 const embeddingService = new EmbeddingService();
-export const RESEARCH_AREA_EMBEDDING_VERSION = 'research-area-v2-taxonomy';
+const RESEARCH_AREA_EMBEDDING_TASK_TYPE = 'RETRIEVAL_DOCUMENT' as const;
+const RESEARCH_AREA_EMBEDDING_VERSION_PREFIX = 'research-area-v2-taxonomy';
+const RESEARCHER_PROFILE_EMBEDDING_TASK_TYPE = 'RETRIEVAL_DOCUMENT' as const;
+const RESEARCHER_PROFILE_EMBEDDING_VERSION_PREFIX = 'researcher-profile-v1';
+export const RESEARCH_AREA_EMBEDDING_VERSION = buildResearchAreaEmbeddingVersion();
+export const RESEARCHER_PROFILE_EMBEDDING_VERSION = buildResearcherProfileEmbeddingVersion();
 export const FUNDING_PUBLICATION_TAG = 'my-publication';
 
+function getResearchAreaEmbeddingHealth() {
+  return embeddingService.getHealth({ taskType: RESEARCH_AREA_EMBEDDING_TASK_TYPE });
+}
+
+function buildResearchAreaEmbeddingVersion() {
+  const health = getResearchAreaEmbeddingHealth();
+  return `${RESEARCH_AREA_EMBEDDING_VERSION_PREFIX}:${health.provider}:${health.modelName}:${RESEARCH_AREA_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`;
+}
+
+function getResearchAreaEmbeddingColumn() {
+  const health = getResearchAreaEmbeddingHealth();
+  return health.provider === 'voyage' && health.outputDimensionality === 1024
+    ? 'embedding_voyage_1024'
+    : 'embedding';
+}
+
+function researchAreaEmbeddingColumnSql() {
+  return Prisma.raw(getResearchAreaEmbeddingColumn());
+}
+
+function getResearcherProfileEmbeddingHealth() {
+  return embeddingService.getHealth({ taskType: RESEARCHER_PROFILE_EMBEDDING_TASK_TYPE });
+}
+
+function buildResearcherProfileEmbeddingVersion() {
+  const health = getResearcherProfileEmbeddingHealth();
+  return `${RESEARCHER_PROFILE_EMBEDDING_VERSION_PREFIX}:${health.provider}:${health.modelName}:${RESEARCHER_PROFILE_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`;
+}
+
+function getResearcherProfileEmbeddingColumn() {
+  const health = getResearcherProfileEmbeddingHealth();
+  return health.provider === 'voyage' && health.outputDimensionality === 1024
+    ? 'embedding_voyage_1024'
+    : 'embedding';
+}
+
+function researcherProfileEmbeddingColumnSql() {
+  return Prisma.raw(getResearcherProfileEmbeddingColumn());
+}
+
 export interface ResearchAreaEmbeddingCoverage {
+  total: number;
+  current: number;
+  missing: number;
+  stale: number;
+  embeddingVersion: string;
+}
+
+export interface ResearcherProfileEmbeddingCoverage {
   total: number;
   current: number;
   missing: number;
@@ -134,6 +187,26 @@ type SavedResearchAreaRow = {
   updated_at: Date;
 };
 
+type ResearcherProfileEmbeddingRow = {
+  id: string;
+  user_id: string;
+  display_name: string | null;
+  country_of_residence: string | null;
+  institution_name: string | null;
+  institution_type: string | null;
+  department: string | null;
+  career_stage: string | null;
+  application_languages: string[];
+  research_summary: string | null;
+  research_areas: string[];
+  keywords: string[];
+  normalized_text: string | null;
+  content_hash: string | null;
+  embedding_version: string | null;
+  hasEmbedding: boolean;
+  updated_at: Date;
+};
+
 function serializeResearchAreaTaxonomy(record: Partial<SavedResearchAreaRow>): ResearcherSavedResearchAreaTaxonomy | null {
   if (!record.taxonomy_area_id && !record.taxonomy_level1_name && !record.taxonomy_level2_name) {
     return null;
@@ -188,6 +261,32 @@ export function buildResearchAreaNormalizedText(input: {
     .join(' | ');
 }
 
+export function buildResearcherProfileNormalizedText(input: {
+  displayName?: string | null;
+  countryOfResidence?: string | null;
+  institutionName?: string | null;
+  institutionType?: string | null;
+  department?: string | null;
+  careerStage?: string | null;
+  applicationLanguages?: string[] | null;
+  researchSummary?: string | null;
+  researchAreas?: string[] | null;
+  keywords?: string[] | null;
+}) {
+  return normalizeWhitespace([
+    input.displayName ? `researcher: ${input.displayName}` : '',
+    input.researchSummary ? `research summary: ${input.researchSummary}` : '',
+    input.researchAreas?.length ? `research areas: ${input.researchAreas.join(', ')}` : '',
+    input.keywords?.length ? `keywords: ${input.keywords.join(', ')}` : '',
+    input.department ? `department: ${input.department}` : '',
+    input.institutionName ? `institution: ${input.institutionName}` : '',
+    input.institutionType ? `institution type: ${input.institutionType}` : '',
+    input.careerStage ? `career stage: ${input.careerStage}` : '',
+    input.countryOfResidence ? `country of residence: ${input.countryOfResidence}` : '',
+    input.applicationLanguages?.length ? `application languages: ${input.applicationLanguages.join(', ')}` : '',
+  ].filter(Boolean).join(' | '));
+}
+
 function buildContentHash(normalizedText: string) {
   return crypto.createHash('sha256').update(normalizedText).digest('hex');
 }
@@ -210,6 +309,34 @@ async function querySavedResearchAreaById(areaId: string): Promise<SavedResearch
            created_at, updated_at
     FROM researcher_saved_research_areas
     WHERE id = ${areaId}
+    LIMIT 1
+  `);
+
+  return rows[0] || null;
+}
+
+async function queryResearcherProfileEmbeddingByUserId(userId: string): Promise<ResearcherProfileEmbeddingRow | null> {
+  const rows = await prisma.$queryRaw<ResearcherProfileEmbeddingRow[]>(Prisma.sql`
+    SELECT
+      id,
+      user_id,
+      display_name,
+      country_of_residence,
+      institution_name,
+      institution_type,
+      department,
+      career_stage,
+      application_languages,
+      research_summary,
+      research_areas,
+      keywords,
+      normalized_text,
+      content_hash,
+      embedding_version,
+      (${researcherProfileEmbeddingColumnSql()} IS NOT NULL) AS "hasEmbedding",
+      updated_at
+    FROM researcher_profiles
+    WHERE user_id = ${userId}
     LIMIT 1
   `);
 
@@ -324,7 +451,7 @@ export function buildEmptyRecommendationProfileSnapshot(options: {
   };
 }
 
-async function listFundingPublicationSignals(userId: string, limit = 10): Promise<RecommendationPublicationSnapshot[]> {
+async function listFundingPublicationSignals(userId: string, limit = 5): Promise<RecommendationPublicationSnapshot[]> {
   const rows = await prisma.referenceLibrary.findMany({
     where: {
       userId,
@@ -498,7 +625,81 @@ export class ResearcherProfileService {
       }),
     ]);
 
+    await this.indexResearcherProfileEmbedding(userId).catch((error) => {
+      console.warn('Failed to index researcher profile embedding:', error instanceof Error ? error.message : String(error));
+    });
+
     return this.getProfile(userId);
+  }
+
+  async indexResearcherProfileEmbedding(userId: string): Promise<boolean> {
+    const profile = await queryResearcherProfileEmbeddingByUserId(userId);
+    if (!profile) {
+      return false;
+    }
+
+    const normalizedText = buildResearcherProfileNormalizedText({
+      displayName: profile.display_name,
+      countryOfResidence: profile.country_of_residence,
+      institutionName: profile.institution_name,
+      institutionType: profile.institution_type,
+      department: profile.department,
+      careerStage: profile.career_stage,
+      applicationLanguages: normalizeTextArray(profile.application_languages),
+      researchSummary: profile.research_summary,
+      researchAreas: normalizeTextArray(profile.research_areas),
+      keywords: normalizeTextArray(profile.keywords),
+    });
+    const contentHash = buildContentHash(normalizedText);
+
+    if (!normalizedText) {
+      await prisma.$executeRaw`
+        UPDATE researcher_profiles
+        SET normalized_text = NULL,
+            content_hash = NULL,
+            ${researcherProfileEmbeddingColumnSql()} = NULL,
+            embedding_version = NULL
+        WHERE user_id = ${userId}
+      `;
+      return true;
+    }
+
+    if (
+      profile.hasEmbedding &&
+      profile.content_hash === contentHash &&
+      profile.embedding_version === RESEARCHER_PROFILE_EMBEDDING_VERSION
+    ) {
+      return true;
+    }
+
+    const { embedding, error } = await embeddingService.generateEmbedding(normalizedText, undefined, {
+      taskType: RESEARCHER_PROFILE_EMBEDDING_TASK_TYPE,
+      title: profile.display_name || 'Researcher profile',
+    });
+
+    if (error || embedding.length === 0) {
+      console.warn('Researcher profile embedding skipped:', error || 'empty embedding');
+      await prisma.$executeRaw`
+        UPDATE researcher_profiles
+        SET normalized_text = ${normalizedText},
+            content_hash = ${contentHash},
+            ${researcherProfileEmbeddingColumnSql()} = NULL,
+            embedding_version = NULL
+        WHERE user_id = ${userId}
+      `;
+      return false;
+    }
+
+    await prisma.$executeRaw`
+      UPDATE researcher_profiles
+      SET normalized_text = ${normalizedText},
+          content_hash = ${contentHash},
+          ${researcherProfileEmbeddingColumnSql()} = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)},
+          embedding_version = ${RESEARCHER_PROFILE_EMBEDDING_VERSION}
+      WHERE user_id = ${userId}
+    `;
+
+    return true;
   }
 
   async listResearchAreas(userId: string): Promise<ResearcherSavedResearchAreaRecord[]> {
@@ -627,19 +828,22 @@ export class ResearcherProfileService {
       existing.embedding_version !== RESEARCH_AREA_EMBEDDING_VERSION;
 
     if (shouldRegenerateEmbedding) {
-      const { embedding } = await embeddingService.generateEmbedding(normalizedText);
+      const { embedding } = await embeddingService.generateEmbedding(normalizedText, undefined, {
+        taskType: RESEARCH_AREA_EMBEDDING_TASK_TYPE,
+        title: input.label,
+      });
 
       if (embedding.length > 0) {
         await prisma.$executeRaw`
           UPDATE researcher_saved_research_areas
-          SET embedding = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)},
+          SET ${researchAreaEmbeddingColumnSql()} = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)},
               embedding_version = ${RESEARCH_AREA_EMBEDDING_VERSION}
           WHERE id = ${area.id}
         `;
       } else {
         await prisma.$executeRaw`
           UPDATE researcher_saved_research_areas
-          SET embedding = NULL,
+          SET ${researchAreaEmbeddingColumnSql()} = NULL,
               embedding_version = NULL
           WHERE id = ${area.id}
         `;
@@ -718,12 +922,12 @@ export class ResearcherProfileService {
       SELECT
         COUNT(*) AS total,
         COUNT(*) FILTER (
-          WHERE embedding IS NOT NULL
+          WHERE ${researchAreaEmbeddingColumnSql()} IS NOT NULL
             AND embedding_version = ${RESEARCH_AREA_EMBEDDING_VERSION}
         ) AS current,
-        COUNT(*) FILTER (WHERE embedding IS NULL) AS missing,
+        COUNT(*) FILTER (WHERE ${researchAreaEmbeddingColumnSql()} IS NULL) AS missing,
         COUNT(*) FILTER (
-          WHERE embedding IS NULL
+          WHERE ${researchAreaEmbeddingColumnSql()} IS NULL
              OR embedding_version IS NULL
              OR embedding_version <> ${RESEARCH_AREA_EMBEDDING_VERSION}
         ) AS stale
@@ -747,7 +951,8 @@ export class ResearcherProfileService {
              label, research_area, keywords, disciplines, is_default, use_for_alerts, normalized_text, embedding_version,
              created_at, updated_at
       FROM researcher_saved_research_areas
-      WHERE embedding_version IS NULL
+      WHERE ${researchAreaEmbeddingColumnSql()} IS NULL
+         OR embedding_version IS NULL
          OR embedding_version <> ${RESEARCH_AREA_EMBEDDING_VERSION}
       ORDER BY updated_at DESC
       LIMIT ${safeLimit}
@@ -773,14 +978,17 @@ export class ResearcherProfileService {
           throw new Error('Saved research area has no text to embed');
         }
 
-        const { embedding, error } = await embeddingService.generateEmbedding(normalizedText);
+        const { embedding, error } = await embeddingService.generateEmbedding(normalizedText, undefined, {
+          taskType: RESEARCH_AREA_EMBEDDING_TASK_TYPE,
+          title: area.label,
+        });
         if (error || embedding.length === 0) {
           throw new Error(error || 'Embedding generation returned no vector');
         }
 
         await prisma.$executeRaw`
           UPDATE researcher_saved_research_areas
-          SET embedding = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)},
+          SET ${researchAreaEmbeddingColumnSql()} = ${Prisma.raw(`'[${embedding.join(',')}]'::vector`)},
               embedding_version = ${RESEARCH_AREA_EMBEDDING_VERSION},
               normalized_text = ${normalizedText},
               content_hash = ${buildContentHash(normalizedText)}
@@ -792,6 +1000,95 @@ export class ResearcherProfileService {
         result.failed += 1;
         result.errors.push({
           id: area.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return result;
+  }
+
+  async getResearcherProfileEmbeddingCoverage(): Promise<ResearcherProfileEmbeddingCoverage> {
+    const rows = await prisma.$queryRaw<
+      Array<{
+        total: bigint | number;
+        current: bigint | number;
+        missing: bigint | number;
+        stale: bigint | number;
+      }>
+    >(Prisma.sql`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (
+          WHERE ${researcherProfileEmbeddingColumnSql()} IS NOT NULL
+            AND embedding_version = ${RESEARCHER_PROFILE_EMBEDDING_VERSION}
+        ) AS current,
+        COUNT(*) FILTER (WHERE ${researcherProfileEmbeddingColumnSql()} IS NULL) AS missing,
+        COUNT(*) FILTER (
+          WHERE ${researcherProfileEmbeddingColumnSql()} IS NULL
+             OR embedding_version IS NULL
+             OR embedding_version <> ${RESEARCHER_PROFILE_EMBEDDING_VERSION}
+        ) AS stale
+      FROM researcher_profiles
+    `);
+
+    const row = rows[0];
+    return {
+      total: Number(row?.total || 0),
+      current: Number(row?.current || 0),
+      missing: Number(row?.missing || 0),
+      stale: Number(row?.stale || 0),
+      embeddingVersion: RESEARCHER_PROFILE_EMBEDDING_VERSION,
+    };
+  }
+
+  async backfillResearcherProfileEmbeddings(limit = 25): Promise<EmbeddingBackfillResult> {
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const candidates = await prisma.$queryRaw<ResearcherProfileEmbeddingRow[]>(Prisma.sql`
+      SELECT
+        id,
+        user_id,
+        display_name,
+        country_of_residence,
+        institution_name,
+        institution_type,
+        department,
+        career_stage,
+        application_languages,
+        research_summary,
+        research_areas,
+        keywords,
+        normalized_text,
+        content_hash,
+        embedding_version,
+        (${researcherProfileEmbeddingColumnSql()} IS NOT NULL) AS "hasEmbedding",
+        updated_at
+      FROM researcher_profiles
+      WHERE ${researcherProfileEmbeddingColumnSql()} IS NULL
+         OR embedding_version IS NULL
+         OR embedding_version <> ${RESEARCHER_PROFILE_EMBEDDING_VERSION}
+      ORDER BY updated_at DESC
+      LIMIT ${safeLimit}
+    `);
+
+    const result: EmbeddingBackfillResult = {
+      processed: candidates.length,
+      succeeded: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (const profile of candidates) {
+      try {
+        const indexed = await this.indexResearcherProfileEmbedding(profile.user_id);
+        if (!indexed) {
+          throw new Error('Embedding generation returned no vector');
+        }
+        result.succeeded += 1;
+      } catch (error) {
+        result.failed += 1;
+        result.errors.push({
+          id: profile.id,
           error: error instanceof Error ? error.message : String(error),
         });
       }

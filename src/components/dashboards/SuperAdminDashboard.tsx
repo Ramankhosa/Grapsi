@@ -334,6 +334,7 @@ export default function SuperAdminDashboard() {
       items: [
         { label: 'Team Roles', icon: 'Roles', href: '/super-admin/team-roles', badge: 'NEW' },
         { label: 'Funding Control', icon: '$', href: '/super-admin/funding', badge: 'NEW' },
+        { label: 'Project Intelligence', icon: 'PI', href: '/super-admin/project-intelligence/crawlers', badge: 'NEW' },
         { label: 'Research Areas', icon: 'RA', href: '/super-admin/research-areas', badge: 'NEW' },
         { label: 'Trial Campaigns', icon: '📧', href: '/super-admin/trial-campaigns', badge: 'NEW' },
         { label: 'ATI Token Management', icon: '🎟️', href: '/ati-management' },
@@ -498,6 +499,13 @@ export default function SuperAdminDashboard() {
               <p className="text-sm text-slate-400">Monitor and manage your entire platform</p>
             </div>
             <div className="flex items-center gap-3">
+              <button
+                onClick={() => router.push('/super-admin/project-intelligence/crawlers')}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-500 border border-violet-500 transition-colors"
+              >
+                <span>PI</span>
+                <span className="text-sm">Project Intelligence</span>
+              </button>
               <button
                 onClick={checkExpiryNotifications}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition-colors"

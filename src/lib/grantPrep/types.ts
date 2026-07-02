@@ -161,6 +161,38 @@ export interface GrantPrepStageMemory {
   staleReason?: string | null;
 }
 
+export interface GrantPrepIdeaAnchorV1 {
+  version: 'idea_anchor_v1';
+  title: string;
+  oneSentenceSummary: string;
+  problemOrOpportunity: string;
+  coreApproach: string;
+  targetBeneficiariesOrSetting: string | null;
+  funderFit: string[];
+  distinguishingFeatures: string[];
+  nonNegotiables: string[];
+  scopeBoundaries: string[];
+  unresolvedQuestions: string[];
+  keywords: string[];
+}
+
+export interface GrantPrepIdeationDecision {
+  status: 'fixed' | 'needs_revalidation';
+  revision: number;
+  fixedAt: string;
+  sourceMessageId: string;
+  clientRequestId: string;
+  selectedOption: {
+    label: string;
+    text: string;
+    rationale: string | null;
+  };
+  anchor: GrantPrepIdeaAnchorV1;
+  anchorHash: string;
+  constraintHash: string;
+  compilationSource: 'llm' | 'deterministic_fallback';
+}
+
 export interface GrantPrepStageState {
   stageKey: GrantPrepStageKey;
   title: string;
@@ -174,6 +206,7 @@ export interface GrantPrepStageState {
   points: GrantPrepPointState[];
   lastUpdatedAt: string | null;
   memory?: GrantPrepStageMemory | null;
+  decision?: GrantPrepIdeationDecision | null;
 }
 
 export type GrantPrepStageStates = Record<GrantPrepStageKey, GrantPrepStageState>;
@@ -263,6 +296,10 @@ export interface GrantPrepMarkerPayload {
     pointKey?: string | null;
   }>;
   compactUserFacingSummary?: string | null;
+  anchorAssessment?: {
+    status: 'aligned' | 'possible_conflict' | 'conflict';
+    reason?: string | null;
+  } | null;
 }
 
 export interface GrantPrepResponseEnvelope {
@@ -321,6 +358,8 @@ export interface GrantPrepFreezePayload {
   stageStates: GrantPrepStageStates;
   globalKeywords: string[];
   globalCaptureSummary: string[];
+  ideaAnchor?: GrantPrepIdeaAnchorV1 | null;
+  ideaAnchorHash?: string | null;
   prepEvidence: GrantPrepEvidenceItem[];
   prepEvidenceBySection: Record<string, GrantPrepEvidenceItem[]>;
   generationReadiness?: {

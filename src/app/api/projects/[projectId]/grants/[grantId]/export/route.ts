@@ -5,6 +5,7 @@ import { buildGrantProposalDocxSections } from '@/lib/grants/export'
 import { formatGrantProposalDocxCitations } from '@/lib/grants/exportCitationFormatting'
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 import { validateGrantFinalExportReadiness } from '@/lib/grants/draftContextContract'
+import { getGrantIdeaAnchorFromFreezePayload } from '@/lib/grants/promptOverlay'
 import { buildPaperDocxBuffer } from '@/lib/export/paper-docx-export'
 import { prisma } from '@/lib/prisma'
 import { citationService } from '@/lib/services/citation-service'
@@ -93,7 +94,9 @@ export async function GET(
     }
 
     if (exportMode === 'final') {
+      const { ideaAnchorHash } = getGrantIdeaAnchorFromFreezePayload(workspace.blueprint.freezePayloadJson)
       const readiness = validateGrantFinalExportReadiness({
+        currentIdeaAnchorHash: ideaAnchorHash,
         sections: workspace.blueprint.sectionDrafts.map((section) => ({
           sectionKey: section.sectionKey,
           label: section.label,
@@ -104,6 +107,7 @@ export async function GET(
           structuredResponses: section.structuredResponses,
           status: section.status,
           isStale: (section as { isStale?: boolean | null }).isStale || false,
+          sourceIdeaAnchorHash: (section as { sourceIdeaAnchorHash?: string | null }).sourceIdeaAnchorHash || null,
           validationReport: (section as { validationReport?: unknown }).validationReport,
           grantComplianceReport: (section as { grantComplianceReport?: any }).grantComplianceReport || null,
         })),

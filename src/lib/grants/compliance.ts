@@ -127,6 +127,11 @@ export function normalizeGrantGenerationTrace(value: unknown): GrantGenerationTr
     : {}
 
   return {
+    ideaAnchorHash: typeof record.ideaAnchorHash === 'string' && record.ideaAnchorHash.trim()
+      ? record.ideaAnchorHash.trim()
+      : null,
+    usedAnchorElements: dedupeGrantStrings(record.usedAnchorElements, 16),
+    anchorConflicts: dedupeGrantStrings(record.anchorConflicts, 12),
     usedPrepEvidence: dedupeGrantStrings(record.usedPrepEvidence, 16),
     coveredRequiredPoints: dedupeGrantStrings(record.coveredRequiredPoints, 16),
     unmetRequiredPoints: dedupeGrantStrings(record.unmetRequiredPoints, 16),

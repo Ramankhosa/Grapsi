@@ -884,10 +884,52 @@ export function normalizeDraftInput(input: Partial<FundingDraftValues>): Funding
 
 export function parseJsonResponse(rawText: string): any {
   const trimmed = rawText.trim();
-  const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = codeBlockMatch?.[1] || trimmed;
-  const firstBrace = candidate.indexOf('{');
-  const lastBrace = candidate.lastIndexOf('}');
-  const jsonText = firstBrace >= 0 && lastBrace > firstBrace ? candidate.slice(firstBrace, lastBrace + 1) : candidate;
-  return JSON.parse(jsonText);
+  if (!trimmed) {
+    throw new Error('LLM returned empty response text');
+  }
+
+  const candidates = Array.from(trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi))
+    .map((match) => match[1].trim())
+    .reverse();
+  candidates.push(trimmed);
+
+  let lastError: unknown = null;
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+
+    for (let start = candidate.indexOf('{'); start >= 0; start = candidate.indexOf('{', start + 1)) {
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+
+      for (let index = start; index < candidate.length; index += 1) {
+        const character = candidate[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (character === '\\') escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }
+
+        if (character === '"') inString = true;
+        else if (character === '{') depth += 1;
+        else if (character === '}') depth -= 1;
+
+        if (depth === 0) {
+          try {
+            return JSON.parse(candidate.slice(start, index + 1));
+          } catch (error) {
+            lastError = error;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  throw new Error(`Failed to parse LLM response as JSON${lastError instanceof Error ? `: ${lastError.message}` : ''}`);
 }

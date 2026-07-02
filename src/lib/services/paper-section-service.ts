@@ -19,6 +19,7 @@ import {
 } from '@/lib/grants/blueprintMetadata';
 import { buildGrantDraftingPrompt } from '@/lib/grants/draftingPromptComposer';
 import {
+  getGrantIdeaAnchorFromFreezePayload,
   formatGrantMustCoverItems,
   summarizeGrantFreezePayload,
 } from '@/lib/grants/promptOverlay';
@@ -86,6 +87,33 @@ import type {
   GrantTemplateIntent,
   ReviewerReadinessReport,
 } from '@/types/grant';
+
+async function syncGrantSectionDraftContextFingerprint(
+  draftingSessionId: string,
+  sectionKey: string,
+  validationReport: unknown
+) {
+  const report = validationReport && typeof validationReport === 'object' && !Array.isArray(validationReport)
+    ? validationReport as Record<string, unknown>
+    : {};
+  const contract = report.grantDraftContextContract && typeof report.grantDraftContextContract === 'object'
+    && !Array.isArray(report.grantDraftContextContract)
+    ? report.grantDraftContextContract as Record<string, unknown>
+    : {};
+  const fingerprint = String(report.grantDraftContextFingerprint || contract.fingerprint || '').trim();
+  if (!fingerprint) return;
+
+  await prisma.grantSectionDraft.updateMany({
+    where: {
+      sectionKey,
+      grantSession: { draftingSessionId },
+    },
+    data: {
+      sourceContextFingerprint: fingerprint,
+      sourceIdeaAnchorHash: String(contract.ideaAnchorHash || '').trim() || null,
+    },
+  });
+}
 
 const DEFAULT_BG_PASS1_CONCURRENCY = Number.parseInt(
   process.env.BG_PASS1_CONCURRENCY || '10',
@@ -804,6 +832,7 @@ class PaperSectionService {
         };
 
         const section = await this.upsertSection(sessionId, sectionKey, sectionData, existingSection);
+        await syncGrantSectionDraftContextFingerprint(sessionId, sectionKey, sectionData.validationReport);
         return { success: true, section: this.transformSection(section) };
       }
 
@@ -1009,6 +1038,8 @@ class PaperSectionService {
         version: { increment: 1 },
       }
     });
+
+    await syncGrantSectionDraftContextFingerprint(section.sessionId, section.sectionKey, validationReport);
 
     return { success: true, section: this.transformSection(updated) };
   }
@@ -1865,6 +1896,7 @@ class PaperSectionService {
           },
         })
       : null;
+    const grantIdeaAnchor = getGrantIdeaAnchorFromFreezePayload(grantSession?.blueprint?.freezePayloadJson)
     const grantPromptContext = grantBacked
       ? {
           displayLabel: currentSection.sectionKey.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
@@ -1882,6 +1914,8 @@ class PaperSectionService {
                 fundingCallTitle: grantSession.fundingCall?.scheme_title || null,
                 agencyName: grantSession.fundingCall?.agency_name || null,
                 freezeSummary: summarizeGrantFreezePayload(grantSession.blueprint?.freezePayloadJson),
+                ideaAnchor: grantIdeaAnchor.ideaAnchor,
+                ideaAnchorHash: grantIdeaAnchor.ideaAnchorHash,
               }
             : null,
         }
@@ -2120,6 +2154,9 @@ ${pm.memory.forwardReferences.length > 0 ? `- Promises: ${pm.memory.forwardRefer
           label: grantPromptContext?.displayLabel || currentSection.sectionKey,
           workflowMode: (currentSection as { workflowMode?: string | null }).workflowMode || 'app_draft',
           citationMode: currentSection.citationMode || null,
+          grantSemantic: currentSection.grantSemantic as GrantSectionSemantic | null,
+          ideaAnchorHash: (currentSection as { ideaAnchorHash?: string | null }).ideaAnchorHash || null,
+          ideaAnchorRelationship: (currentSection as { ideaAnchorRelationship?: string | null }).ideaAnchorRelationship || null,
           mustCover: currentSection.mustCover,
           dimensions: currentSection.dimensions || [],
           grantRuleProfile: currentSection.grantRuleProfile as GrantRuleProfile | null,

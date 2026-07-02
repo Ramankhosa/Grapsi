@@ -558,6 +558,7 @@ describe('RecommendationSearchService', () => {
         }),
       ],
     });
+    vi.spyOn(service as any, 'getQueryVectorLiteral').mockResolvedValue(null);
 
     const result = await service.search({
       inputMode: 'research_area',

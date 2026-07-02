@@ -1,7 +1,10 @@
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
+import { isFeatureEnabled } from '../feature-flags';
 import { EmbeddingService } from './embeddingService';
+import { voyageRerankService } from './voyageRerankService';
+import { enrichRecommendationResultsWithDocumentEvidence } from '../fundingDocuments/evidence';
 import {
   FUNDING_CHAT_QUERY_ENRICHMENT_STAGE_CODE,
   FUNDING_CHAT_TASK_CODE,
@@ -43,6 +46,7 @@ const embeddingService = new EmbeddingService();
 const VECTOR_CANDIDATE_LIMIT = 60;
 const FULLTEXT_CANDIDATE_LIMIT = 60;
 const MERGED_CANDIDATE_LIMIT = 100;
+const RERANK_CANDIDATE_LIMIT = 50;
 const NO_RESULT_SCORE_THRESHOLD = 0.2;
 const LOW_CONFIDENCE_THRESHOLD = 0.35;
 const TOPIC_RELEVANCE_SEMANTIC_THRESHOLD = 0.45;
@@ -398,6 +402,19 @@ function buildCandidateTopicText(candidate: RecommendationCandidate) {
     candidate.description || '',
     candidate.disciplines.join(' '),
   ].filter(Boolean).join(' '));
+}
+
+function buildCandidateRerankDocument(candidate: RecommendationCandidate) {
+  return normalizeWhitespace([
+    candidate.schemeTitle ? `Scheme: ${candidate.schemeTitle}` : '',
+    candidate.agencyName ? `Agency: ${candidate.agencyName}` : '',
+    candidate.shortDescription || candidate.fullDescription || candidate.description
+      ? `Description: ${candidate.shortDescription || candidate.fullDescription || candidate.description}`
+      : '',
+    candidate.disciplines.length ? `Disciplines: ${candidate.disciplines.join(', ')}` : '',
+    candidate.fundingKinds.length ? `Funding types: ${candidate.fundingKinds.join(', ')}` : '',
+    candidate.eligibilityText ? `Eligibility: ${candidate.eligibilityText}` : '',
+  ].filter(Boolean).join('\n')).slice(0, 6000);
 }
 
 function buildQueryTopicTokens(normalized: NormalizedRecommendationSearchRequest) {
@@ -1057,13 +1074,34 @@ function buildResearchAreaEnrichmentCacheInput(
 }
 
 function getQueryEmbeddingIdentity() {
-  const health = embeddingService.getHealth();
+  const health = embeddingService.getHealth({ taskType: QUERY_EMBEDDING_TASK_TYPE });
   return {
+    provider: health.provider,
     modelName: health.modelName,
     outputDimensionality: health.outputDimensionality,
     taskType: QUERY_EMBEDDING_TASK_TYPE,
-    version: `${QUERY_EMBEDDING_CACHE_VERSION_PREFIX}:${health.modelName}:${QUERY_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`,
+    version: `${QUERY_EMBEDDING_CACHE_VERSION_PREFIX}:${health.provider}:${health.modelName}:${QUERY_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`,
   };
+}
+
+function getQueryEmbeddingCacheColumn(cacheInput: ReturnType<typeof buildQueryEmbeddingCacheInput>) {
+  return cacheInput.provider === 'voyage' && cacheInput.outputDimensionality === 1024
+    ? 'embedding_voyage_1024'
+    : 'embedding';
+}
+
+function getFundingCallSearchEmbeddingColumn(identity = getQueryEmbeddingIdentity()) {
+  return identity.provider === 'voyage' && identity.outputDimensionality === 1024
+    ? 'embedding_voyage_1024'
+    : 'embedding';
+}
+
+function queryEmbeddingCacheColumnSql(cacheInput: ReturnType<typeof buildQueryEmbeddingCacheInput>) {
+  return Prisma.raw(getQueryEmbeddingCacheColumn(cacheInput));
+}
+
+function fundingCallSearchEmbeddingColumnSql() {
+  return Prisma.raw(getFundingCallSearchEmbeddingColumn());
 }
 
 function buildQueryEmbeddingCacheInput(normalized: NormalizedRecommendationSearchRequest) {
@@ -1485,9 +1523,17 @@ Rules:
       relaxationSuggestions = buildRelaxationSuggestions(normalized, noResultsReason);
     }
 
-    const rawResults = filteredScored.map(({ candidate, score, profileMatch }) =>
+    let rawResults = filteredScored.map(({ candidate, score, profileMatch }) =>
       toPublicResult(candidate, score, normalized, profileMatch)
     );
+    if (isFeatureEnabled('ENABLE_FUNDING_DOC_INTELLIGENCE')) {
+      rawResults = await enrichRecommendationResultsWithDocumentEvidence(rawResults, {
+        semanticDocument: normalized.normalizedQuery.semanticDocument,
+        access,
+        llmContext: options.llmContext || null,
+        limit: 5,
+      });
+    }
     const searchDiagnostics = {
       strictFilterRecovery,
       profile: {
@@ -1523,13 +1569,14 @@ Rules:
   ): Promise<string | null> {
     try {
       const rows = await prisma.$queryRaw<Array<{ embedding: string }>>(Prisma.sql`
-        SELECT embedding::text AS embedding
+        SELECT ${queryEmbeddingCacheColumnSql(cacheInput)}::text AS embedding
         FROM recommendation_query_embedding_cache
         WHERE request_hash = ${cacheInput.requestHash}
           AND model = ${cacheInput.modelName}
           AND embedding_version = ${cacheInput.version}
           AND task_type = ${cacheInput.taskType}
           AND output_dimensionality = ${cacheInput.outputDimensionality}
+          AND ${queryEmbeddingCacheColumnSql(cacheInput)} IS NOT NULL
         LIMIT 1
       `);
 
@@ -1561,6 +1608,15 @@ Rules:
     vectorLiteral: string
   ) {
     try {
+      const cacheColumn = getQueryEmbeddingCacheColumn(cacheInput);
+      const embeddingValueSql = Prisma.sql`CAST(${vectorLiteral} AS vector)`;
+      const insertEmbeddingSql = cacheColumn === 'embedding_voyage_1024'
+        ? Prisma.sql`NULL, ${embeddingValueSql}`
+        : Prisma.sql`${embeddingValueSql}, NULL`;
+      const updateEmbeddingSql = cacheColumn === 'embedding_voyage_1024'
+        ? Prisma.sql`embedding_voyage_1024 = EXCLUDED.embedding_voyage_1024`
+        : Prisma.sql`embedding = EXCLUDED.embedding`;
+
       await prisma.$executeRaw(Prisma.sql`
         INSERT INTO recommendation_query_embedding_cache (
           id,
@@ -1572,6 +1628,7 @@ Rules:
           task_type,
           output_dimensionality,
           embedding,
+          embedding_voyage_1024,
           hit_count,
           last_used_at,
           created_at,
@@ -1586,7 +1643,7 @@ Rules:
           ${cacheInput.version},
           ${cacheInput.taskType},
           ${cacheInput.outputDimensionality},
-          CAST(${vectorLiteral} AS vector),
+          ${insertEmbeddingSql},
           1,
           CURRENT_TIMESTAMP,
           CURRENT_TIMESTAMP,
@@ -1595,7 +1652,7 @@ Rules:
         ON CONFLICT ("request_hash", "model", "embedding_version", "task_type", "output_dimensionality")
         DO UPDATE SET
           semantic_document = EXCLUDED.semantic_document,
-          embedding = EXCLUDED.embedding,
+          ${updateEmbeddingSql},
           hit_count = recommendation_query_embedding_cache.hit_count + 1,
           last_used_at = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP
@@ -1664,12 +1721,12 @@ Rules:
       Prisma.sql`
         SELECT
           ${selectCandidateColumns()},
-          (1 - (embedding <=> CAST(${vectorLiteral} AS vector))) AS "semanticSimilarity",
+          (1 - (${fundingCallSearchEmbeddingColumnSql()} <=> CAST(${vectorLiteral} AS vector))) AS "semanticSimilarity",
           0::float AS "textRank"
         FROM funding_calls
-        WHERE embedding IS NOT NULL
+        WHERE ${fundingCallSearchEmbeddingColumnSql()} IS NOT NULL
           AND ${combineConditions(baseConditions)}
-        ORDER BY embedding <=> CAST(${vectorLiteral} AS vector) ASC
+        ORDER BY ${fundingCallSearchEmbeddingColumnSql()} <=> CAST(${vectorLiteral} AS vector) ASC
         LIMIT ${VECTOR_CANDIDATE_LIMIT}
       `
     );
@@ -1733,6 +1790,59 @@ Rules:
       .slice(0, MERGED_CANDIDATE_LIMIT);
   }
 
+  private async rerankCandidates(
+    normalized: NormalizedRecommendationSearchRequest,
+    candidates: RecommendationCandidate[]
+  ) {
+    if (!voyageRerankService.isConfigured() || candidates.length <= 1) {
+      return candidates;
+    }
+
+    const rerankWindow = candidates.slice(0, RERANK_CANDIDATE_LIMIT);
+    const remaining = candidates.slice(RERANK_CANDIDATE_LIMIT);
+    const documents = rerankWindow.map(buildCandidateRerankDocument);
+    const query = normalizeWhitespace(
+      normalized.normalizedQuery.semanticDocument ||
+      normalized.normalizedQuery.canonicalQueryText ||
+      normalized.normalizedQuery.fullTextQuery ||
+      ''
+    );
+
+    try {
+      const reranked = await voyageRerankService.rerank({
+        query,
+        documents,
+        topK: rerankWindow.length,
+      });
+      if (reranked.length === 0) {
+        return candidates;
+      }
+
+      const seen = new Set<number>();
+      const ordered = reranked
+        .filter((item) => item.index >= 0 && item.index < rerankWindow.length)
+        .map((item) => {
+          seen.add(item.index);
+          const candidate = rerankWindow[item.index];
+          return {
+            ...candidate,
+            semanticSimilarity: Math.max(candidate.semanticSimilarity, Math.max(0, Math.min(item.relevanceScore, 1))),
+          };
+        });
+
+      rerankWindow.forEach((candidate, index) => {
+        if (!seen.has(index)) {
+          ordered.push(candidate);
+        }
+      });
+
+      return [...ordered, ...remaining];
+    } catch (error) {
+      console.warn('Voyage rerank failed; using first-stage funding results.', error instanceof Error ? error.message : String(error));
+      return candidates;
+    }
+  }
+
   private async executeSearch(
     normalized: NormalizedRecommendationSearchRequest,
     ignoreUserFilters = false,
@@ -1762,7 +1872,7 @@ Rules:
     }
 
     return {
-      candidates: this.mergeCandidates(vectorCandidates, fullTextCandidates),
+      candidates: await this.rerankCandidates(normalized, this.mergeCandidates(vectorCandidates, fullTextCandidates)),
       degradedMode,
     };
   }

@@ -12,6 +12,7 @@ import {
 } from '@/lib/grants/budgetTemplate'
 import { requiresMappedGrantEvidence } from '@/lib/grants/citationMode'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import type { GrantPrepIdeaAnchorV1 } from '@/lib/grantPrep/types'
 import type {
   GrantCitationMode,
   GrantComplianceReport,
@@ -22,11 +23,16 @@ import type {
   ReviewerReadinessReport,
 } from '@/types/grant'
 
+type GrantIdeaAnchorRelationship = 'identity_bearing' | 'supporting' | 'neutral'
+
 type SectionContractInput = {
   sectionKey: string
   label?: string | null
   workflowMode?: string | null
   citationMode?: GrantCitationMode | string | null
+  grantSemantic?: string | null
+  ideaAnchorHash?: string | null
+  ideaAnchorRelationship?: GrantIdeaAnchorRelationship | string | null
   mustCover?: string[] | null
   dimensions?: string[] | null
   grantRuleProfile?: GrantRuleProfile | null
@@ -47,11 +53,17 @@ type EvidenceContractInput = {
 }
 
 export interface GrantDraftContextContract {
-  version: 1
+  version: 2
   sectionKey: string
   label: string | null
   workflowMode: string | null
   citationMode: string | null
+  ideaAnchor: GrantPrepIdeaAnchorV1 | null
+  ideaAnchorHash: string | null
+  ideaAnchorRelationship: GrantIdeaAnchorRelationship
+  requiredAnchorElements: string[]
+  allowedUnresolvedQuestions: string[]
+  scopeBoundaries: string[]
   wordBudget: number | null
   characterLimit: number | null
   fundingCallSummary: string[]
@@ -91,6 +103,35 @@ function normalizeStrings(value: unknown, limit = 80): string[] {
     if (output.length >= limit) break
   }
   return output
+}
+
+function normalizeAnchorRelationship(value: unknown): GrantIdeaAnchorRelationship {
+  return value === 'identity_bearing' || value === 'supporting' || value === 'neutral'
+    ? value
+    : 'supporting'
+}
+
+function buildRequiredAnchorElements(
+  anchor: GrantPrepIdeaAnchorV1 | null,
+  relationship: GrantIdeaAnchorRelationship
+) {
+  if (!anchor || relationship === 'neutral') return []
+  const base = [
+    anchor.title,
+    anchor.oneSentenceSummary,
+    anchor.coreApproach,
+    anchor.targetBeneficiariesOrSetting,
+  ]
+  const expanded = relationship === 'identity_bearing'
+    ? [
+        ...base,
+        anchor.problemOrOpportunity,
+        ...anchor.nonNegotiables,
+        ...anchor.distinguishingFeatures,
+        ...anchor.funderFit,
+      ]
+    : base
+  return normalizeStrings(expanded, relationship === 'identity_bearing' ? 16 : 8)
 }
 
 function contractFingerprint(value: Omit<GrantDraftContextContract, 'fingerprint'>): string {
@@ -144,7 +185,11 @@ function buildReadiness(input: {
 
 export function buildGrantDraftContextContract(input: {
   section: SectionContractInput
-  grantContextSummary?: { freezeSummary?: string[] | null } | null
+  grantContextSummary?: {
+    freezeSummary?: string[] | null
+    ideaAnchor?: GrantPrepIdeaAnchorV1 | null
+    ideaAnchorHash?: string | null
+  } | null
   evidence?: EvidenceContractInput | null
   allowEvidenceBypass?: boolean
 }): GrantDraftContextContract {
@@ -163,13 +208,24 @@ export function buildGrantDraftContextContract(input: {
   const mappedDimensionCount = dimensionEvidence.filter((entry) =>
     (entry.citations || []).some((citation) => String(citation.citationKey || '').trim())
   ).length
+  const ideaAnchor = input.grantContextSummary?.ideaAnchor || null
+  const ideaAnchorHash = String(
+    section.ideaAnchorHash || input.grantContextSummary?.ideaAnchorHash || ''
+  ).trim() || null
+  const ideaAnchorRelationship = normalizeAnchorRelationship(section.ideaAnchorRelationship)
 
   const withoutFingerprint: Omit<GrantDraftContextContract, 'fingerprint'> = {
-    version: 1,
+    version: 2,
     sectionKey: section.sectionKey,
     label: section.label || null,
     workflowMode: section.workflowMode || null,
     citationMode: section.citationMode || null,
+    ideaAnchor,
+    ideaAnchorHash,
+    ideaAnchorRelationship,
+    requiredAnchorElements: buildRequiredAnchorElements(ideaAnchor, ideaAnchorRelationship),
+    allowedUnresolvedQuestions: normalizeStrings(ideaAnchor?.unresolvedQuestions || [], 12),
+    scopeBoundaries: normalizeStrings(ideaAnchor?.scopeBoundaries || [], 12),
     wordBudget: typeof section.wordBudget === 'number' ? section.wordBudget : null,
     characterLimit: typeof section.characterLimit === 'number' ? section.characterLimit : null,
     fundingCallSummary: normalizeStrings([
@@ -266,6 +322,7 @@ export function mergeGrantValidationReport(
 }
 
 export function validateGrantFinalExportReadiness(input: {
+  currentIdeaAnchorHash?: string | null
   sections: Array<{
     sectionKey: string
     label?: string | null
@@ -278,9 +335,11 @@ export function validateGrantFinalExportReadiness(input: {
     grantComplianceReport?: GrantComplianceReport | null
     validationReport?: unknown
     isStale?: boolean | null
+    sourceIdeaAnchorHash?: string | null
   }>
 }): { ok: boolean; issues: string[] } {
   const issues: string[] = []
+  const currentIdeaAnchorHash = String(input.currentIdeaAnchorHash || '').trim() || null
   for (const section of input.sections) {
     const paperDraftable = section.sectionType
       ? isGrantSectionAutoDraftable({
@@ -310,6 +369,7 @@ export function validateGrantFinalExportReadiness(input: {
       if (section.isStale) {
         issues.push(`${label} is stale after blueprint, guideline, prep, or evidence changes.`)
       }
+      addAnchorReadinessIssues(section, issues, label, currentIdeaAnchorHash)
       continue
     }
     if (!paperDraftable) continue
@@ -332,6 +392,7 @@ export function validateGrantFinalExportReadiness(input: {
     if (section.isStale) {
       issues.push(`${label} is stale after blueprint, guideline, prep, or evidence changes.`)
     }
+    addAnchorReadinessIssues(section, issues, label, currentIdeaAnchorHash)
     if (readinessIssues.length > 0) {
       issues.push(`${label} is not ready: ${readinessIssues.join('; ')}`)
     }
@@ -343,4 +404,34 @@ export function validateGrantFinalExportReadiness(input: {
   }
 
   return { ok: issues.length === 0, issues }
+}
+
+function getValidationContract(section: { validationReport?: unknown }): Partial<GrantDraftContextContract> | null {
+  const validation = section.validationReport && typeof section.validationReport === 'object' && !Array.isArray(section.validationReport)
+    ? section.validationReport as Record<string, unknown>
+    : {}
+  const contract = validation.grantDraftContextContract
+  return contract && typeof contract === 'object' && !Array.isArray(contract)
+    ? contract as Partial<GrantDraftContextContract>
+    : null
+}
+
+function addAnchorReadinessIssues(
+  section: {
+    sourceIdeaAnchorHash?: string | null
+    validationReport?: unknown
+  },
+  issues: string[],
+  label: string,
+  currentIdeaAnchorHash: string | null
+) {
+  const validationContract = getValidationContract(section)
+  const validationHash = validationContract?.ideaAnchorHash
+    ? String(validationContract.ideaAnchorHash).trim()
+    : null
+  const expectedHash = currentIdeaAnchorHash || validationHash
+  const sourceHash = String(section.sourceIdeaAnchorHash || '').trim() || validationHash
+  if (expectedHash && sourceHash !== expectedHash) {
+    issues.push(`${label} was prepared against a different finalized idea.`)
+  }
 }

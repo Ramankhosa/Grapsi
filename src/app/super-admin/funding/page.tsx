@@ -88,6 +88,14 @@ const CALL_INGESTION_LINKS: CallIngestionLink[] = [
     access: 'write',
   },
   {
+    href: '/super-admin/project-intelligence/crawlers',
+    title: 'Project Intelligence Corpus',
+    description: 'Crawl public awarded-project sources, inspect runs, and monitor corpus ingestion coverage.',
+    cta: 'Open crawlers',
+    icon: DatabaseZap,
+    access: 'super',
+  },
+  {
     href: '/super-admin/llm-config',
     title: 'LLM Stage Settings',
     description: 'Tune funding ingestion, chat, guideline, and template extraction model stages.',

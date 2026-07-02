@@ -212,6 +212,9 @@ export interface GrantSectionComplianceContract {
 }
 
 export interface GrantGenerationTrace {
+  ideaAnchorHash: string | null
+  usedAnchorElements: string[]
+  anchorConflicts: string[]
   usedPrepEvidence: string[]
   coveredRequiredPoints: string[]
   unmetRequiredPoints: string[]
@@ -358,4 +361,8 @@ export interface GrantBlueprintPlanSection {
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
   grantComplianceReport?: GrantComplianceReport | null
   reviewerReadinessReport?: ReviewerReadinessReport | null
+  ideaAnchorHash?: string | null
+  ideaAnchorRelationship?: 'identity_bearing' | 'supporting' | 'neutral'
+  anchorReviewRequired?: boolean
+  manualOverrideAnchorHash?: string | null
 }

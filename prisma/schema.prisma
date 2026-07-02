@@ -214,6 +214,122 @@ enum FundingDuplicateResolution {
   create_new_anyway
 }
 
+enum PublicProjectSourceKey {
+  PRISM
+  BIRAC
+  CSIR
+  ICMR
+}
+
+enum PublicProjectRecordStatus {
+  ACTIVE
+  QUARANTINED
+  INACTIVE
+}
+
+enum PublicProjectEmbeddingStatus {
+  not_generated
+  processing
+  generated
+  stale
+  failed
+}
+
+enum PublicProjectCrawlMode {
+  pilot
+  full
+  incremental
+}
+
+enum PublicProjectCrawlStatus {
+  queued
+  running
+  completed
+  completed_with_errors
+  failed
+  blocked
+  cancel_requested
+  canceled
+}
+
+enum PublicProjectCrawlItemStatus {
+  discovered
+  processing
+  completed
+  failed
+  skipped
+  quarantined
+}
+
+enum PublicProjectParticipantRole {
+  PI
+  CO_PI
+  TEAM_MEMBER
+  NODAL_CONTACT
+  OTHER
+}
+
+enum FundingCallDocumentKind {
+  call_document
+}
+
+enum FundingDocumentParsingStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+enum FundingDocumentEmbeddingStatus {
+  not_generated
+  processing
+  generated
+  partial
+  failed
+}
+
+enum FundingCallDocumentSectionType {
+  overview
+  objectives
+  thematic_areas
+  eligibility
+  funding_support
+  budget_rules
+  duration
+  important_dates
+  evaluation_criteria
+  exclusions
+  application_process
+  required_documents
+  consortium_partner_rules
+  intellectual_property_rules
+  reporting_requirements
+  contact_details
+  corrigendum_or_amendment
+  other
+}
+
+enum FundingCallDocumentClassificationMethod {
+  heading
+  llm
+  fallback
+}
+
+enum FundingCallDocumentChunkEmbeddingStatus {
+  pending
+  generated
+  failed
+}
+
+enum FundingCallDocumentEventType {
+  uploaded
+  reprocessed
+  re_embedded
+  superseded
+  deleted_sections
+  quality_flagged
+}
+
 enum GrantPrepMode {
   template_driven
   guided_fallback
@@ -863,6 +979,7 @@ model FundingCall {
   extracted_json              Json?
   extraction_confidence_json  Json?
   embedding                   Unsupported("vector")?
+  embedding_voyage_1024       Unsupported("vector")?
   ts_document                 Unsupported("tsvector")?
   expiration_date             DateTime?
   is_active                   Boolean?                        @default(true)
@@ -887,6 +1004,11 @@ model FundingCall {
   template_runs               FundingCallTemplateRun[]
   guideline_runs              FundingCallGuidelineRun[]
   intake_jobs                 FundingIntakeJob[]              @relation("FundingCallIntakeJobs")
+  documents                   FundingCallDocument[]
+  document_pages              FundingCallDocumentPage[]
+  document_sections           FundingCallDocumentSection[]
+  document_chunks             FundingCallDocumentChunk[]
+  document_events             FundingCallDocumentEvent[]
   grantSessions               GrantSession[]
   grantPrepSessions           GrantPrepSession[]
   grantBlueprints             GrantBlueprint[]
@@ -911,8 +1033,246 @@ model FundingCall {
   @@index([expiration_date])
   @@index([is_active])
   @@index([embedding])
+  @@index([embedding_voyage_1024])
   @@index([ts_document], map: "funding_calls_ts_idx", type: Gin)
   @@map("funding_calls")
+}
+
+model PublicProjectSource {
+  id                  String                 @id @default(cuid())
+  sourceKey           PublicProjectSourceKey @unique @map("source_key")
+  name                String
+  baseUrl             String                 @map("base_url")
+  enabled             Boolean                @default(false)
+  connectorVersion    String                 @default("v1") @map("connector_version")
+  crawlConfig         Json?                  @map("crawl_config_json")
+  scheduleConfig      Json?                  @map("schedule_config_json")
+  healthJson          Json?                  @map("health_json")
+  lastSuccessfulRunId String?                @map("last_successful_run_id")
+  lastRunAt           DateTime?              @map("last_run_at")
+  lastError           String?                @map("last_error")
+  createdAt           DateTime               @default(now()) @map("created_at")
+  updatedAt           DateTime               @updatedAt @map("updated_at")
+
+  projects  PublicProject[]
+  crawlRuns PublicProjectCrawlRun[]
+
+  @@map("public_project_sources")
+}
+
+model PublicProject {
+  id                      String                       @id @default(cuid())
+  sourceId                String                       @map("source_id")
+  sourceKey               PublicProjectSourceKey       @map("source_key")
+  externalId              String                       @map("external_id")
+  fileNumber              String?                      @map("file_number")
+  projectNumber           String?                      @map("project_number")
+  sourceUrl               String?                      @map("source_url")
+  detailUrl               String?                      @map("detail_url")
+  sourceVariant           String                       @default("online") @map("source_variant")
+  sourceRecordKey         String                       @map("source_record_key")
+  statusText              String?                      @map("status_text")
+  projectType             String?                      @map("project_type")
+  recordStatus            PublicProjectRecordStatus    @default(ACTIVE) @map("record_status")
+  validationErrors        Json?                        @map("validation_errors_json")
+  programName             String?                      @map("program_name")
+  schemeName              String?                      @map("scheme_name")
+  schemeHierarchy         Json?                        @map("scheme_hierarchy_json")
+  category                String?
+  theme                   String?
+  discipline              String?
+  areaName                String?                      @map("area_name")
+  subAreaName             String?                      @map("sub_area_name")
+  title                   String
+  abstractText            String?                      @map("abstract")
+  executiveSummary        String?                      @map("executive_summary")
+  objectivesText          String?                      @map("objectives")
+  milestonesText          String?                      @map("milestones")
+  deliverablesText        String?                      @map("deliverables")
+  outputPlannedText       String?                      @map("output_planned")
+  outputAchievedText      String?                      @map("output_achieved")
+  keywords                String[]                     @default([])
+  primaryInvestigatorName String?                      @map("primary_investigator_name")
+  primaryInstitutionName  String?                      @map("primary_institution_name")
+  departmentName          String?                      @map("department_name")
+  city                    String?
+  state                   String?
+  country                 String?                      @default("India")
+  sanctionYear            Int?                         @map("sanction_year")
+  startDate               DateTime?                    @map("start_date")
+  endDate                 DateTime?                    @map("end_date")
+  durationMonths          Int?                         @map("duration_months")
+  budgetAmount            Decimal?                     @map("budget_amount") @db.Decimal(18, 2)
+  budgetCurrency          String?                      @default("INR") @map("budget_currency")
+  budgetComponents        Json?                        @map("budget_components_json")
+  manpower                Json?                        @map("manpower_json")
+  equipment               Json?                        @map("equipment_json")
+  publications            Json?                        @map("publications_json")
+  patents                 Json?                        @map("patents_json")
+  outcomes                Json?                        @map("outcomes_json")
+  rawPayload              Json?                        @map("raw_payload_json")
+  extendedFields          Json?                        @map("extended_fields_json")
+  contentHash             String                       @map("content_hash")
+  detailHash              String?                      @map("detail_hash")
+  duplicateFingerprint    String?                      @map("duplicate_fingerprint")
+  missingFullRunCount     Int                          @default(0) @map("missing_full_run_count")
+  firstSeenAt             DateTime                     @default(now()) @map("first_seen_at")
+  lastSeenAt              DateTime                     @default(now()) @map("last_seen_at")
+  lastChangedAt           DateTime?                    @map("last_changed_at")
+  inactiveAt              DateTime?                    @map("inactive_at")
+  embeddingProvider       String?                      @map("embedding_provider")
+  embeddingModel          String?                      @map("embedding_model")
+  embeddingDimension      Int?                         @map("embedding_dimension")
+  embeddingVersion        String?                      @map("embedding_version")
+  embeddingInputHash      String?                      @map("embedding_input_hash")
+  embeddingStatus         PublicProjectEmbeddingStatus @default(not_generated) @map("embedding_status")
+  embeddingError          String?                      @map("embedding_error")
+  embedding               Unsupported("vector")?
+  embeddingVoyage1024     Unsupported("vector")?       @map("embedding_voyage_1024")
+  tsDocument              Unsupported("tsvector")?     @map("ts_document")
+  createdAt               DateTime                     @default(now()) @map("created_at")
+  updatedAt               DateTime                     @updatedAt @map("updated_at")
+
+  source       PublicProjectSource            @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  participants PublicProjectParticipant[]
+  contacts     PublicProjectPrivateContact[]
+  crawlItems   PublicProjectCrawlItem[]
+  revisions    PublicProjectRevision[]
+
+  @@unique([sourceId, sourceRecordKey])
+  @@index([sourceKey, sourceVariant])
+  @@index([recordStatus])
+  @@index([title])
+  @@index([primaryInstitutionName])
+  @@index([state])
+  @@index([sanctionYear])
+  @@index([duplicateFingerprint])
+  @@index([embedding])
+  @@index([embeddingVoyage1024])
+  @@index([tsDocument], map: "public_projects_ts_idx", type: Gin)
+  @@map("public_projects")
+}
+
+model PublicProjectParticipant {
+  id              String                       @id @default(cuid())
+  projectId       String                       @map("project_id")
+  role            PublicProjectParticipantRole @default(TEAM_MEMBER)
+  name            String
+  institutionName String?                      @map("institution_name")
+  departmentName  String?                      @map("department_name")
+  city            String?
+  state           String?
+  country         String?                      @default("India")
+  sourcePayload   Json?                        @map("source_payload_json")
+  createdAt       DateTime                     @default(now()) @map("created_at")
+  updatedAt       DateTime                     @updatedAt @map("updated_at")
+
+  project PublicProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([name])
+  @@index([institutionName])
+  @@map("public_project_participants")
+}
+
+model PublicProjectPrivateContact {
+  id             String   @id @default(cuid())
+  projectId      String   @map("project_id")
+  contactType    String   @map("contact_type")
+  label          String?
+  value          String
+  sourcePayload  Json?    @map("source_payload_json")
+  isPublicSource Boolean  @default(true) @map("is_public_source")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  project PublicProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, contactType, value])
+  @@index([projectId])
+  @@index([contactType])
+  @@map("public_project_private_contacts")
+}
+
+model PublicProjectCrawlRun {
+  id                   String                   @id @default(cuid())
+  sourceId             String                   @map("source_id")
+  mode                 PublicProjectCrawlMode
+  filters              Json?                    @map("filters_json")
+  status               PublicProjectCrawlStatus @default(queued)
+  discoveredCount      Int                      @default(0) @map("discovered_count")
+  processedCount       Int                      @default(0) @map("processed_count")
+  succeededCount       Int                      @default(0) @map("succeeded_count")
+  failedCount          Int                      @default(0) @map("failed_count")
+  quarantinedCount     Int                      @default(0) @map("quarantined_count")
+  embeddingFailedCount Int                      @default(0) @map("embedding_failed_count")
+  cursor               Json?                    @map("cursor_json")
+  lockedAt             DateTime?                @map("locked_at")
+  lockedBy             String?                  @map("locked_by")
+  heartbeatAt          DateTime?                @map("heartbeat_at")
+  requestedByUserId    String?                  @map("requested_by_user_id")
+  errorCode            String?                  @map("error_code")
+  errorMessage         String?                  @map("error_message")
+  startedAt            DateTime?                @map("started_at")
+  completedAt          DateTime?                @map("completed_at")
+  cancelRequestedAt    DateTime?                @map("cancel_requested_at")
+  createdAt            DateTime                 @default(now()) @map("created_at")
+  updatedAt            DateTime                 @updatedAt @map("updated_at")
+
+  source    PublicProjectSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  items     PublicProjectCrawlItem[]
+  revisions PublicProjectRevision[]
+
+  @@index([sourceId, status])
+  @@index([status, createdAt])
+  @@index([heartbeatAt])
+  @@map("public_project_crawl_runs")
+}
+
+model PublicProjectCrawlItem {
+  id                 String                       @id @default(cuid())
+  runId              String                       @map("run_id")
+  projectId          String?                      @map("project_id")
+  sourceRecordKey    String                       @map("source_record_key")
+  sourceVariant      String?                      @map("source_variant")
+  externalId         String?                      @map("external_id")
+  state              String?
+  status             PublicProjectCrawlItemStatus @default(discovered)
+  attemptCount       Int                          @default(0) @map("attempt_count")
+  errorCode          String?                      @map("error_code")
+  errorMessage       String?                      @map("error_message")
+  listingPayload     Json?                        @map("listing_payload_json")
+  detailPayload      Json?                        @map("detail_payload_json")
+  contentHash        String?                      @map("content_hash")
+  processedAt        DateTime?                    @map("processed_at")
+  createdAt          DateTime                     @default(now()) @map("created_at")
+  updatedAt          DateTime                     @updatedAt @map("updated_at")
+
+  run     PublicProjectCrawlRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  project PublicProject?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@unique([runId, sourceRecordKey])
+  @@index([status])
+  @@index([projectId])
+  @@index([state])
+  @@map("public_project_crawl_items")
+}
+
+model PublicProjectRevision {
+  id                String   @id @default(cuid())
+  projectId         String   @map("project_id")
+  runId             String?  @map("run_id")
+  contentHash       String   @map("content_hash")
+  normalizedPayload Json     @map("normalized_payload_json")
+  rawPayload        Json?    @map("raw_payload_json")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  project PublicProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run     PublicProjectCrawlRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, contentHash])
+  @@index([runId])
+  @@map("public_project_revisions")
 }
 
 model FundingImportJob {
@@ -1098,6 +1458,128 @@ model FundingIntakeJobEvent {
 
   @@index([job_id])
   @@map("funding_intake_job_events")
+}
+
+model FundingCallDocument {
+  id                   String                         @id @default(cuid())
+  funding_call_id      String
+  version              Int
+  is_active            Boolean                        @default(true)
+  original_filename    String
+  mime_type            String
+  byte_size            Int
+  storage_path         String
+  source_url           String?
+  checksum             String
+  uploaded_by          String?
+  document_kind        FundingCallDocumentKind        @default(call_document)
+  parsing_status       FundingDocumentParsingStatus   @default(pending)
+  parsing_error        String?
+  parsing_stats        Json?
+  quality_flags        Json?
+  needs_manual_review  Boolean                        @default(false)
+  embedding_status     FundingDocumentEmbeddingStatus @default(not_generated)
+  created_at           DateTime                       @default(now())
+  updated_at           DateTime                       @updatedAt
+  funding_call         FundingCall                    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  pages                FundingCallDocumentPage[]
+  sections             FundingCallDocumentSection[]
+  chunks               FundingCallDocumentChunk[]
+  events               FundingCallDocumentEvent[]
+
+  @@unique([funding_call_id, checksum])
+  @@unique([funding_call_id, version])
+  @@index([funding_call_id, is_active])
+  @@index([parsing_status])
+  @@index([embedding_status])
+  @@map("funding_call_documents")
+}
+
+model FundingCallDocumentPage {
+  id                    String              @id @default(cuid())
+  document_id           String
+  funding_call_id       String
+  page_number           Int
+  raw_text              String
+  cleaned_text          String
+  extraction_confidence Float?
+  created_at            DateTime            @default(now())
+  document              FundingCallDocument @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  funding_call          FundingCall         @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+
+  @@unique([document_id, page_number])
+  @@index([funding_call_id])
+  @@map("funding_call_document_pages")
+}
+
+model FundingCallDocumentSection {
+  id                    String                                  @id @default(cuid())
+  document_id           String
+  funding_call_id       String
+  section_type          FundingCallDocumentSectionType
+  section_title         String?
+  section_text          String
+  start_page            Int
+  end_page              Int
+  order_index           Int
+  confidence            Float?
+  classification_method FundingCallDocumentClassificationMethod
+  created_at            DateTime                                @default(now())
+  document              FundingCallDocument                     @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  funding_call          FundingCall                             @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  chunks                FundingCallDocumentChunk[]
+
+  @@index([funding_call_id, section_type])
+  @@index([document_id, order_index])
+  @@map("funding_call_document_sections")
+}
+
+model FundingCallDocumentChunk {
+  id                  String                                  @id @default(cuid())
+  document_id         String
+  funding_call_id     String
+  section_id          String?
+  section_type        FundingCallDocumentSectionType
+  chunk_index         Int
+  chunk_text          String
+  page_start          Int
+  page_end            Int
+  token_count         Int
+  embedding_provider  String?
+  embedding_model     String?
+  embedding_dimension Int?
+  embedding_status    FundingCallDocumentChunkEmbeddingStatus @default(pending)
+  embedding_error     String?
+  embedding           Unsupported("vector")?
+  embedding_voyage_1024 Unsupported("vector")?
+  created_at          DateTime                                @default(now())
+  document            FundingCallDocument                     @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  funding_call        FundingCall                             @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  section             FundingCallDocumentSection?             @relation(fields: [section_id], references: [id], onDelete: SetNull)
+
+  @@unique([document_id, chunk_index])
+  @@index([funding_call_id, section_type])
+  @@index([document_id])
+  @@index([embedding_status])
+  @@index([embedding])
+  @@index([embedding_voyage_1024])
+  @@map("funding_call_document_chunks")
+}
+
+model FundingCallDocumentEvent {
+  id               String                       @id @default(cuid())
+  document_id      String
+  funding_call_id  String
+  event_type       FundingCallDocumentEventType
+  actor_user_id    String?
+  payload          Json?
+  created_at       DateTime                     @default(now())
+  document         FundingCallDocument          @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  funding_call     FundingCall                  @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+
+  @@index([document_id, created_at])
+  @@index([funding_call_id, created_at])
+  @@map("funding_call_document_events")
 }
 
 model FundingCallTemplate {
@@ -1444,6 +1926,10 @@ model GrantSectionDraft {
   createdByUserId      String
   updatedByUserId      String
   generatedAt          DateTime?
+  isStale              Boolean                 @default(false)
+  staleReason          String?                 @db.Text
+  sourceIdeaAnchorHash String?
+  sourceContextFingerprint String?
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
   grantSession         GrantSession           @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
@@ -1725,7 +2211,8 @@ model RecommendationQueryEmbeddingCache {
   embedding_version     String
   task_type             String
   output_dimensionality Int
-  embedding             Unsupported("vector")
+  embedding             Unsupported("vector")?
+  embedding_voyage_1024 Unsupported("vector")?
   hit_count             Int                   @default(1)
   last_used_at          DateTime              @default(now())
   created_at            DateTime              @default(now())
@@ -1733,6 +2220,7 @@ model RecommendationQueryEmbeddingCache {
 
   @@unique([request_hash, model, embedding_version, task_type, output_dimensionality], map: "rec_query_embedding_cache_key")
   @@index([embedding])
+  @@index([embedding_voyage_1024])
   @@index([last_used_at], map: "idx_recommendation_query_embedding_cache_last_used_at")
   @@map("recommendation_query_embedding_cache")
 }
@@ -1753,6 +2241,11 @@ model ResearcherProfile {
   research_summary      String?
   research_areas        String[] @default([])
   keywords              String[] @default([])
+  normalized_text       String?
+  content_hash          String?
+  embedding             Unsupported("vector")?
+  embedding_voyage_1024 Unsupported("vector")?
+  embedding_version     String?
   linkedin_url          String?
   google_scholar_url    String?
   scopus_url            String?
@@ -1764,6 +2257,8 @@ model ResearcherProfile {
   @@index([country_of_residence], map: "idx_researcher_profiles_country")
   @@index([institution_type], map: "idx_researcher_profiles_institution_type")
   @@index([career_stage], map: "idx_researcher_profiles_career_stage")
+  @@index([embedding])
+  @@index([embedding_voyage_1024])
   @@map("researcher_profiles")
 }
 
@@ -1806,6 +2301,7 @@ model ResearcherSavedResearchArea {
   normalized_text      String?
   content_hash         String?
   embedding            Unsupported("vector")?
+  embedding_voyage_1024 Unsupported("vector")?
   embedding_version    String?
   created_at           DateTime               @default(now())
   updated_at           DateTime               @updatedAt
@@ -1817,6 +2313,7 @@ model ResearcherSavedResearchArea {
   @@index([taxonomy_area_id], map: "idx_researcher_saved_research_areas_taxonomy_area")
   @@index([taxonomy_level1_code, taxonomy_level2_code], map: "idx_researcher_saved_research_areas_taxonomy_codes")
   @@index([embedding])
+  @@index([embedding_voyage_1024])
   @@map("researcher_saved_research_areas")
 }
 
@@ -6046,6 +6543,11 @@ model ReferenceLibrary {
   pmcid               String?
   arxivId             String?
   abstract            String?  @db.Text // Full abstract
+  fundingMatchText    String?  @map("funding_match_text") @db.Text
+  fundingMatchHash    String?  @map("funding_match_hash")
+  fundingEmbedding    Unsupported("vector")? @map("funding_embedding")
+  fundingEmbeddingVoyage1024 Unsupported("vector")? @map("funding_embedding_voyage_1024")
+  fundingEmbeddingVersion String? @map("funding_embedding_version")
 
   // Source classification
   sourceType CitationSourceType @default(OTHER)
@@ -6089,6 +6591,8 @@ model ReferenceLibrary {
   @@index([sourceType])
   @@index([isFavorite])
   @@index([isRead])
+  @@index([fundingEmbedding])
+  @@index([fundingEmbeddingVoyage1024])
   @@map("reference_library")
 }
 

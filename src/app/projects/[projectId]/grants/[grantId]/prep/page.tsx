@@ -13,8 +13,8 @@ import GrantPrepHandoffModal from '@/components/grantPrep/GrantPrepHandoffModal'
 import GrantPrepStageEditorModal from '@/components/grantPrep/GrantPrepStageEditorModal';
 import GrantPrepStageNavigator from '@/components/grantPrep/GrantPrepStageNavigator';
 import GrantPrepTopBar from '@/components/grantPrep/GrantPrepTopBar';
-import type { GrantPrepStageKey, GrantPrepSuggestedAnswer } from '@/lib/grantPrep/types';
-import { GRANT_PREP_STAGE_BY_KEY, getNextEnabledPickableStageKey } from '@/lib/grantPrep/stageLibrary';
+import type { GrantPrepIdeaAnchorV1, GrantPrepStageKey, GrantPrepSuggestedAnswer } from '@/lib/grantPrep/types';
+import { GRANT_PREP_STAGE_BY_KEY } from '@/lib/grantPrep/stageLibrary';
 import type {
   GrantPrepLayoutMode,
   PointAction,
@@ -161,6 +161,7 @@ export default function GrantPrepPage(props: any) {
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [finalizingIdeation, setFinalizingIdeation] = useState(false);
   const [sendCooldown, setSendCooldown] = useState(false);
   const [preview, setPreview] = useState<PrepHandoffPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -445,26 +446,129 @@ export default function GrantPrepPage(props: any) {
             : current
         );
         return true;
-      } catch {
-        toast.error('Failed to switch stage');
+      } catch (error) {
+        toast.error(
+          axios.isAxiosError(error) && error.response?.data?.message
+            ? error.response.data.message
+            : 'Failed to switch stage'
+        );
         return false;
       }
     },
     [axiosConfig, sessionData?.id, prepContext, sessionLocked]
   );
 
-  const handleLockIdeation = useCallback(async () => {
-    if (!prepContext) return;
-
-    const nextStageKey = getNextEnabledPickableStageKey(prepContext.stageStates, 'ideation');
-
-    if (!nextStageKey) {
-      toast.error('No next Grant Prep stage is available for this template.');
-      return;
+  const handleFinalizeIdeation = useCallback(async (sourceMessageId: string, option: GrantPrepSuggestedAnswer) => {
+    if (!sessionData?.id || !sessionData.updated_at || finalizingIdeation) return;
+    setFinalizingIdeation(true);
+    try {
+      const response = await axios.post(
+        `/api/grant-prep/sessions/${sessionData.id}/stages/ideation/decision`,
+        {
+          sourceMessageId,
+          optionLabel: option.label,
+          clientRequestId: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          expectedSessionUpdatedAt: new Date(sessionData.updated_at).toISOString(),
+        },
+        axiosConfig()
+      );
+      setPrepContext(response.data.prepContext);
+      setSessionData((current) => current ? {
+        ...current,
+        status: response.data.sessionStatus || current.status,
+        updated_at: response.data.sessionUpdatedAt || current.updated_at,
+      } : current);
+      if (response.data.warning) toast(response.data.warning, { icon: '!' });
+      else toast.success('Idea chosen. Grant Prep will use it to keep later stages focused.');
+    } catch (error) {
+      toast.error(
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : 'Failed to finalize the selected idea'
+      );
+      throw error;
+    } finally {
+      setFinalizingIdeation(false);
     }
+  }, [axiosConfig, finalizingIdeation, sessionData?.id, sessionData?.updated_at]);
 
-    await handleStageChange(nextStageKey);
-  }, [handleStageChange, prepContext]);
+  const handlePreviewTypedIdea = useCallback(async (ideaText: string) => {
+    if (!sessionData?.id || !sessionData.updated_at || finalizingIdeation) {
+      throw new Error('Idea preview is not available yet.');
+    }
+    setFinalizingIdeation(true);
+    try {
+      const response = await axios.post(
+        `/api/grant-prep/sessions/${sessionData.id}/stages/ideation/decision`,
+        {
+          ideaText,
+          previewOnly: true,
+          clientRequestId: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          expectedSessionUpdatedAt: new Date(sessionData.updated_at).toISOString(),
+        },
+        axiosConfig()
+      );
+      if (response.data.warning) toast(response.data.warning, { icon: '!' });
+      return response.data.preview as {
+        anchor: GrantPrepIdeaAnchorV1;
+        anchorHash: string;
+        compilationSource: 'llm' | 'deterministic_fallback';
+      };
+    } catch (error) {
+      toast.error(
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : 'Failed to compile the typed idea'
+      );
+      throw error;
+    } finally {
+      setFinalizingIdeation(false);
+    }
+  }, [axiosConfig, finalizingIdeation, sessionData?.id, sessionData?.updated_at]);
+
+  const handleFinalizeTypedIdea = useCallback(async (
+    ideaText: string,
+    preview: {
+      anchor: GrantPrepIdeaAnchorV1;
+      anchorHash: string;
+      compilationSource: 'llm' | 'deterministic_fallback';
+    }
+  ) => {
+    if (!sessionData?.id || !sessionData.updated_at || finalizingIdeation) return;
+    setFinalizingIdeation(true);
+    try {
+      const response = await axios.post(
+        `/api/grant-prep/sessions/${sessionData.id}/stages/ideation/decision`,
+        {
+          ideaText,
+          compiledAnchor: preview.anchor,
+          previewAnchorHash: preview.anchorHash,
+          previewCompilationSource: preview.compilationSource,
+          clientRequestId: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          expectedSessionUpdatedAt: new Date(sessionData.updated_at).toISOString(),
+        },
+        axiosConfig()
+      );
+      setPrepContext(response.data.prepContext);
+      setSessionData((current) => current ? {
+        ...current,
+        status: response.data.sessionStatus || current.status,
+        updated_at: response.data.sessionUpdatedAt || current.updated_at,
+      } : current);
+      setInput('');
+      if (response.data.warning) toast(response.data.warning, { icon: '!' });
+      else toast.success('Idea finalized. Later stages were prefilled for confirmation.');
+    } catch (error) {
+      toast.error(
+        axios.isAxiosError(error) && error.response?.data?.message
+          ? error.response.data.message
+          : 'Failed to finalize the typed idea'
+      );
+      throw error;
+    } finally {
+      setFinalizingIdeation(false);
+    }
+  }, [axiosConfig, finalizingIdeation, sessionData?.id, sessionData?.updated_at]);
 
   const handleEngagementModeChange = useCallback(
     async (engagementMode: PrepEngagementMode) => {
@@ -1036,7 +1140,11 @@ export default function GrantPrepPage(props: any) {
                   pendingPoints={pendingPoints}
                   stageTransitionContext={stageTransitionContext}
                   ideationContext={ideationContext}
-                  onLockIdeation={handleLockIdeation}
+                  ideationDecision={prepContext.stageStates.ideation.decision}
+                  onFinalizeIdeation={handleFinalizeIdeation}
+                  onPreviewTypedIdea={handlePreviewTypedIdea}
+                  onFinalizeTypedIdea={handleFinalizeTypedIdea}
+                  finalizingIdeation={finalizingIdeation}
                   onToggleFullscreen={toggleChatFullscreen}
                   isFullscreen={effectiveChatFullscreen}
                 />
@@ -1083,7 +1191,11 @@ export default function GrantPrepPage(props: any) {
                       pendingPoints={pendingPoints}
                       stageTransitionContext={stageTransitionContext}
                       ideationContext={ideationContext}
-                      onLockIdeation={handleLockIdeation}
+                      ideationDecision={prepContext.stageStates.ideation.decision}
+                      onFinalizeIdeation={handleFinalizeIdeation}
+                      onPreviewTypedIdea={handlePreviewTypedIdea}
+                      onFinalizeTypedIdea={handleFinalizeTypedIdea}
+                      finalizingIdeation={finalizingIdeation}
                       onToggleFullscreen={toggleChatFullscreen}
                       isFullscreen={effectiveChatFullscreen}
                     />
@@ -1116,7 +1228,11 @@ export default function GrantPrepPage(props: any) {
                       pendingPoints={pendingPoints}
                       stageTransitionContext={stageTransitionContext}
                       ideationContext={ideationContext}
-                      onLockIdeation={handleLockIdeation}
+                      ideationDecision={prepContext.stageStates.ideation.decision}
+                      onFinalizeIdeation={handleFinalizeIdeation}
+                      onPreviewTypedIdea={handlePreviewTypedIdea}
+                      onFinalizeTypedIdea={handleFinalizeTypedIdea}
+                      finalizingIdeation={finalizingIdeation}
                       onToggleFullscreen={toggleChatFullscreen}
                       isFullscreen={effectiveChatFullscreen}
                     />

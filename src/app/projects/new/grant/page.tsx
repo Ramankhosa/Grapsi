@@ -149,13 +149,13 @@ export default function NewGrantProjectPage() {
         onBeginWriting={handleBeginWriting}
         importEndpoint="/api/funding/imports"
         allowedCallModes={['text']}
-        allowedGuidelineModes={['text', 'skip']}
-        allowedTemplateModes={['file', 'text', 'skip']}
+        allowedGuidelineModes={['skip', 'text']}
+        allowedTemplateModes={['skip', 'file', 'text']}
         storageKey={grantProjectWizardStorageKey}
         showProjectNameField
         eyebrow="Grant project upload"
         title="Create Grant Project From Your Own Call"
-        description="Paste the funding call text, review extracted details, optionally add guideline text and a funder template PDF/image, then start Grant Prep. If no template is provided, the standard grant application template will be used."
+        description="Add the call, choose any optional supporting documents, and start Grant Prep."
       />
     </div>
   )

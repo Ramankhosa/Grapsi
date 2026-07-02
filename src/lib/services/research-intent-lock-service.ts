@@ -18,6 +18,9 @@ import crypto from 'crypto';
 // ============================================================================
 
 export interface ResearchIntentLock {
+    source?: string;
+    version?: string;
+    ideaAnchorHash?: string;
     researchQuestions: string[];
     thesisStatement: string;
     contributions: string[];
@@ -27,6 +30,41 @@ export interface ResearchIntentLock {
     paperType: string;
     targetVenue?: { name: string; quartile?: string };
     keywords: string[];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}
+
+function strings(value: unknown): string[] {
+    return Array.isArray(value)
+        ? value.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+}
+
+function buildGrantAnchorIntentLock(freezePayload: unknown): ResearchIntentLock | null {
+    const payload = asRecord(freezePayload);
+    const anchor = asRecord(payload.ideaAnchor);
+    const ideaAnchorHash = String(payload.ideaAnchorHash || '').trim();
+    const summary = String(anchor.oneSentenceSummary || '').trim();
+    if (!ideaAnchorHash || !summary) return null;
+
+    const scopeBoundaries = strings(anchor.scopeBoundaries);
+    return {
+        source: 'grant_idea_anchor',
+        version: String(anchor.version || 'idea_anchor_v1'),
+        ideaAnchorHash,
+        researchQuestions: strings(anchor.unresolvedQuestions),
+        thesisStatement: summary,
+        contributions: [...strings(anchor.distinguishingFeatures), ...strings(anchor.funderFit)].slice(0, 7),
+        scopeBoundaries,
+        allowedClaims: strings(anchor.nonNegotiables),
+        forbiddenClaims: scopeBoundaries.map((item) => `Do not expand beyond: ${item}`),
+        paperType: 'grant proposal',
+        keywords: strings(anchor.keywords),
+    };
 }
 
 // ============================================================================
@@ -50,9 +88,31 @@ class ResearchIntentLockService {
 
         if (!blueprint) return null;
 
-        // If already generated, return it
+        const linkedGrantSession = await prisma.grantSession.findUnique({
+            where: { draftingSessionId: sessionId },
+            select: { blueprint: { select: { freezePayloadJson: true } } },
+        });
+        const currentGrantLock = buildGrantAnchorIntentLock(linkedGrantSession?.blueprint?.freezePayloadJson);
+
+        // Grant re-handoffs can replace the anchor after a lock was first stored.
+        // Rebuild deterministically before any drafting prompt can reuse a stale lock.
         if (blueprint.intentLock && typeof blueprint.intentLock === 'object') {
-            return blueprint.intentLock as unknown as ResearchIntentLock;
+            const storedLock = blueprint.intentLock as unknown as ResearchIntentLock;
+            if (currentGrantLock && storedLock.ideaAnchorHash !== currentGrantLock.ideaAnchorHash) {
+                await prisma.paperBlueprint.update({
+                    where: { id: blueprint.id },
+                    data: { intentLock: currentGrantLock as any },
+                });
+                return currentGrantLock;
+            }
+            return storedLock;
+        }
+        if (currentGrantLock) {
+            await prisma.paperBlueprint.update({
+                where: { id: blueprint.id },
+                data: { intentLock: currentGrantLock as any },
+            });
+            return currentGrantLock;
         }
 
         // Generate from blueprint + research topic
@@ -132,6 +192,9 @@ class ResearchIntentLockService {
         if (!blueprint) return null;
 
         const existing = (blueprint.intentLock as unknown as ResearchIntentLock) || {};
+        if (existing?.source === 'grant_idea_anchor') {
+            throw new Error('Grant-derived intent locks are controlled by Grant Prep. Change the finalized grant idea instead.');
+        }
         const merged = { ...existing, ...updates };
 
         await prisma.paperBlueprint.update({

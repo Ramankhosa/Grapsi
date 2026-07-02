@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { assertGrantPrepProjectCapability, requireGrantPrepActor } from '@/lib/grantPrep/access'
 import { serializeGrantPrepSession } from '@/lib/grantPrep/compat'
+import { hashGrantPrepIdeaConstraints } from '@/lib/grantPrep/ideaAnchor'
 import {
   buildGrantPrepModeWarning,
   inflateGrantPrepSessionContext,
@@ -66,6 +67,32 @@ export async function GET(
         fundingContext: serverContext.fundingContext,
         warning,
       })
+    }
+    const decision = prepContext.stageStates.ideation?.decision
+    const currentConstraintHash = hashGrantPrepIdeaConstraints({
+      fundingContext: serverContext.fundingContext,
+      selectedPriorityAreas: prepContext.selectedThrustAreaRuleKeys,
+      guidelineRevisionId: serverContext.guidelineRevisionId,
+      templateRevisionId: serverContext.templateRevisionId,
+    })
+    const ideaConstraintsChanged = Boolean(
+      canRefresh
+      && decision?.status === 'fixed'
+      && decision.constraintHash !== currentConstraintHash
+    )
+    if (ideaConstraintsChanged && decision) {
+      prepContext = {
+        ...prepContext,
+        stageStates: {
+          ...prepContext.stageStates,
+          ideation: {
+            ...prepContext.stageStates.ideation,
+            decision: { ...decision, status: 'needs_revalidation' },
+          },
+        },
+      }
+    }
+    if (canRefresh && (isStale || ideaConstraintsChanged)) {
       await prisma.grantPrepSession.update({
         where: { id: grantPrepSession.id },
         data: {

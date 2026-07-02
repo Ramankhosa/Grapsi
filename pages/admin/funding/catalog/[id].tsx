@@ -320,6 +320,7 @@ export default function FundingCatalogDetailPage() {
           callHref={details.sourceProvenance ? `/admin/funding/intake/${details.sourceProvenance.id}` : `/admin/funding/catalog/${details.call.id}`}
           guidelinesHref={`/admin/funding/catalog/${details.call.id}/guidelines`}
           templateHref={`/admin/funding/catalog/${details.call.id}/template`}
+          documentsHref={`/admin/funding/catalog/${details.call.id}/documents`}
           guidelineStatus={details.call.guideline_status}
           templateStatus={details.call.template_status}
         />

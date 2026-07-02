@@ -1,7 +1,10 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
+import { isFeatureEnabled } from '@/lib/feature-flags'
 import { buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
+import { fundingDocumentRetrievalService } from '@/lib/fundingDocuments/retrieval'
+import { toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import { fundingCallsService } from '@/lib/services/fundingCallsService'
 import { ResponseFormattingService, ResponseFormatType } from '@/lib/services/responseFormattingService'
 import { SQLToLLMConnector } from '@/lib/services/sqlToLLMConnector'
@@ -53,11 +56,63 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Funding call not found' }, { status: 404 })
     }
 
+    let documentEvidence: Array<{
+      sectionTitle: string | null
+      sectionType: string
+      pageStart: number
+      pageEnd: number
+      documentVersion: number
+      text: string
+    }> = []
+    let documentQualityWarnings: string[] = []
+    if (isFeatureEnabled('ENABLE_FUNDING_DOC_INTELLIGENCE')) {
+      const evidenceChunks = await fundingDocumentRetrievalService.searchChunks({
+        query: [userQuery || '', ...(userContext?.researchInterests || [])].filter(Boolean).join('\n') || 'research funding opportunity fit',
+        fundingCallId,
+        sectionTypes: ['thematic_areas', 'objectives', 'evaluation_criteria', 'eligibility'],
+        callStatus: 'any',
+        topK: 4,
+        minSimilarity: 0.22,
+        access: toRecommendationAccessScope(auth.actor),
+        llmContext: {
+          tenantId: auth.actor.tenantId,
+          userId: auth.actor.id,
+        },
+      })
+      documentEvidence = evidenceChunks.map((chunk) => ({
+        sectionTitle: chunk.sectionTitle,
+        sectionType: chunk.sectionType,
+        pageStart: chunk.pageStart,
+        pageEnd: chunk.pageEnd,
+        documentVersion: chunk.documentVersion,
+        text: chunk.chunkText,
+      }))
+      const warnings = new Set<string>()
+      for (const chunk of evidenceChunks) {
+        const flags = chunk.qualityFlags
+        if (flags && typeof flags === 'object' && !Array.isArray(flags)) {
+          const rawFlags = Array.isArray((flags as any).flags) ? (flags as any).flags : []
+          rawFlags.forEach((flag: any) => {
+            if (flag?.severity === 'warning' || flag?.severity === 'conflict') {
+              warnings.add(String(flag.message || flag.code))
+            }
+          })
+        }
+      }
+      documentQualityWarnings = Array.from(warnings)
+    }
+
     const analysis = await sqlToLLMConnector.analyzeFundingOpportunity(fundingCall, userQuery || 'Seeking research funding', {
       userResearchInterests: userContext?.researchInterests,
       userInstitutionType: userContext?.institutionType,
       userCountry: userContext?.country,
       detailedAnalysis: true,
+      llmContext: {
+        tenantId: auth.actor.tenantId,
+        userId: auth.actor.id,
+      },
+      documentEvidence,
+      documentQualityWarnings,
     })
 
     const format =

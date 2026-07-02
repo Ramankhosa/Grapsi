@@ -39,6 +39,8 @@ export async function createPapsiGrantSession(input: {
         stageMapping: input.payload.stageMapping,
         stageStates: input.payload.stageStates,
         globalKeywords: input.payload.globalKeywords,
+        ideaAnchor: input.payload.ideaAnchor || null,
+        ideaAnchorHash: input.payload.ideaAnchorHash || null,
       },
       guideline_snapshot: {
         mode: input.payload.guidance.mode,

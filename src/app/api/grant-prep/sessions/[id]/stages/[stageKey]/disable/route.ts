@@ -63,6 +63,9 @@ export async function PUT(
     if (!GRANT_PREP_STAGE_BY_KEY[stageKey].pickable) {
       return NextResponse.json({ message: 'That stage cannot be toggled manually' }, { status: 400 })
     }
+    if (stageKey === 'ideation') {
+      return NextResponse.json({ message: 'Idea & Angle is required because it anchors the rest of Grant Prep.' }, { status: 400 })
+    }
 
     const prepContext = inflateGrantPrepSessionContext(grantPrepSession)
     const typedStageKey = stageKey

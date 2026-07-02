@@ -92,6 +92,11 @@ export async function PUT(
       budgetLimits: serverContext.fundingContext.budgetLimits || null,
       projectDuration: serverContext.fundingContext.projectDuration || null,
     })
+    const prioritiesChanged = JSON.stringify([...prepContext.selectedThrustAreaRuleKeys].sort())
+      !== JSON.stringify([...normalized.selectedPriorityAreas].sort())
+    if (prioritiesChanged && stageStates.ideation.decision) {
+      stageStates.ideation.decision.status = 'needs_revalidation'
+    }
     const nextContext = {
       ...prepContext,
       selectedThrustAreaRuleKeys: normalized.selectedPriorityAreas,

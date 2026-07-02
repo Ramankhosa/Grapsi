@@ -1,6 +1,7 @@
 // @ts-nocheck
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import type {
   FundingCallTemplate,
@@ -9,6 +10,7 @@ import type {
   FundingRevisionStatus,
 } from '@prisma/client';
 import prisma from '../prisma';
+import { getStaleExtractionRunCutoff, startExtractionHeartbeat } from '../funding/extractionRunLifecycle';
 import type { IntakeOperator } from '../fundingIntake/types';
 import {
   assertSafePublicHttpsUrl,
@@ -31,8 +33,8 @@ import {
   STANDARD_GRANT_TEMPLATE_FALLBACK_WARNING,
   STANDARD_GRANT_TEMPLATE_VERSION,
 } from './standardGrantTemplate';
+import { TEMPLATE_UPLOAD_DIR } from './storage';
 
-const TEMPLATE_UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads', 'funding-templates');
 type TemplateRevisionType =
   | 'manual_create'
   | 'manual_edit'
@@ -44,6 +46,43 @@ type TemplateRevisionType =
 
 function asJson(value: unknown) {
   return value as Prisma.InputJsonValue;
+}
+
+async function failStaleTemplateRuns(fundingCallId?: string) {
+  await prisma.fundingCallTemplateRun.updateMany({
+    where: {
+      ...(fundingCallId ? { funding_call_id: fundingCallId } : {}),
+      status: { in: ['queued', 'extracting'] },
+      updated_at: { lt: getStaleExtractionRunCutoff() },
+    },
+    data: {
+      status: 'failed',
+      error_code: 'extraction_timed_out',
+      error_message: 'Template extraction did not finish within the allowed time. Start a new extraction run.',
+    },
+  });
+}
+
+function buildAssetSetHash(assets: Array<{ id: string; sequence_no: number; checksum?: string | null }>) {
+  return hashText(assets.map((asset) => `${asset.id}:${asset.sequence_no}:${asset.checksum || ''}`).join('|'));
+}
+
+function readRunAssetIds(rawOutput: unknown): string[] {
+  if (!rawOutput || typeof rawOutput !== 'object' || Array.isArray(rawOutput)) return [];
+  const assetIds = (rawOutput as Record<string, unknown>).assetIds;
+  return Array.isArray(assetIds) ? assetIds.map(String).filter(Boolean) : [];
+}
+
+function hasTemplateItems(value: unknown) {
+  const template = normalizeGrantTemplate(value);
+  return Boolean(
+    template.budget
+    || template.questions.length
+    || template.sections.length
+    || template.attachments.length
+    || template.evaluationCriteria.length
+    || template.submissionRules.items.length
+  );
 }
 
 function lifecycleFromTemplateStatus(status: FundingCallTemplateStatus): FundingTemplateLifecycleStatus {
@@ -322,8 +361,9 @@ async function deleteLocalAssetIfPresent(storagePathValue?: string | null) {
     path.isAbsolute(storagePathValue) ? storagePathValue : path.join(process.cwd(), storagePathValue)
   );
   const resolvedUploadDir = path.resolve(TEMPLATE_UPLOAD_DIR);
+  const relativePath = path.relative(resolvedUploadDir, resolvedStoragePath);
 
-  if (!resolvedStoragePath.startsWith(resolvedUploadDir)) {
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
     return;
   }
 
@@ -432,6 +472,7 @@ export class FundingTemplateService {
 
   async getTemplateBundle(fundingCallId: string) {
     const call = await ensureFundingCall(fundingCallId);
+    await failStaleTemplateRuns(fundingCallId);
 
     const [template, assets, runs, revisions] = await Promise.all([
       prisma.fundingCallTemplate.findUnique({
@@ -712,6 +753,7 @@ export class FundingTemplateService {
       size: number;
       tempFilePath: string;
       checksum: string;
+      sourceMetadata?: Record<string, unknown>;
     },
     operator: IntakeOperator
   ) {
@@ -721,25 +763,39 @@ export class FundingTemplateService {
 
     const sanitizedFileName = file.originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const destinationPath = path.join(TEMPLATE_UPLOAD_DIR, `${Date.now()}_${sanitizedFileName}`);
-    await fs.copyFile(file.tempFilePath, destinationPath);
+    let copied = false;
+    try {
+      await fs.copyFile(file.tempFilePath, destinationPath);
+      copied = true;
+      const copiedBytes = await fs.readFile(destinationPath);
+      const copiedChecksum = crypto.createHash('sha256').update(copiedBytes).digest('hex');
+      if (copiedChecksum !== file.checksum) {
+        throw new Error('Template upload checksum verification failed after storage');
+      }
 
-    const sourceType = file.mimeType === 'application/pdf' ? 'pdf' : 'image';
-
-    return prisma.fundingCallTemplateAsset.create({
-      data: {
-        funding_call_id: fundingCallId,
-        sequence_no: sequenceNo,
-        source_type: sourceType,
-        storage_path: destinationPath,
-        mime: file.mimeType,
-        checksum: file.checksum,
-        source_metadata_json: asJson({
-          original_name: file.originalName,
-          bytes: file.size,
-        }),
-        uploaded_by: operator.email,
-      },
-    });
+      const sourceType = file.mimeType === 'application/pdf' ? 'pdf' : 'image';
+      return await prisma.fundingCallTemplateAsset.create({
+        data: {
+          funding_call_id: fundingCallId,
+          sequence_no: sequenceNo,
+          source_type: sourceType,
+          storage_path: destinationPath,
+          mime: file.mimeType,
+          checksum: file.checksum,
+          source_metadata_json: asJson({
+            original_name: file.originalName,
+            bytes: file.size,
+            ...(file.sourceMetadata || {}),
+          }),
+          uploaded_by: operator.email,
+        },
+      });
+    } catch (error) {
+      if (copied) await fs.unlink(destinationPath).catch(() => undefined);
+      throw error;
+    } finally {
+      await fs.unlink(file.tempFilePath).catch(() => undefined);
+    }
   }
 
   async upsertAutoManagedAssetFromIntakeSource(
@@ -934,16 +990,29 @@ export class FundingTemplateService {
     assets: any[],
     operator: IntakeOperator
   ) {
+    let stopHeartbeat: (() => Promise<void>) | null = null;
     try {
-      await prisma.fundingCallTemplateRun.update({
-        where: { id: runId },
+      const claimed = await prisma.fundingCallTemplateRun.updateMany({
+        where: { id: runId, funding_call_id: fundingCallId, status: 'queued' },
         data: { status: 'extracting' },
       });
+      if (claimed.count !== 1) return;
+
+      stopHeartbeat = startExtractionHeartbeat(() => prisma.fundingCallTemplateRun.updateMany({
+        where: { id: runId, status: 'extracting' },
+        data: { status: 'extracting' },
+      }));
 
       const extraction = await extractGrantTemplateFromAssets(assets, {
         tenantId: operator.tenantId || null,
         userId: operator.userId,
       });
+      if (!hasTemplateItems(extraction.template)) {
+        throw new Error('Template extraction produced no usable items');
+      }
+
+      await stopHeartbeat();
+      stopHeartbeat = null;
 
       const template = await prisma.fundingCallTemplate.findUnique({
         where: { fundingCallId: fundingCallId },
@@ -951,18 +1020,25 @@ export class FundingTemplateService {
       });
 
       await prisma.$transaction(async (tx) => {
-        await tx.fundingCallTemplateRun.update({
-          where: { id: runId },
+        const completed = await tx.fundingCallTemplateRun.updateMany({
+          where: { id: runId, funding_call_id: fundingCallId, status: 'extracting' },
           data: {
             status: 'needs_review',
             extractor_model: extraction.extractorModel,
             prompt_version: extraction.promptVersion,
-            raw_output_json: asJson(extraction.rawOutput),
+            raw_output_json: asJson({
+              ...(extraction.rawOutput && typeof extraction.rawOutput === 'object' && !Array.isArray(extraction.rawOutput)
+                ? extraction.rawOutput as Record<string, unknown>
+                : { output: extraction.rawOutput }),
+              assetIds: assets.map((asset) => asset.id),
+            }),
             normalized_template_json: asJson(extraction.template),
             compatibility_json: asJson(extraction.compatibility),
             warnings_json: asJson(extraction.warnings),
           },
         });
+
+        if (completed.count !== 1) return;
 
         await tx.fundingCall.update({
           where: { id: fundingCallId },
@@ -973,8 +1049,8 @@ export class FundingTemplateService {
         });
       });
     } catch (error) {
-      await prisma.fundingCallTemplateRun.update({
-        where: { id: runId },
+      await prisma.fundingCallTemplateRun.updateMany({
+        where: { id: runId, status: { in: ['queued', 'extracting'] } },
         data: {
           status: 'failed',
           error_code: 'template_extraction_failed',
@@ -982,14 +1058,15 @@ export class FundingTemplateService {
         },
       });
       throw error;
+    } finally {
+      await stopHeartbeat?.();
     }
   }
 
   async startExtractionRun(fundingCallId: string, operator: IntakeOperator, assetIds?: string[]) {
+    await failStaleTemplateRuns(fundingCallId);
     const { template, assets } = await this.resolveTemplateExtractionAssets(fundingCallId, operator, assetIds);
-    const assetSetHash = hashText(
-      assets.map((asset) => `${asset.id}:${asset.sequence_no}:${asset.checksum || ''}`).join('|')
-    );
+    const assetSetHash = buildAssetSetHash(assets);
 
     const run = await prisma.fundingCallTemplateRun.create({
       data: {
@@ -1008,10 +1085,9 @@ export class FundingTemplateService {
   }
 
   async createExtractionRun(fundingCallId: string, operator: IntakeOperator, assetIds?: string[]) {
+    await failStaleTemplateRuns(fundingCallId);
     const { template, assets } = await this.resolveTemplateExtractionAssets(fundingCallId, operator, assetIds);
-    const assetSetHash = hashText(
-      assets.map((asset) => `${asset.id}:${asset.sequence_no}:${asset.checksum || ''}`).join('|')
-    );
+    const assetSetHash = buildAssetSetHash(assets);
 
     const run = await prisma.fundingCallTemplateRun.create({
       data: {
@@ -1028,6 +1104,7 @@ export class FundingTemplateService {
 
   async listRuns(fundingCallId: string, limit = 20) {
     await ensureFundingCall(fundingCallId);
+    await failStaleTemplateRuns(fundingCallId);
     return prisma.fundingCallTemplateRun.findMany({
       where: { funding_call_id: fundingCallId },
       orderBy: { created_at: 'desc' },
@@ -1037,6 +1114,7 @@ export class FundingTemplateService {
 
   async getRun(fundingCallId: string, runId: string) {
     await ensureFundingCall(fundingCallId);
+    await failStaleTemplateRuns(fundingCallId);
     return prisma.fundingCallTemplateRun.findFirst({
       where: {
         id: runId,
@@ -1049,7 +1127,7 @@ export class FundingTemplateService {
     fundingCallId: string,
     runId: string,
     operator: IntakeOperator,
-    options?: { mode?: 'replace' | 'merge' }
+    options?: { mode?: 'replace' | 'merge'; approve?: boolean }
   ) {
     const { template } = await ensureTemplateRecord(fundingCallId, operator);
     const run = await this.getRun(fundingCallId, runId);
@@ -1062,13 +1140,24 @@ export class FundingTemplateService {
       throw new Error('Only extraction runs that need review can be applied');
     }
 
+    if (!run.normalized_template_json || !hasTemplateItems(run.normalized_template_json)) {
+      throw new Error('Cannot apply an empty template extraction result');
+    }
+
     const currentTemplate = normalizeGrantTemplate(template.grant_template_json);
     const incomingTemplate = normalizeGrantTemplate(run.normalized_template_json);
+    const runAssetIds = readRunAssetIds(run.raw_output_json);
     const assets = await prisma.fundingCallTemplateAsset.findMany({
-      where: { funding_call_id: fundingCallId },
-      select: { id: true, sequence_no: true },
+      where: {
+        funding_call_id: fundingCallId,
+        ...(runAssetIds.length > 0 ? { id: { in: runAssetIds } } : {}),
+      },
+      select: { id: true, sequence_no: true, checksum: true },
       orderBy: [{ sequence_no: 'asc' }, { created_at: 'asc' }],
     });
+    if (buildAssetSetHash(assets) !== run.asset_set_hash) {
+      throw new Error('Template assets changed after extraction. Start a new extraction run before applying.');
+    }
     const assetSequenceById = buildAssetSequenceMap(assets);
     const mode = options?.mode === 'merge' ? 'merge' : 'replace';
     const nextTemplate = mode === 'merge'
@@ -1095,6 +1184,14 @@ export class FundingTemplateService {
       : `Applied extraction run ${run.id} as current template: ${generateDiffSummary(currentTemplate, nextTemplate)}`;
 
     await prisma.$transaction(async (tx) => {
+      const claimed = await tx.fundingCallTemplateRun.updateMany({
+        where: { id: run.id, funding_call_id: fundingCallId, status: 'needs_review' },
+        data: { status: 'applied' },
+      });
+      if (claimed.count !== 1) {
+        throw new Error('Template extraction run was already applied or changed');
+      }
+
       const revisionNo = await createRevision(tx, template, {
         revisionType: 'extraction_import',
         grantTemplate: nextTemplate,
@@ -1108,36 +1205,50 @@ export class FundingTemplateService {
         diffSummary,
       });
 
-      await tx.fundingCallTemplate.update({
-        where: { id: template.id },
+      const finalRevisionNo = options?.approve
+        ? await createRevision(tx, { ...template, current_revision_no: revisionNo }, {
+            revisionType: 'approval',
+            grantTemplate: nextTemplate,
+            compatibility,
+            editorUserId: operator.userId,
+            approvedState: 'approved',
+            changeNotes: `Accepted and approved extraction run ${run.id}`,
+            diffSummary: 'Approved template revision',
+          })
+        : revisionNo;
+
+      const updatedTemplate = await tx.fundingCallTemplate.updateMany({
+        where: { id: template.id, current_revision_no: template.current_revision_no },
         data: {
           grant_template_json: asJson(nextTemplate),
           compatibility_json: asJson(compatibility),
           compiledGrantTemplateJson: Prisma.DbNull,
-          current_revision_no: revisionNo,
-          status: 'draft',
+          current_revision_no: finalRevisionNo,
+          status: options?.approve ? 'approved' : 'draft',
           last_edited_by: operator.email,
           last_edited_at: new Date(),
+          approved_by: options?.approve ? operator.email : null,
+          approved_at: options?.approve ? new Date() : null,
         },
       });
-
-      await tx.fundingCallTemplateRun.update({
-        where: { id: run.id },
-        data: {
-          status: 'applied',
-        },
-      });
+      if (updatedTemplate.count !== 1) {
+        throw new Error('Template changed while this extraction run was being applied');
+      }
 
       await tx.fundingCall.update({
         where: { id: fundingCallId },
         data: {
-          template_status: 'needs_review',
+          template_status: options?.approve ? 'approved' : 'needs_review',
           active_template_id: template.id,
         },
       });
     });
 
     return this.getTemplateBundle(fundingCallId);
+  }
+
+  async acceptRun(fundingCallId: string, runId: string, operator: IntakeOperator) {
+    return this.applyRun(fundingCallId, runId, operator, { mode: 'replace', approve: true });
   }
 }
 

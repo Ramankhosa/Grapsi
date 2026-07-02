@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma'
 import { resolveGrantWorkflowTenantContext } from '@/lib/grantWorkflowTenantContext'
 import { buildGrantPrepFreezePayload } from '@/lib/grantPrep/handoff/handoffBuilder'
 import type { GrantPrepActor } from '@/lib/grantPrep/access'
+import type { GrantPrepIdeaAnchorV1 } from '@/lib/grantPrep/types'
 import {
   buildGeneratedGrantProposalFoundation,
   collectGrantCapturedKeywords,
@@ -70,6 +71,25 @@ import type {
 } from '@/types/grant'
 
 type JsonObject = Record<string, unknown>
+
+function buildGrantIdeaIntentLock(anchor?: GrantPrepIdeaAnchorV1 | null, anchorHash?: string | null) {
+  if (!anchor || !anchorHash) return null
+  return {
+    source: 'grant_idea_anchor',
+    version: anchor.version,
+    ideaAnchorHash: anchorHash,
+    researchQuestions: anchor.unresolvedQuestions,
+    thesisStatement: anchor.oneSentenceSummary,
+    contributions: [...anchor.distinguishingFeatures, ...anchor.funderFit].slice(0, 7),
+    scopeBoundaries: anchor.scopeBoundaries,
+    allowedClaims: anchor.nonNegotiables,
+    forbiddenClaims: anchor.scopeBoundaries.map((item) => `Do not expand beyond: ${item}`),
+    paperType: 'grant proposal',
+    keywords: anchor.keywords,
+    coreApproach: anchor.coreApproach,
+    targetBeneficiariesOrSetting: anchor.targetBeneficiariesOrSetting,
+  }
+}
 
 export interface LocalGrantLaunchPreview {
   blockers: Array<{ stageKey: string; pointKey: string; message: string }>
@@ -646,6 +666,9 @@ function buildSeededContext(
     .slice(0, 8)
 
   const bulletLines = [
+    payload.ideaAnchor ? `Finalized idea: ${payload.ideaAnchor.oneSentenceSummary}` : null,
+    payload.ideaAnchor?.coreApproach ? `Idea core approach: ${payload.ideaAnchor.coreApproach}` : null,
+    payload.ideaAnchor?.scopeBoundaries?.length ? `Idea scope boundaries: ${payload.ideaAnchor.scopeBoundaries.join('; ')}` : null,
     payload.project.title ? `Project: ${payload.project.title}` : null,
     payload.project.description ? `Project description: ${payload.project.description}` : null,
     payload.fundingCall.title ? `Funding call: ${payload.fundingCall.title}` : null,
@@ -738,6 +761,8 @@ function buildGrantBlueprintEnrichmentContext(input: {
   guidelinePack?: GuidelinePackDocument | null
 }): GrantBlueprintEnrichmentContext {
   return {
+    ideaAnchor: input.payload.ideaAnchor || null,
+    ideaAnchorHash: input.payload.ideaAnchorHash || null,
     projectTitle: input.projectTitle || input.payload.project.title,
     projectDescription: input.projectDescription || input.payload.project.description || null,
     fundingCallTitle: input.fundingCallTitle || input.payload.fundingCall.title || null,
@@ -770,8 +795,13 @@ function buildGrantBlueprintHydrationContext(input: {
   const fundingCall = asObject(payload.fundingCall)
   const stageStates = asObject(payload.stageStates)
   const payloadKeywords = asStringArray(payload.globalKeywords)
+  const ideaAnchor = asObject(payload.ideaAnchor)
 
   return {
+    ideaAnchor: Object.keys(ideaAnchor).length > 0
+      ? ideaAnchor as unknown as GrantBlueprintEnrichmentContext['ideaAnchor']
+      : null,
+    ideaAnchorHash: String(payload.ideaAnchorHash || '').trim() || null,
     projectTitle: input.projectTitle || String(project.title || '').trim() || null,
     projectDescription: input.projectDescription || String(project.description || '').trim() || null,
     fundingCallTitle: input.fundingCallTitle || String(fundingCall.title || '').trim() || null,
@@ -1189,6 +1219,10 @@ export function buildPaperSectionPlanFromGrantSections(
         grantSectionComplianceContract: section.grantSectionComplianceContract || null,
         grantComplianceReport: section.grantComplianceReport || null,
         reviewerReadinessReport: section.reviewerReadinessReport || null,
+        ideaAnchorHash: section.ideaAnchorHash || null,
+        ideaAnchorRelationship: section.ideaAnchorRelationship || 'supporting',
+        anchorReviewRequired: section.anchorReviewRequired || false,
+        manualOverrideAnchorHash: section.manualOverrideAnchorHash || null,
         workflowMode: section.workflowMode,
         citationMode,
         ...(typeof section.wordBudget === 'number'
@@ -1223,6 +1257,8 @@ async function ensureGrantShadowWorkspaceTx(
     blueprintStatus: 'DRAFT' | 'FROZEN'
     foundation?: Partial<GrantProposalFoundation> | null
     resetStatus?: boolean
+    ideaAnchor?: GrantPrepIdeaAnchorV1 | null
+    ideaAnchorHash?: string | null
   }
 ) {
   let draftingSession = input.draftingSessionId
@@ -1316,6 +1352,7 @@ async function ensureGrantShadowWorkspaceTx(
     input.sectionPlan,
     currentBlueprint?.sectionPlan
   )
+  const grantIntentLock = buildGrantIdeaIntentLock(input.ideaAnchor, input.ideaAnchorHash)
 
   if (!currentBlueprint) {
     await tx.paperBlueprint.create({
@@ -1329,6 +1366,7 @@ async function ensureGrantShadowWorkspaceTx(
         methodologyType: 'OTHER',
         status: input.blueprintStatus === 'FROZEN' ? 'FROZEN' : 'DRAFT',
         frozenAt: input.blueprintStatus === 'FROZEN' ? new Date() : null,
+        ...(grantIntentLock ? { intentLock: asJson(grantIntentLock) } : {}),
       },
     })
 
@@ -1355,6 +1393,7 @@ async function ensureGrantShadowWorkspaceTx(
     methodologyType: 'OTHER',
     status: nextStatus,
     frozenAt: nextFrozenAt,
+    ...(grantIntentLock ? { intentLock: grantIntentLock } : {}),
   }
 
   const currentSnapshot = {
@@ -1366,6 +1405,7 @@ async function ensureGrantShadowWorkspaceTx(
     methodologyType: currentBlueprint.methodologyType,
     status: currentBlueprint.status,
     frozenAt: currentBlueprint.frozenAt ? currentBlueprint.frozenAt.toISOString() : null,
+    intentLock: currentBlueprint.intentLock,
   }
 
   const nextSnapshot = {
@@ -1387,6 +1427,7 @@ async function ensureGrantShadowWorkspaceTx(
         methodologyType: 'OTHER',
         status: nextStatus,
         frozenAt: nextFrozenAt,
+        ...(grantIntentLock ? { intentLock: asJson(grantIntentLock) } : {}),
         version: { increment: 1 },
       },
     })
@@ -1476,6 +1517,8 @@ async function ensureGrantShadowWorkspace(input: {
       sectionPlan,
       globalKeywords: asStringArray(blueprint.globalKeywordsJson),
       blueprintStatus: blueprint.status,
+      ideaAnchor: asObject(asObject(blueprint.freezePayloadJson).ideaAnchor) as unknown as GrantPrepIdeaAnchorV1,
+      ideaAnchorHash: String(asObject(blueprint.freezePayloadJson).ideaAnchorHash || '').trim() || null,
     })
   )
 }
@@ -1763,6 +1806,8 @@ export async function launchGrantPrepToLocalWorkspace(input: {
     const existingBlueprint = await tx.grantBlueprint.findUnique({
       where: { grantSessionId: grantSession.id },
     })
+    const previousAnchorHash = String(asObject(existingBlueprint?.freezePayloadJson).ideaAnchorHash || '').trim() || null
+    const anchorChanged = Boolean(existingBlueprint && previousAnchorHash !== (state.freeze.payload.ideaAnchorHash || null))
 
     const blueprint = existingBlueprint
       ? await tx.grantBlueprint.update({
@@ -1852,6 +1897,8 @@ export async function launchGrantPrepToLocalWorkspace(input: {
             mustCoverJson: asJson(section.mustCover),
             mustAvoidJson: asJson(section.mustAvoid),
             sourceTemplatePointer: section.sourceTemplatePointer,
+            sourceIdeaAnchorHash: state.freeze.payload.ideaAnchorHash || null,
+            isStale: false,
             createdByUserId: input.actor.id,
             updatedByUserId: input.actor.id,
           },
@@ -1887,7 +1934,22 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       globalKeywords: state.freeze.payload.globalKeywords,
       blueprintStatus: 'DRAFT',
       foundation: generatedBlueprint.proposalFoundation,
+      resetStatus: Boolean(existingBlueprint),
+      ideaAnchor: state.freeze.payload.ideaAnchor || null,
+      ideaAnchorHash: state.freeze.payload.ideaAnchorHash || null,
     })
+
+    if (existingBlueprint) {
+      await tx.grantSectionDraft.updateMany({
+        where: { grantSessionId: grantSession.id },
+        data: {
+          isStale: true,
+          staleReason: anchorChanged
+            ? 'The finalized idea changed. Review or regenerate this section.'
+            : 'Grant Prep or blueprint context changed. Review this section.',
+        },
+      })
+    }
 
     const launchUrl = buildGrantWorkspaceUrl({
       projectId: state.prepSession.project_id,
@@ -2255,6 +2317,8 @@ export async function updateBlueprintPlan(input: {
       blueprintStatus: 'DRAFT',
       foundation: input.foundation,
       resetStatus: true,
+      ideaAnchor: asObject(asObject(blueprint.freezePayloadJson).ideaAnchor) as unknown as GrantPrepIdeaAnchorV1,
+      ideaAnchorHash: String(asObject(blueprint.freezePayloadJson).ideaAnchorHash || '').trim() || null,
     })
 
     await tx.grantBlueprint.update({

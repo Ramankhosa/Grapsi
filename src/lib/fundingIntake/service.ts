@@ -1,6 +1,7 @@
 // @ts-nocheck
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import type {
   FundingCallStatus,
@@ -10,6 +11,7 @@ import type {
   FundingIntakeJobStatus,
 } from '@prisma/client';
 import prisma from '../prisma';
+import { startExtractionHeartbeat } from '../funding/extractionRunLifecycle';
 import { fundingGuidelineService } from '../fundingGuidelines/service';
 import { fundingTemplateService } from '../fundingTemplates/service';
 import { fundingCatalogService } from '../services/fundingCatalogService';
@@ -69,6 +71,7 @@ const TEMPLATE_UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads', 'fundi
 const BATCH_SOURCE_KEYS = FUNDING_BATCH_SOURCE_KEYS;
 const QUEUE_CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.FUNDING_INTAKE_QUEUE_CONCURRENCY || 3)));
 const JOB_LOCK_STALE_MS = Math.max(60_000, Number(process.env.FUNDING_INTAKE_JOB_LOCK_STALE_MS || 10 * 60 * 1000));
+const MAX_RATE_LIMIT_RETRIES = Math.max(0, Number(process.env.FUNDING_INTAKE_MAX_RATE_LIMIT_RETRIES || 3));
 const WORKER_ID = `funding-intake-${process.pid}-${Math.random().toString(36).slice(2)}`;
 let drainPromise: Promise<void> | null = null;
 
@@ -227,8 +230,22 @@ async function storeUploadedPdf(file: NonNullable<IntakeSubmitInput['sourceFile'
   await ensureIntakeUploadDir();
   const sanitizedFileName = file.originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
   const destinationPath = path.join(INTAKE_UPLOAD_DIR, `${Date.now()}_${sanitizedFileName}`);
-  await fs.copyFile(file.tempFilePath, destinationPath);
-  return destinationPath;
+  let copied = false;
+  try {
+    await fs.copyFile(file.tempFilePath, destinationPath);
+    copied = true;
+    const storedBytes = await fs.readFile(destinationPath);
+    const storedChecksum = crypto.createHash('sha256').update(storedBytes).digest('hex');
+    if (storedChecksum !== file.checksum) {
+      throw new Error('Funding intake PDF checksum verification failed after storage');
+    }
+    return destinationPath;
+  } catch (error) {
+    if (copied) await fs.unlink(destinationPath).catch(() => undefined);
+    throw error;
+  } finally {
+    await fs.unlink(file.tempFilePath).catch(() => undefined);
+  }
 }
 
 function readCatalogMetadata(value: Prisma.JsonValue | null | undefined): Record<string, unknown> {
@@ -622,6 +639,10 @@ async function transitionJobStatus(
     fetchMetadataJson?: Record<string, unknown> | null;
     rawText?: string | null;
     normalizedText?: string | null;
+    nextAttemptAt?: Date | null;
+    releaseLock?: boolean;
+    incrementRetryCount?: boolean;
+    expectedStatuses?: FundingIntakeJobStatus[];
   }
 ) {
   const existing = await prisma.fundingIntakeJob.findUnique({
@@ -630,21 +651,29 @@ async function transitionJobStatus(
   });
 
   const previousStatus = existing?.status || null;
+  const hasOption = (key: string) => Boolean(options && Object.prototype.hasOwnProperty.call(options, key));
 
-  await prisma.fundingIntakeJob.update({
-    where: { id: jobId },
+  const updated = await prisma.fundingIntakeJob.updateMany({
+    where: {
+      id: jobId,
+      ...(options?.expectedStatuses ? { status: { in: options.expectedStatuses as any } } : {}),
+    },
     data: {
       status: nextStatus,
-      error_code: options?.errorCode ?? undefined,
-      error_message: options?.errorMessage ?? undefined,
-      started_at: options?.startedAt ?? undefined,
-      completed_at: options?.completedAt ?? undefined,
+      error_code: hasOption('errorCode') ? options?.errorCode : nextStatus === 'failed' ? undefined : null,
+      error_message: hasOption('errorMessage') ? options?.errorMessage : nextStatus === 'failed' ? undefined : null,
+      started_at: hasOption('startedAt') ? options?.startedAt : undefined,
+      completed_at: hasOption('completedAt') ? options?.completedAt : undefined,
       duplicate_status: options?.duplicateStatus ?? undefined,
       linked_funding_call_id: options?.linkedFundingCallId ?? undefined,
       processing_phase: options?.processingPhase ?? undefined,
-      locked_at: allowedTransitionTarget(nextStatus) ? undefined : null,
-      locked_by: allowedTransitionTarget(nextStatus) ? undefined : null,
-      next_attempt_at: allowedTransitionTarget(nextStatus) ? undefined : null,
+      locked_at: options?.releaseLock ? null : allowedTransitionTarget(nextStatus) ? undefined : null,
+      locked_by: options?.releaseLock ? null : allowedTransitionTarget(nextStatus) ? undefined : null,
+      next_attempt_at:
+        hasOption('nextAttemptAt')
+          ? options.nextAttemptAt
+          : allowedTransitionTarget(nextStatus) ? undefined : null,
+      retry_count: options?.incrementRetryCount ? { increment: 1 } : undefined,
       fetch_metadata_json:
         options?.fetchMetadataJson === null
           ? Prisma.JsonNull
@@ -654,11 +683,14 @@ async function transitionJobStatus(
     },
   });
 
+  if (updated.count !== 1) return false;
+
   await recordJobEvent(jobId, nextStatus, 'status_transition', {
     actorUserId: options?.actorUserId,
     previousStatus,
     message: options?.message,
   });
+  return true;
 }
 
 async function createExtractionAttempt(
@@ -987,7 +1019,10 @@ async function persistDraft(
     : [];
   const deterministicDraftValues = {
     ...draftValues,
-    official_urls: extractionOfficialUrls.length > 0 ? extractionOfficialUrls : draftValues.official_urls,
+    official_urls: collectSourceUrls(job.source_url, [
+      ...(draftValues.official_urls || []),
+      ...extractionOfficialUrls,
+    ]),
   };
   const isTenantPrivateDraft = operator.role === 'USER' && Boolean(operator.tenantId);
   const sharedData = {
@@ -2580,6 +2615,15 @@ class FundingIntakeService {
       return;
     }
 
+    const stopHeartbeat = startExtractionHeartbeat(() => prisma.fundingIntakeJob.updateMany({
+      where: {
+        id: jobId,
+        locked_by: WORKER_ID,
+        status: { in: ['queued', 'fetching', 'extracting'] as any },
+      },
+      data: { locked_at: new Date() },
+    }), Math.min(60_000, Math.max(10_000, Math.floor(JOB_LOCK_STALE_MS / 3))));
+
     try {
       const submitterForLlm = await prisma.user.findUnique({
         where: { id: job.submitted_by_user_id },
@@ -2642,6 +2686,7 @@ class FundingIntakeService {
           completedAt: new Date(),
           processingPhase: 'draft_created',
           message: 'Batch funding intake job completed',
+          expectedStatuses: ['queued', 'fetching', 'extracting'],
         });
         await this.maybeUpdateBatchStatus(job.batch_id);
         return;
@@ -2746,6 +2791,7 @@ class FundingIntakeService {
             completedAt: new Date(),
             processingPhase: 'draft_created',
             message: 'Batch funding intake job completed',
+            expectedStatuses: ['queued', 'fetching', 'extracting'],
           });
           await this.maybeUpdateBatchStatus(latestJob.batch_id);
           return;
@@ -2757,6 +2803,7 @@ class FundingIntakeService {
         completedAt: new Date(),
         processingPhase: 'needs_review',
         message: 'Extraction completed and awaiting curator review',
+        expectedStatuses: ['queued', 'fetching', 'extracting'],
       });
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : String(error);
@@ -2782,14 +2829,39 @@ class FundingIntakeService {
         console.warn(`[Funding Intake] LLM rate limited for job ${jobId}: ${rawMessage}`);
       }
 
-      await transitionJobStatus(jobId, 'failed', {
-        errorCode,
-        errorMessage: message,
-        completedAt: new Date(),
-        processingPhase: 'failed',
-        message,
-      });
+      const shouldRetry = isRateLimited && job.retry_count < MAX_RATE_LIMIT_RETRIES;
+      if (shouldRetry) {
+        const retryDelayMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+          ? Math.min(retryAfterMs, 15 * 60 * 1000)
+          : 60_000;
+        const nextAttemptAt = new Date(Date.now() + retryDelayMs);
+        const requeued = await transitionJobStatus(jobId, 'queued', {
+          errorCode,
+          errorMessage: message,
+          completedAt: null,
+          processingPhase: 'rate_limit_retry',
+          message: `${message} Automatically retrying at ${nextAttemptAt.toISOString()}.`,
+          nextAttemptAt,
+          releaseLock: true,
+          incrementRetryCount: true,
+          expectedStatuses: ['queued', 'fetching', 'extracting'],
+        });
+        if (requeued) {
+          const timer = setTimeout(() => this.enqueue(jobId), retryDelayMs);
+          timer.unref?.();
+        }
+      } else {
+        await transitionJobStatus(jobId, 'failed', {
+          errorCode,
+          errorMessage: message,
+          completedAt: new Date(),
+          processingPhase: 'failed',
+          message,
+          expectedStatuses: ['queued', 'fetching', 'extracting'],
+        });
+      }
     } finally {
+      await stopHeartbeat();
       const latestJob = await prisma.fundingIntakeJob.findUnique({
         where: { id: jobId },
         select: { batch_id: true },

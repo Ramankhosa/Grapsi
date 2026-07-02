@@ -14,6 +14,7 @@ import {
   FaTimes,
   FaUpload,
 } from 'react-icons/fa';
+import PdfPageSelector, { type PdfDocumentState } from '@/components/PdfPageSelector';
 import { deriveGrantPrepPriorityAreaOptions } from '@/lib/grantPrep/priorityAreas';
 
 type ImportMode = 'url' | 'file' | 'text';
@@ -301,6 +302,16 @@ function countArray(value: unknown) {
   return Array.isArray(value) ? value.length : 0;
 }
 
+function isPdfTemplateFile(file: File | null) {
+  if (!file) return false;
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+}
+
+function isFullPageSelection(selectedPages: number[], totalPages: number | null) {
+  if (!totalPages || selectedPages.length !== totalPages) return false;
+  return selectedPages.every((page, index) => page === index + 1);
+}
+
 function previewRules(pack: Record<string, unknown>) {
   const buckets = ['priorities', 'mustAddress', 'evaluationCriteria', 'submissionRules', 'formatRules'];
   const previews: string[] = [];
@@ -444,6 +455,13 @@ export default function FundingCallImportModal({
   const [templateUrl, setTemplateUrl] = useState('');
   const [templateText, setTemplateText] = useState('');
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [templateSelectedPages, setTemplateSelectedPages] = useState<number[]>([]);
+  const [templatePdfState, setTemplatePdfState] = useState<PdfDocumentState>({
+    totalPages: null,
+    loading: false,
+    error: null,
+  });
+  const [templatePageSelectionError, setTemplatePageSelectionError] = useState<string | null>(null);
   const [templateState, setTemplateState] = useState<ArtifactState>(emptyArtifactState);
   const [projectName, setProjectName] = useState('');
   const [selectedPriorityAreas, setSelectedPriorityAreas] = useState<string[]>([]);
@@ -465,9 +483,54 @@ export default function FundingCallImportModal({
   const callTextOnly = allowedCallModes.length === 1 && allowedCallModes[0] === 'text';
   const guidelineTextOnly = allowedGuidelineModes.every((candidate) => candidate === 'text' || candidate === 'skip');
   const templateFileOrTextOnly = allowedTemplateModes.every((candidate) => candidate === 'file' || candidate === 'text' || candidate === 'skip');
+  const streamlinedOwnCallFlow = callTextOnly && guidelineTextOnly && templateFileOrTextOnly;
+  const templateFileIsPdf = activeTemplateMode === 'file' && isPdfTemplateFile(templateFile);
+  const templatePdfSelectionBlockingMessage = useMemo(() => {
+    if (!templateFileIsPdf) return null;
+    if (templatePdfState.loading) return 'Preparing PDF pages. Try again in a moment.';
+    if (templatePageSelectionError) return templatePageSelectionError;
+    if (templatePdfState.totalPages && templateSelectedPages.length === 0) {
+      return 'Select at least one template page before extraction.';
+    }
+    if (!templatePdfState.totalPages && templatePdfState.error && templateSelectedPages.length === 0) {
+      return 'Enter the template page range before extraction.';
+    }
+    return null;
+  }, [
+    templateFileIsPdf,
+    templatePageSelectionError,
+    templatePdfState.error,
+    templatePdfState.loading,
+    templatePdfState.totalPages,
+    templateSelectedPages.length,
+  ]);
+  const shouldSubmitTemplateSelectedPages =
+    templateFileIsPdf &&
+    templateSelectedPages.length > 0 &&
+    !isFullPageSelection(templateSelectedPages, templatePdfState.totalPages);
   const compactPastedCallQuery = activeMode === 'text' ? buildCompactCallSearchQuery(sourceText) : '';
   const effectiveQuickSearchQuery = (quickSearchInput.trim() || compactPastedCallQuery).trim();
   const quickSearchSourceLabel = quickSearchInput.trim() ? 'manual search' : 'pasted text';
+
+  const handleTemplateSelectedPagesChange = useCallback((pages: number[]) => {
+    setTemplateSelectedPages(pages);
+  }, []);
+
+  const handleTemplatePdfStateChange = useCallback((state: PdfDocumentState) => {
+    setTemplatePdfState(state);
+  }, []);
+
+  const handleTemplatePageSelectionErrorChange = useCallback((message: string | null) => {
+    setTemplatePageSelectionError(message);
+  }, []);
+
+  const handleTemplateFileChange = useCallback((file: File | null) => {
+    setTemplateFile(file);
+    setTemplateSelectedPages([]);
+    setTemplatePdfState({ totalPages: null, loading: false, error: null });
+    setTemplatePageSelectionError(null);
+    setTemplateState((current) => current.status === 'failed' ? emptyArtifactState : current);
+  }, []);
 
   const clearSavedProgress = () => {
     if (typeof window !== 'undefined') {
@@ -500,6 +563,9 @@ export default function FundingCallImportModal({
     setTemplateUrl('');
     setTemplateText('');
     setTemplateFile(null);
+    setTemplateSelectedPages([]);
+    setTemplatePdfState({ totalPages: null, loading: false, error: null });
+    setTemplatePageSelectionError(null);
     setTemplateState(emptyArtifactState);
     setProjectName('');
     setSelectedPriorityAreas([]);
@@ -762,6 +828,7 @@ export default function FundingCallImportModal({
     : activeMode === 'file'
       ? Boolean(sourceFile)
       : sourceText.trim().length >= 80;
+  const canSubmitWithTemplateSelection = canSubmit && !templatePdfSelectionBlockingMessage;
   const guidelineSummary = buildGuidelineSummary(guidelineState.run);
   const templateSummary = buildTemplateSummary(templateState.run);
   const isGuidelineComplete = (status = guidelineState.status) => status === 'accepted' || status === 'skipped';
@@ -1009,7 +1076,13 @@ export default function FundingCallImportModal({
         });
       }
 
-      setGuidelineState({ status: 'ready', run: response.run, error: null });
+      let run = response.run;
+      if (run?.id && (run.status === 'queued' || run.status === 'extracting')) {
+        setGuidelineState({ status: 'extracting', run, error: null });
+        run = await pollGuidelineRun(callId, run.id);
+      }
+
+      setGuidelineState({ status: 'ready', run, error: null });
     } catch (err) {
       setGuidelineState({ status: 'failed', error: err instanceof Error ? err.message : 'Failed to extract guidelines' });
     }
@@ -1039,6 +1112,27 @@ export default function FundingCallImportModal({
       setActionLoading(false);
     }
   };
+
+  async function pollGuidelineRun(callId: string, runId: string): Promise<any> {
+    const POLL_INTERVAL_MS = 3000;
+    const MAX_ATTEMPTS = 120; // ~6 minutes
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      const payload = await apiRequest<{ run: any }>(`/api/funding/calls/${callId}/user-guidelines/runs/${runId}`);
+      const run = payload?.run;
+
+      if (run?.status === 'needs_review' || run?.status === 'applied') {
+        return run;
+      }
+      if (run?.status === 'failed') {
+        throw new Error(run.error_message || 'Guideline extraction failed. Try extracting again.');
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+
+    throw new Error('Guideline extraction is taking longer than expected. Use "Extract again" to retry.');
+  }
 
   // Template extraction now runs server-side in the background; poll the run
   // until it reaches a terminal status so long PDF extractions survive proxy timeouts.
@@ -1085,6 +1179,11 @@ export default function FundingCallImportModal({
       }
     }
 
+    if (activeTemplateMode === 'file' && templateFile && templatePdfSelectionBlockingMessage) {
+      setTemplateState({ status: 'failed', error: templatePdfSelectionBlockingMessage });
+      return;
+    }
+
     setTemplateState({ status: 'extracting', error: null });
     setError(null);
 
@@ -1094,6 +1193,9 @@ export default function FundingCallImportModal({
         if (!templateFile) throw new Error('Upload a template file first');
         const formData = new FormData();
         formData.append('file', templateFile);
+        if (shouldSubmitTemplateSelectedPages) {
+          formData.append('selectedPages', JSON.stringify(templateSelectedPages));
+        }
         response = await apiRequest(`/api/funding/calls/${callId}/user-template/extract`, {
           method: 'POST',
           body: formData,
@@ -1226,7 +1328,11 @@ export default function FundingCallImportModal({
           {step === 'source' ? (
             <div className="space-y-5">
               <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-950">Add the call source</div>
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">1</span>
+                  <div className="text-sm font-semibold text-slate-950">Funding call</div>
+                  <span className="text-xs font-semibold text-slate-500">Required</span>
+                </div>
                 <p className="mt-1 text-sm text-slate-600">
                   {callTextOnly
                     ? 'Paste the funding call text. URL and PDF uploads are disabled for this project creation flow.'
@@ -1244,6 +1350,7 @@ export default function FundingCallImportModal({
                   ) : null}
                 </div>
 
+                {!streamlinedOwnCallFlow || quickSearchLoading || Boolean(quickSearchError) || quickSearchResults.length > 0 ? (
                 <div className="mt-4 rounded-md border border-amber-200 bg-white p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -1320,6 +1427,7 @@ export default function FundingCallImportModal({
                     </div>
                   ) : null}
                 </div>
+                ) : null}
 
                 <div className="mt-4">
                   {activeMode === 'url' ? (
@@ -1353,23 +1461,24 @@ export default function FundingCallImportModal({
                 </div>
               </div>
 
-              <div className="rounded-md border border-emerald-100 bg-emerald-50 p-4">
-                <div className="text-sm font-semibold text-emerald-950">Parallel extraction inputs</div>
-                <p className="mt-1 text-sm text-emerald-800">
-                  Add guidelines and a proposal template now. After the call source is submitted, GrantMentor starts the available LLM extraction jobs in parallel.
-                </p>
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-950">Optional documents</div>
+                  <p className="mt-1 text-sm text-slate-600">Add either item, or leave it skipped.</p>
+                </div>
+                <span className="text-xs font-semibold text-slate-500">Processed with the call</span>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-md border border-slate-200 p-4">
+              <div className="space-y-3">
+                <div className={`rounded-md border p-4 ${activeGuidelineMode === 'skip' ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-white'}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-950">Guidelines</div>
-                      <p className="mt-1 text-sm text-slate-600">
-                        {guidelineTextOnly
-                          ? 'Paste separate guideline text if available, or skip.'
-                          : 'Use the call source, upload a separate PDF, provide a URL, paste text, or skip.'}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-semibold text-slate-700">2</span>
+                        <div className="text-sm font-semibold text-slate-950">Guidelines</div>
+                        <span className="text-xs font-semibold text-slate-500">Optional</span>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-600">Rules, limits, and reviewer criteria.</p>
                     </div>
                     {guidelineState.status !== 'idle' ? (
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
@@ -1391,7 +1500,7 @@ export default function FundingCallImportModal({
                       <SourceButton active={activeGuidelineMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setGuidelineMode('text')} />
                     ) : null}
                     {allowedGuidelineModes.includes('skip') ? (
-                      <SourceButton active={activeGuidelineMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setGuidelineMode('skip')} />
+                      <SourceButton active={activeGuidelineMode === 'skip'} icon={<FaTimes />} label="Skip" onClick={() => setGuidelineMode('skip')} />
                     ) : null}
                   </div>
                   <div className="mt-4">
@@ -1421,11 +1530,7 @@ export default function FundingCallImportModal({
                         placeholder="Paste the guideline text here"
                         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                       />
-                    ) : activeGuidelineMode === 'skip' ? (
-                      <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
-                        Guidelines will be skipped for now.
-                      </div>
-                    ) : (
+                    ) : activeGuidelineMode === 'skip' ? null : (
                       <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
                         Guidelines will be extracted from the call source in parallel.
                       </div>
@@ -1436,15 +1541,15 @@ export default function FundingCallImportModal({
                   ) : null}
                 </div>
 
-                <div className="rounded-md border border-slate-200 p-4">
+                <div className={`rounded-md border p-4 ${activeTemplateMode === 'skip' ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-white'}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-950">Proposal template</div>
-                      <p className="mt-1 text-sm text-slate-600">
-                        {templateFileOrTextOnly
-                          ? 'Upload a funder template as PDF or image, paste template text, or skip to use the standard fallback template.'
-                          : 'Upload a funder template when available. If skipped, the standard fallback template is used.'}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-semibold text-slate-700">3</span>
+                        <div className="text-sm font-semibold text-slate-950">Proposal template</div>
+                        <span className="text-xs font-semibold text-slate-500">Optional</span>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-600">Proposal sections, questions, and attachments.</p>
                     </div>
                     {templateState.status !== 'idle' ? (
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
@@ -1466,22 +1571,31 @@ export default function FundingCallImportModal({
                       <SourceButton active={activeTemplateMode === 'text'} icon={<FaAlignLeft />} label="Paste text" onClick={() => setTemplateMode('text')} />
                     ) : null}
                     {allowedTemplateModes.includes('skip') ? (
-                      <SourceButton active={activeTemplateMode === 'skip'} icon={<FaArrowRight />} label="Skip" onClick={() => setTemplateMode('skip')} />
+                      <SourceButton active={activeTemplateMode === 'skip'} icon={<FaTimes />} label="Skip" onClick={() => setTemplateMode('skip')} />
                     ) : null}
                   </div>
                   <div className="mt-4">
                     {activeTemplateMode === 'file' ? (
-                      <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
-                        <FaUpload className="mb-3 text-xl text-emerald-700" />
-                        <span className="font-semibold text-slate-900">{templateFile ? templateFile.name : 'Upload template file'}</span>
-                        <span className="mt-1 text-xs text-slate-500">PDF, PNG, JPG, JPEG, or WebP files are supported.</span>
-                        <input
-                          type="file"
-                          accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp"
-                          className="hidden"
-                          onChange={(event) => setTemplateFile(event.target.files?.[0] || null)}
+                      <>
+                        <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
+                          <FaUpload className="mb-3 text-xl text-emerald-700" />
+                          <span className="font-semibold text-slate-900">{templateFile ? templateFile.name : 'Upload template file'}</span>
+                          <span className="mt-1 text-xs text-slate-500">PDF, PNG, JPG, JPEG, or WebP files are supported.</span>
+                          <input
+                            type="file"
+                            accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp"
+                            className="hidden"
+                            onChange={(event) => handleTemplateFileChange(event.target.files?.[0] || null)}
+                          />
+                        </label>
+                        <PdfPageSelector
+                          file={templateFile}
+                          selectedPages={templateSelectedPages}
+                          onSelectedPagesChange={handleTemplateSelectedPagesChange}
+                          onDocumentStateChange={handleTemplatePdfStateChange}
+                          onValidationErrorChange={handleTemplatePageSelectionErrorChange}
                         />
-                      </label>
+                      </>
                     ) : activeTemplateMode === 'url' ? (
                       <input
                         value={templateUrl}
@@ -1497,11 +1611,7 @@ export default function FundingCallImportModal({
                         placeholder="Paste the proposal template text here"
                         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                       />
-                    ) : activeTemplateMode === 'skip' ? (
-                      <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
-                        The standard grant application template will be used as fallback.
-                      </div>
-                    ) : (
+                    ) : activeTemplateMode === 'skip' ? null : (
                       <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
                         Proposal structure will be extracted from the call source in parallel.
                       </div>
@@ -1554,7 +1664,7 @@ export default function FundingCallImportModal({
               <button
                 type="button"
                 onClick={hasFailedRequests ? retryFailedRequests : submitImport}
-                disabled={loading || importing || (!hasFailedRequests && !canSubmit)}
+                disabled={loading || importing || (!hasFailedRequests && !canSubmitWithTemplateSelection)}
                 className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading || importing ? <FaSpinner className="animate-spin" /> : <FaMagic />}
@@ -1562,7 +1672,7 @@ export default function FundingCallImportModal({
                   ? 'Extracting...'
                   : hasFailedRequests
                     ? retryFailedLabel
-                    : 'Start parallel extraction'}
+                    : streamlinedOwnCallFlow ? 'Create project' : 'Start extraction'}
               </button>
             </div>
           ) : null}
@@ -1853,17 +1963,26 @@ export default function FundingCallImportModal({
 
                 <div className="mt-4">
                   {activeTemplateMode === 'file' ? (
-                    <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-7 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
-                      <FaUpload className="mb-3 text-xl text-emerald-700" />
-                      <span className="font-semibold text-slate-900">{templateFile ? templateFile.name : 'Upload template file'}</span>
-                      <span className="mt-1 text-xs text-slate-500">PDF, PNG, JPG, JPEG, or WebP files are supported.</span>
-                      <input
-                        type="file"
-                        accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp"
-                        className="hidden"
-                        onChange={(event) => setTemplateFile(event.target.files?.[0] || null)}
+                    <>
+                      <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-7 text-center text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50">
+                        <FaUpload className="mb-3 text-xl text-emerald-700" />
+                        <span className="font-semibold text-slate-900">{templateFile ? templateFile.name : 'Upload template file'}</span>
+                        <span className="mt-1 text-xs text-slate-500">PDF, PNG, JPG, JPEG, or WebP files are supported.</span>
+                        <input
+                          type="file"
+                          accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp"
+                          className="hidden"
+                          onChange={(event) => handleTemplateFileChange(event.target.files?.[0] || null)}
+                        />
+                      </label>
+                      <PdfPageSelector
+                        file={templateFile}
+                        selectedPages={templateSelectedPages}
+                        onSelectedPagesChange={handleTemplateSelectedPagesChange}
+                        onDocumentStateChange={handleTemplatePdfStateChange}
+                        onValidationErrorChange={handleTemplatePageSelectionErrorChange}
                       />
-                    </label>
+                    </>
                   ) : activeTemplateMode === 'url' ? (
                     <input
                       value={templateUrl}
@@ -1945,7 +2064,7 @@ export default function FundingCallImportModal({
                 <button
                   type="button"
                   onClick={extractTemplate}
-                  disabled={templateState.status === 'extracting'}
+                  disabled={templateState.status === 'extracting' || Boolean(templatePdfSelectionBlockingMessage)}
                   className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
                   {templateState.status === 'extracting' ? <FaSpinner className="animate-spin" /> : <FaMagic />}

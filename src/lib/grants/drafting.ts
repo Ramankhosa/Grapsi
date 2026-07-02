@@ -293,7 +293,6 @@ export async function generateGrantSectionDraft(input: {
   }
 
   const blueprint = workspace.blueprint
-
   if (blueprint.status !== 'FROZEN') {
     throw new Error('Freeze the blueprint before generating draft sections.')
   }
@@ -429,6 +428,10 @@ export async function saveGrantSectionDraft(input: {
   }
 
   const blueprint = workspace.blueprint
+  const freezePayload = blueprint.freezePayloadJson && typeof blueprint.freezePayloadJson === 'object'
+    ? blueprint.freezePayloadJson as Record<string, unknown>
+    : {}
+  const currentIdeaAnchorHash = String(freezePayload.ideaAnchorHash || '').trim() || null
   const sectionDraft = blueprint.sectionDrafts.find((section) => section.sectionKey === input.sectionKey)
   if (!sectionDraft) {
     throw new Error('Grant section not found')
@@ -445,6 +448,9 @@ export async function saveGrantSectionDraft(input: {
           status: input.markReviewed ? 'REVIEWED' : 'DRAFT',
           version: { increment: 1 },
           updatedByUserId: input.userId,
+          isStale: false,
+          staleReason: null,
+          sourceIdeaAnchorHash: currentIdeaAnchorHash,
         },
         include: {
           structuredResponses: true,
@@ -485,6 +491,9 @@ export async function saveGrantSectionDraft(input: {
           status: input.markReviewed ? 'REVIEWED' : 'DRAFT',
           version: { increment: 1 },
           updatedByUserId: input.userId,
+          isStale: false,
+          staleReason: null,
+          sourceIdeaAnchorHash: currentIdeaAnchorHash,
         },
         include: {
           structuredResponses: true,

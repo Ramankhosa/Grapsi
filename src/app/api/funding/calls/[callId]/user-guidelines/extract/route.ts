@@ -23,6 +23,9 @@ export async function POST(
 
   const access = await requireUserManageablePrivateFundingCall(auth.actor, params.callId)
   if ('response' in access) return access.response
+  if (!access.isOwner) {
+    return NextResponse.json({ message: 'Only the owner can extract guidelines for this private funding call' }, { status: 403 })
+  }
 
   try {
     const contentType = request.headers.get('content-type') || ''
@@ -58,7 +61,7 @@ export async function POST(
       }
     }
 
-    const run = await fundingGuidelineService.createExtractionRunFromFundingCall(
+    const run = await fundingGuidelineService.startExtractionRunFromFundingCall(
       params.callId,
       auth.operator,
       sourceInput

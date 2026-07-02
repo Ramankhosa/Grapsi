@@ -1,15 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import type { ChangeEvent, FocusEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HiArrowsPointingIn, HiArrowsPointingOut, HiExclamationTriangle, HiPaperAirplane, HiSparkles } from 'react-icons/hi2';
-import type { PrepIdeationContext, PrepMessage } from './types';
+import type { PrepIdeationContext, PrepIdeationDecision, PrepMessage } from './types';
 import {
   mergeGrantPrepSuggestedAnswersWithInline,
   removeGrantPrepApprovalBundlePrefix,
 } from '@/lib/grantPrep/suggestedAnswers';
 import {
+  buildGrantPrepResearchAreaRecommendationMessage,
   buildGrantPrepPublicationRecommendationMessage,
+  buildGrantPrepSavedPublicationRecommendationMessage,
+  GRANT_PREP_CALL_ONLY_IDEA_RECOMMENDATION_REQUEST,
   GRANT_PREP_IDEA_RECOMMENDATION_REQUEST,
   GRANT_PREP_MAX_IDEATION_PUBLICATIONS,
   GRANT_PREP_MORE_IDEAS_REQUEST,
@@ -44,12 +48,26 @@ type Props = {
   pendingPoints?: Array<{ key: string; label: string; helpText?: string }>;
   stageTransitionContext?: StageTransitionContext;
   ideationContext?: PrepIdeationContext | null;
-  onLockIdeation?: () => void | Promise<void>;
+  ideationDecision?: PrepIdeationDecision | null;
+  onFinalizeIdeation?: (messageId: string, option: SuggestedAnswer) => void | Promise<void>;
+  onPreviewTypedIdea?: (ideaText: string) => Promise<{
+    anchor: PrepIdeationDecision['anchor'];
+    anchorHash: string;
+    compilationSource: PrepIdeationDecision['compilationSource'];
+  }>;
+  onFinalizeTypedIdea?: (ideaText: string, preview: {
+    anchor: PrepIdeationDecision['anchor'];
+    anchorHash: string;
+    compilationSource: PrepIdeationDecision['compilationSource'];
+  }) => void | Promise<void>;
+  finalizingIdeation?: boolean;
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
 };
 
 type PendingPoint = { key: string; label: string; helpText?: string };
+type IdeationResearchArea = NonNullable<PrepIdeationContext>['savedResearchAreas'][number];
+type IdeationPublication = NonNullable<PrepIdeationContext>['publications'][number];
 
 function SteeringBanner({ level, message }: { level: string; message: string }) {
   const tone =
@@ -132,6 +150,22 @@ function buildAiSuggestionPrompt(activeStageTitle: string | undefined, points: P
   ]
     .filter(Boolean)
     .join(' ');
+}
+
+function truncateCardText(value: string | null | undefined, maxLength = 170) {
+  const normalized = (value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trim()}...` : normalized;
+}
+
+function getResearchAreaTitle(area: IdeationResearchArea) {
+  return area.label || area.researchArea || 'Research area';
+}
+
+function getPublicationMeta(publication: IdeationPublication) {
+  return [publication.year ? String(publication.year) : null, publication.venue, publication.doi ? `DOI ${publication.doi}` : null]
+    .filter(Boolean)
+    .join(' | ');
 }
 
 function StageTransitionStarterCard({
@@ -299,16 +333,49 @@ function IdeationStartCard({
   onSend: (contentOverride?: string) => void;
 }) {
   const [publicationInput, setPublicationInput] = useState('');
+  const [manualOpen, setManualOpen] = useState(!ideationContext?.hasUsableContext);
   const [error, setError] = useState<string | null>(null);
   const hasContext = ideationContext?.hasUsableContext;
   const disabled = sending || !!sendCooldown || sessionLocked;
-  const sourceText = ideationContext?.sourceSummary?.length
-    ? ideationContext.sourceSummary.join(', ')
-    : 'your saved profile context';
+  const savedResearchAreas = (ideationContext?.savedResearchAreas || []).slice(0, 5);
+  const savedPublications = (ideationContext?.publications || []).slice(0, GRANT_PREP_MAX_IDEATION_PUBLICATIONS);
+  const hasResearchFitItems = savedResearchAreas.length > 0 || savedPublications.length > 0;
+  const profileSignalCount = [
+    ideationContext?.profile?.researchSummary,
+    ideationContext?.profile?.researchAreas?.length ? 'areas' : null,
+    ideationContext?.profile?.keywords?.length ? 'keywords' : null,
+  ].filter(Boolean).length;
+  const contextSummary = [
+    savedResearchAreas.length ? `${savedResearchAreas.length} research area${savedResearchAreas.length === 1 ? '' : 's'}` : null,
+    savedPublications.length ? `${savedPublications.length}/${GRANT_PREP_MAX_IDEATION_PUBLICATIONS} key publication${savedPublications.length === 1 ? '' : 's'}` : null,
+    profileSignalCount ? 'profile summary' : null,
+  ].filter(Boolean).join(' | ');
+  const pastedPublicationCount = parseGrantPrepPublicationLines(publicationInput).length;
+
+  useEffect(() => {
+    if (hasContext) {
+      setManualOpen(false);
+    }
+  }, [hasContext]);
 
   const handleRecommendFromContext = () => {
     if (disabled) return;
     onSend(GRANT_PREP_IDEA_RECOMMENDATION_REQUEST);
+  };
+
+  const handleRecommendFromCallOnly = () => {
+    if (disabled) return;
+    onSend(GRANT_PREP_CALL_ONLY_IDEA_RECOMMENDATION_REQUEST);
+  };
+
+  const handleRecommendFromResearchArea = (area: IdeationResearchArea) => {
+    if (disabled) return;
+    onSend(buildGrantPrepResearchAreaRecommendationMessage(area));
+  };
+
+  const handleRecommendFromSavedPublication = (publication: IdeationPublication) => {
+    if (disabled) return;
+    onSend(buildGrantPrepSavedPublicationRecommendationMessage(publication));
   };
 
   const handleRecommendFromPublications = () => {
@@ -327,29 +394,156 @@ function IdeationStartCard({
   };
 
   return (
-    <div className="flex flex-1 items-center justify-center px-3 py-8">
-      <div className="w-full max-w-2xl rounded-xl border border-emerald-100 bg-emerald-50/70 p-5 text-left shadow-prep-card">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-white text-prep-accent shadow-sm">
-            <HiSparkles className="h-5 w-5" />
+    <div className="flex flex-1 items-start justify-center px-3 py-5">
+      <div className="w-full max-w-3xl overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-prep-card">
+        <div className="border-b border-slate-100 px-4 py-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-prep-accent">
+              <HiSparkles className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-base font-semibold text-slate-950">Start Grant Prep</div>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                Choose what the chatbot should use first. It will suggest three grant directions, then you can edit or pick one.
+              </p>
+            </div>
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-base font-semibold text-slate-900">Start with agency-aligned ideas</div>
-            <p className="mt-1 text-sm leading-6 text-slate-600">
-              I can suggest three A/B/C grant ideas that fit the funding call requirements before you choose an angle.
-            </p>
+        </div>
 
-            {hasContext ? (
-              <div className="mt-4 rounded-lg border border-emerald-100 bg-white px-3 py-2 text-xs text-slate-600">
-                Using: {sourceText}.
+        <div className="space-y-4 px-4 py-4">
+          {hasContext ? (
+            <section className="rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-emerald-950">Use all Research Fit context</div>
+                  <div className="mt-1 text-xs leading-5 text-emerald-900">
+                    {contextSummary || 'Saved profile context'} will ground the first recommendations.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRecommendFromContext}
+                  disabled={disabled}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-prep-accent px-3 py-2 text-sm font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  <HiSparkles className="h-4 w-4" />
+                  Use Research Fit
+                </button>
               </div>
-            ) : (
-              <div className="mt-4">
+            </section>
+          ) : null}
+
+          {savedResearchAreas.length > 0 ? (
+            <section className="rounded-lg border border-slate-200">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-950">Research areas</h3>
+                  <p className="text-xs text-slate-500">{savedResearchAreas.length} saved for matching</p>
+                </div>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {savedResearchAreas.map((area, index) => (
+                  <div key={`${getResearchAreaTitle(area)}_${index}`} className="grid gap-3 px-3 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-medium text-slate-900">{getResearchAreaTitle(area)}</div>
+                        {area.taxonomyPath ? (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                            {area.taxonomyPath}
+                          </span>
+                        ) : null}
+                      </div>
+                      {area.researchArea ? (
+                        <p className="mt-1 text-sm leading-5 text-slate-600">{truncateCardText(area.researchArea)}</p>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRecommendFromResearchArea(area)}
+                      disabled={disabled}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                    >
+                      <HiPaperAirplane className="h-3.5 w-3.5" />
+                      Use area
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {savedPublications.length > 0 ? (
+            <section className="rounded-lg border border-slate-200">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-950">Key publications</h3>
+                  <p className="text-xs text-slate-500">{savedPublications.length}/{GRANT_PREP_MAX_IDEATION_PUBLICATIONS} selected in Research Fit</p>
+                </div>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {savedPublications.map((publication, index) => {
+                  const meta = getPublicationMeta(publication);
+                  return (
+                    <div key={`${publication.title}_${index}`} className="grid gap-3 px-3 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-900">{publication.title}</div>
+                        {meta ? <div className="mt-0.5 text-xs text-slate-500">{meta}</div> : null}
+                        {publication.abstractSnippet ? (
+                          <p className="mt-1 text-sm leading-5 text-slate-600">{truncateCardText(publication.abstractSnippet)}</p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRecommendFromSavedPublication(publication)}
+                        disabled={disabled}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                      >
+                        <HiPaperAirplane className="h-3.5 w-3.5" />
+                        Use publication
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          {!hasResearchFitItems ? (
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3">
+              <div className="text-sm font-semibold text-slate-900">No saved research areas or key publications yet</div>
+              <div className="mt-1 text-sm text-slate-600">
+                Add them when you want Grant Prep to start from your own focused topics or papers.
+              </div>
+              <Link
+                href="/profile/research-fit"
+                className="mt-2 inline-flex rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Open Research Fit
+              </Link>
+            </div>
+          ) : null}
+
+          <section className="rounded-lg border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setManualOpen((current) => !current)}
+              className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
+            >
+              <span>
+                <span className="block text-sm font-semibold text-slate-950">Manual start</span>
+                <span className="mt-0.5 block text-xs text-slate-500">Use this when Research Fit is not ready or you want to paste papers for this call only.</span>
+              </span>
+              <span className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600">
+                {manualOpen ? 'Hide' : 'Show'}
+              </span>
+            </button>
+            {manualOpen ? (
+              <div className="border-t border-slate-100 px-3 pb-3 pt-2">
                 <label htmlFor="grant-prep-publications" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Optional publication base
+                  Paste publication titles
                 </label>
                 <p className="mt-1 text-sm text-slate-600">
-                  Paste up to five publication titles or short citations if you want ideas grounded in your work.
+                  Optional. Use up to five titles or short citations if you want this chat grounded in papers that are not saved in Research Fit.
                 </p>
                 <textarea
                   id="grant-prep-publications"
@@ -359,7 +553,7 @@ function IdeationStartCard({
                     setError(null);
                   }}
                   disabled={disabled}
-                  rows={5}
+                  rows={4}
                   placeholder={[
                     '1. AI-assisted diabetic retinopathy screening in rural clinics',
                     '2. Community health worker-led diabetes adherence intervention',
@@ -367,50 +561,43 @@ function IdeationStartCard({
                   ].join('\n')}
                   className="mt-2 w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-prep-accent focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50"
                 />
-                <div className="mt-1 flex items-center justify-between gap-2 text-xs">
-                  <span className={error ? 'text-rose-600' : 'text-slate-400'}>
-                    {error || `${parseGrantPrepPublicationLines(publicationInput).length}/${GRANT_PREP_MAX_IDEATION_PUBLICATIONS} publications`}
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <span className={error ? 'text-xs text-rose-600' : 'text-xs text-slate-400'}>
+                    {error || `${pastedPublicationCount}/${GRANT_PREP_MAX_IDEATION_PUBLICATIONS} pasted publications`}
                   </span>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleRecommendFromPublications}
+                      disabled={disabled}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-prep-accent px-3 py-2 text-xs font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      <HiSparkles className="h-3.5 w-3.5" />
+                      Use pasted papers
+                    </button>
+                  </div>
                 </div>
               </div>
-            )}
+            ) : null}
+          </section>
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleRecommendFromContext}
-                disabled={disabled}
-                className="rounded-lg bg-prep-accent px-3 py-2 text-sm font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
-              >
-                Recommend grant ideas
-              </button>
-              {!hasContext ? (
-                <button
-                  type="button"
-                  onClick={handleRecommendFromPublications}
-                  disabled={disabled}
-                  className="rounded-lg bg-prep-accent px-3 py-2 text-sm font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  Recommend from these papers
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => onSend(GRANT_PREP_IDEA_RECOMMENDATION_REQUEST)}
-                disabled={disabled}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                >
-                  Brainstorm from the call only
-                </button>
-              <button
-                type="button"
-                onClick={() => onInputChange('I have finalized the idea already: ')}
-                disabled={disabled}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-              >
-                I have finalized the idea already
-              </button>
-            </div>
+          <div className="flex flex-wrap justify-between gap-2 border-t border-slate-100 pt-3">
+            <button
+              type="button"
+              onClick={handleRecommendFromCallOnly}
+              disabled={disabled}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+            >
+              Start from funding call only
+            </button>
+            <button
+              type="button"
+              onClick={() => onInputChange('I have finalized the idea already: ')}
+              disabled={disabled}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+            >
+              I already know the idea
+            </button>
           </div>
         </div>
       </div>
@@ -434,13 +621,26 @@ export default function GrantPrepChatPane({
   pendingPoints,
   stageTransitionContext,
   ideationContext,
-  onLockIdeation,
+  ideationDecision,
+  onFinalizeIdeation,
+  onPreviewTypedIdea,
+  onFinalizeTypedIdea,
+  finalizingIdeation = false,
   onToggleFullscreen,
   isFullscreen = false,
 }: Props) {
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [expandedPromptInput, setExpandedPromptInput] = useState(false);
+  const [pendingIdeaChoice, setPendingIdeaChoice] = useState<{ messageId: string; option: SuggestedAnswer } | null>(null);
+  const [pendingTypedIdea, setPendingTypedIdea] = useState<{
+    ideaText: string;
+    anchor: PrepIdeationDecision['anchor'];
+    anchorHash: string;
+    compilationSource: PrepIdeationDecision['compilationSource'];
+  } | null>(null);
+  const [revisingFixedIdea, setRevisingFixedIdea] = useState(false);
+  const autoSuggestedStageRef = useRef<string | null>(null);
 
   // EC-2: auto-scroll to latest message
   useEffect(() => {
@@ -496,6 +696,7 @@ export default function GrantPrepChatPane({
   const isInputDisabled = sessionLocked || !!sendCooldown;
   const canSend = !sending && !sendCooldown && !!input.trim() && !sessionLocked;
   const isIdeationStage = activeStageKey === 'ideation';
+  const hasFixedIdea = isIdeationStage && ideationDecision?.status === 'fixed';
   const ideationStageMessages = messages.filter(
     (message) => message.stage_key === 'ideation' || (isIdeationStage && !message.stage_key)
   );
@@ -518,10 +719,31 @@ export default function GrantPrepChatPane({
     !hasActiveStageMessages &&
     !!pendingPoints &&
     pendingPoints.length > 0 &&
-    messages.length > 0 &&
     (activeStageKey === 'problem_definition'
-      ? hasIdeationStageMessages
+      ? (hasIdeationStageMessages || ideationDecision?.status === 'fixed')
       : Boolean(stageTransitionContext?.problemReady && hasProblemDefinitionMessages));
+  useEffect(() => {
+    if (
+      showStageTransitionStarter
+      && activeStageKey
+      && autoSuggestedStageRef.current !== activeStageKey
+      && !sessionLocked
+      && !sending
+      && !sendCooldown
+    ) {
+      autoSuggestedStageRef.current = activeStageKey;
+      onSend(buildAiSuggestionPrompt(activeStageTitle, (pendingPoints || []).slice(0, 5)));
+    }
+  }, [
+    activeStageKey,
+    activeStageTitle,
+    onSend,
+    pendingPoints,
+    sendCooldown,
+    sending,
+    sessionLocked,
+    showStageTransitionStarter,
+  ]);
   const hasOrphanMessage =
     messages.length > 0 && messages[messages.length - 1].role === 'user' && !sending;
 
@@ -616,9 +838,14 @@ export default function GrantPrepChatPane({
                 <div className="mt-3 flex flex-col gap-2 pl-9">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
                     {isIdeationStage
-                      ? 'Idea directions - explore one, edit it, or write your own'
+                      ? 'Idea directions - choose what to do next'
                       : 'Approval bundles - approve as-is, edit, or write your own'}
                   </div>
+                  {isIdeationStage ? (
+                    <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-900">
+                      <strong>Explore further</strong> keeps improving an idea. <strong>Choose &amp; continue</strong> saves it as the reference for every later stage. None feel right? Ask for three different ideas.
+                    </div>
+                  ) : null}
                   {structuredAnswers.map((option, i) => (
                     <div
                       key={i}
@@ -664,16 +891,31 @@ export default function GrantPrepChatPane({
                           disabled={sessionLocked}
                           className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                         >
-                          {isIdeationStage ? 'Edit direction' : 'Edit bundle'}
+                          {isIdeationStage ? 'Edit idea' : 'Edit bundle'}
                         </button>
                         <button
                           type="button"
                           onClick={() => onSend(option.text, option)}
-                          disabled={sessionLocked || sending || !!sendCooldown}
-                          className="rounded-lg bg-prep-accent px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+                          disabled={sessionLocked || sending || !!sendCooldown || finalizingIdeation}
+                          className={clsx(
+                            'rounded-lg px-2.5 py-1.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:bg-slate-300',
+                            isIdeationStage
+                              ? 'border border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-50'
+                              : 'bg-prep-accent text-white hover:bg-prep-accentDark'
+                          )}
                         >
-                          {isIdeationStage ? 'Explore this direction' : 'Approve and send'}
+                          {isIdeationStage ? 'Explore further' : 'Approve and send'}
                         </button>
+                        {isIdeationStage && onFinalizeIdeation ? (
+                          <button
+                            type="button"
+                            onClick={() => setPendingIdeaChoice({ messageId: message.id, option })}
+                            disabled={sessionLocked || sending || !!sendCooldown || finalizingIdeation}
+                            className="rounded-lg bg-prep-accent px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-prep-accentDark disabled:cursor-not-allowed disabled:bg-slate-300"
+                          >
+                            Choose this idea &amp; continue
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   ))}
@@ -700,7 +942,7 @@ export default function GrantPrepChatPane({
                         disabled={sessionLocked || sending || !!sendCooldown}
                         className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 shadow-prep-card transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        Show 3 more ideas
+                        Show 3 different ideas
                       </button>
                     </div>
                   ) : null}
@@ -794,21 +1036,30 @@ export default function GrantPrepChatPane({
           </div>
         ) : (
           <>
-            {isIdeationStage && onLockIdeation ? (
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
-                <span className="text-xs font-medium text-emerald-900">
-                  Ready to move from idea shaping into proposal prep?
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onLockIdeation()}
-                  disabled={sending || !!sendCooldown}
-                  className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  Lock it in & continue
-                </button>
+            {hasFixedIdea && !revisingFixedIdea ? (
+              <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <div className="text-xs font-bold uppercase tracking-wide text-emerald-700">Chosen idea</div>
+                <div className="mt-1 text-sm font-semibold text-emerald-950">{ideationDecision?.anchor.title}</div>
+                <div className="mt-1 text-xs leading-5 text-emerald-900">{ideationDecision?.anchor.oneSentenceSummary}</div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-emerald-800">This reference guides every later Grant Prep stage.</span>
+                  <button type="button" onClick={() => setRevisingFixedIdea(true)} className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">
+                    Change chosen idea
+                  </button>
+                </div>
               </div>
             ) : null}
+            {hasFixedIdea && revisingFixedIdea ? (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                <span className="text-xs text-amber-900">The current idea remains active until you confirm a replacement. Later answers may need review.</span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => onSend(GRANT_PREP_MORE_IDEAS_REQUEST)} disabled={sending || !!sendCooldown} className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white disabled:bg-slate-300">Suggest 3 different ideas</button>
+                  <button type="button" onClick={() => setRevisingFixedIdea(false)} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800">Keep current idea</button>
+                </div>
+              </div>
+            ) : null}
+            {!hasFixedIdea || revisingFixedIdea ? (
+            <>
             <div className="flex items-end gap-2">
               <div
                 className={clsx(
@@ -861,12 +1112,101 @@ export default function GrantPrepChatPane({
                 </button>
               ) : null}
             </div>
+            {isIdeationStage && onFinalizeTypedIdea ? (
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ideaText = input.replace(/^I have finalized the idea already:\s*/i, '').trim();
+                    if (ideaText.length < 8 || !onPreviewTypedIdea) return;
+                    try {
+                      const preview = await onPreviewTypedIdea(ideaText);
+                      setPendingTypedIdea({ ideaText, ...preview });
+                    } catch {
+                      // The page-level handler reports the API error.
+                    }
+                  }}
+                  disabled={
+                    finalizingIdeation
+                    || input.replace(/^I have finalized the idea already:\s*/i, '').trim().length < 8
+                  }
+                  className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Finalize my idea
+                </button>
+              </div>
+            ) : null}
+            </>
+            ) : null}
             {input.length > 3500 ? (
               <div className="mt-1 text-right text-xs text-slate-400">{input.length}/4000</div>
             ) : null}
           </>
         )}
       </div>
+
+      {pendingIdeaChoice ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="confirm-idea-title">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+            <h2 id="confirm-idea-title" className="text-lg font-semibold text-slate-950">Use this as your grant idea?</h2>
+            <div className="mt-3 max-h-56 overflow-y-auto whitespace-pre-line rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">{pendingIdeaChoice.option.text}</div>
+            <p className="mt-3 text-sm leading-6 text-slate-600">We will create a short working summary and use it to keep every later stage focused. You can change it later, but completed work may need review.</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setPendingIdeaChoice(null)} disabled={finalizingIdeation} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Keep exploring</button>
+              <button
+                type="button"
+                disabled={finalizingIdeation}
+                onClick={async () => {
+                  const choice = pendingIdeaChoice;
+                  await onFinalizeIdeation?.(choice.messageId, choice.option);
+                  setPendingIdeaChoice(null);
+                  setRevisingFixedIdea(false);
+                }}
+                className="rounded-lg bg-prep-accent px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-300"
+              >
+                {finalizingIdeation ? 'Creating idea summary...' : 'Choose idea & continue'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {pendingTypedIdea ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="confirm-typed-idea-title">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+            <h2 id="confirm-typed-idea-title" className="text-lg font-semibold text-slate-950">Finalize this grant idea?</h2>
+            <div className="mt-3 max-h-72 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{pendingTypedIdea.anchor.title}</div>
+                <div className="mt-1 font-medium text-slate-900">{pendingTypedIdea.anchor.oneSentenceSummary}</div>
+              </div>
+              {pendingTypedIdea.anchor.problemOrOpportunity ? <div><span className="font-semibold">Problem:</span> {pendingTypedIdea.anchor.problemOrOpportunity}</div> : null}
+              {pendingTypedIdea.anchor.coreApproach ? <div><span className="font-semibold">Approach:</span> {pendingTypedIdea.anchor.coreApproach}</div> : null}
+              {pendingTypedIdea.anchor.targetBeneficiariesOrSetting ? <div><span className="font-semibold">Target/setting:</span> {pendingTypedIdea.anchor.targetBeneficiariesOrSetting}</div> : null}
+              {pendingTypedIdea.anchor.funderFit.length > 0 ? <div><span className="font-semibold">Funder fit:</span> {pendingTypedIdea.anchor.funderFit.join(' | ')}</div> : null}
+            </div>
+            <p className="mt-3 text-sm leading-6 text-slate-600">Confirm this compiled anchor. Later stages will be prefilled from it but still require review.</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setPendingTypedIdea(null)} disabled={finalizingIdeation} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Keep editing</button>
+              <button
+                type="button"
+                disabled={finalizingIdeation}
+                onClick={async () => {
+                  await onFinalizeTypedIdea?.(pendingTypedIdea.ideaText, {
+                    anchor: pendingTypedIdea.anchor,
+                    anchorHash: pendingTypedIdea.anchorHash,
+                    compilationSource: pendingTypedIdea.compilationSource,
+                  });
+                  setPendingTypedIdea(null);
+                  setRevisingFixedIdea(false);
+                }}
+                className="rounded-lg bg-prep-accent px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-300"
+              >
+                {finalizingIdeation ? 'Creating idea summary...' : 'Finalize idea & continue'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

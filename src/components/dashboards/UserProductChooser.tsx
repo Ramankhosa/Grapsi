@@ -56,9 +56,9 @@ const productOptions = [
     orbColor: 'bg-amber-200/40'
   },
   {
-    title: 'Research Areas',
-    description: 'Save keywords and focus areas to anchor recommendations to your work.',
-    href: '/profile/research-areas',
+    title: 'Research Fit',
+    description: 'Manage research areas and key publications for better funding matches.',
+    href: '/profile/research-fit',
     icon: Compass,
     gradient: 'from-emerald-500 to-green-500',
     glowColor: 'rgba(16, 185, 129, 0.08)',

@@ -12,6 +12,8 @@ import type {
   GrantSectionSemantic,
   GrantTemplateIntent,
 } from '@/types/grant'
+import type { GrantPrepIdeaAnchorV1 } from '@/lib/grantPrep/types'
+import { formatGrantPrepIdeaAnchorForPrompt } from '@/lib/grantPrep/ideaAnchor'
 
 type GrantPromptSectionType = 'narrative' | 'short_answer' | 'checklist' | 'table' | 'budget_rows' | string
 
@@ -20,6 +22,8 @@ export interface GrantPromptSummary {
   fundingCallTitle?: string | null
   agencyName?: string | null
   freezeSummary?: string[]
+  ideaAnchor?: GrantPrepIdeaAnchorV1 | null
+  ideaAnchorHash?: string | null
 }
 
 export interface GrantPass1MemoryContext {
@@ -40,6 +44,8 @@ export interface GrantPromptComposerInput {
   grantSemantic?: GrantSectionSemantic | null
   templateIntent?: GrantTemplateIntent | null
   grantContextSummary?: GrantPromptSummary | null
+  ideaAnchor?: GrantPrepIdeaAnchorV1 | null
+  ideaAnchorHash?: string | null
   grantRuleProfile?: GrantRuleProfile | null
   grantSectionComplianceContract?: GrantSectionComplianceContract | null
   authoritativePrepBundle?: GrantPrepPromptBundle | null
@@ -200,11 +206,18 @@ function buildPromptPrecedenceBlock(): string {
   return [
     'PROMPT PRECEDENCE:',
     '- Hard call, template, budget, eligibility, length, and compliance rules override all other guidance.',
+    '- The finalized idea anchor governs proposal identity. Do not silently change its problem, core approach, target setting, non-negotiables, or scope boundaries.',
     '- Authoritative Grant Prep facts are the factual backbone for this section when they apply.',
     '- Mapped citation evidence may support only the exact claims it substantiates.',
     '- Related-section awareness is for consistency only; do not turn it into new commitments, metrics, or compliance claims.',
     '- Style guidance and user instructions apply only when they do not conflict with the rules above.',
   ].join('\n')
+}
+
+function buildIdeaAnchorBlock(input: GrantPromptComposerInput): string {
+  const anchor = input.ideaAnchor || input.grantContextSummary?.ideaAnchor || null
+  const hash = input.ideaAnchorHash || input.grantContextSummary?.ideaAnchorHash || null
+  return anchor ? formatGrantPrepIdeaAnchorForPrompt(anchor, hash) : ''
 }
 
 function buildCompetitivePositioningBlock(semantic?: GrantSectionSemantic | null): string {
@@ -421,6 +434,9 @@ function buildPass1OutputFallback(input: GrantPromptComposerInput): string {
       '    ]',
       '  },',
       '  "usedPrepEvidence": ["stageKey:pointKey"],',
+      '  "ideaAnchorHash": "current anchor hash or null",',
+      '  "usedAnchorElements": ["anchor field used in this section"],',
+      '  "anchorConflicts": ["conflict with finalized idea, empty when aligned"],',
       '  "coveredRequiredPoints": ["required point covered in the content"],',
       '  "unmetRequiredPoints": ["required point still missing"],',
       '  "violatedAvoidRules": ["avoid rule violated by the draft"],',
@@ -538,6 +554,7 @@ export async function buildGrantDraftingPrompt(input: GrantPromptComposerInput):
       buildGrantContextBlock(input.grantContextSummary),
       buildSeededContextBlock(input.seededContext),
       buildPromptPrecedenceBlock(),
+      buildIdeaAnchorBlock(input),
       buildBlueprintContextBlock(input),
       formatGrantPromptProfileForPrompt(profile),
       buildCompetitivePositioningBlock(input.grantSemantic),
@@ -576,6 +593,7 @@ export async function buildGrantDraftingPrompt(input: GrantPromptComposerInput):
     buildGrantContextBlock(input.grantContextSummary),
     buildSeededContextBlock(input.seededContext),
     buildPromptPrecedenceBlock(),
+    buildIdeaAnchorBlock(input),
     buildBlueprintContextBlock(input),
     formatGrantPromptProfileForPrompt(profile),
     playbook,

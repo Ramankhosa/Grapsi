@@ -54,6 +54,16 @@ export async function PUT(
     if (!stageState?.enabled || !stageState?.pickable) {
       return NextResponse.json({ message: 'That stage is not available in this session' }, { status: 400 })
     }
+    if (
+      stageKey !== 'ideation'
+      && prepContext.stageStates.ideation?.enabled
+      && prepContext.stageStates.ideation.decision?.status !== 'fixed'
+    ) {
+      return NextResponse.json(
+        { message: 'Idea & Angle is required because it anchors the rest of Grant Prep. Finalize or reconfirm an idea before switching stages.' },
+        { status: 409 }
+      )
+    }
 
     const nextContext = {
       ...prepContext,

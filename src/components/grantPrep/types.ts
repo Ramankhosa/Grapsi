@@ -2,6 +2,7 @@ import type {
   GrantPrepEngagementMode,
   GrantPrepMappedPoint,
   GrantPrepIdeationContext,
+  GrantPrepIdeationDecision,
   GrantPrepPointCapture,
   GrantPrepSessionContext,
   GrantPrepStageKey,
@@ -36,6 +37,7 @@ export type PrepSession = {
   status: string;
   papsi_launch_url: string | null;
   overall_readiness: number;
+  updated_at?: string;
   last_handoff_error?: string | null;
   project: {
     id: string;
@@ -116,3 +118,4 @@ export type PrepContext = GrantPrepSessionContext;
 export type PrepPointCapture = GrantPrepPointCapture;
 export type PrepEngagementMode = GrantPrepEngagementMode;
 export type PrepIdeationContext = GrantPrepIdeationContext;
+export type PrepIdeationDecision = GrantPrepIdeationDecision;

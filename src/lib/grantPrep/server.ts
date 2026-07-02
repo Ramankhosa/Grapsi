@@ -102,7 +102,6 @@ export async function resolveGrantPrepIdeationContext(userId: string): Promise<G
       client.researcherSavedResearchArea.findMany({
         where: {
           user_id: userId,
-          use_for_alerts: true,
         },
         select: {
           label: true,
@@ -175,7 +174,7 @@ export async function resolveGrantPrepIdeationContext(userId: string): Promise<G
         year: typeof publication.year === 'number' ? publication.year : null,
         venue: normalizeText(publication.venue) || null,
         doi: normalizeText(publication.doi) || null,
-        abstractSnippet: truncateText(publication.abstract, 360),
+        abstractSnippet: truncateText(publication.abstract, 900),
       }))
       .filter((publication: GrantPrepIdeationContext['publications'][number]) => publication.title);
 
@@ -294,6 +293,7 @@ function mergeStageStates(
       points: [...preservedPoints, ...staleCapturedPoints],
       lastUpdatedAt: currentStage.lastUpdatedAt,
       memory: currentStage.memory || nextStage.memory || null,
+      decision: typedStageKey === 'ideation' ? currentStage.decision || nextStage.decision || null : null,
     };
 
     if (staleCapturedPoints.length > 0) {

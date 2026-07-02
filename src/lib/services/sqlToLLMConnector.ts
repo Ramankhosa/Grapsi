@@ -29,6 +29,15 @@ export interface LLMAnalysisOptions {
   maxResultsToAnalyze?: number;
   detailedAnalysis?: boolean;
   llmContext?: FundingLlmRoutingContext | null;
+  documentEvidence?: Array<{
+    sectionTitle: string | null;
+    sectionType: string;
+    pageStart: number;
+    pageEnd: number;
+    documentVersion: number;
+    text: string;
+  }>;
+  documentQualityWarnings?: string[];
 }
 
 /**
@@ -286,6 +295,12 @@ Please analyze the following funding opportunity in detail:
 
 ${formattedCall}
 
+Document evidence supplied by retrieval:
+${options.documentEvidence?.length ? JSON.stringify(options.documentEvidence, null, 2) : 'No document evidence supplied.'}
+
+Document quality warnings:
+${options.documentQualityWarnings?.length ? options.documentQualityWarnings.join('\n') : 'None supplied.'}
+
 Provide a detailed analysis that covers:
 1. Overall suitability for the user's interests/background
 2. Detailed eligibility analysis - does the user qualify?
@@ -295,7 +310,7 @@ Provide a detailed analysis that covers:
 6. Potential challenges or competition concerns
 7. Alternative funding sources if this one isn't ideal
 
-Format your analysis with clear headings and bullet points where appropriate.
+Format your analysis with clear headings and bullet points where appropriate. When document evidence is supplied, include "Recommended because", "Evidence", and "Risks" sections. Cite only supplied section/page/version metadata, and mark document-derived claims as requiring verification when structured fields are missing or quality warnings are present.
 `;
 
       // Get LLM analysis

@@ -54,7 +54,7 @@ export const GRANT_PREP_STAGE_LIBRARY: GrantPrepStageDefinition[] = [
     pickable: true,
     guidelineBlocks: ['priorities', 'mustAddress', 'evaluationCriteria'],
     steeringRule: 'Do not accept a vague problem statement without a target population or urgency signal. Do not accept a textbook framing of a well-known issue without a sharper angle, gap, or timely reason this proposal stands out now.',
-    dependencies: [],
+    dependencies: ['ideation'],
     defaultPoints: points([
       ['problem_core', 'Core problem statement', 'P1', 'One sentence on the real problem being solved.', ['problem', 'challenge', 'need']],
       ['problem_scale', 'Scale and urgency', 'P1', 'Magnitude, timing, or why action is timely.', ['urgent', 'burden', 'gap']],

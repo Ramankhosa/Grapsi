@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
-import path from 'path';
 import { parseJsonResponse } from '../fundingIntake/utils';
+import { resolveManagedFundingAssetPath } from './storage';
 import {
   FUNDING_TEMPLATE_EXTRACT_TASK_CODE,
   FUNDING_TEMPLATE_MULTIMODAL_STAGE_CODE,
@@ -71,6 +71,7 @@ export interface TemplateExtractionAssetInput {
   raw_text?: string | null;
   normalized_text?: string | null;
   ocr_text?: string | null;
+  source_metadata_json?: unknown;
 }
 
 export interface TemplateExtractionResult {
@@ -85,6 +86,116 @@ export interface TemplateExtractionResult {
 
 type GrantTemplateItemType = 'field' | 'section' | 'table' | 'budget' | 'attachment' | 'checklist' | 'rule' | 'rubric';
 type GrantTemplateSupportLevel = 'full' | 'partial' | 'manual' | 'unsupported';
+
+function readAssetMetadata(asset: TemplateExtractionAssetInput): Record<string, unknown> {
+  const metadata = asset.source_metadata_json;
+  return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+}
+
+function getSelectedOriginalPages(asset: TemplateExtractionAssetInput): number[] {
+  const metadata = readAssetMetadata(asset);
+  const pages = metadata.selected_pages;
+  if (!Array.isArray(pages)) {
+    return [];
+  }
+
+  return pages
+    .map((page) => Number(page))
+    .filter((page) => Number.isInteger(page) && page > 0);
+}
+
+function buildAssetPageInstructionLines(asset: TemplateExtractionAssetInput): string[] {
+  const metadata = readAssetMetadata(asset);
+  const selectedPages = getSelectedOriginalPages(asset);
+  if (metadata.reduced_pdf !== true || selectedPages.length === 0) {
+    return [];
+  }
+
+  return [
+    'pdf_subset: true',
+    `original_page_count: ${metadata.original_page_count || 'unknown'}`,
+    `selected_original_pages: ${selectedPages.join(', ')}`,
+    'When adding sourceAnchors.page for this PDF, use the original PDF page number from selected_original_pages, not the page position inside this reduced PDF.',
+  ];
+}
+
+function remapReducedPdfAnchorPages(
+  template: GrantTemplateDocument,
+  assets: TemplateExtractionAssetInput[]
+): GrantTemplateDocument {
+  const selectedPagesByAssetId = new Map<string, number[]>();
+  for (const asset of assets) {
+    const selectedPages = getSelectedOriginalPages(asset);
+    if (selectedPages.length > 0) {
+      selectedPagesByAssetId.set(asset.id, selectedPages);
+    }
+  }
+
+  if (selectedPagesByAssetId.size === 0) {
+    return template;
+  }
+
+  const remapAnchors = (anchors: any[] | undefined) => {
+    if (!Array.isArray(anchors)) {
+      return [];
+    }
+
+    return anchors.map((anchor) => {
+      const selectedPages = selectedPagesByAssetId.get(String(anchor?.asset_id || ''));
+      const page = Number(anchor?.page);
+      if (
+        !selectedPages ||
+        !Number.isInteger(page) ||
+        page < 1 ||
+        page > selectedPages.length ||
+        selectedPages.includes(page)
+      ) {
+        return anchor;
+      }
+
+      return {
+        ...anchor,
+        page: selectedPages[page - 1],
+        note: [anchor.note, `Mapped from reduced PDF page ${page}`].filter(Boolean).join(' | ') || null,
+      };
+    });
+  };
+
+  const remapItems = (items: any[]) => items.map((item) => ({
+    ...item,
+    sourceAnchors: remapAnchors(item.sourceAnchors),
+  }));
+
+  return {
+    ...template,
+    questions: remapItems(template.questions),
+    sections: remapItems(template.sections),
+    attachments: remapItems(template.attachments),
+    evaluationCriteria: remapItems(template.evaluationCriteria),
+    submissionRules: {
+      ...template.submissionRules,
+      items: remapItems(template.submissionRules.items),
+      sourceAnchors: remapAnchors(template.submissionRules.sourceAnchors),
+    },
+    budget: template.budget
+      ? {
+          ...template.budget,
+          sourceAnchors: remapAnchors(template.budget.sourceAnchors),
+          columns: (template.budget.columns || []).map((column) => ({
+            ...column,
+            sourceAnchors: remapAnchors(column.sourceAnchors),
+          })),
+          categories: (template.budget.categories || []).map((category) => ({
+            ...category,
+            sourceAnchors: remapAnchors(category.sourceAnchors),
+          })),
+        }
+      : null,
+    sourceAnchors: remapAnchors(template.sourceAnchors),
+  };
+}
 
 function coerceWorkflowMode(value: unknown, fallback: 'app_draft' | 'app_support' | 'team_manual' = 'team_manual') {
   return normalizeGrantWorkflowMode(value, fallback);
@@ -222,6 +333,7 @@ function buildTextOnlyPrompt(assets: TemplateExtractionAssetInput[]): string {
         `sequence_no: ${asset.sequence_no ?? 'unknown'}`,
         `source_type: ${asset.source_type}`,
         asset.source_url ? `source_url: ${asset.source_url}` : null,
+        ...buildAssetPageInstructionLines(asset),
         'content:',
         text.slice(0, 20000),
       ]
@@ -249,6 +361,7 @@ async function buildGeminiRestParts(assets: TemplateExtractionAssetInput[]): Pro
           `sequence_no: ${asset.sequence_no ?? 'unknown'}`,
           `source_type: ${asset.source_type}`,
           asset.source_url ? `source_url: ${asset.source_url}` : null,
+          ...buildAssetPageInstructionLines(asset),
           'content:',
           text.slice(0, 20000),
         ]
@@ -258,15 +371,16 @@ async function buildGeminiRestParts(assets: TemplateExtractionAssetInput[]): Pro
       continue;
     }
 
-    const absolutePath = path.isAbsolute(asset.storage_path)
-      ? asset.storage_path
-      : path.join(process.cwd(), asset.storage_path);
+    const absolutePath = await resolveManagedFundingAssetPath(asset.storage_path);
     const fileBuffer = await fs.readFile(absolutePath);
     console.log(
       `[Funding Template] Attaching binary asset ${asset.id} (${asset.source_type}) mime=${asset.mime || 'auto'} size=${fileBuffer.length} path=${absolutePath}`
     );
     parts.push({
-      text: `Asset ${asset.id} (${asset.source_type}, sequence_no=${asset.sequence_no ?? 'unknown'}). Use asset_id "${asset.id}" for every anchor from this file.`,
+      text: [
+        `Asset ${asset.id} (${asset.source_type}, sequence_no=${asset.sequence_no ?? 'unknown'}). Use asset_id "${asset.id}" for every anchor from this file.`,
+        ...buildAssetPageInstructionLines(asset),
+      ].join('\n'),
     });
     parts.push({
       inline_data: {
@@ -1005,12 +1119,14 @@ export async function extractGrantTemplateFromAssets(
 
   const templateCandidate = parsed?.template || parsed || {};
   const normalizedTemplate = lenientNormalizeTemplate(templateCandidate);
+  const pageMappedTemplate = remapReducedPdfAnchorPages(normalizedTemplate, selectedAssets);
   const assetSequenceById = buildAssetSequenceMap(selectedAssets);
-  const orderedTemplate = sortAndDeduplicateGrantTemplate(normalizedTemplate, {
+  const orderedTemplate = sortAndDeduplicateGrantTemplate(pageMappedTemplate, {
     assetSequenceById,
   });
 
   const itemCount =
+    (orderedTemplate.budget ? 1 : 0) +
     orderedTemplate.questions.length +
     orderedTemplate.sections.length +
     orderedTemplate.attachments.length +
@@ -1020,6 +1136,7 @@ export async function extractGrantTemplateFromAssets(
 
   if (itemCount === 0) {
     console.warn('[Funding Template] Extraction produced an empty template. Raw text preview:', modelResponse.rawText.slice(0, 800));
+    throw new Error('Template extraction produced no usable items');
   }
 
   const warnings = Array.isArray(parsed?.warnings)

@@ -1373,6 +1373,7 @@ export default function FundingIntakeJobPage() {
           callHref={`/admin/funding/intake/${details.job.id}`}
           guidelinesHref={callId ? `/admin/funding/catalog/${callId}/guidelines` : null}
           templateHref={callId ? `/admin/funding/catalog/${callId}/template` : null}
+          documentsHref={callId ? `/admin/funding/catalog/${callId}/documents` : null}
           guidelineStatus={details.call?.guideline_status || null}
           templateStatus={details.call?.template_status || null}
         />

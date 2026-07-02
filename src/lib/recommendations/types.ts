@@ -201,6 +201,25 @@ export interface RecommendationSearchResultItem {
   matchReasons: string[];
   profileMatch: RecommendationProfileMatch | null;
   eligibilitySummary: string;
+  evidence?: RecommendationDocumentEvidence | null;
+}
+
+export interface RecommendationDocumentEvidenceChunk {
+  chunkId: string;
+  sectionTitle: string | null;
+  sectionType: string;
+  pageStart: number;
+  pageEnd: number;
+  similarity: number;
+  documentVersion: number;
+  text: string;
+}
+
+export interface RecommendationDocumentEvidence {
+  availability: 'document_available' | 'no_document';
+  chunks: RecommendationDocumentEvidenceChunk[];
+  qualityWarnings: string[];
+  docSemanticFit: number | null;
 }
 
 export interface RecommendationSearchResponse {

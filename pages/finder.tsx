@@ -934,8 +934,8 @@ export default function FinderPage() {
             <Link href="/profile/researcher" className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 transition-colors hover:border-emerald-300">
               Research Profile
             </Link>
-            <Link href="/profile/research-areas" className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800">
-              Research Areas
+            <Link href="/profile/research-fit" className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800">
+              Research Fit
             </Link>
           </div>
 

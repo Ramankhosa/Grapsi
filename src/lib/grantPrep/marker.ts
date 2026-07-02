@@ -220,6 +220,16 @@ function sanitizeMarkerPayload(value: unknown): GrantPrepMarkerPayload | null {
     typeof parsed.readinessDelta === 'number' && Number.isFinite(parsed.readinessDelta)
       ? parsed.readinessDelta
       : undefined;
+  const anchorAssessmentObject = asObject(parsed.anchorAssessment);
+  const anchorAssessmentStatus = asTrimmedString(anchorAssessmentObject?.status);
+  const anchorAssessment = anchorAssessmentStatus === 'aligned'
+    || anchorAssessmentStatus === 'possible_conflict'
+    || anchorAssessmentStatus === 'conflict'
+    ? {
+        status: anchorAssessmentStatus,
+        reason: asOptionalString(anchorAssessmentObject?.reason) ?? null,
+      } as NonNullable<GrantPrepMarkerPayload['anchorAssessment']>
+    : null;
 
   return {
     version: 'brainstorm_marker_v1',
@@ -236,6 +246,7 @@ function sanitizeMarkerPayload(value: unknown): GrantPrepMarkerPayload | null {
         : null,
     steeringEvents,
     compactUserFacingSummary: asOptionalString(parsed.compactUserFacingSummary) ?? null,
+    anchorAssessment,
   };
 }
 

@@ -35,6 +35,9 @@ export function buildGrantPrepFreezePayload(input: {
   templateRevisionId: string | null;
   compiledSections?: Array<{ sectionKey: string; sourceTemplatePointer?: string | null }>;
 }) {
+  const ideaDecision = input.session.stageStates.ideation?.decision || null;
+  const ideaAnchor = ideaDecision?.status === 'fixed' ? ideaDecision.anchor : null;
+  const ideaAnchorHash = ideaDecision?.status === 'fixed' ? ideaDecision.anchorHash : null;
   const normalizeStringArray = (value: unknown) => {
     const source = Array.isArray(value) ? value : [];
     const seen = new Set<string>();
@@ -143,6 +146,11 @@ export function buildGrantPrepFreezePayload(input: {
     : [];
 
   const globalCaptureSummary = [
+    ...(ideaAnchor ? [
+      `Finalized idea: ${ideaAnchor.oneSentenceSummary}`,
+      `Core approach: ${ideaAnchor.coreApproach}`,
+      ...(ideaAnchor.scopeBoundaries.length ? [`Idea scope boundaries: ${ideaAnchor.scopeBoundaries.join('; ')}`] : []),
+    ] : []),
     ...selectedPrioritySummary,
     ...prepEvidence
     .slice(0, 12)
@@ -167,6 +175,15 @@ export function buildGrantPrepFreezePayload(input: {
           : `${stage.title}: ${point.label} is still incomplete.`,
       }))
   );
+  if (input.session.stageStates.ideation?.enabled && !ideaAnchor) {
+    blockers.unshift({
+      stageKey: 'ideation',
+      pointKey: 'idea_anchor',
+      message: ideaDecision?.status === 'needs_revalidation'
+        ? 'The chosen idea must be reconfirmed after funding or priority changes.'
+        : 'Choose and finalize an idea before handoff.',
+    });
+  }
 
   const payload: GrantPrepFreezePayload = {
     version: 'grant_handoff_v1',
@@ -200,6 +217,8 @@ export function buildGrantPrepFreezePayload(input: {
     stageStates: input.session.stageStates,
     globalKeywords: input.session.globalKeywords,
     globalCaptureSummary,
+    ideaAnchor,
+    ideaAnchorHash,
     prepEvidence,
     prepEvidenceBySection,
     blockers,

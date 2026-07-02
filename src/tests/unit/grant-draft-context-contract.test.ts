@@ -48,6 +48,21 @@ function makeContract(): GrantSectionComplianceContract {
   }
 }
 
+const ideaAnchor = {
+  version: 'idea_anchor_v1' as const,
+  title: 'Cyber centre of excellence',
+  oneSentenceSummary: 'Build a cyber centre of excellence for applied public-sector readiness.',
+  problemOrOpportunity: 'Cyber readiness is fragmented across regions.',
+  coreApproach: 'Create a centre of excellence for training, coordination, and implementation support.',
+  targetBeneficiariesOrSetting: 'State CERT and public-sector cyber teams',
+  funderFit: ['Aligned with cybersecurity capacity building.'],
+  distinguishingFeatures: ['Connects training outputs to implementation readiness.'],
+  nonNegotiables: ['Keep the proposal focused on cyber readiness capacity.'],
+  scopeBoundaries: ['Do not expand into unrelated digital transformation work.'],
+  unresolvedQuestions: ['Confirm named implementation partners.'],
+  keywords: ['cyber centre'],
+}
+
 describe('GrantDraftContextContract', () => {
   it('binds funding call rules, prep anchors, dimensions, and citation hints', () => {
     const contract = buildGrantDraftContextContract({
@@ -56,6 +71,8 @@ describe('GrantDraftContextContract', () => {
         label: 'Technical Plan',
         workflowMode: 'app_draft',
         citationMode: 'mapped_evidence',
+        ideaAnchorHash: 'anchor_hash_1',
+        ideaAnchorRelationship: 'identity_bearing',
         mustCover: ['Describe the validated delivery model.'],
         dimensions: ['Implementation feasibility of federated cyber range networks'],
         grantSectionComplianceContract: makeContract(),
@@ -80,6 +97,8 @@ describe('GrantDraftContextContract', () => {
       },
       grantContextSummary: {
         freezeSummary: ['Funding call: MeitY Cyber CoE Call', 'Prep keywords: cyber resilience'],
+        ideaAnchor,
+        ideaAnchorHash: 'anchor_hash_1',
       },
       evidence: {
         useMappedEvidence: true,
@@ -94,6 +113,12 @@ describe('GrantDraftContextContract', () => {
       },
     })
 
+    expect(contract.version).toBe(2)
+    expect(contract.ideaAnchorHash).toBe('anchor_hash_1')
+    expect(contract.ideaAnchorRelationship).toBe('identity_bearing')
+    expect(contract.requiredAnchorElements.join(' ')).toContain('cyber centre')
+    expect(contract.allowedUnresolvedQuestions).toEqual(['Confirm named implementation partners.'])
+    expect(contract.scopeBoundaries).toEqual(['Do not expand into unrelated digital transformation work.'])
     expect(contract.fundingCallSummary).toContain('Funding call: MeitY Cyber CoE Call')
     expect(contract.grantRuleProfile?.avoidRules).toContain('Avoid generic claims without evidence.')
     expect(contract.authoritativePrepBundle?.bullets).toContain('State CERT readiness is fragmented across regions.')
@@ -142,7 +167,16 @@ describe('GrantDraftContextContract', () => {
         'The proposal explains the national capability gap: State CERT readiness is fragmented across regions.',
         'It includes measurable validation milestones and shows measurable implementation feasibility [CITE:Need2024].',
       ].join(' '),
-      trace: { usedPrepEvidence: [], coveredRequiredPoints: [], unmetRequiredPoints: [], violatedAvoidRules: [], openQuestions: [] },
+      trace: {
+        ideaAnchorHash: null,
+        usedAnchorElements: [],
+        anchorConflicts: [],
+        usedPrepEvidence: [],
+        coveredRequiredPoints: [],
+        unmetRequiredPoints: [],
+        violatedAvoidRules: [],
+        openQuestions: [],
+      },
     })
 
     expect(validation.grantComplianceReport.usedPrepEvidence).toContain('problem_definition:national_gap')
@@ -192,6 +226,42 @@ describe('GrantDraftContextContract', () => {
     expect(readiness.issues.join(' ')).toMatch(/stale/i)
     expect(readiness.issues.join(' ')).toMatch(/not been validated/i)
     expect(readiness.issues.join(' ')).not.toMatch(/Budget has no final draft/)
+  })
+
+  it('blocks final export when a section was prepared against another finalized idea', () => {
+    const readiness = validateGrantFinalExportReadiness({
+      currentIdeaAnchorHash: 'current_anchor_hash',
+      sections: [
+        {
+          sectionKey: 'technical_plan',
+          label: 'Technical Plan',
+          workflowMode: 'app_draft',
+          required: true,
+          content: 'Draft content',
+          sourceIdeaAnchorHash: 'old_anchor_hash',
+          validationReport: {
+            grantDraftContextContract: {
+              version: 2,
+              ideaAnchorHash: 'old_anchor_hash',
+              readiness: { issues: [], warnings: [] },
+            },
+            grantComplianceReport: buildGrantComplianceReport({
+              stage: 'pass2',
+              content: 'Draft content',
+              contract: null,
+            }),
+          },
+          grantComplianceReport: buildGrantComplianceReport({
+            stage: 'pass2',
+            content: 'Draft content',
+            contract: null,
+          }),
+        },
+      ],
+    })
+
+    expect(readiness.ok).toBe(false)
+    expect(readiness.issues.join(' ')).toMatch(/different finalized idea/i)
   })
 
   it('blocks final export when a required budget has no structured rows', () => {

@@ -187,8 +187,23 @@ function buildSearchableDocument(values: FundingDraftValues): string {
 }
 
 function getFundingCallEmbeddingVersion() {
-  const health = embeddingService.getHealth();
-  return `${FUNDING_CALL_EMBEDDING_VERSION_PREFIX}:${health.modelName}:${FUNDING_CALL_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`;
+  const health = getFundingCallEmbeddingHealth();
+  return `${FUNDING_CALL_EMBEDDING_VERSION_PREFIX}:${health.provider}:${health.modelName}:${FUNDING_CALL_EMBEDDING_TASK_TYPE.toLowerCase()}:${health.outputDimensionality}`;
+}
+
+function getFundingCallEmbeddingHealth() {
+  return embeddingService.getHealth({ taskType: FUNDING_CALL_EMBEDDING_TASK_TYPE });
+}
+
+function getFundingCallEmbeddingColumn() {
+  const health = getFundingCallEmbeddingHealth();
+  return health.provider === 'voyage' && health.outputDimensionality === 1024
+    ? 'embedding_voyage_1024'
+    : 'embedding';
+}
+
+function fundingCallEmbeddingColumnSql() {
+  return PrismaNamespace.raw(getFundingCallEmbeddingColumn());
 }
 
 function isCurrentFundingCallEmbedding(metadata: Prisma.JsonValue | null | undefined, hasEmbedding: boolean) {
@@ -208,7 +223,7 @@ async function generateEmbedding(values: FundingDraftValues): Promise<{
   taskType: typeof FUNDING_CALL_EMBEDDING_TASK_TYPE;
 }> {
   const searchableDocument = buildSearchableDocument(values);
-  const health = embeddingService.getHealth();
+  const health = getFundingCallEmbeddingHealth();
   const { embedding, error, modelName, outputDimensionality } = await embeddingService.generateEmbedding(
     searchableDocument,
     undefined,
@@ -238,7 +253,7 @@ async function getEmbeddingPresence(ids: string[]): Promise<Map<string, boolean>
 
   const rows = await prisma.$queryRaw<Array<{ id: string; hasEmbedding: boolean }>>(
     PrismaNamespace.sql`
-      SELECT id::text AS id, embedding IS NOT NULL AS "hasEmbedding"
+      SELECT id::text AS id, ${fundingCallEmbeddingColumnSql()} IS NOT NULL AS "hasEmbedding"
       FROM funding_calls
       WHERE id IN (${PrismaNamespace.join(ids.map((id) => PrismaNamespace.sql`${id}`))})
     `
@@ -348,14 +363,14 @@ async function updateStoredEmbedding(
 ) {
   await tx.$executeRaw`
     UPDATE funding_calls
-    SET embedding = ${PrismaNamespace.raw(`'[${embedding.join(',')}]'::vector`)}
+    SET ${fundingCallEmbeddingColumnSql()} = ${PrismaNamespace.raw(`'[${embedding.join(',')}]'::vector`)}
     WHERE id = ${fundingCallId}
   `;
 }
 
 export class FundingCatalogService {
   getEmbeddingServiceHealth(): EmbeddingServiceHealth {
-    return embeddingService.getHealth();
+    return getFundingCallEmbeddingHealth();
   }
 
   async getEmbeddingCoverageSummary(): Promise<FundingEmbeddingCoverageSummary> {
@@ -377,14 +392,14 @@ export class FundingCatalogService {
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
-            AND embedding IS NOT NULL
+            AND ${fundingCallEmbeddingColumnSql()} IS NOT NULL
             AND COALESCE(metadata ->> 'embedding_status', '') = 'generated'
             AND COALESCE(metadata ->> 'embedding_version', '') = ${currentEmbeddingVersion}
         ) AS "publishedActiveEmbedded",
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
-            AND embedding IS NULL
+            AND ${fundingCallEmbeddingColumnSql()} IS NULL
         ) AS "publishedActiveMissingEmbedding",
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
@@ -394,7 +409,7 @@ export class FundingCatalogService {
         COUNT(*) FILTER (
           WHERE catalog_status = 'PUBLISHED'
             AND COALESCE(is_active, true) = true
-            AND embedding IS NOT NULL
+            AND ${fundingCallEmbeddingColumnSql()} IS NOT NULL
             AND (
               COALESCE(metadata ->> 'embedding_status', '') <> 'generated'
               OR COALESCE(metadata ->> 'embedding_version', '') <> ${currentEmbeddingVersion}
@@ -467,7 +482,7 @@ export class FundingCatalogService {
         WHERE catalog_status = 'PUBLISHED'
           AND COALESCE(is_active, true) = true
           AND (
-            embedding IS NULL
+            ${fundingCallEmbeddingColumnSql()} IS NULL
             OR COALESCE(metadata ->> 'embedding_status', '') = 'failed'
             OR COALESCE(metadata ->> 'embedding_version', '') <> ${currentEmbeddingVersion}
           )

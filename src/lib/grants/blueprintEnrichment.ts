@@ -3,6 +3,7 @@ import type {
   GuidelinePackDocument,
 } from '@/lib/fundingGuidelines/types'
 import type {
+  GrantPrepIdeaAnchorV1,
   GrantPrepStageStates,
 } from '@/lib/grantPrep/types'
 import { buildGrantThematicBlueprint } from '@/lib/grants/blueprintMetadata'
@@ -52,6 +53,8 @@ export interface GeneratedGrantProposalFoundation {
 }
 
 export interface GrantBlueprintEnrichmentContext {
+  ideaAnchor?: GrantPrepIdeaAnchorV1 | null
+  ideaAnchorHash?: string | null
   projectTitle?: string | null
   projectDescription?: string | null
   fundingCallTitle?: string | null
@@ -520,6 +523,9 @@ function resolveGrantSectionSemantic(section: GrantBlueprintPlanSection): GrantS
 
 function buildTopicAnchor(context: GrantBlueprintEnrichmentContext): string {
   const keywordAnchor = dedupeStrings([
+    ...(context.ideaAnchor?.keywords || []),
+    context.ideaAnchor?.title || '',
+    context.ideaAnchor?.coreApproach || '',
     ...(context.selectedPriorityAreas || []),
     ...(context.focusAreas || []),
     ...(context.globalKeywords || []),
@@ -538,6 +544,14 @@ function buildTopicAnchor(context: GrantBlueprintEnrichmentContext): string {
   }
 
   return 'the proposed program'
+}
+
+function ideaAnchorRelationshipForSemantic(semantic: GrantSectionSemantic): 'identity_bearing' | 'supporting' | 'neutral' {
+  if (['summary', 'problem_need', 'objectives', 'methodology', 'innovation', 'impact_outcomes', 'alignment'].includes(semantic)) {
+    return 'identity_bearing'
+  }
+  if (['workplan', 'evaluation', 'sustainability', 'risk'].includes(semantic)) return 'supporting'
+  return 'neutral'
 }
 
 function buildCallAnchor(context: GrantBlueprintEnrichmentContext): string {
@@ -1211,6 +1225,8 @@ function enrichBudgetSection(
 
   return {
     ...section,
+    ideaAnchorHash: context.ideaAnchorHash || null,
+    ideaAnchorRelationship: 'neutral',
     citationMode: 'no_citations',
     grantSemantic: null,
     prepContextBlock: budgetBundle,
@@ -1613,6 +1629,8 @@ function enrichOneSection(
 
   return {
     ...section,
+    ideaAnchorHash: context.ideaAnchorHash || null,
+    ideaAnchorRelationship: ideaAnchorRelationshipForSemantic(semantic),
     citationMode,
     mustCover,
     mustAvoid: thematicBlueprint.mustAvoid,
@@ -1652,6 +1670,21 @@ export function buildGeneratedGrantProposalFoundation(
   sections: GrantBlueprintPlanSection[],
   context: GrantBlueprintEnrichmentContext
 ): GeneratedGrantProposalFoundation {
+  if (context.ideaAnchor) {
+    const anchor = context.ideaAnchor
+    const contributions = dedupeStrings([
+      ...anchor.distinguishingFeatures,
+      ...anchor.funderFit,
+      ...anchor.nonNegotiables,
+    ]).slice(0, 5)
+    return {
+      thesisStatement: sentenceCase(anchor.oneSentenceSummary),
+      centralObjective: sentenceCase(anchor.coreApproach || anchor.oneSentenceSummary),
+      keyContributions: contributions.length > 0
+        ? contributions.map((item) => sentenceCase(item))
+        : [sentenceCase(anchor.oneSentenceSummary)],
+    }
+  }
   const draftableSections = sections.filter((section) => isGrantSectionAutoDraftable(section))
   const topicAnchor = buildTopicAnchor(context)
   const callAnchor = buildCallAnchor(context)

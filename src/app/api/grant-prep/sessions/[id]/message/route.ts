@@ -12,6 +12,7 @@ import {
 import { assertGrantPrepProjectCapability, requireGrantPrepActor } from '@/lib/grantPrep/access'
 import { generateGrantPrepText, resolveGrantPrepTenantContext } from '@/lib/grantPrep/llm'
 import { buildGrantPrepPrompt, buildIdeationPrompt } from '@/lib/grantPrep/promptComposer'
+import { hashGrantPrepIdeaConstraints } from '@/lib/grantPrep/ideaAnchor'
 import {
   buildGrantPrepModeWarning,
   inflateGrantPrepSessionContext,
@@ -364,6 +365,32 @@ export async function POST(
         fundingContext: serverContext.fundingContext,
         warning: prepWarning,
       })
+    }
+    const currentConstraintHash = hashGrantPrepIdeaConstraints({
+      fundingContext: serverContext.fundingContext,
+      selectedPriorityAreas: prepContext.selectedThrustAreaRuleKeys,
+      guidelineRevisionId: serverContext.guidelineRevisionId,
+      templateRevisionId: serverContext.templateRevisionId,
+    })
+    const currentDecision = prepContext.stageStates.ideation?.decision
+    const ideaConstraintsChanged = Boolean(
+      currentDecision
+      && currentDecision.status === 'fixed'
+      && currentDecision.constraintHash !== currentConstraintHash
+    )
+    if (ideaConstraintsChanged && currentDecision) {
+      prepContext = {
+        ...prepContext,
+        stageStates: {
+          ...prepContext.stageStates,
+          ideation: {
+            ...prepContext.stageStates.ideation,
+            decision: { ...currentDecision, status: 'needs_revalidation' },
+          },
+        },
+      }
+    }
+    if (templateOrGuidelineStale || ideaConstraintsChanged) {
       await prisma.grantPrepSession.update({
         where: { id: grantPrepSession.id },
         data: {
@@ -540,7 +567,7 @@ export async function POST(
       }
     }
 
-    const finalWarning =
+    let finalWarning =
       !repaired.marker && inferredMarker
         ? 'The assistant response marker was reconstructed from the turn before committing state.'
         : repaired.warning
@@ -570,8 +597,16 @@ export async function POST(
       currentStatus: currentSessionStatus,
       isReady: isGrantPrepSessionReady(prepContext.stageStates, prepContext.engagementMode),
     })
+    const anchorConflict = inferredMarker?.anchorAssessment?.status === 'conflict'
+    const fixedIdeaExploration = stageKey === 'ideation' && prepContext.stageStates.ideation.decision?.status === 'fixed'
+    if (anchorConflict) {
+      finalWarning = inferredMarker?.anchorAssessment?.reason
+        || 'This turn conflicts with the chosen idea. No Grant Prep facts were changed.'
+    } else if (fixedIdeaExploration) {
+      finalWarning = 'These alternatives are exploratory. Your chosen idea remains active until you confirm a replacement.'
+    }
 
-    if (inferredMarker && inferredMarker.stageKey === stageKey) {
+    if (inferredMarker && inferredMarker.stageKey === stageKey && !anchorConflict && !fixedIdeaExploration) {
       const allowedCrossStagePointKeys = getGrantPrepCrossStageAllowedPointKeys(
         buildGrantPrepConversationBundle({
           session: prepContext,
