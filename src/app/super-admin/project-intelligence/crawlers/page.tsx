@@ -35,10 +35,12 @@ type SourceResponse = {
   }
 }
 
+const ICSSR_UPLOAD_CHUNK_SIZE = 512 * 1024
+const CSV_UPLOAD_CHUNK_SIZE = 512 * 1024
+
 function authHeaders() {
   return {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
   }
 }
 
@@ -48,7 +50,7 @@ function formatDate(value: string | null | undefined) {
 }
 
 export default function PublicProjectCrawlerPage() {
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, authFetch } = useAuth()
   const router = useRouter()
   const [sources, setSources] = useState<SourceResponse | null>(null)
   const [runs, setRuns] = useState<any[]>([])
@@ -102,9 +104,9 @@ export default function PublicProjectCrawlerPage() {
   async function refresh() {
     try {
       const [sourceResponse, runResponse, projectResponse] = await Promise.all([
-        fetch('/api/super-admin/project-intelligence/crawlers/sources', { headers: authHeaders() }),
-        fetch('/api/super-admin/project-intelligence/crawlers/runs?limit=20', { headers: authHeaders() }),
-        fetch(`/api/super-admin/project-intelligence/projects?sourceKey=${selectedSource}&limit=10`, { headers: authHeaders() }),
+        authFetch('/api/super-admin/project-intelligence/crawlers/sources', { headers: authHeaders() }),
+        authFetch('/api/super-admin/project-intelligence/crawlers/runs?limit=20', { headers: authHeaders() }),
+        authFetch(`/api/super-admin/project-intelligence/projects?sourceKey=${selectedSource}&limit=10`, { headers: authHeaders() }),
       ])
 
       if (sourceResponse.ok) setSources(await sourceResponse.json())
@@ -120,7 +122,7 @@ export default function PublicProjectCrawlerPage() {
     setError(null)
     setMessage(null)
     try {
-      const response = await fetch(url, {
+      const response = await authFetch(url, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify(body),
@@ -201,7 +203,7 @@ export default function PublicProjectCrawlerPage() {
   // ICSSR file upload functions
   async function fetchUploadedFiles() {
     try {
-      const response = await fetch('/api/super-admin/project-intelligence/crawlers/upload', {
+      const response = await authFetch('/api/super-admin/project-intelligence/crawlers/upload', {
         headers: authHeaders(),
       })
       if (response.ok) {
@@ -222,31 +224,65 @@ export default function PublicProjectCrawlerPage() {
     setMessage(null)
 
     try {
-      const formData = new FormData()
-      for (let i = 0; i < files.length; i++) {
-        formData.append('files', files[i])
+      let successCount = 0
+      let errorCount = 0
+      const failures: string[] = []
+
+      for (const file of Array.from(files)) {
+        try {
+          if (!file.name.toLowerCase().endsWith('.pdf')) {
+            throw new Error('Only PDF files are accepted')
+          }
+
+          const uploadId = crypto.randomUUID()
+          const totalChunks = Math.ceil(file.size / ICSSR_UPLOAD_CHUNK_SIZE)
+          if (totalChunks === 0) throw new Error('The PDF is empty')
+
+          for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+            const start = chunkIndex * ICSSR_UPLOAD_CHUNK_SIZE
+            const chunk = file.slice(start, Math.min(start + ICSSR_UPLOAD_CHUNK_SIZE, file.size))
+            const params = new URLSearchParams({
+              mode: 'chunk',
+              uploadId,
+              fileName: file.name,
+              chunkIndex: String(chunkIndex),
+              totalChunks: String(totalChunks),
+              fileSize: String(file.size),
+            })
+            const response = await authFetch(
+              `/api/super-admin/project-intelligence/crawlers/upload?${params.toString()}`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/octet-stream',
+                },
+                body: chunk,
+              }
+            )
+            const data = await response.json().catch(() => ({}))
+            if (!response.ok) {
+              throw new Error(
+                data.error ||
+                  (response.status === 413
+                    ? 'Upload rejected by the server or reverse proxy'
+                    : `Upload failed with status ${response.status}`)
+              )
+            }
+          }
+
+          successCount += 1
+        } catch (fileError) {
+          errorCount += 1
+          failures.push(
+            `${file.name}: ${fileError instanceof Error ? fileError.message : 'Upload failed'}`
+          )
+        }
+
+        setUploadProgress({ total: files.length, success: successCount, error: errorCount })
       }
 
-      const response = await fetch('/api/super-admin/project-intelligence/crawlers/upload', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
-        },
-        body: formData,
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Upload failed')
-      }
-
-      setUploadProgress({
-        total: data.totalFiles,
-        success: data.successCount,
-        error: data.errorCount,
-      })
-      setMessage(`Uploaded ${data.successCount} of ${data.totalFiles} files successfully.`)
+      setMessage(`Uploaded ${successCount} of ${files.length} files successfully.`)
+      if (failures.length > 0) setError(failures.join('\n'))
       await fetchUploadedFiles()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -257,7 +293,7 @@ export default function PublicProjectCrawlerPage() {
 
   async function deleteUploadedFile(fileName: string) {
     try {
-      const response = await fetch(
+      const response = await authFetch(
         `/api/super-admin/project-intelligence/crawlers/upload?fileName=${encodeURIComponent(fileName)}`,
         {
           method: 'DELETE',
@@ -284,7 +320,7 @@ export default function PublicProjectCrawlerPage() {
   // CSV upload functions for DST and other CSV sources
   async function fetchCsvFiles() {
     try {
-      const response = await fetch('/api/super-admin/project-intelligence/crawlers/csv-upload', {
+      const response = await authFetch('/api/super-admin/project-intelligence/crawlers/csv-upload', {
         headers: authHeaders(),
       })
       if (response.ok) {
@@ -305,31 +341,64 @@ export default function PublicProjectCrawlerPage() {
     setMessage(null)
 
     try {
-      const formData = new FormData()
-      for (let i = 0; i < files.length; i++) {
-        formData.append('files', files[i])
+      let successCount = 0
+      let errorCount = 0
+      const failures: string[] = []
+
+      for (const file of Array.from(files)) {
+        try {
+          const lowerName = file.name.toLowerCase()
+          if (!lowerName.endsWith('.csv') && !lowerName.endsWith('.txt')) {
+            throw new Error('Only .csv or .txt files are accepted')
+          }
+
+          const uploadId = crypto.randomUUID()
+          const totalChunks = Math.ceil(file.size / CSV_UPLOAD_CHUNK_SIZE)
+          if (totalChunks === 0) throw new Error('The file is empty')
+
+          for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+            const start = chunkIndex * CSV_UPLOAD_CHUNK_SIZE
+            const chunk = file.slice(start, Math.min(start + CSV_UPLOAD_CHUNK_SIZE, file.size))
+            const params = new URLSearchParams({
+              mode: 'chunk',
+              uploadId,
+              fileName: file.name,
+              chunkIndex: String(chunkIndex),
+              totalChunks: String(totalChunks),
+              fileSize: String(file.size),
+            })
+            const response = await authFetch(
+              `/api/super-admin/project-intelligence/crawlers/csv-upload?${params.toString()}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: chunk,
+              }
+            )
+            const data = await response.json().catch(() => ({}))
+            if (!response.ok) {
+              throw new Error(
+                data.error ||
+                  (response.status === 413
+                    ? 'Upload rejected by the server or reverse proxy'
+                    : `Upload failed with status ${response.status}`)
+              )
+            }
+          }
+
+          successCount += 1
+        } catch (fileError) {
+          errorCount += 1
+          failures.push(
+            `${file.name}: ${fileError instanceof Error ? fileError.message : 'Upload failed'}`
+          )
+        }
+
+        setCsvUploadProgress({ total: files.length, success: successCount, error: errorCount })
       }
 
-      const response = await fetch('/api/super-admin/project-intelligence/crawlers/csv-upload', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
-        },
-        body: formData,
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Upload failed')
-      }
-
-      setCsvUploadProgress({
-        total: data.totalFiles,
-        success: data.successCount,
-        error: data.errorCount,
-      })
-      setMessage(`Uploaded ${data.successCount} of ${data.totalFiles} CSV files successfully.`)
+      setMessage(`Uploaded ${successCount} of ${files.length} CSV files successfully.`)
+      if (failures.length > 0) setError(failures.join('\n'))
       await fetchCsvFiles()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -340,7 +409,7 @@ export default function PublicProjectCrawlerPage() {
 
   async function deleteCsvFile(fileName: string) {
     try {
-      const response = await fetch(
+      const response = await authFetch(
         `/api/super-admin/project-intelligence/crawlers/csv-upload?fileName=${encodeURIComponent(fileName)}`,
         {
           method: 'DELETE',

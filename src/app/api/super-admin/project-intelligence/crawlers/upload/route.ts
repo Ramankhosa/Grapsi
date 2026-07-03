@@ -1,45 +1,143 @@
-import { mkdir, writeFile, readdir, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { appendFile, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises'
+import { join, resolve, sep } from 'node:path'
 import { existsSync } from 'node:fs'
 
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 
-import { prisma } from '@/lib/prisma'
+import {
+  requirePublicProjectReadRequest,
+  requirePublicProjectWriteRequest,
+} from '@/lib/publicProjects/auth'
 
 const UPLOAD_DIR = process.env.ICSSR_UPLOAD_DIR || '/tmp/icssr-uploads'
+const RESOLVED_UPLOAD_DIR = resolve(UPLOAD_DIR)
+const PARTS_DIR = resolve(join(UPLOAD_DIR, '.parts'))
+const MAX_FILE_SIZE_BYTES =
+  Math.max(Number(process.env.ICSSR_MAX_PDF_UPLOAD_MB || 50), 1) * 1024 * 1024
+const MAX_CHUNK_SIZE_BYTES = 768 * 1024
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 async function ensureUploadDir() {
   if (!existsSync(UPLOAD_DIR)) {
     await mkdir(UPLOAD_DIR, { recursive: true })
   }
+  if (!existsSync(PARTS_DIR)) {
+    await mkdir(PARTS_DIR, { recursive: true })
+  }
 }
 
-export async function POST(request: Request) {
+function getUploadPath(fileName: string) {
+  const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const filePath = resolve(join(UPLOAD_DIR, safeFileName))
+  if (filePath !== RESOLVED_UPLOAD_DIR && !filePath.startsWith(`${RESOLVED_UPLOAD_DIR}${sep}`)) {
+    throw new Error('Invalid file path')
+  }
+  return { safeFileName, filePath }
+}
+
+function readInteger(value: string | null) {
+  if (!value) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+async function uploadChunk(request: NextRequest) {
+  const uploadId = request.nextUrl.searchParams.get('uploadId') || ''
+  const fileName = request.nextUrl.searchParams.get('fileName') || ''
+  const chunkIndex = readInteger(request.nextUrl.searchParams.get('chunkIndex'))
+  const totalChunks = readInteger(request.nextUrl.searchParams.get('totalChunks'))
+  const fileSize = readInteger(request.nextUrl.searchParams.get('fileSize'))
+
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(uploadId)) {
+    return NextResponse.json({ error: 'Invalid upload identifier' }, { status: 400 })
+  }
+  if (!fileName.toLowerCase().endsWith('.pdf')) {
+    return NextResponse.json({ error: 'Only PDF files are accepted' }, { status: 400 })
+  }
+  if (
+    chunkIndex === null ||
+    totalChunks === null ||
+    fileSize === null ||
+    chunkIndex < 0 ||
+    totalChunks < 1 ||
+    chunkIndex >= totalChunks ||
+    fileSize < 1
+  ) {
+    return NextResponse.json({ error: 'Invalid chunk metadata' }, { status: 400 })
+  }
+  if (fileSize > MAX_FILE_SIZE_BYTES) {
+    return NextResponse.json(
+      { error: `PDF exceeds the ${Math.floor(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB upload limit` },
+      { status: 413 }
+    )
+  }
+
+  const chunk = Buffer.from(await request.arrayBuffer())
+  if (chunk.length === 0 || chunk.length > MAX_CHUNK_SIZE_BYTES) {
+    return NextResponse.json({ error: 'Invalid upload chunk size' }, { status: 413 })
+  }
+
+  const partDirectory = resolve(join(PARTS_DIR, uploadId))
+  if (!partDirectory.startsWith(`${PARTS_DIR}${sep}`)) {
+    return NextResponse.json({ error: 'Invalid upload path' }, { status: 400 })
+  }
+  await mkdir(partDirectory, { recursive: true })
+  await writeFile(join(partDirectory, `${chunkIndex}.part`), chunk)
+
+  if (chunkIndex !== totalChunks - 1) {
+    return NextResponse.json({ success: true, complete: false, chunkIndex })
+  }
+
+  const { safeFileName, filePath } = getUploadPath(fileName)
+  const temporaryPath = join(partDirectory, 'assembled.pdf')
+  let assembledSize = 0
+  await writeFile(temporaryPath, Buffer.alloc(0))
+
   try {
-    const authHeader = request.headers.get('authorization')
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    for (let index = 0; index < totalChunks; index += 1) {
+      const part = await readFile(join(partDirectory, `${index}.part`))
+      assembledSize += part.length
+      if (assembledSize > MAX_FILE_SIZE_BYTES) {
+        throw new Error('Assembled PDF exceeds the upload limit')
+      }
+      await appendFile(temporaryPath, part)
     }
 
-    const token = authHeader.slice(7)
-    const user = await prisma.user.findFirst({
-      where: {
-        refreshTokens: {
-          some: {
-            tokenHash: token,
-            expiresAt: { gt: new Date() },
-            isRevoked: false,
-          },
-        },
-      },
-      select: { id: true, email: true, roles: true },
-    })
-
-    if (!user?.roles?.includes('SUPER_ADMIN')) {
-      return NextResponse.json({ error: 'Forbidden - Super Admin only' }, { status: 403 })
+    if (assembledSize !== fileSize) {
+      throw new Error('Uploaded PDF size does not match the source file')
     }
+
+    await unlink(filePath).catch(() => undefined)
+    await rename(temporaryPath, filePath)
+  } catch (error) {
+    await rm(partDirectory, { recursive: true, force: true })
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to assemble PDF' },
+      { status: 409 }
+    )
+  }
+
+  await rm(partDirectory, { recursive: true, force: true })
+  return NextResponse.json({
+    success: true,
+    complete: true,
+    fileName: safeFileName,
+    size: assembledSize,
+  })
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const auth = await requirePublicProjectWriteRequest(request)
+    if ('response' in auth) return auth.response
 
     await ensureUploadDir()
+
+    if (request.nextUrl.searchParams.get('mode') === 'chunk') {
+      return uploadChunk(request)
+    }
 
     const formData = await request.formData()
     const files = formData.getAll('files') as File[]
@@ -56,12 +154,19 @@ export async function POST(request: Request) {
           results.push({ fileName: file.name, status: 'error', error: 'Not a PDF file' })
           continue
         }
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+          results.push({
+            fileName: file.name,
+            status: 'error',
+            error: `PDF exceeds the ${Math.floor(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB upload limit`,
+          })
+          continue
+        }
 
         const bytes = await file.arrayBuffer()
         const buffer = Buffer.from(bytes)
 
-        const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-        const filePath = join(UPLOAD_DIR, safeFileName)
+        const { filePath } = getUploadPath(file.name)
 
         await writeFile(filePath, buffer)
 
@@ -95,30 +200,10 @@ export async function POST(request: Request) {
   }
 }
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization')
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const token = authHeader.slice(7)
-    const user = await prisma.user.findFirst({
-      where: {
-        refreshTokens: {
-          some: {
-            tokenHash: token,
-            expiresAt: { gt: new Date() },
-            isRevoked: false,
-          },
-        },
-      },
-      select: { id: true, email: true, roles: true },
-    })
-
-    if (!user?.roles?.includes('SUPER_ADMIN')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
+    const auth = await requirePublicProjectReadRequest(request)
+    if ('response' in auth) return auth.response
 
     await ensureUploadDir()
     const files = await readdir(UPLOAD_DIR)
@@ -138,30 +223,10 @@ export async function GET(request: Request) {
   }
 }
 
-export async function DELETE(request: Request) {
+export async function DELETE(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization')
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const token = authHeader.slice(7)
-    const user = await prisma.user.findFirst({
-      where: {
-        refreshTokens: {
-          some: {
-            tokenHash: token,
-            expiresAt: { gt: new Date() },
-            isRevoked: false,
-          },
-        },
-      },
-      select: { id: true, email: true, roles: true },
-    })
-
-    if (!user?.roles?.includes('SUPER_ADMIN')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
+    const auth = await requirePublicProjectWriteRequest(request)
+    if ('response' in auth) return auth.response
 
     const { searchParams } = new URL(request.url)
     const fileName = searchParams.get('fileName')
@@ -170,8 +235,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'File name required' }, { status: 400 })
     }
 
-    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
-    const filePath = join(UPLOAD_DIR, safeFileName)
+    const { filePath } = getUploadPath(fileName)
 
     try {
       await unlink(filePath)
