@@ -100,6 +100,19 @@ function getEmbeddingColumn() {
   return health.provider === 'voyage' && health.outputDimensionality === 1024 ? 'embedding_voyage_1024' : 'embedding'
 }
 
+function getInlineAutoEmbeddingBatchSize() {
+  if (process.env.PUBLIC_PROJECT_INLINE_AUTO_EMBEDDINGS === 'false') {
+    return 0
+  }
+
+  const configured = Number(process.env.PUBLIC_PROJECT_INLINE_EMBEDDING_BATCH_SIZE || 1)
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return 1
+  }
+
+  return Math.min(Math.max(configured, 1), 25)
+}
+
 function embeddingColumnSql() {
   return PrismaNamespace.raw(getEmbeddingColumn())
 }
@@ -108,19 +121,27 @@ function vectorLiteralSql(embedding: number[]) {
   return PrismaNamespace.raw(`'[${embedding.join(',')}]'::vector`)
 }
 
-export function buildPublicProjectEmbeddingInput(project: Pick<
-  NormalizedPublicProject,
-  'title' | 'abstractText' | 'executiveSummary' | 'objectivesText'
->): string {
-  if (['BIRAC', 'ICMR'].includes(String((project as Partial<NormalizedPublicProject>).sourceKey || ''))) {
-    return `Title: ${cleanText(project.title) || ''}`
-  }
-
+export function buildPublicProjectEmbeddingInput(project: {
+  title: string
+  sourceKey?: string
+  abstractText?: string | null
+  enrichedAbstract?: string | null
+  executiveSummary?: string | null
+  objectivesText?: string | null
+}): string {
+  const sourceKey = String(project.sourceKey || '')
+  const sourceAbstract = cleanText(project.abstractText)
+  const sourceAbstractIsPlaceholder = !sourceAbstract || ['na', 'n/a', 'not available', 'not provided'].includes(sourceAbstract.toLowerCase())
   const fallback =
-    cleanText(project.abstractText) ||
+    cleanText(project.enrichedAbstract) ||
+    (sourceAbstractIsPlaceholder ? null : sourceAbstract) ||
     cleanText(project.executiveSummary) ||
     cleanText(project.objectivesText) ||
     ''
+
+  if (!fallback && ['BIRAC', 'ICMR'].includes(sourceKey)) {
+    return `Title: ${cleanText(project.title) || ''}`
+  }
 
   return [`Title: ${cleanText(project.title) || ''}`, fallback ? `Abstract: ${fallback}` : null]
     .filter(Boolean)
@@ -759,6 +780,8 @@ export class PublicProjectCorpusService {
             : { succeededCount: { increment: 1 } }),
         },
       })
+
+      await this.processInlinePendingEmbeddings()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await prisma.publicProjectCrawlItem.update({
@@ -783,6 +806,25 @@ export class PublicProjectCorpusService {
           failedCount: { increment: 1 },
         },
       })
+    }
+  }
+
+  private async processInlinePendingEmbeddings() {
+    const limit = getInlineAutoEmbeddingBatchSize()
+    if (limit <= 0) {
+      return
+    }
+
+    try {
+      await this.processPendingEmbeddings({
+        limit,
+        includeFailed: false,
+      })
+    } catch (error) {
+      console.warn(
+        '[PublicProjectCorpus] Inline embedding drain failed:',
+        error instanceof Error ? error.message : String(error)
+      )
     }
   }
 
@@ -918,6 +960,7 @@ export class PublicProjectCorpusService {
 
   private async generateEmbeddingForProject(project: {
     id: string
+    sourceKey?: PublicProjectSourceKey | string
     title: string
     abstractText: string | null
     executiveSummary: string | null
@@ -1004,8 +1047,10 @@ export class PublicProjectCorpusService {
       orderBy: [{ lastSeenAt: 'desc' }],
       select: {
         id: true,
+        sourceKey: true,
         title: true,
         abstractText: true,
+        enrichedAbstract: true,
         executiveSummary: true,
         objectivesText: true,
       },

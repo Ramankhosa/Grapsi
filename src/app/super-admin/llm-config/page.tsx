@@ -68,7 +68,8 @@ const PROVIDER_COLORS: Record<string, string> = {
   deepseek: 'bg-purple-100 text-purple-800 border-purple-200',
   groq: 'bg-pink-100 text-pink-800 border-pink-200',
   qwen: 'bg-indigo-100 text-indigo-800 border-indigo-200',
-  zhipu: 'bg-teal-100 text-teal-800 border-teal-200'
+  zhipu: 'bg-teal-100 text-teal-800 border-teal-200',
+  voyage: 'bg-cyan-100 text-cyan-800 border-cyan-200'
 }
 
 const RETIRED_MODEL_CODES = new Set(['gpt-5.1-thinking'])
@@ -96,6 +97,12 @@ const VISIBLE_STAGE_CODES_BY_FEATURE: Partial<Record<string, Set<string>>> = {
     'FUNDING_CHAT_QUERY_ENRICHMENT',
     'FUNDING_CHAT_NARRATIVE',
     'FUNDING_CHAT_EMBEDDING',
+    'IDEA_INTELLIGENCE_STRUCTURE',
+    'IDEA_INTELLIGENCE_EVIDENCE_MAP',
+    'IDEA_INTELLIGENCE_REPORT',
+    'IDEA_INTELLIGENCE_REFINE',
+    'FUNDING_DOCUMENT_RETRIEVAL',
+    'FUNDING_DOCUMENT_CHUNK_EMBEDDING',
     'FUNDING_TEMPLATE_EXTRACT_TEXT',
     'FUNDING_TEMPLATE_EXTRACT_MULTIMODAL',
     'FUNDING_GUIDELINE_EXTRACT_TEXT',
@@ -272,6 +279,30 @@ const QUICK_ACCESS_BY_FEATURE: Record<string, QuickAccessStage[]> = {
       description: 'Grounded recommendation explanations, comparisons, and follow-up responses.'
     },
     {
+      code: 'IDEA_INTELLIGENCE_STRUCTURE',
+      passLabel: 'Idea',
+      title: 'Idea Structuring',
+      description: 'Extracts comparable idea facets, keywords, and semantic query for funding landscape intelligence.'
+    },
+    {
+      code: 'IDEA_INTELLIGENCE_EVIDENCE_MAP',
+      passLabel: 'Matrix',
+      title: 'Evidence Matrix',
+      description: 'Maps funded projects, publications, patents, and web evidence against each idea facet.'
+    },
+    {
+      code: 'IDEA_INTELLIGENCE_REPORT',
+      passLabel: 'Brief',
+      title: 'Positioning Brief',
+      description: 'Writes the final evidence-grounded funding landscape brief and recommendations.'
+    },
+    {
+      code: 'IDEA_INTELLIGENCE_REFINE',
+      passLabel: 'Refine',
+      title: 'Refinement Loop',
+      description: 'Creates the next idea version from completed analysis and user refinement goals.'
+    },
+    {
       code: 'FUNDING_TEMPLATE_EXTRACT_TEXT',
       passLabel: 'Template',
       title: 'Template Text Extraction',
@@ -377,7 +408,37 @@ const STAGE_CONTROL_HELP: Record<string, StageHelpInfo> = {
   FUNDING_CHAT_EMBEDDING: {
     summary: 'Funding query embedding.',
     responsibility: 'Tracks the embedding model used for vector retrieval metering.',
-    tip: 'This stage is logged separately from chat generation and normally uses the configured embedding service model.'
+    tip: 'Voyage 4 Lite is used for low-latency queries. Runtime selection comes from the embedding service environment configuration.'
+  },
+  IDEA_INTELLIGENCE_STRUCTURE: {
+    summary: 'Idea intelligence structuring.',
+    responsibility: 'Controls the model that turns a free-form idea into title, problem, approach, facets, keywords, and semantic query.',
+    tip: 'Use a fast JSON-reliable model. This stage is mostly extraction and controlled normalization.'
+  },
+  IDEA_INTELLIGENCE_EVIDENCE_MAP: {
+    summary: 'Cross-corpus evidence matrix.',
+    responsibility: 'Controls the model that maps funded projects, publications, patents, and web evidence against each idea facet.',
+    tip: 'Use a stronger reasoning model here; this stage drives PRESENT/PARTIAL/ABSENT/UNASSESSED labels and triangulation quality.'
+  },
+  IDEA_INTELLIGENCE_REPORT: {
+    summary: 'Funding landscape positioning brief.',
+    responsibility: 'Controls the model that writes the final evidence-grounded brief, risks, differentiators, and next steps.',
+    tip: 'Use a balanced model with strong factual summarization. It must not predict funding success or invent novelty.'
+  },
+  IDEA_INTELLIGENCE_REFINE: {
+    summary: 'Idea refinement and versioning.',
+    responsibility: 'Controls the model that creates the next version of an idea from completed landscape analysis and user refinement goals.',
+    tip: 'Use a model that can preserve intent while making targeted evidence-aware changes.'
+  },
+  FUNDING_DOCUMENT_RETRIEVAL: {
+    summary: 'Funding document query embedding.',
+    responsibility: 'Tracks query embeddings used to search parsed funding-document chunks.',
+    tip: 'Voyage 4 Lite queries are compatible with the Voyage 4 Large document vectors.'
+  },
+  FUNDING_DOCUMENT_CHUNK_EMBEDDING: {
+    summary: 'Funding document chunk embedding.',
+    responsibility: 'Tracks document embeddings generated when parsed funding-call chunks are indexed.',
+    tip: 'Voyage 4 Large is used for document quality. Runtime selection comes from the embedding service environment configuration.'
   },
   FUNDING_TEMPLATE_EXTRACT_TEXT: {
     summary: 'Grant template text extraction.',
@@ -639,7 +700,7 @@ function isStageVisibleInAdmin(stage: WorkflowStage): boolean {
 }
 
 function getStageCodeBadgeClasses(stageCode: string): string {
-  if (/^FUNDING_|^GRANT_BUDGET_DRAFT$/.test(stageCode)) {
+  if (/^FUNDING_|^IDEA_INTELLIGENCE_|^GRANT_BUDGET_DRAFT$/.test(stageCode)) {
     return 'border-lime-700/50 bg-lime-900/25 text-lime-200'
   }
   if (/^PAPER_TOPIC_|^PAPER_ABSTRACT_TITLE$/.test(stageCode)) {

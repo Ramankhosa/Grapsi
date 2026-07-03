@@ -155,6 +155,28 @@ describe('LLM cost metering guards', () => {
     expect(block).toContain('outputCostPer1M: 0')
   })
 
+  it('seeds Voyage embedding models and assigns query and document stages', () => {
+    const seed = readRepoFile('Seed/seed-llm-models.js')
+
+    expect(seed).toContain("code: 'voyage-4-lite'")
+    expect(seed).toContain('inputCostPer1M: 2')
+    expect(seed).toContain("code: 'voyage-4-large'")
+    expect(seed).toContain('inputCostPer1M: 12')
+    expect(seed).toContain("code: 'FUNDING_DOCUMENT_RETRIEVAL'")
+    expect(seed).toContain("code: 'FUNDING_DOCUMENT_CHUNK_EMBEDDING'")
+    expect(seed).toContain("models: { FREE_PLAN: 'voyage-4-lite', PRO_PLAN: 'voyage-4-lite', ENTERPRISE_PLAN: 'voyage-4-lite' }")
+    expect(seed).toContain("models: { FREE_PLAN: 'voyage-4-large', PRO_PLAN: 'voyage-4-large', ENTERPRISE_PLAN: 'voyage-4-large' }")
+  })
+
+  it('recognizes Voyage model codes for metering provider attribution', async () => {
+    const { getModelPricingSync, getProviderFromModel } = await import('@/lib/metering/cost-calculator')
+
+    expect(getProviderFromModel('voyage-4-lite')).toBe('Voyage')
+    expect(getProviderFromModel('voyage-4-large')).toBe('Voyage')
+    expect(getModelPricingSync('voyage-4-lite').input * 1_000_000).toBe(0.02)
+    expect(getModelPricingSync('voyage-4-large').input * 1_000_000).toBe(0.12)
+  })
+
   it('resolves Gemini 3 Flash preview pricing from the internal Gemini 3.1 Flash alias', async () => {
     vi.resetModules()
     vi.doMock('@/lib/prisma', () => ({

@@ -57,8 +57,18 @@ const SerpApiScholarResultSchema = z.object({
   doi: z.string().optional(),
 });
 
+const SerpApiWebResultSchema = z.object({
+  position: z.number().optional(),
+  title: z.string(),
+  link: z.string().optional(),
+  displayed_link: z.string().optional(),
+  snippet: z.string().optional(),
+  source: z.string().optional(),
+  date: z.string().optional(),
+}).passthrough();
+
 // Union schema that accepts either patent or scholar results
-const SerpApiSearchResultSchema = z.union([SerpApiPatentResultSchema, SerpApiScholarResultSchema]);
+const SerpApiSearchResultSchema = z.union([SerpApiPatentResultSchema, SerpApiScholarResultSchema, SerpApiWebResultSchema]);
 
 const SerpApiSearchResponseSchema = z.object({
   search_metadata: z.object({
@@ -104,8 +114,23 @@ const SerpApiDetailsResponseSchema = z.object({
   error: z.string().optional(),
 });
 
-export type SerpApiSearchResult = z.infer<typeof SerpApiSearchResultSchema>;
-export type SerpApiSearchResponse = z.infer<typeof SerpApiSearchResponseSchema>;
+export type SerpApiSearchResult = Record<string, any>;
+export type SerpApiSearchResponse = {
+  search_metadata: {
+    id: string;
+    status: string;
+    created_at: string;
+    processed_at: string;
+  };
+  search_parameters: {
+    engine: string;
+    q: string;
+    num?: number | string;
+    start?: number | string;
+  };
+  organic_results?: SerpApiSearchResult[];
+  error?: string;
+};
 export type SerpApiDetailsResponse = z.infer<typeof SerpApiDetailsResponseSchema>;
 
 export class SerpApiProvider {
@@ -130,7 +155,7 @@ export class SerpApiProvider {
    */
   async search(params: {
     q: string;
-    engine?: 'google_patents' | 'google_scholar';
+    engine?: 'google_patents' | 'google_scholar' | 'google';
     num?: number;
     start?: number;
     hl?: string;
@@ -235,6 +260,15 @@ export class SerpApiProvider {
     hl?: string;
   }): Promise<SerpApiSearchResponse> {
     return this.search({ ...params, engine: 'google_scholar' });
+  }
+
+  async searchWeb(params: {
+    q: string;
+    num?: number;
+    start?: number;
+    hl?: string;
+  }): Promise<SerpApiSearchResponse> {
+    return this.search({ ...params, engine: 'google' });
   }
 
   /**

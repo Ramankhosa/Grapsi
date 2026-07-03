@@ -2,7 +2,9 @@ import type { PublicProjectSourceKey } from '@/lib/prisma-generated'
 
 import { createBiracPublicProjectConnector } from './connectors/birac'
 import { createCsirPublicProjectConnector } from './connectors/csir'
+import { createCsvImportPublicProjectConnector } from './connectors/csvImport'
 import { createIcmrPublicProjectConnector } from './connectors/icmr'
+import { createIcssrPublicProjectConnector } from './connectors/icssr'
 import { createPrismPublicProjectConnector } from './connectors/prism'
 import type { PublicProjectConnector } from './types'
 
@@ -86,6 +88,66 @@ export const PUBLIC_PROJECT_SOURCE_DEFINITIONS: Array<{
       disabledUntilProductionQualityValidation: true,
     },
   },
+  {
+    sourceKey: 'ICSSR',
+    name: 'ICSSR awarded projects (uploaded PDFs)',
+    baseUrl: 'https://www.icssr.org',
+    enabled: true,
+    crawlConfig: {
+      status: 'pilot_enabled',
+      discovery: 'uploaded_pdf_folder_processing',
+      pilotRecordCap: 50,
+      pdfFolder: process.env.ICSSR_UPLOAD_DIR || '/tmp/icssr-uploads',
+      abstractPolicy: 'store_NA_embed_title_only',
+      sourceTypes: [
+        'Major Research Project',
+        'Minor Research Project',
+        'FFSI Fellowship',
+        'LSS Awardees',
+        'Longitudinal Studies',
+        'Special Calls (PVTGs/Tribes)',
+        'ICSSR-JSPS Joint Research',
+        'ICSSR-NSTC Joint Research',
+        'Viksit Bharat 2047',
+        'Jal Jeevan Mission',
+      ],
+      uploadEndpoint: '/api/super-admin/project-intelligence/crawlers/upload',
+    },
+    scheduleConfig: {
+      monthlyIncrementalEnabled: false,
+      disabledUntilProductionQualityValidation: true,
+    },
+  },
+  {
+    sourceKey: 'CSV_IMPORT',
+    name: 'CSV Manual Import (Any Agency)',
+    baseUrl: 'https://manual-import.local',
+    enabled: true,
+    crawlConfig: {
+      status: 'pilot_enabled',
+      discovery: 'csv_file_upload_processing',
+      pilotRecordCap: 200,
+      csvFolder: process.env.CSV_IMPORT_DIR || '/tmp/csv-imports',
+      abstractPolicy: 'store_NA_embed_title_only',
+      sourceTypes: [
+        'DST - SEED',
+        'DST - S&T for Women',
+        'DST - Major Projects',
+        'DST - Minor Projects',
+        'DBT',
+        'DAE',
+        'DRDO',
+        'ISRO',
+        'Other Agencies',
+      ],
+      uploadEndpoint: '/api/super-admin/project-intelligence/crawlers/csv-upload',
+      supportsMultipleAgencies: true,
+    },
+    scheduleConfig: {
+      monthlyIncrementalEnabled: false,
+      disabledUntilProductionQualityValidation: true,
+    },
+  },
 ]
 
 export function getPublicProjectConnector(sourceKey: PublicProjectSourceKey): PublicProjectConnector {
@@ -98,6 +160,10 @@ export function getPublicProjectConnector(sourceKey: PublicProjectSourceKey): Pu
       return createBiracPublicProjectConnector()
     case 'ICMR':
       return createIcmrPublicProjectConnector()
+    case 'ICSSR':
+      return createIcssrPublicProjectConnector()
+    case 'CSV_IMPORT':
+      return createCsvImportPublicProjectConnector()
     default:
       throw new Error(`Unsupported public-project source: ${sourceKey}`)
   }

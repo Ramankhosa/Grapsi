@@ -79,6 +79,7 @@ async function seedProductionPlans() {
       // FUNDING_DISCOVERY tasks
       { code: 'FUNDING_CALL_INGEST', name: 'Funding Call Ingestion', linkedFeature: 'FUNDING_DISCOVERY' },
       { code: 'FUNDING_CHAT', name: 'AI Fund Finder Chat', linkedFeature: 'FUNDING_DISCOVERY' },
+      { code: 'IDEA_INTELLIGENCE', name: 'Funding Idea Intelligence', linkedFeature: 'FUNDING_DISCOVERY' },
       { code: 'FUNDING_TEMPLATE_EXTRACT', name: 'Funding Template Extraction', linkedFeature: 'FUNDING_DISCOVERY' },
       { code: 'FUNDING_GUIDELINE_EXTRACT', name: 'Funding Guideline Extraction', linkedFeature: 'FUNDING_DISCOVERY' },
       // GRANT_PREP and GRANT_DRAFTING tasks
@@ -253,6 +254,7 @@ async function seedProductionPlans() {
       // FREE PLAN - Funding discovery tasks
       { planCode: 'FREE_PLAN', taskCode: 'FUNDING_CALL_INGEST', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'FREE_PLAN', taskCode: 'FUNDING_CHAT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
+      { planCode: 'FREE_PLAN', taskCode: 'IDEA_INTELLIGENCE', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'FREE_PLAN', taskCode: 'FUNDING_TEMPLATE_EXTRACT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'FREE_PLAN', taskCode: 'FUNDING_GUIDELINE_EXTRACT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
       { planCode: 'FREE_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_S', 'BASE_M'], defaultClass: 'BASE_M' },
@@ -282,6 +284,7 @@ async function seedProductionPlans() {
       // PRO PLAN - Funding discovery tasks
       { planCode: 'PRO_PLAN', taskCode: 'FUNDING_CALL_INGEST', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'PRO_PLAN', taskCode: 'FUNDING_CHAT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
+      { planCode: 'PRO_PLAN', taskCode: 'IDEA_INTELLIGENCE', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'PRO_PLAN', taskCode: 'FUNDING_TEMPLATE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'PRO_PLAN', taskCode: 'FUNDING_GUIDELINE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
       { planCode: 'PRO_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_M', 'PRO_M'], defaultClass: 'PRO_M' },
@@ -312,6 +315,7 @@ async function seedProductionPlans() {
       // ENTERPRISE PLAN - Funding discovery tasks
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_CALL_INGEST', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_CHAT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'IDEA_INTELLIGENCE', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_TEMPLATE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'FUNDING_GUIDELINE_EXTRACT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'GRANT_PREP_CHAT', allowedClasses: ['BASE_M', 'PRO_M', 'PRO_L', 'ADVANCED'], defaultClass: 'PRO_L' },

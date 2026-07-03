@@ -1,0 +1,43 @@
+import { publicProjectCorpusService } from './service'
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function boundedBatchSize(value: number | undefined, fallback: number) {
+  const next = Number.isFinite(value) && value ? Number(value) : fallback
+  return Math.min(Math.max(next, 1), 200)
+}
+
+export interface PublicProjectEmbeddingWorkerOptions {
+  once?: boolean
+  limit?: number
+  includeFailed?: boolean
+  pollIntervalMs?: number
+}
+
+export async function runPublicProjectEmbeddingWorker(options: PublicProjectEmbeddingWorkerOptions = {}) {
+  const pollIntervalMs = Math.max(options.pollIntervalMs || 15000, 1000)
+  const limit = boundedBatchSize(
+    options.limit,
+    Number(process.env.PUBLIC_PROJECT_EMBEDDING_WORKER_BATCH_SIZE || 25)
+  )
+  const includeFailed =
+    options.includeFailed ?? process.env.PUBLIC_PROJECT_EMBEDDING_WORKER_INCLUDE_FAILED === 'true'
+
+  do {
+    const result = await publicProjectCorpusService.processPendingEmbeddings({
+      limit,
+      includeFailed,
+    })
+
+    if (options.once) {
+      return result
+    }
+
+    if (result.selected === 0 || result.failed > 0) {
+      await sleep(pollIntervalMs)
+    }
+  } while (true)
+}
+

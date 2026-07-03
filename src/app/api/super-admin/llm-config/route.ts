@@ -137,7 +137,8 @@ function checkProviderApiKey(provider: string): boolean {
     deepseek: 'DEEPSEEK_API_KEY',
     groq: 'GROQ_API_KEY',
     zhipu: 'ZHIPU_API_KEY',
-    qwen: 'QWEN_API_KEY'
+    qwen: 'QWEN_API_KEY',
+    voyage: 'VOYAGE_API_KEY'
   }
   const envVar = envMap[provider]
   return envVar ? !!process.env[envVar] : false

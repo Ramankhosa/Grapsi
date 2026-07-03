@@ -6,7 +6,7 @@
  * ============================================================================
  *
  * Seeds the database with:
- * 1. All available LLM models (Google, OpenAI, Anthropic, DeepSeek, Groq, Zhipu, Qwen)
+ * 1. All available LLM models (Google, OpenAI, Anthropic, DeepSeek, Groq, Zhipu, Qwen, Voyage)
  * 2. The active grant-focused workflow stages used by the current pipeline
  * 3. PRODUCTION TOKEN LIMITS for all plans (same limits, different models per tier)
  *
@@ -37,6 +37,11 @@ const FUNDING_TASK_SEEDS = [
     code: 'FUNDING_CHAT',
     name: 'AI Fund Finder Chat',
     defaultStageCode: 'FUNDING_CHAT_NARRATIVE'
+  },
+  {
+    code: 'IDEA_INTELLIGENCE',
+    name: 'Funding Idea Intelligence',
+    defaultStageCode: 'IDEA_INTELLIGENCE_REPORT'
   },
   {
     code: 'FUNDING_TEMPLATE_EXTRACT',
@@ -204,6 +209,33 @@ async function main() {
       supportsVision: false,
       supportsStreaming: false,
       inputCostPer1M: 15,
+      outputCostPer1M: 0,
+      isActive: true,
+      isDefault: false
+    },
+    // Voyage 4 embedding models share one embedding space, allowing the
+    // lower-cost query model to retrieve documents embedded by the large model.
+    // Pricing source: https://docs.voyageai.com/docs/pricing
+    {
+      code: 'voyage-4-lite',
+      displayName: 'Voyage 4 Lite',
+      provider: 'voyage',
+      contextWindow: 32000,
+      supportsVision: false,
+      supportsStreaming: false,
+      inputCostPer1M: 2,     // $0.02
+      outputCostPer1M: 0,
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'voyage-4-large',
+      displayName: 'Voyage 4 Large',
+      provider: 'voyage',
+      contextWindow: 32000,
+      supportsVision: false,
+      supportsStreaming: false,
+      inputCostPer1M: 12,    // $0.12
       outputCostPer1M: 0,
       isActive: true,
       isDefault: false
@@ -1109,18 +1141,72 @@ async function main() {
     },
     {
       code: 'FUNDING_CHAT_EMBEDDING',
-      displayName: 'AI Fund Finder Embedding',
+      displayName: 'AI Fund Finder Query Embedding',
       featureCode: 'FUNDING_DISCOVERY',
       sortOrder: 6,
       description: 'Embed funding search queries for vector retrieval cost tracking.',
-      tokenLimits: { maxTokensIn: 12000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-embedding-001', PRO_PLAN: 'gemini-embedding-001', ENTERPRISE_PLAN: 'gemini-embedding-001' }
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 0 },
+      models: { FREE_PLAN: 'voyage-4-lite', PRO_PLAN: 'voyage-4-lite', ENTERPRISE_PLAN: 'voyage-4-lite' }
+    },
+    {
+      code: 'IDEA_INTELLIGENCE_STRUCTURE',
+      displayName: 'Idea Intelligence Structuring',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 7,
+      description: 'Convert free-form research ideas into searchable facets, keywords, and semantic queries.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
+      models: { FREE_PLAN: 'gemini-2.0-flash-lite', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'IDEA_INTELLIGENCE_EVIDENCE_MAP',
+      displayName: 'Idea Intelligence Evidence Mapping',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 8,
+      description: 'Map idea facets against funded projects, publications, patents, and web evidence.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'IDEA_INTELLIGENCE_REPORT',
+      displayName: 'Idea Intelligence Positioning Brief',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 9,
+      description: 'Generate evidence-grounded positioning recommendations and next steps from the cross-corpus matrix.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'IDEA_INTELLIGENCE_REFINE',
+      displayName: 'Idea Intelligence Refinement',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 10,
+      description: 'Generate refined idea versions from completed landscape analysis and user refinement goals.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'FUNDING_DOCUMENT_RETRIEVAL',
+      displayName: 'Funding Document Query Embedding',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 11,
+      description: 'Embed queries used to retrieve relevant funding-document chunks.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 0 },
+      models: { FREE_PLAN: 'voyage-4-lite', PRO_PLAN: 'voyage-4-lite', ENTERPRISE_PLAN: 'voyage-4-lite' }
+    },
+    {
+      code: 'FUNDING_DOCUMENT_CHUNK_EMBEDDING',
+      displayName: 'Funding Document Chunk Embedding',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 12,
+      description: 'Embed parsed funding-document chunks for vector retrieval.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 0 },
+      models: { FREE_PLAN: 'voyage-4-large', PRO_PLAN: 'voyage-4-large', ENTERPRISE_PLAN: 'voyage-4-large' }
     },
     {
       code: 'FUNDING_TEMPLATE_EXTRACT_TEXT',
       displayName: 'Funding Template Text Extraction',
       featureCode: 'FUNDING_DISCOVERY',
-      sortOrder: 7,
+      sortOrder: 13,
       description: 'Extract grant template structure from text assets.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
       models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
@@ -1129,7 +1215,7 @@ async function main() {
       code: 'FUNDING_TEMPLATE_EXTRACT_MULTIMODAL',
       displayName: 'Funding Template Multimodal Extraction',
       featureCode: 'FUNDING_DISCOVERY',
-      sortOrder: 8,
+      sortOrder: 14,
       description: 'Extract grant template structure from PDF and image assets.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
       models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
@@ -1138,7 +1224,7 @@ async function main() {
       code: 'FUNDING_GUIDELINE_EXTRACT_TEXT',
       displayName: 'Funding Guideline Extraction',
       featureCode: 'FUNDING_DISCOVERY',
-      sortOrder: 9,
+      sortOrder: 15,
       description: 'Extract structured grant-writing guidelines from call text.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 24000 },
       models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
@@ -1581,6 +1667,11 @@ async function main() {
   // ============================================================================
   const MIN_STAGE_MAX_TOKENS_IN = 12000;
   const MIN_STAGE_MAX_TOKENS_OUT = 8000;
+  const EMBEDDING_STAGE_CODES = new Set([
+    'FUNDING_CHAT_EMBEDDING',
+    'FUNDING_DOCUMENT_RETRIEVAL',
+    'FUNDING_DOCUMENT_CHUNK_EMBEDDING'
+  ]);
   const tokenLimits = Object.fromEntries(
     stageSeeds.map(stage => [stage.code, stage.tokenLimits])
   );
@@ -1663,7 +1754,9 @@ async function main() {
         const limits = rawLimits
           ? {
               maxTokensIn: Math.max(rawLimits.maxTokensIn, MIN_STAGE_MAX_TOKENS_IN),
-              maxTokensOut: Math.max(rawLimits.maxTokensOut, MIN_STAGE_MAX_TOKENS_OUT),
+              maxTokensOut: EMBEDDING_STAGE_CODES.has(task.defaultStageCode)
+                ? 0
+                : Math.max(rawLimits.maxTokensOut, MIN_STAGE_MAX_TOKENS_OUT),
             }
           : null;
 

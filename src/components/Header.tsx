@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import { FileText, Bell, Library } from 'lucide-react'
+import { FileText, Bell, Library, Sparkles } from 'lucide-react'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
@@ -181,6 +181,14 @@ export default function Header() {
                   🔍 Search
                 </Link>
 
+                <Link
+                  href="/funding/intelligence"
+                  className="hidden items-center px-3 py-2 text-sm font-medium text-gpt-gray-700 transition-all duration-200 hover:text-teal-700 lg:inline-flex"
+                >
+                  <Sparkles className="mr-1.5 h-4 w-4" />
+                  Funding Intelligence
+                </Link>
+
                 {/* Shared research library navigation */}
                 {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && (
                   <>
@@ -255,6 +263,15 @@ export default function Header() {
                     >
                       <span>📁</span>
                       <span>Projects</span>
+                    </Link>
+
+                    <Link
+                      href="/funding/intelligence"
+                      className="flex w-full items-center space-x-2 px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50"
+                      onClick={closeMenu}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      <span>Funding Intelligence</span>
                     </Link>
 
                     {/* Shared research library links */}

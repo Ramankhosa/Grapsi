@@ -1961,9 +1961,9 @@ export default function SectionDraftingStage({
 
   // Cleanup timers on unmount
   useEffect(() => {
+    const timersRef = autoSaveTimers.current;
     return () => {
-      const timers = autoSaveTimers.current;
-      Object.values(timers).forEach(clearTimeout);
+      Object.values(timersRef).forEach(clearTimeout);
     };
   }, []);
 

@@ -12,6 +12,10 @@ import {
   RefreshCw,
   RotateCcw,
   Shield,
+  Upload,
+  FileText,
+  Trash2,
+  FileSpreadsheet,
 } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
@@ -49,14 +53,26 @@ export default function PublicProjectCrawlerPage() {
   const [sources, setSources] = useState<SourceResponse | null>(null)
   const [runs, setRuns] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
-  const [selectedSource, setSelectedSource] = useState<'PRISM' | 'CSIR' | 'BIRAC' | 'ICMR'>('PRISM')
+  const [selectedSource, setSelectedSource] = useState<'PRISM' | 'CSIR' | 'BIRAC' | 'ICMR' | 'ICSSR' | 'CSV_IMPORT'>('PRISM')
   const [states, setStates] = useState('PUNJAB, DELHI')
   const [csirPilotLimit, setCsirPilotLimit] = useState(20)
   const [biracPilotLimit, setBiracPilotLimit] = useState(20)
   const [icmrPilotLimit, setIcmrPilotLimit] = useState(20)
+  const [icssrPilotLimit, setIcssrPilotLimit] = useState(20)
+  const [csvImportLimit, setCsvImportLimit] = useState(200)
   const [isBusy, setIsBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // ICSSR upload state
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; path: string }>>([])
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<{ total: number; success: number; error: number } | null>(null)
+
+  // CSV upload state (for DST and other CSV sources)
+  const [csvFiles, setCsvFiles] = useState<Array<{ name: string; path: string }>>([])
+  const [isCsvUploading, setIsCsvUploading] = useState(false)
+  const [csvUploadProgress, setCsvUploadProgress] = useState<{ total: number; success: number; error: number } | null>(null)
 
   const canRead = useMemo(
     () => Boolean(user?.roles?.includes('SUPER_ADMIN') || user?.roles?.includes('SUPER_ADMIN_VIEWER')),
@@ -125,9 +141,13 @@ export default function PublicProjectCrawlerPage() {
   }
 
   async function startPilot() {
-    if (selectedSource === 'CSIR' || selectedSource === 'BIRAC' || selectedSource === 'ICMR') {
+    if (selectedSource === 'CSIR' || selectedSource === 'BIRAC' || selectedSource === 'ICMR' || selectedSource === 'ICSSR' || selectedSource === 'CSV_IMPORT') {
       const maxRecords =
-        selectedSource === 'CSIR' ? csirPilotLimit : selectedSource === 'BIRAC' ? biracPilotLimit : icmrPilotLimit
+        selectedSource === 'CSIR' ? csirPilotLimit :
+        selectedSource === 'BIRAC' ? biracPilotLimit :
+        selectedSource === 'ICMR' ? icmrPilotLimit :
+        selectedSource === 'ICSSR' ? icssrPilotLimit :
+        csvImportLimit
       await postJson('/api/super-admin/project-intelligence/crawlers/runs', {
         sourceKey: selectedSource,
         mode: 'pilot',
@@ -178,6 +198,172 @@ export default function PublicProjectCrawlerPage() {
     })
   }
 
+  // ICSSR file upload functions
+  async function fetchUploadedFiles() {
+    try {
+      const response = await fetch('/api/super-admin/project-intelligence/crawlers/upload', {
+        headers: authHeaders(),
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setUploadedFiles(data.files || [])
+      }
+    } catch (err) {
+      console.error('Failed to fetch uploaded files:', err)
+    }
+  }
+
+  async function uploadFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+
+    setIsUploading(true)
+    setUploadProgress(null)
+    setError(null)
+    setMessage(null)
+
+    try {
+      const formData = new FormData()
+      for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i])
+      }
+
+      const response = await fetch('/api/super-admin/project-intelligence/crawlers/upload', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
+        },
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Upload failed')
+      }
+
+      setUploadProgress({
+        total: data.totalFiles,
+        success: data.successCount,
+        error: data.errorCount,
+      })
+      setMessage(`Uploaded ${data.successCount} of ${data.totalFiles} files successfully.`)
+      await fetchUploadedFiles()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  async function deleteUploadedFile(fileName: string) {
+    try {
+      const response = await fetch(
+        `/api/super-admin/project-intelligence/crawlers/upload?fileName=${encodeURIComponent(fileName)}`,
+        {
+          method: 'DELETE',
+          headers: authHeaders(),
+        }
+      )
+
+      if (response.ok) {
+        await fetchUploadedFiles()
+        setMessage(`Deleted ${fileName}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+    }
+  }
+
+  // Fetch uploaded files when ICSSR is selected
+  useEffect(() => {
+    if (selectedSource === 'ICSSR' && canRead) {
+      fetchUploadedFiles()
+    }
+  }, [selectedSource, canRead])
+
+  // CSV upload functions for DST and other CSV sources
+  async function fetchCsvFiles() {
+    try {
+      const response = await fetch('/api/super-admin/project-intelligence/crawlers/csv-upload', {
+        headers: authHeaders(),
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setCsvFiles(data.files || [])
+      }
+    } catch (err) {
+      console.error('Failed to fetch CSV files:', err)
+    }
+  }
+
+  async function uploadCsvFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+
+    setIsCsvUploading(true)
+    setCsvUploadProgress(null)
+    setError(null)
+    setMessage(null)
+
+    try {
+      const formData = new FormData()
+      for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i])
+      }
+
+      const response = await fetch('/api/super-admin/project-intelligence/crawlers/csv-upload', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
+        },
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Upload failed')
+      }
+
+      setCsvUploadProgress({
+        total: data.totalFiles,
+        success: data.successCount,
+        error: data.errorCount,
+      })
+      setMessage(`Uploaded ${data.successCount} of ${data.totalFiles} CSV files successfully.`)
+      await fetchCsvFiles()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setIsCsvUploading(false)
+    }
+  }
+
+  async function deleteCsvFile(fileName: string) {
+    try {
+      const response = await fetch(
+        `/api/super-admin/project-intelligence/crawlers/csv-upload?fileName=${encodeURIComponent(fileName)}`,
+        {
+          method: 'DELETE',
+          headers: authHeaders(),
+        }
+      )
+
+      if (response.ok) {
+        await fetchCsvFiles()
+        setMessage(`Deleted ${fileName}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+    }
+  }
+
+  // Fetch CSV files when CSV_IMPORT is selected
+  useEffect(() => {
+    if (selectedSource === 'CSV_IMPORT' && canRead) {
+      fetchCsvFiles()
+    }
+  }, [selectedSource, canRead])
+
   if (isLoading || !user || !canRead) {
     return <div className="min-h-screen bg-slate-50 p-8 text-sm text-slate-600">Checking Super Admin access...</div>
   }
@@ -187,6 +373,8 @@ export default function PublicProjectCrawlerPage() {
   const csir = sources?.sources?.find((source) => source.sourceKey === 'CSIR')
   const birac = sources?.sources?.find((source) => source.sourceKey === 'BIRAC')
   const icmr = sources?.sources?.find((source) => source.sourceKey === 'ICMR')
+  const icssr = sources?.sources?.find((source) => source.sourceKey === 'ICSSR')
+  const csvImport = sources?.sources?.find((source) => source.sourceKey === 'CSV_IMPORT')
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
@@ -199,7 +387,7 @@ export default function PublicProjectCrawlerPage() {
               </div>
               <h1 className="mt-3 text-3xl font-semibold text-slate-950">Public Project Crawlers</h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                Build the awarded-project corpus from public sources. PRISM, CSIR, BIRAC and ICMR are active for local pilot runs.
+                Build the awarded-project corpus from public sources. PRISM, CSIR, BIRAC, ICMR and ICSSR are active for local pilot runs.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -244,7 +432,7 @@ export default function PublicProjectCrawlerPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-950">Choose crawler source</h2>
-              <p className="mt-1 text-sm text-slate-600">Select PRISM, CSIR, BIRAC or ICMR before starting a pilot run.</p>
+              <p className="mt-1 text-sm text-slate-600">Select PRISM, CSIR, BIRAC, ICMR or ICSSR before starting a pilot run.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -287,11 +475,31 @@ export default function PublicProjectCrawlerPage() {
               >
                 ICMR crawler
               </button>
+              <button
+                onClick={() => setSelectedSource('ICSSR')}
+                className={`px-4 py-2 text-sm font-semibold ${
+                  selectedSource === 'ICSSR'
+                    ? 'bg-indigo-700 text-white'
+                    : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                ICSSR crawler
+              </button>
+              <button
+                onClick={() => setSelectedSource('CSV_IMPORT')}
+                className={`px-4 py-2 text-sm font-semibold ${
+                  selectedSource === 'CSV_IMPORT'
+                    ? 'bg-emerald-700 text-white'
+                    : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                CSV Importer
+              </button>
             </div>
           </div>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-7">
+        <section className="grid gap-4 md:grid-cols-4 lg:grid-cols-8">
           <div className="border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
               <Database className="h-4 w-4" />
@@ -344,7 +552,199 @@ export default function PublicProjectCrawlerPage() {
             <div className="mt-3 text-lg font-semibold text-slate-950">{icmr?.enabled ? 'Enabled' : 'Disabled'}</div>
             <p className="mt-1 text-sm text-slate-500">Last run: {formatDate(icmr?.lastRunAt)}</p>
           </button>
+          <button
+            onClick={() => setSelectedSource('ICSSR')}
+            className={`border p-5 text-left shadow-sm ${selectedSource === 'ICSSR' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white'}`}
+          >
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">ICSSR</div>
+            <div className="mt-3 text-lg font-semibold text-slate-950">{icssr?.enabled ? 'Enabled' : 'Disabled'}</div>
+            <p className="mt-1 text-sm text-slate-500">Last run: {formatDate(icssr?.lastRunAt)}</p>
+          </button>
+          <button
+            onClick={() => setSelectedSource('CSV_IMPORT')}
+            className={`border p-5 text-left shadow-sm ${selectedSource === 'CSV_IMPORT' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 bg-white'}`}
+          >
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">CSV Importer</div>
+            <div className="mt-3 text-lg font-semibold text-slate-950">{csvImport?.enabled ? 'Enabled' : 'Disabled'}</div>
+            <p className="mt-1 text-sm text-slate-500">Last run: {formatDate(csvImport?.lastRunAt)}</p>
+          </button>
         </section>
+
+        {selectedSource === 'ICSSR' && (
+          <section className="border border-indigo-200 bg-indigo-50/30 p-6 shadow-sm">
+            <div className="flex items-center gap-2">
+              <Upload className="h-5 w-5 text-indigo-700" />
+              <h2 className="text-lg font-semibold text-slate-950">ICSSR PDF Upload</h2>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Upload all ICSSR PDF files (Major, Minor, JSPS, NSTC, FFSI, etc.) in one go. Files are stored temporarily and processed during the crawl. Taiwan PI data from NSTC files is automatically excluded.
+            </p>
+
+            {canWrite && (
+              <div className="mt-5">
+                <label className="block text-sm font-medium text-slate-700">
+                  Select PDF files to upload (multiple allowed)
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    multiple
+                    onChange={(event) => uploadFiles(event.target.files)}
+                    disabled={isUploading}
+                    className="mt-2 block w-full text-sm text-slate-600 file:mr-4 file:rounded file:border-0 file:bg-indigo-600 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-indigo-700 disabled:opacity-50"
+                  />
+                </label>
+              </div>
+            )}
+
+            {isUploading && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-indigo-700">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Uploading files...
+              </div>
+            )}
+
+            {uploadProgress && (
+              <div className="mt-4 rounded bg-white p-3 text-sm">
+                <div className="font-medium text-slate-700">Upload Results:</div>
+                <div className="mt-1 text-slate-600">
+                  Total: {uploadProgress.total} | Success:{' '}
+                  <span className="text-emerald-600">{uploadProgress.success}</span> | Errors:{' '}
+                  <span className="text-red-600">{uploadProgress.error}</span>
+                </div>
+              </div>
+            )}
+
+            {uploadedFiles.length > 0 && (
+              <div className="mt-5">
+                <h3 className="text-sm font-medium text-slate-700">
+                  Uploaded Files ({uploadedFiles.length})
+                </h3>
+                <div className="mt-2 max-h-48 overflow-y-auto rounded border border-slate-200 bg-white">
+                  {uploadedFiles.map((file) => (
+                    <div
+                      key={file.name}
+                      className="flex items-center justify-between border-b border-slate-100 px-3 py-2 last:border-b-0"
+                    >
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <FileText className="h-4 w-4 flex-shrink-0 text-slate-400" />
+                        <span className="truncate text-sm text-slate-700" title={file.name}>
+                          {file.name}
+                        </span>
+                      </div>
+                      {canWrite && (
+                        <button
+                          onClick={() => deleteUploadedFile(file.name)}
+                          className="flex-shrink-0 text-slate-400 hover:text-red-600"
+                          title="Delete file"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {uploadedFiles.length === 0 && !isUploading && (
+              <div className="mt-4 rounded border border-dashed border-slate-300 bg-white p-4 text-center text-sm text-slate-500">
+                No PDF files uploaded yet. Upload files to begin crawling.
+              </div>
+            )}
+
+            {!canWrite && (
+              <p className="mt-4 text-sm text-slate-500">Viewer role: read-only file access.</p>
+            )}
+          </section>
+        )}
+
+        {selectedSource === 'CSV_IMPORT' && (
+          <section className="border border-emerald-200 bg-emerald-50/30 p-6 shadow-sm">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5 text-emerald-700" />
+              <h2 className="text-lg font-semibold text-slate-950">CSV Manual Importer</h2>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Upload CSV files containing manually collected project data from any funding agency (DST, DBT, DAE, DRDO, ISRO, etc.). The CSV can include columns like: Funding_agency, project_id, scheme, financial_year, title, pi_name, pi_organization, pi_emails, state, budget_size. The system auto-detects columns and reads the Funding_agency for each row.
+            </p>
+
+            {canWrite && (
+              <div className="mt-5">
+                <label className="block text-sm font-medium text-slate-700">
+                  Select CSV files to upload (.csv or .txt)
+                  <input
+                    type="file"
+                    accept=".csv,.txt"
+                    multiple
+                    onChange={(event) => uploadCsvFiles(event.target.files)}
+                    disabled={isCsvUploading}
+                    className="mt-2 block w-full text-sm text-slate-600 file:mr-4 file:rounded file:border-0 file:bg-emerald-600 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-emerald-700 disabled:opacity-50"
+                  />
+                </label>
+              </div>
+            )}
+
+            {isCsvUploading && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-emerald-700">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Uploading CSV files...
+              </div>
+            )}
+
+            {csvUploadProgress && (
+              <div className="mt-4 rounded bg-white p-3 text-sm">
+                <div className="font-medium text-slate-700">Upload Results:</div>
+                <div className="mt-1 text-slate-600">
+                  Total: {csvUploadProgress.total} | Success:{' '}
+                  <span className="text-emerald-600">{csvUploadProgress.success}</span> | Errors:{' '}
+                  <span className="text-red-600">{csvUploadProgress.error}</span>
+                </div>
+              </div>
+            )}
+
+            {csvFiles.length > 0 && (
+              <div className="mt-5">
+                <h3 className="text-sm font-medium text-slate-700">
+                  Uploaded CSV Files ({csvFiles.length})
+                </h3>
+                <div className="mt-2 max-h-48 overflow-y-auto rounded border border-slate-200 bg-white">
+                  {csvFiles.map((file) => (
+                    <div
+                      key={file.name}
+                      className="flex items-center justify-between border-b border-slate-100 px-3 py-2 last:border-b-0"
+                    >
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <FileSpreadsheet className="h-4 w-4 flex-shrink-0 text-slate-400" />
+                        <span className="truncate text-sm text-slate-700" title={file.name}>
+                          {file.name}
+                        </span>
+                      </div>
+                      {canWrite && (
+                        <button
+                          onClick={() => deleteCsvFile(file.name)}
+                          className="flex-shrink-0 text-slate-400 hover:text-red-600"
+                          title="Delete file"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {csvFiles.length === 0 && !isCsvUploading && (
+              <div className="mt-4 rounded border border-dashed border-slate-300 bg-white p-4 text-center text-sm text-slate-500">
+                No CSV files uploaded yet. Upload DST project data files to begin import.
+              </div>
+            )}
+
+            {!canWrite && (
+              <p className="mt-4 text-sm text-slate-500">Viewer role: read-only file access.</p>
+            )}
+          </section>
+        )}
 
         <section className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
           <div className="border border-slate-200 bg-white p-6 shadow-sm">
@@ -403,7 +803,7 @@ export default function PublicProjectCrawlerPage() {
                   />
                 </label>
               </>
-            ) : (
+            ) : selectedSource === 'ICMR' ? (
               <>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   Local ICMR pilot discovers approved-project PDF links, parses table rows, stores the raw row JSON, and embeds title only because the PDFs do not expose abstracts.
@@ -416,6 +816,54 @@ export default function PublicProjectCrawlerPage() {
                     max={20}
                     value={icmrPilotLimit}
                     onChange={(event) => setIcmrPilotLimit(Number(event.target.value || 20))}
+                    disabled={!canWrite}
+                    className="mt-2 w-full border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700 disabled:bg-slate-100"
+                  />
+                </label>
+              </>
+            ) : selectedSource === 'ICSSR' ? (
+              <>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  ICSSR pilot processes uploaded PDF files, parses awarded project details (Major, Minor, Fellowships, Special Calls, JSPS, NSTC), stores the raw row JSON, and embeds title only. Taiwan PI information from NSTC files is automatically excluded.
+                </p>
+                {uploadedFiles.length === 0 && (
+                  <div className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-800">
+                    <AlertTriangle className="mb-1 inline h-4 w-4" />
+                    No PDF files uploaded. Please upload files above before starting the crawl.
+                  </div>
+                )}
+                <label className="mt-5 block text-sm font-medium text-slate-700">
+                  ICSSR pilot record cap
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={icssrPilotLimit}
+                    onChange={(event) => setIcssrPilotLimit(Number(event.target.value || 20))}
+                    disabled={!canWrite}
+                    className="mt-2 w-full border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700 disabled:bg-slate-100"
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  CSV Importer processes uploaded CSV files containing manually collected project data from any funding agency. Automatically detects the funding agency from the Funding_agency column. Supports DST, DBT, DAE, DRDO, ISRO, and other agencies. Embeds title only for search.
+                </p>
+                {csvFiles.length === 0 && (
+                  <div className="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-800">
+                    <AlertTriangle className="mb-1 inline h-4 w-4" />
+                    No CSV files uploaded. Please upload files in the section above before starting the import.
+                  </div>
+                )}
+                <label className="mt-5 block text-sm font-medium text-slate-700">
+                  CSV import record cap
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={csvImportLimit}
+                    onChange={(event) => setCsvImportLimit(Number(event.target.value || 200))}
                     disabled={!canWrite}
                     className="mt-2 w-full border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700 disabled:bg-slate-100"
                   />

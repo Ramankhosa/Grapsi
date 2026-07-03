@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
 
-import { publicProjectCorpusService } from '../src/lib/publicProjects/service'
+import { runPublicProjectEmbeddingWorker } from '../src/lib/publicProjects/embeddingWorker'
 
 dotenv.config()
 
@@ -11,13 +11,22 @@ function readArg(name: string) {
 }
 
 async function main() {
-  const limit = Number(readArg('limit') || 25)
-  const includeFailed = !process.argv.includes('--skip-failed')
-  const result = await publicProjectCorpusService.processPendingEmbeddings({
-    limit,
+  const once = process.argv.includes('--once')
+  const limit = readArg('limit')
+  const pollInterval = readArg('poll-ms')
+  const includeFailed =
+    process.argv.includes('--include-failed') || (once && !process.argv.includes('--skip-failed'))
+
+  const result = await runPublicProjectEmbeddingWorker({
+    once,
+    limit: limit ? Number(limit) : undefined,
     includeFailed,
+    pollIntervalMs: pollInterval ? Number(pollInterval) : undefined,
   })
-  console.log(JSON.stringify(result, null, 2))
+
+  if (once) {
+    console.log(JSON.stringify(result, null, 2))
+  }
 }
 
 main().catch((error) => {

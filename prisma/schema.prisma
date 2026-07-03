@@ -219,6 +219,8 @@ enum PublicProjectSourceKey {
   BIRAC
   CSIR
   ICMR
+  ICSSR
+  CSV_IMPORT
 }
 
 enum PublicProjectRecordStatus {
@@ -630,9 +632,9 @@ model User {
   researcher_profile                 ResearcherProfile?
   researcher_notification_preference ResearcherNotificationPreference?
   researcher_saved_research_areas    ResearcherSavedResearchArea[]
-  research_area_taxonomy_uploads     ResearchAreaTaxonomyUpload[] @relation("ResearchAreaTaxonomyUploadImporter")
-  platform_role_assignments          PlatformTeamRoleAssignment[] @relation("PlatformRoleAssignmentUser")
-  platform_role_assignments_assigned PlatformTeamRoleAssignment[] @relation("PlatformRoleAssignmentAssigner")
+  research_area_taxonomy_uploads     ResearchAreaTaxonomyUpload[]      @relation("ResearchAreaTaxonomyUploadImporter")
+  platform_role_assignments          PlatformTeamRoleAssignment[]      @relation("PlatformRoleAssignmentUser")
+  platform_role_assignments_assigned PlatformTeamRoleAssignment[]      @relation("PlatformRoleAssignmentAssigner")
 
   @@map("users")
 }
@@ -837,24 +839,24 @@ model UserServiceQuota {
 }
 
 model Project {
-  id                String                @id @default(cuid())
-  name              String
-  projectType       ProjectType           @default(PATENT)
-  userId            String
-  tenantId          String
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
-  applicantProfile  ApplicantProfile?
-  collaborators     ProjectCollaborator[]
-  patents           Patent[]
-  grantSessions     GrantSession[]
-  grantPrepSessions GrantPrepSession[]
-  grantBlueprints   GrantBlueprint[]
-  grantSectionDrafts GrantSectionDraft[]
+  id                            String                         @id @default(cuid())
+  name                          String
+  projectType                   ProjectType                    @default(PATENT)
+  userId                        String
+  tenantId                      String
+  createdAt                     DateTime                       @default(now())
+  updatedAt                     DateTime                       @updatedAt
+  applicantProfile              ApplicantProfile?
+  collaborators                 ProjectCollaborator[]
+  patents                       Patent[]
+  grantSessions                 GrantSession[]
+  grantPrepSessions             GrantPrepSession[]
+  grantBlueprints               GrantBlueprint[]
+  grantSectionDrafts            GrantSectionDraft[]
   grantStructuredFieldResponses GrantStructuredFieldResponse[]
-  noveltySearchRuns NoveltySearchRun[]
-  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  noveltySearchRuns             NoveltySearchRun[]
+  user                          User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant                        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@map("projects")
@@ -919,10 +921,10 @@ model ProjectCollaborator {
 }
 
 model FundingCall {
-  id                          String                          @id @default(cuid())
+  id                          String                            @id @default(cuid())
   tenantId                    String?
   visibility                  FundingVisibility
-  status                      FundingStatus                   @default(INGESTING)
+  status                      FundingStatus                     @default(INGESTING)
   title                       String
   agencyName                  String?
   sourceUrl                   String?
@@ -930,32 +932,32 @@ model FundingCall {
   sourceDomain                String?
   programIdentifier           String?
   summary                     String?
-  sourceType                  FundingSourceType               @default(URL)
+  sourceType                  FundingSourceType                 @default(URL)
   deadlineAt                  DateTime?
   publishedAt                 DateTime?
   archivedAt                  DateTime?
   extractedFacts              Json?
   normalizedMetadata          Json?
   input_type                  FundingInputType?
-  catalog_status              FundingCallStatus?              @default(DRAFT)
-  template_status             FundingTemplateLifecycleStatus  @default(none)
-  guideline_status            FundingGuidelineLifecycleStatus @default(none)
-  eligible_countries          String[]                        @default([])
-  eligible_regions            String[]                        @default([])
-  host_countries              String[]                        @default([])
-  funding_kinds               String[]                        @default([])
-  institution_types           String[]                        @default([])
-  career_stages               String[]                        @default([])
-  citizenship_requirements    String[]                        @default([])
-  residency_requirements      String[]                        @default([])
-  application_languages       String[]                        @default([])
-  disciplines                 String[]                        @default([])
+  catalog_status              FundingCallStatus?                @default(DRAFT)
+  template_status             FundingTemplateLifecycleStatus    @default(none)
+  guideline_status            FundingGuidelineLifecycleStatus   @default(none)
+  eligible_countries          String[]                          @default([])
+  eligible_regions            String[]                          @default([])
+  host_countries              String[]                          @default([])
+  funding_kinds               String[]                          @default([])
+  institution_types           String[]                          @default([])
+  career_stages               String[]                          @default([])
+  citizenship_requirements    String[]                          @default([])
+  residency_requirements      String[]                          @default([])
+  application_languages       String[]                          @default([])
+  disciplines                 String[]                          @default([])
   agency_name                 String?
   scheme_title                String?
   description                 String?
   open_date                   DateTime?
   close_date                  DateTime?
-  is_rolling                  Boolean?                        @default(false)
+  is_rolling                  Boolean?                          @default(false)
   geography_scope             String?
   funder_country              String?
   amount_min                  Float?
@@ -966,7 +968,7 @@ model FundingCall {
   project_duration_text       String?
   eligibility_text            String?
   expected_deliverables_text  String?
-  official_urls               String[]                        @default([])
+  official_urls               String[]                          @default([])
   contact_info                String?
   sponsor_type                String?
   source                      String?
@@ -982,8 +984,8 @@ model FundingCall {
   embedding_voyage_1024       Unsupported("vector")?
   ts_document                 Unsupported("tsvector")?
   expiration_date             DateTime?
-  is_active                   Boolean?                        @default(true)
-  version                     Int?                            @default(1)
+  is_active                   Boolean?                          @default(true)
+  version                     Int?                              @default(1)
   previous_version_id         String?
   metadata                    Json?
   intake_job_id               String?
@@ -991,19 +993,19 @@ model FundingCall {
   active_guideline_id         String?
   createdByUserId             String
   updatedByUserId             String
-  createdAt                   DateTime                        @default(now())
-  updatedAt                   DateTime                        @updatedAt
-  tenant                      Tenant?                         @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  createdAt                   DateTime                          @default(now())
+  updatedAt                   DateTime                          @updatedAt
+  tenant                      Tenant?                           @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   importJobs                  FundingImportJob[]
   assets                      FundingImportAsset[]
-  template                    FundingCallTemplate?            @relation("FundingCallTemplates")
-  guideline                   FundingCallGuideline?           @relation("FundingCallGuidelines")
-  active_template             FundingCallTemplate?            @relation("FundingCallActiveTemplate", fields: [active_template_id], references: [id], onDelete: SetNull)
-  active_guideline            FundingCallGuideline?           @relation("FundingCallActiveGuideline", fields: [active_guideline_id], references: [id], onDelete: SetNull)
+  template                    FundingCallTemplate?              @relation("FundingCallTemplates")
+  guideline                   FundingCallGuideline?             @relation("FundingCallGuidelines")
+  active_template             FundingCallTemplate?              @relation("FundingCallActiveTemplate", fields: [active_template_id], references: [id], onDelete: SetNull)
+  active_guideline            FundingCallGuideline?             @relation("FundingCallActiveGuideline", fields: [active_guideline_id], references: [id], onDelete: SetNull)
   template_assets             FundingCallTemplateAsset[]
   template_runs               FundingCallTemplateRun[]
   guideline_runs              FundingCallGuidelineRun[]
-  intake_jobs                 FundingIntakeJob[]              @relation("FundingCallIntakeJobs")
+  intake_jobs                 FundingIntakeJob[]                @relation("FundingCallIntakeJobs")
   documents                   FundingCallDocument[]
   document_pages              FundingCallDocumentPage[]
   document_sections           FundingCallDocumentSection[]
@@ -1112,6 +1114,13 @@ model PublicProject {
   outcomes                Json?                        @map("outcomes_json")
   rawPayload              Json?                        @map("raw_payload_json")
   extendedFields          Json?                        @map("extended_fields_json")
+  duplicateOfId           String?                      @map("duplicate_of_id")
+  dedupedAt               DateTime?                    @map("deduped_at")
+  enrichedAbstract        String?                      @map("enriched_abstract")
+  enrichmentSource        String?                      @map("enrichment_source")
+  enrichmentMetadata      Json?                        @map("enrichment_metadata_json")
+  taxonomyStatus          String?                      @map("taxonomy_status")
+  taxonomyMetadata        Json?                        @map("taxonomy_metadata_json")
   contentHash             String                       @map("content_hash")
   detailHash              String?                      @map("detail_hash")
   duplicateFingerprint    String?                      @map("duplicate_fingerprint")
@@ -1133,11 +1142,12 @@ model PublicProject {
   createdAt               DateTime                     @default(now()) @map("created_at")
   updatedAt               DateTime                     @updatedAt @map("updated_at")
 
-  source       PublicProjectSource            @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  source       PublicProjectSource           @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   participants PublicProjectParticipant[]
   contacts     PublicProjectPrivateContact[]
   crawlItems   PublicProjectCrawlItem[]
   revisions    PublicProjectRevision[]
+  researchAreas PublicProjectResearchArea[]
 
   @@unique([sourceId, sourceRecordKey])
   @@index([sourceKey, sourceVariant])
@@ -1147,10 +1157,35 @@ model PublicProject {
   @@index([state])
   @@index([sanctionYear])
   @@index([duplicateFingerprint])
+  @@index([duplicateOfId])
+  @@index([enrichmentSource])
+  @@index([taxonomyStatus])
   @@index([embedding])
   @@index([embeddingVoyage1024])
   @@index([tsDocument], map: "public_projects_ts_idx", type: Gin)
   @@map("public_projects")
+}
+
+model PublicProjectResearchArea {
+  id                 String   @id @default(cuid())
+  projectId          String   @map("project_id")
+  taxonomyAreaId     String?  @map("taxonomy_area_id")
+  taxonomyLevel1Code String?  @map("taxonomy_level1_code")
+  taxonomyLevel2Code String?  @map("taxonomy_level2_code")
+  label              String
+  confidence         Float    @default(0.5)
+  source             String   @default("heuristic")
+  rationale          String?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  project PublicProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, label])
+  @@index([projectId])
+  @@index([taxonomyAreaId])
+  @@index([taxonomyLevel1Code, taxonomyLevel2Code])
+  @@map("public_project_research_areas")
 }
 
 model PublicProjectParticipant {
@@ -1219,7 +1254,7 @@ model PublicProjectCrawlRun {
   createdAt            DateTime                 @default(now()) @map("created_at")
   updatedAt            DateTime                 @updatedAt @map("updated_at")
 
-  source    PublicProjectSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  source    PublicProjectSource      @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   items     PublicProjectCrawlItem[]
   revisions PublicProjectRevision[]
 
@@ -1230,23 +1265,23 @@ model PublicProjectCrawlRun {
 }
 
 model PublicProjectCrawlItem {
-  id                 String                       @id @default(cuid())
-  runId              String                       @map("run_id")
-  projectId          String?                      @map("project_id")
-  sourceRecordKey    String                       @map("source_record_key")
-  sourceVariant      String?                      @map("source_variant")
-  externalId         String?                      @map("external_id")
-  state              String?
-  status             PublicProjectCrawlItemStatus @default(discovered)
-  attemptCount       Int                          @default(0) @map("attempt_count")
-  errorCode          String?                      @map("error_code")
-  errorMessage       String?                      @map("error_message")
-  listingPayload     Json?                        @map("listing_payload_json")
-  detailPayload      Json?                        @map("detail_payload_json")
-  contentHash        String?                      @map("content_hash")
-  processedAt        DateTime?                    @map("processed_at")
-  createdAt          DateTime                     @default(now()) @map("created_at")
-  updatedAt          DateTime                     @updatedAt @map("updated_at")
+  id              String                       @id @default(cuid())
+  runId           String                       @map("run_id")
+  projectId       String?                      @map("project_id")
+  sourceRecordKey String                       @map("source_record_key")
+  sourceVariant   String?                      @map("source_variant")
+  externalId      String?                      @map("external_id")
+  state           String?
+  status          PublicProjectCrawlItemStatus @default(discovered)
+  attemptCount    Int                          @default(0) @map("attempt_count")
+  errorCode       String?                      @map("error_code")
+  errorMessage    String?                      @map("error_message")
+  listingPayload  Json?                        @map("listing_payload_json")
+  detailPayload   Json?                        @map("detail_payload_json")
+  contentHash     String?                      @map("content_hash")
+  processedAt     DateTime?                    @map("processed_at")
+  createdAt       DateTime                     @default(now()) @map("created_at")
+  updatedAt       DateTime                     @updatedAt @map("updated_at")
 
   run     PublicProjectCrawlRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   project PublicProject?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -1273,6 +1308,113 @@ model PublicProjectRevision {
   @@unique([projectId, contentHash])
   @@index([runId])
   @@map("public_project_revisions")
+}
+
+/// Persisted, resumable funding-landscape analysis for one user idea.
+/// Versioned refinement is intentionally additive and can be layered on later.
+model IdeaIntelligenceRun {
+  id                    String    @id @default(cuid())
+  tenantId              String?   @map("tenant_id")
+  userId                String    @map("user_id")
+  sessionId             String?   @map("session_id")
+  versionId             String?   @map("version_id")
+  anchorPublicProjectId String?   @map("anchor_public_project_id")
+  title                 String
+  ideaText              String    @map("idea_text")
+  status                String    @default("PENDING")
+  currentStage          Int       @default(0) @map("current_stage")
+  stageStatesJson       Json?     @map("stage_states_json")
+  structuredIdeaJson    Json?     @map("structured_idea_json")
+  retrievalResultsJson  Json?     @map("retrieval_results_json")
+  analysisJson          Json?     @map("analysis_json")
+  scoresJson            Json?     @map("scores_json")
+  reportJson            Json?     @map("report_json")
+  errorMessage          String?   @map("error_message")
+  startedAt             DateTime? @map("started_at")
+  completedAt           DateTime? @map("completed_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  session IdeaIntelligenceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  version IdeaIntelligenceVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  refinementCandidates IdeaRefinementCandidate[]
+
+  @@index([userId, createdAt], map: "idea_intelligence_runs_user_created_idx")
+  @@index([tenantId, status], map: "idea_intelligence_runs_tenant_status_idx")
+  @@index([sessionId, createdAt], map: "idea_intelligence_runs_session_created_idx")
+  @@index([versionId], map: "idea_intelligence_runs_version_idx")
+  @@map("idea_intelligence_runs")
+}
+
+model IdeaIntelligenceSession {
+  id                    String    @id @default(cuid())
+  tenantId              String?   @map("tenant_id")
+  userId                String    @map("user_id")
+  projectId             String?   @map("project_id")
+  ideaBankIdeaId        String?   @map("idea_bank_idea_id")
+  anchorPublicProjectId String?   @map("anchor_public_project_id")
+  title                 String
+  currentVersionId      String?   @map("current_version_id")
+  status                String    @default("ACTIVE")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  versions IdeaIntelligenceVersion[]
+  runs     IdeaIntelligenceRun[]
+  refinementCandidates IdeaRefinementCandidate[]
+
+  @@index([userId, createdAt], map: "idea_intelligence_sessions_user_created_idx")
+  @@index([tenantId, status], map: "idea_intelligence_sessions_tenant_status_idx")
+  @@map("idea_intelligence_sessions")
+}
+
+model IdeaIntelligenceVersion {
+  id                  String    @id @default(cuid())
+  sessionId           String    @map("session_id")
+  versionNumber       Int       @map("version_number")
+  title               String
+  ideaText            String    @map("idea_text")
+  structuredIdeaJson  Json?     @map("structured_idea_json")
+  parentVersionId     String?   @map("parent_version_id")
+  refinementObjective String?   @map("refinement_objective")
+  refinementRationale String?   @map("refinement_rationale")
+  scoreDeltaJson      Json?     @map("score_delta_json")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  session IdeaIntelligenceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  runs    IdeaIntelligenceRun[]
+
+  @@unique([sessionId, versionNumber], map: "idea_intelligence_versions_session_number_key")
+  @@index([sessionId, createdAt], map: "idea_intelligence_versions_session_created_idx")
+  @@index([parentVersionId], map: "idea_intelligence_versions_parent_idx")
+  @@map("idea_intelligence_versions")
+}
+
+model IdeaRefinementCandidate {
+  id                String    @id @default(cuid())
+  runId             String    @map("run_id")
+  sessionId         String?   @map("session_id")
+  candidateIndex    Int       @map("candidate_index")
+  objective         String?   @map("objective")
+  strategy          String
+  title             String
+  ideaText          String    @map("idea_text")
+  payloadJson       Json      @map("payload_json")
+  groundednessScore Float     @default(0) @map("groundedness_score")
+  status            String    @default("PROPOSED")
+  selectedVersionId String?   @map("selected_version_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  run     IdeaIntelligenceRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  session IdeaIntelligenceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([runId, candidateIndex], map: "idea_refinement_candidates_run_index_idx")
+  @@index([runId, status], map: "idea_refinement_candidates_run_status_idx")
+  @@index([sessionId, createdAt], map: "idea_refinement_candidates_session_created_idx")
+  @@index([selectedVersionId], map: "idea_refinement_candidates_selected_version_idx")
+  @@map("idea_refinement_candidates")
 }
 
 model FundingImportJob {
@@ -1328,7 +1470,7 @@ model FundingImportAsset {
 }
 
 model FundingIntakeJob {
-  id                     String                 @id @default(cuid())
+  id                     String                   @id @default(cuid())
   batch_id               String?
   submitted_by_user_id   String
   linked_funding_call_id String?
@@ -1344,21 +1486,21 @@ model FundingIntakeJob {
   raw_text               String?
   normalized_text        String?
   fetch_metadata_json    Json?
-  status                 FundingIntakeJobStatus @default(queued)
-  duplicate_status       FundingDuplicateStatus @default(none)
+  status                 FundingIntakeJobStatus   @default(queued)
+  duplicate_status       FundingDuplicateStatus   @default(none)
   error_code             String?
   error_message          String?
-  retry_count            Int                    @default(0)
-  attempt_count          Int                    @default(0)
+  retry_count            Int                      @default(0)
+  attempt_count          Int                      @default(0)
   locked_at              DateTime?
   locked_by              String?
   next_attempt_at        DateTime?
   started_at             DateTime?
   completed_at           DateTime?
-  created_at             DateTime               @default(now())
-  updated_at             DateTime               @updatedAt
-  batch                  FundingIntakeBatch?     @relation(fields: [batch_id], references: [id], onDelete: SetNull)
-  linked_funding_call    FundingCall?           @relation("FundingCallIntakeJobs", fields: [linked_funding_call_id], references: [id], onDelete: SetNull)
+  created_at             DateTime                 @default(now())
+  updated_at             DateTime                 @updatedAt
+  batch                  FundingIntakeBatch?      @relation(fields: [batch_id], references: [id], onDelete: SetNull)
+  linked_funding_call    FundingCall?             @relation("FundingCallIntakeJobs", fields: [linked_funding_call_id], references: [id], onDelete: SetNull)
   sources                FundingIntakeJobSource[]
 
   @@index([batch_id])
@@ -1372,14 +1514,14 @@ model FundingIntakeJob {
 }
 
 model FundingIntakeBatch {
-  id                     String                   @id @default(cuid())
-  submitted_by_user_id   String
-  label                  String?
-  status                 FundingIntakeBatchStatus @default(processing)
-  total_jobs             Int                      @default(0)
-  created_at             DateTime                 @default(now())
-  updated_at             DateTime                 @updatedAt
-  jobs                   FundingIntakeJob[]
+  id                   String                   @id @default(cuid())
+  submitted_by_user_id String
+  label                String?
+  status               FundingIntakeBatchStatus @default(processing)
+  total_jobs           Int                      @default(0)
+  created_at           DateTime                 @default(now())
+  updated_at           DateTime                 @updatedAt
+  jobs                 FundingIntakeJob[]
 
   @@index([submitted_by_user_id])
   @@index([status])
@@ -1461,31 +1603,31 @@ model FundingIntakeJobEvent {
 }
 
 model FundingCallDocument {
-  id                   String                         @id @default(cuid())
-  funding_call_id      String
-  version              Int
-  is_active            Boolean                        @default(true)
-  original_filename    String
-  mime_type            String
-  byte_size            Int
-  storage_path         String
-  source_url           String?
-  checksum             String
-  uploaded_by          String?
-  document_kind        FundingCallDocumentKind        @default(call_document)
-  parsing_status       FundingDocumentParsingStatus   @default(pending)
-  parsing_error        String?
-  parsing_stats        Json?
-  quality_flags        Json?
-  needs_manual_review  Boolean                        @default(false)
-  embedding_status     FundingDocumentEmbeddingStatus @default(not_generated)
-  created_at           DateTime                       @default(now())
-  updated_at           DateTime                       @updatedAt
-  funding_call         FundingCall                    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
-  pages                FundingCallDocumentPage[]
-  sections             FundingCallDocumentSection[]
-  chunks               FundingCallDocumentChunk[]
-  events               FundingCallDocumentEvent[]
+  id                  String                         @id @default(cuid())
+  funding_call_id     String
+  version             Int
+  is_active           Boolean                        @default(true)
+  original_filename   String
+  mime_type           String
+  byte_size           Int
+  storage_path        String
+  source_url          String?
+  checksum            String
+  uploaded_by         String?
+  document_kind       FundingCallDocumentKind        @default(call_document)
+  parsing_status      FundingDocumentParsingStatus   @default(pending)
+  parsing_error       String?
+  parsing_stats       Json?
+  quality_flags       Json?
+  needs_manual_review Boolean                        @default(false)
+  embedding_status    FundingDocumentEmbeddingStatus @default(not_generated)
+  created_at          DateTime                       @default(now())
+  updated_at          DateTime                       @updatedAt
+  funding_call        FundingCall                    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  pages               FundingCallDocumentPage[]
+  sections            FundingCallDocumentSection[]
+  chunks              FundingCallDocumentChunk[]
+  events              FundingCallDocumentEvent[]
 
   @@unique([funding_call_id, checksum])
   @@unique([funding_call_id, version])
@@ -1535,27 +1677,27 @@ model FundingCallDocumentSection {
 }
 
 model FundingCallDocumentChunk {
-  id                  String                                  @id @default(cuid())
-  document_id         String
-  funding_call_id     String
-  section_id          String?
-  section_type        FundingCallDocumentSectionType
-  chunk_index         Int
-  chunk_text          String
-  page_start          Int
-  page_end            Int
-  token_count         Int
-  embedding_provider  String?
-  embedding_model     String?
-  embedding_dimension Int?
-  embedding_status    FundingCallDocumentChunkEmbeddingStatus @default(pending)
-  embedding_error     String?
-  embedding           Unsupported("vector")?
+  id                    String                                  @id @default(cuid())
+  document_id           String
+  funding_call_id       String
+  section_id            String?
+  section_type          FundingCallDocumentSectionType
+  chunk_index           Int
+  chunk_text            String
+  page_start            Int
+  page_end              Int
+  token_count           Int
+  embedding_provider    String?
+  embedding_model       String?
+  embedding_dimension   Int?
+  embedding_status      FundingCallDocumentChunkEmbeddingStatus @default(pending)
+  embedding_error       String?
+  embedding             Unsupported("vector")?
   embedding_voyage_1024 Unsupported("vector")?
-  created_at          DateTime                                @default(now())
-  document            FundingCallDocument                     @relation(fields: [document_id], references: [id], onDelete: Cascade)
-  funding_call        FundingCall                             @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
-  section             FundingCallDocumentSection?             @relation(fields: [section_id], references: [id], onDelete: SetNull)
+  created_at            DateTime                                @default(now())
+  document              FundingCallDocument                     @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  funding_call          FundingCall                             @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  section               FundingCallDocumentSection?             @relation(fields: [section_id], references: [id], onDelete: SetNull)
 
   @@unique([document_id, chunk_index])
   @@index([funding_call_id, section_type])
@@ -1567,15 +1709,15 @@ model FundingCallDocumentChunk {
 }
 
 model FundingCallDocumentEvent {
-  id               String                       @id @default(cuid())
-  document_id      String
-  funding_call_id  String
-  event_type       FundingCallDocumentEventType
-  actor_user_id    String?
-  payload          Json?
-  created_at       DateTime                     @default(now())
-  document         FundingCallDocument          @relation(fields: [document_id], references: [id], onDelete: Cascade)
-  funding_call     FundingCall                  @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  id              String                       @id @default(cuid())
+  document_id     String
+  funding_call_id String
+  event_type      FundingCallDocumentEventType
+  actor_user_id   String?
+  payload         Json?
+  created_at      DateTime                     @default(now())
+  document        FundingCallDocument          @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  funding_call    FundingCall                  @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
 
   @@index([document_id, created_at])
   @@index([funding_call_id, created_at])
@@ -1583,26 +1725,26 @@ model FundingCallDocumentEvent {
 }
 
 model FundingCallTemplate {
-  id                  String                        @id @default(cuid())
-  fundingCallId       String                        @unique
-  status              FundingCallTemplateStatus     @default(draft)
-  grant_template_json Json                          @default("{}")
-  compatibility_json  Json?
-  compiledGrantTemplateJson Json?                   @map("compiled_grant_template_json")
-  compiled_papsi_json Json?
-  current_revision_no Int                           @default(0)
-  last_edited_by      String?
-  last_edited_at      DateTime?
-  approved_by         String?
-  approved_at         DateTime?
-  created_at          DateTime                      @default(now())
-  updated_at          DateTime                      @updatedAt
-  createdAt           DateTime                      @default(now())
-  updatedAt           DateTime                      @updatedAt
-  fundingCall         FundingCall                   @relation("FundingCallTemplates", fields: [fundingCallId], references: [id], onDelete: Cascade)
-  active_for_calls    FundingCall[]                 @relation("FundingCallActiveTemplate")
-  revisions           FundingCallTemplateRevision[]
-  runs                FundingCallTemplateRun[]
+  id                        String                        @id @default(cuid())
+  fundingCallId             String                        @unique
+  status                    FundingCallTemplateStatus     @default(draft)
+  grant_template_json       Json                          @default("{}")
+  compatibility_json        Json?
+  compiledGrantTemplateJson Json?                         @map("compiled_grant_template_json")
+  compiled_papsi_json       Json?
+  current_revision_no       Int                           @default(0)
+  last_edited_by            String?
+  last_edited_at            DateTime?
+  approved_by               String?
+  approved_at               DateTime?
+  created_at                DateTime                      @default(now())
+  updated_at                DateTime                      @updatedAt
+  createdAt                 DateTime                      @default(now())
+  updatedAt                 DateTime                      @updatedAt
+  fundingCall               FundingCall                   @relation("FundingCallTemplates", fields: [fundingCallId], references: [id], onDelete: Cascade)
+  active_for_calls          FundingCall[]                 @relation("FundingCallActiveTemplate")
+  revisions                 FundingCallTemplateRevision[]
+  runs                      FundingCallTemplateRun[]
 
   @@map("funding_call_templates")
 }
@@ -1763,24 +1905,24 @@ model FundingCallGuidelineRun {
 }
 
 model GrantSession {
-  id              String             @id @default(cuid())
-  projectId       String
-  tenantId        String
-  fundingCallId   String
-  draftingSessionId String?          @unique
-  status          GrantSessionStatus @default(SETUP)
-  createdByUserId String
-  updatedByUserId String
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  project         Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  fundingCall     FundingCall        @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
-  draftingSession DraftingSession?   @relation("GrantShadowWorkspace", fields: [draftingSessionId], references: [id], onDelete: SetNull)
-  prepSession     GrantPrepSession?
-  blueprint       GrantBlueprint?
-  sectionDrafts   GrantSectionDraft[]
-  structuredFieldResponses GrantStructuredFieldResponse[]
+  id                        String                         @id @default(cuid())
+  projectId                 String
+  tenantId                  String
+  fundingCallId             String
+  draftingSessionId         String?                        @unique
+  status                    GrantSessionStatus             @default(SETUP)
+  createdByUserId           String
+  updatedByUserId           String
+  createdAt                 DateTime                       @default(now())
+  updatedAt                 DateTime                       @updatedAt
+  project                   Project                        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tenant                    Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fundingCall               FundingCall                    @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
+  draftingSession           DraftingSession?               @relation("GrantShadowWorkspace", fields: [draftingSessionId], references: [id], onDelete: SetNull)
+  prepSession               GrantPrepSession?
+  blueprint                 GrantBlueprint?
+  sectionDrafts             GrantSectionDraft[]
+  structuredFieldResponses  GrantStructuredFieldResponse[]
   reviewerSectionGrantLinks ReviewerSectionGrantLink[]
 
   @@index([projectId, status])
@@ -1839,7 +1981,7 @@ model GrantPrepSession {
 }
 
 model GrantPrepMessage {
-  id                      String                @id @default(cuid())
+  id                      String                 @id @default(cuid())
   session_id              String
   stage_key               String
   role                    String
@@ -1852,13 +1994,13 @@ model GrantPrepMessage {
   current_point           String?
   captured_content_json   Json?
   steering_events_json    Json?
-  suggested_follow_ups    String[]              @default([])
+  suggested_follow_ups    String[]               @default([])
   suggested_answers       Json?
   quality_assessment      String?
-  is_critique             Boolean               @default(false)
-  created_at              DateTime              @default(now())
-  updated_at              DateTime              @updatedAt
-  session                 GrantPrepSession      @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  is_critique             Boolean                @default(false)
+  created_at              DateTime               @default(now())
+  updated_at              DateTime               @updatedAt
+  session                 GrantPrepSession       @relation(fields: [session_id], references: [id], onDelete: Cascade)
 
   @@unique([session_id, client_message_id], map: "grant_prep_messages_session_client_message_unique")
   @@index([session_id, created_at], map: "idx_grant_prep_messages_session_created_at")
@@ -1867,31 +2009,31 @@ model GrantPrepMessage {
 }
 
 model GrantBlueprint {
-  id                     String               @id @default(cuid())
-  grantSessionId         String               @unique
-  tenantId               String
-  projectId              String
-  fundingCallId          String
-  sourcePrepSessionId    String?
-  sourceTemplateRevisionId String?
+  id                        String               @id @default(cuid())
+  grantSessionId            String               @unique
+  tenantId                  String
+  projectId                 String
+  fundingCallId             String
+  sourcePrepSessionId       String?
+  sourceTemplateRevisionId  String?
   sourceGuidelineRevisionId String?
-  status                 GrantBlueprintStatus @default(DRAFT)
-  version                Int                  @default(1)
-  compiledTemplateJson   Json
-  sectionPlanJson        Json
-  freezePayloadJson      Json?
-  globalKeywordsJson     Json?
-  createdByUserId        String
-  updatedByUserId        String
-  frozenAt               DateTime?
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @updatedAt
-  grantSession           GrantSession         @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
-  tenant                 Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  project                Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  fundingCall            FundingCall          @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
-  sourcePrepSession      GrantPrepSession?    @relation("GrantPrepSourceBlueprint", fields: [sourcePrepSessionId], references: [id], onDelete: SetNull)
-  sectionDrafts          GrantSectionDraft[]
+  status                    GrantBlueprintStatus @default(DRAFT)
+  version                   Int                  @default(1)
+  compiledTemplateJson      Json
+  sectionPlanJson           Json
+  freezePayloadJson         Json?
+  globalKeywordsJson        Json?
+  createdByUserId           String
+  updatedByUserId           String
+  frozenAt                  DateTime?
+  createdAt                 DateTime             @default(now())
+  updatedAt                 DateTime             @updatedAt
+  grantSession              GrantSession         @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  tenant                    Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project                   Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fundingCall               FundingCall          @relation(fields: [fundingCallId], references: [id], onDelete: Cascade)
+  sourcePrepSession         GrantPrepSession?    @relation("GrantPrepSourceBlueprint", fields: [sourcePrepSessionId], references: [id], onDelete: SetNull)
+  sectionDrafts             GrantSectionDraft[]
 
   @@index([tenantId, projectId])
   @@index([fundingCallId])
@@ -1899,44 +2041,44 @@ model GrantBlueprint {
 }
 
 model GrantSectionDraft {
-  id                   String                  @id @default(cuid())
-  grantSessionId       String
-  blueprintId          String
-  tenantId             String
-  projectId            String
-  sectionKey           String
-  label                String
-  sectionType          String
-  sectionOrder         Int
-  required             Boolean                @default(true)
-  wordBudget           Int?
-  characterLimit       Int?
-  purpose              String                 @db.Text
-  reviewerIntent       String?                @db.Text
-  dependenciesJson     Json?
-  mustCoverJson        Json?
-  mustAvoidJson        Json?
-  sourceTemplatePointer String?
-  content              String?                @db.Text
-  status               GrantSectionDraftStatus @default(NOT_STARTED)
-  version              Int                    @default(1)
-  llmPromptUsed        String?                @db.Text
-  llmResponse          String?                @db.Text
-  llmTokensUsed        Int?
-  createdByUserId      String
-  updatedByUserId      String
-  generatedAt          DateTime?
-  isStale              Boolean                 @default(false)
-  staleReason          String?                 @db.Text
-  sourceIdeaAnchorHash String?
-  sourceContextFingerprint String?
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
-  grantSession         GrantSession           @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
-  blueprint            GrantBlueprint         @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
-  tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  project              Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  structuredResponses  GrantStructuredFieldResponse[]
+  id                        String                         @id @default(cuid())
+  grantSessionId            String
+  blueprintId               String
+  tenantId                  String
+  projectId                 String
+  sectionKey                String
+  label                     String
+  sectionType               String
+  sectionOrder              Int
+  required                  Boolean                        @default(true)
+  wordBudget                Int?
+  characterLimit            Int?
+  purpose                   String                         @db.Text
+  reviewerIntent            String?                        @db.Text
+  dependenciesJson          Json?
+  mustCoverJson             Json?
+  mustAvoidJson             Json?
+  sourceTemplatePointer     String?
+  content                   String?                        @db.Text
+  status                    GrantSectionDraftStatus        @default(NOT_STARTED)
+  version                   Int                            @default(1)
+  llmPromptUsed             String?                        @db.Text
+  llmResponse               String?                        @db.Text
+  llmTokensUsed             Int?
+  createdByUserId           String
+  updatedByUserId           String
+  generatedAt               DateTime?
+  isStale                   Boolean                        @default(false)
+  staleReason               String?                        @db.Text
+  sourceIdeaAnchorHash      String?
+  sourceContextFingerprint  String?
+  createdAt                 DateTime                       @default(now())
+  updatedAt                 DateTime                       @updatedAt
+  grantSession              GrantSession                   @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  blueprint                 GrantBlueprint                 @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+  tenant                    Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project                   Project                        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  structuredResponses       GrantStructuredFieldResponse[]
   reviewerSectionGrantLinks ReviewerSectionGrantLink[]
 
   @@unique([grantSessionId, sectionKey], map: "grant_section_drafts_session_section_key_unique")
@@ -1946,21 +2088,21 @@ model GrantSectionDraft {
 }
 
 model GrantStructuredFieldResponse {
-  id               String            @id @default(cuid())
-  grantSessionId   String
-  sectionDraftId   String
-  tenantId         String
-  projectId        String
-  sectionKey       String
-  fieldKey         String
-  responseJson     Json
-  updatedByUserId  String
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  grantSession     GrantSession      @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
-  sectionDraft     GrantSectionDraft @relation(fields: [sectionDraftId], references: [id], onDelete: Cascade)
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id              String            @id @default(cuid())
+  grantSessionId  String
+  sectionDraftId  String
+  tenantId        String
+  projectId       String
+  sectionKey      String
+  fieldKey        String
+  responseJson    Json
+  updatedByUserId String
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  grantSession    GrantSession      @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  sectionDraft    GrantSectionDraft @relation(fields: [sectionDraftId], references: [id], onDelete: Cascade)
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([sectionDraftId, fieldKey], map: "grant_structured_field_responses_section_field_unique")
   @@index([grantSessionId, sectionKey])
@@ -1969,35 +2111,35 @@ model GrantStructuredFieldResponse {
 }
 
 model ReviewerCall {
-  id                    String            @id @default(cuid())
-  user_id               String
-  tenantId              String?
-  projectId             String?
-  grantSessionId        String?
-  fundingCallId         String?
-  reviewerMode          ReviewerMode      @default(standalone)
-  templateSnapshotJson  Json?
-  manualRubricJson      Json?
-  rulesSource           String            @default("template_manual")
+  id                       String                     @id @default(cuid())
+  user_id                  String
+  tenantId                 String?
+  projectId                String?
+  grantSessionId           String?
+  fundingCallId            String?
+  reviewerMode             ReviewerMode               @default(standalone)
+  templateSnapshotJson     Json?
+  manualRubricJson         Json?
+  rulesSource              String                     @default("template_manual")
   sourceTemplateRevisionId String?
-  project_title         String
-  agency_name           String
-  call_input_type       CallInputType
-  call_input_data       String            @db.Text
-  parsed_json           Json              @default("{}")
-  raw_text_backup       String?           @db.Text
-  LLM_model_used        String?
-  review_status         ReviewStatus      @default(parsed)
-  created_at            DateTime          @default(now())
-  updated_at            DateTime          @updatedAt
-  final_review_status   ReviewStatus      @default(parsed)
-  overall_review_json   Json?
-  review_progress_state Json?
-  is_public             Boolean           @default(false)
-  share_token           String?           @unique
-  user                  User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  reviewer_sections     ReviewerSection[]
-  grant_section_links   ReviewerSectionGrantLink[]
+  project_title            String
+  agency_name              String
+  call_input_type          CallInputType
+  call_input_data          String                     @db.Text
+  parsed_json              Json                       @default("{}")
+  raw_text_backup          String?                    @db.Text
+  LLM_model_used           String?
+  review_status            ReviewStatus               @default(parsed)
+  created_at               DateTime                   @default(now())
+  updated_at               DateTime                   @updatedAt
+  final_review_status      ReviewStatus               @default(parsed)
+  overall_review_json      Json?
+  review_progress_state    Json?
+  is_public                Boolean                    @default(false)
+  share_token              String?                    @unique
+  user                     User                       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  reviewer_sections        ReviewerSection[]
+  grant_section_links      ReviewerSectionGrantLink[]
 
   @@index([user_id])
   @@index([tenantId])
@@ -2010,24 +2152,24 @@ model ReviewerCall {
 }
 
 model ReviewerSection {
-  id                    String        @id @default(cuid())
+  id                    String                     @id @default(cuid())
   call_id               String
   section_title         String
-  user_input            String        @db.Text
-  ai_review_json        Json          @default("{}")
-  last_reviewed_at      DateTime      @default(now())
-  status                SectionStatus @default(draft)
+  user_input            String                     @db.Text
+  ai_review_json        Json                       @default("{}")
+  last_reviewed_at      DateTime                   @default(now())
+  status                SectionStatus              @default(draft)
   improvement_flag      Boolean?
-  is_revision           Boolean       @default(false)
+  is_revision           Boolean                    @default(false)
   previous_section_id   String?
-  review_linked_context Boolean       @default(true)
-  version               Int           @default(1)
-  context_summary       String?       @db.Text
+  review_linked_context Boolean                    @default(true)
+  version               Int                        @default(1)
+  context_summary       String?                    @db.Text
   sourceHash            String?
-  sourceStale           Boolean       @default(false)
+  sourceStale           Boolean                    @default(false)
   reviewerBucketKey     String?
   mappingJson           Json?
-  reviewer_call         ReviewerCall  @relation(fields: [call_id], references: [id], onDelete: Cascade)
+  reviewer_call         ReviewerCall               @relation(fields: [call_id], references: [id], onDelete: Cascade)
   grant_section_links   ReviewerSectionGrantLink[]
 
   @@index([call_id])
@@ -2038,7 +2180,7 @@ model ReviewerSection {
 }
 
 model ReviewerSectionGrantLink {
-  id                  String              @id @default(cuid())
+  id                  String             @id @default(cuid())
   reviewerSectionId   String
   reviewerCallId      String
   grantSessionId      String
@@ -2046,14 +2188,14 @@ model ReviewerSectionGrantLink {
   grantSectionKey     String
   grantSectionLabel   String
   sourceContentHash   String
-  order               Int                 @default(0)
-  isActive            Boolean             @default(true)
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-  reviewerSection     ReviewerSection     @relation(fields: [reviewerSectionId], references: [id], onDelete: Cascade)
-  reviewerCall        ReviewerCall        @relation(fields: [reviewerCallId], references: [id], onDelete: Cascade)
-  grantSession        GrantSession        @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
-  grantSectionDraft   GrantSectionDraft?  @relation(fields: [grantSectionDraftId], references: [id], onDelete: SetNull)
+  order               Int                @default(0)
+  isActive            Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  reviewerSection     ReviewerSection    @relation(fields: [reviewerSectionId], references: [id], onDelete: Cascade)
+  reviewerCall        ReviewerCall       @relation(fields: [reviewerCallId], references: [id], onDelete: Cascade)
+  grantSession        GrantSession       @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+  grantSectionDraft   GrantSectionDraft? @relation(fields: [grantSectionDraftId], references: [id], onDelete: SetNull)
 
   @@index([reviewerCallId])
   @@index([reviewerSectionId, order])
@@ -2063,23 +2205,23 @@ model ReviewerSectionGrantLink {
 }
 
 model ReviewAsset {
-  id                     String   @id @default(cuid())
+  id                     String    @id @default(cuid())
   project_id             String
-  gcs_uri                String   @db.Text
-  gcs_preview_uri        String?  @db.Text
+  gcs_uri                String    @db.Text
+  gcs_preview_uri        String?   @db.Text
   mime                   String
   bytes                  Int
-  sha256                 String   @db.VarChar(128)
+  sha256                 String    @db.VarChar(128)
   width                  Int?
   height                 Int?
   page_count             Int?
   original_name          String?
   google_file_id         String?
   google_file_updated_at DateTime?
-  ocr_text               String?  @db.Text
+  ocr_text               String?   @db.Text
   created_by_user_id     String
-  created_at             DateTime @default(now())
-  deprecated             Boolean  @default(false)
+  created_at             DateTime  @default(now())
+  deprecated             Boolean   @default(false)
 
   @@unique([project_id, sha256])
   @@index([project_id])
@@ -2203,7 +2345,7 @@ model RecommendationQueryEnrichmentCache {
 }
 
 model RecommendationQueryEmbeddingCache {
-  id                    String                @id @default(cuid())
+  id                    String                 @id @default(cuid())
   request_hash          String
   input_mode            String
   semantic_document     String
@@ -2213,10 +2355,10 @@ model RecommendationQueryEmbeddingCache {
   output_dimensionality Int
   embedding             Unsupported("vector")?
   embedding_voyage_1024 Unsupported("vector")?
-  hit_count             Int                   @default(1)
-  last_used_at          DateTime              @default(now())
-  created_at            DateTime              @default(now())
-  updated_at            DateTime              @updatedAt
+  hit_count             Int                    @default(1)
+  last_used_at          DateTime               @default(now())
+  created_at            DateTime               @default(now())
+  updated_at            DateTime               @updatedAt
 
   @@unique([request_hash, model, embedding_version, task_type, output_dimensionality], map: "rec_query_embedding_cache_key")
   @@index([embedding])
@@ -2226,21 +2368,21 @@ model RecommendationQueryEmbeddingCache {
 }
 
 model ResearcherProfile {
-  id                    String   @id @default(cuid())
-  user_id               String   @unique
+  id                    String                 @id @default(cuid())
+  user_id               String                 @unique
   display_name          String?
   birth_year            Int?
   country_of_residence  String?
-  citizenship_countries String[] @default([])
+  citizenship_countries String[]               @default([])
   institution_name      String?
   institution_type      String?
   department            String?
   career_stage          String?
   years_of_experience   Int?
-  application_languages String[] @default([])
+  application_languages String[]               @default([])
   research_summary      String?
-  research_areas        String[] @default([])
-  keywords              String[] @default([])
+  research_areas        String[]               @default([])
+  keywords              String[]               @default([])
   normalized_text       String?
   content_hash          String?
   embedding             Unsupported("vector")?
@@ -2250,9 +2392,9 @@ model ResearcherProfile {
   google_scholar_url    String?
   scopus_url            String?
   orcid_url             String?
-  created_at            DateTime @default(now())
-  updated_at            DateTime @updatedAt
-  user                  User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  created_at            DateTime               @default(now())
+  updated_at            DateTime               @updatedAt
+  user                  User                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([country_of_residence], map: "idx_researcher_profiles_country")
   @@index([institution_type], map: "idx_researcher_profiles_institution_type")
@@ -2285,28 +2427,28 @@ model ResearcherNotificationPreference {
 }
 
 model ResearcherSavedResearchArea {
-  id                   String                 @id @default(cuid())
-  user_id              String
-  taxonomy_area_id     String?
-  taxonomy_level1_code String?
-  taxonomy_level1_name String?
-  taxonomy_level2_code String?
-  taxonomy_level2_name String?
-  label                String
-  research_area        String
-  keywords             String[]               @default([])
-  disciplines          String[]               @default([])
-  is_default           Boolean                @default(false)
-  use_for_alerts       Boolean                @default(true)
-  normalized_text      String?
-  content_hash         String?
-  embedding            Unsupported("vector")?
+  id                    String                    @id @default(cuid())
+  user_id               String
+  taxonomy_area_id      String?
+  taxonomy_level1_code  String?
+  taxonomy_level1_name  String?
+  taxonomy_level2_code  String?
+  taxonomy_level2_name  String?
+  label                 String
+  research_area         String
+  keywords              String[]                  @default([])
+  disciplines           String[]                  @default([])
+  is_default            Boolean                   @default(false)
+  use_for_alerts        Boolean                   @default(true)
+  normalized_text       String?
+  content_hash          String?
+  embedding             Unsupported("vector")?
   embedding_voyage_1024 Unsupported("vector")?
-  embedding_version    String?
-  created_at           DateTime               @default(now())
-  updated_at           DateTime               @updatedAt
-  user                 User                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  taxonomy_area        ResearchAreaTaxonomyArea? @relation(fields: [taxonomy_area_id], references: [id], onDelete: SetNull)
+  embedding_version     String?
+  created_at            DateTime                  @default(now())
+  updated_at            DateTime                  @updatedAt
+  user                  User                      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  taxonomy_area         ResearchAreaTaxonomyArea? @relation(fields: [taxonomy_area_id], references: [id], onDelete: SetNull)
 
   @@index([user_id], map: "idx_researcher_saved_research_areas_user_id")
   @@index([user_id, is_default], map: "idx_researcher_saved_research_areas_default")
@@ -2318,18 +2460,18 @@ model ResearcherSavedResearchArea {
 }
 
 model ResearchAreaTaxonomyUpload {
-  id                String   @id @default(cuid())
-  source_name       String   @default("OECD FORD")
+  id                String                     @id @default(cuid())
+  source_name       String                     @default("OECD FORD")
   original_filename String?
-  row_count         Int      @default(0)
-  active_row_count  Int      @default(0)
-  status            String   @default("ACTIVE")
+  row_count         Int                        @default(0)
+  active_row_count  Int                        @default(0)
+  status            String                     @default("ACTIVE")
   uploaded_by       String
   notes             String?
-  created_at        DateTime @default(now())
+  created_at        DateTime                   @default(now())
   activated_at      DateTime?
   archived_at       DateTime?
-  uploadedBy        User     @relation("ResearchAreaTaxonomyUploadImporter", fields: [uploaded_by], references: [id], onDelete: Restrict)
+  uploadedBy        User                       @relation("ResearchAreaTaxonomyUploadImporter", fields: [uploaded_by], references: [id], onDelete: Restrict)
   areas             ResearchAreaTaxonomyArea[]
 
   @@index([status], map: "idx_research_area_taxonomy_uploads_status")
@@ -2338,18 +2480,18 @@ model ResearchAreaTaxonomyUpload {
 }
 
 model ResearchAreaTaxonomyArea {
-  id                    String   @id @default(cuid())
+  id                    String                            @id @default(cuid())
   upload_id             String
   level1_code           String
   level1_name           String
-  level2_code           String   @default("")
-  level2_name           String   @default("")
+  level2_code           String                            @default("")
+  level2_name           String                            @default("")
   description           String?
-  aliases               String[] @default([])
+  aliases               String[]                          @default([])
   sort_order            Int?
-  is_active             Boolean  @default(true)
-  created_at            DateTime @default(now())
-  upload                ResearchAreaTaxonomyUpload @relation(fields: [upload_id], references: [id], onDelete: Cascade)
+  is_active             Boolean                           @default(true)
+  created_at            DateTime                          @default(now())
+  upload                ResearchAreaTaxonomyUpload        @relation(fields: [upload_id], references: [id], onDelete: Cascade)
   saved_research_areas  ResearcherSavedResearchArea[]
   funding_call_mappings FundingCallResearchAreaTaxonomy[]
 
@@ -2361,17 +2503,17 @@ model ResearchAreaTaxonomyArea {
 }
 
 model FundingCallResearchAreaTaxonomy {
-  id                   String   @id @default(cuid())
+  id                   String                   @id @default(cuid())
   funding_call_id      String
   taxonomy_area_id     String
   taxonomy_level1_code String?
   taxonomy_level1_name String?
   taxonomy_level2_code String?
   taxonomy_level2_name String?
-  source               String   @default("manual")
+  source               String                   @default("manual")
   confidence           Float?
-  created_at           DateTime @default(now())
-  funding_call         FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  created_at           DateTime                 @default(now())
+  funding_call         FundingCall              @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
   taxonomy_area        ResearchAreaTaxonomyArea @relation(fields: [taxonomy_area_id], references: [id], onDelete: Cascade)
 
   @@unique([funding_call_id, taxonomy_area_id], map: "funding_call_research_area_taxonomies_call_area_key")
@@ -2452,6 +2594,7 @@ enum TaskCode {
   // Funding and grant tasks
   FUNDING_CALL_INGEST
   FUNDING_CHAT
+  IDEA_INTELLIGENCE
   FUNDING_TEMPLATE_EXTRACT
   FUNDING_GUIDELINE_EXTRACT
   GRANT_PREP_CHAT
@@ -6520,34 +6663,34 @@ model ReferenceLibrary {
   userId String @map("user_id")
 
   // Core bibliographic fields (same as Citation)
-  title               String
-  authors             String[] // Array of author names
-  year                Int?
-  venue               String? // Journal name, conference name, book title, etc.
-  volume              String?
-  issue               String?
-  pages               String?
-  doi                 String?
-  url                 String?
-  isbn                String?
-  publisher           String?
-  edition             String?
-  editors             String[] @default([])
-  publicationPlace    String?
-  publicationDate     String?
-  accessedDate        String?
-  articleNumber       String?
-  issn                String?
-  journalAbbreviation String?
-  pmid                String?
-  pmcid               String?
-  arxivId             String?
-  abstract            String?  @db.Text // Full abstract
-  fundingMatchText    String?  @map("funding_match_text") @db.Text
-  fundingMatchHash    String?  @map("funding_match_hash")
-  fundingEmbedding    Unsupported("vector")? @map("funding_embedding")
+  title                      String
+  authors                    String[] // Array of author names
+  year                       Int?
+  venue                      String? // Journal name, conference name, book title, etc.
+  volume                     String?
+  issue                      String?
+  pages                      String?
+  doi                        String?
+  url                        String?
+  isbn                       String?
+  publisher                  String?
+  edition                    String?
+  editors                    String[]               @default([])
+  publicationPlace           String?
+  publicationDate            String?
+  accessedDate               String?
+  articleNumber              String?
+  issn                       String?
+  journalAbbreviation        String?
+  pmid                       String?
+  pmcid                      String?
+  arxivId                    String?
+  abstract                   String?                @db.Text // Full abstract
+  fundingMatchText           String?                @map("funding_match_text") @db.Text
+  fundingMatchHash           String?                @map("funding_match_hash")
+  fundingEmbedding           Unsupported("vector")? @map("funding_embedding")
   fundingEmbeddingVoyage1024 Unsupported("vector")? @map("funding_embedding_voyage_1024")
-  fundingEmbeddingVersion String? @map("funding_embedding_version")
+  fundingEmbeddingVersion    String?                @map("funding_embedding_version")
 
   // Source classification
   sourceType CitationSourceType @default(OTHER)

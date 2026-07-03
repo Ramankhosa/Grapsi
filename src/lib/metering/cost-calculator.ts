@@ -35,6 +35,14 @@ const STATIC_MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-3-flash-preview': GEMINI_3_FLASH_PRICING,
   'gemini-3.1-flash': GEMINI_3_FLASH_PRICING,
   'gemini-3.1-flash-preview': GEMINI_3_FLASH_PRICING,
+  'voyage-4-lite': {
+    input: 0.02 / 1_000_000,
+    output: 0,
+  },
+  'voyage-4-large': {
+    input: 0.12 / 1_000_000,
+    output: 0,
+  },
 }
 
 // Contingency multiplier (10%)
@@ -285,6 +293,7 @@ export function getProviderFromModel(modelCode: string): string {
   if (lowerCode.includes('deepseek')) return 'DeepSeek'
   if (lowerCode.startsWith('glm')) return 'Zhipu'
   if (lowerCode.startsWith('qwen')) return 'Qwen'
+  if (lowerCode.startsWith('voyage-')) return 'Voyage'
   if (lowerCode.includes('llama') || lowerCode.includes('mixtral') || lowerCode.includes('gemma') || lowerCode.startsWith('groq-')) return 'Groq'
   
   return 'Unknown'
