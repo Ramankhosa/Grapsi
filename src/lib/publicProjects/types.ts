@@ -92,6 +92,7 @@ export interface PublicProjectDiscoveryOptions {
   maxRecords?: number
   onlinePerState?: number
   legacyPerState?: number
+  skipExisting?: boolean
 }
 
 export interface PublicProjectConnector {

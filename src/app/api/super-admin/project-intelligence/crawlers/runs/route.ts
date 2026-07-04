@@ -3,10 +3,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { PublicProjectCrawlMode, PublicProjectSourceKey } from '@/lib/prisma-generated'
 import { requirePublicProjectReadRequest, requirePublicProjectWriteRequest } from '@/lib/publicProjects/auth'
 import { publicProjectCorpusService } from '@/lib/publicProjects/service'
+import { PUBLIC_PROJECT_SOURCE_DEFINITIONS } from '@/lib/publicProjects/sourceRegistry'
 
 export const runtime = 'nodejs'
 
-const VALID_SOURCES = new Set(['PRISM', 'BIRAC', 'CSIR', 'ICMR'])
+const VALID_SOURCES = new Set(PUBLIC_PROJECT_SOURCE_DEFINITIONS.map((source) => source.sourceKey))
 const VALID_MODES = new Set(['pilot', 'full', 'incremental'])
 
 export async function GET(request: NextRequest) {
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
     const sourceKey = String(body.sourceKey || 'PRISM').toUpperCase()
     const mode = String(body.mode || 'pilot')
 
-    if (!VALID_SOURCES.has(sourceKey)) {
+    if (!VALID_SOURCES.has(sourceKey as PublicProjectSourceKey)) {
       return NextResponse.json({ message: 'Unsupported public project source' }, { status: 400 })
     }
     if (!VALID_MODES.has(mode)) {

@@ -17,7 +17,9 @@ export async function POST(request: NextRequest) {
     const processed = await publicProjectCorpusService.processNextRun({
       workerId: `api-drain:${auth.actor.id}`,
       runId: body.runId || undefined,
-      maxItems: body.maxItems ? Number(body.maxItems) : undefined,
+      // Keep request-triggered drains below typical production request timeouts.
+      // The standalone worker uses larger resumable batches by default.
+      maxItems: body.maxItems ? Number(body.maxItems) : 10,
     })
     return NextResponse.json({ processed })
   } catch (error) {

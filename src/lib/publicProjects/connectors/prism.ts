@@ -18,7 +18,7 @@ const PRISM_BASE_URL = 'https://prism.serbonline.in'
 const SEARCH_URL = `${PRISM_BASE_URL}/Search`
 const DEFAULT_USER_AGENT =
   'GrapsiPublicProjectCrawler/1.0 (+https://grapsi.ai; public awarded-project indexing; contact: support@grapsi.ai)'
-const DEFAULT_REQUEST_SPACING_MS = 1000
+const DEFAULT_REQUEST_SPACING_MS = 250
 
 type PrismListingRow = JsonRecord & {
   proposalId?: string
@@ -288,7 +288,10 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
   private csrfToken: string | null = null
   private csrfHeader: string | null = null
   private sessionReady = false
+  private sessionPromise: Promise<void> | null = null
   private lastRequestAt = 0
+  private requestSlotQueue: Promise<void> = Promise.resolve()
+  private blockedUntil = 0
 
   constructor(
     private readonly options: {
@@ -371,17 +374,23 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
     if (this.sessionReady) {
       return
     }
+    if (!this.sessionPromise) {
+      this.sessionPromise = (async () => {
+        const response = await this.request('GET', '/Search')
+        const html = responseBodyText(response)
+        this.csrfToken = metaContent(html, '_csrf')
+        this.csrfHeader = metaContent(html, '_csrf_header')
 
-    const response = await this.request('GET', '/Search')
-    const html = responseBodyText(response)
-    this.csrfToken = metaContent(html, '_csrf')
-    this.csrfHeader = metaContent(html, '_csrf_header')
+        if (!this.csrfToken || !this.csrfHeader) {
+          throw new Error('PRISM search page did not expose CSRF metadata')
+        }
 
-    if (!this.csrfToken || !this.csrfHeader) {
-      throw new Error('PRISM search page did not expose CSRF metadata')
+        this.sessionReady = true
+      })().finally(() => {
+        this.sessionPromise = null
+      })
     }
-
-    this.sessionReady = true
+    await this.sessionPromise
   }
 
   private mergeCookies(response: AxiosResponse<unknown>) {
@@ -405,11 +414,20 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
 
   private async waitForRequestSlot() {
     const spacing = this.options.requestSpacingMs ?? DEFAULT_REQUEST_SPACING_MS
-    const elapsed = Date.now() - this.lastRequestAt
-    if (elapsed < spacing) {
-      await sleep(spacing - elapsed)
-    }
-    this.lastRequestAt = Date.now()
+    const slot = this.requestSlotQueue.then(async () => {
+      const waitUntil = Math.max(this.lastRequestAt + spacing, this.blockedUntil)
+      const delay = waitUntil - Date.now()
+      if (delay > 0) {
+        await sleep(delay)
+      }
+      this.lastRequestAt = Date.now()
+    })
+    this.requestSlotQueue = slot.catch(() => undefined)
+    await slot
+  }
+
+  private deferRequests(delayMs: number) {
+    this.blockedUntil = Math.max(this.blockedUntil, Date.now() + delayMs)
   }
 
   private async request(method: 'GET' | 'POST', path: string, data?: URLSearchParams): Promise<AxiosResponse<unknown>> {
@@ -437,14 +455,16 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
         })
 
         this.mergeCookies(response)
-        this.assertNotBlocked(response)
 
         if ([429, 500, 502, 503, 504].includes(response.status) && attempt < 3) {
           const retryAfterSeconds = Number(response.headers['retry-after'] || 0)
           const retryDelay = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 1000 * 2 ** attempt
+          this.deferRequests(retryDelay)
           await sleep(retryDelay)
           continue
         }
+
+        this.assertNotBlocked(response)
 
         if (response.status >= 400) {
           throw new Error(`PRISM HTTP ${response.status} for ${path}`)
@@ -609,7 +629,10 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
         cleanText((payload as any)?.value) ||
         cleanText(payload)
       )
-    } catch {
+    } catch (error) {
+      if (error instanceof PublicProjectSourceBlockedError) {
+        throw error
+      }
       return null
     }
   }
@@ -648,16 +671,22 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
       ],
     ]
 
-    const result: JsonRecord = {}
-    for (const [key, path, body] of endpoints) {
-      try {
-        result[key] = await this.postForm(path, body)
-      } catch (error) {
-        result[key] = {
-          error: error instanceof Error ? error.message : String(error),
+    const entries = await Promise.all(
+      endpoints.map(async ([key, path, body]) => {
+        try {
+          return [key, await this.postForm(path, body)] as const
+        } catch (error) {
+          if (error instanceof PublicProjectSourceBlockedError) {
+            throw error
+          }
+          return [
+            key,
+            { error: error instanceof Error ? error.message : String(error) },
+          ] as const
         }
-      }
-    }
+      })
+    )
+    const result: JsonRecord = Object.fromEntries(entries)
     return result
   }
 
@@ -845,7 +874,12 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
 }
 
 export function createPrismPublicProjectConnector() {
-  return new PrismPublicProjectConnector()
+  const spacing = Number(process.env.PRISM_REQUEST_SPACING_MS || DEFAULT_REQUEST_SPACING_MS)
+  const timeout = Number(process.env.PRISM_REQUEST_TIMEOUT_MS || 30000)
+  return new PrismPublicProjectConnector({
+    requestSpacingMs: Number.isFinite(spacing) && spacing >= 0 ? spacing : DEFAULT_REQUEST_SPACING_MS,
+    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 30000,
+  })
 }
 
 export const __prismTestables = {

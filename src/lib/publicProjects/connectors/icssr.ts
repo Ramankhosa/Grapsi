@@ -27,6 +27,8 @@ type IcssrParsedRow = JsonRecord & {
   fileId: string
   fileName: string
   serialNumber: string
+  applicationId?: string | null
+  taiwanCollaboration?: boolean
   title?: string | null
   principalInvestigator?: string | null
   institution?: string | null
@@ -82,6 +84,164 @@ function isDateLine(line: string) {
   return /^(January|February|March|April|May|June|July|August|September|October|November|December|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i.test(
     line.trim()
   )
+}
+
+const APPLICATION_ID_PATTERN = /\bICSSR\s*[-–]\s*[A-Z0-9]+(?:\s*[-–]\s*[A-Z0-9]+)+\b/i
+const PERSON_PREFIX_PATTERN = /(?:Dr|Prof|Professor|Mr|Mrs|Ms)\.?/i
+const TITLE_START_WORDS = new Set([
+  'a', 'an', 'the', 'advancing', 'ai', 'alleviating', 'analysing', 'analyzing', 'assessment',
+  'assessing', 'awareness', 'bridging', 'building', 'carbon', 'citizenship', 'climate',
+  'colonial', 'comparative', 'contours', 'crafting', 'cross-national', 'cultural', 'decoding',
+  'designing', 'determinants', 'developing', 'development', 'digital', 'digitalising', 'documentation',
+  'ecology', 'effectiveness', 'empowering', 'enhancing', 'evaluating', 'evaluation',
+  'exploring', 'expressing', 'festivals', 'foraging', 'from', 'gendered', 'green',
+  'harnessing', 'heritage', 'historical', 'history', 'impact', 'implementation',
+  'improving', 'infrastructure', 'integral', 'integrating', 'investigating', 'leveraging',
+  'kalinga-lanka', 'mapping', 'marginalization', 'mediating', 'mission', 'optimal', 'paid', 'panchayat', 'pm',
+  'performing', 'policy', 'preserving', 'professional', 'psychosocial', 'repositioning',
+  'resilience', 'revisiting', 'reviving', 'river-sensitive', 'role', 'socio-economic',
+  'socio-ecological', 'socio-technical', 'solar', 'strategic', 'strengthening', 'street',
+  'striving', 'studying', 'temple', 'toward', 'towards', 'transforming', 'triple',
+  'understanding', 'unveiling', 'urban', 'water', 'woman-led', 'women',
+])
+
+function normalizeApplicationId(value: string | null): string | null {
+  if (!value) return null
+  return value.replace(/\s*[-–]\s*/g, '-').replace(/\s+/g, '').toUpperCase()
+}
+
+function findApplicationId(lines: string[]): string | null {
+  const match = lines.join(' ').match(APPLICATION_ID_PATTERN)
+  return normalizeApplicationId(match?.[0] || null)
+}
+
+function isPersonStart(line: string) {
+  return /^(?:Dr|Prof|Mr|Mrs|Ms)\.?\s+[\p{L}]/iu.test(line.trim())
+}
+
+function findRowStarts(lines: string[], collaborationFile: boolean) {
+  const starts: Array<{ index: number; serialNumber: string }> = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim()
+    const inlineApplication = line.match(/^(\d{1,4})[.)]?\s+(?=ICSSR\s*[-–])/i)
+    if (inlineApplication) {
+      starts.push({ index, serialNumber: inlineApplication[1] })
+      continue
+    }
+
+    const inlineCollaboration = collaborationFile
+      ? line.match(/^(\d{1,4})[.)]\s+(?=(?:Dr|Prof|Professor|Mr|Mrs|Ms)\.?\s)/i)
+      : null
+    if (inlineCollaboration) {
+      starts.push({ index, serialNumber: inlineCollaboration[1] })
+      continue
+    }
+
+    const isolated = line.match(/^(\d{1,4})[.)]?$/)
+    if (!isolated) continue
+
+    const lookahead = lines.slice(index + 1, index + 5)
+    const hasApplicationId = /^ICSSR\s*[-–]/i.test(lookahead.slice(0, 2).join(' '))
+    const hasCollaborationPerson = collaborationFile && lookahead.some(isPersonStart)
+    if (hasApplicationId || hasCollaborationPerson) {
+      starts.push({ index, serialNumber: isolated[1] })
+    }
+  }
+
+  return starts
+}
+
+function cleanRowContent(blockLines: string[], applicationId: string | null) {
+  let content = blockLines.join(' ').replace(/^\s*\d{1,4}[.)]?\s*/, '')
+  const applicationMatch = content.match(APPLICATION_ID_PATTERN)
+  if (applicationMatch?.index !== undefined) {
+    content = content.slice(applicationMatch.index + applicationMatch[0].length)
+  } else if (applicationId) {
+    content = content.replace(applicationId, '')
+  }
+  return cleanText(content)
+}
+
+function splitPersonAndTitle(content: string | null) {
+  if (!content) return { person: null, title: null }
+
+  const prefixMatch = content.match(new RegExp(`^(${PERSON_PREFIX_PATTERN.source})\\s+`, 'i'))
+  const prefixWordCount = prefixMatch ? prefixMatch[0].trim().split(/\s+/).length : 0
+  const words = content.split(/\s+/)
+  const minimumNameWords = prefixWordCount > 0 ? prefixWordCount + 1 : 1
+  const maximumNameWords = Math.min(words.length - 1, prefixWordCount > 0 ? prefixWordCount + 5 : 4)
+
+  let titleIndex = -1
+  for (let index = minimumNameWords; index <= maximumNameWords; index += 1) {
+    const normalized = words[index]?.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}-]+$/gu, '').toLowerCase()
+    if (normalized && TITLE_START_WORDS.has(normalized)) {
+      titleIndex = index
+      break
+    }
+  }
+
+  if (titleIndex < 0) {
+    const defaultNameWords = prefixWordCount > 0
+      ? (words[prefixWordCount]?.match(/^[A-Z]\.?$/) ? prefixWordCount + 4 : prefixWordCount + 2)
+      : Math.min(3, words.length - 1)
+    titleIndex = Math.min(Math.max(defaultNameWords, minimumNameWords), words.length - 1)
+  }
+
+  return {
+    person: cleanText(words.slice(0, titleIndex).join(' ')),
+    title: cleanText(words.slice(titleIndex).join(' ')),
+  }
+}
+
+function splitInstitutionAndTitle(content: string | null) {
+  if (!content) return { institution: null, title: null }
+  const words = content.split(/\s+/)
+  for (let index = 2; index < words.length; index += 1) {
+    const normalized = words[index].replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}-]+$/gu, '').toLowerCase()
+    if (TITLE_START_WORDS.has(normalized)) {
+      return {
+        institution: cleanText(words.slice(0, index).join(' ')),
+        title: cleanText(words.slice(index).join(' ')),
+      }
+    }
+  }
+  return { institution: null, title: content }
+}
+
+function parseCollaborationBlock(blockLines: string[], isTaiwanFile: boolean) {
+  const withoutSerial = [...blockLines]
+  withoutSerial[0] = withoutSerial[0].replace(/^\s*\d{1,4}[.)]?\s*/, '')
+
+  const personIndexes = withoutSerial
+    .map((line, index) => (isPersonStart(line) ? index : -1))
+    .filter((index) => index >= 0)
+  const indianIndex = personIndexes[0] ?? -1
+  const foreignIndex = personIndexes[1] ?? -1
+
+  let titleStart = -1
+  if (foreignIndex >= 0) {
+    const foreignCountryPattern = isTaiwanFile
+      ? /(?:^|,\s*)(?:taiwan(?:\s*\(r\.?o\.?c\.?\))?|taipei(?:,?\s*taiwan)?)\s*$/i
+      : /(?:japan|tokyo|osaka|kyoto)\s*$/i
+    for (let index = foreignIndex + 1; index < withoutSerial.length; index += 1) {
+      if (foreignCountryPattern.test(withoutSerial[index])) {
+        titleStart = index + 1
+        break
+      }
+    }
+  }
+  if (titleStart < 0 && foreignIndex >= 0) {
+    titleStart = Math.min(foreignIndex + 2, withoutSerial.length - 1)
+  }
+
+  const principalInvestigator = indianIndex >= 0 ? cleanText(withoutSerial[indianIndex]) : null
+  const institution = indianIndex >= 0 && foreignIndex > indianIndex
+    ? lineJoin(withoutSerial.slice(indianIndex + 1, foreignIndex))
+    : null
+  const title = titleStart >= 0 ? lineJoin(withoutSerial.slice(titleStart)) : null
+
+  return { principalInvestigator, institution, title }
 }
 
 function lineJoin(lines: string[]) {
@@ -229,26 +389,36 @@ function parseIcssrPdfRows(text: string, pdf: IcssrPdfFile): IcssrParsedRow[] {
   const rows: IcssrParsedRow[] = []
   const seen = new Set<string>()
 
-  const isTaiwanFile = isTaiwanCollaboration(pdf.fileName)
-  const isJapanFile = isJapanCollaboration(pdf.fileName)
+  const headerText = lines.slice(0, 40).join(' ')
+  const isTaiwanFile = isTaiwanCollaboration(pdf.fileName) || /\bNSTC\b|Taiwan/i.test(headerText)
+  const isJapanFile = isJapanCollaboration(pdf.fileName) || /\bJSPS\b|Japan Society/i.test(headerText)
   const isCollaborationFile = isTaiwanFile || isJapanFile
-
-  const serialIndexes: Array<{ index: number; serialNumber: string }> = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (/^\d{1,4}[.\)]?$/.test(line.trim()) && !/S\.?\s*No/i.test(line)) {
-      const num = line.replace(/[.\)]$/, '').trim()
-      if (lines.slice(index + 1, index + 10).some((l) => /(Dr|Prof|Mr|Ms|Project|Title|Investigator)/i.test(l))) {
-        serialIndexes.push({ index, serialNumber: num })
-      }
-    }
-  }
+  const hasNamedCoordinatorColumn = /Name of (?:the )?Project\s+(?:Director|Coordinator|Co-ordinator)/i.test(
+    headerText
+  )
+  const hasInstitutionColumn = /Name of (?:the )?Institution/i.test(headerText)
+  const serialIndexes = findRowStarts(lines, isCollaborationFile)
 
   for (let position = 0; position < serialIndexes.length; position += 1) {
     const start = serialIndexes[position].index
-    const end = serialIndexes[position + 1]?.index ?? Math.min(start + 30, lines.length)
+    const end = serialIndexes[position + 1]?.index ?? lines.length
     const serialNumber = serialIndexes[position].serialNumber
-    const blockLines = lines.slice(start, end)
+    const untrimmedBlock = lines.slice(start, end)
+    const footerIndex = untrimmedBlock.findIndex(
+      (line, index) =>
+        index > 0 &&
+        /^(?:Disclaimer|Note:\s*All precautions|List of Awardees|Detailed List|Indian Council of Social Science Research|S\.?\s*No\.?$)/i.test(
+          line
+        )
+    )
+    const blockLines = (footerIndex > 0 ? untrimmedBlock.slice(0, footerIndex) : untrimmedBlock).filter(
+      (line, index) =>
+        index === 0 ||
+        !/^(?:Application(?: ID| No\.?| Number)?|Name of (?:the )?(?:Project|Institution)|Project Director|Title of (?:the )?(?:Study|Research|Proposal|Programme)|Indian PI|Taiwanese PI|Japanese Principal Investigator)$/i.test(
+          line
+        )
+    )
+    const applicationId = findApplicationId(blockLines)
 
     let title: string | null = null
     let principalInvestigator: string | null = null
@@ -261,29 +431,34 @@ function parseIcssrPdfRows(text: string, pdf: IcssrPdfFile): IcssrParsedRow[] {
     let status: string | null = null
 
     if (isCollaborationFile) {
-      const piData = extractPIsForCollaboration(blockLines, isTaiwanFile)
-      principalInvestigator = piData.pi
-      institution = piData.institution
+      const collaboration = parseCollaborationBlock(blockLines, isTaiwanFile)
+      principalInvestigator = collaboration.principalInvestigator
+      institution = collaboration.institution
+      title = collaboration.title
+    } else {
+      const content = cleanRowContent(blockLines, applicationId)
+      const startsWithPerson = Boolean(
+        content && new RegExp(`^${PERSON_PREFIX_PATTERN.source}\\s+`, 'i').test(content)
+      )
+      if (startsWithPerson || hasNamedCoordinatorColumn) {
+        const split = splitPersonAndTitle(content)
+        principalInvestigator = split.person
+        title = split.title
+      } else if (hasInstitutionColumn) {
+        const split = splitInstitutionAndTitle(content)
+        institution = split.institution
+        title = split.title
+      } else {
+        title = content
+      }
     }
 
     for (let i = 1; i < blockLines.length; i++) {
       const line = blockLines[i]
       const lower = line.toLowerCase()
 
-      if (!isCollaborationFile) {
-        if (lower.includes('principal investigator') || lower.includes('pi:') || /^Dr\.?\s+/i.test(line)) {
-          if (!principalInvestigator) {
-            principalInvestigator = cleanText(line.replace(/principal investigator[:\s]*/i, ''))
-          }
-          continue
-        }
-
-        if (lower.includes('institution') || lower.includes('university') || lower.includes('college')) {
-          if (!institution) {
-            institution = line
-          }
-          continue
-        }
+      if (!isCollaborationFile && (lower.includes('institution') || lower.includes('university') || lower.includes('college'))) {
+        if (!institution) institution = line
       }
 
       if (isAmountLine(line) && !amount) {
@@ -315,9 +490,6 @@ function parseIcssrPdfRows(text: string, pdf: IcssrPdfFile): IcssrParsedRow[] {
         continue
       }
 
-      if (!title && line.length > 15 && !/^(Dr|Prof|Mr|Ms|Project|Title)/i.test(line)) {
-        title = line
-      }
     }
 
     if (!title) {
@@ -333,6 +505,8 @@ function parseIcssrPdfRows(text: string, pdf: IcssrPdfFile): IcssrParsedRow[] {
       fileId: pdf.fileId,
       fileName: pdf.fileName,
       serialNumber,
+      applicationId,
+      taiwanCollaboration: isTaiwanFile,
       title,
       principalInvestigator,
       institution,
@@ -453,7 +627,7 @@ export class IcssrPublicProjectConnector implements PublicProjectConnector {
 
           yield {
             sourceKey: 'ICSSR',
-            externalId: `${pdf.fileId}:${row.serialNumber}`,
+            externalId: `${pdf.fileId}:${row.applicationId || row.serialNumber}`,
             sourceVariant: `icssr_${pdf.projectType.toLowerCase().replace(/\s+/g, '_')}`,
             sourceRecordKey,
             detailUrl: null,
@@ -483,7 +657,7 @@ export class IcssrPublicProjectConnector implements PublicProjectConnector {
       filePath: string
     }
 
-    const isTaiwanFile = isTaiwanCollaboration(row.fileName)
+    const isTaiwanFile = Boolean(row.taiwanCollaboration) || isTaiwanCollaboration(row.fileName)
     const title = cleanText(row.title) || `ICSSR ${row.projectType} ${row.serialNumber}`
     const award = parseAwardDate(row.awardDate)
 
@@ -551,6 +725,7 @@ export class IcssrPublicProjectConnector implements PublicProjectConnector {
         projectType: row.projectType,
         yearWindow: row.yearWindow,
         serialNumber: row.serialNumber,
+        applicationId: row.applicationId,
         institution: row.institution,
         fundedBy: row.fundedBy,
         awardDate: row.awardDate,

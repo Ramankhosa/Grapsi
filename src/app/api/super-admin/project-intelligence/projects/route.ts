@@ -3,10 +3,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { PublicProjectSourceKey } from '@/lib/prisma-generated'
 import { requirePublicProjectReadRequest } from '@/lib/publicProjects/auth'
 import { publicProjectCorpusService } from '@/lib/publicProjects/service'
+import { PUBLIC_PROJECT_SOURCE_DEFINITIONS } from '@/lib/publicProjects/sourceRegistry'
 
 export const runtime = 'nodejs'
 
-const VALID_SOURCES = new Set(['PRISM', 'BIRAC', 'CSIR', 'ICMR'])
+const VALID_SOURCES = new Set(PUBLIC_PROJECT_SOURCE_DEFINITIONS.map((source) => source.sourceKey))
 
 export async function GET(request: NextRequest) {
   const auth = await requirePublicProjectReadRequest(request)
@@ -16,7 +17,7 @@ export async function GET(request: NextRequest) {
 
   const sourceKeyParam = request.nextUrl.searchParams.get('sourceKey')
   const sourceKey = sourceKeyParam ? sourceKeyParam.toUpperCase() : null
-  if (sourceKey && !VALID_SOURCES.has(sourceKey)) {
+  if (sourceKey && !VALID_SOURCES.has(sourceKey as PublicProjectSourceKey)) {
     return NextResponse.json({ message: 'Unsupported public project source' }, { status: 400 })
   }
 

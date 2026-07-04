@@ -1,5 +1,6 @@
 import { literatureSearchService, type SearchResult } from '@/lib/services/literature-search-service'
 import { serpApiProvider, type SerpApiSearchResult } from '@/lib/serpapi-provider'
+import { isPatentNestConfigured, searchIndianPatents } from '@/lib/patentnest/client'
 import { sanitizeExternalUrl } from '@/lib/urlSafety'
 
 export type PublicationEvidence = {
@@ -139,14 +140,6 @@ function normalizeWeb(result: SerpApiSearchResult): WebEvidence | null {
   }
 }
 
-function patentnestConfig() {
-  const baseUrl = process.env.PATENTNEST_API_URL || ''
-  const searchUrl = process.env.PATENTNEST_SEARCH_URL || ''
-  const apiUrl = searchUrl || (baseUrl ? `${baseUrl.replace(/\/+$/, '')}/v1/patents/search` : '')
-  const apiKey = process.env.patentnest_api_key || process.env.PATENTNEST_API_KEY || ''
-  return { apiUrl, apiKey }
-}
-
 function normalizePatentnestItem(item: any): PatentEvidence | null {
   const title = normalizeText(item?.title || item?.inventionTitle || item?.patentTitle, 500)
   if (!title) return null
@@ -156,8 +149,8 @@ function normalizePatentnestItem(item: any): PatentEvidence | null {
     title,
     abstract: normalizeText(item?.abstract || item?.summary || item?.snippet, 1500) || null,
     publicationNumber: normalizeText(item?.publicationNumber || item?.publication_number || item?.applicationNumber, 160) || null,
-    assignee: normalizeText(item?.assignee || item?.applicant || item?.applicantName, 240) || null,
-    inventor: normalizeText(item?.inventor || item?.inventors || item?.inventorName, 240) || null,
+    assignee: normalizeText(item?.assignee || item?.applicant || item?.applicantName || item?.applicants?.[0]?.name, 240) || null,
+    inventor: normalizeText(item?.inventor || item?.inventorName || (Array.isArray(item?.inventors) ? item.inventors.join(', ') : item?.inventors), 240) || null,
     priorityDate: normalizeText(item?.priorityDate || item?.priority_date, 80) || null,
     filingDate: normalizeText(item?.filingDate || item?.filing_date || item?.applicationDate, 80) || null,
     publicationDate: normalizeText(item?.publicationDate || item?.publication_date, 80) || null,
@@ -167,45 +160,14 @@ function normalizePatentnestItem(item: any): PatentEvidence | null {
 }
 
 async function searchPatentnest(query: string, limit: number) {
-  const { apiUrl, apiKey } = patentnestConfig()
-  if (!apiUrl || !apiKey) {
+  if (!isPatentNestConfigured()) {
     return { results: [], status: 'not_configured' as const }
   }
 
   try {
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        query: query.slice(0, 500),
-        limit,
-        offset: 0,
-        filters: {
-          jurisdictions: ['IN'],
-          dateFrom: '2015-01-01',
-          dateTo: null,
-          legalStatus: ['granted', 'pending'],
-        },
-      }),
-    })
-    const body = await response.json().catch(() => ({}))
-    if (!response.ok) {
-      throw new Error(body?.error?.message || body?.error || body?.message || `PatentNest search failed with ${response.status}`)
-    }
-    const rawItems = Array.isArray(body?.results)
-      ? body.results
-      : Array.isArray(body?.patents)
-        ? body.patents
-        : Array.isArray(body?.items)
-          ? body.items
-          : Array.isArray(body?.data)
-            ? body.data
-            : []
+    const response = await searchIndianPatents(query, limit)
     return {
-      results: rawItems.map(normalizePatentnestItem).filter(Boolean).slice(0, limit) as PatentEvidence[],
+      results: response.data.results.map(normalizePatentnestItem).filter(Boolean).slice(0, limit) as PatentEvidence[],
       status: 'ok' as const,
     }
   } catch (error) {
@@ -255,14 +217,13 @@ export async function retrieveIdeaEvidence(query: string, options: { publication
     })
     .slice(0, patentLimit)
 
-  const { apiUrl, apiKey } = patentnestConfig()
   return {
     publications,
     patents,
     webResults,
     diagnostics: {
       publicationSources: publicationResult.status === 'fulfilled' ? publicationResult.value.sources : [],
-      patentnestConfigured: Boolean(apiUrl && apiKey),
+      patentnestConfigured: isPatentNestConfigured(),
       patentnestStatus: patentnest.status,
       patentnestError: 'error' in patentnest ? patentnest.error : undefined,
       serpapiError: patentResult.status === 'fulfilled' ? patentResult.value.error : patentResult.reason?.message,

@@ -51,3 +51,15 @@ The funding-call document intelligence layer is controlled by `FEATURE_FUNDING_D
 - `FUNDING_DOC_CHUNK_OVERLAP`: within-section chunk overlap. Defaults to 64 estimated tokens.
 
 Document embeddings use the existing `EMBEDDING_PROVIDER`, `VOYAGE_*`, and Google embedding variables through `EmbeddingService`.
+
+## PatentNest Indian Patent Corpus
+
+Idea Intelligence uses PatentNest as its primary Indian-patent source and keeps the existing SerpAPI/Google Patents search as a fallback and supplementary global source. If no PatentNest key is configured, Idea Intelligence continues through SerpAPI.
+
+The integration uses the server-only client in `src/lib/patentnest/client.ts`. Generate a `pn_live_...` key and add it to `.env.local` for development or the server's secret manager for production:
+
+```dotenv
+PATENTNEST_API_KEY=pn_live_replace_with_your_key
+```
+
+Do not use a `NEXT_PUBLIC_` variable for this credential. Restart the Next.js server after configuring it.

@@ -1,17 +1,30 @@
-import { mkdir, writeFile, readdir, unlink } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import { NextRequest, NextResponse } from 'next/server'
 
-import { requirePublicProjectWriteRequest } from '@/lib/publicProjects/auth'
+import {
+  requirePublicProjectReadRequest,
+  requirePublicProjectWriteRequest,
+} from '@/lib/publicProjects/auth'
 
 const UPLOAD_DIR = process.env.CSV_IMPORT_DIR || '/tmp/csv-imports'
 const RESOLVED_UPLOAD_DIR = resolve(UPLOAD_DIR)
+const PARTS_DIR = resolve(join(UPLOAD_DIR, '.parts'))
+const MAX_FILE_SIZE_BYTES =
+  Math.max(Number(process.env.CSV_IMPORT_MAX_UPLOAD_MB || 100), 1) * 1024 * 1024
+const MAX_CHUNK_SIZE_BYTES = 768 * 1024
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 async function ensureUploadDir() {
   if (!existsSync(UPLOAD_DIR)) {
     await mkdir(UPLOAD_DIR, { recursive: true })
+  }
+  if (!existsSync(PARTS_DIR)) {
+    await mkdir(PARTS_DIR, { recursive: true })
   }
 }
 
@@ -24,12 +37,112 @@ function getUploadPath(fileName: string) {
   return { safeFileName, filePath }
 }
 
+function isSupportedFile(fileName: string) {
+  const lower = fileName.toLowerCase()
+  return lower.endsWith('.csv') || lower.endsWith('.txt')
+}
+
+function readInteger(value: string | null) {
+  if (!value) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+async function uploadChunk(request: NextRequest) {
+  const uploadId = request.nextUrl.searchParams.get('uploadId') || ''
+  const fileName = request.nextUrl.searchParams.get('fileName') || ''
+  const chunkIndex = readInteger(request.nextUrl.searchParams.get('chunkIndex'))
+  const totalChunks = readInteger(request.nextUrl.searchParams.get('totalChunks'))
+  const fileSize = readInteger(request.nextUrl.searchParams.get('fileSize'))
+
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(uploadId)) {
+    return NextResponse.json({ error: 'Invalid upload identifier' }, { status: 400 })
+  }
+  if (!isSupportedFile(fileName)) {
+    return NextResponse.json({ error: 'Only .csv or .txt files are accepted' }, { status: 400 })
+  }
+  if (
+    chunkIndex === null ||
+    totalChunks === null ||
+    fileSize === null ||
+    chunkIndex < 0 ||
+    totalChunks < 1 ||
+    chunkIndex >= totalChunks ||
+    fileSize < 1
+  ) {
+    return NextResponse.json({ error: 'Invalid chunk metadata' }, { status: 400 })
+  }
+  if (fileSize > MAX_FILE_SIZE_BYTES) {
+    return NextResponse.json(
+      { error: `File exceeds the ${Math.floor(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB upload limit` },
+      { status: 413 }
+    )
+  }
+
+  const chunk = Buffer.from(await request.arrayBuffer())
+  if (chunk.length === 0 || chunk.length > MAX_CHUNK_SIZE_BYTES) {
+    return NextResponse.json({ error: 'Invalid upload chunk size' }, { status: 413 })
+  }
+
+  const partDirectory = resolve(join(PARTS_DIR, uploadId))
+  if (!partDirectory.startsWith(`${PARTS_DIR}${sep}`)) {
+    return NextResponse.json({ error: 'Invalid upload path' }, { status: 400 })
+  }
+  await mkdir(partDirectory, { recursive: true })
+  await writeFile(join(partDirectory, `${chunkIndex}.part`), chunk)
+
+  if (chunkIndex !== totalChunks - 1) {
+    return NextResponse.json({ success: true, complete: false, chunkIndex })
+  }
+
+  const { safeFileName, filePath } = getUploadPath(fileName)
+  const temporaryPath = join(partDirectory, 'assembled.upload')
+  let assembledSize = 0
+  await writeFile(temporaryPath, Buffer.alloc(0))
+
+  try {
+    for (let index = 0; index < totalChunks; index += 1) {
+      const part = await readFile(join(partDirectory, `${index}.part`))
+      assembledSize += part.length
+      if (assembledSize > MAX_FILE_SIZE_BYTES) {
+        throw new Error('Assembled file exceeds the upload limit')
+      }
+      await appendFile(temporaryPath, part)
+    }
+
+    if (assembledSize !== fileSize) {
+      throw new Error('Uploaded file size does not match the source file')
+    }
+
+    await unlink(filePath).catch(() => undefined)
+    await rename(temporaryPath, filePath)
+  } catch (error) {
+    await rm(partDirectory, { recursive: true, force: true })
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to assemble uploaded file' },
+      { status: 409 }
+    )
+  }
+
+  await rm(partDirectory, { recursive: true, force: true })
+  return NextResponse.json({
+    success: true,
+    complete: true,
+    fileName: safeFileName,
+    size: assembledSize,
+  })
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await requirePublicProjectWriteRequest(request)
     if ('response' in auth) return auth.response
 
     await ensureUploadDir()
+
+    if (request.nextUrl.searchParams.get('mode') === 'chunk') {
+      return uploadChunk(request)
+    }
 
     const formData = await request.formData()
     const files = formData.getAll('files') as File[]
@@ -42,11 +155,16 @@ export async function POST(request: NextRequest) {
 
     for (const file of files) {
       try {
-        const isCsv = file.name.toLowerCase().endsWith('.csv')
-        const isTxt = file.name.toLowerCase().endsWith('.txt')
-
-        if (!isCsv && !isTxt) {
+        if (!isSupportedFile(file.name)) {
           results.push({ fileName: file.name, status: 'error', error: 'Only .csv or .txt files allowed' })
+          continue
+        }
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+          results.push({
+            fileName: file.name,
+            status: 'error',
+            error: `File exceeds the ${Math.floor(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB upload limit`,
+          })
           continue
         }
 
@@ -89,7 +207,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requirePublicProjectWriteRequest(request)
+    const auth = await requirePublicProjectReadRequest(request)
     if ('response' in auth) return auth.response
 
     await ensureUploadDir()
