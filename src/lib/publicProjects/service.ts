@@ -15,6 +15,7 @@ import { getPublicProjectConnector, PUBLIC_PROJECT_SOURCE_DEFINITIONS } from './
 import type {
   JsonRecord,
   NormalizedPublicProject,
+  PublicProjectConnector,
   PublicProjectDiscoveredRecord,
 } from './types'
 import { PublicProjectSourceBlockedError } from './types'
@@ -98,19 +99,6 @@ function getEmbeddingVersion() {
 function getEmbeddingColumn() {
   const health = getEmbeddingHealth()
   return health.provider === 'voyage' && health.outputDimensionality === 1024 ? 'embedding_voyage_1024' : 'embedding'
-}
-
-function getInlineAutoEmbeddingBatchSize() {
-  if (process.env.PUBLIC_PROJECT_INLINE_AUTO_EMBEDDINGS === 'false') {
-    return 0
-  }
-
-  const configured = Number(process.env.PUBLIC_PROJECT_INLINE_EMBEDDING_BATCH_SIZE || 1)
-  if (!Number.isFinite(configured) || configured <= 0) {
-    return 1
-  }
-
-  return Math.min(Math.max(configured, 1), 25)
 }
 
 function embeddingColumnSql() {
@@ -343,6 +331,7 @@ export interface CreatePublicProjectRunInput {
     maxRecords?: number
     onlinePerState?: number
     legacyPerState?: number
+    skipExisting?: boolean
   }
   confirmFullProduction?: boolean
 }
@@ -351,6 +340,39 @@ export interface ProcessRunOptions {
   workerId?: string
   runId?: string
   maxItems?: number
+}
+
+const DISCOVERY_WRITE_BATCH_SIZE = 500
+const DEFAULT_EXTRACTION_BATCH_SIZE = 100
+const MAX_ITEM_ATTEMPTS = 3
+
+function boundedPositiveInteger(value: unknown, fallback: number, maximum: number) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(Math.floor(parsed), maximum) : fallback
+}
+
+function extractionConcurrency(sourceKey: PublicProjectSourceKey) {
+  if (sourceKey !== 'PRISM') {
+    return 1
+  }
+
+  return boundedPositiveInteger(process.env.PRISM_FETCH_CONCURRENCY, 4, 8)
+}
+
+async function forEachWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  operation: (item: T) => Promise<void>
+) {
+  let nextIndex = 0
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      await operation(items[index])
+    }
+  })
+  await Promise.all(workers)
 }
 
 export class PublicProjectCorpusService {
@@ -485,12 +507,34 @@ export class PublicProjectCorpusService {
   }
 
   async cancelRun(runId: string) {
+    const run = await prisma.publicProjectCrawlRun.findUnique({
+      where: { id: runId },
+      select: { status: true },
+    })
+    if (!run) {
+      throw new Error('Crawl run not found')
+    }
+    if (['completed', 'completed_with_errors', 'failed', 'blocked', 'canceled'].includes(run.status)) {
+      return prisma.publicProjectCrawlRun.findUniqueOrThrow({ where: { id: runId } })
+    }
+
+    const now = new Date()
     return prisma.publicProjectCrawlRun.update({
       where: { id: runId },
-      data: {
-        status: 'cancel_requested',
-        cancelRequestedAt: new Date(),
-      },
+      data:
+        run.status === 'queued'
+          ? {
+              status: 'canceled',
+              cancelRequestedAt: now,
+              completedAt: now,
+              heartbeatAt: now,
+              lockedAt: null,
+              lockedBy: null,
+            }
+          : {
+              status: 'cancel_requested',
+              cancelRequestedAt: now,
+            },
     })
   }
 
@@ -533,6 +577,19 @@ export class PublicProjectCorpusService {
     if (!run || !['queued', 'running'].includes(run.status)) {
       return null
     }
+
+    const staleBefore = new Date(
+      Date.now() - boundedPositiveInteger(process.env.PUBLIC_PROJECT_CRAWLER_STALE_LOCK_SECONDS, 300, 3600) * 1000
+    )
+    if (
+      run.status === 'running' &&
+      run.lockedBy !== workerId &&
+      run.heartbeatAt &&
+      run.heartbeatAt > staleBefore
+    ) {
+      return null
+    }
+
     return prisma.publicProjectCrawlRun.update({
       where: { id: runId },
       data: {
@@ -547,10 +604,14 @@ export class PublicProjectCorpusService {
 
   private async claimQueuedRun(workerId: string) {
     return prisma.$transaction(async (tx) => {
+      const staleBefore = new Date(
+        Date.now() - boundedPositiveInteger(process.env.PUBLIC_PROJECT_CRAWLER_STALE_LOCK_SECONDS, 300, 3600) * 1000
+      )
       const rows = await tx.$queryRaw<Array<{ id: string }>>(PrismaNamespace.sql`
         SELECT id
         FROM public_project_crawl_runs
         WHERE status = 'queued'
+           OR (status = 'running' AND (heartbeat_at IS NULL OR heartbeat_at < ${staleBefore}))
         ORDER BY created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
@@ -560,6 +621,7 @@ export class PublicProjectCorpusService {
         return null
       }
 
+      const existing = await tx.publicProjectCrawlRun.findUnique({ where: { id } })
       return tx.publicProjectCrawlRun.update({
         where: { id },
         data: {
@@ -567,7 +629,7 @@ export class PublicProjectCorpusService {
           lockedBy: workerId,
           lockedAt: new Date(),
           heartbeatAt: new Date(),
-          startedAt: new Date(),
+          startedAt: existing?.startedAt || new Date(),
         },
       })
     })
@@ -585,48 +647,84 @@ export class PublicProjectCorpusService {
 
     const connector = getPublicProjectConnector(run.source.sourceKey)
     const filters = asObject(run.filters as Prisma.JsonValue)
-    let processedThisCall = 0
+    const processLimit = boundedPositiveInteger(
+      options.maxItems ?? process.env.PUBLIC_PROJECT_CRAWLER_BATCH_SIZE,
+      DEFAULT_EXTRACTION_BATCH_SIZE,
+      500
+    )
 
     try {
-      for await (const discovered of connector.discover({
-        mode: run.mode,
-        states: Array.isArray(filters.states) ? (filters.states as string[]) : undefined,
-        maxRecords: typeof filters.maxRecords === 'number' ? filters.maxRecords : undefined,
-        onlinePerState: typeof filters.onlinePerState === 'number' ? filters.onlinePerState : undefined,
-        legacyPerState: typeof filters.legacyPerState === 'number' ? filters.legacyPerState : undefined,
-      })) {
-        const latestRun = await prisma.publicProjectCrawlRun.findUnique({ where: { id: runId } })
-        if (latestRun?.status === 'cancel_requested') {
-          await prisma.publicProjectCrawlRun.update({
-            where: { id: runId },
-            data: {
-              status: 'canceled',
-              completedAt: new Date(),
-              heartbeatAt: new Date(),
-            },
-          })
-          return
-        }
+      const cursor = asObject(run.cursor as Prisma.JsonValue)
+      if (!['discovered', 'extracting'].includes(String(cursor.checkpoint || ''))) {
+        await this.discoverRunItems(runId, connector, run.mode, filters)
+      }
 
-        await this.recordDiscoveredItem(runId, discovered)
-        await this.processDiscoveredRecord(run.source, runId, discovered)
-        processedThisCall += 1
+      if (await this.cancelRunIfRequested(runId)) {
+        return
+      }
 
+      // A process can terminate after claiming an item. Return those rows to the
+      // retry queue; attemptCount prevents permanent poison records from looping.
+      await prisma.publicProjectCrawlItem.updateMany({
+        where: { runId, status: 'processing' },
+        data: {
+          status: 'failed',
+          errorCode: 'INTERRUPTED',
+          errorMessage: 'Extraction worker stopped before the item completed',
+        },
+      })
+
+      const items = await prisma.publicProjectCrawlItem.findMany({
+        where: {
+          runId,
+          OR: [
+            { status: 'discovered' },
+            { status: 'failed', attemptCount: { lt: MAX_ITEM_ATTEMPTS } },
+          ],
+        },
+        take: processLimit,
+        orderBy: { createdAt: 'asc' },
+      })
+      const skipExisting = filters.skipExisting !== false
+
+      await forEachWithConcurrency(items, extractionConcurrency(run.source.sourceKey), async (item) => {
+        await this.processDiscoveredRecord(
+          run.source,
+          runId,
+          connector,
+          this.discoveredRecordFromItem(run.source.sourceKey, item),
+          item.attemptCount,
+          skipExisting
+        )
+      })
+
+      const remaining = await prisma.publicProjectCrawlItem.count({
+        where: {
+          runId,
+          OR: [
+            { status: 'discovered' },
+            { status: 'processing' },
+            { status: 'failed', attemptCount: { lt: MAX_ITEM_ATTEMPTS } },
+          ],
+        },
+      })
+
+      if (remaining > 0) {
         await prisma.publicProjectCrawlRun.update({
           where: { id: runId },
           data: {
+            status: 'queued',
+            lockedAt: null,
+            lockedBy: null,
             heartbeatAt: new Date(),
             cursor: toJsonInput({
               sourceKey: run.source.sourceKey,
-              lastSourceRecordKey: discovered.sourceRecordKey,
-              processedThisCall,
+              checkpoint: 'extracting',
+              remaining,
             }),
           },
         })
-
-        if (options.maxItems && processedThisCall >= options.maxItems) {
-          return
-        }
+        return
       }
 
       const finalRun = await prisma.publicProjectCrawlRun.findUnique({ where: { id: runId } })
@@ -639,6 +737,12 @@ export class PublicProjectCorpusService {
           status: finalStatus,
           completedAt: new Date(),
           heartbeatAt: new Date(),
+          lockedAt: null,
+          lockedBy: null,
+          cursor: toJsonInput({
+            sourceKey: run.source.sourceKey,
+            checkpoint: 'completed',
+          }),
         },
       })
 
@@ -701,40 +805,120 @@ export class PublicProjectCorpusService {
     }
   }
 
-  private async recordDiscoveredItem(runId: string, discovered: PublicProjectDiscoveredRecord) {
-    await prisma.publicProjectCrawlItem.upsert({
-      where: {
-        runId_sourceRecordKey: {
-          runId,
-          sourceRecordKey: discovered.sourceRecordKey,
-        },
-      },
-      create: {
-        runId,
-        sourceRecordKey: discovered.sourceRecordKey,
-        sourceVariant: discovered.sourceVariant,
-        externalId: discovered.externalId,
-        state: discovered.state || null,
-        status: 'discovered',
-        listingPayload: toJsonInput(discovered.listingPayload),
-      },
-      update: {
-        sourceVariant: discovered.sourceVariant,
-        externalId: discovered.externalId,
-        state: discovered.state || null,
-        listingPayload: toJsonInput(discovered.listingPayload),
-      },
-    })
-
+  private async discoverRunItems(
+    runId: string,
+    connector: PublicProjectConnector,
+    mode: PublicProjectCrawlMode,
+    filters: JsonRecord
+  ) {
     await prisma.publicProjectCrawlRun.update({
       where: { id: runId },
       data: {
-        discoveredCount: { increment: 1 },
+        heartbeatAt: new Date(),
+        cursor: toJsonInput({ sourceKey: connector.sourceKey, checkpoint: 'discovering' }),
+      },
+    })
+
+    let buffer: PublicProjectDiscoveredRecord[] = []
+    const flush = async () => {
+      if (buffer.length === 0) return
+      const batch = buffer
+      buffer = []
+      const created = await prisma.publicProjectCrawlItem.createMany({
+        data: batch.map((discovered) => ({
+          runId,
+          sourceRecordKey: discovered.sourceRecordKey,
+          sourceVariant: discovered.sourceVariant,
+          externalId: discovered.externalId,
+          state: discovered.state || null,
+          status: 'discovered' as const,
+          listingPayload: toJsonInput(discovered.listingPayload),
+          detailPayload: toJsonInput({ detailUrl: discovered.detailUrl || null }),
+        })),
+        skipDuplicates: true,
+      })
+      await prisma.publicProjectCrawlRun.update({
+        where: { id: runId },
+        data: {
+          discoveredCount: { increment: created.count },
+          heartbeatAt: new Date(),
+        },
+      })
+    }
+
+    for await (const discovered of connector.discover({
+      mode,
+      states: Array.isArray(filters.states) ? (filters.states as string[]) : undefined,
+      maxRecords: typeof filters.maxRecords === 'number' ? filters.maxRecords : undefined,
+      onlinePerState: typeof filters.onlinePerState === 'number' ? filters.onlinePerState : undefined,
+      legacyPerState: typeof filters.legacyPerState === 'number' ? filters.legacyPerState : undefined,
+    })) {
+      buffer.push(discovered)
+      if (buffer.length >= DISCOVERY_WRITE_BATCH_SIZE) {
+        await flush()
+        if (await this.cancelRunIfRequested(runId)) return
+      }
+    }
+    await flush()
+    await prisma.publicProjectCrawlRun.update({
+      where: { id: runId },
+      data: {
+        heartbeatAt: new Date(),
+        cursor: toJsonInput({ sourceKey: connector.sourceKey, checkpoint: 'discovered' }),
       },
     })
   }
 
-  private async processDiscoveredRecord(source: SourceRecord, runId: string, discovered: PublicProjectDiscoveredRecord) {
+  private async cancelRunIfRequested(runId: string) {
+    const latest = await prisma.publicProjectCrawlRun.findUnique({
+      where: { id: runId },
+      select: { status: true },
+    })
+    if (latest?.status === 'canceled') return true
+    if (latest?.status !== 'cancel_requested') return false
+    await prisma.publicProjectCrawlRun.update({
+      where: { id: runId },
+      data: {
+        status: 'canceled',
+        completedAt: new Date(),
+        heartbeatAt: new Date(),
+        lockedAt: null,
+        lockedBy: null,
+      },
+    })
+    return true
+  }
+
+  private discoveredRecordFromItem(
+    sourceKey: PublicProjectSourceKey,
+    item: {
+      sourceRecordKey: string
+      sourceVariant: string | null
+      externalId: string | null
+      state: string | null
+      listingPayload: Prisma.JsonValue | null
+      detailPayload: Prisma.JsonValue | null
+    }
+  ): PublicProjectDiscoveredRecord {
+    return {
+      sourceKey,
+      sourceRecordKey: item.sourceRecordKey,
+      sourceVariant: item.sourceVariant || 'online',
+      externalId: item.externalId || item.sourceRecordKey,
+      state: item.state,
+      detailUrl: cleanText(asObject(item.detailPayload).detailUrl),
+      listingPayload: asObject(item.listingPayload),
+    }
+  }
+
+  private async processDiscoveredRecord(
+    source: SourceRecord,
+    runId: string,
+    connector: PublicProjectConnector,
+    discovered: PublicProjectDiscoveredRecord,
+    previousAttemptCount: number,
+    skipExisting: boolean
+  ) {
     await prisma.publicProjectCrawlItem.update({
       where: {
         runId_sourceRecordKey: {
@@ -749,7 +933,48 @@ export class PublicProjectCorpusService {
     })
 
     try {
-      const connector = getPublicProjectConnector(source.sourceKey)
+      if (skipExisting) {
+        const existing = await prisma.publicProject.findUnique({
+          where: {
+            sourceId_sourceRecordKey: {
+              sourceId: source.id,
+              sourceRecordKey: discovered.sourceRecordKey,
+            },
+          },
+          select: { id: true, contentHash: true, recordStatus: true },
+        })
+        if (existing) {
+          await prisma.$transaction([
+            prisma.publicProject.update({
+              where: { id: existing.id },
+              data: {
+                lastSeenAt: new Date(),
+                missingFullRunCount: 0,
+                ...(existing.recordStatus === 'INACTIVE'
+                  ? { recordStatus: 'ACTIVE' as const, inactiveAt: null }
+                  : {}),
+              },
+            }),
+            prisma.publicProjectCrawlItem.update({
+              where: { runId_sourceRecordKey: { runId, sourceRecordKey: discovered.sourceRecordKey } },
+              data: {
+                projectId: existing.id,
+                status: 'skipped',
+                contentHash: existing.contentHash,
+                processedAt: new Date(),
+                errorCode: null,
+                errorMessage: null,
+              },
+            }),
+            prisma.publicProjectCrawlRun.update({
+              where: { id: runId },
+              data: { processedCount: { increment: 1 } },
+            }),
+          ])
+          return
+        }
+      }
+
       const normalized = await connector.fetchAndNormalize(discovered)
       const result = await this.upsertNormalizedProject(source, runId, discovered, normalized)
 
@@ -781,9 +1006,9 @@ export class PublicProjectCorpusService {
         },
       })
 
-      await this.processInlinePendingEmbeddings()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const isFinalAttempt = previousAttemptCount + 1 >= MAX_ITEM_ATTEMPTS
       await prisma.publicProjectCrawlItem.update({
         where: {
           runId_sourceRecordKey: {
@@ -801,30 +1026,13 @@ export class PublicProjectCorpusService {
 
       await prisma.publicProjectCrawlRun.update({
         where: { id: runId },
-        data: {
-          processedCount: { increment: 1 },
-          failedCount: { increment: 1 },
-        },
+        data: isFinalAttempt
+          ? { processedCount: { increment: 1 }, failedCount: { increment: 1 } }
+          : { heartbeatAt: new Date() },
       })
-    }
-  }
-
-  private async processInlinePendingEmbeddings() {
-    const limit = getInlineAutoEmbeddingBatchSize()
-    if (limit <= 0) {
-      return
-    }
-
-    try {
-      await this.processPendingEmbeddings({
-        limit,
-        includeFailed: false,
-      })
-    } catch (error) {
-      console.warn(
-        '[PublicProjectCorpus] Inline embedding drain failed:',
-        error instanceof Error ? error.message : String(error)
-      )
+      if (error instanceof PublicProjectSourceBlockedError) {
+        throw error
+      }
     }
   }
 
@@ -1034,6 +1242,21 @@ export class PublicProjectCorpusService {
   async processPendingEmbeddings(options: { limit?: number; includeFailed?: boolean } = {}) {
     const limit = Math.min(Math.max(options.limit || 25, 1), 200)
     const currentVersion = getEmbeddingVersion()
+    const activeCrawls = await prisma.publicProjectCrawlRun.count({
+      where: { status: { in: ['queued', 'running', 'cancel_requested'] } },
+    })
+    if (activeCrawls > 0) {
+      return {
+        selected: 0,
+        succeeded: 0,
+        failed: 0,
+        errors: [],
+        deferred: true,
+        deferredReason: `${activeCrawls} extraction run(s) are still active`,
+        coverage: await this.getEmbeddingCoverage(),
+      }
+    }
+
     const projects = await prisma.publicProject.findMany({
       where: {
         recordStatus: 'ACTIVE',
@@ -1092,6 +1315,7 @@ export class PublicProjectCorpusService {
       succeeded,
       failed,
       errors,
+      deferred: false,
       coverage: await this.getEmbeddingCoverage(),
     }
   }
