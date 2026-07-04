@@ -74,6 +74,9 @@ module.exports = {
       fontFamily: {
         sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
         serif: ['var(--font-cormorant)', 'serif'],
+        'home-v2-sans': ['var(--font-home-v2-sans)', 'Inter', 'sans-serif'],
+        'home-v2-serif': ['var(--font-home-v2-serif)', 'serif'],
+        'home-v2-mono': ['var(--font-home-v2-mono)', 'monospace'],
       },
       boxShadow: {
         'prep-card': '0 10px 25px rgba(15, 23, 42, 0.08)',
@@ -82,11 +85,16 @@ module.exports = {
       },
       animation: {
         'pulse-slow': 'prepPulse 2.4s ease-in-out infinite',
+        'home-v2-marquee': 'homeV2Marquee 48s linear infinite',
       },
       keyframes: {
         prepPulse: {
           '0%, 100%': { transform: 'scale(1)', opacity: '0.2' },
           '50%': { transform: 'scale(1.05)', opacity: '0.32' },
+        },
+        homeV2Marquee: {
+          '0%': { transform: 'translateX(0)' },
+          '100%': { transform: 'translateX(-50%)' },
         },
       },
     },

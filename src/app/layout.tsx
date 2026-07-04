@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter, Cormorant_Garamond } from 'next/font/google'
 import { Providers } from '@/components/providers'
-import Header from '@/components/Header'
+import AppChrome from '@/components/AppChrome'
 import './globals.css'
 
 // Configure Inter and Cormorant Garamond fonts with fallbacks for offline development
@@ -37,8 +37,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.className} ${cormorant.variable} bg-gpt-gray-50 min-h-screen`}>
         <Providers>
-          <Header />
-          {children}
+          <AppChrome>{children}</AppChrome>
         </Providers>
       </body>
     </html>

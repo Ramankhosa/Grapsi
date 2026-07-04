@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     'AIGrantMentor turns funding records, calls, and reviewer criteria into a command center for research funding.',
 }
 
-export default function HomePage() {
+export default function HomeV2Route() {
   return (
     <div className={`${inter.variable} ${sourceSerif.variable} ${jetbrainsMono.variable}`}>
       <HomeV2Page />
