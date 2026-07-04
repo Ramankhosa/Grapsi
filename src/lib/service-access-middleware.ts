@@ -173,17 +173,6 @@ export async function enforceServiceAccess(
  * Service type mapping for common API routes
  */
 export const ROUTE_SERVICE_MAP: Record<string, ServiceType> = {
-  // Drafting routes
-  '/api/patents/*/drafting': 'PATENT_DRAFTING',
-  '/api/patents/*/draft': 'PATENT_DRAFTING',
-  
-  // Novelty search routes
-  '/api/novelty-search': 'NOVELTY_SEARCH',
-  '/api/patents/*/novelty-assessment': 'NOVELTY_SEARCH',
-  
-  // Prior art routes
-  '/api/patents/*/prior-art': 'PRIOR_ART_SEARCH',
-  
   // Idea bank routes
   '/api/idea-bank': 'IDEA_BANK',
 

@@ -3,22 +3,13 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { FolderKanban, Lightbulb, FileText, Search, ArrowRight } from 'lucide-react'
+import { FolderKanban, Lightbulb, ArrowRight } from 'lucide-react'
 
 interface IdeaBankStats {
   totalIdeas: number
   publicIdeas: number
   reservedIdeas: number
   userReservations: number
-}
-
-interface NoveltySearchHistoryItem {
-  id: string
-  title: string
-  status: string
-  createdAt: string
-  completedAt?: string
-  results?: any
 }
 
 interface InsightGridProps {
@@ -29,8 +20,6 @@ export default function InsightGrid({ onCardHover }: InsightGridProps) {
   const { user } = useAuth()
   const router = useRouter()
   const [ideaStats, setIdeaStats] = useState<IdeaBankStats | null>(null)
-  const [noveltyHistory, setNoveltyHistory] = useState<NoveltySearchHistoryItem[]>([])
-  const [draftsCount, setDraftsCount] = useState<number>(0)
   const [projectsCount, setProjectsCount] = useState<number>(0)
   const [loading, setLoading] = useState(true)
 
@@ -55,18 +44,7 @@ export default function InsightGrid({ onCardHover }: InsightGridProps) {
         setIdeaStats(ideaData.stats)
       }
 
-      // Fetch novelty search history
-      const noveltyResponse = await fetch('/api/novelty-search/history', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      })
-      if (noveltyResponse.ok) {
-        const noveltyData = await noveltyResponse.json()
-        setNoveltyHistory(noveltyData.history || [])
-      }
-
-      // Fetch projects to count drafts (patents in draft status)
+      // Fetch projects for the active workspace count.
       const projectsResponse = await fetch('/api/projects', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
@@ -75,17 +53,6 @@ export default function InsightGrid({ onCardHover }: InsightGridProps) {
       if (projectsResponse.ok) {
         const projectsData = await projectsResponse.json()
         const projects = projectsData.projects || []
-
-        // Count patents across all projects that are in draft status
-        let totalDrafts = 0
-        for (const project of projects) {
-          if (project.patents) {
-            totalDrafts += project.patents.filter((patent: any) =>
-              patent.status === 'DRAFT' || patent.status === 'IN_PROGRESS'
-            ).length
-          }
-        }
-        setDraftsCount(totalDrafts)
         setProjectsCount(projects.length)
       }
     } catch (error) {
@@ -94,21 +61,6 @@ export default function InsightGrid({ onCardHover }: InsightGridProps) {
       setLoading(false)
     }
   }
-
-  const getLatestNoveltyResult = () => {
-    if (noveltyHistory.length === 0) return null
-    const latest = noveltyHistory[0]
-    const stage1Results = latest.results?.stage1
-    const patentCount = stage1Results?.patentCount || 0
-
-    return {
-      title: latest.title,
-      patentCount,
-      completedAt: latest.completedAt
-    }
-  }
-
-  const latestNovelty = getLatestNoveltyResult()
 
   const handleCardClick = (card: any) => {
     if (card.navigateTo) {
@@ -142,32 +94,6 @@ export default function InsightGrid({ onCardHover }: InsightGridProps) {
       borderColor: 'border-amber-200',
       tooltip: `Idea growth rate +20% this week.`,
       navigateTo: '/idea-bank'
-    },
-    {
-      id: 'drafts',
-      icon: FileText,
-      title: 'Drafts in Progress',
-      value: draftsCount.toString(),
-      label: 'Files',
-      description: `${draftsCount} awaiting completion`,
-      color: 'text-ai-blue-600',
-      bgColor: 'bg-ai-blue-50',
-      borderColor: 'border-ai-blue-200',
-      tooltip: 'Resume your latest draft where you left off.',
-      navigateTo: '/patents/draft/new' // Or a drafts list page if it exists
-    },
-    {
-      id: 'novelty',
-      icon: Search,
-      title: 'Novelty Scans',
-      value: noveltyHistory.length.toString(),
-      label: 'Reports',
-      description: latestNovelty ? `Latest: ${latestNovelty.patentCount} citations found` : 'No scans yet',
-      color: 'text-purple-600',
-      bgColor: 'bg-purple-50',
-      borderColor: 'border-purple-200',
-      tooltip: `Total novelty searches: ${noveltyHistory.length}.`,
-      navigateTo: '/novelty-search'
     }
   ]
 

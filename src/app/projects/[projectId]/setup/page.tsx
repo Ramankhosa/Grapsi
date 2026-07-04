@@ -252,7 +252,7 @@ export default function ProjectSetupPage() {
                 </Link>
               </div>
 
-              {/* Add Patent Option */}
+              {/* Add Grant Option */}
               <div className="border border-gpt-gray-200 rounded-lg p-6 hover:border-gpt-blue-300 transition-colors">
                 <div className="text-center mb-4">
                   <div className="w-12 h-12 bg-gpt-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -261,17 +261,17 @@ export default function ProjectSetupPage() {
                     </svg>
                   </div>
                   <h3 className="text-lg font-medium text-gpt-gray-900 mb-2">
-                    Add Patent
+                    Add Grant
                   </h3>
                   <p className="text-sm text-gpt-gray-600 mb-4">
-                    Start creating your first patent application for this project.
+                    Start preparing a grant application for this project.
                   </p>
                 </div>
                 <Link
-                  href={`/patents/draft/new?projectId=${projectId}`}
+                  href={`/projects/${projectId}/grants`}
                   className="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gpt-blue-600 hover:bg-gpt-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
                 >
-                  Add Patent
+                  Add Grant
                 </Link>
               </div>
             </div>
@@ -286,7 +286,7 @@ export default function ProjectSetupPage() {
             Back to Dashboard
           </Link>
           <p className="text-sm text-gpt-gray-500 mt-4">
-            You can always access your project from the dashboard to manage collaborators, add patents, or set up applicant profiles.
+            You can always access your project from the dashboard to manage collaborators, add grants, or set up applicant profiles.
           </p>
         </div>
       </div>

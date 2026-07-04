@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { motion, useScroll, useTransform } from 'framer-motion'
-import { ArrowRight, Sparkles, Search, FileText } from 'lucide-react'
+import { ArrowRight, Sparkles, FileText } from 'lucide-react'
 
 export default function HeroSection() {
   const { user } = useAuth()
@@ -106,8 +106,7 @@ export default function HeroSection() {
           transition={{ delay: 0.9, duration: 0.8 }}
           className="text-lg md:text-2xl text-ai-graphite-300 max-w-3xl mx-auto mb-12 leading-relaxed font-light"
         >
-          Step into the <span className="text-white font-medium">future of invention</span>. 
-          The world's most advanced AI cockpit for patent drafting and novelty analysis.
+          Build stronger grant applications with structured preparation, evidence mapping, and AI-assisted drafting.
         </motion.p>
 
         {/* CTAs */}
@@ -117,19 +116,19 @@ export default function HeroSection() {
           transition={{ delay: 1.1, duration: 0.8 }}
           className="flex flex-col sm:flex-row gap-6 items-center justify-center w-full"
         >
-          <Link href={user ? '/patents/draft/new' : '/login'} className="group relative w-full sm:w-auto">
+          <Link href={user ? '/projects/new/grant' : '/login'} className="group relative w-full sm:w-auto">
             <div className="absolute -inset-0.5 bg-gradient-to-r from-ai-blue-500 to-cyan-500 rounded-lg blur opacity-30 group-hover:opacity-70 transition duration-200"></div>
             <button className="relative w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 bg-ai-graphite-900 border border-ai-blue-500/50 rounded-lg text-white font-medium hover:bg-ai-graphite-800 transition-all duration-200">
               <FileText className="w-5 h-5" />
-              Start Drafting
+              Start Grant
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </Link>
 
-          <Link href={user ? '/novelty-search' : '/login'} className="w-full sm:w-auto">
+          <Link href={user ? '/funding/intelligence' : '/login'} className="w-full sm:w-auto">
              <button className="w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 bg-white/5 border border-white/10 rounded-lg text-ai-graphite-200 font-medium hover:bg-white/10 hover:text-white backdrop-blur-sm transition-all duration-200">
-              <Search className="w-5 h-5" />
-              Novelty Search
+              <Sparkles className="w-5 h-5" />
+              Funding Intelligence
             </button>
           </Link>
         </motion.div>

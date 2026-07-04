@@ -350,49 +350,11 @@ export default function IdeaBankDashboard() {
   }
 
   const handleSendToSearch = (ideaId: string) => {
-    const idea = ideas.find(i => i.id === ideaId)
-    if (!idea) {
-      alert('Idea not found')
-      return
-    }
-    
-    // Verify the idea is reserved by current user
-    if (!idea._isReservedByCurrentUser) {
-      alert('You must reserve this idea before sending it to novelty search')
-      return
-    }
-    
-    const mergedDescription = buildMergedDescription(idea)
-    const params = new URLSearchParams({
-      title: idea.title,
-      description: mergedDescription,
-      ideaId: ideaId
-    })
-    
-    router.push(`/novelty-search?${params.toString()}`)
+    alert('Patent novelty search has been removed from this grant-writing app.')
   }
 
   const handleSendToDrafting = (ideaId: string) => {
-    const idea = ideas.find(i => i.id === ideaId)
-    if (!idea) {
-      alert('Idea not found')
-      return
-    }
-    
-    // Verify the idea is reserved by current user
-    if (!idea._isReservedByCurrentUser) {
-      alert('You must reserve this idea before sending it to drafting')
-      return
-    }
-    
-    const mergedDescription = buildMergedDescription(idea)
-    const params = new URLSearchParams({
-      title: idea.title,
-      rawIdea: mergedDescription,
-      ideaId: ideaId
-    })
-    
-    router.push(`/patents/draft/new?${params.toString()}`)
+    alert('Patent drafting has been removed from this grant-writing app.')
   }
 
   // Pagination controls

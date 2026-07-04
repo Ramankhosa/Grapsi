@@ -28,14 +28,14 @@ export default function CTAFooter() {
         </h2>
         
         <p className="text-xl text-ai-blue-200/80 mb-12 max-w-2xl mx-auto font-light">
-          The gateway to patent protection is open. Step through.
+          Prepare, map, and draft a stronger grant application.
         </p>
 
         <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
-          <Link href={user ? '/patents/draft/new' : '/register'}>
+          <Link href={user ? '/projects/new/grant' : '/register'}>
             <button className="group relative inline-flex items-center gap-3 px-10 py-4 bg-white text-ai-graphite-950 font-bold rounded-lg hover:bg-ai-blue-50 transition-all duration-200 shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)]">
               <Rocket className="w-5 h-5" />
-              Initialize Project
+              Start Grant
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </Link>

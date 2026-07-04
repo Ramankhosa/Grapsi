@@ -18,45 +18,14 @@ export default function AISpotlight({ draftsCount, latestNoveltySearch, userRese
   const generateSuggestion = useCallback(() => {
     const suggestions = []
 
-    // Draft completion suggestion
-    if (draftsCount > 0) {
-      suggestions.push({
-        type: 'draft',
-        title: 'Resume Drafting',
-        message: `You have ${draftsCount} draft${draftsCount > 1 ? 's' : ''} pending. Your latest draft is waiting for review.`,
-        actions: [
-          { label: 'Resume Draft', action: () => router.push('/patents/draft/new') },
-          { label: 'View Projects', action: () => router.push('/projects') }
-        ]
-      })
-    }
-
-    // Novelty review suggestion
-    if (latestNoveltySearch) {
-      const stage1Results = latestNoveltySearch.results?.stage1
-      const patentCount = stage1Results?.patentCount || 0
-
-      if (patentCount > 0) {
-        suggestions.push({
-          type: 'novelty',
-          title: 'Analysis Complete',
-          message: `"${latestNoveltySearch.title.substring(0, 25)}..." returned ${patentCount} citations. Review the findings to proceed.`,
-          actions: [
-            { label: 'View Report', action: () => router.push(`/novelty-search/${latestNoveltySearch.id}/consolidated`) },
-            { label: 'New Search', action: () => router.push('/novelty-search') }
-          ]
-        })
-      }
-    }
-
     // Default suggestion
     if (suggestions.length === 0) {
       suggestions.push({
         type: 'welcome',
         title: 'Intelligence Ready',
-        message: 'The neural engine is idle. Initiate a new novelty search or explore high-potential concepts.',
+        message: 'Open your grant projects or explore high-potential concepts for funding fit.',
         actions: [
-          { label: 'Start Search', action: () => router.push('/novelty-search') },
+          { label: 'View Projects', action: () => router.push('/projects') },
           { label: 'Explore Ideas', action: () => router.push('/idea-bank') }
         ]
       })
@@ -64,7 +33,7 @@ export default function AISpotlight({ draftsCount, latestNoveltySearch, userRese
 
     const randomIndex = Math.floor(Math.random() * suggestions.length)
     setCurrentSuggestion(suggestions[randomIndex])
-  }, [draftsCount, latestNoveltySearch, router])
+  }, [router])
 
   useEffect(() => {
     generateSuggestion()

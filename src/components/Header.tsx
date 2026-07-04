@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import { FileText, Bell, Database, Library, Sparkles } from 'lucide-react'
+import { FileText, Bell, Library, Sparkles } from 'lucide-react'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
@@ -175,21 +175,6 @@ export default function Header() {
                 </Link>
 
                 <Link
-                  href="/novelty-search"
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
-                >
-                  🔍 Search
-                </Link>
-
-                <Link
-                  href="/indian-patents"
-                  className="hidden items-center px-3 py-2 text-sm font-medium text-gpt-gray-700 transition-all duration-200 hover:text-orange-700 xl:inline-flex"
-                >
-                  <Database className="mr-1.5 h-4 w-4" />
-                  Indian Patents
-                </Link>
-
-                <Link
                   href="/funding/intelligence"
                   className="hidden items-center px-3 py-2 text-sm font-medium text-gpt-gray-700 transition-all duration-200 hover:text-teal-700 lg:inline-flex"
                 >
@@ -256,30 +241,12 @@ export default function Header() {
                     </Link>
 
                     <Link
-                      href="/novelty-search"
-                      className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                      onClick={closeMenu}
-                    >
-                      <span>🔍</span>
-                      <span>Novelty Search</span>
-                    </Link>
-
-                    <Link
                       href="/projects"
                       className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
                       onClick={closeMenu}
                     >
                       <span>📁</span>
                       <span>Projects</span>
-                    </Link>
-
-                    <Link
-                      href="/indian-patents"
-                      className="flex w-full items-center space-x-2 px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50"
-                      onClick={closeMenu}
-                    >
-                      <Database className="h-4 w-4" />
-                      <span>Indian Patents</span>
                     </Link>
 
                     <Link

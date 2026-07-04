@@ -99,33 +99,9 @@ export default function UserDashboard() {
   })
 
   const fetchPapers = useCallback(async () => {
-    try {
-      setLoading(true)
-      const response = await fetch('/api/papers?limit=5&sortBy=updatedAt&sortOrder=desc', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        const papersList = data.papers || []
-        setPapers(papersList)
-        
-        // Calculate stats
-        const totalPapers = papersList.length
-        const inProgress = papersList.filter((p: Paper) => p.status === 'IN_PROGRESS').length
-        const completed = papersList.filter((p: Paper) => p.status === 'COMPLETED').length
-        const totalCitations = papersList.reduce((sum: number, p: Paper) => sum + (p.citationsCount || 0), 0)
-        const totalWords = papersList.reduce((sum: number, p: Paper) => sum + (p.wordCount || 0), 0)
-        
-        setStats({ totalPapers, inProgress, completed, totalCitations, totalWords })
-      }
-    } catch (error) {
-      console.error('Error fetching papers:', error)
-    } finally {
-      setLoading(false)
-    }
+    setPapers([])
+    setStats({ totalPapers: 0, inProgress: 0, completed: 0, totalCitations: 0, totalWords: 0 })
+    setLoading(false)
   }, [])
 
   const fetchFundingUploads = useCallback(async () => {
@@ -369,15 +345,15 @@ export default function UserDashboard() {
                 Welcome back{user?.email ? `, ${user.email.split('@')[0]}` : ''}!
               </h1>
               <p className="text-slate-600 mt-1">
-                Continue working on your research papers and funding opportunities
+                Continue working on your grant applications and funding opportunities
               </p>
             </div>
             <button
-              onClick={() => router.push('/papers/new')}
+              onClick={() => router.push('/projects/new/grant')}
               className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all duration-200"
             >
               <Plus className="w-4 h-4 mr-2" />
-              New Paper
+              New Grant
             </button>
           </motion.div>
         </div>
@@ -454,7 +430,7 @@ export default function UserDashboard() {
                     Recent Papers
                   </h2>
                   <button
-                    onClick={() => router.push('/papers')}
+                    onClick={() => router.push('/projects')}
                     className="text-sm text-violet-600 hover:text-violet-700 font-medium flex items-center gap-1"
                   >
                     View All
@@ -469,7 +445,7 @@ export default function UserDashboard() {
                   <h3 className="text-lg font-medium text-slate-900 mb-2">No papers yet</h3>
                   <p className="text-slate-600 mb-6">Start your academic writing journey</p>
                   <button
-                    onClick={() => router.push('/papers/new')}
+                    onClick={() => router.push('/projects/new/grant')}
                     className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-violet-700"
                   >
                     <Plus className="w-4 h-4 mr-2" />
@@ -484,7 +460,7 @@ export default function UserDashboard() {
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: 0.1 * index }}
-                      onClick={() => router.push(`/papers/${paper.id}`)}
+                      onClick={() => router.push('/projects')}
                       className="p-4 hover:bg-slate-50 cursor-pointer transition-colors"
                     >
                       <div className="flex items-center justify-between">
@@ -540,27 +516,27 @@ export default function UserDashboard() {
               </h2>
               <div className="space-y-3">
                 <button
-                  onClick={() => router.push('/papers/new')}
+                  onClick={() => router.push('/projects/new/grant')}
                   className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-violet-200 hover:bg-violet-50 transition-colors text-left"
                 >
                   <div className="p-2 bg-violet-100 rounded-lg">
                     <Plus className="w-4 h-4 text-violet-600" />
                   </div>
                   <div>
-                    <div className="font-medium text-slate-900">Start New Paper</div>
-                    <div className="text-xs text-slate-500">Create a new research paper</div>
+                    <div className="font-medium text-slate-900">Start New Grant</div>
+                    <div className="text-xs text-slate-500">Create a new grant workspace</div>
                   </div>
                 </button>
                 <button
-                  onClick={() => router.push('/papers')}
+                  onClick={() => router.push('/projects')}
                   className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-blue-200 hover:bg-blue-50 transition-colors text-left"
                 >
                   <div className="p-2 bg-blue-100 rounded-lg">
                     <BookOpenCheck className="w-4 h-4 text-blue-600" />
                   </div>
                   <div>
-                    <div className="font-medium text-slate-900">Browse Papers</div>
-                    <div className="text-xs text-slate-500">View all your papers</div>
+                    <div className="font-medium text-slate-900">Browse Projects</div>
+                    <div className="text-xs text-slate-500">View all your projects</div>
                   </div>
                 </button>
                 <button

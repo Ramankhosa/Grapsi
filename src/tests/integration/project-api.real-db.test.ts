@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DELETE as deleteCollaboratorRoute } from '@/app/api/projects/[projectId]/collaborators/[collaboratorId]/route'
 import { POST as addCollaboratorRoute } from '@/app/api/projects/[projectId]/collaborators/route'
 import { GET as getApplicantProfileRoute, POST as saveApplicantProfileRoute } from '@/app/api/projects/[projectId]/applicant-profile/route'
-import { DELETE as deletePatentRoute } from '@/app/api/projects/[projectId]/patents/[patentId]/route'
-import { GET as listPatentsRoute, POST as createPatentRoute } from '@/app/api/projects/[projectId]/patents/route'
 import { DELETE as deleteProjectRoute, GET as getProjectRoute, PATCH as updateProjectRoute } from '@/app/api/projects/[projectId]/route'
 import { GET as listProjectsRoute, POST as createProjectRoute } from '@/app/api/projects/route'
 import { prisma } from '@/lib/prisma'
@@ -344,64 +342,4 @@ describe('Project API real DB integration', () => {
     expect(viewerWriteResponse.status).toBe(403)
   })
 
-  it('project patents allow owner and editor creates, viewer read only, and editor can delete', async () => {
-    const fixture = await createAccessFixture()
-
-    const ownerCreateResponse = await createPatentRoute(
-      createJsonRequest(
-        `/api/projects/${fixture.project.id}/patents`,
-        tokenFor(fixture.owner, fixture.tenant.atiId),
-        'POST',
-        { title: 'Owner Patent' }
-      ),
-      { params: { projectId: fixture.project.id } }
-    )
-    expect(ownerCreateResponse.status).toBe(201)
-    const ownerPatent = (await ownerCreateResponse.json()).patent
-
-    const editorCreateResponse = await createPatentRoute(
-      createJsonRequest(
-        `/api/projects/${fixture.project.id}/patents`,
-        tokenFor(fixture.editor, fixture.tenant.atiId),
-        'POST',
-        { title: 'Editor Patent' }
-      ),
-      { params: { projectId: fixture.project.id } }
-    )
-    expect(editorCreateResponse.status).toBe(201)
-    const editorPatent = (await editorCreateResponse.json()).patent
-
-    const viewerCreateResponse = await createPatentRoute(
-      createJsonRequest(
-        `/api/projects/${fixture.project.id}/patents`,
-        tokenFor(fixture.viewer, fixture.tenant.atiId),
-        'POST',
-        { title: 'Viewer Patent' }
-      ),
-      { params: { projectId: fixture.project.id } }
-    )
-    expect(viewerCreateResponse.status).toBe(403)
-
-    const viewerListResponse = await listPatentsRoute(
-      createRequest(`/api/projects/${fixture.project.id}/patents`, tokenFor(fixture.viewer, fixture.tenant.atiId)),
-      { params: { projectId: fixture.project.id } }
-    )
-    const viewerListBody = await viewerListResponse.json()
-    expect(viewerListResponse.status).toBe(200)
-    expect(viewerListBody.patents).toHaveLength(2)
-
-    const deleteByEditorResponse = await deletePatentRoute(
-      createRequest(
-        `/api/projects/${fixture.project.id}/patents/${ownerPatent.id}`,
-        tokenFor(fixture.editor, fixture.tenant.atiId),
-        'DELETE'
-      ),
-      { params: { projectId: fixture.project.id, patentId: ownerPatent.id } }
-    )
-    expect(deleteByEditorResponse.status).toBe(200)
-    expect(await prisma.patent.findUnique({ where: { id: ownerPatent.id } })).toBeNull()
-
-    const remainingPatent = await prisma.patent.findUnique({ where: { id: editorPatent.id } })
-    expect(remainingPatent).not.toBeNull()
-  })
 })

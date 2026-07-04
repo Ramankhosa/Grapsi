@@ -151,7 +151,47 @@ export default function PublicProjectCrawlerPage() {
     }
   }
 
+  async function drainUntilDone(runId: string) {
+    setIsBusy(true)
+    setMessage('Run started — processing...')
+    let keepDraining = true
+    while (keepDraining) {
+      try {
+        const response = await authFetch('/api/super-admin/project-intelligence/crawlers/worker/drain', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ runId }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          setError(data.message || data.error || 'Drain request failed')
+          keepDraining = false
+          break
+        }
+
+        const processed = data.processed
+        if (!processed || ['completed', 'completed_with_errors', 'failed', 'canceled'].includes(processed.status)) {
+          keepDraining = false
+        }
+
+        await refresh()
+
+        if (keepDraining) {
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+      } catch (drainError) {
+        setError(drainError instanceof Error ? drainError.message : 'Drain loop failed')
+        keepDraining = false
+      }
+    }
+    setMessage('Run processing complete.')
+    await refresh()
+    setIsBusy(false)
+  }
+
   async function startPilot() {
+    let result: any = null
+
     if (selectedSource === 'CSIR' || selectedSource === 'BIRAC' || selectedSource === 'ICMR' || selectedSource === 'ICSSR' || selectedSource === 'CSV_IMPORT') {
       const maxRecords =
         selectedSource === 'CSIR' ? csirPilotLimit :
@@ -159,41 +199,48 @@ export default function PublicProjectCrawlerPage() {
         selectedSource === 'ICMR' ? icmrPilotLimit :
         selectedSource === 'ICSSR' ? icssrPilotLimit :
         csvImportLimit
-      await postJson('/api/super-admin/project-intelligence/crawlers/runs', {
+      result = await postJson('/api/super-admin/project-intelligence/crawlers/runs', {
         sourceKey: selectedSource,
         mode: 'pilot',
         filters: {
           maxRecords,
         },
       })
-      return
+    } else {
+      const parsedStates = states
+        .split(',')
+        .map((state) => state.trim().toUpperCase())
+        .filter(Boolean)
+
+      result = await postJson('/api/super-admin/project-intelligence/crawlers/runs', {
+        sourceKey: 'PRISM',
+        mode: 'pilot',
+        filters: {
+          states: parsedStates.length ? parsedStates : ['PUNJAB', 'DELHI'],
+          maxRecords: 20,
+          onlinePerState: 5,
+          legacyPerState: 5,
+        },
+      })
     }
 
-    const parsedStates = states
-      .split(',')
-      .map((state) => state.trim().toUpperCase())
-      .filter(Boolean)
-
-    await postJson('/api/super-admin/project-intelligence/crawlers/runs', {
-      sourceKey: 'PRISM',
-      mode: 'pilot',
-      filters: {
-        states: parsedStates.length ? parsedStates : ['PUNJAB', 'DELHI'],
-        maxRecords: 20,
-        onlinePerState: 5,
-        legacyPerState: 5,
-      },
-    })
+    if (result?.run?.id) {
+      await drainUntilDone(result.run.id)
+    }
   }
 
   async function startFull() {
     const typed = window.prompt(`Type PRODUCTION FULL ${selectedSource} to queue the full ${selectedSource} run.`)
     if (typed !== `PRODUCTION FULL ${selectedSource}`) return
-    await postJson('/api/super-admin/project-intelligence/crawlers/runs', {
+    const result = await postJson('/api/super-admin/project-intelligence/crawlers/runs', {
       sourceKey: selectedSource,
       mode: 'full',
       confirmFullProduction: true,
     })
+
+    if (result?.run?.id) {
+      await drainUntilDone(result.run.id)
+    }
   }
 
   async function drain(runId?: string) {
@@ -1038,8 +1085,8 @@ export default function PublicProjectCrawlerPage() {
                           </button>
                         )}
                         {canWrite && ['queued', 'running'].includes(run.status) && (
-                          <button onClick={() => drain(run.id)} className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700">
-                            <Play className="h-3.5 w-3.5" />
+                          <button onClick={() => drainUntilDone(run.id)} disabled={isBusy} className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 disabled:opacity-50">
+                            {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                             Run
                           </button>
                         )}

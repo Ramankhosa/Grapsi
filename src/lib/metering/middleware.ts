@@ -13,10 +13,8 @@ interface RouteMeteringConfig {
 }
 
 const ROUTE_CONFIGS: Record<string, RouteMeteringConfig> = {
-  '/api/patents': { featureCode: 'PATENT_DRAFTING', taskCode: 'LLM2_DRAFT' },
   '/api/search': { featureCode: 'PRIOR_ART_SEARCH' },
   '/api/diagrams': { featureCode: 'DIAGRAM_GENERATION', taskCode: 'LLM3_DIAGRAM' },
-  '/api/patents/': { featureCode: 'PRIOR_ART_SEARCH', taskCode: 'LLM4_NOVELTY_SCREEN' }, // Novelty assessment
   // Add more routes as needed
 }
 

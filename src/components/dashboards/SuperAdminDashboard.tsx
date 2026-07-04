@@ -126,25 +126,7 @@ export default function SuperAdminDashboard() {
   }
 
   const fetchPaperAnalytics = async () => {
-    if (!isFeatureEnabled('ENABLE_PAPER_WRITING_UI')) return
-
-    try {
-      setIsLoadingPapers(true)
-      const response = await fetch('/api/super-admin/analytics/papers', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        setPaperAnalytics(data)
-      }
-    } catch (error) {
-      console.error('Failed to fetch paper analytics:', error)
-    } finally {
-      setIsLoadingPapers(false)
-    }
+    setIsLoadingPapers(false)
   }
 
   const handleCreateTenant = async (e: React.FormEvent) => {

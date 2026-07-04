@@ -112,39 +112,7 @@ export default function TenantAdminDashboard() {
   }
 
   const fetchPaperAnalytics = async () => {
-    if (!isFeatureEnabled('ENABLE_PAPER_WRITING_UI')) return
-
-    try {
-      setIsLoadingPapers(true)
-
-      // Fetch paper analytics
-      const analyticsResponse = await fetch('/api/admin/analytics/papers', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      })
-
-      if (analyticsResponse.ok) {
-        const analyticsData = await analyticsResponse.json()
-        setPaperAnalytics(analyticsData)
-      }
-
-      // Fetch users with paper metrics
-      const usersResponse = await fetch('/api/admin/analytics/users-papers', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      })
-
-      if (usersResponse.ok) {
-        const usersData = await usersResponse.json()
-        setPaperUsers(usersData.users || [])
-      }
-    } catch (error) {
-      console.error('Failed to fetch paper analytics:', error)
-    } finally {
-      setIsLoadingPapers(false)
-    }
+    setIsLoadingPapers(false)
   }
 
   const handleCreateToken = async (e: React.FormEvent) => {
