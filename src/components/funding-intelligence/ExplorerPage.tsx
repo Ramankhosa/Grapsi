@@ -43,6 +43,10 @@ function scorePercent(item: ProjectSearchItem) {
   return Math.round(Math.max(0, Math.min(1, item.relevanceScore)) * 100)
 }
 
+function displayFundingSource(item: Pick<ProjectSearchItem, 'fundingAgency' | 'sourceKey'>) {
+  return item.fundingAgency || item.sourceKey
+}
+
 function parseList(value: string | null) {
   return value ? value.split(',').map((item) => item.trim()).filter(Boolean) : []
 }
@@ -176,10 +180,11 @@ function ResultSkeleton() {
 function ResultCard({ item }: { item: ProjectSearchItem }) {
   const score = scorePercent(item)
   const summary = item.abstractText && item.abstractText.toUpperCase() !== 'NA' ? item.abstractText : item.executiveSummary
+  const fundingSource = displayFundingSource(item)
   return (
     <article className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg hover:shadow-teal-950/5 sm:p-6">
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-wide ${SOURCE_STYLES[item.sourceKey] || 'border-slate-200 bg-slate-50 text-slate-700'}`}>{item.sourceKey}</span>
+        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-wide ${SOURCE_STYLES[item.sourceKey] || 'border-slate-200 bg-slate-50 text-slate-700'}`}>{fundingSource}</span>
         {item.sanctionYear ? <span className="text-xs font-medium text-slate-500">Funded in {item.sanctionYear}</span> : null}
         {item.schemeName ? <span className="max-w-[240px] truncate rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">{item.schemeName}</span> : null}
         {score !== null ? (

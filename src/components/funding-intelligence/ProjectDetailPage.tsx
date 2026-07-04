@@ -24,6 +24,7 @@ type Participant = {
 type ProjectDetail = {
   id: string
   sourceKey: string
+  fundingAgency: string | null
   externalId: string
   fileNumber: string | null
   projectNumber: string | null
@@ -78,10 +79,15 @@ function EvidenceSection({ title, children }: { title: string; children: React.R
   return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><h2 className="text-lg font-semibold text-slate-900">{title}</h2><div className="mt-4 whitespace-pre-line text-sm leading-7 text-slate-600 sm:text-[15px]">{children}</div></section>
 }
 
+function displayFundingSource(item: Pick<ProjectSearchItem, 'fundingAgency' | 'sourceKey'>) {
+  return item.fundingAgency || item.sourceKey
+}
+
 function SimilarCard({ item }: { item: ProjectSearchItem }) {
+  const fundingSource = displayFundingSource(item)
   return (
     <Link href={`/funding/intelligence/projects/${item.id}`} className="block min-w-[280px] max-w-[330px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-md">
-      <div className="flex items-center justify-between gap-3"><span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold text-teal-700">{item.sourceKey}</span>{item.relevanceScore ? <span className="text-xs font-semibold text-teal-700">{Math.round(item.relevanceScore * 100)}% similar</span> : null}</div>
+      <div className="flex items-center justify-between gap-3"><span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold text-teal-700">{fundingSource}</span>{item.relevanceScore ? <span className="text-xs font-semibold text-teal-700">{Math.round(item.relevanceScore * 100)}% similar</span> : null}</div>
       <h3 className="mt-3 line-clamp-3 font-semibold leading-6 text-slate-900">{item.title}</h3>
       <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{item.primaryInstitutionName || item.schemeName || 'Institution not reported'}</p>
     </Link>
@@ -123,6 +129,7 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
 
   const sourceLink = project?.detailUrl || project?.sourceUrl || project?.source?.baseUrl || null
   const abstract = useMemo(() => project?.abstractText && project.abstractText.toUpperCase() !== 'NA' ? project.abstractText : project?.executiveSummary, [project])
+  const fundingSource = project?.fundingAgency || project?.sourceKey || ''
 
   if (authLoading || loading) return <div className="flex min-h-[70vh] items-center justify-center bg-[#f6f8f7]"><Loader2 className="h-7 w-7 animate-spin text-teal-700" /></div>
   if (!token) return <div className="p-8 text-sm text-slate-600">Sign in to view funding evidence.</div>
@@ -136,7 +143,7 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
 
       <section className="border-b border-teal-950/10 bg-[#0b3437] text-white">
         <div className="mx-auto max-w-7xl px-4 py-9 sm:px-6 sm:py-12 lg:px-8">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-teal-100/70"><span className="rounded-full border border-teal-100/20 bg-white/10 px-2.5 py-1 text-teal-50">{project.sourceKey}</span>{project.schemeName ? <span>{project.schemeName}</span> : null}</div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-teal-100/70"><span className="rounded-full border border-teal-100/20 bg-white/10 px-2.5 py-1 text-teal-50">{fundingSource}</span>{project.schemeName ? <span>{project.schemeName}</span> : null}</div>
           <h1 className="mt-4 max-w-4xl text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">{project.title}</h1>
           <div className="mt-6 flex flex-wrap gap-x-6 gap-y-3 text-sm text-teal-50/75">
             {project.primaryInvestigatorName ? <span className="flex items-center gap-2"><Landmark className="h-4 w-4" />{project.primaryInvestigatorName}</span> : null}

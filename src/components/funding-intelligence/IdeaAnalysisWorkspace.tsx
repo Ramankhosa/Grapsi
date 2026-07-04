@@ -237,12 +237,17 @@ function ProgressPanel({ run }: { run: AnalysisRun }) {
   )
 }
 
+function displayFundingSource(project: Pick<ProjectSearchItem, 'fundingAgency' | 'sourceKey'>) {
+  return project.fundingAgency || project.sourceKey
+}
+
 function EvidenceRow({ project, assessment }: { project: ProjectSearchItem; assessment?: ProjectAssessment }) {
   const [open, setOpen] = useState(false)
+  const fundingSource = displayFundingSource(project)
   return (
     <article className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <button type="button" onClick={() => setOpen((value) => !value)} className="flex w-full items-start gap-4 p-5 text-left">
-        <span className="mt-0.5 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold text-teal-700">{project.sourceKey}</span>
+        <span className="mt-0.5 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold text-teal-700">{fundingSource}</span>
         <div className="min-w-0 flex-1"><h3 className="font-semibold leading-6 text-slate-900">{project.title}</h3><p className="mt-1 text-xs text-slate-500">{[project.primaryInstitutionName, project.sanctionYear, project.schemeName].filter(Boolean).join(' · ')}</p></div>
         <ChevronDown className={`mt-1 h-4 w-4 shrink-0 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
       </button>

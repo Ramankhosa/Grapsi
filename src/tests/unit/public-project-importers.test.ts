@@ -84,4 +84,25 @@ describe('public project file importers', () => {
       budgetAmount: '6065122',
     })
   })
+
+  it('reads agency names from the first CSV column when the header is agency-oriented', () => {
+    const csv = Buffer.from(
+      [
+        'Agency Name,Project ID,Scheme,Financial Year,Title,PI Name,Organization,State,Budget',
+        'DBT,DBT-001,BioCARe,2024-25,Microbiome intervention study,Dr Asha Rao,Institute of Life Sciences,Odisha,1200000',
+      ].join('\n')
+    )
+    const rows = __csvImportTestables.parseCsvFile(csv, {
+      fileId: 'dbt-file',
+      fileName: 'dbt.csv',
+      filePath: '/tmp/dbt.csv',
+    } as any)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      fundingAgency: 'DBT',
+      projectRecordId: 'DBT-001',
+      title: 'Microbiome intervention study',
+    })
+  })
 })

@@ -217,11 +217,22 @@ function parseCsvFile(buffer: Buffer, file: CsvFile): CsvParsedRow[] {
 
     for (const record of records) {
       // Extract values using detected mapping
-      const fundingAgency = cleanText(record[mapping.fundingAgency || ''] || record['Funding_agency'] || record['Funding Agency'] || record['Agency'] || 'Unknown')
+      const firstColumn = columns[0]
+      const fundingAgency = cleanText(
+        record[mapping.fundingAgency || ''] ||
+        record['Funding_agency'] ||
+        record['Funding Agency'] ||
+        record['Funding Agency Name'] ||
+        record['Agency'] ||
+        record['Agency Name'] ||
+        record['agency_name'] ||
+        (firstColumn && /agency|funder|source/i.test(firstColumn) ? record[firstColumn] : null) ||
+        'Unknown'
+      )
       const projectRecordId = cleanText(record[mapping.projectRecordId || ''] || record['dst_project_record_id'] || record['Project ID'] || record['ID'] || record['Record ID'])
       const scheme = cleanText(record[mapping.scheme || ''] || record['scheme'] || record['Scheme'] || 'General Scheme')
       const financialYear = cleanText(record[mapping.financialYear || ''] || record['financial_year'] || record['Financial Year'] || record['Year'] || 'Unknown')
-      const title = cleanText(record[mapping.title || ''] || record['title_for_entry'] || record['Title'] || record['Project Title'])
+      const title = cleanText(record[mapping.title || ''] || record['title_for_embedding'] || record['title_for_entry'] || record['Title'] || record['Project Title'])
       const piName = cleanText(record[mapping.piName || ''] || record['pi_name'] || record['PI Name'] || record['Principal Investigator'])
       const piOrganization = cleanText(record[mapping.piOrganization || ''] || record['pi_organization'] || record['PI Organization'] || record['Organization'] || record['Institution'])
       const piEmail = cleanText(record[mapping.piEmail || ''] || record['pi_emails'] || record['PI Email'] || record['Email'])

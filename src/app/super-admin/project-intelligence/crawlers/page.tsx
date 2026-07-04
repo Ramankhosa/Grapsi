@@ -49,6 +49,15 @@ function formatDate(value: string | null | undefined) {
   return new Date(value).toLocaleString()
 }
 
+function projectFundingAgency(project: any) {
+  const value =
+    project?.extendedFields?.fundingAgency ||
+    project?.schemeHierarchy?.fundingAgency ||
+    project?.extendedFields?.agencyName ||
+    project?.schemeHierarchy?.agencyName
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 export default function PublicProjectCrawlerPage() {
   const { user, isLoading, authFetch } = useAuth()
   const router = useRouter()
@@ -1064,7 +1073,7 @@ export default function PublicProjectCrawlerPage() {
                   {project.primaryInvestigatorName || 'PI unavailable'} · {project.primaryInstitutionName || 'Institution unavailable'} · {project.state || 'State unavailable'} · {project.sanctionYear || 'Year unavailable'}
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
-                  {project.sourceVariant} · {project.recordStatus} · embedding {project.embeddingStatus}
+                  {[projectFundingAgency(project), project.sourceVariant, project.recordStatus, `embedding ${project.embeddingStatus}`].filter(Boolean).join(' · ')}
                 </div>
               </div>
             ))}

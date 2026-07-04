@@ -612,7 +612,10 @@ export class PublicProjectCorpusService {
         FROM public_project_crawl_runs
         WHERE status = 'queued'
            OR (status = 'running' AND (heartbeat_at IS NULL OR heartbeat_at < ${staleBefore}))
-        ORDER BY created_at ASC
+        ORDER BY
+          CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
+          updated_at ASC,
+          created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
       `)

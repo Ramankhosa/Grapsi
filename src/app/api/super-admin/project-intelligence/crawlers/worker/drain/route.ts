@@ -5,6 +5,15 @@ import { publicProjectCorpusService } from '@/lib/publicProjects/service'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
+
+function readDrainBatchSize(value: unknown) {
+  const parsed = Number(value ?? process.env.PUBLIC_PROJECT_CRAWLER_HTTP_BATCH_SIZE ?? 100)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 100
+  }
+  return Math.min(Math.floor(parsed), 250)
+}
 
 export async function POST(request: NextRequest) {
   const auth = await requirePublicProjectWriteRequest(request)
@@ -17,9 +26,9 @@ export async function POST(request: NextRequest) {
     const processed = await publicProjectCorpusService.processNextRun({
       workerId: `api-drain:${auth.actor.id}`,
       runId: body.runId || undefined,
-      // Keep request-triggered drains below typical production request timeouts.
-      // The standalone worker uses larger resumable batches by default.
-      maxItems: body.maxItems ? Number(body.maxItems) : 10,
+      // Keep request-triggered drains bounded, but avoid the old 10-item cap
+      // that made file import runs appear to stop immediately.
+      maxItems: readDrainBatchSize(body.maxItems),
     })
     return NextResponse.json({ processed })
   } catch (error) {

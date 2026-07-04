@@ -7,6 +7,7 @@ import type { PublicProjectSearchItem } from '@/lib/publicProjects/searchService
 function project(overrides: Partial<PublicProjectSearchItem> = {}): PublicProjectSearchItem {
   return {
     id: 'project-1', sourceKey: 'PRISM', sourceName: 'PRISM', sourceUrl: null, detailUrl: null,
+    fundingAgency: null,
     title: 'A funded project', abstractText: 'Detailed evidence', executiveSummary: null,
     primaryInvestigatorName: null, primaryInstitutionName: null, schemeName: null, programName: null,
     sanctionYear: 2024, state: null, budgetAmount: null, budgetCurrency: 'INR', discipline: null,

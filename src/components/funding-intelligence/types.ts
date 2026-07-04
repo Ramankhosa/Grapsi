@@ -13,6 +13,7 @@ export type ProjectSearchItem = {
   id: string
   sourceKey: string
   sourceName: string
+  fundingAgency: string | null
   sourceUrl: string | null
   detailUrl: string | null
   title: string

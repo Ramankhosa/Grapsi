@@ -46,6 +46,7 @@ export type PublicProjectSearchItem = {
   id: string
   sourceKey: string
   sourceName: string
+  fundingAgency: string | null
   sourceUrl: string | null
   detailUrl: string | null
   title: string
@@ -102,6 +103,53 @@ function normalizeText(value: unknown, maxLength = 1200) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength)
 }
 
+function cleanDisplayText(value: unknown, maxLength = 160) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  return text ? text.slice(0, maxLength) : null
+}
+
+function asJsonRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function fundingAgencyExpression() {
+  return Prisma.sql`COALESCE(
+    NULLIF(p.extended_fields_json->>'fundingAgency', ''),
+    NULLIF(p.scheme_hierarchy_json->>'fundingAgency', ''),
+    CASE
+      WHEN p.source_key::text = 'CSV_IMPORT'
+      THEN NULLIF(regexp_replace(COALESCE(p.program_name, ''), '\\s+Funding$', '', 'i'), '')
+      ELSE NULL
+    END
+  )`
+}
+
+function extractFundingAgency(project: {
+  sourceKey?: string | null
+  programName?: string | null
+  schemeHierarchy?: unknown
+  extendedFields?: unknown
+}) {
+  const extendedFields = asJsonRecord(project.extendedFields)
+  const schemeHierarchy = asJsonRecord(project.schemeHierarchy)
+  const explicitAgency =
+    cleanDisplayText(extendedFields.fundingAgency) ||
+    cleanDisplayText(schemeHierarchy.fundingAgency) ||
+    cleanDisplayText(extendedFields.agencyName) ||
+    cleanDisplayText(schemeHierarchy.agencyName)
+
+  if (explicitAgency) {
+    return explicitAgency
+  }
+
+  const programName = cleanDisplayText(project.programName)
+  if (project.sourceKey === 'CSV_IMPORT' && programName) {
+    return cleanDisplayText(programName.replace(/\s+Funding$/i, '')) || programName
+  }
+
+  return null
+}
+
 function clampLimit(value: number | undefined) {
   return Math.min(Math.max(Number(value) || 20, 1), 50)
 }
@@ -152,7 +200,11 @@ function buildFilterConditions(filters: PublicProjectSearchFilters = {}) {
   const conditions: Prisma.Sql[] = [Prisma.sql`p.record_status = 'ACTIVE'::"PublicProjectRecordStatus"`]
 
   if (filters.sourceKeys?.length) {
-    conditions.push(Prisma.sql`p.source_key::text = ANY(${textArray(filters.sourceKeys)})`)
+    const sourceValues = filters.sourceKeys.map((value) => value.toLowerCase())
+    conditions.push(Prisma.sql`(
+      LOWER(p.source_key::text) = ANY(${textArray(sourceValues)})
+      OR LOWER(COALESCE(${fundingAgencyExpression()}, '')) = ANY(${textArray(sourceValues)})
+    )`)
   }
   if (Number.isFinite(filters.yearFrom)) {
     conditions.push(Prisma.sql`p.sanction_year >= ${Math.floor(filters.yearFrom!)}`)
@@ -187,6 +239,7 @@ function selectColumns() {
     p.id,
     p.source_key::text AS "sourceKey",
     s.name AS "sourceName",
+    ${fundingAgencyExpression()} AS "fundingAgency",
     p.source_url AS "sourceUrl",
     p.detail_url AS "detailUrl",
     p.title,
@@ -222,6 +275,7 @@ function getEmbeddingIdentity() {
 function normalizeCandidate(row: CandidateRow): CandidateRow {
   return {
     ...row,
+    fundingAgency: cleanDisplayText(row.fundingAgency),
     keywords: Array.isArray(row.keywords) ? row.keywords : [],
     budgetAmount: row.budgetAmount === null ? null : Number(row.budgetAmount),
     semanticSimilarity: Math.max(0, Math.min(1, Number(row.semanticSimilarity) || 0)),
@@ -258,8 +312,11 @@ export function isPublicProjectCandidateDisplayable(
 }
 
 function serializeProject(project: any) {
+  const fundingAgency = extractFundingAgency(project)
+  const { extendedFields, ...safeProject } = project
   return {
-    ...project,
+    ...safeProject,
+    fundingAgency,
     budgetAmount: project.budgetAmount === null || project.budgetAmount === undefined
       ? null
       : Number(project.budgetAmount),
@@ -401,7 +458,7 @@ export class PublicProjectSearchService {
       WITH filtered AS (
         SELECT p.* FROM public_projects p WHERE ${where}
       )
-      SELECT 'source' AS dimension, source_key::text AS value, count(*)::int AS count FROM filtered GROUP BY source_key
+      SELECT 'source' AS dimension, COALESCE(${fundingAgencyExpression()}, source_key::text) AS value, count(*)::int AS count FROM filtered p GROUP BY 2
       UNION ALL SELECT 'year', sanction_year::text, count(*)::int FROM filtered WHERE sanction_year IS NOT NULL GROUP BY sanction_year
       UNION ALL SELECT 'state', state, count(*)::int FROM filtered WHERE state IS NOT NULL AND btrim(state) <> '' GROUP BY state
       UNION ALL SELECT 'scheme', scheme_name, count(*)::int FROM filtered WHERE scheme_name IS NOT NULL AND btrim(scheme_name) <> '' GROUP BY scheme_name
@@ -534,6 +591,8 @@ export class PublicProjectSearchService {
         detailUrl: true,
         statusText: true,
         programName: true,
+        schemeHierarchy: true,
+        extendedFields: true,
         schemeName: true,
         category: true,
         theme: true,
