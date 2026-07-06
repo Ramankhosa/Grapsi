@@ -49,7 +49,10 @@ export async function POST(request: NextRequest) {
       {
         sourceKey: sourceKey as PublicProjectSourceKey,
         mode: mode as PublicProjectCrawlMode,
-        filters: body.filters || {},
+        filters: {
+          ...(body.filters || {}),
+          ...(body.rawOnly === true || body.rawDataOnly === true ? { rawOnly: true } : {}),
+        },
         confirmFullProduction: Boolean(body.confirmFullProduction),
       },
       auth.actor.id

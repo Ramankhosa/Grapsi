@@ -10,6 +10,7 @@ import type {
   PublicProjectConnector,
   PublicProjectDiscoveredRecord,
   PublicProjectDiscoveryOptions,
+  PublicProjectRawRecord,
 } from '@/lib/publicProjects/types'
 
 const ICSSR_BASE_URL = 'https://www.icssr.org'
@@ -742,6 +743,36 @@ export class IcssrPublicProjectConnector implements PublicProjectConnector {
       },
       participants,
       contacts: [],
+    }
+  }
+
+  async fetchRaw(record: PublicProjectDiscoveredRecord): Promise<PublicProjectRawRecord> {
+    const row = record.listingPayload as IcssrParsedRow & {
+      projectType: string
+      yearWindow: string
+      pdfPages?: number | null
+      pdfTextHash?: string | null
+      filePath?: string | null
+    }
+
+    return {
+      sourceKey: 'ICSSR',
+      externalId: record.externalId,
+      sourceVariant: record.sourceVariant,
+      sourceRecordKey: record.sourceRecordKey,
+      sourceUrl: ICSSR_BASE_URL,
+      detailUrl: null,
+      fetchedAt: new Date().toISOString(),
+      listingPayload: row,
+      detailPayload: {
+        fileName: row.fileName,
+        filePath: row.filePath || null,
+        pdfPages: row.pdfPages || null,
+        pdfTextHash: row.pdfTextHash || null,
+      },
+      rawPayload: {
+        row,
+      },
     }
   }
 }

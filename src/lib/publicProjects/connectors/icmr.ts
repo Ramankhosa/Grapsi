@@ -9,6 +9,7 @@ import type {
   PublicProjectConnector,
   PublicProjectDiscoveredRecord,
   PublicProjectDiscoveryOptions,
+  PublicProjectRawRecord,
 } from '@/lib/publicProjects/types'
 import { PublicProjectSourceBlockedError } from '@/lib/publicProjects/types'
 
@@ -498,6 +499,31 @@ export class IcmrPublicProjectConnector implements PublicProjectConnector {
           sourcePayload: { source: 'principalInvestigatorBlock' },
         })),
       ],
+    }
+  }
+
+  async fetchRaw(record: PublicProjectDiscoveredRecord): Promise<PublicProjectRawRecord> {
+    const row = record.listingPayload as IcmrParsedRow & { pdfPages?: number | null; pdfTextHash?: string | null }
+
+    return {
+      sourceKey: 'ICMR',
+      externalId: record.externalId,
+      sourceVariant: record.sourceVariant,
+      sourceRecordKey: record.sourceRecordKey,
+      sourceUrl: APPROVED_PROJECTS_URL,
+      detailUrl: row.pdfUrl,
+      fetchedAt: new Date().toISOString(),
+      listingPayload: row,
+      detailPayload: {
+        pdfUrl: row.pdfUrl,
+        pdfId: row.pdfId,
+        pdfLabel: row.pdfLabel,
+        pdfPages: row.pdfPages || null,
+        pdfTextHash: row.pdfTextHash || null,
+      },
+      rawPayload: {
+        row,
+      },
     }
   }
 

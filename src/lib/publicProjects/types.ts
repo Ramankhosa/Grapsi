@@ -86,13 +86,48 @@ export interface PublicProjectDiscoveredRecord {
   listingPayload: JsonRecord
 }
 
+export interface PublicProjectRawRecord {
+  sourceKey: PublicProjectSourceKey
+  externalId: string
+  sourceVariant: string
+  sourceRecordKey: string
+  sourceUrl?: string | null
+  detailUrl?: string | null
+  fetchedAt: string
+  listingPayload: JsonRecord
+  detailPayload?: JsonRecord | null
+  rawPayload: JsonRecord
+  sourceName?: string | null
+  sourceCountry?: string | null
+  sourceAgency?: string | null
+  sourceProjectId?: string | null
+  projectTitle?: string | null
+  projectAbstract?: string | null
+  projectObjectives?: string | null
+  principalInvestigator?: string | null
+  leadInstitution?: string | null
+  fundingProgram?: string | null
+  fundingScheme?: string | null
+  startDate?: string | null
+  endDate?: string | null
+  fiscalYear?: number | null
+  contentHash?: string | null
+}
+
 export interface PublicProjectDiscoveryOptions {
   mode: PublicProjectCrawlMode
   states?: string[]
   maxRecords?: number
+  startYear?: number
+  endYear?: number
+  fiscalYears?: number[]
+  agencies?: string[]
+  pageSize?: number
   onlinePerState?: number
   legacyPerState?: number
   skipExisting?: boolean
+  includeAuxiliarySections?: boolean
+  includeActiveProjects?: boolean
 }
 
 export interface PublicProjectConnector {
@@ -100,6 +135,7 @@ export interface PublicProjectConnector {
   baseUrl: string
   listStates(): Promise<string[]>
   discover(options: PublicProjectDiscoveryOptions): AsyncGenerator<PublicProjectDiscoveredRecord>
+  fetchRaw?(record: PublicProjectDiscoveredRecord): Promise<PublicProjectRawRecord>
   fetchAndNormalize(record: PublicProjectDiscoveredRecord): Promise<NormalizedPublicProject>
 }
 

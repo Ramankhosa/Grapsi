@@ -23,7 +23,7 @@ import type {
   RecommendationPublicationSnapshot,
   RecommendationSearchFilters,
 } from '../recommendations/types';
-import { EmbeddingService } from './embeddingService';
+import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
 import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
 
 const embeddingService = new EmbeddingService();
@@ -672,6 +672,10 @@ export class ResearcherProfileService {
       return true;
     }
 
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return false;
+    }
+
     const { embedding, error } = await embeddingService.generateEmbedding(normalizedText, undefined, {
       taskType: RESEARCHER_PROFILE_EMBEDDING_TASK_TYPE,
       title: profile.display_name || 'Researcher profile',
@@ -827,7 +831,7 @@ export class ResearcherProfileService {
       existing.content_hash !== contentHash ||
       existing.embedding_version !== RESEARCH_AREA_EMBEDDING_VERSION;
 
-    if (shouldRegenerateEmbedding) {
+    if (shouldRegenerateEmbedding && await areStoredEmbeddingJobsEnabled()) {
       const { embedding } = await embeddingService.generateEmbedding(normalizedText, undefined, {
         taskType: RESEARCH_AREA_EMBEDDING_TASK_TYPE,
         title: input.label,
@@ -945,6 +949,15 @@ export class ResearcherProfileService {
   }
 
   async backfillResearchAreaEmbeddings(limit = 25): Promise<EmbeddingBackfillResult> {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return {
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        errors: [],
+      };
+    }
+
     const safeLimit = Math.max(1, Math.min(limit, 100));
     const candidates = await prisma.$queryRaw<SavedResearchAreaRow[]>(Prisma.sql`
       SELECT id, taxonomy_area_id, taxonomy_level1_code, taxonomy_level1_name, taxonomy_level2_code, taxonomy_level2_name,
@@ -1043,6 +1056,15 @@ export class ResearcherProfileService {
   }
 
   async backfillResearcherProfileEmbeddings(limit = 25): Promise<EmbeddingBackfillResult> {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return {
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        errors: [],
+      };
+    }
+
     const safeLimit = Math.max(1, Math.min(limit, 100));
     const candidates = await prisma.$queryRaw<ResearcherProfileEmbeddingRow[]>(Prisma.sql`
       SELECT

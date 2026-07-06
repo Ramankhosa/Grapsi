@@ -14,6 +14,14 @@ import {
   getTenantCostBreakdown,
   resetUsageCounters 
 } from '@/lib/service-usage-tracker'
+import {
+  setBooleanRuntimeSetting,
+  writeRuntimeSettingAudit,
+} from '@/lib/runtime-settings'
+import {
+  getStoredEmbeddingJobsControl,
+  STORED_EMBEDDING_JOBS_SETTING_KEY,
+} from '@/lib/services/embeddingService'
 import type { ServiceType } from '@prisma/client'
 
 // Verify super admin access
@@ -72,6 +80,9 @@ export async function GET(request: NextRequest) {
       
       case 'all_tenants':
         return await getAllTenantsUsage()
+
+      case 'embedding_control':
+        return NextResponse.json({ embeddingControl: await getEmbeddingControlData() })
       
       default:
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
@@ -126,6 +137,9 @@ export async function POST(request: NextRequest) {
       
       case 'update_model_cost':
         return await updateModelCost(body)
+
+      case 'set_embedding_control':
+        return await setEmbeddingControl(body, auth.user.id)
       
       default:
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
@@ -239,8 +253,22 @@ async function getDashboardData() {
       inputPricePerMTokens: mp.inputPricePerMTokens,
       outputPricePerMTokens: mp.outputPricePerMTokens,
       currency: mp.currency
-    }))
+    })),
+    embeddingControl: await getEmbeddingControlData()
   })
+}
+
+async function getEmbeddingControlData() {
+  const control = await getStoredEmbeddingJobsControl()
+  return {
+    key: STORED_EMBEDDING_JOBS_SETTING_KEY,
+    enabled: control.enabled,
+    source: control.source,
+    updatedAt: control.updatedAt,
+    updatedBy: control.updatedBy,
+    hardDisabled: control.hardDisabled,
+    generationHardDisabled: process.env.EMBEDDING_GENERATION_ENABLED === 'false',
+  }
 }
 
 // ============================================================================
@@ -594,6 +622,47 @@ async function resetTenantUsage(body: any, adminUserId?: string) {
   console.log(`[SuperAdmin] Usage reset: tenant=${tenant?.name || tenantId}, service=${serviceType || 'ALL'}, period=${period || 'ALL'}, count=${count}`)
   
   return NextResponse.json({ success: true, resetCount: count })
+}
+
+// ============================================================================
+// Runtime Embedding Control
+// ============================================================================
+
+async function setEmbeddingControl(body: any, adminUserId?: string) {
+  if (typeof body.enabled !== 'boolean') {
+    return NextResponse.json(
+      { error: 'enabled boolean required' },
+      { status: 400 }
+    )
+  }
+
+  const setting = await setBooleanRuntimeSetting({
+    key: STORED_EMBEDDING_JOBS_SETTING_KEY,
+    enabled: body.enabled,
+    description: 'Controls stored/background embedding jobs such as crawler, funding document, and profile indexing.',
+    updatedBy: adminUserId || null,
+  })
+
+  await writeRuntimeSettingAudit({
+    actorUserId: adminUserId || null,
+    key: STORED_EMBEDDING_JOBS_SETTING_KEY,
+    enabled: body.enabled,
+  })
+
+  return NextResponse.json({
+    success: true,
+    embeddingControl: {
+      key: STORED_EMBEDDING_JOBS_SETTING_KEY,
+      enabled: setting.enabled,
+      source: setting.source,
+      updatedAt: setting.updatedAt,
+      updatedBy: setting.updatedBy,
+      hardDisabled:
+        process.env.BACKGROUND_EMBEDDINGS_ENABLED === 'false' ||
+        process.env.EMBEDDING_INDEXING_ENABLED === 'false',
+      generationHardDisabled: process.env.EMBEDDING_GENERATION_ENABLED === 'false',
+    },
+  })
 }
 
 // ============================================================================

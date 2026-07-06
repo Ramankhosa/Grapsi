@@ -9,6 +9,7 @@ import type {
   PublicProjectDiscoveredRecord,
   PublicProjectDiscoveryOptions,
   PublicProjectParticipantInput,
+  PublicProjectRawRecord,
 } from '@/lib/publicProjects/types'
 import { PublicProjectSourceBlockedError } from '@/lib/publicProjects/types'
 
@@ -434,6 +435,31 @@ export class CsirPublicProjectConnector implements PublicProjectConnector {
       },
       participants,
       contacts: this.uniqueContacts(contacts),
+    }
+  }
+
+  async fetchRaw(record: PublicProjectDiscoveredRecord): Promise<PublicProjectRawRecord> {
+    const listing = record.listingPayload as CsirListingPayload
+    const detailHtml = await this.fetchDetailPage(listing.ipn)
+    const detailPayload = {
+      detailUrl: `${CSIR_BASE_URL}/control`,
+      html: detailHtml,
+    }
+
+    return {
+      sourceKey: 'CSIR',
+      externalId: record.externalId,
+      sourceVariant: record.sourceVariant,
+      sourceRecordKey: record.sourceRecordKey,
+      sourceUrl: `${CSIR_BASE_URL}${SEARCH_PATH}`,
+      detailUrl: detailPayload.detailUrl,
+      fetchedAt: new Date().toISOString(),
+      listingPayload: listing,
+      detailPayload,
+      rawPayload: {
+        listing,
+        detail: detailPayload,
+      },
     }
   }
 

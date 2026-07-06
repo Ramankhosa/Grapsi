@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "node scripts/run-local-command.js next dev -p 3010",
     "build": "node scripts/clean-next.js && node scripts/run-local-command.js next build",
+    "build:cached": "node scripts/run-local-command.js next build",
+    "build:low-impact": "node scripts/low-impact-build.js",
     "start": "node scripts/run-local-command.js next start -p 3010",
     "lint": "next lint",
     "seed:plans:prod": "node scripts/run-local-command.js node scripts/seed-production-plans.js",
@@ -32,9 +34,11 @@
     "verify:funding-grant-launch": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-grant-launch.ts",
     "worker:public-project-crawler": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-crawler-worker.ts",
     "worker:public-project-embeddings": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts",
+    "worker:public-project-embeddings:low-impact": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts --limit=5 --batch-cooldown-ms=10000 --poll-ms=30000",
     "quality:public-projects": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-quality-worker.ts",
     "crawl:public-projects:once": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-crawler-worker.ts --once",
-    "embed:public-projects:once": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts --once"
+    "embed:public-projects:once": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts --once",
+    "ingest:funded-projects:raw": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/ingest-funded-project-raw-sources.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

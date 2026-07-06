@@ -5,7 +5,7 @@ import { DRAFT_MINIMUM_FIELDS } from '../fundingIntake/constants';
 import type { FundingDraftValues, IntakeOperator } from '../fundingIntake/types';
 import { normalizeDraftInput } from '../fundingIntake/utils';
 import type { EmbeddingServiceHealth } from './embeddingService';
-import { EmbeddingService } from './embeddingService';
+import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
 
 type CatalogMetadata = Record<string, any>;
 
@@ -474,6 +474,15 @@ export class FundingCatalogService {
   }
 
   async backfillPublishedEmbeddings(limit = 25): Promise<FundingEmbeddingBackfillResult> {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return {
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        errors: [],
+      };
+    }
+
     const currentEmbeddingVersion = getFundingCallEmbeddingVersion();
     const candidates = await prisma.$queryRaw<Array<{ id: string }>>(
       PrismaNamespace.sql`
@@ -632,7 +641,13 @@ export class FundingCatalogService {
     );
 
     let embeddingResult: Awaited<ReturnType<typeof generateEmbedding>> | null = null;
-    if (current.catalog_status === 'PUBLISHED' && Boolean(current.is_active) && searchableFieldsChanged) {
+    const storedEmbeddingJobsEnabled = await areStoredEmbeddingJobsEnabled();
+    if (
+      storedEmbeddingJobsEnabled &&
+      current.catalog_status === 'PUBLISHED' &&
+      Boolean(current.is_active) &&
+      searchableFieldsChanged
+    ) {
       try {
         embeddingResult = await generateEmbedding(nextDraftValues);
       } catch (error) {
@@ -703,24 +718,26 @@ export class FundingCatalogService {
       };
     }
 
-    let embeddingResult: Awaited<ReturnType<typeof generateEmbedding>>;
-    try {
-      embeddingResult = await generateEmbedding(draftValues);
-    } catch (error) {
-      const metadata = buildCatalogMetadata(current.metadata, {
-        embedding_status: 'failed',
-        embedding_updated_at: new Date().toISOString(),
-        embedding_error: error instanceof Error ? error.message : String(error),
-      });
+    let embeddingResult: Awaited<ReturnType<typeof generateEmbedding>> | null = null;
+    if (await areStoredEmbeddingJobsEnabled()) {
+      try {
+        embeddingResult = await generateEmbedding(draftValues);
+      } catch (error) {
+        const metadata = buildCatalogMetadata(current.metadata, {
+          embedding_status: 'failed',
+          embedding_updated_at: new Date().toISOString(),
+          embedding_error: error instanceof Error ? error.message : String(error),
+        });
 
-      await prisma.fundingCall.update({
-        where: { id: fundingCallId },
-        data: {
-          metadata: metadata as any,
-        },
-      });
+        await prisma.fundingCall.update({
+          where: { id: fundingCallId },
+          data: {
+            metadata: metadata as any,
+          },
+        });
 
-      throw error;
+        throw error;
+      }
     }
 
     const now = new Date().toISOString();
@@ -730,13 +747,21 @@ export class FundingCatalogService {
       {
         published_by: operator.email,
         published_at: now,
-        embedding_status: 'generated',
-        embedding_version: embeddingResult.version,
-        embedding_model: embeddingResult.modelName,
-        embedding_dimensions: embeddingResult.outputDimensionality,
-        embedding_task_type: embeddingResult.taskType,
-        embedding_updated_at: now,
-        embedding_error: null,
+        ...(embeddingResult
+          ? {
+              embedding_status: 'generated',
+              embedding_version: embeddingResult.version,
+              embedding_model: embeddingResult.modelName,
+              embedding_dimensions: embeddingResult.outputDimensionality,
+              embedding_task_type: embeddingResult.taskType,
+              embedding_updated_at: now,
+              embedding_error: null,
+            }
+          : {
+              embedding_status: 'not_generated',
+              embedding_updated_at: now,
+              embedding_error: 'Stored embedding jobs are disabled',
+            }),
         last_catalog_update_by: operator.email,
         last_catalog_update_at: now,
       },
@@ -755,7 +780,9 @@ export class FundingCatalogService {
         data: updateData,
       });
 
-      await updateStoredEmbedding(tx, fundingCallId, embeddingResult.embedding);
+      if (embeddingResult) {
+        await updateStoredEmbedding(tx, fundingCallId, embeddingResult.embedding);
+      }
     });
 
     return {

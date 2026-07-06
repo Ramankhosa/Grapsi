@@ -55,6 +55,16 @@ interface ModelPrice {
   currency: string
 }
 
+interface EmbeddingControl {
+  key: string
+  enabled: boolean
+  source: 'database' | 'fallback'
+  updatedAt: string | null
+  updatedBy: string | null
+  hardDisabled: boolean
+  generationHardDisabled: boolean
+}
+
 interface DashboardData {
   summary: {
     totalTenants: number
@@ -67,6 +77,7 @@ interface DashboardData {
   plans: Plan[]
   tenants: TenantSummary[]
   modelPrices: ModelPrice[]
+  embeddingControl?: EmbeddingControl
 }
 
 // Service display names
@@ -107,6 +118,7 @@ export default function ServiceControlPage() {
   const [success, setSuccess] = useState<string | null>(null)
   const [data, setData] = useState<DashboardData | null>(null)
   const [allTenants, setAllTenants] = useState<TenantSummary[]>([])
+  const [savingEmbeddingControl, setSavingEmbeddingControl] = useState(false)
   
   // Edit states
   const [editingPlan, setEditingPlan] = useState<string | null>(null)
@@ -273,6 +285,41 @@ export default function ServiceControlPage() {
     }
   }
 
+  const handleSetEmbeddingControl = async (enabled: boolean) => {
+    try {
+      setSavingEmbeddingControl(true)
+      setError(null)
+
+      const response = await fetch('/api/super-admin/service-control', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify({
+          action: 'set_embedding_control',
+          enabled
+        })
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || 'Failed to update embedding control')
+      }
+
+      const result = await response.json()
+      setData(prev => prev ? {
+        ...prev,
+        embeddingControl: result.embeddingControl
+      } : prev)
+      setSuccess(enabled ? 'Stored embedding jobs started' : 'Stored embedding jobs stopped')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update embedding control')
+    } finally {
+      setSavingEmbeddingControl(false)
+    }
+  }
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -370,6 +417,57 @@ export default function ServiceControlPage() {
             {/* Overview Tab */}
             {activeTab === 'overview' && data && (
               <div className="space-y-6">
+                {data.embeddingControl && (
+                  <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <div className="flex items-center gap-3">
+                          <h2 className="text-lg font-semibold text-cyan-400">Stored Embedding Jobs</h2>
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            data.embeddingControl.enabled
+                              ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700'
+                              : 'bg-amber-900/50 text-amber-300 border border-amber-700'
+                          }`}>
+                            {data.embeddingControl.enabled ? 'Running' : 'Stopped'}
+                          </span>
+                        </div>
+                        <p className="text-sm text-slate-400 mt-2 max-w-3xl">
+                          Controls stored/background embedding creation for crawler projects, funding documents, funding calls, researcher profiles, research areas, and publication matching. Query-time search embeddings remain controlled separately by the global embedding setting.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
+                          <span>Source: {data.embeddingControl.source}</span>
+                          <span>
+                            Last changed: {data.embeddingControl.updatedAt ? new Date(data.embeddingControl.updatedAt).toLocaleString() : 'not set'}
+                          </span>
+                          {data.embeddingControl.generationHardDisabled && (
+                            <span className="text-red-300">All embedding generation is disabled by environment</span>
+                          )}
+                          {data.embeddingControl.hardDisabled && (
+                            <span className="text-red-300">Stored jobs are hard-disabled by environment</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => handleSetEmbeddingControl(false)}
+                          disabled={isViewer || savingEmbeddingControl || !data.embeddingControl.enabled}
+                          className="px-4 py-2 text-sm font-semibold rounded-md text-amber-100 bg-amber-700 hover:bg-amber-600 border border-amber-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {savingEmbeddingControl ? 'Saving...' : 'Stop'}
+                        </button>
+                        <button
+                          onClick={() => handleSetEmbeddingControl(true)}
+                          disabled={isViewer || savingEmbeddingControl || data.embeddingControl.enabled || data.embeddingControl.hardDisabled}
+                          className="px-4 py-2 text-sm font-semibold rounded-md text-white bg-emerald-600 hover:bg-emerald-500 border border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {savingEmbeddingControl ? 'Saving...' : 'Start'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Summary Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                   <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">

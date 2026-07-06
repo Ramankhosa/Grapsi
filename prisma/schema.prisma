@@ -220,6 +220,12 @@ enum PublicProjectSourceKey {
   CSIR
   ICMR
   ICSSR
+  NSF
+  NIH_REPORTER
+  UKRI_GTR
+  CORDIS
+  NWO
+  WORLD_BANK
   CSV_IMPORT
 }
 
@@ -235,6 +241,7 @@ enum PublicProjectEmbeddingStatus {
   generated
   stale
   failed
+  disabled
 }
 
 enum PublicProjectCrawlMode {
@@ -1062,6 +1069,40 @@ model PublicProjectSource {
   @@map("public_project_sources")
 }
 
+model FundedProjectRawSource {
+  id                    String    @id @default(cuid())
+  sourceName            String    @map("source_name")
+  sourceCountry         String?   @map("source_country")
+  sourceAgency          String?   @map("source_agency")
+  sourceProjectId       String    @map("source_project_id")
+  sourceUrl             String?   @map("source_url")
+  projectTitle          String?   @map("project_title") @db.Text
+  projectAbstract       String?   @map("project_abstract") @db.Text
+  projectObjectives     String?   @map("project_objectives") @db.Text
+  principalInvestigator String?   @map("principal_investigator") @db.Text
+  leadInstitution       String?   @map("lead_institution") @db.Text
+  fundingProgram        String?   @map("funding_program") @db.Text
+  fundingScheme         String?   @map("funding_scheme") @db.Text
+  startDate             DateTime? @map("start_date")
+  endDate               DateTime? @map("end_date")
+  fiscalYear            Int?      @map("fiscal_year")
+  rawPayload            Json      @map("raw_payload_json")
+  contentHash           String    @map("content_hash")
+  firstSeenAt           DateTime  @default(now()) @map("first_seen_at")
+  lastSeenAt            DateTime  @default(now()) @map("last_seen_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@unique([sourceName, sourceProjectId], map: "funded_project_raw_sources_source_project_key")
+  @@index([sourceName], map: "funded_project_raw_sources_source_name_idx")
+  @@index([sourceCountry], map: "funded_project_raw_sources_source_country_idx")
+  @@index([sourceAgency], map: "funded_project_raw_sources_source_agency_idx")
+  @@index([leadInstitution], map: "funded_project_raw_sources_lead_institution_idx")
+  @@index([fiscalYear], map: "funded_project_raw_sources_fiscal_year_idx")
+  @@index([startDate], map: "funded_project_raw_sources_start_date_idx")
+  @@map("funded_project_raw_sources")
+}
+
 model PublicProject {
   id                      String                       @id @default(cuid())
   sourceId                String                       @map("source_id")
@@ -1142,15 +1183,16 @@ model PublicProject {
   createdAt               DateTime                     @default(now()) @map("created_at")
   updatedAt               DateTime                     @updatedAt @map("updated_at")
 
-  source       PublicProjectSource           @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  participants PublicProjectParticipant[]
-  contacts     PublicProjectPrivateContact[]
-  crawlItems   PublicProjectCrawlItem[]
-  revisions    PublicProjectRevision[]
+  source        PublicProjectSource           @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  participants  PublicProjectParticipant[]
+  contacts      PublicProjectPrivateContact[]
+  crawlItems    PublicProjectCrawlItem[]
+  revisions     PublicProjectRevision[]
   researchAreas PublicProjectResearchArea[]
 
   @@unique([sourceId, sourceRecordKey])
   @@index([sourceKey, sourceVariant])
+  @@index([sourceKey, lastSeenAt])
   @@index([recordStatus])
   @@index([title])
   @@index([primaryInstitutionName])
@@ -1287,6 +1329,7 @@ model PublicProjectCrawlItem {
   project PublicProject?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   @@unique([runId, sourceRecordKey])
+  @@index([runId, status, attemptCount, createdAt])
   @@index([status])
   @@index([projectId])
   @@index([state])
@@ -1335,8 +1378,8 @@ model IdeaIntelligenceRun {
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
 
-  session IdeaIntelligenceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  version IdeaIntelligenceVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  session              IdeaIntelligenceSession?  @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  version              IdeaIntelligenceVersion?  @relation(fields: [versionId], references: [id], onDelete: SetNull)
   refinementCandidates IdeaRefinementCandidate[]
 
   @@index([userId, createdAt], map: "idea_intelligence_runs_user_created_idx")
@@ -1347,20 +1390,20 @@ model IdeaIntelligenceRun {
 }
 
 model IdeaIntelligenceSession {
-  id                    String    @id @default(cuid())
-  tenantId              String?   @map("tenant_id")
-  userId                String    @map("user_id")
-  projectId             String?   @map("project_id")
-  ideaBankIdeaId        String?   @map("idea_bank_idea_id")
-  anchorPublicProjectId String?   @map("anchor_public_project_id")
+  id                    String   @id @default(cuid())
+  tenantId              String?  @map("tenant_id")
+  userId                String   @map("user_id")
+  projectId             String?  @map("project_id")
+  ideaBankIdeaId        String?  @map("idea_bank_idea_id")
+  anchorPublicProjectId String?  @map("anchor_public_project_id")
   title                 String
-  currentVersionId      String?   @map("current_version_id")
-  status                String    @default("ACTIVE")
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
+  currentVersionId      String?  @map("current_version_id")
+  status                String   @default("ACTIVE")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
 
-  versions IdeaIntelligenceVersion[]
-  runs     IdeaIntelligenceRun[]
+  versions             IdeaIntelligenceVersion[]
+  runs                 IdeaIntelligenceRun[]
   refinementCandidates IdeaRefinementCandidate[]
 
   @@index([userId, createdAt], map: "idea_intelligence_sessions_user_created_idx")
@@ -1369,18 +1412,18 @@ model IdeaIntelligenceSession {
 }
 
 model IdeaIntelligenceVersion {
-  id                  String    @id @default(cuid())
-  sessionId           String    @map("session_id")
-  versionNumber       Int       @map("version_number")
+  id                  String   @id @default(cuid())
+  sessionId           String   @map("session_id")
+  versionNumber       Int      @map("version_number")
   title               String
-  ideaText            String    @map("idea_text")
-  structuredIdeaJson  Json?     @map("structured_idea_json")
-  parentVersionId     String?   @map("parent_version_id")
-  refinementObjective String?   @map("refinement_objective")
-  refinementRationale String?   @map("refinement_rationale")
-  scoreDeltaJson      Json?     @map("score_delta_json")
-  createdAt           DateTime  @default(now()) @map("created_at")
-  updatedAt           DateTime  @updatedAt @map("updated_at")
+  ideaText            String   @map("idea_text")
+  structuredIdeaJson  Json?    @map("structured_idea_json")
+  parentVersionId     String?  @map("parent_version_id")
+  refinementObjective String?  @map("refinement_objective")
+  refinementRationale String?  @map("refinement_rationale")
+  scoreDeltaJson      Json?    @map("score_delta_json")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   session IdeaIntelligenceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   runs    IdeaIntelligenceRun[]
@@ -1392,20 +1435,20 @@ model IdeaIntelligenceVersion {
 }
 
 model IdeaRefinementCandidate {
-  id                String    @id @default(cuid())
-  runId             String    @map("run_id")
-  sessionId         String?   @map("session_id")
-  candidateIndex    Int       @map("candidate_index")
-  objective         String?   @map("objective")
+  id                String   @id @default(cuid())
+  runId             String   @map("run_id")
+  sessionId         String?  @map("session_id")
+  candidateIndex    Int      @map("candidate_index")
+  objective         String?  @map("objective")
   strategy          String
   title             String
-  ideaText          String    @map("idea_text")
-  payloadJson       Json      @map("payload_json")
-  groundednessScore Float     @default(0) @map("groundedness_score")
-  status            String    @default("PROPOSED")
-  selectedVersionId String?   @map("selected_version_id")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  ideaText          String   @map("idea_text")
+  payloadJson       Json     @map("payload_json")
+  groundednessScore Float    @default(0) @map("groundedness_score")
+  status            String   @default("PROPOSED")
+  selectedVersionId String?  @map("selected_version_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   run     IdeaIntelligenceRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
   session IdeaIntelligenceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { normalizeWhitespace } from '@/lib/recommendations/utils';
-import { EmbeddingService } from '@/lib/services/embeddingService';
+import { EmbeddingService, areStoredEmbeddingJobsEnabled } from '@/lib/services/embeddingService';
 
 export const FUNDING_PUBLICATION_TAG = 'my-publication';
 export const MAX_FUNDING_PUBLICATIONS = 5;
@@ -175,6 +175,10 @@ async function indexFundingPublicationForMatching(row: {
           funding_embedding_version = NULL
       WHERE id = ${row.id}
     `;
+    return;
+  }
+
+  if (!await areStoredEmbeddingJobsEnabled()) {
     return;
   }
 
@@ -462,6 +466,15 @@ export class FundingPublicationService {
   }
 
   async backfillEmbeddings(limit = 25): Promise<FundingPublicationEmbeddingBackfillResult> {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return {
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        errors: [],
+      };
+    }
+
     const safeLimit = Math.max(1, Math.min(limit, 100));
     const embeddingVersion = getFundingPublicationEmbeddingVersion();
     const candidates = await prisma.$queryRaw<FundingPublicationEmbeddingRow[]>(Prisma.sql`

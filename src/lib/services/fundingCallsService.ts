@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import type { RecommendationAccessScope } from '../recommendations/types';
 import { sanitizeExternalUrl, sanitizeExternalUrls } from '../urlSafety';
-import { EmbeddingService } from './embeddingService';
+import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
 import { recommendationSearchService } from './recommendationSearchService';
 import { resultRankingService } from './resultRankingService';
 
@@ -194,6 +194,10 @@ export class FundingCallsService {
    * Generate and update the embedding for a funding call
    */
   async updateEmbedding(id: string): Promise<void> {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return;
+    }
+
     try {
       const fundingCall = await this.getFundingCallById(id);
       

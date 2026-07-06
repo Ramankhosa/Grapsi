@@ -7,6 +7,7 @@ import type {
   PublicProjectConnector,
   PublicProjectDiscoveredRecord,
   PublicProjectDiscoveryOptions,
+  PublicProjectRawRecord,
 } from '@/lib/publicProjects/types'
 import { PublicProjectSourceBlockedError } from '@/lib/publicProjects/types'
 
@@ -259,6 +260,25 @@ export class BiracPublicProjectConnector implements PublicProjectConnector {
           ]
         : [],
       contacts: [],
+    }
+  }
+
+  async fetchRaw(record: PublicProjectDiscoveredRecord): Promise<PublicProjectRawRecord> {
+    const row = record.listingPayload as BiracListingPayload
+
+    return {
+      sourceKey: 'BIRAC',
+      externalId: record.externalId,
+      sourceVariant: record.sourceVariant,
+      sourceRecordKey: record.sourceRecordKey,
+      sourceUrl: `${BIRAC_BASE_URL}${SUPPORTED_PROJECTS_PATH}`,
+      detailUrl: row.schemeUrl,
+      fetchedAt: new Date().toISOString(),
+      listingPayload: row,
+      detailPayload: null,
+      rawPayload: {
+        row,
+      },
     }
   }
 

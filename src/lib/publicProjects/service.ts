@@ -9,14 +9,19 @@ import type {
 } from '@/lib/prisma-generated'
 import { Prisma as PrismaNamespace } from '@/lib/prisma-generated'
 import prisma from '@/lib/prisma'
-import { EmbeddingService } from '@/lib/services/embeddingService'
+import { EmbeddingService, areStoredEmbeddingJobsEnabled } from '@/lib/services/embeddingService'
 
-import { getPublicProjectConnector, PUBLIC_PROJECT_SOURCE_DEFINITIONS } from './sourceRegistry'
+import {
+  getPublicProjectConnector,
+  PUBLIC_PROJECT_SOURCE_DEFINITIONS,
+  TOP_FUNDED_PROJECT_SOURCE_KEYS,
+} from './sourceRegistry'
 import type {
   JsonRecord,
   NormalizedPublicProject,
   PublicProjectConnector,
   PublicProjectDiscoveredRecord,
+  PublicProjectRawRecord,
 } from './types'
 import { PublicProjectSourceBlockedError } from './types'
 
@@ -329,9 +334,18 @@ export interface CreatePublicProjectRunInput {
   filters?: {
     states?: string[]
     maxRecords?: number
+    startYear?: number
+    endYear?: number
+    fiscalYears?: number[]
+    agencies?: string[]
+    pageSize?: number
     onlinePerState?: number
     legacyPerState?: number
     skipExisting?: boolean
+    includeAuxiliarySections?: boolean
+    rawOnly?: boolean
+    rawDataOnly?: boolean
+    includeActiveProjects?: boolean
   }
   confirmFullProduction?: boolean
 }
@@ -445,7 +459,21 @@ export class PublicProjectCorpusService {
 
     const definition = PUBLIC_PROJECT_SOURCE_DEFINITIONS.find((item) => item.sourceKey === input.sourceKey)
     const defaultConfig = definition?.crawlConfig || {}
+    const sourceIsRawDataOnly = defaultConfig.rawDataOnly === true || defaultConfig.rawOnly === true
+    const rawOnlyRequested = sourceIsRawDataOnly || input.filters?.rawOnly === true || input.filters?.rawDataOnly === true
+    if (rawOnlyRequested && !TOP_FUNDED_PROJECT_SOURCE_KEYS.includes(input.sourceKey as any)) {
+      throw new Error('Raw-only public-project ingestion is available only for the top funded-project sources')
+    }
     const filters = {
+      ...(rawOnlyRequested ? { rawOnly: true } : {}),
+      startYear: input.filters?.startYear ?? Number(defaultConfig.startYear || 2015),
+      endYear: input.filters?.endYear ?? Number(defaultConfig.endYear || new Date().getFullYear()),
+      pageSize: input.filters?.pageSize ?? Number(defaultConfig.pageSize || 100),
+      ...(Array.isArray(input.filters?.fiscalYears) ? { fiscalYears: input.filters.fiscalYears } : {}),
+      ...(Array.isArray(input.filters?.agencies) ? { agencies: input.filters.agencies } : {}),
+      ...(input.filters?.includeActiveProjects !== undefined
+        ? { includeActiveProjects: input.filters.includeActiveProjects }
+        : {}),
       ...(input.mode === 'pilot'
         ? input.sourceKey === 'PRISM'
           ? {
@@ -455,11 +483,18 @@ export class PublicProjectCorpusService {
               maxRecords: input.filters?.maxRecords ?? Number(defaultConfig.pilotRecordCap || 20),
               onlinePerState: input.filters?.onlinePerState ?? Number(defaultConfig.onlinePerState || 5),
               legacyPerState: input.filters?.legacyPerState ?? Number(defaultConfig.legacyPerState || 5),
+              includeAuxiliarySections:
+                input.filters?.includeAuxiliarySections ?? Boolean(defaultConfig.pilotFetchAuxiliarySections),
             }
           : {
               maxRecords: input.filters?.maxRecords ?? Number(defaultConfig.pilotRecordCap || 20),
             }
-        : input.filters || {}),
+        : {
+            ...(input.filters || {}),
+            ...(input.sourceKey === 'PRISM' && input.filters?.includeAuxiliarySections === undefined
+              ? { includeAuxiliarySections: Boolean(defaultConfig.fetchAuxiliarySections) }
+              : {}),
+          }),
     }
 
     return prisma.publicProjectCrawlRun.create({
@@ -650,6 +685,7 @@ export class PublicProjectCorpusService {
 
     const connector = getPublicProjectConnector(run.source.sourceKey)
     const filters = asObject(run.filters as Prisma.JsonValue)
+    const rawOnly = filters.rawOnly === true || filters.rawDataOnly === true
     const processLimit = boundedPositiveInteger(
       options.maxItems ?? process.env.PUBLIC_PROJECT_CRAWLER_BATCH_SIZE,
       DEFAULT_EXTRACTION_BATCH_SIZE,
@@ -688,7 +724,7 @@ export class PublicProjectCorpusService {
         take: processLimit,
         orderBy: { createdAt: 'asc' },
       })
-      const skipExisting = filters.skipExisting !== false
+      const skipExisting = !rawOnly && filters.skipExisting !== false
 
       await forEachWithConcurrency(items, extractionConcurrency(run.source.sourceKey), async (item) => {
         await this.processDiscoveredRecord(
@@ -697,7 +733,8 @@ export class PublicProjectCorpusService {
           connector,
           this.discoveredRecordFromItem(run.source.sourceKey, item),
           item.attemptCount,
-          skipExisting
+          skipExisting,
+          rawOnly
         )
       })
 
@@ -749,7 +786,7 @@ export class PublicProjectCorpusService {
         },
       })
 
-      if (run.mode === 'full') {
+      if (run.mode === 'full' && !rawOnly) {
         await this.markMissingProjectsAfterFullRun(run.sourceId, runId)
       }
 
@@ -853,8 +890,15 @@ export class PublicProjectCorpusService {
       mode,
       states: Array.isArray(filters.states) ? (filters.states as string[]) : undefined,
       maxRecords: typeof filters.maxRecords === 'number' ? filters.maxRecords : undefined,
+      startYear: typeof filters.startYear === 'number' ? filters.startYear : undefined,
+      endYear: typeof filters.endYear === 'number' ? filters.endYear : undefined,
+      fiscalYears: Array.isArray(filters.fiscalYears) ? (filters.fiscalYears as number[]) : undefined,
+      agencies: Array.isArray(filters.agencies) ? (filters.agencies as string[]) : undefined,
+      pageSize: typeof filters.pageSize === 'number' ? filters.pageSize : undefined,
       onlinePerState: typeof filters.onlinePerState === 'number' ? filters.onlinePerState : undefined,
       legacyPerState: typeof filters.legacyPerState === 'number' ? filters.legacyPerState : undefined,
+      includeAuxiliarySections: filters.includeAuxiliarySections === true,
+      includeActiveProjects: filters.includeActiveProjects === true,
     })) {
       buffer.push(discovered)
       if (buffer.length >= DISCOVERY_WRITE_BATCH_SIZE) {
@@ -920,7 +964,8 @@ export class PublicProjectCorpusService {
     connector: PublicProjectConnector,
     discovered: PublicProjectDiscoveredRecord,
     previousAttemptCount: number,
-    skipExisting: boolean
+    skipExisting: boolean,
+    rawOnly: boolean
   ) {
     await prisma.publicProjectCrawlItem.update({
       where: {
@@ -936,6 +981,39 @@ export class PublicProjectCorpusService {
     })
 
     try {
+      if (rawOnly) {
+        const rawRecord = await this.fetchRawRecord(connector, discovered)
+        const contentHash = sha256(rawRecord.rawPayload)
+        await this.upsertRawSourceRecord(rawRecord, contentHash)
+        await prisma.$transaction([
+          prisma.publicProjectCrawlItem.update({
+            where: {
+              runId_sourceRecordKey: {
+                runId,
+                sourceRecordKey: discovered.sourceRecordKey,
+              },
+            },
+            data: {
+              projectId: null,
+              status: 'completed',
+              contentHash,
+              detailPayload: toJsonInput(rawRecord.rawPayload),
+              processedAt: new Date(),
+              errorCode: null,
+              errorMessage: null,
+            },
+          }),
+          prisma.publicProjectCrawlRun.update({
+            where: { id: runId },
+            data: {
+              processedCount: { increment: 1 },
+              succeededCount: { increment: 1 },
+            },
+          }),
+        ])
+        return
+      }
+
       if (skipExisting) {
         const existing = await prisma.publicProject.findUnique({
           where: {
@@ -1036,6 +1114,94 @@ export class PublicProjectCorpusService {
       if (error instanceof PublicProjectSourceBlockedError) {
         throw error
       }
+    }
+  }
+
+  private async upsertRawSourceRecord(rawRecord: PublicProjectRawRecord, contentHash: string) {
+    await prisma.$executeRaw(PrismaNamespace.sql`
+      INSERT INTO funded_project_raw_sources (
+        id,
+        source_name,
+        source_country,
+        source_agency,
+        source_project_id,
+        source_url,
+        project_title,
+        project_abstract,
+        project_objectives,
+        principal_investigator,
+        lead_institution,
+        funding_program,
+        funding_scheme,
+        start_date,
+        end_date,
+        fiscal_year,
+        raw_payload_json,
+        content_hash,
+        first_seen_at,
+        last_seen_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${crypto.randomUUID()},
+        ${String(rawRecord.sourceKey)},
+        NULL,
+        NULL,
+        ${rawRecord.externalId},
+        ${rawRecord.detailUrl || rawRecord.sourceUrl || null},
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        ${toRequiredJsonInput(rawRecord.rawPayload)},
+        ${contentHash},
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      )
+      ON CONFLICT (source_name, source_project_id)
+      DO UPDATE SET
+        source_url = EXCLUDED.source_url,
+        raw_payload_json = EXCLUDED.raw_payload_json,
+        content_hash = EXCLUDED.content_hash,
+        last_seen_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+    `)
+  }
+
+  private async fetchRawRecord(
+    connector: PublicProjectConnector,
+    discovered: PublicProjectDiscoveredRecord
+  ): Promise<PublicProjectRawRecord> {
+    if (connector.fetchRaw) {
+      return connector.fetchRaw(discovered)
+    }
+
+    return {
+      sourceKey: discovered.sourceKey,
+      externalId: discovered.externalId,
+      sourceVariant: discovered.sourceVariant,
+      sourceRecordKey: discovered.sourceRecordKey,
+      detailUrl: discovered.detailUrl || null,
+      fetchedAt: new Date().toISOString(),
+      listingPayload: discovered.listingPayload,
+      detailPayload: null,
+      rawPayload: {
+        sourceKey: discovered.sourceKey,
+        externalId: discovered.externalId,
+        sourceVariant: discovered.sourceVariant,
+        sourceRecordKey: discovered.sourceRecordKey,
+        detailUrl: discovered.detailUrl || null,
+        listingPayload: discovered.listingPayload,
+      },
     }
   }
 
@@ -1243,6 +1409,18 @@ export class PublicProjectCorpusService {
   }
 
   async processPendingEmbeddings(options: { limit?: number; includeFailed?: boolean } = {}) {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return {
+        selected: 0,
+        succeeded: 0,
+        failed: 0,
+        errors: [],
+        deferred: true,
+        deferredReason: 'Stored embedding jobs are disabled',
+        coverage: await this.getEmbeddingCoverage(),
+      }
+    }
+
     const limit = Math.min(Math.max(options.limit || 25, 1), 200)
     const currentVersion = getEmbeddingVersion()
     const activeCrawls = await prisma.publicProjectCrawlRun.count({
@@ -1263,6 +1441,7 @@ export class PublicProjectCorpusService {
     const projects = await prisma.publicProject.findMany({
       where: {
         recordStatus: 'ACTIVE',
+        sourceKey: { notIn: TOP_FUNDED_PROJECT_SOURCE_KEYS as unknown as PublicProjectSourceKey[] },
         OR: [
           { embeddingStatus: { in: ['not_generated', 'stale'] } },
           { embeddingVersion: { not: currentVersion } },
@@ -1287,6 +1466,10 @@ export class PublicProjectCorpusService {
     const errors: Array<{ id: string; error: string }> = []
 
     for (const project of projects) {
+      if (!await areStoredEmbeddingJobsEnabled()) {
+        break
+      }
+
       try {
         const didFail = await this.generateEmbeddingForProject(project)
         if (didFail) {
@@ -1381,6 +1564,7 @@ export class PublicProjectCorpusService {
     query?: string | null
     state?: string | null
     limit?: number
+    includeParticipants?: boolean
     includeContacts?: boolean
   }) {
     const limit = Math.min(Math.max(options.limit || 50, 1), 200)
@@ -1405,8 +1589,82 @@ export class PublicProjectCorpusService {
       where,
       take: limit,
       orderBy: [{ lastSeenAt: 'desc' }],
-      include: {
-        participants: true,
+      select: {
+        id: true,
+        sourceId: true,
+        sourceKey: true,
+        externalId: true,
+        fileNumber: true,
+        projectNumber: true,
+        sourceUrl: true,
+        detailUrl: true,
+        sourceVariant: true,
+        sourceRecordKey: true,
+        statusText: true,
+        projectType: true,
+        recordStatus: true,
+        validationErrors: true,
+        programName: true,
+        schemeName: true,
+        schemeHierarchy: true,
+        category: true,
+        theme: true,
+        discipline: true,
+        areaName: true,
+        subAreaName: true,
+        title: true,
+        abstractText: true,
+        executiveSummary: true,
+        objectivesText: true,
+        milestonesText: true,
+        deliverablesText: true,
+        outputPlannedText: true,
+        outputAchievedText: true,
+        keywords: true,
+        primaryInvestigatorName: true,
+        primaryInstitutionName: true,
+        departmentName: true,
+        city: true,
+        state: true,
+        country: true,
+        sanctionYear: true,
+        startDate: true,
+        endDate: true,
+        durationMonths: true,
+        budgetAmount: true,
+        budgetCurrency: true,
+        budgetComponents: true,
+        manpower: true,
+        equipment: true,
+        publications: true,
+        patents: true,
+        outcomes: true,
+        extendedFields: true,
+        duplicateOfId: true,
+        dedupedAt: true,
+        enrichedAbstract: true,
+        enrichmentSource: true,
+        enrichmentMetadata: true,
+        taxonomyStatus: true,
+        taxonomyMetadata: true,
+        contentHash: true,
+        detailHash: true,
+        duplicateFingerprint: true,
+        missingFullRunCount: true,
+        firstSeenAt: true,
+        lastSeenAt: true,
+        lastChangedAt: true,
+        inactiveAt: true,
+        embeddingProvider: true,
+        embeddingModel: true,
+        embeddingDimension: true,
+        embeddingVersion: true,
+        embeddingInputHash: true,
+        embeddingStatus: true,
+        embeddingError: true,
+        createdAt: true,
+        updatedAt: true,
+        participants: options.includeParticipants || false,
         contacts: options.includeContacts || false,
       },
     })

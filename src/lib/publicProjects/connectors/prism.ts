@@ -11,6 +11,7 @@ import type {
   PublicProjectDiscoveredRecord,
   PublicProjectDiscoveryOptions,
   PublicProjectParticipantInput,
+  PublicProjectRawRecord,
 } from '@/lib/publicProjects/types'
 import { PublicProjectSourceBlockedError } from '@/lib/publicProjects/types'
 
@@ -349,7 +350,7 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
           return
         }
 
-        const discovered = this.toDiscoveredRecord(row, state)
+        const discovered = this.toDiscoveredRecord(row, state, options.includeAuxiliarySections === true)
         if (!discovered) {
           continue
         }
@@ -362,12 +363,38 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
 
   async fetchAndNormalize(record: PublicProjectDiscoveredRecord): Promise<NormalizedPublicProject> {
     const listing = record.listingPayload as PrismListingRow
+    const includeAuxiliarySections = record.listingPayload?.includeAuxiliarySections === true
     const detail =
       record.sourceVariant === 'legacy'
         ? await this.fetchLegacyDetail(record, listing)
-        : await this.fetchOnlineDetail(record, listing)
+        : await this.fetchOnlineDetail(record, listing, includeAuxiliarySections)
 
     return this.normalizeProject(record, listing, detail)
+  }
+
+  async fetchRaw(record: PublicProjectDiscoveredRecord): Promise<PublicProjectRawRecord> {
+    const listing = record.listingPayload as PrismListingRow
+    const includeAuxiliarySections = record.listingPayload?.includeAuxiliarySections === true
+    const detail =
+      record.sourceVariant === 'legacy'
+        ? await this.fetchLegacyDetail(record, listing)
+        : await this.fetchOnlineDetail(record, listing, includeAuxiliarySections)
+
+    return {
+      sourceKey: 'PRISM',
+      externalId: record.externalId,
+      sourceVariant: record.sourceVariant,
+      sourceRecordKey: record.sourceRecordKey,
+      sourceUrl: SEARCH_URL,
+      detailUrl: detail.detailUrl,
+      fetchedAt: new Date().toISOString(),
+      listingPayload: listing,
+      detailPayload: detail as unknown as JsonRecord,
+      rawPayload: {
+        listing,
+        detail,
+      },
+    }
   }
 
   private async ensureSession() {
@@ -531,7 +558,11 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
     return rows.filter((row: unknown): row is PrismListingRow => Boolean(row && typeof row === 'object'))
   }
 
-  private toDiscoveredRecord(row: PrismListingRow, state: string): PublicProjectDiscoveredRecord | null {
+  private toDiscoveredRecord(
+    row: PrismListingRow,
+    state: string,
+    includeAuxiliarySections: boolean
+  ): PublicProjectDiscoveredRecord | null {
     const variant = isLegacyListing(row) ? 'legacy' : 'online'
     const externalId =
       cleanText(row.proposalId) ||
@@ -558,13 +589,15 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
       listingPayload: {
         ...row,
         stateName: state,
+        includeAuxiliarySections,
       },
     }
   }
 
   private async fetchOnlineDetail(
     record: PublicProjectDiscoveredRecord,
-    listing: PrismListingRow
+    listing: PrismListingRow,
+    includeAuxiliarySections: boolean
   ): Promise<PrismDetailPayload> {
     const detailPath = `/SRProposalDetails/${listing.encodedProposalId || ''}`
     const response = await this.request('GET', detailPath)
@@ -581,7 +614,7 @@ export class PrismPublicProjectConnector implements PublicProjectConnector {
       projectSummary: nodeTextById(html, 'projectSummaryContentDiv'),
     }
 
-    const auxiliary = decodedProposalId ? await this.fetchOnlineAuxiliary(decodedProposalId) : {}
+    const auxiliary = decodedProposalId && includeAuxiliarySections ? await this.fetchOnlineAuxiliary(decodedProposalId) : {}
 
     return {
       detailUrl: record.detailUrl || `${PRISM_BASE_URL}${detailPath}`,

@@ -8,7 +8,7 @@ import { Prisma } from '@prisma/client';
 
 import prisma from '@/lib/prisma';
 import type { IntakeOperator } from '@/lib/fundingIntake/types';
-import { EmbeddingService } from '@/lib/services/embeddingService';
+import { EmbeddingService, areStoredEmbeddingJobsEnabled } from '@/lib/services/embeddingService';
 import { parseFundingDocument } from './parser';
 import { sectionizeFundingDocument } from './sectionizer';
 import { chunkFundingDocumentSections } from './chunker';
@@ -431,7 +431,7 @@ export class FundingDocumentService {
         }
       });
 
-      if (chunks.length > 0) {
+      if (chunks.length > 0 && await areStoredEmbeddingJobsEnabled()) {
         await this.embedDocumentChunks(documentId);
       }
     } catch (error) {
@@ -529,6 +529,10 @@ export class FundingDocumentService {
   }
 
   async embedDocumentChunks(documentId: string, options: { force?: boolean; limit?: number } = {}) {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return { processed: 0, succeeded: 0, failed: 0, errors: [] };
+    }
+
     const document = await prisma.fundingCallDocument.findUnique({
       where: { id: documentId },
       include: {
@@ -583,6 +587,10 @@ export class FundingDocumentService {
     const errors: Array<{ id: string; error: string }> = [];
 
     for (const chunk of chunks) {
+      if (!await areStoredEmbeddingJobsEnabled()) {
+        break;
+      }
+
       const result = await embeddingService.generateEmbedding(
         chunk.chunk_text,
         document.funding_call?.tenantId
@@ -668,6 +676,16 @@ export class FundingDocumentService {
   }
 
   async backfillDocumentEmbeddings(limit = 25) {
+    if (!await areStoredEmbeddingJobsEnabled()) {
+      return {
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        errors: [],
+        embeddingHealth: this.getEmbeddingHealth(),
+      };
+    }
+
     const health = getDocumentEmbeddingHealth();
     const cappedLimit = Math.max(1, Math.min(Number(limit || 25), 100));
     const chunks = await prisma.fundingCallDocumentChunk.findMany({

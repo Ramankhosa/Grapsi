@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
       query: request.nextUrl.searchParams.get('query'),
       state: request.nextUrl.searchParams.get('state'),
       limit: Number(request.nextUrl.searchParams.get('limit') || 50),
+      includeParticipants: request.nextUrl.searchParams.get('includeParticipants') === 'true',
       includeContacts: request.nextUrl.searchParams.get('includeContacts') === 'true',
     })
     return NextResponse.json({ projects })

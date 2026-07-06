@@ -14,6 +14,7 @@ async function main() {
   const once = process.argv.includes('--once')
   const limit = readArg('limit')
   const pollInterval = readArg('poll-ms')
+  const batchCooldown = readArg('batch-cooldown-ms')
   const includeFailed =
     process.argv.includes('--include-failed') || (once && !process.argv.includes('--skip-failed'))
 
@@ -22,6 +23,7 @@ async function main() {
     limit: limit ? Number(limit) : undefined,
     includeFailed,
     pollIntervalMs: pollInterval ? Number(pollInterval) : undefined,
+    batchCooldownMs: batchCooldown ? Number(batchCooldown) : undefined,
   })
 
   if (once) {

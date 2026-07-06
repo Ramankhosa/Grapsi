@@ -3,6 +3,7 @@ import {
   estimateTokensFromText,
   recordStandaloneLLMUsage,
 } from '@/lib/metering/llm-usage';
+import { getBooleanRuntimeSetting } from '@/lib/runtime-settings';
 
 interface EmbeddingResponse {
   embedding: number[];
@@ -59,8 +60,34 @@ type EmbeddingCircuitState = {
 const EMBEDDING_FAILURE_THRESHOLD = Number(process.env.EMBEDDING_FAILURE_THRESHOLD || 3);
 const EMBEDDING_COOLDOWN_MS = Number(process.env.EMBEDDING_COOLDOWN_MS || 120000);
 const EMBEDDING_REQUEST_TIMEOUT_MS = Number(process.env.EMBEDDING_REQUEST_TIMEOUT_MS || 20000);
+const EMBEDDING_MIN_INTERVAL_MS = Math.max(0, Number(process.env.EMBEDDING_MIN_INTERVAL_MS || 0));
+const EMBEDDING_BATCH_CONCURRENCY = Math.max(
+  1,
+  Math.min(Number(process.env.EMBEDDING_BATCH_CONCURRENCY || 1), 10)
+);
 
 type EmbeddingProvider = 'google' | 'voyage';
+
+export const STORED_EMBEDDING_JOBS_SETTING_KEY = 'stored_embedding_jobs_enabled';
+
+export async function getStoredEmbeddingJobsControl() {
+  const fallback = process.env.STORED_EMBEDDING_JOBS_ENABLED !== 'false';
+  const setting = await getBooleanRuntimeSetting(STORED_EMBEDDING_JOBS_SETTING_KEY, fallback);
+  const hardDisabled =
+    process.env.BACKGROUND_EMBEDDINGS_ENABLED === 'false' ||
+    process.env.EMBEDDING_INDEXING_ENABLED === 'false';
+
+  return {
+    ...setting,
+    enabled: setting.enabled && !hardDisabled,
+    hardDisabled,
+  };
+}
+
+export async function areStoredEmbeddingJobsEnabled() {
+  const control = await getStoredEmbeddingJobsControl();
+  return control.enabled;
+}
 
 /**
  * Service to generate vector embeddings for text using Google's Embeddings API or alternatives
@@ -72,6 +99,8 @@ export class EmbeddingService {
     lastFailureAt: null,
     openUntil: null,
   };
+  private static throttleQueue: Promise<void> = Promise.resolve();
+  private static lastRequestStartedAt = 0;
 
   private apiKey: string;
   private apiUrl: string;
@@ -147,12 +176,39 @@ export class EmbeddingService {
     };
   }
 
+  private isGenerationDisabled() {
+    return process.env.EMBEDDING_GENERATION_ENABLED === 'false';
+  }
+
+  private async waitForThrottleSlot() {
+    if (EMBEDDING_MIN_INTERVAL_MS <= 0) {
+      return;
+    }
+
+    const previous = EmbeddingService.throttleQueue;
+    let releaseCurrent: () => void = () => {};
+    EmbeddingService.throttleQueue = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+
+    await previous;
+
+    const elapsed = Date.now() - EmbeddingService.lastRequestStartedAt;
+    const delay = Math.max(0, EMBEDDING_MIN_INTERVAL_MS - elapsed);
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    EmbeddingService.lastRequestStartedAt = Date.now();
+    releaseCurrent();
+  }
+
   getHealth(options: EmbeddingGenerationOptions = {}): EmbeddingServiceHealth {
     const state = EmbeddingService.circuitState;
     const modelName = this.resolveModelName(options);
     return {
       provider: this.provider,
-      configured: this.provider === 'voyage' ? Boolean(this.voyageApiKey) : Boolean(this.apiKey),
+      configured: !this.isGenerationDisabled() && (this.provider === 'voyage' ? Boolean(this.voyageApiKey) : Boolean(this.apiKey)),
       circuitOpen: this.isCircuitOpen(),
       consecutiveFailures: state.consecutiveFailures,
       lastError: state.lastError,
@@ -193,6 +249,13 @@ export class EmbeddingService {
     usageContext?: EmbeddingUsageContext,
     options: EmbeddingGenerationOptions = {}
   ): Promise<EmbeddingResponse> {
+    if (this.isGenerationDisabled()) {
+      return {
+        embedding: [],
+        error: 'Embedding generation is disabled by EMBEDDING_GENERATION_ENABLED=false',
+      };
+    }
+
     if (this.provider === 'voyage') {
       return this.generateVoyageEmbedding(text, usageContext, options);
     }
@@ -217,6 +280,7 @@ export class EmbeddingService {
     const title = taskType === 'RETRIEVAL_DOCUMENT' ? normalizeTitle(options.title) : '';
 
     try {
+      await this.waitForThrottleSlot();
       const response = await axios.post(
         `${this.apiUrl}/${modelName}:embedContent`,
         {
@@ -311,6 +375,7 @@ export class EmbeddingService {
     const inputType = resolveVoyageInputType(options);
 
     try {
+      await this.waitForThrottleSlot();
       const response = await axios.post(
         this.voyageApiUrl,
         {
@@ -392,7 +457,18 @@ export class EmbeddingService {
     usageContext?: EmbeddingUsageContext,
     options: EmbeddingGenerationOptions = {}
   ): Promise<EmbeddingResponse[]> {
-    return Promise.all(texts.map(text => this.generateEmbedding(text, usageContext, options)));
+    const results: EmbeddingResponse[] = new Array(texts.length);
+    let cursor = 0;
+
+    const workers = Array.from({ length: Math.min(EMBEDDING_BATCH_CONCURRENCY, texts.length) }, async () => {
+      while (cursor < texts.length) {
+        const index = cursor++;
+        results[index] = await this.generateEmbedding(texts[index], usageContext, options);
+      }
+    });
+
+    await Promise.all(workers);
+    return results;
   }
   
   /**
