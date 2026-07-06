@@ -1408,7 +1408,10 @@ export class PublicProjectCorpusService {
     return false
   }
 
-  async processPendingEmbeddings(options: { limit?: number; includeFailed?: boolean } = {}) {
+  async processPendingEmbeddings(options: { limit?: number; includeFailed?: boolean; includeCoverage?: boolean } = {}) {
+    const includeCoverage = options.includeCoverage !== false
+    const buildCoverage = async () => (includeCoverage ? await this.getEmbeddingCoverage() : null)
+
     if (!await areStoredEmbeddingJobsEnabled()) {
       return {
         selected: 0,
@@ -1417,7 +1420,7 @@ export class PublicProjectCorpusService {
         errors: [],
         deferred: true,
         deferredReason: 'Stored embedding jobs are disabled',
-        coverage: await this.getEmbeddingCoverage(),
+        coverage: await buildCoverage(),
       }
     }
 
@@ -1434,7 +1437,7 @@ export class PublicProjectCorpusService {
         errors: [],
         deferred: true,
         deferredReason: `${activeCrawls} extraction run(s) are still active`,
-        coverage: await this.getEmbeddingCoverage(),
+        coverage: await buildCoverage(),
       }
     }
 
@@ -1502,7 +1505,7 @@ export class PublicProjectCorpusService {
       failed,
       errors,
       deferred: false,
-      coverage: await this.getEmbeddingCoverage(),
+      coverage: await buildCoverage(),
     }
   }
 

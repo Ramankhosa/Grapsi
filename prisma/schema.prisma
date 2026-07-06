@@ -1193,6 +1193,7 @@ model PublicProject {
   @@unique([sourceId, sourceRecordKey])
   @@index([sourceKey, sourceVariant])
   @@index([sourceKey, lastSeenAt])
+  @@index([recordStatus, embeddingStatus, sourceKey, lastSeenAt(sort: Desc)], map: "public_projects_embedding_pickup_idx")
   @@index([recordStatus])
   @@index([title])
   @@index([primaryInstitutionName])

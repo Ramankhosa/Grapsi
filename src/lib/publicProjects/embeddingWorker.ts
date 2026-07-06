@@ -20,12 +20,12 @@ export interface PublicProjectEmbeddingWorkerOptions {
 export async function runPublicProjectEmbeddingWorker(options: PublicProjectEmbeddingWorkerOptions = {}) {
   const pollIntervalMs = Math.max(options.pollIntervalMs || 15000, 1000)
   const batchCooldownMs = Math.max(
-    options.batchCooldownMs ?? Number(process.env.PUBLIC_PROJECT_EMBEDDING_WORKER_BATCH_COOLDOWN_MS || 5000),
+    options.batchCooldownMs ?? Number(process.env.PUBLIC_PROJECT_EMBEDDING_WORKER_BATCH_COOLDOWN_MS || 10000),
     0
   )
   const limit = boundedBatchSize(
     options.limit,
-    Number(process.env.PUBLIC_PROJECT_EMBEDDING_WORKER_BATCH_SIZE || 25)
+    Number(process.env.PUBLIC_PROJECT_EMBEDDING_WORKER_BATCH_SIZE || 5)
   )
   const includeFailed =
     options.includeFailed ?? process.env.PUBLIC_PROJECT_EMBEDDING_WORKER_INCLUDE_FAILED === 'true'
@@ -34,6 +34,7 @@ export async function runPublicProjectEmbeddingWorker(options: PublicProjectEmbe
     const result = await publicProjectCorpusService.processPendingEmbeddings({
       limit,
       includeFailed,
+      includeCoverage: false,
     })
 
     if (options.once) {
