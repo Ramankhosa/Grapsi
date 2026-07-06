@@ -35,8 +35,38 @@ type SourceResponse = {
   }
 }
 
+type ExistingCrawlerSourceKey = 'PRISM' | 'CSIR' | 'BIRAC' | 'ICMR' | 'ICSSR' | 'CSV_IMPORT'
+
+type FundedRawSourceName = 'NIH_REPORTER' | 'NSF_AWARD_SEARCH' | 'CORDIS' | 'UKRI_GTR' | 'NWO_NWOPEN'
+
+type FundedRawStatsResponse = {
+  sources: Array<{
+    sourceName: FundedRawSourceName
+    label: string
+    country: string
+    agency: string
+    count: number
+    firstSeenAt: string | null
+    lastSeenAt: string | null
+    latestFiscalYear: number | null
+  }>
+}
+
 const ICSSR_UPLOAD_CHUNK_SIZE = 512 * 1024
 const CSV_UPLOAD_CHUNK_SIZE = 512 * 1024
+
+const FUNDED_RAW_SOURCES: Array<{
+  sourceName: FundedRawSourceName
+  label: string
+  agency: string
+  country: string
+}> = [
+  { sourceName: 'NIH_REPORTER', label: 'NIH RePORTER', agency: 'NIH', country: 'US' },
+  { sourceName: 'NSF_AWARD_SEARCH', label: 'NSF Award Search', agency: 'NSF', country: 'US' },
+  { sourceName: 'CORDIS', label: 'EU CORDIS', agency: 'European Commission', country: 'EU' },
+  { sourceName: 'UKRI_GTR', label: 'UKRI GtR', agency: 'UKRI', country: 'UK' },
+  { sourceName: 'NWO_NWOPEN', label: 'NWO NWOpen', agency: 'NWO', country: 'NL' },
+]
 
 function authHeaders() {
   return {
@@ -62,9 +92,20 @@ export default function PublicProjectCrawlerPage() {
   const { user, isLoading, authFetch } = useAuth()
   const router = useRouter()
   const [sources, setSources] = useState<SourceResponse | null>(null)
+  const [fundedRawStats, setFundedRawStats] = useState<FundedRawStatsResponse | null>(null)
   const [runs, setRuns] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
-  const [selectedSource, setSelectedSource] = useState<'PRISM' | 'CSIR' | 'BIRAC' | 'ICMR' | 'ICSSR' | 'CSV_IMPORT'>('PRISM')
+  const [selectedSource, setSelectedSource] = useState<ExistingCrawlerSourceKey>('PRISM')
+  const [selectedFundedRawSources, setSelectedFundedRawSources] = useState<FundedRawSourceName[]>([
+    'NIH_REPORTER',
+    'NSF_AWARD_SEARCH',
+    'CORDIS',
+    'UKRI_GTR',
+    'NWO_NWOPEN',
+  ])
+  const [fundedRawFromYear, setFundedRawFromYear] = useState(2015)
+  const [fundedRawPageSize, setFundedRawPageSize] = useState(25)
+  const [fundedRawTimeoutMs, setFundedRawTimeoutMs] = useState(30000)
   const [states, setStates] = useState('PUNJAB, DELHI')
   const [csirPilotLimit, setCsirPilotLimit] = useState(20)
   const [biracPilotLimit, setBiracPilotLimit] = useState(20)
@@ -112,13 +153,15 @@ export default function PublicProjectCrawlerPage() {
 
   async function refresh() {
     try {
-      const [sourceResponse, runResponse, projectResponse] = await Promise.all([
+      const [sourceResponse, fundedRawResponse, runResponse, projectResponse] = await Promise.all([
         authFetch('/api/super-admin/project-intelligence/crawlers/sources', { headers: authHeaders() }),
+        authFetch('/api/super-admin/funded-projects/raw-sources', { headers: authHeaders() }),
         authFetch('/api/super-admin/project-intelligence/crawlers/runs?limit=20', { headers: authHeaders() }),
         authFetch(`/api/super-admin/project-intelligence/projects?sourceKey=${selectedSource}&limit=10`, { headers: authHeaders() }),
       ])
 
       if (sourceResponse.ok) setSources(await sourceResponse.json())
+      if (fundedRawResponse.ok) setFundedRawStats(await fundedRawResponse.json())
       if (runResponse.ok) setRuns((await runResponse.json()).runs || [])
       if (projectResponse.ok) setProjects((await projectResponse.json()).projects || [])
     } catch (refreshError) {
@@ -254,6 +297,60 @@ export default function PublicProjectCrawlerPage() {
       limit: 25,
       includeFailed: true,
     })
+  }
+
+  function toggleFundedRawSource(sourceName: FundedRawSourceName) {
+    setSelectedFundedRawSources((current) =>
+      current.includes(sourceName)
+        ? current.filter((source) => source !== sourceName)
+        : [...current, sourceName]
+    )
+  }
+
+  async function runFundedRawIngestion(maxRecordsPerSource: number, confirmFullProduction = false) {
+    if (selectedFundedRawSources.length === 0) {
+      setError('Select at least one funded-project source first.')
+      return
+    }
+
+    setIsBusy(true)
+    setError(null)
+    setMessage(`Fetching raw funded-project records from ${selectedFundedRawSources.length} source(s)...`)
+    try {
+      const response = await authFetch('/api/super-admin/funded-projects/raw-sources', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          sources: selectedFundedRawSources,
+          fromYear: fundedRawFromYear,
+          maxRecordsPerSource,
+          pageSize: fundedRawPageSize,
+          timeoutMs: fundedRawTimeoutMs,
+          confirmFullProduction,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.message || data.error || 'Funded-project raw ingestion failed')
+      }
+
+      if (data.sources) setFundedRawStats({ sources: data.sources })
+      const totals = Object.entries(data.result || {})
+        .map(([source, result]: [string, any]) => `${source}: ${result.upserted || 0}${result.error ? ' failed' : ''}`)
+        .join(', ')
+      setMessage(`Raw ingestion complete. ${totals || 'No source results returned.'}`)
+      await refresh()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function runFundedRawFull() {
+    const typed = window.prompt('Type RAW FULL FUNDED PROJECTS to run a large raw ingestion.')
+    if (typed !== 'RAW FULL FUNDED PROJECTS') return
+    await runFundedRawIngestion(100000, true)
   }
 
   // ICSSR file upload functions
@@ -500,6 +597,10 @@ export default function PublicProjectCrawlerPage() {
   const icmr = sources?.sources?.find((source) => source.sourceKey === 'ICMR')
   const icssr = sources?.sources?.find((source) => source.sourceKey === 'ICSSR')
   const csvImport = sources?.sources?.find((source) => source.sourceKey === 'CSV_IMPORT')
+  const fundedRawStatsBySource = new Map(
+    (fundedRawStats?.sources || []).map((source) => [source.sourceName, source])
+  )
+  const fundedRawTotal = fundedRawStats?.sources?.reduce((sum, source) => sum + source.count, 0) ?? 0
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
@@ -552,6 +653,136 @@ export default function PublicProjectCrawlerPage() {
             {error || message}
           </div>
         )}
+
+        <section className="border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                International funded projects
+              </div>
+              <h2 className="mt-2 text-xl font-semibold text-slate-950">Raw source ingestion</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                Fetch 2015-present funded-project records into funded_project_raw_sources. This panel stores raw and lightly structured data only.
+              </p>
+            </div>
+            <div className="min-w-40 border border-slate-200 bg-slate-50 p-4 text-right">
+              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Raw records</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-950">{fundedRawTotal}</div>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            {FUNDED_RAW_SOURCES.map((source) => {
+              const stats = fundedRawStatsBySource.get(source.sourceName)
+              const selected = selectedFundedRawSources.includes(source.sourceName)
+              return (
+                <button
+                  key={source.sourceName}
+                  onClick={() => toggleFundedRawSource(source.sourceName)}
+                  className={`border p-4 text-left shadow-sm ${
+                    selected ? 'border-sky-500 bg-sky-50' : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-950">{source.label}</div>
+                      <div className="mt-1 text-xs text-slate-500">{source.agency} | {source.country}</div>
+                    </div>
+                    <span className={`px-2 py-1 text-xs font-semibold ${selected ? 'bg-sky-700 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                      {selected ? 'Selected' : 'Off'}
+                    </span>
+                  </div>
+                  <div className="mt-4 text-2xl font-semibold text-slate-950">{stats?.count ?? 0}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Last raw fetch: {formatDate(stats?.lastSeenAt)}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block text-sm font-medium text-slate-700">
+                From year
+                <input
+                  type="number"
+                  min={1970}
+                  max={new Date().getFullYear() + 1}
+                  value={fundedRawFromYear}
+                  onChange={(event) => setFundedRawFromYear(Number(event.target.value || 2015))}
+                  disabled={!canWrite || isBusy}
+                  className="mt-2 w-full border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700 disabled:bg-slate-100"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                Page size
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={fundedRawPageSize}
+                  onChange={(event) => setFundedRawPageSize(Number(event.target.value || 25))}
+                  disabled={!canWrite || isBusy}
+                  className="mt-2 w-full border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700 disabled:bg-slate-100"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                Timeout ms
+                <input
+                  type="number"
+                  min={1000}
+                  max={120000}
+                  step={1000}
+                  value={fundedRawTimeoutMs}
+                  onChange={(event) => setFundedRawTimeoutMs(Number(event.target.value || 30000))}
+                  disabled={!canWrite || isBusy}
+                  className="mt-2 w-full border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700 disabled:bg-slate-100"
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setSelectedFundedRawSources(FUNDED_RAW_SOURCES.map((source) => source.sourceName))}
+                disabled={!canWrite || isBusy}
+                className="inline-flex items-center gap-2 border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Select all
+              </button>
+              <button
+                onClick={() => setSelectedFundedRawSources([])}
+                disabled={!canWrite || isBusy}
+                className="inline-flex items-center gap-2 border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => runFundedRawIngestion(100)}
+                disabled={!canWrite || isBusy}
+                className="inline-flex items-center gap-2 bg-sky-700 px-4 py-2 text-sm font-medium text-white hover:bg-sky-800 disabled:opacity-50"
+              >
+                {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                Fetch 100
+              </button>
+              <button
+                onClick={() => runFundedRawIngestion(1000)}
+                disabled={!canWrite || isBusy}
+                className="inline-flex items-center gap-2 border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-800 hover:bg-sky-100 disabled:opacity-50"
+              >
+                Fetch 1,000
+              </button>
+              <button
+                onClick={runFundedRawFull}
+                disabled={!canWrite || isBusy}
+                className="inline-flex items-center gap-2 border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+              >
+                <AlertTriangle className="h-4 w-4" />
+                Full raw crawl
+              </button>
+            </div>
+          </div>
+          {!canWrite && <p className="mt-4 text-sm text-slate-500">Viewer role: read-only raw source access.</p>}
+        </section>
 
         <section className="border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
