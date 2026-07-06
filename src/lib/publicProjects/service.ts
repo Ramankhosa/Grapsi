@@ -359,6 +359,10 @@ export interface ProcessRunOptions {
 const DISCOVERY_WRITE_BATCH_SIZE = 500
 const DEFAULT_EXTRACTION_BATCH_SIZE = 100
 const MAX_ITEM_ATTEMPTS = 3
+const DEFAULT_CRAWLER_STALE_LOCK_SECONDS = 300
+const DEFAULT_EMBEDDING_STALE_PROCESSING_MINUTES = 15
+const STALE_VERSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000
+const STALE_VERSION_SWEEP_BATCH = 200
 
 function boundedPositiveInteger(value: unknown, fallback: number, maximum: number) {
   const parsed = Number(value)
@@ -389,7 +393,108 @@ async function forEachWithConcurrency<T>(
   await Promise.all(workers)
 }
 
+const COVERAGE_CACHE_TTL_MS = 30_000
+type EmbeddingCoverageResult = {
+  total: number
+  active: number
+  generated: number
+  failed: number
+  stale: number
+  pending: number
+  processing: number
+  currentEmbeddingVersion: string
+}
+let coverageCache: { data: EmbeddingCoverageResult | null; expiresAt: number } = {
+  data: null,
+  expiresAt: 0,
+}
+let coverageInflight: Promise<EmbeddingCoverageResult> | null = null
+
 export class PublicProjectCorpusService {
+  private lastStaleVersionSweepAt = 0
+
+  private getCrawlerStaleBefore() {
+    return new Date(
+      Date.now() -
+        boundedPositiveInteger(
+          process.env.PUBLIC_PROJECT_CRAWLER_STALE_LOCK_SECONDS,
+          DEFAULT_CRAWLER_STALE_LOCK_SECONDS,
+          3600
+        ) *
+          1000
+    )
+  }
+
+  private async finalizeStaleCancelRequestedRuns() {
+    const staleBefore = this.getCrawlerStaleBefore()
+    await prisma.publicProjectCrawlRun.updateMany({
+      where: {
+        status: 'cancel_requested',
+        OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: staleBefore } }],
+      },
+      data: {
+        status: 'canceled',
+        completedAt: new Date(),
+        heartbeatAt: new Date(),
+        lockedAt: null,
+        lockedBy: null,
+        errorCode: null,
+        errorMessage: 'Cancellation finalized after the worker heartbeat expired',
+      },
+    })
+  }
+
+  private async resetStaleEmbeddingProcessingRows() {
+    const staleBefore = new Date(
+      Date.now() -
+        boundedPositiveInteger(
+          process.env.PUBLIC_PROJECT_EMBEDDING_STALE_PROCESSING_MINUTES,
+          DEFAULT_EMBEDDING_STALE_PROCESSING_MINUTES,
+          1440
+        ) *
+          60 *
+          1000
+    )
+
+    await prisma.publicProject.updateMany({
+      where: {
+        recordStatus: 'ACTIVE',
+        embeddingStatus: 'processing',
+        updatedAt: { lt: staleBefore },
+      },
+      data: {
+        embeddingStatus: 'stale',
+        embeddingError: 'Embedding job was reset after the processing lease expired',
+      },
+    })
+  }
+
+  private async promoteStaleVersionRows() {
+    const now = Date.now()
+    if (now - this.lastStaleVersionSweepAt < STALE_VERSION_SWEEP_INTERVAL_MS) {
+      return
+    }
+    this.lastStaleVersionSweepAt = now
+
+    const currentVersion = getEmbeddingVersion()
+    const staleRows = await prisma.publicProject.findMany({
+      where: {
+        recordStatus: 'ACTIVE',
+        embeddingStatus: 'generated',
+        NOT: { embeddingVersion: currentVersion },
+      },
+      take: STALE_VERSION_SWEEP_BATCH,
+      select: { id: true },
+    })
+
+    if (staleRows.length > 0) {
+      await prisma.publicProject.updateMany({
+        where: { id: { in: staleRows.map((r) => r.id) } },
+        data: { embeddingStatus: 'stale' },
+      })
+    }
+  }
+
   async ensureSources() {
     await Promise.all(PUBLIC_PROJECT_SOURCE_DEFINITIONS.map((definition) => this.ensureSource(definition.sourceKey)))
   }
@@ -420,21 +525,29 @@ export class PublicProjectCorpusService {
     })
   }
 
-  async listSources() {
-    await this.ensureSources()
+  async listSources(options: { includeCoverage?: boolean; syncDefinitions?: boolean; includeCounts?: boolean } = {}) {
+    if (options.syncDefinitions !== false) {
+      await this.ensureSources()
+    }
+    const includeCoverage = options.includeCoverage !== false
+    const includeCounts = options.includeCounts !== false
     const [sources, coverage] = await Promise.all([
       prisma.publicProjectSource.findMany({
         orderBy: { sourceKey: 'asc' },
-        include: {
-          _count: {
-            select: {
-              projects: true,
-              crawlRuns: true,
-            },
-          },
-        },
+        ...(includeCounts
+          ? {
+              include: {
+                _count: {
+                  select: {
+                    projects: true,
+                    crawlRuns: true,
+                  },
+                },
+              },
+            }
+          : {}),
       }),
-      this.getEmbeddingCoverage(),
+      includeCoverage ? this.getEmbeddingCoverage() : Promise.resolve(null),
     ])
 
     return {
@@ -514,6 +627,7 @@ export class PublicProjectCorpusService {
   }
 
   async listRuns(limit = 20) {
+    await this.finalizeStaleCancelRequestedRuns()
     await this.ensureSources()
     return prisma.publicProjectCrawlRun.findMany({
       take: Math.min(Math.max(limit, 1), 100),
@@ -544,7 +658,7 @@ export class PublicProjectCorpusService {
   async cancelRun(runId: string) {
     const run = await prisma.publicProjectCrawlRun.findUnique({
       where: { id: runId },
-      select: { status: true },
+      select: { status: true, heartbeatAt: true },
     })
     if (!run) {
       throw new Error('Crawl run not found')
@@ -554,6 +668,25 @@ export class PublicProjectCorpusService {
     }
 
     const now = new Date()
+    if (
+      run.status === 'running' &&
+      (!run.heartbeatAt || run.heartbeatAt < this.getCrawlerStaleBefore())
+    ) {
+      return prisma.publicProjectCrawlRun.update({
+        where: { id: runId },
+        data: {
+          status: 'canceled',
+          cancelRequestedAt: now,
+          completedAt: now,
+          heartbeatAt: now,
+          lockedAt: null,
+          lockedBy: null,
+          errorCode: null,
+          errorMessage: 'Canceled after the worker heartbeat expired',
+        },
+      })
+    }
+
     return prisma.publicProjectCrawlRun.update({
       where: { id: runId },
       data:
@@ -594,6 +727,7 @@ export class PublicProjectCorpusService {
   }
 
   async processNextRun(options: ProcessRunOptions = {}) {
+    await this.finalizeStaleCancelRequestedRuns()
     const workerId = options.workerId || `public-project-worker:${os.hostname()}:${process.pid}`
     const run = options.runId
       ? await this.claimSpecificRun(options.runId, workerId)
@@ -1424,8 +1558,11 @@ export class PublicProjectCorpusService {
       }
     }
 
-    const limit = Math.min(Math.max(options.limit || 25, 1), 200)
-    const currentVersion = getEmbeddingVersion()
+    await this.finalizeStaleCancelRequestedRuns()
+    await this.resetStaleEmbeddingProcessingRows()
+    await this.promoteStaleVersionRows()
+
+    const limit = Math.min(Math.max(options.limit || 5, 1), 200)
     const activeCrawls = await prisma.publicProjectCrawlRun.count({
       where: { status: { in: ['queued', 'running', 'cancel_requested'] } },
     })
@@ -1441,15 +1578,16 @@ export class PublicProjectCorpusService {
       }
     }
 
+    const pickupStatuses: string[] = ['not_generated', 'stale']
+    if (options.includeFailed) {
+      pickupStatuses.push('failed')
+    }
+
     const projects = await prisma.publicProject.findMany({
       where: {
         recordStatus: 'ACTIVE',
         sourceKey: { notIn: TOP_FUNDED_PROJECT_SOURCE_KEYS as unknown as PublicProjectSourceKey[] },
-        OR: [
-          { embeddingStatus: { in: ['not_generated', 'stale'] } },
-          { embeddingVersion: { not: currentVersion } },
-          ...(options.includeFailed ? [{ embeddingStatus: 'failed' as const }] : []),
-        ],
+        embeddingStatus: { in: pickupStatuses as any },
       },
       take: limit,
       orderBy: [{ lastSeenAt: 'desc' }],
@@ -1510,6 +1648,29 @@ export class PublicProjectCorpusService {
   }
 
   async getEmbeddingCoverage() {
+    const now = Date.now()
+    if (coverageCache.data && coverageCache.expiresAt > now) {
+      return coverageCache.data
+    }
+
+    if (coverageInflight) {
+      return coverageInflight
+    }
+
+    const query = this.fetchEmbeddingCoverage().then((result) => {
+      coverageCache = { data: result, expiresAt: Date.now() + COVERAGE_CACHE_TTL_MS }
+      coverageInflight = null
+      return result
+    }).catch((error) => {
+      coverageInflight = null
+      throw error
+    })
+
+    coverageInflight = query
+    return query
+  }
+
+  private async fetchEmbeddingCoverage() {
     const currentVersion = getEmbeddingVersion()
     const rows = await prisma.$queryRaw<
       Array<{

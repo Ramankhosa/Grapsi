@@ -32,7 +32,7 @@ type SourceResponse = {
     pending: number
     processing: number
     currentEmbeddingVersion: string
-  }
+  } | null
 }
 
 type ExistingCrawlerSourceKey = 'PRISM' | 'CSIR' | 'BIRAC' | 'ICMR' | 'ICSSR' | 'CSV_IMPORT'
@@ -54,6 +54,8 @@ type FundedRawStatsResponse = {
 
 const ICSSR_UPLOAD_CHUNK_SIZE = 512 * 1024
 const CSV_UPLOAD_CHUNK_SIZE = 512 * 1024
+const DASHBOARD_LIGHT_REFRESH_MS = 60000
+const DRAIN_STATUS_REFRESH_MS = 5000
 
 const FUNDED_RAW_SOURCES: Array<{
   sourceName: FundedRawSourceName
@@ -145,23 +147,44 @@ export default function PublicProjectCrawlerPage() {
 
   useEffect(() => {
     if (canRead) {
-      refresh()
-      const timer = window.setInterval(refresh, 15000)
+      refresh({ full: true })
+      const timer = window.setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          refresh({ full: false })
+        }
+      }, DASHBOARD_LIGHT_REFRESH_MS)
       return () => window.clearInterval(timer)
     }
   }, [canRead, selectedSource])
 
-  async function refresh() {
+  async function refresh(options: { full?: boolean } = {}) {
+    const full = options.full !== false
     try {
+      const sourcesUrl = full
+        ? '/api/super-admin/project-intelligence/crawlers/sources'
+        : '/api/super-admin/project-intelligence/crawlers/sources?includeCoverage=false'
       const [sourceResponse, fundedRawResponse, runResponse, projectResponse] = await Promise.all([
-        authFetch('/api/super-admin/project-intelligence/crawlers/sources', { headers: authHeaders() }),
-        authFetch('/api/super-admin/funded-projects/raw-sources', { headers: authHeaders() }),
+        authFetch(sourcesUrl, { headers: authHeaders() }),
+        full ? authFetch('/api/super-admin/funded-projects/raw-sources', { headers: authHeaders() }) : Promise.resolve(null),
         authFetch('/api/super-admin/project-intelligence/crawlers/runs?limit=20', { headers: authHeaders() }),
         authFetch(`/api/super-admin/project-intelligence/projects?sourceKey=${selectedSource}&limit=10`, { headers: authHeaders() }),
       ])
 
-      if (sourceResponse.ok) setSources(await sourceResponse.json())
-      if (fundedRawResponse.ok) setFundedRawStats(await fundedRawResponse.json())
+      if (sourceResponse.ok) {
+        const nextSources = await sourceResponse.json()
+        setSources((current) => ({
+          ...nextSources,
+          sources: (nextSources.sources || []).map((source: any) => {
+            const previous = current?.sources?.find((item) => item.sourceKey === source.sourceKey)
+            return {
+              ...source,
+              _count: source._count ?? previous?._count,
+            }
+          }),
+          coverage: nextSources.coverage ?? current?.coverage ?? null,
+        }))
+      }
+      if (fundedRawResponse?.ok) setFundedRawStats(await fundedRawResponse.json())
       if (runResponse.ok) setRuns((await runResponse.json()).runs || [])
       if (projectResponse.ok) setProjects((await projectResponse.json()).projects || [])
     } catch (refreshError) {
@@ -184,7 +207,7 @@ export default function PublicProjectCrawlerPage() {
         throw new Error(data.message || data.error || 'Request failed')
       }
       setMessage('Operation queued successfully.')
-      await refresh()
+      await refresh({ full: true })
       return data
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError))
@@ -198,6 +221,7 @@ export default function PublicProjectCrawlerPage() {
     setIsBusy(true)
     setMessage('Run started — processing...')
     let keepDraining = true
+    let lastStatusRefreshAt = 0
     while (keepDraining) {
       try {
         const response = await authFetch('/api/super-admin/project-intelligence/crawlers/worker/drain', {
@@ -217,7 +241,10 @@ export default function PublicProjectCrawlerPage() {
           keepDraining = false
         }
 
-        await refresh()
+        if (Date.now() - lastStatusRefreshAt > DRAIN_STATUS_REFRESH_MS) {
+          await refresh({ full: false })
+          lastStatusRefreshAt = Date.now()
+        }
 
         if (keepDraining) {
           await new Promise((resolve) => setTimeout(resolve, 1000))
@@ -228,7 +255,7 @@ export default function PublicProjectCrawlerPage() {
       }
     }
     setMessage('Run processing complete.')
-    await refresh()
+    await refresh({ full: true })
     setIsBusy(false)
   }
 
@@ -293,10 +320,37 @@ export default function PublicProjectCrawlerPage() {
   }
 
   async function drainEmbeddings() {
-    await postJson('/api/super-admin/project-intelligence/embeddings/drain', {
-      limit: 25,
-      includeFailed: true,
-    })
+    setIsBusy(true)
+    setError(null)
+    setMessage('Embedding batch started...')
+    try {
+      const response = await authFetch('/api/super-admin/project-intelligence/embeddings/drain', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          limit: 5,
+          includeFailed: false,
+          includeCoverage: false,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.message || data.error || 'Embedding request failed')
+      }
+
+      if (data.deferred) {
+        setMessage(`Embedding batch deferred: ${data.deferredReason || 'work is not ready'}.`)
+      } else {
+        setMessage(
+          `Embedding batch complete. Selected ${data.selected || 0}, generated ${data.succeeded || 0}, failed ${data.failed || 0}.`
+        )
+      }
+      await refresh({ full: false })
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError))
+    } finally {
+      setIsBusy(false)
+    }
   }
 
   function toggleFundedRawSource(sourceName: FundedRawSourceName) {
@@ -339,7 +393,7 @@ export default function PublicProjectCrawlerPage() {
         .map(([source, result]: [string, any]) => `${source}: ${result.upserted || 0}${result.error ? ' failed' : ''}`)
         .join(', ')
       setMessage(`Raw ingestion complete. ${totals || 'No source results returned.'}`)
-      await refresh()
+      await refresh({ full: true })
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError))
     } finally {
@@ -618,7 +672,7 @@ export default function PublicProjectCrawlerPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               <button
-                onClick={refresh}
+                onClick={() => refresh({ full: true })}
                 className="inline-flex items-center gap-2 border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
               >
                 <RefreshCw className="h-4 w-4" />

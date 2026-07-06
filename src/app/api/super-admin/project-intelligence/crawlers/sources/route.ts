@@ -12,7 +12,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    return NextResponse.json(await publicProjectCorpusService.listSources())
+    const includeCoverage = request.nextUrl.searchParams.get('includeCoverage') !== 'false'
+    return NextResponse.json(
+      await publicProjectCorpusService.listSources({
+        includeCoverage,
+        syncDefinitions: includeCoverage,
+        includeCounts: includeCoverage,
+      })
+    )
   } catch (error) {
     return NextResponse.json(
       { message: error instanceof Error ? error.message : 'Failed to load public project sources' },
