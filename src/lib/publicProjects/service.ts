@@ -361,12 +361,12 @@ const DEFAULT_EXTRACTION_BATCH_SIZE = 100
 const MAX_ITEM_ATTEMPTS = 3
 const DEFAULT_CRAWLER_STALE_LOCK_SECONDS = 300
 const DEFAULT_EMBEDDING_STALE_PROCESSING_MINUTES = 15
-const STALE_VERSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000
-const STALE_VERSION_SWEEP_BATCH = 200
+const DEFAULT_STALE_VERSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000
+const DEFAULT_STALE_VERSION_SWEEP_BATCH = 200
 // Do not promote more rows to 'stale' while the worker still has this much
 // backlog; an unbounded stale queue makes every pickup query progressively
 // more expensive and floods autovacuum with update churn.
-const STALE_VERSION_SWEEP_BACKLOG_LIMIT = 500
+const DEFAULT_STALE_VERSION_SWEEP_BACKLOG_LIMIT = 500
 
 function boundedPositiveInteger(value: unknown, fallback: number, maximum: number) {
   const parsed = Number(value)
@@ -474,8 +474,13 @@ export class PublicProjectCorpusService {
   }
 
   private async promoteStaleVersionRows() {
+    const sweepIntervalMs = boundedPositiveInteger(
+      process.env.PUBLIC_PROJECT_EMBEDDING_SWEEP_INTERVAL_MS,
+      DEFAULT_STALE_VERSION_SWEEP_INTERVAL_MS,
+      60 * 60 * 1000
+    )
     const now = Date.now()
-    if (now - this.lastStaleVersionSweepAt < STALE_VERSION_SWEEP_INTERVAL_MS) {
+    if (now - this.lastStaleVersionSweepAt < sweepIntervalMs) {
       return
     }
     this.lastStaleVersionSweepAt = now
@@ -483,13 +488,18 @@ export class PublicProjectCorpusService {
     // Keep the pending queue bounded: only refill it once the worker has
     // nearly drained the existing backlog. This uses the pickup index, so the
     // count is an index-only scan over the (small) pending set.
+    const backlogLimit = boundedPositiveInteger(
+      process.env.PUBLIC_PROJECT_EMBEDDING_SWEEP_BACKLOG_LIMIT,
+      DEFAULT_STALE_VERSION_SWEEP_BACKLOG_LIMIT,
+      10000
+    )
     const pendingBacklog = await prisma.publicProject.count({
       where: {
         recordStatus: 'ACTIVE',
         embeddingStatus: { in: ['not_generated', 'stale'] },
       },
     })
-    if (pendingBacklog >= STALE_VERSION_SWEEP_BACKLOG_LIMIT) {
+    if (pendingBacklog >= backlogLimit) {
       return
     }
 
@@ -500,7 +510,11 @@ export class PublicProjectCorpusService {
         embeddingStatus: 'generated',
         NOT: { embeddingVersion: currentVersion },
       },
-      take: STALE_VERSION_SWEEP_BATCH,
+      take: boundedPositiveInteger(
+        process.env.PUBLIC_PROJECT_EMBEDDING_SWEEP_BATCH,
+        DEFAULT_STALE_VERSION_SWEEP_BATCH,
+        2000
+      ),
       select: { id: true },
     })
 
