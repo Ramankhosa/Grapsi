@@ -12,6 +12,21 @@ import { createEmptyGrantTemplate, normalizeGrantTemplate } from '@/lib/fundingT
 import type { GrantTemplateDocument } from '@/lib/fundingTemplates/types';
 import { FUNDING_FIELD_DEFINITIONS, BOOLEAN_FIELD_KEYS, NUMERIC_FIELD_KEYS } from '@/lib/fundingIntake/constants';
 
+// Plain-language labels for guideline/template statuses shown across this page.
+const STEP_STATUS_LABELS: Record<string, string> = {
+  none: 'Not started',
+  draft: 'In progress',
+  needs_review: 'Needs review',
+  approved: 'Approved',
+};
+
+function stepStatusLabel(status: string | null | undefined): string {
+  if (!status) {
+    return STEP_STATUS_LABELS.none;
+  }
+  return STEP_STATUS_LABELS[status] || status.replace(/_/g, ' ');
+}
+
 type EvidenceAnchor = {
   sourceType: 'segment';
   segmentId: string;
@@ -1380,10 +1395,10 @@ export default function FundingIntakeJobPage() {
 
         <div className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Unified Intake Workspace</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Job {details.job.id}</h1>
+            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Step 1 of 4 · Call Details</p>
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Intake Job {details.job.id}</h1>
             <p className="mt-3 text-sm text-slate-600">
-              Source type: {details.job.input_type.toUpperCase()} | Job status: {details.job.status.replace(/_/g, ' ')} | Submitted by {details.submitter?.email || 'unknown'}
+              Source: {details.job.input_type.toUpperCase()} | Status: {details.job.status.replace(/_/g, ' ')} | Submitted by {details.submitter?.email || 'unknown'}
             </p>
             {!canWriteFundingIntake && (
               <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -1404,9 +1419,9 @@ export default function FundingIntakeJobPage() {
                     <span className="relative inline-flex h-3 w-3 rounded-full bg-red-600" />
                   </span>
                   <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-red-700">In Process</div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-red-700">In Progress</div>
                     <div className="mt-1 text-sm font-semibold text-red-950">
-                      Waiting for LLM response for basic call details.
+                      The AI is reading the source and filling in the call details.
                     </div>
                     <div className="mt-1 text-xs text-red-800">
                       Stage: {(details.job.processing_phase || details.job.status).replace(/_/g, ' ')}
@@ -1482,47 +1497,49 @@ export default function FundingIntakeJobPage() {
           </div>
         )}
         <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-          Call, Guidelines, and Template are independent requests under the same funding call. As soon as this intake job has a linked draft call, the step tabs stay clickable so the admin can start guideline or template LLM requests while call-details extraction is still running.
+          Ingesting a call has three main parts — Call Details, Guidelines, and Template — and each runs on its own. Once a draft call exists, you can work on any step in any order; you never have to wait for one to finish before starting another.
         </div>
         {(isActiveJob || activeGuidelineRuns.length > 0 || activeTemplateRuns.length > 0) && (
           <div className="mt-3 grid gap-3 md:grid-cols-3">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <div className="font-semibold">Call details extraction</div>
-              <div className="mt-1">{isActiveJob ? `Running: ${details.job.processing_phase || details.job.status}` : 'No active call-details request'}</div>
+              <div className="font-semibold">Call details</div>
+              <div className="mt-1">{isActiveJob ? `AI is working (${(details.job.processing_phase || details.job.status).replace(/_/g, ' ')})` : 'Nothing running right now'}</div>
             </div>
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <div className="font-semibold">Guideline extraction</div>
-              <div className="mt-1">{activeGuidelineRuns.length > 0 ? `${activeGuidelineRuns.length} run${activeGuidelineRuns.length === 1 ? '' : 's'} queued or extracting` : 'No active guideline request'}</div>
+              <div className="font-semibold">Guidelines</div>
+              <div className="mt-1">{activeGuidelineRuns.length > 0 ? `AI is working (${activeGuidelineRuns.length} extraction${activeGuidelineRuns.length === 1 ? '' : 's'} in progress)` : 'Nothing running right now'}</div>
             </div>
             <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-              <div className="font-semibold">Template extraction</div>
-              <div className="mt-1">{activeTemplateRuns.length > 0 ? `${activeTemplateRuns.length} run${activeTemplateRuns.length === 1 ? '' : 's'} queued or extracting` : 'No active template request'}</div>
+              <div className="font-semibold">Template</div>
+              <div className="mt-1">{activeTemplateRuns.length > 0 ? `AI is working (${activeTemplateRuns.length} extraction${activeTemplateRuns.length === 1 ? '' : 's'} in progress)` : 'Nothing running right now'}</div>
             </div>
           </div>
         )}
 
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Status Summary</p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-900">Current intake state</h2>
-            <p className="mt-1 text-sm text-slate-600">Use this snapshot to decide whether to recover, review, or publish.</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Progress Checkpoints</p>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">Where this call stands</h2>
+            <p className="mt-1 text-sm text-slate-600">Four quick checkpoints: can it be published, is it ready for applicants to draft with, and how far along Guidelines and Template are.</p>
           </div>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm">
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-300">Publish readiness</div>
-            <div className="mt-2 text-2xl font-semibold">{details.publishReadiness?.ready ? 'Ready' : 'Needs fields'}</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-300">Ready to publish?</div>
+            <div className="mt-2 text-2xl font-semibold">{details.publishReadiness?.ready ? 'Yes' : 'Not yet'}</div>
+            {!details.publishReadiness?.ready && <div className="mt-1 text-xs text-slate-300">Some required fields are still empty</div>}
           </div>
           <div className="rounded-2xl bg-emerald-50 p-5 text-emerald-900 shadow-sm">
-            <div className="text-xs uppercase tracking-[0.18em] text-emerald-700">Drafting readiness</div>
-            <div className="mt-2 text-2xl font-semibold">{details.draftingReadiness.ready ? 'Ready' : details.draftingReadiness.mode.replace(/_/g, ' ')}</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-emerald-700">Ready for drafting?</div>
+            <div className="mt-2 text-2xl font-semibold">{details.draftingReadiness.ready ? 'Yes' : 'Not yet'}</div>
+            {!details.draftingReadiness.ready && <div className="mt-1 text-xs text-emerald-800">Needs approved guidelines and template</div>}
           </div>
           <div className="rounded-2xl bg-amber-50 p-5 text-amber-900 shadow-sm">
             <div className="text-xs uppercase tracking-[0.18em] text-amber-700">Guidelines</div>
-            <div className="mt-2 text-2xl font-semibold">{details.call?.guideline_status || 'none'}</div>
+            <div className="mt-2 text-2xl font-semibold">{stepStatusLabel(details.call?.guideline_status)}</div>
           </div>
           <div className="rounded-2xl bg-sky-50 p-5 text-sky-900 shadow-sm">
             <div className="text-xs uppercase tracking-[0.18em] text-sky-700">Template</div>
-            <div className="mt-2 text-2xl font-semibold">{details.call?.template_status || 'none'}</div>
+            <div className="mt-2 text-2xl font-semibold">{stepStatusLabel(details.call?.template_status)}</div>
           </div>
         </div>
         </section>
@@ -1531,10 +1548,10 @@ export default function FundingIntakeJobPage() {
           <section className="mt-8 rounded-2xl border border-rose-200 bg-white p-6 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-700">Recovery</p>
-                <h2 className="mt-2 text-xl font-semibold text-slate-900">Call details extraction failed</h2>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-700">Something went wrong</p>
+                <h2 className="mt-2 text-xl font-semibold text-slate-900">The AI could not read the call details</h2>
                 <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                  Retry the same source, rerun call basics from a cleaner URL/text/PDF source, or continue by filling the required basics manually.
+                  You have three options: retry with the same source, try again with a cleaner URL, text, or PDF, or skip the AI and type the required fields in yourself below.
                 </p>
               </div>
               <button
@@ -1573,7 +1590,7 @@ export default function FundingIntakeJobPage() {
                   onClick={scrollToCallBasics}
                   className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left text-sm font-medium text-emerald-900"
                 >
-                  Continue Manually
+                  Fill In Fields Manually
                 </button>
               </div>
 
@@ -1630,10 +1647,10 @@ export default function FundingIntakeJobPage() {
         <section id="call-basics" className="mt-8 scroll-mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Required Basics</p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">Verify call basics</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Required Fields</p>
+              <h2 className="mt-2 text-xl font-semibold text-slate-900">Check the call basics</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Agency name, scheme title, and description are required before a draft can be saved. Failed jobs can continue manually from here.
+                Confirm the agency name, scheme title, and description — these three must be filled in before a draft can be saved. If the AI failed, you can type them in yourself.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -1735,9 +1752,9 @@ export default function FundingIntakeJobPage() {
 
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Secondary Metadata</p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-900">Complete search and matching details</h2>
-            <p className="mt-1 text-sm text-slate-600">These fields improve recommendations, filtering, and downstream drafting context.</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Optional Details</p>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">Add search and matching details</h2>
+            <p className="mt-1 text-sm text-slate-600">Optional but recommended — these fields help researchers find this call and improve the quality of AI-assisted drafting.</p>
           </div>
           <div className="mt-6 space-y-4">
             {secondaryFieldGroups.map((group) => {
@@ -1761,9 +1778,9 @@ export default function FundingIntakeJobPage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Next Steps</p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">Guidelines and template</h2>
+              <h2 className="mt-2 text-xl font-semibold text-slate-900">Steps 2 &amp; 3 · Guidelines and Template</h2>
               <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                Guidelines and Template have dedicated workspaces. Use these cards after the call draft exists.
+                Guidelines (the rules applicants must follow) and Template (the application form structure) each have their own workspace. Open them once the call draft is saved.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1777,22 +1794,22 @@ export default function FundingIntakeJobPage() {
                   </Link>
                 </>
               ) : (
-                <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">Save the call draft to unlock Guidelines and Template.</div>
+                <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">Save the call draft first — that unlocks the Guidelines and Template steps.</div>
               )}
             </div>
           </div>
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
               <div className="text-xs uppercase tracking-[0.18em] text-amber-700">Guidelines</div>
-              <div className="mt-2 text-2xl font-semibold text-amber-950">{details.call?.guideline_status || 'none'}</div>
-              <div className="mt-3 text-sm text-amber-900">Recent runs: {(details.guidelines?.runs || []).length}</div>
-              <div className="mt-1 text-sm text-amber-900">Rules: {guidelineSummary?.totalRules || 0}</div>
+              <div className="mt-2 text-2xl font-semibold text-amber-950">{stepStatusLabel(details.call?.guideline_status)}</div>
+              <div className="mt-3 text-sm text-amber-900">AI extractions so far: {(details.guidelines?.runs || []).length}</div>
+              <div className="mt-1 text-sm text-amber-900">Rules captured: {guidelineSummary?.totalRules || 0}</div>
             </div>
             <div className="rounded-2xl border border-sky-200 bg-sky-50 p-5">
               <div className="text-xs uppercase tracking-[0.18em] text-sky-700">Template</div>
-              <div className="mt-2 text-2xl font-semibold text-sky-950">{details.call?.template_status || 'none'}</div>
-              <div className="mt-3 text-sm text-sky-900">Assets: {(details.template?.assets || []).length}</div>
-              <div className="mt-1 text-sm text-sky-900">Items: {templateCounts.questions + templateCounts.sections + templateCounts.attachments + templateCounts.evaluationCriteria + templateCounts.submissionRules + templateCounts.budget}</div>
+              <div className="mt-2 text-2xl font-semibold text-sky-950">{stepStatusLabel(details.call?.template_status)}</div>
+              <div className="mt-3 text-sm text-sky-900">Sources added: {(details.template?.assets || []).length}</div>
+              <div className="mt-1 text-sm text-sky-900">Template items: {templateCounts.questions + templateCounts.sections + templateCounts.attachments + templateCounts.evaluationCriteria + templateCounts.submissionRules + templateCounts.budget}</div>
             </div>
           </div>
         </section>
@@ -2567,8 +2584,8 @@ export default function FundingIntakeJobPage() {
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <h2 className="text-xl font-semibold text-slate-900">Publish</h2>
-                <p className="mt-1 text-sm text-slate-600">Publish remains warning-only for incomplete guidelines or templates, but the readiness split is visible here. Guideline and template statuses below come from their dedicated tabs, not from any inline editor on this page.</p>
+                <h2 className="text-xl font-semibold text-slate-900">Final step · Publish</h2>
+                <p className="mt-1 text-sm text-slate-600">Publishing makes this call visible to researchers. You can publish even if Guidelines or Template are not approved yet — you will just see a warning, not a block. The two readiness checks below tell you exactly what is missing.</p>
               </div>
               <div className="flex flex-col gap-3 lg:items-end">
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
@@ -2621,24 +2638,24 @@ export default function FundingIntakeJobPage() {
             </div>
 
             {!callId ? (
-              <div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">Save the funding call draft before publishing.</div>
+              <div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">Save the call draft first — publishing becomes available after that.</div>
             ) : (
               <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,0.9fr),minmax(0,1.1fr)]">
                 <div className="space-y-4">
                   <div className={`rounded-xl border p-4 ${details.publishReadiness?.ready ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-600">Publish readiness</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-900">{details.publishReadiness?.ready ? 'Ready to publish' : 'Needs field completion'}</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-600">Checkpoint 1 · Can this be published?</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-900">{details.publishReadiness?.ready ? 'Yes — all required fields are filled in' : 'Not yet — some required fields are empty'}</div>
                     {!details.publishReadiness?.ready && (details.publishReadiness?.missingFields?.length || 0) > 0 && (
-                      <div className="mt-3 text-sm text-slate-700">Missing fields: {details.publishReadiness?.missingFields?.join(', ')}</div>
+                      <div className="mt-3 text-sm text-slate-700">Still needed: {details.publishReadiness?.missingFields?.join(', ')}</div>
                     )}
                   </div>
 
                   <div className={`rounded-xl border p-4 ${details.draftingReadiness.ready ? 'border-emerald-200 bg-emerald-50' : 'border-sky-200 bg-sky-50'}`}>
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-600">Drafting readiness</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-900">{details.draftingReadiness.mode.replace(/_/g, ' ')}</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-600">Checkpoint 2 · Can researchers draft with it?</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-900">{details.draftingReadiness.ready ? 'Yes — fully ready for drafting' : `Not fully (mode: ${details.draftingReadiness.mode.replace(/_/g, ' ')})`}</div>
                     <div className="mt-3 space-y-1 text-sm text-slate-700">
                       {details.draftingReadiness.issues.length === 0 ? (
-                        <div>Approved guidelines and template are both available.</div>
+                        <div>Approved guidelines and an approved template are both in place.</div>
                       ) : (
                         details.draftingReadiness.issues.map((issue) => <div key={issue}>- {issue}</div>)
                       )}
@@ -2647,10 +2664,10 @@ export default function FundingIntakeJobPage() {
                 </div>
 
                 <div className="rounded-xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Publish warnings</div>
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Warnings (do not block publishing)</div>
                   <div className="mt-3 space-y-3">
                     {details.publishWarnings.length === 0 ? (
-                      <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">No non-blocking publish warnings.</div>
+                      <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">No warnings — everything looks good.</div>
                     ) : (
                       details.publishWarnings.map((warning) => (
                         <div key={warning.code} className="rounded-lg bg-amber-50 px-3 py-3 text-sm text-amber-900">
@@ -2662,7 +2679,7 @@ export default function FundingIntakeJobPage() {
                   </div>
 
                   <div className="mt-5 rounded-lg bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                    Current call status: {details.call?.status || 'DRAFT'} | Guideline status: {details.call?.guideline_status || 'none'} | Template status: {details.call?.template_status || 'none'} | Embedding: {details.call?.embedding_status || 'not_generated'}
+                    Call: {details.call?.status || 'DRAFT'} | Guidelines: {stepStatusLabel(details.call?.guideline_status)} | Template: {stepStatusLabel(details.call?.template_status)} | Search index: {(details.call?.embedding_status || 'not_generated').replace(/_/g, ' ')}
                   </div>
                 </div>
               </div>

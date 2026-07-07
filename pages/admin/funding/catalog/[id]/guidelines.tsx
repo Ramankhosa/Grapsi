@@ -100,6 +100,36 @@ const BLOCK_LABELS: Record<FundingGuidelineBlockKey, string> = {
 
 const IMPORTANCE_LEVELS: FundingGuidelineRuleImportance[] = ['high', 'medium', 'low'];
 
+// Plain-language labels for extraction run statuses shown to admins.
+const RUN_STATUS_LABELS: Record<string, string> = {
+  queued: 'Waiting to start',
+  extracting: 'AI is reading the source',
+  needs_review: 'Ready for your review',
+  failed: 'Failed',
+  applied: 'Loaded into draft',
+  rejected: 'Rejected',
+};
+
+// Plain-language labels for the stored guideline pack status.
+const STORED_STATUS_LABELS: Record<string, string> = {
+  none: 'Not started',
+  draft: 'Draft — not approved yet',
+  needs_review: 'Needs review',
+  approved: 'Approved',
+  archived: 'Archived',
+};
+
+function runStatusLabel(status: string): string {
+  return RUN_STATUS_LABELS[status] || status.replace(/_/g, ' ');
+}
+
+function storedStatusLabel(status: string | null | undefined): string {
+  if (!status) {
+    return STORED_STATUS_LABELS.none;
+  }
+  return STORED_STATUS_LABELS[status] || status.replace(/_/g, ' ');
+}
+
 function createRule(block: FundingGuidelineBlockKey): FundingGuidelineRuleItem {
   return {
     key: `${block}_${Date.now()}`,
@@ -331,7 +361,7 @@ function GuidelineBlockEditor({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{BLOCK_LABELS[block]}</h2>
-          <p className="mt-1 text-sm text-slate-600">Review, reorder, and refine the rules in this guideline block.</p>
+          <p className="mt-1 text-sm text-slate-600">Edit, reorder, or add rules here. Remember to use “Save Changes” at the top when you are done.</p>
         </div>
         <button type="button" onClick={addRule} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white">
           Add Rule
@@ -606,7 +636,7 @@ export default function FundingGuidelineWorkspacePage() {
       }
       setBundle(data);
       setGuidelinePack(normalizeGuidelinePack(data.guideline?.guideline_pack_json || createEmptyGuidelinePack()));
-      toast.success('Blank guideline pack created');
+      toast.success('Empty guidelines created — you can start adding rules');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to create blank guidelines');
     } finally {
@@ -656,7 +686,7 @@ export default function FundingGuidelineWorkspacePage() {
       await loadBundle(false);
       setSelectedRunId(data.run?.id || null);
       setSourcePdf(null);
-      toast.success('Guideline extraction started. It will continue if you switch tabs.');
+      toast.success('AI extraction started. It keeps running even if you leave this page.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to run guideline extraction');
     } finally {
@@ -681,7 +711,7 @@ export default function FundingGuidelineWorkspacePage() {
       setBundle(data);
       setGuidelinePack(normalizeGuidelinePack(data.guideline?.guideline_pack_json || createEmptyGuidelinePack()));
       setSelectedRunId(runId);
-      toast.success('Guideline run applied to the live draft');
+      toast.success('AI result accepted — it is now the current draft');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to apply guideline run');
     } finally {
@@ -756,7 +786,7 @@ export default function FundingGuidelineWorkspacePage() {
       }
       setBundle(data);
       setGuidelinePack(normalizeGuidelinePack(data.guideline?.guideline_pack_json || createEmptyGuidelinePack()));
-      toast.success(`Reverted to revision ${selectedRevisionNo}`);
+      toast.success(`Restored version ${selectedRevisionNo}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to revert guidelines');
     } finally {
@@ -801,7 +831,7 @@ export default function FundingGuidelineWorkspacePage() {
   return (
     <div className="min-h-screen bg-slate-50">
       <Head>
-        <title>Funding Guideline Workspace</title>
+        <title>Guidelines Workspace</title>
       </Head>
       <Header />
 
@@ -818,32 +848,29 @@ export default function FundingGuidelineWorkspacePage() {
 
         <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Funding Guidelines</p>
+            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Step 2 of 4 · Guidelines</p>
             <h1 className="mt-2 text-3xl font-semibold text-slate-900">{bundle.fundingCall.scheme_title}</h1>
             <p className="mt-3 text-sm text-slate-600">
-              {bundle.fundingCall.agency_name} • Guideline status: {bundle.fundingCall.guideline_status} • Template status: {bundle.fundingCall.template_status}
+              {bundle.fundingCall.agency_name} • Guidelines: {storedStatusLabel(bundle.fundingCall.guideline_status)} • Template: {storedStatusLabel(bundle.fundingCall.template_status)}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Link href={`/admin/funding/catalog/${bundle.fundingCall.id}`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
-              Back to Record
+              Back to Call Details
             </Link>
             <Link href={`/admin/funding/catalog/${bundle.fundingCall.id}/template`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
-              Open Template Workspace
+              Open Template (Step 3)
             </Link>
             <button type="button" onClick={() => void loadBundle(false)} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
               Refresh
             </button>
-            <button type="button" onClick={handleExtract} disabled={extracting} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 disabled:opacity-50">
-              {extracting ? 'Running Extraction...' : 'Run Extraction'}
-            </button>
             {!bundle.guideline && (
               <button type="button" onClick={handleCreateBlank} disabled={creating} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
-                {creating ? 'Creating...' : 'Create Blank'}
+                {creating ? 'Creating...' : 'Start With Empty Guidelines'}
               </button>
             )}
             <button type="button" onClick={handleSave} disabled={saving} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
-              {saving ? 'Saving...' : 'Save Guidelines'}
+              {saving ? 'Saving...' : 'Save Changes'}
             </button>
             {selectedRun?.status === 'needs_review' && (
               <button
@@ -852,13 +879,31 @@ export default function FundingGuidelineWorkspacePage() {
                 disabled={applyingRunId !== null}
                 className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
               >
-                {applyingRunId === selectedRun.id ? 'Applying Run...' : 'Apply Selected Run'}
+                {applyingRunId === selectedRun.id ? 'Accepting...' : 'Accept AI Result Into Draft'}
               </button>
             )}
             <button type="button" onClick={handleApprove} disabled={approving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-              {approving ? 'Approving...' : 'Approve'}
+              {approving ? 'Approving...' : 'Approve Guidelines'}
             </button>
           </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-700">How this page works</h2>
+          <ol className="mt-3 grid gap-3 text-sm text-slate-600 md:grid-cols-4">
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">1. Extract.</span> Let the AI read the call source and pull out the rules applicants must follow.
+            </li>
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">2. Review.</span> Check the AI result in the preview, then accept it into the draft.
+            </li>
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">3. Edit &amp; save.</span> Fix or add rules in the editors, then use Save Changes.
+            </li>
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">4. Approve.</span> Once the guidelines look right, approve them to mark this step done.
+            </li>
+          </ol>
         </div>
 
         <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,0.75fr),minmax(0,1.25fr)]">
@@ -866,24 +911,24 @@ export default function FundingGuidelineWorkspacePage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Run Guideline Extraction</h2>
+                  <h2 className="text-lg font-semibold text-slate-900">Step 1 · Extract guidelines with AI</h2>
                   <p className="mt-1 text-sm text-slate-600">
-                    Use the saved intake source automatically, or override this run with a separate URL, text block, or PDF for the same call.
+                    Choose where the AI should read the guidelines from. By default it reuses the source already saved for this call, or you can point this run at a different URL, pasted text, or PDF.
                   </p>
                 </div>
                 <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                  Default source: {bundle.fundingCall.intake_job_id ? 'saved intake source' : 'saved call source'}
+                  Default source: {bundle.fundingCall.intake_job_id ? 'the source saved during intake' : 'the source saved on this call'}
                 </div>
               </div>
 
               {(extracting || activeRuns.length > 0) && (
                 <div className="mt-5">
                   <ExtractionWaitingNotice
-                    title={activeRuns.length > 0 ? 'Guideline extraction is still running' : 'Guideline extraction is being submitted'}
+                    title={activeRuns.length > 0 ? 'The AI is still working on the guidelines' : 'Starting the AI extraction'}
                     description={
                       activeRuns.length > 0
-                        ? `${activeRuns.length} guideline run${activeRuns.length === 1 ? '' : 's'} queued or extracting. You can switch to Call or Template; this run stays attached to the same funding call.`
-                        : 'Submitting a persisted run. Once accepted, the model continues server-side even if you switch tabs.'
+                        ? `${activeRuns.length} extraction${activeRuns.length === 1 ? ' is' : 's are'} in progress. You can safely move to the Call Details or Template step — the work continues in the background and the result will appear here.`
+                        : 'Sending the request now. Once it starts, it keeps running in the background even if you leave this page.'
                     }
                   />
                 </div>
@@ -895,35 +940,35 @@ export default function FundingGuidelineWorkspacePage() {
                   onClick={() => setSourceMode('intake')}
                   className={`rounded-full px-3 py-1.5 text-xs font-medium ${sourceMode === 'intake' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}
                 >
-                  Use Existing Source
+                  Use Saved Source
                 </button>
                 <button
                   type="button"
                   onClick={() => setSourceMode('url')}
                   className={`rounded-full px-3 py-1.5 text-xs font-medium ${sourceMode === 'url' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}
                 >
-                  Separate URL
+                  Different URL
                 </button>
                 <button
                   type="button"
                   onClick={() => setSourceMode('text')}
                   className={`rounded-full px-3 py-1.5 text-xs font-medium ${sourceMode === 'text' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}
                 >
-                  Separate Text
+                  Paste Text
                 </button>
                 <button
                   type="button"
                   onClick={() => setSourceMode('pdf')}
                   className={`rounded-full px-3 py-1.5 text-xs font-medium ${sourceMode === 'pdf' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}
                 >
-                  Separate PDF
+                  Upload PDF
                 </button>
               </div>
 
               <div className="mt-5">
                 {sourceMode === 'intake' && (
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                    This run reuses the intake source attached to this funding call. If call-details extraction has not finished preparing the text, this guideline run prepares the existing source for its own use without changing Template assets.
+                    The AI will read the source that is already saved for this funding call — no upload needed. This does not affect the Template step in any way.
                   </div>
                 )}
 
@@ -955,7 +1000,7 @@ export default function FundingGuidelineWorkspacePage() {
                       className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700"
                     />
                     <div className="text-xs text-slate-500">
-                      {sourcePdf ? `Selected PDF: ${sourcePdf.name}` : 'Select a PDF only when you want to override the saved source for this run.'}
+                      {sourcePdf ? `Selected PDF: ${sourcePdf.name}` : 'Upload a PDF only if the guidelines live in a document that is different from the saved source.'}
                     </div>
                   </div>
                 )}
@@ -968,19 +1013,19 @@ export default function FundingGuidelineWorkspacePage() {
                   disabled={extracting}
                   className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                 >
-                  {extracting ? 'Running Extraction...' : 'Run Guideline Extraction'}
+                  {extracting ? 'Starting Extraction...' : 'Start AI Extraction'}
                 </button>
               </div>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Workspace status</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Where things stand</h2>
               <div className="mt-4 space-y-3 text-sm text-slate-700">
-                <div><span className="font-medium text-slate-900">Stored status:</span> {bundle.guideline?.status || 'none'}</div>
-                <div><span className="font-medium text-slate-900">Current revision:</span> {bundle.guideline?.current_revision_no || 0}</div>
-                <div><span className="font-medium text-slate-900">Total stored rules:</span> {bundle.guideline?.summary_json?.totalRules || 0}</div>
-                <div><span className="font-medium text-slate-900">Latest run:</span> {bundle.runs[0] ? `${bundle.runs[0].status} (${new Date(bundle.runs[0].created_at).toLocaleString()})` : 'None'}</div>
-                <div><span className="font-medium text-slate-900">Reviewable run:</span> {latestReviewableRun ? latestReviewableRun.id : 'None'}</div>
+                <div><span className="font-medium text-slate-900">Guidelines status:</span> {storedStatusLabel(bundle.guideline?.status)}</div>
+                <div><span className="font-medium text-slate-900">Saved version:</span> {bundle.guideline?.current_revision_no || 0}</div>
+                <div><span className="font-medium text-slate-900">Rules saved so far:</span> {bundle.guideline?.summary_json?.totalRules || 0}</div>
+                <div><span className="font-medium text-slate-900">Latest AI extraction:</span> {bundle.runs[0] ? `${runStatusLabel(bundle.runs[0].status)} (${new Date(bundle.runs[0].created_at).toLocaleString()})` : 'None yet'}</div>
+                <div><span className="font-medium text-slate-900">Awaiting your review:</span> {latestReviewableRun ? 'Yes — see AI Extraction History below' : 'Nothing pending'}</div>
                 {bundle.guideline?.approved_at && (
                   <div><span className="font-medium text-slate-900">Approved at:</span> {new Date(bundle.guideline.approved_at).toLocaleString()}</div>
                 )}
@@ -988,15 +1033,18 @@ export default function FundingGuidelineWorkspacePage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Extraction Runs</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Step 2 · AI extraction history</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Every AI extraction is listed here. Preview a result first, and if it looks good, accept it into the draft editor.
+              </p>
               <div className="mt-4 space-y-3">
-                {bundle.runs.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No guideline extraction runs yet.</div>}
+                {bundle.runs.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No AI extractions yet. Use Step 1 above to start one.</div>}
                 {bundle.runs.map((run) => (
                   <div key={run.id} className="rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <div className="font-semibold text-slate-900">{run.id}</div>
-                        <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">{run.status}</div>
+                        <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">{runStatusLabel(run.status)}</div>
                       </div>
                       <div className="text-xs text-slate-500">{new Date(run.created_at).toLocaleString()}</div>
                     </div>
@@ -1019,7 +1067,7 @@ export default function FundingGuidelineWorkspacePage() {
                           disabled={applyingRunId !== null}
                           className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
                         >
-                          {applyingRunId === run.id ? 'Applying...' : 'Apply This Run'}
+                          {applyingRunId === run.id ? 'Accepting...' : 'Accept Into Draft'}
                         </button>
                       )}
                     </div>
@@ -1029,9 +1077,12 @@ export default function FundingGuidelineWorkspacePage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Revision history</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Version history</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Every save creates a new version. If something goes wrong, pick an earlier version and restore it.
+              </p>
               <div className="mt-4 space-y-3">
-                {bundle.revisions.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No revisions yet.</div>}
+                {bundle.revisions.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No saved versions yet.</div>}
                 {bundle.revisions.length > 0 && (
                   <>
                     <select
@@ -1041,12 +1092,12 @@ export default function FundingGuidelineWorkspacePage() {
                     >
                       {bundle.revisions.map((revision) => (
                         <option key={revision.id} value={revision.revision_no}>
-                          Revision {revision.revision_no} • {revision.revision_type} • {revision.approved_state}
+                          Version {revision.revision_no} • {revision.revision_type.replace(/_/g, ' ')} • {revision.approved_state.replace(/_/g, ' ')}
                         </option>
                       ))}
                     </select>
                     <button type="button" onClick={handleRevert} disabled={!selectedRevisionNo || reverting} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
-                      {reverting ? 'Reverting...' : 'Revert to Selected Revision'}
+                      {reverting ? 'Restoring...' : 'Restore Selected Version'}
                     </button>
                   </>
                 )}
@@ -1055,8 +1106,8 @@ export default function FundingGuidelineWorkspacePage() {
                     <div key={revision.id} className="rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <div className="font-semibold text-slate-900">Revision {revision.revision_no}</div>
-                          <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">{revision.revision_type}</div>
+                          <div className="font-semibold text-slate-900">Version {revision.revision_no}</div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">{revision.revision_type.replace(/_/g, ' ')}</div>
                         </div>
                         <div className="text-xs text-slate-500">{new Date(revision.created_at).toLocaleString()}</div>
                       </div>
@@ -1069,8 +1120,8 @@ export default function FundingGuidelineWorkspacePage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Raw JSON</h2>
-              <p className="mt-1 text-sm text-slate-600">Use this for fast bulk edits or to paste a reviewed guideline pack.</p>
+              <h2 className="text-lg font-semibold text-slate-900">Advanced · Edit as JSON</h2>
+              <p className="mt-1 text-sm text-slate-600">For technical users only. Paste or bulk-edit the full guideline data here — most people can skip this section.</p>
               <textarea
                 value={rawJson}
                 onChange={(event) => setRawJson(event.target.value)}
@@ -1085,21 +1136,21 @@ export default function FundingGuidelineWorkspacePage() {
 
           <div className="space-y-8">
             <GuidelinePreviewCard
-              title="Preview Stored Guidelines"
-              subtitle="This preview is reconstructed from the stored guideline pack currently attached to the funding call."
+              title="Current Saved Guidelines"
+              subtitle="This is what is saved on the funding call right now. It only changes when you save or accept an AI result."
               pack={bundle.guideline ? normalizeGuidelinePack(bundle.guideline.guideline_pack_json) : null}
-              emptyMessage="No stored guideline pack exists yet."
+              emptyMessage="Nothing saved yet. Run an AI extraction (Step 1) or start with empty guidelines."
             />
 
             <GuidelinePreviewCard
-              title={selectedRun ? 'Preview Selected Extraction Run' : 'Preview Latest Extraction Run'}
+              title={selectedRun ? 'AI Result (Selected Extraction)' : 'AI Result (Latest Extraction)'}
               subtitle={
                 selectedRun
-                  ? `Run ${selectedRun.id} is ${selectedRun.status.replace('_', ' ')}. Apply it only after reviewing the extracted rules.`
-                  : 'This shows the latest extracted guideline draft from the automated LLM pass.'
+                  ? `This extraction is ${runStatusLabel(selectedRun.status).toLowerCase()}. Review the rules below, then use “Accept AI Result Into Draft” if they look right.`
+                  : 'This shows what the AI found in its latest pass. It is not saved until you accept it.'
               }
               pack={selectedRunPack ? normalizeGuidelinePack(selectedRunPack) : latestRunPack ? normalizeGuidelinePack(latestRunPack) : null}
-              emptyMessage="No extraction run has produced a guideline draft yet."
+              emptyMessage="No AI result to show yet. Start an extraction in Step 1."
             />
 
             {FUNDING_GUIDELINE_BLOCK_KEYS.map((block) => (

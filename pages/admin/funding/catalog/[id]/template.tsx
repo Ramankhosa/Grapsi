@@ -80,6 +80,36 @@ type Bundle = {
 };
 
 const ITEM_TYPES: FundingTemplateItemType[] = ['field', 'section', 'table', 'budget', 'attachment', 'checklist', 'rule', 'rubric'];
+
+// Plain-language labels for extraction run statuses shown to admins.
+const RUN_STATUS_LABELS: Record<string, string> = {
+  queued: 'Waiting to start',
+  extracting: 'AI is reading the sources',
+  needs_review: 'Ready for your review',
+  failed: 'Failed',
+  applied: 'In use as current template',
+  rejected: 'Rejected',
+};
+
+// Plain-language labels for stored template / call-level statuses.
+const STORED_STATUS_LABELS: Record<string, string> = {
+  none: 'Not started',
+  draft: 'Draft — not approved yet',
+  needs_review: 'Needs review',
+  approved: 'Approved',
+  archived: 'Archived',
+};
+
+function runStatusLabel(status: string): string {
+  return RUN_STATUS_LABELS[status] || status.replace(/_/g, ' ');
+}
+
+function storedStatusLabel(status: string | null | undefined): string {
+  if (!status) {
+    return STORED_STATUS_LABELS.none;
+  }
+  return STORED_STATUS_LABELS[status] || status.replace(/_/g, ' ');
+}
 const SUPPORT_LEVELS: FundingTemplateSupportLevel[] = ['full', 'partial', 'manual', 'unsupported'];
 const WORKFLOW_MODES: GrantWorkflowMode[] = ['app_draft', 'app_support', 'team_manual'];
 const DRAFTING_SUBMISSION_MODES: GrantDraftingSubmissionMode[] = ['drafting', 'submission', 'both'];
@@ -519,7 +549,7 @@ function BlockEditor({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          <p className="mt-1 text-sm text-slate-600">Use raw JSON below for source anchors, schema payloads, and advanced item metadata.</p>
+          <p className="mt-1 text-sm text-slate-600">Edit, reorder, or add items here. Remember to use “Save Changes” at the top when you are done.</p>
         </div>
         <button
           type="button"
@@ -812,7 +842,7 @@ export default function FundingTemplatePage() {
     try {
       const data = await postJson(`/api/admin/funding/calls/${id}/template`);
       setBundle(data);
-      toast.success('Blank template created');
+      toast.success('Empty template created — you can start adding sections and questions');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to create template');
     } finally {
@@ -942,13 +972,13 @@ export default function FundingTemplatePage() {
       const assetIds = selectedAssetIds;
 
       if (assetIds.length === 0) {
-        throw new Error('Select at least one template source. Use Existing Intake Source if you want to include the call intake source.');
+        throw new Error('Tick at least one source first. Use “Use the Saved Intake Source” if the application form is in the same place as the call details.');
       }
 
       const data = await postJson(`/api/admin/funding/calls/${id}/template/extract`, { assetIds });
       await loadBundle(false);
       setSelectedRunId(data.run?.id || null);
-      toast.success('Template extraction started. It will continue if you switch tabs.');
+      toast.success('AI extraction started. It keeps running even if you leave this page.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to extract template');
     } finally {
@@ -969,7 +999,7 @@ export default function FundingTemplatePage() {
         setEditorSource('template');
       }
       setSelectedRunId(runId);
-      toast.success('Latest extraction is now the current template.');
+      toast.success('Done — this AI result is now the current template.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to apply extraction run');
     } finally {
@@ -979,11 +1009,11 @@ export default function FundingTemplatePage() {
 
   async function revertRevision(revisionNo: number) {
     if (!id) return;
-    if (!window.confirm(`Revert to revision ${revisionNo}? This will create a new forward revision.`)) return;
+    if (!window.confirm(`Restore version ${revisionNo}? Your current version is kept in the history, so nothing is lost.`)) return;
     try {
       const data = await postJson(`/api/admin/funding/calls/${id}/template/revert`, { revisionNo });
       setBundle(data);
-      toast.success(`Reverted to revision ${revisionNo}`);
+      toast.success(`Restored version ${revisionNo}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to revert template');
     }
@@ -999,7 +1029,7 @@ export default function FundingTemplatePage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <Head><title>Funding Template Authoring</title></Head>
+      <Head><title>Application Template Workspace</title></Head>
       <Header />
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <FundingWorkspaceTabs
@@ -1014,15 +1044,33 @@ export default function FundingTemplatePage() {
 
         <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Funding Template Authoring</p>
+            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Step 3 of 4 · Application Template</p>
             <h1 className="mt-2 text-3xl font-semibold text-slate-900">{bundle.fundingCall.scheme_title}</h1>
-            <p className="mt-3 text-sm text-slate-600">{bundle.fundingCall.agency_name} · Call status: {bundle.fundingCall.status} · Template status: {bundle.fundingCall.template_status.replace('_', ' ')}</p>
+            <p className="mt-3 text-sm text-slate-600">{bundle.fundingCall.agency_name} · Call: {bundle.fundingCall.status.replace(/_/g, ' ').toLowerCase()} · Template: {storedStatusLabel(bundle.fundingCall.template_status)}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link href={`/admin/funding/catalog/${bundle.fundingCall.id}`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">Back to Catalog Record</Link>
+            <Link href={`/admin/funding/catalog/${bundle.fundingCall.id}`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">Back to Call Details</Link>
             {bundle.fundingCall.intake_job_id && <Link href={`/admin/funding/intake/${bundle.fundingCall.intake_job_id}`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">Open Intake Job</Link>}
-            {!bundle.template && <button type="button" onClick={handleCreateTemplate} disabled={busyState !== 'idle'} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyState === 'create' ? 'Creating...' : 'Create Blank Template'}</button>}
+            {!bundle.template && <button type="button" onClick={handleCreateTemplate} disabled={busyState !== 'idle'} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyState === 'create' ? 'Creating...' : 'Start With Empty Template'}</button>}
           </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-700">How this page works</h2>
+          <ol className="mt-3 grid gap-3 text-sm text-slate-600 md:grid-cols-4">
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">1. Pick sources.</span> In the panel on the right, choose which documents or links the AI should read.
+            </li>
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">2. Extract &amp; review.</span> Run the AI extraction, preview the result, and make it the current template if it looks right.
+            </li>
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">3. Edit &amp; save.</span> Adjust sections, questions, and attachments in the editors, then use Save Changes.
+            </li>
+            <li className="rounded-xl bg-slate-50 p-3">
+              <span className="font-semibold text-slate-900">4. Approve.</span> Approve the template to mark this step done.
+            </li>
+          </ol>
         </div>
 
         <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,1.35fr),minmax(0,0.65fr)]">
@@ -1030,17 +1078,17 @@ export default function FundingTemplatePage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Template Workspace</h2>
-                  <p className="mt-1 text-sm text-slate-600">Manual saves append revisions. Extraction merges by key and records conflicts instead of overwriting authored content.</p>
+                  <h2 className="text-lg font-semibold text-slate-900">Template at a glance</h2>
+                  <p className="mt-1 text-sm text-slate-600">Every save creates a new version, so nothing is lost. AI extractions never overwrite your manual edits — any clash is flagged as a conflict for you to resolve.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={handleSaveTemplate} disabled={busyState !== 'idle' || !draftTemplate} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">{busyState === 'save' ? 'Saving...' : 'Save Template'}</button>
+                  <button type="button" onClick={handleSaveTemplate} disabled={busyState !== 'idle' || !draftTemplate} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">{busyState === 'save' ? 'Saving...' : 'Save Changes'}</button>
                   <button type="button" onClick={handleApproveTemplate} disabled={busyState !== 'idle' || !bundle.template} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyState === 'approve' ? 'Approving...' : 'Approve Template'}</button>
                 </div>
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Revision</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.current_revision_no || 0}</div></div>
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Template Status</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.status || 'none'}</div></div>
+                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Saved Version</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.current_revision_no || 0}</div></div>
+                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Template Status</div><div className="mt-2 text-lg font-semibold text-slate-900">{storedStatusLabel(bundle.template?.status)}</div></div>
                 <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Conflicts</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.compatibility_json?.conflicts?.length || 0}</div></div>
                 <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Warnings</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.compatibility_json?.warnings?.length || 0}</div></div>
               </div>
@@ -1053,21 +1101,21 @@ export default function FundingTemplatePage() {
               {latestExtractionRun && latestRunHasContent && currentTemplateIsEmpty && (
                 <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                   {latestRunNeedsApply
-                    ? 'The latest extraction preview is ready, but it is not the active template yet. Use `Use Latest Extraction as Current Template` to promote it.'
-                    : 'The current active template was loaded from the latest extraction run.'}
+                    ? 'The AI has produced a template, but it is not in use yet. Find it in the panel on the right and click “Make This the Current Template”.'
+                    : 'The current template was loaded from the latest AI extraction.'}
                 </div>
               )}
               <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
-                Editor source: <span className="font-semibold text-slate-900">{editorSource === 'template' ? 'current active template' : 'latest extraction preview'}</span>
+                You are editing: <span className="font-semibold text-slate-900">{editorSource === 'template' ? 'the current saved template' : 'an AI result that has not been made current yet'}</span>
               </div>
-              <input value={changeNotes} onChange={(event) => setChangeNotes(event.target.value)} className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm" placeholder="Optional note for the next manual edit revision" />
+              <input value={changeNotes} onChange={(event) => setChangeNotes(event.target.value)} className="mt-4 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm" placeholder="Optional note describing what you changed (saved with the next version)" />
             </section>
 
             <TemplatePreviewCard
-              title="Current Active Template"
-              subtitle="This is the template currently attached to the funding call and used by downstream grant workflows."
+              title="Current Template"
+              subtitle="This is the template saved on the funding call right now — it is what applicants and drafting tools will use."
               template={storedTemplatePreview}
-              emptyMessage="The stored template is currently empty. If extraction found content, use the extraction panel to preview it and then save or apply it."
+              emptyMessage="No template saved yet. If the AI already extracted one, open it in the panel on the right and make it the current template."
             />
 
             {draftTemplate && (
@@ -1081,8 +1129,8 @@ export default function FundingTemplatePage() {
                 <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-4">
                     <div>
-                      <h2 className="text-lg font-semibold text-slate-900">Advanced Raw JSON</h2>
-                      <p className="mt-1 text-sm text-slate-600">Budget schema, source anchors, item schema payloads, and merge conflict cleanup are edited here.</p>
+                      <h2 className="text-lg font-semibold text-slate-900">Advanced · Edit as JSON</h2>
+                      <p className="mt-1 text-sm text-slate-600">For technical users only. Budget schema, source anchors, and conflict cleanup are edited here — most people can skip this section.</p>
                     </div>
                     <button type="button" onClick={applyRawJson} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">Load Raw JSON Into Editor</button>
                   </div>
@@ -1096,9 +1144,9 @@ export default function FundingTemplatePage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Template Sources</h2>
+                  <h2 className="text-lg font-semibold text-slate-900">Step 1 · Choose sources for the AI</h2>
                   <p className="mt-1 text-sm text-slate-600">
-                    Template extraction uses only the selected sources below. It does not automatically read Call Basics or Guidelines.
+                    The AI builds the template only from the sources you tick below. It does not automatically read the Call Details or Guidelines steps.
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
@@ -1108,11 +1156,11 @@ export default function FundingTemplatePage() {
               {(busyState === 'extract' || activeRuns.length > 0) && (
                 <div className="mt-5">
                   <ExtractionWaitingNotice
-                    title={activeRuns.length > 0 ? 'Template extraction is still running' : 'Template extraction is being submitted'}
+                    title={activeRuns.length > 0 ? 'The AI is still building the template' : 'Starting the AI extraction'}
                     description={
                       activeRuns.length > 0
-                        ? `${activeRuns.length} template run${activeRuns.length === 1 ? '' : 's'} queued or extracting. You can switch to Call or Guidelines; this run stays attached to the same funding call.`
-                        : 'Submitting a persisted run. Once accepted, the model continues server-side even if you switch tabs.'
+                        ? `${activeRuns.length} extraction${activeRuns.length === 1 ? ' is' : 's are'} in progress. You can safely move to the Call Details or Guidelines step — the work continues in the background and the result will appear here.`
+                        : 'Sending the request now. Once it starts, it keeps running in the background even if you leave this page.'
                     }
                   />
                 </div>
@@ -1127,7 +1175,7 @@ export default function FundingTemplatePage() {
                       disabled={busyState !== 'idle' || !bundle.fundingCall.intake_job_id}
                       className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-900 disabled:opacity-50"
                     >
-                      Use Existing Intake Source
+                      Use the Saved Intake Source
                     </button>
                     <button
                       type="button"
@@ -1147,7 +1195,7 @@ export default function FundingTemplatePage() {
                     </button>
                   </div>
                   <p className="mt-3 text-xs leading-5 text-slate-500">
-                    The intake source is the source used for basic call details. Guideline results are separate; add a guideline document here only if it should be treated as template input.
+                    The intake source is the same page or document that was used for the call details. Guidelines are handled separately — only add a guideline document here if the application form itself is inside it.
                   </p>
                 </div>
 
@@ -1234,19 +1282,19 @@ export default function FundingTemplatePage() {
                 ))}
               </div>
 
-              <button type="button" onClick={extractTemplate} disabled={busyState !== 'idle' || selectedAssetIds.length === 0} className="mt-6 w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white disabled:opacity-50">{busyState === 'extract' ? 'Running Extraction...' : selectedAssetIds.length > 0 ? `Run Extraction on ${selectedAssetIds.length} Source${selectedAssetIds.length === 1 ? '' : 's'}` : 'Select a Source to Run Extraction'}</button>
+              <button type="button" onClick={extractTemplate} disabled={busyState !== 'idle' || selectedAssetIds.length === 0} className="mt-6 w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white disabled:opacity-50">{busyState === 'extract' ? 'Starting Extraction...' : selectedAssetIds.length > 0 ? `Start AI Extraction (${selectedAssetIds.length} source${selectedAssetIds.length === 1 ? '' : 's'})` : 'Tick a Source Above to Start Extraction'}</button>
 
               {latestExtractionRun && latestRunHasContent && (
                 <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <h3 className="text-sm font-semibold text-emerald-950">Latest Extraction Ready</h3>
+                      <h3 className="text-sm font-semibold text-emerald-950">Step 2 · The AI result is ready</h3>
                       <p className="mt-1 text-sm text-emerald-900">
-                        Status: {latestExtractionRun.status.replace('_', ' ')}
+                        Status: {runStatusLabel(latestExtractionRun.status)}
                         {latestExtractionRun.extractor_model ? ` • Model: ${latestExtractionRun.extractor_model}` : ''}
                       </p>
                       <p className="mt-2 text-xs text-emerald-800">
-                        The preview below shows the extracted template. Use the primary action here to make it the current active template.
+                        Preview what the AI found. If it looks right, make it the current template — nothing is in use until you do.
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -1258,11 +1306,11 @@ export default function FundingTemplatePage() {
                           disabled={busyState !== 'idle'}
                           className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
                         >
-                          {busyState === 'apply' ? 'Applying...' : 'Use Latest Extraction as Current Template'}
+                          {busyState === 'apply' ? 'Applying...' : 'Make This the Current Template'}
                         </button>
                       ) : (
                         <span className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-emerald-900">
-                          Already current
+                          Already in use
                         </span>
                       )}
                     </div>
@@ -1278,11 +1326,14 @@ export default function FundingTemplatePage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Runs and Revisions</h2>
+              <h2 className="text-lg font-semibold text-slate-900">AI extractions &amp; version history</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Every AI extraction and every saved version is listed here. Preview an extraction before making it the current template, or restore an earlier version if needed.
+              </p>
               <div className="mt-5 space-y-3">
                 {bundle.runs.map((run) => (
                   <div key={run.id} className="rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
-                    <div className="font-semibold text-slate-900">{run.status.replace('_', ' ')}</div>
+                    <div className="font-semibold text-slate-900">{runStatusLabel(run.status)}</div>
                     <div className="mt-1 text-xs text-slate-500">{new Date(run.created_at).toLocaleString()}</div>
                     {run.extractor_model && <div className="mt-2">Model: {run.extractor_model}</div>}
                     {run.warnings_json && run.warnings_json.length > 0 && <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">{run.warnings_json.join(' · ')}</div>}
@@ -1296,26 +1347,26 @@ export default function FundingTemplatePage() {
                           disabled={busyState !== 'idle'}
                           className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
                         >
-                          {busyState === 'apply' ? 'Applying...' : 'Use This Extraction'}
+                          {busyState === 'apply' ? 'Applying...' : 'Make This the Current Template'}
                         </button>
                       )}
                     </div>
                   </div>
                 ))}
-                {bundle.runs.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No extraction runs yet.</div>}
+                {bundle.runs.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No AI extractions yet. Tick a source above and start one.</div>}
               </div>
 
               {selectedRun && (
                 <>
                   <TemplatePreviewCard
-                    title={selectedRun.status === 'needs_review' ? 'Latest Extraction Preview' : 'Applied Extraction Preview'}
+                    title={selectedRun.status === 'needs_review' ? 'AI Result Preview (not in use yet)' : 'AI Result Preview (already in use)'}
                     subtitle={
                       selectedRun.status === 'needs_review'
-                        ? 'This preview is not active yet. Use the action above to make it the current template.'
-                        : 'This extraction run has already been applied.'
+                        ? 'This is just a preview. Use “Make This the Current Template” above if it looks right.'
+                        : 'This AI result has already been made the current template.'
                     }
                     template={selectedRunPreview}
-                    emptyMessage="This extraction run does not contain any normalized template content."
+                    emptyMessage="This AI extraction did not produce any template content."
                   />
                   <details className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                     <summary className="cursor-pointer text-sm font-medium text-slate-700">Show Raw Run JSON</summary>
@@ -1329,20 +1380,21 @@ export default function FundingTemplatePage() {
               <div className="mt-6 space-y-3">
                 {bundle.revisions.map((revision) => (
                   <div key={revision.id} className="rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
-                    <div className="font-semibold text-slate-900">Revision {revision.revision_no} · {revision.revision_type}</div>
+                    <div className="font-semibold text-slate-900">Version {revision.revision_no} · {revision.revision_type.replace(/_/g, ' ')}</div>
                     <div className="mt-1 text-xs text-slate-500">{new Date(revision.created_at).toLocaleString()}</div>
                     {revision.diff_summary && <div className="mt-2">{revision.diff_summary}</div>}
                     {revision.change_notes && <div className="mt-1 text-slate-500">{revision.change_notes}</div>}
-                    <button type="button" onClick={() => revertRevision(revision.revision_no)} className="mt-3 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700">Revert to This Revision</button>
+                    <button type="button" onClick={() => revertRevision(revision.revision_no)} className="mt-3 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700">Restore This Version</button>
                   </div>
                 ))}
-                {bundle.revisions.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No revisions yet.</div>}
+                {bundle.revisions.length === 0 && <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No saved versions yet.</div>}
               </div>
             </section>
 
             {bundle.template?.compatibility_json && (
               <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-slate-900">Compatibility Summary</h2>
+                <h2 className="text-lg font-semibold text-slate-900">Checks &amp; conflicts</h2>
+                <p className="mt-1 text-sm text-slate-600">How well the app can support each part of this template, plus any clashes between AI extractions and manual edits.</p>
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   {Object.entries(bundle.template.compatibility_json.supportCounts || {}).map(([level, count]) => (
                     <div key={level} className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">{level}</div><div className="mt-2 text-2xl font-semibold text-slate-900">{count}</div></div>

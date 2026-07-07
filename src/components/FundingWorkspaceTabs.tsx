@@ -21,32 +21,44 @@ type StepItem = {
   status?: string | null;
 };
 
+// Plain-language labels for raw workflow statuses shown in the tab badges.
+const STATUS_LABELS: Record<string, string> = {
+  none: 'Not started',
+  draft: 'In progress',
+  needs_review: 'Needs review',
+  approved: 'Approved',
+};
+
+function formatStatusLabel(status: string): string {
+  return STATUS_LABELS[status] || status.replace(/_/g, ' ');
+}
+
 export default function FundingWorkspaceTabs(props: FundingWorkspaceTabsProps) {
   const steps: StepItem[] = [
     {
       key: 'call',
-      label: '1. Call',
-      subtitle: 'Independent call details',
+      label: '1. Call Details',
+      subtitle: 'What the funding call is about',
       href: props.callHref || null,
     },
     {
       key: 'guidelines',
       label: '2. Guidelines',
-      subtitle: 'Independent guideline runs',
+      subtitle: 'Rules applicants must follow',
       href: props.guidelinesHref || null,
       status: props.guidelineStatus || null,
     },
     {
       key: 'template',
       label: '3. Template',
-      subtitle: 'Independent template runs',
+      subtitle: 'Application form structure',
       href: props.templateHref || null,
       status: props.templateStatus || null,
     },
     {
       key: 'documents',
       label: '4. Documents',
-      subtitle: 'Document evidence layer',
+      subtitle: 'Uploaded source files',
       href: props.documentsHref || null,
       status: props.documentStatus || null,
     },
@@ -75,7 +87,7 @@ export default function FundingWorkspaceTabs(props: FundingWorkspaceTabsProps) {
                 </div>
                 {step.status && (
                   <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-700">
-                    {step.status.replace(/_/g, ' ')}
+                    {formatStatusLabel(step.status)}
                   </span>
                 )}
               </div>

@@ -18,6 +18,30 @@ const TEXT_RANK_DISPLAY_THRESHOLD = 0.025
 const QUERY_EMBEDDING_TASK = 'RETRIEVAL_QUERY' as const
 const QUERY_CACHE_PREFIX = 'public-project-query-v1'
 
+// Facet aggregation scans the whole corpus, so results are cached per filter
+// combination and concurrent callers share a single in-flight query.
+const FACETS_CACHE_TTL_MS = Math.max(
+  30_000,
+  Number(process.env.PUBLIC_PROJECT_FACETS_CACHE_MS || 10 * 60 * 1000)
+)
+const FACETS_CACHE_MAX_KEYS = 50
+const facetsCache = new Map<string, { data: PublicProjectFacets; expiresAt: number }>()
+const facetsInflight = new Map<string, Promise<PublicProjectFacets>>()
+
+function pruneExpiredFacets() {
+  const now = Date.now()
+  for (const [key, entry] of facetsCache) {
+    if (entry.expiresAt <= now) {
+      facetsCache.delete(key)
+    }
+  }
+  while (facetsCache.size >= FACETS_CACHE_MAX_KEYS) {
+    const oldestKey = facetsCache.keys().next().value
+    if (oldestKey === undefined) break
+    facetsCache.delete(oldestKey)
+  }
+}
+
 export type PublicProjectSearchFilters = {
   sourceKeys?: string[]
   yearFrom?: number
@@ -453,12 +477,52 @@ export class PublicProjectSearchService {
   }
 
   async getFacets(filters: PublicProjectSearchFilters = {}): Promise<PublicProjectFacets> {
+    const cacheKey = JSON.stringify(filters || {})
+    const now = Date.now()
+    const cached = facetsCache.get(cacheKey)
+    if (cached && cached.expiresAt > now) {
+      return cached.data
+    }
+
+    const inflight = facetsInflight.get(cacheKey)
+    if (inflight) {
+      return inflight
+    }
+
+    const promise = this.fetchFacets(filters)
+      .then((data) => {
+        pruneExpiredFacets()
+        facetsCache.set(cacheKey, { data, expiresAt: Date.now() + FACETS_CACHE_TTL_MS })
+        facetsInflight.delete(cacheKey)
+        return data
+      })
+      .catch((error) => {
+        facetsInflight.delete(cacheKey)
+        throw error
+      })
+
+    facetsInflight.set(cacheKey, promise)
+    return promise
+  }
+
+  private async fetchFacets(filters: PublicProjectSearchFilters = {}): Promise<PublicProjectFacets> {
     const where = combineConditions(buildFilterConditions(filters))
+    // Only materialize the scalar columns the facet aggregations need. Pulling
+    // p.* here forced Postgres to spill the whole wide table (vectors, raw
+    // JSON payloads, tsvector) into a temp file on every call, saturating disk I/O.
     const rows = await prisma.$queryRaw<Array<{ dimension: string; value: string; count: number }>>(Prisma.sql`
       WITH filtered AS (
-        SELECT p.* FROM public_projects p WHERE ${where}
+        SELECT
+          COALESCE(${fundingAgencyExpression()}, p.source_key::text) AS source_value,
+          p.sanction_year,
+          p.state,
+          p.scheme_name,
+          p.primary_institution_name,
+          p.discipline
+        FROM public_projects p
+        WHERE ${where}
       )
-      SELECT 'source' AS dimension, COALESCE(${fundingAgencyExpression()}, source_key::text) AS value, count(*)::int AS count FROM filtered p GROUP BY 2
+      SELECT 'source' AS dimension, source_value AS value, count(*)::int AS count FROM filtered GROUP BY source_value
       UNION ALL SELECT 'year', sanction_year::text, count(*)::int FROM filtered WHERE sanction_year IS NOT NULL GROUP BY sanction_year
       UNION ALL SELECT 'state', state, count(*)::int FROM filtered WHERE state IS NOT NULL AND btrim(state) <> '' GROUP BY state
       UNION ALL SELECT 'scheme', scheme_name, count(*)::int FROM filtered WHERE scheme_name IS NOT NULL AND btrim(scheme_name) <> '' GROUP BY scheme_name

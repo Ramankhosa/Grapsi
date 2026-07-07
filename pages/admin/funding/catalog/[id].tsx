@@ -13,6 +13,21 @@ import type {
   ResearchAreaTaxonomyPayload,
 } from '@/lib/researcherProfile/types';
 
+// Plain-language labels for guideline/template statuses shown to admins.
+const STEP_STATUS_LABELS: Record<string, string> = {
+  none: 'Not started',
+  draft: 'In progress',
+  needs_review: 'Needs review',
+  approved: 'Approved',
+};
+
+function stepStatusLabel(status: string | null | undefined): string {
+  if (!status) {
+    return STEP_STATUS_LABELS.none;
+  }
+  return STEP_STATUS_LABELS[status] || status.replace(/_/g, ' ');
+}
+
 type CatalogDetails = {
   call: {
     id: string;
@@ -327,10 +342,10 @@ export default function FundingCatalogDetailPage() {
 
         <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Funding Catalog</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Record {details.call.id}</h1>
+            <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Step 1 of 4 · Call Details</p>
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Funding Call {details.call.id}</h1>
             <p className="mt-3 text-sm text-slate-600">
-              Status: {details.call.status} · {details.call.is_active ? 'Active' : 'Inactive'} · Embedding: {details.call.embedding_status.replace('_', ' ')}
+              Status: {details.call.status} · {details.call.is_active ? 'Active' : 'Inactive'} · Search index: {details.call.embedding_status.replace('_', ' ')}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -342,11 +357,11 @@ export default function FundingCatalogDetailPage() {
                 Open Intake Job
               </Link>
             )}
-            <Link href={`/admin/funding/catalog/${details.call.id}/template`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
-              Open Template Workspace
-            </Link>
             <Link href={`/admin/funding/catalog/${details.call.id}/guidelines`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
-              Open Guideline Workspace
+              Open Guidelines (Step 2)
+            </Link>
+            <Link href={`/admin/funding/catalog/${details.call.id}/template`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
+              Open Template (Step 3)
             </Link>
             <button
               type="button"
@@ -386,46 +401,46 @@ export default function FundingCatalogDetailPage() {
         <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,0.7fr),minmax(0,1.3fr)]">
           <div className="space-y-8">
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Publish readiness</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Ready to publish?</h2>
               {details.publishReadiness.ready ? (
                 <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                  This funding call is ready to publish.
+                  Yes — all required fields are filled in. You can publish this call.
                 </div>
               ) : (
                 <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  Missing publish fields: {details.publishReadiness.missingFields.join(', ')}
+                  Not yet. Fill in these fields first: {details.publishReadiness.missingFields.join(', ')}
                 </div>
               )}
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Catalog status</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Where things stand</h2>
               <div className="mt-4 space-y-3 text-sm text-slate-700">
                 <div>
                   <span className="font-medium text-slate-900">Published by:</span>{' '}
-                  {details.call.published_by || 'Not published'}
+                  {details.call.published_by || 'Not published yet'}
                 </div>
                 <div>
                   <span className="font-medium text-slate-900">Published at:</span>{' '}
-                  {details.call.published_at ? new Date(details.call.published_at).toLocaleString() : 'Not published'}
+                  {details.call.published_at ? new Date(details.call.published_at).toLocaleString() : 'Not published yet'}
                 </div>
                 <div>
-                  <span className="font-medium text-slate-900">Embedding status:</span>{' '}
+                  <span className="font-medium text-slate-900">Search index:</span>{' '}
                   {details.call.embedding_status.replace('_', ' ')}
                 </div>
                 <div>
-                  <span className="font-medium text-slate-900">Template status:</span>{' '}
-                  {details.call.template_status}
+                  <span className="font-medium text-slate-900">Template (Step 3):</span>{' '}
+                  {stepStatusLabel(details.call.template_status)}
                 </div>
                 <div>
-                  <span className="font-medium text-slate-900">Guideline status:</span>{' '}
-                  {details.call.guideline_status}
+                  <span className="font-medium text-slate-900">Guidelines (Step 2):</span>{' '}
+                  {stepStatusLabel(details.call.guideline_status)}
                 </div>
                 <div>
-                  <span className="font-medium text-slate-900">Drafting readiness:</span>{' '}
+                  <span className="font-medium text-slate-900">Ready for drafting:</span>{' '}
                   {details.call.guideline_status === 'approved' && details.call.template_status === 'approved'
-                    ? 'Ready for brainstorming and drafting'
-                    : 'Awaiting approved guideline/template assets'}
+                    ? 'Yes — researchers can brainstorm and draft with this call'
+                    : 'Not yet — Guidelines and Template both need to be approved first'}
                 </div>
                 {details.call.source_url && (
                   <div className="break-all">
@@ -544,7 +559,7 @@ export default function FundingCatalogDetailPage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">Source provenance</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Where this call came from</h2>
               {details.sourceProvenance ? (
                 <div className="mt-4 space-y-3 text-sm text-slate-700">
                   <div><span className="font-medium text-slate-900">Intake Job:</span> {details.sourceProvenance.id}</div>
@@ -557,16 +572,16 @@ export default function FundingCatalogDetailPage() {
                 </div>
               ) : (
                 <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
-                  No linked intake job was found for this catalog record.
+                  This call was not created through the intake process, so there is no linked intake job.
                 </div>
               )}
             </section>
           </div>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Catalog editor</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Call details editor</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Edit the live funding-call fields in place. Publishing regenerates the embedding and makes the call eligible for search.
+              Edit any field of this funding call here, then use “Save Changes” at the top. Publishing refreshes the search index so researchers can find the call.
             </p>
 
             <div className="mt-6 space-y-6">
