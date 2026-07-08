@@ -195,6 +195,57 @@ export async function fetchReadableUrlContent(input: string): Promise<{
   };
 }
 
+const BINARY_DOCUMENT_FETCH_TIMEOUT_MS = 30_000;
+const MAX_BINARY_DOCUMENT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Download a binary document (PDF/DOCX) from a public URL with the same SSRF
+ * and TLS-tolerance rules as `fetchReadableUrlContent`. Returns the raw bytes
+ * plus the response headers needed to identify the file.
+ */
+export async function fetchBinaryDocumentFromUrl(input: string): Promise<{
+  bytes: Buffer;
+  contentType: string;
+  contentDisposition: string;
+  finalUrl: URL;
+}> {
+  const safeUrl = await assertSafePublicHttpsUrl(input);
+  const baseRequestOptions = {
+    timeout: BINARY_DOCUMENT_FETCH_TIMEOUT_MS,
+    responseType: 'arraybuffer' as const,
+    maxContentLength: MAX_BINARY_DOCUMENT_BYTES,
+    maxBodyLength: MAX_BINARY_DOCUMENT_BYTES,
+    maxRedirects: 3,
+    headers: {
+      'User-Agent': 'GrantMentor Funding Intake/1.0',
+      Accept: 'application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/octet-stream',
+    },
+  };
+
+  let response;
+  try {
+    response = await axios.get(safeUrl.toString(), baseRequestOptions);
+  } catch (error) {
+    if (!isTlsCertificateError(error)) {
+      throw error;
+    }
+    response = await axios.get(safeUrl.toString(), {
+      ...baseRequestOptions,
+      httpsAgent: INSECURE_TLS_RETRY_AGENT,
+    });
+  }
+
+  const responseUrl = String(response.request?.res?.responseUrl || safeUrl.toString());
+  const finalUrl = await assertSafePublicHttpsUrl(responseUrl);
+
+  return {
+    bytes: Buffer.from(response.data),
+    contentType: String(response.headers['content-type'] || ''),
+    contentDisposition: String(response.headers['content-disposition'] || ''),
+    finalUrl,
+  };
+}
+
 export function createEmptyStructuredField<T>(value: T | null = null): StructuredFieldValue<T> {
   return {
     value,

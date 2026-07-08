@@ -885,6 +885,18 @@ async function main() {
       isDefault: false
     },
     {
+      code: 'glm-5.2',
+      displayName: 'GLM-5.2',
+      provider: 'zhipu',
+      contextWindow: 200000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 160,    // $1.60
+      outputCostPer1M: 480,   // $4.80
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'glm-5',
       displayName: 'GLM-5',
       provider: 'zhipu',
@@ -969,15 +981,39 @@ async function main() {
       isDefault: false
     },
     {
+      code: 'glm-4.6v',
+      displayName: 'GLM-4.6V',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 320,   // $3.20
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.6v-flash',
+      displayName: 'GLM-4.6V Flash',
+      provider: 'zhipu',
+      contextWindow: 128000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'glm-4.5',
-      displayName: 'GLM-4.5',
+      displayName: 'GLM-4.5 (retired)',
       provider: 'zhipu',
       contextWindow: 128000,
       supportsVision: false,
       supportsStreaming: true,
       inputCostPer1M: 20,     // $0.20
       outputCostPer1M: 110,   // $1.10
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
@@ -994,14 +1030,14 @@ async function main() {
     },
     {
       code: 'glm-4.5-x',
-      displayName: 'GLM-4.5 X',
+      displayName: 'GLM-4.5 X (invalid, use glm-4.5-airx)',
       provider: 'zhipu',
       contextWindow: 128000,
       supportsVision: false,
       supportsStreaming: true,
       inputCostPer1M: 20,     // $0.20
       outputCostPer1M: 110,   // $1.10
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
@@ -1030,26 +1066,26 @@ async function main() {
     },
     {
       code: 'glm-4.5v',
-      displayName: 'GLM-4.5V',
+      displayName: 'GLM-4.5V (invalid, use glm-4.6v)',
       provider: 'zhipu',
       contextWindow: 128000,
       supportsVision: true,
       supportsStreaming: true,
       inputCostPer1M: 60,     // $0.60
       outputCostPer1M: 180,   // $1.80
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
       code: 'glm-4-32b-0414-128k',
-      displayName: 'GLM-4 32B 128K',
+      displayName: 'GLM-4 32B 128K (Z.AI only, not on open.bigmodel.cn)',
       provider: 'zhipu',
       contextWindow: 128000,
       supportsVision: false,
       supportsStreaming: true,
       inputCostPer1M: 20,     // $0.20
       outputCostPer1M: 110,   // $1.10
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
 

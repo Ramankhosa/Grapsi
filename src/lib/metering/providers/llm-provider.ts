@@ -166,6 +166,7 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'grok-2': 'grok',
 
     // Zhipu (GLM)
+    'glm-5.2': 'zhipu',
     'glm-5.1': 'zhipu',
     'glm-5': 'zhipu',
     'glm-5-turbo': 'zhipu',
@@ -174,11 +175,14 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'glm-4.7-flash': 'zhipu',
     'glm-4.7-flashx': 'zhipu',
     'glm-4.6': 'zhipu',
-    'glm-4.5': 'zhipu',
+    'glm-4.6v': 'zhipu',
+    'glm-4.6v-flash': 'zhipu',
     'glm-4.5-air': 'zhipu',
-    'glm-4.5-x': 'zhipu',
     'glm-4.5-airx': 'zhipu',
     'glm-4.5-flash': 'zhipu',
+    // Legacy codes — still route to zhipu so existing DB configs don't break
+    'glm-4.5': 'zhipu',
+    'glm-4.5-x': 'zhipu',
     'glm-4.5v': 'zhipu',
     'glm-4-32b-0414-128k': 'zhipu',
 

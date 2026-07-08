@@ -61,7 +61,9 @@ const VISION_CAPABLE_MODELS = new Set([
   'gemini-1.5-pro', 'gemini-1.5-pro-002',
   'gemini-1.5-flash', 'gemini-1.5-flash-002',
   'gemini-3.0-nano-banana', 'gemini-3.1-flash', 'gemini-3.1-flash-preview', 'gemini-3-flash-preview',
-  'gemini-3-pro-preview', 'gemini-3-pro-preview-thinking', 'gemini-3-pro-image-preview'
+  'gemini-3-pro-preview', 'gemini-3-pro-preview-thinking', 'gemini-3-pro-image-preview',
+  // Zhipu
+  'glm-5v-turbo', 'glm-4.6v', 'glm-4.6v-flash'
 ])
 
 /**
@@ -69,7 +71,18 @@ const VISION_CAPABLE_MODELS = new Set([
  */
 const FILE_CAPABLE_MODELS = new Set([
   'gemini-2.5-flash',
-  'gemini-2.5-pro'
+  'gemini-2.5-pro',
+  'gemini-1.5-pro',
+  'gemini-1.5-pro-002',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-002',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-001',
+  'gemini-3.1-flash',
+  'gemini-3.1-flash-preview',
+  'gemini-3-flash-preview',
+  'gemini-3-pro-preview',
+  'gemini-3-pro-preview-thinking',
 ])
 
 /**
@@ -129,21 +142,20 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'deepseek-v4-flash': { maxInput: 1000000, maxOutput: 384000 },
   'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
   // Zhipu
-  'glm-5': { maxInput: 200000, maxOutput: 65536 },
+  'glm-5.2': { maxInput: 200000, maxOutput: 65536 },
   'glm-5.1': { maxInput: 200000, maxOutput: 65536 },
+  'glm-5': { maxInput: 200000, maxOutput: 65536 },
   'glm-5-turbo': { maxInput: 200000, maxOutput: 65536 },
   'glm-5v-turbo': { maxInput: 200000, maxOutput: 65536 },
   'glm-4.7': { maxInput: 128000, maxOutput: 32768 },
   'glm-4.7-flash': { maxInput: 128000, maxOutput: 32768 },
   'glm-4.7-flashx': { maxInput: 128000, maxOutput: 32768 },
   'glm-4.6': { maxInput: 128000, maxOutput: 32768 },
-  'glm-4.5': { maxInput: 128000, maxOutput: 32768 },
+  'glm-4.6v': { maxInput: 128000, maxOutput: 16384 },
+  'glm-4.6v-flash': { maxInput: 128000, maxOutput: 16384 },
   'glm-4.5-air': { maxInput: 128000, maxOutput: 32768 },
-  'glm-4.5-x': { maxInput: 128000, maxOutput: 32768 },
   'glm-4.5-airx': { maxInput: 128000, maxOutput: 32768 },
   'glm-4.5-flash': { maxInput: 128000, maxOutput: 32768 },
-  'glm-4.5v': { maxInput: 128000, maxOutput: 16384 },
-  'glm-4-32b-0414-128k': { maxInput: 128000, maxOutput: 32768 },
   // Qwen
   'qwen2.5-72b-instruct': { maxInput: 131072, maxOutput: 8192 }
 }

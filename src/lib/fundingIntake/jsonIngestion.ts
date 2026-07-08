@@ -356,6 +356,21 @@ function parseGuidelines(raw: JsonRecord): GuidelinePackDocument | null {
   return isEmptyGuidelinePack(pack) ? null : pack;
 }
 
+// Full-call document links (PDF/DOCX) supplied by the upload for automatic
+// download + embedding ingestion. Accepts a string or an array of strings.
+function parseDocumentUrls(raw: JsonRecord): string[] {
+  const candidate = getByAliases(raw, ['document_urls', 'documentUrls', 'document_url', 'documentUrl']);
+  const list = Array.isArray(candidate) ? candidate : typeof candidate === 'string' ? [candidate] : [];
+  const urls: string[] = [];
+  for (const item of list) {
+    const url = String(item || '').trim();
+    if (/^https?:\/\/.+/i.test(url) && !urls.includes(url)) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
 function readSourceText(raw: JsonRecord, call: JsonRecord | null): string | null {
   const candidate = getByAliases(raw, ['source_text', 'sourceText', 'raw_source_text', 'rawText', 'normalized_text']) ??
     getByAliases(call, ['source_text', 'sourceText', 'raw_source_text', 'rawText', 'normalized_text']);
@@ -403,12 +418,14 @@ export function prepareFundingJsonIntake(input: unknown): {
   sourceText: string | null;
   template: GrantTemplateDocument | null;
   guidelinePack: GuidelinePackDocument | null;
+  documentUrls: string[];
   warnings: string[];
   metadata: {
     schema_version: string;
     prompt_version: string;
     has_template: boolean;
     has_guidelines: boolean;
+    has_document_urls: boolean;
   };
 } {
   const raw = asRecord(input);
@@ -429,6 +446,7 @@ export function prepareFundingJsonIntake(input: unknown): {
 
   const template = parseTemplate(raw);
   const guidelinePack = parseGuidelines(raw);
+  const documentUrls = parseDocumentUrls(raw);
 
   return {
     payload,
@@ -436,12 +454,14 @@ export function prepareFundingJsonIntake(input: unknown): {
     sourceText: readSourceText(raw, firstRecord(raw.call, raw.funding_call, raw.fundingCall)),
     template,
     guidelinePack,
+    documentUrls,
     warnings: payload.warnings,
     metadata: {
       schema_version: String(raw.schema_version || 'funding_intake_json_v1'),
       prompt_version: String(raw.prompt_version || FUNDING_JSON_UPLOAD_PROMPT_VERSION),
       has_template: Boolean(template),
       has_guidelines: Boolean(guidelinePack),
+      has_document_urls: documentUrls.length > 0,
     },
   };
 }
@@ -449,6 +469,7 @@ export function prepareFundingJsonIntake(input: unknown): {
 export function readPreparedFundingJsonArtifacts(metadata: unknown): {
   template: GrantTemplateDocument | null;
   guidelinePack: GuidelinePackDocument | null;
+  documentUrls: string[];
   appliedFundingCallId: string | null;
 } {
   const root = asRecord(metadata);
@@ -462,10 +483,16 @@ export function readPreparedFundingJsonArtifacts(metadata: unknown): {
   const guidelinePack = artifacts?.guideline_pack_json
     ? normalizeGuidelinePack(stripSourceAnchorsDeep(artifacts.guideline_pack_json))
     : null;
+  const documentUrls = Array.isArray(artifacts?.document_urls)
+    ? (artifacts!.document_urls as unknown[])
+        .map((url) => String(url || '').trim())
+        .filter((url) => /^https?:\/\/.+/i.test(url))
+    : [];
 
   return {
     template: template && !isEmptyTemplate(template) ? template : null,
     guidelinePack: guidelinePack && !isEmptyGuidelinePack(guidelinePack) ? guidelinePack : null,
+    documentUrls,
     appliedFundingCallId: typeof applied?.funding_call_id === 'string'
       ? applied.funding_call_id
       : typeof jsonUpload?.applied_funding_call_id === 'string'

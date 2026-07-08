@@ -39,8 +39,9 @@ describe('funding CSV ingestion', () => {
     expect(obj.guidelines.guideline_pack_json.priorities).toHaveLength(1)
     expect(obj.guidelines.guideline_pack_json.mustAddress[0].text).toBe('Include a data management plan')
     expect(obj.guidelines.guideline_pack_json.formatRules[0].text).toBe('Maximum 10 pages')
-    // Template is intentionally absent from CSV.
-    expect(obj.template).toBeUndefined()
+    // No template rows in this CSV, so no template artifact is produced.
+    expect(obj.template).toBeNull()
+    expect(obj.document_urls).toEqual([])
   })
 
   it('feeds cleanly into the existing JSON intake preparation', () => {
@@ -169,5 +170,115 @@ describe('funding CSV ingestion — tolerance to common LLM mistakes', () => {
     ].join('\n')
     const obj = parseFundingCsvUpload(csv) as any
     expect(obj.call.fields.agency_name).toBe('NSF')
+  })
+})
+
+describe('funding CSV ingestion — application template rows', () => {
+  const baseRows = ['field,value', 'agency_name,NSF', 'description,Applied AI for public health.']
+
+  it('maps template rows into a grant template document', () => {
+    const csv = [
+      ...baseRows,
+      'section,Project Summary: Objectives and expected impact in 300 words',
+      'section,Work Plan: Milestones and timeline',
+      'question,Project title: Official title of the proposed project',
+      'attachment,CV of PI: Maximum 2 pages',
+      'scoring_criterion,Innovation: Novelty of the approach, 30 points',
+      'budget_category,Equipment: Up to 20% of total budget',
+      'admin_rule,Font: Arial 11 with 2cm margins',
+    ].join('\n')
+
+    const obj = parseFundingCsvUpload(csv) as any
+    const template = obj.template.grant_template_json
+    expect(template.sections).toHaveLength(2)
+    expect(template.sections[0].label).toBe('Project Summary')
+    expect(template.sections[0].guidance).toBe('Objectives and expected impact in 300 words')
+    expect(template.sections[0].type).toBe('section')
+    expect(template.sections[0].workflowMode).toBe('app_draft')
+    expect(template.questions[0].label).toBe('Project title')
+    expect(template.questions[0].type).toBe('field')
+    expect(template.attachments[0].label).toBe('CV of PI')
+    expect(template.attachments[0].type).toBe('attachment')
+    expect(template.attachments[0].workflowMode).toBe('team_manual')
+    // Unquoted comma in the guidance survives.
+    expect(template.evaluationCriteria[0].label).toBe('Innovation')
+    expect(template.evaluationCriteria[0].guidance).toBe('Novelty of the approach, 30 points')
+    expect(template.evaluationCriteria[0].type).toBe('rubric')
+    expect(template.budget.categories[0].label).toBe('Equipment')
+    expect(template.budget.categories[0].notes).toBe('Up to 20% of total budget')
+    expect(template.submissionRules.items[0].label).toBe('Font')
+    expect(template.submissionRules.items[0].type).toBe('rule')
+  })
+
+  it('does not split item names on colons without a following space (times, ratios)', () => {
+    const csv = [...baseRows, 'admin_rule,Submit by 5:00pm ET'].join('\n')
+    const obj = parseFundingCsvUpload(csv) as any
+    const item = obj.template.grant_template_json.submissionRules.items[0]
+    expect(item.label).toBe('Submit by 5:00pm ET')
+    expect(item.guidance).toBeNull()
+  })
+
+  it('accepts a three-column row and dash/pipe separators as fallbacks', () => {
+    const csv = [
+      ...baseRows,
+      'section,"Project Summary","Objectives, methods, and impact"',
+      'attachment,CV of PI - Maximum 2 pages',
+      'question,Requested amount | Total budget in USD',
+    ].join('\n')
+    const obj = parseFundingCsvUpload(csv) as any
+    const template = obj.template.grant_template_json
+    expect(template.sections[0].label).toBe('Project Summary')
+    expect(template.sections[0].guidance).toBe('Objectives, methods, and impact')
+    expect(template.attachments[0].label).toBe('CV of PI')
+    expect(template.attachments[0].guidance).toBe('Maximum 2 pages')
+    expect(template.questions[0].label).toBe('Requested amount')
+    expect(template.questions[0].guidance).toBe('Total budget in USD')
+  })
+
+  it('feeds template rows through the JSON intake preparation into a normalized template', () => {
+    const csv = [
+      ...baseRows,
+      'section,Project Summary: Objectives and impact',
+      'attachment,Support letter: Signed by an authorized official',
+    ].join('\n')
+    const prepared = prepareFundingJsonIntake(parseFundingCsvUpload(csv))
+    expect(prepared.template).not.toBeNull()
+    expect(prepared.template!.sections[0].label).toBe('Project Summary')
+    expect(prepared.template!.attachments[0].label).toBe('Support letter')
+    expect(prepared.metadata.has_template).toBe(true)
+  })
+})
+
+describe('funding CSV ingestion — document URLs', () => {
+  const baseRows = ['field,value', 'agency_name,NSF', 'description,Applied AI for public health.']
+
+  it('collects document_url rows, splitting lists and deduplicating', () => {
+    const csv = [
+      ...baseRows,
+      'document_url,https://agency.example.org/call.pdf',
+      'pdf_url,https://agency.example.org/annex.docx|https://agency.example.org/call.pdf',
+      'document_url,not-a-url',
+    ].join('\n')
+    const obj = parseFundingCsvUpload(csv) as any
+    expect(obj.document_urls).toEqual([
+      'https://agency.example.org/call.pdf',
+      'https://agency.example.org/annex.docx',
+    ])
+  })
+
+  it('splits comma-separated URL lists from an unquoted value', () => {
+    const csv = [...baseRows, 'document_url,https://a.example.org/one.pdf, https://b.example.org/two.pdf'].join('\n')
+    const obj = parseFundingCsvUpload(csv) as any
+    expect(obj.document_urls).toEqual([
+      'https://a.example.org/one.pdf',
+      'https://b.example.org/two.pdf',
+    ])
+  })
+
+  it('carries document URLs through the JSON intake preparation', () => {
+    const csv = [...baseRows, 'document_url,https://agency.example.org/call.pdf'].join('\n')
+    const prepared = prepareFundingJsonIntake(parseFundingCsvUpload(csv))
+    expect(prepared.documentUrls).toEqual(['https://agency.example.org/call.pdf'])
+    expect(prepared.metadata.has_document_urls).toBe(true)
   })
 })

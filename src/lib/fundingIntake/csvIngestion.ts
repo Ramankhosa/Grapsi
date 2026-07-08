@@ -9,6 +9,7 @@ import {
   FUNDING_GUIDELINE_BLOCK_KEYS,
   type FundingGuidelineBlockKey,
 } from '../fundingGuidelines/types';
+import type { GrantTemplateDocument, FundingTemplateItem } from '../fundingTemplates/types';
 
 export const FUNDING_CSV_UPLOAD_SCHEMA_VERSION = 'funding_intake_csv_v1';
 
@@ -38,6 +39,43 @@ const GUIDELINE_ROW_LABELS: Record<string, FundingGuidelineBlockKey> = {
   reviewer_signal: 'reviewerSignals',
   reviewer: 'reviewerSignals',
 };
+
+// Template row labels (left column) -> template block.
+// The canonical template row format is two columns: label,"Item name: guidance".
+// A three-column form (label,Item name,guidance) is tolerated as well.
+type TemplateBlock = 'sections' | 'questions' | 'attachments' | 'evaluationCriteria' | 'submissionRules' | 'budgetCategories';
+
+const TEMPLATE_ROW_LABELS: Record<string, TemplateBlock> = {
+  template_section: 'sections',
+  section: 'sections',
+  narrative_section: 'sections',
+  template_question: 'questions',
+  question: 'questions',
+  form_field: 'questions',
+  template_attachment: 'attachments',
+  attachment: 'attachments',
+  required_document: 'attachments',
+  required_upload: 'attachments',
+  scoring_criterion: 'evaluationCriteria',
+  scoring_criteria: 'evaluationCriteria',
+  rubric: 'evaluationCriteria',
+  rubric_criterion: 'evaluationCriteria',
+  template_submission_rule: 'submissionRules',
+  admin_rule: 'submissionRules',
+  budget_category: 'budgetCategories',
+  budget_line: 'budgetCategories',
+};
+
+const DOCUMENT_URL_LABELS = new Set([
+  'document_url',
+  'full_call_url',
+  'call_document_url',
+  'pdf_url',
+  'pdf_link',
+  'docx_url',
+  'source_document_url',
+  'full_document_url',
+]);
 
 // Reverse lookup: any known alias (lowercased) -> canonical funding field key.
 const CALL_FIELD_ALIAS_TO_KEY = (() => {
@@ -197,17 +235,144 @@ export function parseCsvRows(content: string): string[][] {
   return rows;
 }
 
+// Separators an LLM may use between the item name and its guidance inside one
+// cell. Checked in priority order; each requires surrounding context that keeps
+// times ("5:00pm"), URLs ("https://"), and hyphenated words ("3-5 pages") intact.
+const TEMPLATE_NAME_GUIDANCE_SEPARATORS = [': ', ' — ', ' – ', ' | ', ' - '];
+
+// Resolve a template row into { label, guidance }. Canonical form is a single
+// value cell "Item name: guidance"; a three-column row (label,name,guidance)
+// and dash/pipe separators are tolerated. A bare name yields empty guidance.
+function splitTemplateLabelGuidance(rawRow: string[], joinedValue: string): { label: string; guidance: string } {
+  const cells = [...rawRow];
+  while (cells.length > 0 && (cells[cells.length - 1] ?? '').trim() === '') cells.pop();
+
+  // Three-column form: the middle cell is the item name (only when it does not
+  // itself carry a "name: guidance" separator — that indicates an unquoted
+  // two-column value whose guidance contains commas).
+  if (cells.length >= 3) {
+    const middle = (cells[1] ?? '').trim();
+    if (middle && !middle.includes(': ')) {
+      return {
+        label: middle,
+        guidance: cells.slice(2).join(',').trim(),
+      };
+    }
+  }
+
+  for (const separator of TEMPLATE_NAME_GUIDANCE_SEPARATORS) {
+    const index = joinedValue.indexOf(separator);
+    if (index > 0) {
+      return {
+        label: joinedValue.slice(0, index).trim(),
+        guidance: joinedValue.slice(index + separator.length).trim(),
+      };
+    }
+  }
+
+  return { label: joinedValue.trim(), guidance: '' };
+}
+
+function buildTemplateItem(
+  block: string,
+  index: number,
+  label: string,
+  guidance: string,
+): FundingTemplateItem {
+  const key = slugify(label, `${block}_${index + 1}`);
+  // Defaults per block follow the conventions in standardGrantTemplate.ts:
+  // sections/questions are app-drafted; attachments and submission rules are
+  // handled manually by the team; rubric items describe reviewer scoring.
+  const inferredType =
+    block === 'attachments' ? 'attachment' as const
+    : block === 'evaluationCriteria' ? 'rubric' as const
+    : block === 'sections' ? 'section' as const
+    : block === 'submissionRules' ? 'rule' as const
+    : 'field' as const;
+  const manual = block === 'attachments' || block === 'submissionRules';
+
+  return {
+    key,
+    label,
+    type: inferredType,
+    workflowMode: manual ? 'team_manual' : 'app_draft',
+    required: true,
+    repeatable: false,
+    visibleWhen: null,
+    wordLimit: null,
+    charLimit: null,
+    options: [],
+    schema: null,
+    guidance: guidance || null,
+    supportLevel: manual ? 'manual' : 'full',
+    confidence: 0.85,
+    sourceAnchors: [],
+  };
+}
+
+function assembleTemplate(
+  templateRows: Record<TemplateBlock, Array<{ label: string; guidance: string }>>,
+): GrantTemplateDocument | null {
+  const hasAny = Object.values(templateRows).some((arr) => arr.length > 0);
+  if (!hasAny) return null;
+
+  const sections = templateRows.sections.map((r, i) => buildTemplateItem('sections', i, r.label, r.guidance));
+  const questions = templateRows.questions.map((r, i) => buildTemplateItem('questions', i, r.label, r.guidance));
+  const attachments = templateRows.attachments.map((r, i) => buildTemplateItem('attachments', i, r.label, r.guidance));
+  const evaluationCriteria = templateRows.evaluationCriteria.map((r, i) => buildTemplateItem('evaluationCriteria', i, r.label, r.guidance));
+  const submissionItems = templateRows.submissionRules.map((r, i) => buildTemplateItem('submissionRules', i, r.label, r.guidance));
+
+  const budgetCategories = templateRows.budgetCategories.map((r, i) => ({
+    key: slugify(r.label, `budget_category_${i + 1}`),
+    label: r.label,
+    cap: null,
+    notes: r.guidance || null,
+    sourceAnchors: [],
+  }));
+
+  return {
+    questions,
+    sections,
+    budget: budgetCategories.length > 0
+      ? {
+          required: true,
+          yearWise: false,
+          workflowMode: 'app_draft',
+          columns: [],
+          categories: budgetCategories,
+          caps: null,
+          justificationNotes: null,
+          supportLevel: 'full',
+          confidence: 0.85,
+          sourceAnchors: [],
+        }
+      : null,
+    attachments,
+    evaluationCriteria,
+    submissionRules: {
+      notes: null,
+      items: submissionItems,
+      sourceAnchors: [],
+    },
+    sourceAnchors: [],
+    mergeConflicts: [],
+  };
+}
+
 /**
  * Parse a two-column (field,value) funding-call CSV into the same intake object
  * the JSON-upload path consumes (see `prepareFundingJsonIntake`). Basic call
  * details fill `call.fields`; guideline rows fill `guidelines.guideline_pack_json`.
- * Template/attachments are intentionally not supported here.
+ * Template rows fill `template.grant_template_json`. Document URLs fill
+ * `document_urls` for automatic PDF/DOCX ingestion into embeddings.
  */
 export function parseFundingCsvUpload(rawText: string): {
   schema_version: string;
   source_text: null;
   call: { fields: Record<string, unknown>; warnings: string[] };
   guidelines: { guideline_pack_json: Record<string, Array<{ key: string; text: string }>> };
+  template: { grant_template_json: GrantTemplateDocument } | null;
+  document_urls: string[];
 } {
   // Strip a UTF-8 BOM and any markdown code fences an LLM may wrap around the CSV.
   const cleaned = (rawText || '')
@@ -225,6 +390,15 @@ export function parseFundingCsvUpload(rawText: string): {
   for (const block of FUNDING_GUIDELINE_BLOCK_KEYS) {
     guidelinePack[block] = [];
   }
+  const templateRows: Record<TemplateBlock, Array<{ label: string; guidance: string }>> = {
+    sections: [],
+    questions: [],
+    attachments: [],
+    evaluationCriteria: [],
+    submissionRules: [],
+    budgetCategories: [],
+  };
+  const documentUrls: string[] = [];
 
   let recognizedRows = 0;
 
@@ -241,6 +415,28 @@ export function parseFundingCsvUpload(rawText: string): {
 
     // Skip empty cells and unfilled template placeholders (which start with "#").
     if (!value || value.startsWith('#')) continue;
+
+    // Document URL row (full call PDF/DOCX to download and ingest)?
+    if (DOCUMENT_URL_LABELS.has(label)) {
+      for (const url of splitListCell(value)) {
+        if (/^https?:\/\/.+/i.test(url) && !documentUrls.includes(url)) {
+          documentUrls.push(url);
+        }
+      }
+      recognizedRows += 1;
+      continue;
+    }
+
+    // Application template row?
+    const templateBlock = TEMPLATE_ROW_LABELS[label];
+    if (templateBlock) {
+      const item = splitTemplateLabelGuidance(rawRow, value);
+      if (item.label) {
+        templateRows[templateBlock].push({ label: item.label, guidance: item.guidance });
+        recognizedRows += 1;
+      }
+      continue;
+    }
 
     // Guideline rule row?
     const bucket = GUIDELINE_ROW_LABELS[label];
@@ -273,7 +469,7 @@ export function parseFundingCsvUpload(rawText: string): {
 
   if (recognizedRows === 0) {
     throw new Error(
-      'CSV upload did not contain any recognized funding-call fields or guideline rows. Use the downloadable template as a starting point.'
+      'CSV upload did not contain any recognized funding-call fields, guideline rows, or template rows. Use the downloadable template as a starting point.'
     );
   }
 
@@ -284,10 +480,14 @@ export function parseFundingCsvUpload(rawText: string): {
     throw new Error('CSV upload must include at least one of agency_name, scheme_title, or description.');
   }
 
+  const template = assembleTemplate(templateRows);
+
   return {
     schema_version: FUNDING_CSV_UPLOAD_SCHEMA_VERSION,
     source_text: null,
     call: { fields, warnings: [] },
     guidelines: { guideline_pack_json: guidelinePack },
+    template: template ? { grant_template_json: template } : null,
+    document_urls: documentUrls,
   };
 }

@@ -167,23 +167,41 @@ export class LLMGateway {
         ? llmRequest.metadata.primaryModelCode.trim()
         : ''
 
-      // 6. Validate model capabilities (vision, streaming, etc.)
-      const selectedModel = requestedPrimaryModel || modelResolution?.modelCode || 'gemini-2.5-pro' // Default model
+      // 6. Validate model capabilities (vision, file input, etc.)
+      //    If the primary model fails, try fallback models before giving up.
+      let selectedModel = requestedPrimaryModel || modelResolution?.modelCode || 'gemini-2.5-pro'
       const capabilityCheck = this.validateModelCapabilities(selectedModel, llmRequest)
       if (!capabilityCheck.valid) {
-        console.error(`✗ Model capability validation failed: ${capabilityCheck.error}`)
-        // Release reservation on early failure
-        if (decision.reservationId) {
-          try {
-            await this.system.reservation.releaseReservation(decision.reservationId)
-            console.log(`[Gateway] Released reservation ${decision.reservationId} due to capability validation failure`)
-          } catch (releaseError) {
-            console.warn('[Gateway] Failed to release reservation on capability failure:', releaseError)
+        console.warn(`[Gateway] Primary model ${selectedModel} failed capability check: ${capabilityCheck.error}`)
+
+        let fallbackFound = false
+        if (modelResolution?.fallbacks?.length) {
+          for (const fb of modelResolution.fallbacks) {
+            const fbCheck = this.validateModelCapabilities(fb.modelCode, llmRequest)
+            if (fbCheck.valid) {
+              console.log(`[Gateway] Falling back to capable model: ${fb.modelCode}`)
+              selectedModel = fb.modelCode
+              fallbackFound = true
+              break
+            }
+            console.warn(`[Gateway] Fallback ${fb.modelCode} also failed: ${fbCheck.error}`)
           }
         }
-        return {
-          success: false,
-          error: new MeteringError('INVALID_MODEL', capabilityCheck.error || 'Model does not support required capabilities')
+
+        if (!fallbackFound) {
+          console.error(`✗ Model capability validation failed and no capable fallback found`)
+          if (decision.reservationId) {
+            try {
+              await this.system.reservation.releaseReservation(decision.reservationId)
+              console.log(`[Gateway] Released reservation ${decision.reservationId} due to capability validation failure`)
+            } catch (releaseError) {
+              console.warn('[Gateway] Failed to release reservation on capability failure:', releaseError)
+            }
+          }
+          return {
+            success: false,
+            error: new MeteringError('INVALID_MODEL', capabilityCheck.error || 'Model does not support required capabilities')
+          }
         }
       }
 
@@ -536,7 +554,18 @@ export class LLMGateway {
    */
   private readonly FILE_CAPABLE_MODELS = new Set([
     'gemini-2.5-flash',
-    'gemini-2.5-pro'
+    'gemini-2.5-pro',
+    'gemini-1.5-pro',
+    'gemini-1.5-pro-002',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-002',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-001',
+    'gemini-3.1-flash',
+    'gemini-3.1-flash-preview',
+    'gemini-3-flash-preview',
+    'gemini-3-pro-preview',
+    'gemini-3-pro-preview-thinking',
   ])
 
   /**

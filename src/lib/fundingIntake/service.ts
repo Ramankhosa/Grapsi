@@ -27,6 +27,7 @@ import {
   ACTIVE_IDEMPOTENT_STATUSES,
   DRAFT_MINIMUM_FIELDS,
 } from './constants';
+import { ingestFundingDocumentFromUrl } from './documentUrlIngestion';
 import { extractCanonicalTextFromPdf, extractFundingOpportunity } from './extractor';
 import {
   FUNDING_JSON_UPLOAD_EXTRACTOR_MODEL,
@@ -405,6 +406,7 @@ async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: 
       json_artifacts: {
         grant_template_json: preparedJsonIntake.template || null,
         guideline_pack_json: preparedJsonIntake.guidelinePack || null,
+        document_urls: preparedJsonIntake.documentUrls || [],
       },
     } as Prisma.InputJsonValue,
     status: 'ready' as const,
@@ -2007,6 +2009,8 @@ class FundingIntakeService {
         templateExtractionError: null,
         jsonGuidelineImported: false,
         jsonTemplateImported: false,
+        jsonDocumentsIngested: 0,
+        jsonDocumentErrors: [],
         jsonImportSkippedReason: 'already_applied',
       };
     }
@@ -2017,6 +2021,8 @@ class FundingIntakeService {
     let templateExtractionError: string | null = null;
     let jsonGuidelineImported = false;
     let jsonTemplateImported = false;
+    let jsonDocumentsIngested = 0;
+    const jsonDocumentErrors: string[] = [];
 
     if (artifacts.guidelinePack) {
       try {
@@ -2050,6 +2056,26 @@ class FundingIntakeService {
       }
     }
 
+    // Download and ingest each full-call document URL (PDF/DOCX). Each URL is
+    // isolated so one dead link never blocks the rest of the import.
+    for (const documentUrl of artifacts.documentUrls) {
+      try {
+        const ingested = await ingestFundingDocumentFromUrl(fundingCallId, documentUrl, operator);
+        jsonDocumentsIngested += 1;
+        console.log('[Funding Intake] document URL ingested', {
+          jobId: job.id,
+          fundingCallId,
+          documentUrl,
+          documentId: ingested.documentId,
+          duplicate: ingested.duplicate,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        jsonDocumentErrors.push(`${documentUrl}: ${message}`);
+        console.error('[Funding Intake] document URL ingestion failed:', documentUrl, error);
+      }
+    }
+
     const metadata = readFetchMetadata(job.fetch_metadata_json);
     await prisma.fundingIntakeJob.update({
       where: { id: job.id },
@@ -2061,16 +2087,18 @@ class FundingIntakeService {
             applied_at: new Date().toISOString(),
             guideline_imported: jsonGuidelineImported,
             template_imported: jsonTemplateImported,
+            documents_ingested: jsonDocumentsIngested,
+            document_errors: jsonDocumentErrors,
           },
         } as any),
       },
     });
 
-    if (jsonGuidelineImported || jsonTemplateImported) {
+    if (jsonGuidelineImported || jsonTemplateImported || jsonDocumentsIngested > 0) {
       await recordJobEvent(job.id, job.status, 'json_artifacts_imported', {
         actorUserId: operator.userId,
         previousStatus: job.status,
-        message: `Imported JSON artifacts:${jsonGuidelineImported ? ' guidelines' : ''}${jsonTemplateImported ? ' template' : ''}`,
+        message: `Imported JSON artifacts:${jsonGuidelineImported ? ' guidelines' : ''}${jsonTemplateImported ? ' template' : ''}${jsonDocumentsIngested > 0 ? ` documents(${jsonDocumentsIngested})` : ''}${jsonDocumentErrors.length > 0 ? ` document_errors(${jsonDocumentErrors.length})` : ''}`,
       });
     }
 
@@ -2084,7 +2112,10 @@ class FundingIntakeService {
       templateExtractionError,
       jsonGuidelineImported,
       jsonTemplateImported,
-      jsonImportSkippedReason: !jsonGuidelineImported && !jsonTemplateImported ? 'no_json_artifacts' : null,
+      jsonDocumentsIngested,
+      jsonDocumentErrors,
+      jsonImportSkippedReason:
+        !jsonGuidelineImported && !jsonTemplateImported && jsonDocumentsIngested === 0 ? 'no_json_artifacts' : null,
     };
   }
 
@@ -2516,6 +2547,7 @@ class FundingIntakeService {
           json_artifacts: {
             grant_template_json: prepared.template || null,
             guideline_pack_json: prepared.guidelinePack || null,
+            document_urls: prepared.documentUrls || [],
           },
         };
         sourceHash = sourceHash || hashText(JSON.stringify(parsed));

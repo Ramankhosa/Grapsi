@@ -91,6 +91,8 @@ export async function POST(
       templateExtractionError: successResult.templateExtractionError ?? null,
       jsonGuidelineImported: successResult.jsonGuidelineImported ?? false,
       jsonTemplateImported: successResult.jsonTemplateImported ?? false,
+      jsonDocumentsIngested: successResult.jsonDocumentsIngested ?? 0,
+      jsonDocumentErrors: successResult.jsonDocumentErrors ?? [],
       jsonImportSkippedReason: successResult.jsonImportSkippedReason ?? null,
     })
   } catch (error) {

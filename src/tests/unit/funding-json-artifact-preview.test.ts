@@ -26,14 +26,28 @@ describe('summarizeJsonArtifacts', () => {
     expect(preview.templateItemCount).toBe(2)
     expect(preview.hasGuidelines).toBe(true)
     expect(preview.hasTemplate).toBe(true)
+    expect(preview.documentUrlCount).toBe(0)
+    expect(preview.hasDocumentUrls).toBe(false)
+  })
+
+  it('counts document URLs parked on the job metadata', () => {
+    const preview = summarizeJsonArtifacts({
+      json_artifacts: {
+        document_urls: ['https://agency.example.org/call.pdf', 'not-a-url'],
+      },
+    })
+    expect(preview.documentUrlCount).toBe(1)
+    expect(preview.hasDocumentUrls).toBe(true)
   })
 
   it('returns zeros for missing artifacts, empty objects, and null input', () => {
     expect(summarizeJsonArtifacts(null)).toEqual({
       guidelineRuleCount: 0,
       templateItemCount: 0,
+      documentUrlCount: 0,
       hasGuidelines: false,
       hasTemplate: false,
+      hasDocumentUrls: false,
     })
     expect(summarizeJsonArtifacts({}).hasGuidelines).toBe(false)
     expect(summarizeJsonArtifacts({ json_artifacts: {} }).hasGuidelines).toBe(false)

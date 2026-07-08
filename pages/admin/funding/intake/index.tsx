@@ -726,7 +726,7 @@ export default function FundingIntakeAdminPage() {
                       disabled={!canWriteFundingIntake}
                       className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                     />
-                    <p className="mt-2 text-xs text-slate-500">Upload a two-column (field,value) CSV of the basic call details and guideline rules. Template and attachments are not included in CSV — add those from the Template tab afterwards. When the draft is saved, the guideline rows are imported into the Guidelines tab.</p>
+                    <p className="mt-2 text-xs text-slate-500">Upload a two-column (field,value) CSV covering the whole call in one go: basic details, guideline rules, application template rows, and an optional document_url link to the official PDF/DOCX. When the draft is saved, guidelines and template are imported into their tabs, and the linked document is downloaded and indexed for search automatically.</p>
                   </label>
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
