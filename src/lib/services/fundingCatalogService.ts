@@ -855,26 +855,13 @@ export class FundingCatalogService {
     });
   }
 
+  // Intentionally a no-op: we no longer auto-archive published calls just because
+  // their close_date is in the past. Operators found this date-based archiving
+  // frustrating. Calls can still be archived manually via archiveFundingCall.
+  // The signature is kept so existing callers (check-expired route, repair script)
+  // continue to work and simply archive nothing.
   async archiveExpiredPublishedCalls(): Promise<number> {
-    const result = await prisma.$executeRaw`
-      UPDATE funding_calls
-      SET
-        catalog_status = 'ARCHIVED',
-        is_active = false,
-        updated_at = CURRENT_TIMESTAMP,
-        metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-          'archived_by', 'expiry-job',
-          'archived_at', NOW()::text,
-          'archive_reason', 'expired'
-        )
-      WHERE catalog_status = 'PUBLISHED'
-        AND COALESCE(is_active, true) = true
-        AND COALESCE(is_rolling, false) = false
-        AND COALESCE(close_date, expiration_date) IS NOT NULL
-        AND COALESCE(close_date, expiration_date) < CURRENT_DATE
-    `;
-
-    return Number(result);
+    return 0;
   }
 }
 

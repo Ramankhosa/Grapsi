@@ -10,7 +10,7 @@ import type {
   FundingRevisionStatus,
 } from '@prisma/client';
 import prisma from '../prisma';
-import { getStaleExtractionRunCutoff, startExtractionHeartbeat } from '../funding/extractionRunLifecycle';
+import { startExtractionHeartbeat } from '../funding/extractionRunLifecycle';
 import type { IntakeOperator } from '../fundingIntake/types';
 import {
   assertSafePublicHttpsUrl,
@@ -48,19 +48,11 @@ function asJson(value: unknown) {
   return value as Prisma.InputJsonValue;
 }
 
-async function failStaleTemplateRuns(fundingCallId?: string) {
-  await prisma.fundingCallTemplateRun.updateMany({
-    where: {
-      ...(fundingCallId ? { funding_call_id: fundingCallId } : {}),
-      status: { in: ['queued', 'extracting'] },
-      updated_at: { lt: getStaleExtractionRunCutoff() },
-    },
-    data: {
-      status: 'failed',
-      error_code: 'extraction_timed_out',
-      error_message: 'Template extraction did not finish within the allowed time. Start a new extraction run.',
-    },
-  });
+// Intentionally a no-op: we no longer force-fail in-progress template extraction
+// runs based on elapsed time (see failStaleGuidelineRuns for rationale). Call sites
+// are kept so signatures are unchanged.
+async function failStaleTemplateRuns(_fundingCallId?: string) {
+  return;
 }
 
 function buildAssetSetHash(assets: Array<{ id: string; sequence_no: number; checksum?: string | null }>) {
@@ -526,12 +518,16 @@ export class FundingTemplateService {
       getCompatibilityWarnings(template.compatibility_json)
     );
     const diffSummary = generateDiffSummary(previousTemplate, nextTemplate);
-    const nextApprovedState = template.status;
-    const lifecycleStatus = nextLifecycleStatusForManualEdit(template, call.template_status);
+    // Auto-approve on commit: any non-empty template an operator saves/imports is
+    // immediately usable — there is no separate "Approve" step anymore. Empty
+    // templates keep the previous behavior.
+    const autoApprove = hasTemplateItems(nextTemplate);
+    const nextApprovedState = autoApprove ? 'approved' : template.status;
+    const lifecycleStatus = autoApprove ? 'approved' : nextLifecycleStatusForManualEdit(template, call.template_status);
 
     await prisma.$transaction(async (tx) => {
       const revisionNo = await createRevision(tx, template, {
-        revisionType: 'manual_edit',
+        revisionType: autoApprove ? 'approval' : 'manual_edit',
         grantTemplate: nextTemplate,
         compatibility,
         editorUserId: operator.userId,
@@ -550,6 +546,8 @@ export class FundingTemplateService {
           last_edited_by: operator.email,
           last_edited_at: new Date(),
           status: nextApprovedState,
+          approved_by: autoApprove ? operator.email : undefined,
+          approved_at: autoApprove ? new Date() : undefined,
         },
       });
 

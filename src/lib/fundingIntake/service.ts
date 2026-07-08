@@ -585,22 +585,9 @@ function buildPublishWarnings(options: {
     });
   }
 
-  const metadata = readCatalogMetadata(call.metadata);
-  const lastCatalogUpdateAt = toTimestamp(metadata.last_catalog_update_at);
-
-  if (lastCatalogUpdateAt && guidelineEditedAt && lastCatalogUpdateAt > guidelineEditedAt) {
-    warnings.push({
-      code: 'guidelines_stale',
-      message: 'The funding call fields changed after the current guideline pack was last edited. Re-extract or review guidelines before publishing.',
-    });
-  }
-
-  if (lastCatalogUpdateAt && templateEditedAt && lastCatalogUpdateAt > templateEditedAt) {
-    warnings.push({
-      code: 'template_stale',
-      message: 'The funding call fields changed after the current template was last edited. Re-extract or review the template before publishing.',
-    });
-  }
+  // Note: the previous "guidelines_stale" / "template_stale" warnings (comparing
+  // last_catalog_update_at against the guideline/template edit time) were removed.
+  // They only produced publish-time friction and never blocked publishing.
 
   return warnings;
 }

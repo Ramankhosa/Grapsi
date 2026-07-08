@@ -514,7 +514,6 @@ export default function FundingGuidelineWorkspacePage() {
   const [creating, setCreating] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [applyingRunId, setApplyingRunId] = useState<string | null>(null);
-  const [approving, setApproving] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRevisionNo, setSelectedRevisionNo] = useState<number | null>(null);
@@ -711,7 +710,7 @@ export default function FundingGuidelineWorkspacePage() {
       setBundle(data);
       setGuidelinePack(normalizeGuidelinePack(data.guideline?.guideline_pack_json || createEmptyGuidelinePack()));
       setSelectedRunId(runId);
-      toast.success('AI result accepted — it is now the current draft');
+      toast.success('Guidelines applied and ready to use');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to apply guideline run');
     } finally {
@@ -737,34 +736,11 @@ export default function FundingGuidelineWorkspacePage() {
       }
       setBundle(data);
       setGuidelinePack(normalizeGuidelinePack(data.guideline?.guideline_pack_json || guidelinePack));
-      toast.success('Guidelines saved');
+      toast.success('Guidelines saved and ready to use');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to save guidelines');
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function handleApprove() {
-    if (!id) {
-      return;
-    }
-
-    setApproving(true);
-    try {
-      const response = await fetch(`/api/admin/funding/calls/${id}/guidelines/approve`, {
-        method: 'POST',
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to approve guidelines');
-      }
-      setBundle(data);
-      toast.success('Guidelines approved');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to approve guidelines');
-    } finally {
-      setApproving(false);
     }
   }
 
@@ -869,39 +845,33 @@ export default function FundingGuidelineWorkspacePage() {
                 {creating ? 'Creating...' : 'Start With Empty Guidelines'}
               </button>
             )}
-            <button type="button" onClick={handleSave} disabled={saving} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
-              {saving ? 'Saving...' : 'Save Changes'}
-            </button>
             {selectedRun?.status === 'needs_review' && (
               <button
                 type="button"
                 onClick={() => void handleApplyRun(selectedRun.id)}
                 disabled={applyingRunId !== null}
-                className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
               >
-                {applyingRunId === selectedRun.id ? 'Accepting...' : 'Accept AI Result Into Draft'}
+                {applyingRunId === selectedRun.id ? 'Applying...' : 'Use These Guidelines'}
               </button>
             )}
-            <button type="button" onClick={handleApprove} disabled={approving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-              {approving ? 'Approving...' : 'Approve Guidelines'}
+            <button type="button" onClick={handleSave} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+              {saving ? 'Saving...' : 'Save & Use'}
             </button>
           </div>
         </div>
 
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-700">How this page works</h2>
-          <ol className="mt-3 grid gap-3 text-sm text-slate-600 md:grid-cols-4">
+          <ol className="mt-3 grid gap-3 text-sm text-slate-600 md:grid-cols-3">
             <li className="rounded-xl bg-slate-50 p-3">
               <span className="font-semibold text-slate-900">1. Extract.</span> Let the AI read the call source and pull out the rules applicants must follow.
             </li>
             <li className="rounded-xl bg-slate-50 p-3">
-              <span className="font-semibold text-slate-900">2. Review.</span> Check the AI result in the preview, then accept it into the draft.
+              <span className="font-semibold text-slate-900">2. Use it.</span> Check the AI result in the preview, then click <span className="font-semibold text-slate-900">Use These Guidelines</span>. It becomes the current, ready-to-use pack right away.
             </li>
             <li className="rounded-xl bg-slate-50 p-3">
-              <span className="font-semibold text-slate-900">3. Edit &amp; save.</span> Fix or add rules in the editors, then use Save Changes.
-            </li>
-            <li className="rounded-xl bg-slate-50 p-3">
-              <span className="font-semibold text-slate-900">4. Approve.</span> Once the guidelines look right, approve them to mark this step done.
+              <span className="font-semibold text-slate-900">3. Edit &amp; save.</span> Fix or add rules in the editors, then use <span className="font-semibold text-slate-900">Save &amp; Use</span> — no separate approval step.
             </li>
           </ol>
         </div>
@@ -1067,7 +1037,7 @@ export default function FundingGuidelineWorkspacePage() {
                           disabled={applyingRunId !== null}
                           className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50"
                         >
-                          {applyingRunId === run.id ? 'Accepting...' : 'Accept Into Draft'}
+                          {applyingRunId === run.id ? 'Applying...' : 'Use These Guidelines'}
                         </button>
                       )}
                     </div>
@@ -1146,7 +1116,7 @@ export default function FundingGuidelineWorkspacePage() {
               title={selectedRun ? 'AI Result (Selected Extraction)' : 'AI Result (Latest Extraction)'}
               subtitle={
                 selectedRun
-                  ? `This extraction is ${runStatusLabel(selectedRun.status).toLowerCase()}. Review the rules below, then use “Accept AI Result Into Draft” if they look right.`
+                  ? `This extraction is ${runStatusLabel(selectedRun.status).toLowerCase()}. Review the rules below, then use “Use These Guidelines” if they look right.`
                   : 'This shows what the AI found in its latest pass. It is not saved until you accept it.'
               }
               pack={selectedRunPack ? normalizeGuidelinePack(selectedRunPack) : latestRunPack ? normalizeGuidelinePack(latestRunPack) : null}

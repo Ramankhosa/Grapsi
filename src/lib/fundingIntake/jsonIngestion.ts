@@ -30,7 +30,7 @@ const TEMPLATE_MERGE_CONFLICT_BLOCKS = new Set([
   'budget',
 ]);
 
-const FIELD_ALIASES: Record<FundingFieldKey, string[]> = {
+export const FIELD_ALIASES: Record<FundingFieldKey, string[]> = {
   agency_name: ['agency_name', 'agencyName', 'agency', 'funder', 'funder_name'],
   scheme_title: ['scheme_title', 'schemeTitle', 'title', 'call_title', 'program_title', 'opportunity_title'],
   description: ['description', 'summary', 'call_summary', 'overview'],

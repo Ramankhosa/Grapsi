@@ -19,8 +19,10 @@ export async function POST(
 
   try {
     const payload = applyRunSchema.parse(await request.json().catch(() => ({})))
+    // Apply and approve in one step — there is no separate approval action anymore.
     const bundle = await fundingTemplateService.applyRun(params.id, params.runId, auth.operator, {
       mode: payload.mode,
+      approve: true,
     })
     return NextResponse.json(bundle)
   } catch (error) {

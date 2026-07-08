@@ -8,7 +8,7 @@ import type {
 } from '@prisma/client';
 import prisma from '../prisma';
 import fs from 'fs/promises';
-import { getStaleExtractionRunCutoff, startExtractionHeartbeat } from '../funding/extractionRunLifecycle';
+import { startExtractionHeartbeat } from '../funding/extractionRunLifecycle';
 import type { IntakeOperator } from '../fundingIntake/types';
 import { extractCanonicalTextFromPdf } from '../fundingIntake/extractor';
 import {
@@ -23,19 +23,12 @@ function asJson(value: unknown) {
   return value as Prisma.InputJsonValue;
 }
 
-async function failStaleGuidelineRuns(fundingCallId?: string) {
-  await prisma.fundingCallGuidelineRun.updateMany({
-    where: {
-      ...(fundingCallId ? { funding_call_id: fundingCallId } : {}),
-      status: { in: ['queued', 'extracting'] },
-      updated_at: { lt: getStaleExtractionRunCutoff() },
-    },
-    data: {
-      status: 'failed',
-      error_code: 'extraction_timed_out',
-      error_message: 'Guideline extraction did not finish within the allowed time. Start a new extraction run.',
-    },
-  });
+// Intentionally a no-op: we no longer force-fail in-progress guideline extraction
+// runs based on elapsed time. Long PDF extractions were being killed by the old
+// 20-minute staleness cutoff, which was frustrating for operators. Call sites are
+// kept so signatures are unchanged.
+async function failStaleGuidelineRuns(_fundingCallId?: string) {
+  return;
 }
 
 function hasGuidelineRules(pack: unknown) {
@@ -431,12 +424,18 @@ export class FundingGuidelineService {
     const { call, guideline } = await ensureGuidelineRecord(fundingCallId, operator);
     const previousPack = normalizeGuidelinePack(guideline.guideline_pack_json);
     const nextPack = normalizeGuidelinePack(guidelinePackJson);
-    const nextGuidelineStatus: FundingCallGuidelineStatus = guideline.status === 'approved' ? 'draft' : guideline.status;
-    const lifecycleStatus = nextLifecycleStatusForManualEdit(call.guideline_status);
+    // Auto-approve on commit: any non-empty guideline pack an operator saves/imports
+    // is immediately usable — there is no separate "Approve" step anymore. Empty
+    // packs keep the previous draft behavior.
+    const autoApprove = hasGuidelineRules(nextPack);
+    const nextGuidelineStatus: FundingCallGuidelineStatus = autoApprove
+      ? 'approved'
+      : guideline.status === 'approved' ? 'draft' : guideline.status;
+    const lifecycleStatus = autoApprove ? 'approved' : nextLifecycleStatusForManualEdit(call.guideline_status);
 
     await prisma.$transaction(async (tx) => {
       const revisionNo = await createRevision(tx, guideline, {
-        revisionType: 'manual_edit',
+        revisionType: autoApprove ? 'approval' : 'manual_edit',
         guidelinePack: nextPack,
         editorUserId: operator.userId,
         approvedState: nextGuidelineStatus,
@@ -452,8 +451,8 @@ export class FundingGuidelineService {
           status: nextGuidelineStatus,
           last_edited_by: operator.email,
           last_edited_at: new Date(),
-          approved_by: null,
-          approved_at: null,
+          approved_by: autoApprove ? operator.email : null,
+          approved_at: autoApprove ? new Date() : null,
         },
       });
 

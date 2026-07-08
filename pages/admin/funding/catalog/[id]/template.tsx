@@ -549,7 +549,7 @@ function BlockEditor({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          <p className="mt-1 text-sm text-slate-600">Edit, reorder, or add items here. Remember to use “Save Changes” at the top when you are done.</p>
+          <p className="mt-1 text-sm text-slate-600">Edit, reorder, or add items here. Remember to use “Save &amp; Use” at the top when you are done.</p>
         </div>
         <button
           type="button"
@@ -857,23 +857,9 @@ export default function FundingTemplatePage() {
       const data = await postJson(`/api/admin/funding/calls/${id}/template`, { grant_template_json: draftTemplate, changeNotes: changeNotes || undefined }, 'PUT');
       setBundle(data);
       setChangeNotes('');
-      toast.success('Template saved');
+      toast.success('Template saved and ready to use');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to save template');
-    } finally {
-      setBusyState('idle');
-    }
-  }
-
-  async function handleApproveTemplate() {
-    if (!id || !bundle?.template) return;
-    setBusyState('approve');
-    try {
-      const data = await postJson(`/api/admin/funding/calls/${id}/template/approve`);
-      setBundle(data);
-      toast.success('Template approved');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to approve template');
     } finally {
       setBusyState('idle');
     }
@@ -1057,18 +1043,15 @@ export default function FundingTemplatePage() {
 
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-700">How this page works</h2>
-          <ol className="mt-3 grid gap-3 text-sm text-slate-600 md:grid-cols-4">
+          <ol className="mt-3 grid gap-3 text-sm text-slate-600 md:grid-cols-3">
             <li className="rounded-xl bg-slate-50 p-3">
               <span className="font-semibold text-slate-900">1. Pick sources.</span> In the panel on the right, choose which documents or links the AI should read.
             </li>
             <li className="rounded-xl bg-slate-50 p-3">
-              <span className="font-semibold text-slate-900">2. Extract &amp; review.</span> Run the AI extraction, preview the result, and make it the current template if it looks right.
+              <span className="font-semibold text-slate-900">2. Extract &amp; use.</span> Run the AI extraction, preview the result, and click <span className="font-semibold text-slate-900">Make This the Current Template</span>. It becomes ready to use right away.
             </li>
             <li className="rounded-xl bg-slate-50 p-3">
-              <span className="font-semibold text-slate-900">3. Edit &amp; save.</span> Adjust sections, questions, and attachments in the editors, then use Save Changes.
-            </li>
-            <li className="rounded-xl bg-slate-50 p-3">
-              <span className="font-semibold text-slate-900">4. Approve.</span> Approve the template to mark this step done.
+              <span className="font-semibold text-slate-900">3. Edit &amp; save.</span> Adjust sections, questions, and attachments, then use <span className="font-semibold text-slate-900">Save &amp; Use</span> — no separate approval step.
             </li>
           </ol>
         </div>
@@ -1082,8 +1065,7 @@ export default function FundingTemplatePage() {
                   <p className="mt-1 text-sm text-slate-600">Every save creates a new version, so nothing is lost. AI extractions never overwrite your manual edits — any clash is flagged as a conflict for you to resolve.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={handleSaveTemplate} disabled={busyState !== 'idle' || !draftTemplate} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">{busyState === 'save' ? 'Saving...' : 'Save Changes'}</button>
-                  <button type="button" onClick={handleApproveTemplate} disabled={busyState !== 'idle' || !bundle.template} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyState === 'approve' ? 'Approving...' : 'Approve Template'}</button>
+                  <button type="button" onClick={handleSaveTemplate} disabled={busyState !== 'idle' || !draftTemplate} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyState === 'save' ? 'Saving...' : 'Save & Use'}</button>
                 </div>
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

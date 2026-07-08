@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { stagePdfUpload } from '@/lib/fundingIntake/appRouterUpload'
+import { parseFundingCsvUpload } from '@/lib/fundingIntake/csvIngestion'
 import { requireFundingOperatorRequest, requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
 
@@ -51,12 +52,48 @@ export async function POST(request: NextRequest) {
       const file = formData.get('file')
       if (!(file instanceof File)) {
         return NextResponse.json(
-          { message: inputType === 'json' ? 'No JSON file received' : 'No PDF file received' },
+          {
+            message:
+              inputType === 'json'
+                ? 'No JSON file received'
+                : inputType === 'csv'
+                  ? 'No CSV file received'
+                  : 'No PDF file received',
+          },
           { status: 400 }
         )
       }
 
-      if (inputType === 'json') {
+      if (inputType === 'csv') {
+        // A CSV upload is just an alternate input format: convert it to the same
+        // intake object the JSON path consumes, then submit it as a JSON intake.
+        // This reuses the entire downstream draft/guideline import pipeline and
+        // needs no new job input_type.
+        if (file.size > MAX_JSON_UPLOAD_BYTES) {
+          return NextResponse.json({ message: 'CSV intake file is too large' }, { status: 400 })
+        }
+
+        const csvText = await file.text()
+        let intakeObject
+        try {
+          intakeObject = parseFundingCsvUpload(csvText)
+        } catch (csvError) {
+          return NextResponse.json(
+            { message: csvError instanceof Error ? csvError.message : 'Could not parse CSV upload' },
+            { status: 400 }
+          )
+        }
+        payload = {
+          inputType: 'json',
+          operatorNotes: String(formData.get('operatorNotes') || '').trim() || undefined,
+          sourceJsonText: JSON.stringify(intakeObject),
+          sourceJsonFile: {
+            originalName: file.name || 'funding-intake.csv',
+            mimeType: file.type || 'text/csv',
+            size: file.size,
+          },
+        }
+      } else if (inputType === 'json') {
         if (file.size > MAX_JSON_UPLOAD_BYTES) {
           return NextResponse.json({ message: 'JSON intake file is too large' }, { status: 400 })
         }

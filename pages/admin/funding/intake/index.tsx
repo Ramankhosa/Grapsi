@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import toast from 'react-hot-toast';
 import Header from '@/components/Header';
 import { FUNDING_JSON_UPLOAD_CHATGPT_PROMPT } from '@/lib/fundingIntake/jsonPrompt';
+import { FUNDING_CSV_UPLOAD_CHATGPT_PROMPT, buildFundingCsvTemplate } from '@/lib/fundingIntake/csvPrompt';
 
 type JobSummary = {
   id: string;
@@ -132,12 +133,14 @@ function getBatchStatusBadgeClass(status: string) {
 export default function FundingIntakeAdminPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
-  const [inputType, setInputType] = useState<'url' | 'text' | 'pdf' | 'json'>('url');
+  const [inputType, setInputType] = useState<'url' | 'text' | 'pdf' | 'json' | 'csv'>('url');
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceText, setSourceText] = useState('');
   const [sourcePdf, setSourcePdf] = useState<File | null>(null);
   const [sourceJson, setSourceJson] = useState<File | null>(null);
+  const [sourceCsv, setSourceCsv] = useState<File | null>(null);
   const [showJsonPrompt, setShowJsonPrompt] = useState(false);
+  const [showCsvPrompt, setShowCsvPrompt] = useState(false);
   const [operatorNotes, setOperatorNotes] = useState('');
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [batches, setBatches] = useState<BatchSummary[]>([]);
@@ -370,10 +373,10 @@ export default function FundingIntakeAdminPage() {
     setSubmitting(true);
 
     try {
-      const response = inputType === 'pdf' || inputType === 'json'
+      const response = inputType === 'pdf' || inputType === 'json' || inputType === 'csv'
         ? await (async () => {
             const formData = new FormData();
-            const file = inputType === 'json' ? sourceJson : sourcePdf;
+            const file = inputType === 'json' ? sourceJson : inputType === 'csv' ? sourceCsv : sourcePdf;
             if (file) {
               formData.append('file', file);
             }
@@ -405,6 +408,7 @@ export default function FundingIntakeAdminPage() {
       setSourceText('');
       setSourcePdf(null);
       setSourceJson(null);
+      setSourceCsv(null);
       setOperatorNotes('');
       await loadJobs(false);
       router.push(`/admin/funding/intake/${data.jobId}`);
@@ -517,6 +521,31 @@ export default function FundingIntakeAdminPage() {
     }
   }
 
+  async function handleCopyCsvPrompt() {
+    try {
+      await navigator.clipboard.writeText(FUNDING_CSV_UPLOAD_CHATGPT_PROMPT);
+      toast.success('CSV extraction prompt copied.');
+    } catch {
+      toast.error('Could not copy prompt from this browser.');
+    }
+  }
+
+  function handleDownloadCsvTemplate() {
+    try {
+      const blob = new Blob([buildFundingCsvTemplate()], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'funding-call-template.csv';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Could not download the CSV template from this browser.');
+    }
+  }
+
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center text-gray-600">Loading...</div>;
   }
@@ -548,9 +577,9 @@ export default function FundingIntakeAdminPage() {
         <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Funding Intake</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Create structured funding drafts from URL, text, PDF, or JSON</h1>
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Create structured funding drafts from URL, text, PDF, JSON, or CSV</h1>
             <p className="mt-3 max-w-3xl text-sm text-slate-600">
-              Submit a funding opportunity source, or upload a ChatGPT-extracted JSON file that can seed call fields, guidelines, and templates from one intake job.
+              Submit a funding opportunity source, or upload a ChatGPT-extracted JSON/CSV file that can seed call fields and guidelines from one intake job.
             </p>
           </div>
           <Link href="/admin" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
@@ -596,6 +625,13 @@ export default function FundingIntakeAdminPage() {
                 >
                   JSON Upload
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setInputType('csv')}
+                  className={`rounded-full px-4 py-2 text-sm font-medium ${inputType === 'csv' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                >
+                  CSV Upload
+                </button>
               </div>
 
               {inputType === 'url' ? (
@@ -633,7 +669,7 @@ export default function FundingIntakeAdminPage() {
                   />
                   <p className="mt-2 text-xs text-slate-500">PDF intake stores the uploaded file once, derives canonical text from it, and reuses that same source for extract-all.</p>
                 </label>
-              ) : (
+              ) : inputType === 'json' ? (
                 <div key="intake-json-input" className="space-y-4">
                   <label className="block">
                     <span className="mb-2 block text-sm font-medium text-slate-700">ChatGPT extraction JSON</span>
@@ -679,6 +715,59 @@ export default function FundingIntakeAdminPage() {
                     )}
                   </div>
                 </div>
+              ) : (
+                <div key="intake-csv-input" className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Funding call CSV</span>
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={(event) => setSourceCsv(event.target.files?.[0] || null)}
+                      disabled={!canWriteFundingIntake}
+                      className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                    <p className="mt-2 text-xs text-slate-500">Upload a two-column (field,value) CSV of the basic call details and guideline rules. Template and attachments are not included in CSV — add those from the Template tab afterwards. When the draft is saved, the guideline rows are imported into the Guidelines tab.</p>
+                  </label>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-slate-900">CSV template &amp; extraction prompt</div>
+                        <div className="mt-1 text-xs text-slate-500">Download the blank template, or copy the prompt to have an LLM fill it from the call text, then upload the CSV here.</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handleDownloadCsvTemplate}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                        >
+                          Download Template
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowCsvPrompt((value) => !value)}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                        >
+                          {showCsvPrompt ? 'Hide Prompt' : 'Show Prompt'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCopyCsvPrompt}
+                          className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white"
+                        >
+                          Copy Prompt
+                        </button>
+                      </div>
+                    </div>
+                    {showCsvPrompt && (
+                      <textarea
+                        readOnly
+                        value={FUNDING_CSV_UPLOAD_CHATGPT_PROMPT}
+                        rows={14}
+                        className="mt-4 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 font-mono text-xs leading-5 text-slate-700"
+                      />
+                    )}
+                  </div>
+                </div>
               )}
 
               <label className="block">
@@ -694,12 +783,12 @@ export default function FundingIntakeAdminPage() {
               </label>
 
               <div className="rounded-xl bg-slate-50 p-4 text-xs leading-6 text-slate-600">
-                V1 rules: only HTTPS URLs are accepted for web intake, private-network URLs are blocked, PDF transcription requires Gemini multimodal support, JSON uploads must match the prompt schema, and extraction runs asynchronously.
+                V1 rules: only HTTPS URLs are accepted for web intake, private-network URLs are blocked, PDF transcription requires Gemini multimodal support, JSON/CSV uploads must match the prompt schema, and extraction runs asynchronously.
               </div>
 
                 <button
                   type="submit"
-                  disabled={!canWriteFundingIntake || submitting || (inputType === 'pdf' && !sourcePdf) || (inputType === 'json' && !sourceJson)}
+                  disabled={!canWriteFundingIntake || submitting || (inputType === 'pdf' && !sourcePdf) || (inputType === 'json' && !sourceJson) || (inputType === 'csv' && !sourceCsv)}
                   className="inline-flex items-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                 {submitting ? 'Submitting...' : 'Create Intake Job'}
