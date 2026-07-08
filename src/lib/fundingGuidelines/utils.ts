@@ -349,6 +349,19 @@ export function buildGuidelineSummary(pack: GuidelinePackDocument): FundingGuide
   };
 }
 
+export function hasGuidelineRules(pack: unknown): boolean {
+  return buildGuidelineSummary(normalizeGuidelinePack(pack)).totalRules > 0;
+}
+
+// A completed extraction run is auto-applied only when it has rules and the
+// current pack is still empty — AI must never silently overwrite manual edits.
+export function shouldAutoApplyGuidelineExtraction(
+  currentPackJson: unknown,
+  incomingPackJson: unknown
+): boolean {
+  return hasGuidelineRules(incomingPackJson) && !hasGuidelineRules(currentPackJson);
+}
+
 function blockDiff(previousItems: FundingGuidelineRuleItem[], nextItems: FundingGuidelineRuleItem[]) {
   const previousMap = new Map(previousItems.map((item) => [item.key, item]));
   const nextMap = new Map(nextItems.map((item) => [item.key, item]));

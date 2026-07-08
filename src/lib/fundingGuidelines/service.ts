@@ -17,7 +17,7 @@ import {
   normalizeMultilineText,
 } from '../fundingIntake/utils';
 import { extractFundingGuidelines } from './extractor';
-import { buildGuidelineSummary, createEmptyGuidelinePack, generateGuidelineDiffSummary, normalizeGuidelinePack } from './utils';
+import { buildGuidelineSummary, createEmptyGuidelinePack, generateGuidelineDiffSummary, hasGuidelineRules, normalizeGuidelinePack } from './utils';
 
 function asJson(value: unknown) {
   return value as Prisma.InputJsonValue;
@@ -29,10 +29,6 @@ function asJson(value: unknown) {
 // kept so signatures are unchanged.
 async function failStaleGuidelineRuns(_fundingCallId?: string) {
   return;
-}
-
-function hasGuidelineRules(pack: unknown) {
-  return buildGuidelineSummary(normalizeGuidelinePack(pack)).totalRules > 0;
 }
 
 function canonicalRevisionStatusFromGuidelineStatus(
@@ -681,7 +677,7 @@ export class FundingGuidelineService {
       await stopHeartbeat();
       stopHeartbeat = null;
 
-      await prisma.$transaction(async (tx) => {
+      const runCompleted = await prisma.$transaction(async (tx) => {
         const completed = await tx.fundingCallGuidelineRun.updateMany({
           where: { id: runId, funding_call_id: fundingCallId, status: 'extracting' },
           data: {
@@ -694,7 +690,7 @@ export class FundingGuidelineService {
           },
         });
 
-        if (completed.count !== 1) return;
+        if (completed.count !== 1) return false;
 
         await tx.fundingCall.update({
           where: { id: fundingCallId },
@@ -702,7 +698,12 @@ export class FundingGuidelineService {
             guideline_status: 'needs_review',
           },
         });
+        return true;
       });
+
+      if (runCompleted) {
+        await this.autoApplyRunIfGuidelinesEmpty(fundingCallId, runId, operator);
+      }
     } catch (error) {
       await prisma.fundingCallGuidelineRun.updateMany({
         where: { id: runId, status: { in: ['queued', 'extracting'] } },
@@ -722,7 +723,33 @@ export class FundingGuidelineService {
     }
   }
 
-  async applyRun(fundingCallId: string, runId: string, operator: IntakeOperator, options?: { approve?: boolean }) {
+  // Best-effort: when a run completes and the call has no guideline rules yet,
+  // apply it immediately so the admin does not have to find and click "apply".
+  // Any failure leaves the run at needs_review, where manual apply still works.
+  private async autoApplyRunIfGuidelinesEmpty(
+    fundingCallId: string,
+    runId: string,
+    operator: IntakeOperator
+  ): Promise<void> {
+    try {
+      // Fresh read — the pack may have gained rules while extraction ran.
+      const guideline = await prisma.fundingCallGuideline.findUnique({
+        where: { fundingCallId: fundingCallId },
+        select: { guideline_pack_json: true },
+      });
+      if (guideline && hasGuidelineRules(guideline.guideline_pack_json)) {
+        return;
+      }
+      await this.applyRun(fundingCallId, runId, operator, {
+        approve: true,
+        changeNotes: `Auto-applied extraction run ${runId} (guidelines were empty)`,
+      });
+    } catch (error) {
+      console.warn('[Funding Guidelines] auto-apply skipped, run left in needs_review:', error);
+    }
+  }
+
+  async applyRun(fundingCallId: string, runId: string, operator: IntakeOperator, options?: { approve?: boolean; changeNotes?: string }) {
     const { guideline } = await ensureGuidelineRecord(fundingCallId, operator);
     const run = await this.getRun(fundingCallId, runId);
 
@@ -756,7 +783,7 @@ export class FundingGuidelineService {
         guidelinePack: nextPack,
         editorUserId: operator.userId,
         approvedState: 'draft',
-        changeNotes: `Applied extraction run ${run.id}`,
+        changeNotes: options?.changeNotes || `Applied extraction run ${run.id}`,
         diffSummary,
       });
 

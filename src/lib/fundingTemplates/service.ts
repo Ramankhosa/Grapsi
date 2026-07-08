@@ -24,6 +24,7 @@ import {
   buildCompatibilitySummary,
   createEmptyGrantTemplate,
   generateDiffSummary,
+  hasTemplateItems,
   mergeGrantTemplates,
   normalizeGrantTemplate,
   sortAndDeduplicateGrantTemplate,
@@ -63,18 +64,6 @@ function readRunAssetIds(rawOutput: unknown): string[] {
   if (!rawOutput || typeof rawOutput !== 'object' || Array.isArray(rawOutput)) return [];
   const assetIds = (rawOutput as Record<string, unknown>).assetIds;
   return Array.isArray(assetIds) ? assetIds.map(String).filter(Boolean) : [];
-}
-
-function hasTemplateItems(value: unknown) {
-  const template = normalizeGrantTemplate(value);
-  return Boolean(
-    template.budget
-    || template.questions.length
-    || template.sections.length
-    || template.attachments.length
-    || template.evaluationCriteria.length
-    || template.submissionRules.items.length
-  );
 }
 
 function lifecycleFromTemplateStatus(status: FundingCallTemplateStatus): FundingTemplateLifecycleStatus {
@@ -1017,7 +1006,7 @@ export class FundingTemplateService {
         select: { id: true },
       });
 
-      await prisma.$transaction(async (tx) => {
+      const runCompleted = await prisma.$transaction(async (tx) => {
         const completed = await tx.fundingCallTemplateRun.updateMany({
           where: { id: runId, funding_call_id: fundingCallId, status: 'extracting' },
           data: {
@@ -1036,7 +1025,7 @@ export class FundingTemplateService {
           },
         });
 
-        if (completed.count !== 1) return;
+        if (completed.count !== 1) return false;
 
         await tx.fundingCall.update({
           where: { id: fundingCallId },
@@ -1045,7 +1034,12 @@ export class FundingTemplateService {
             ...(template?.id ? { active_template_id: template.id } : {}),
           },
         });
+        return true;
       });
+
+      if (runCompleted) {
+        await this.autoApplyRunIfTemplateEmpty(fundingCallId, runId, operator);
+      }
     } catch (error) {
       await prisma.fundingCallTemplateRun.updateMany({
         where: { id: runId, status: { in: ['queued', 'extracting'] } },
@@ -1058,6 +1052,33 @@ export class FundingTemplateService {
       throw error;
     } finally {
       await stopHeartbeat?.();
+    }
+  }
+
+  // Best-effort: when a run completes and the call has no template content yet,
+  // apply it immediately so the admin does not have to find and click "apply".
+  // Any failure leaves the run at needs_review, where manual apply still works.
+  private async autoApplyRunIfTemplateEmpty(
+    fundingCallId: string,
+    runId: string,
+    operator: IntakeOperator
+  ): Promise<void> {
+    try {
+      // Fresh read — the template may have gained content while extraction ran.
+      const template = await prisma.fundingCallTemplate.findUnique({
+        where: { fundingCallId: fundingCallId },
+        select: { grant_template_json: true },
+      });
+      if (template && hasTemplateItems(template.grant_template_json)) {
+        return;
+      }
+      await this.applyRun(fundingCallId, runId, operator, {
+        mode: 'replace',
+        approve: true,
+        changeNotes: `Auto-applied extraction run ${runId} (template was empty)`,
+      });
+    } catch (error) {
+      console.warn('[Funding Template] auto-apply skipped, run left in needs_review:', error);
     }
   }
 
@@ -1125,7 +1146,7 @@ export class FundingTemplateService {
     fundingCallId: string,
     runId: string,
     operator: IntakeOperator,
-    options?: { mode?: 'replace' | 'merge'; approve?: boolean }
+    options?: { mode?: 'replace' | 'merge'; approve?: boolean; changeNotes?: string }
   ) {
     const { template } = await ensureTemplateRecord(fundingCallId, operator);
     const run = await this.getRun(fundingCallId, runId);
@@ -1197,9 +1218,10 @@ export class FundingTemplateService {
         editorUserId: operator.userId,
         approvedState: 'draft',
         changeNotes:
-          mode === 'merge'
+          options?.changeNotes
+          || (mode === 'merge'
             ? `Merged extraction run ${run.id}`
-            : `Applied extraction run ${run.id} as current template`,
+            : `Applied extraction run ${run.id} as current template`),
         diffSummary,
       });
 

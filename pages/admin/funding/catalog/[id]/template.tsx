@@ -964,7 +964,7 @@ export default function FundingTemplatePage() {
       const data = await postJson(`/api/admin/funding/calls/${id}/template/extract`, { assetIds });
       await loadBundle(false);
       setSelectedRunId(data.run?.id || null);
-      toast.success('AI extraction started. It keeps running even if you leave this page.');
+      toast.success('AI extraction started. If the template is still empty, the result is applied automatically when it finishes.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to extract template');
     } finally {
@@ -1048,7 +1048,7 @@ export default function FundingTemplatePage() {
               <span className="font-semibold text-slate-900">1. Pick sources.</span> In the panel on the right, choose which documents or links the AI should read.
             </li>
             <li className="rounded-xl bg-slate-50 p-3">
-              <span className="font-semibold text-slate-900">2. Extract &amp; use.</span> Run the AI extraction, preview the result, and click <span className="font-semibold text-slate-900">Make This the Current Template</span>. It becomes ready to use right away.
+              <span className="font-semibold text-slate-900">2. Extract.</span> Run the AI extraction. If the template is still empty, the result automatically becomes the current template; otherwise preview it and click <span className="font-semibold text-slate-900">Make This the Current Template</span>.
             </li>
             <li className="rounded-xl bg-slate-50 p-3">
               <span className="font-semibold text-slate-900">3. Edit &amp; save.</span> Adjust sections, questions, and attachments, then use <span className="font-semibold text-slate-900">Save &amp; Use</span> — no separate approval step.
@@ -1071,19 +1071,13 @@ export default function FundingTemplatePage() {
               <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Saved Version</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.current_revision_no || 0}</div></div>
                 <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Template Status</div><div className="mt-2 text-lg font-semibold text-slate-900">{storedStatusLabel(bundle.template?.status)}</div></div>
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Conflicts</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.compatibility_json?.conflicts?.length || 0}</div></div>
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Warnings</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.compatibility_json?.warnings?.length || 0}</div></div>
-              </div>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Current Questions</div><div className="mt-2 text-2xl font-semibold text-slate-900">{currentTemplateCounts.questions}</div></div>
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Current Sections</div><div className="mt-2 text-2xl font-semibold text-slate-900">{currentTemplateCounts.sections}</div></div>
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Current Attachments</div><div className="mt-2 text-2xl font-semibold text-slate-900">{currentTemplateCounts.attachments}</div></div>
-                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Budget Block</div><div className="mt-2 text-2xl font-semibold text-slate-900">{currentTemplateCounts.hasBudget ? 'Yes' : 'No'}</div></div>
+                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Template Items</div><div className="mt-2 text-2xl font-semibold text-slate-900">{currentTemplateCounts.total}</div></div>
+                <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-500">Conflicts · Warnings</div><div className="mt-2 text-2xl font-semibold text-slate-900">{bundle.template?.compatibility_json?.conflicts?.length || 0} · {bundle.template?.compatibility_json?.warnings?.length || 0}</div></div>
               </div>
               {latestExtractionRun && latestRunHasContent && currentTemplateIsEmpty && (
                 <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                   {latestRunNeedsApply
-                    ? 'The AI has produced a template, but it is not in use yet. Find it in the panel on the right and click “Make This the Current Template”.'
+                    ? 'The AI produced a template but it could not be applied automatically. Use “Make This the Current Template” in the panel on the right.'
                     : 'The current template was loaded from the latest AI extraction.'}
                 </div>
               )}
@@ -1108,16 +1102,14 @@ export default function FundingTemplatePage() {
                 <BlockEditor title="Evaluation Criteria" items={draftTemplate.evaluationCriteria} itemType="rubric" onChange={(items) => updateBlock('evaluationCriteria', items)} />
                 <BlockEditor title="Submission Rules" items={draftTemplate.submissionRules.items} itemType="rule" onChange={(items) => updateBlock('submissionRules', { ...draftTemplate.submissionRules, items })} />
 
-                <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                      <h2 className="text-lg font-semibold text-slate-900">Advanced · Edit as JSON</h2>
-                      <p className="mt-1 text-sm text-slate-600">For technical users only. Budget schema, source anchors, and conflict cleanup are edited here — most people can skip this section.</p>
-                    </div>
+                <details className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <summary className="cursor-pointer text-lg font-semibold text-slate-900">Advanced · Edit as JSON</summary>
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+                    <p className="text-sm text-slate-600">For technical users only. Budget schema, source anchors, and conflict cleanup are edited here — most people can skip this section.</p>
                     <button type="button" onClick={applyRawJson} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">Load Raw JSON Into Editor</button>
                   </div>
                   <textarea value={rawJson} onChange={(event) => setRawJson(event.target.value)} rows={24} className="mt-6 w-full rounded-2xl border border-slate-300 bg-slate-950 px-4 py-4 font-mono text-xs leading-6 text-slate-100" />
-                </section>
+                </details>
               </>
             )}
           </div>
@@ -1126,7 +1118,7 @@ export default function FundingTemplatePage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Step 1 · Choose sources for the AI</h2>
+                  <h2 className="text-lg font-semibold text-slate-900">Choose sources for the AI</h2>
                   <p className="mt-1 text-sm text-slate-600">
                     The AI builds the template only from the sources you tick below. It does not automatically read the Call Details or Guidelines steps.
                   </p>
@@ -1270,13 +1262,15 @@ export default function FundingTemplatePage() {
                 <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <h3 className="text-sm font-semibold text-emerald-950">Step 2 · The AI result is ready</h3>
+                      <h3 className="text-sm font-semibold text-emerald-950">AI result</h3>
                       <p className="mt-1 text-sm text-emerald-900">
                         Status: {runStatusLabel(latestExtractionRun.status)}
                         {latestExtractionRun.extractor_model ? ` • Model: ${latestExtractionRun.extractor_model}` : ''}
                       </p>
                       <p className="mt-2 text-xs text-emerald-800">
-                        Preview what the AI found. If it looks right, make it the current template — nothing is in use until you do.
+                        {latestExtractionRun.status === 'applied'
+                          ? 'This AI result is now the current template — review and edit it in the editor on the left.'
+                          : 'Preview what the AI found. If it looks right, make it the current template — nothing is in use until you do.'}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -1292,7 +1286,7 @@ export default function FundingTemplatePage() {
                         </button>
                       ) : (
                         <span className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-emerald-900">
-                          Already in use
+                          In use as current template
                         </span>
                       )}
                     </div>
@@ -1322,7 +1316,7 @@ export default function FundingTemplatePage() {
                     {run.error_message && <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800">{run.error_message}</div>}
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button type="button" onClick={() => setSelectedRunId((current) => current === run.id ? null : run.id)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700">{selectedRunId === run.id ? 'Hide Preview' : 'Preview'}</button>
-                      {run.status === 'needs_review' && (
+                      {run.status === 'needs_review' && run.id !== latestExtractionRun?.id && (
                         <button
                           type="button"
                           onClick={() => applyRun(run.id)}

@@ -877,3 +877,24 @@ export function parseJsonText<T>(raw: string, fallback: T): T {
     return fallback;
   }
 }
+
+export function hasTemplateItems(value: unknown): boolean {
+  const template = normalizeGrantTemplate(value);
+  return Boolean(
+    template.budget
+    || template.questions.length
+    || template.sections.length
+    || template.attachments.length
+    || template.evaluationCriteria.length
+    || template.submissionRules.items.length
+  );
+}
+
+// A completed extraction run is auto-applied only when it has content and the
+// current template is still empty — AI must never silently overwrite manual edits.
+export function shouldAutoApplyExtraction(
+  currentTemplateJson: unknown,
+  incomingTemplateJson: unknown
+): boolean {
+  return hasTemplateItems(incomingTemplateJson) && !hasTemplateItems(currentTemplateJson);
+}
