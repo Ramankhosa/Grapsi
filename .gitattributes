@@ -1,0 +1,4 @@
+# Ensure shell scripts always use LF line endings so they run correctly on the
+# Linux production VM. Without this, a Windows checkout can store CRLF and bash
+# fails with "\r: command not found" / "bad interpreter".
+*.sh text eol=lf

@@ -18,6 +18,10 @@ yarn-error.log*
 **/.next/
 out/
 
+# Production deploy artifacts (release dirs / current symlink if deploying in-tree)
+/releases/
+/current
+
 # Runtime data
 pids
 *.pid
