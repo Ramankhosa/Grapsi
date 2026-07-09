@@ -1,23 +1,21 @@
 import type { Metadata } from 'next'
-import { Inter, Cormorant_Garamond } from 'next/font/google'
+import localFont from 'next/font/local'
 import { Providers } from '@/components/providers'
 import AppChrome from '@/components/AppChrome'
 import './globals.css'
 
-// Configure Inter and Cormorant Garamond fonts with fallbacks for offline development
-const inter = Inter({
-  subsets: ['latin'],
+const inter = localFont({
+  src: './fonts/Inter-latin.woff2',
   display: 'swap',
   fallback: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-  preload: true, // Enable preload for better performance
+  preload: true,
 })
 
-const cormorant = Cormorant_Garamond({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+const cormorant = localFont({
+  src: './fonts/CormorantGaramond-Regular.woff2',
   display: 'swap',
   variable: '--font-cormorant',
-  preload: true, // Enable preload for better performance
+  preload: true,
 })
 
 export const metadata: Metadata = {

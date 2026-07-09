@@ -1,21 +1,21 @@
 import type { Metadata } from 'next'
-import { Inter, JetBrains_Mono, Source_Serif_4 } from 'next/font/google'
+import localFont from 'next/font/local'
 import HomeV2Page from '@/components/home-v2/HomeV2Page'
 
-const inter = Inter({
-  subsets: ['latin'],
+const inter = localFont({
+  src: './fonts/Inter-latin.woff2',
   display: 'swap',
   variable: '--font-home-v2-sans',
 })
 
-const sourceSerif = Source_Serif_4({
-  subsets: ['latin'],
+const sourceSerif = localFont({
+  src: './fonts/SourceSerif4-latin.woff2',
   display: 'swap',
   variable: '--font-home-v2-serif',
 })
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
+const jetbrainsMono = localFont({
+  src: './fonts/JetBrainsMono-latin.woff2',
   display: 'swap',
   variable: '--font-home-v2-mono',
 })
