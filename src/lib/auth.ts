@@ -82,6 +82,7 @@ export interface JWTPayload {
   ati_id: string | null
   tenant_ati_id: string | null // For scope validation
   scope: 'platform' | 'tenant' // Unified scope model
+  access_expires_at?: string | null // EVENT-kind users: ISO timestamp their access ends
   iat: number
   exp: number
 }

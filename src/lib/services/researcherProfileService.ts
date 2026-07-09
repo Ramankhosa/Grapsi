@@ -504,7 +504,10 @@ export async function buildRecommendationPreferenceSnapshot(
 
   const context = await researcherProfileService.getFinderContext(userId);
   return buildRecommendationProfileSnapshot(context, {
-    includeResearchSignals: false,
+    // Research areas / keywords / saved areas ride along with the eligibility opt-in so
+    // profile-aware turns ("find grants for me") are topical, not just eligibility-scoped:
+    // they feed the orchestrator's profile context and the 0.30 research-area rank signal.
+    includeResearchSignals: true,
     publications,
     preferences,
   });

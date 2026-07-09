@@ -16,7 +16,31 @@ export type RecommendationConversationIntent =
   | 'explain_result'
   | 'browse_more'
   | 'clarification_needed'
-  | 'general_help';
+  | 'general_help'
+  | 'call_question'
+  | 'funding_strategy'
+  | 'small_talk';
+
+/**
+ * How the conversation treats filters.
+ * - 'manual' (default): the assistant never changes filters; every search runs strictly
+ *   within the user's current filters. The assistant may only SUGGEST filters as chips.
+ * - 'auto': legacy behavior — the assistant applies explicitly requested filters and
+ *   proposes inferred ones through the pending-confirmation flow.
+ */
+export type RecommendationFilterMode = 'manual' | 'auto';
+
+/**
+ * A filter suggestion rendered as a clickable chip. Clicking a chip is a manual user
+ * action: the client composes the next filters from the current ones plus this chip
+ * (union per array key in `patch`, assignment for scalars, reset for `clearKeys`).
+ */
+export interface FinderFilterSuggestionChip {
+  label: string;
+  patch: Partial<RecommendationSearchFilters>;
+  clearKeys?: Array<keyof RecommendationSearchFilters>;
+  source: 'llm' | 'zero_results' | 'profile';
+}
 
 export type RecommendationConversationMessageRole = 'user' | 'assistant';
 export type RecommendationConversationMessageType =
@@ -41,9 +65,18 @@ export interface RecommendationConversationPendingPatch {
   nextFilters: Required<RecommendationSearchFilters>;
 }
 
+export interface RecommendationConversationDocumentCitation {
+  sectionTitle: string | null;
+  sectionType: string;
+  pageStart: number;
+  pageEnd: number;
+  documentVersion: number;
+}
+
 export interface RecommendationConversationCitation {
   runId: string;
   resultIds: string[];
+  documentCitations?: RecommendationConversationDocumentCitation[];
 }
 
 export interface RecommendationConversationMessageRecord {
@@ -55,6 +88,7 @@ export interface RecommendationConversationMessageRecord {
   createdAt: string;
   citations: RecommendationConversationCitation | null;
   suggestedReplies?: string[];
+  filterSuggestions?: FinderFilterSuggestionChip[];
 }
 
 export interface RecommendationConversationRunRecord {
@@ -76,6 +110,7 @@ export interface RecommendationConversationSummary {
   updatedAt: string;
   preview: string | null;
   currentInputMode: RecommendationInputMode;
+  filterMode: RecommendationFilterMode;
   hasPendingPatch: boolean;
 }
 
@@ -84,6 +119,7 @@ export interface RecommendationConversationDetail {
   title: string;
   updatedAt: string;
   currentInputMode: RecommendationInputMode;
+  filterMode: RecommendationFilterMode;
   currentQuery: RecommendationConversationQueryState['query'];
   currentFilters: Required<RecommendationSearchFilters>;
   pendingFilterPatch: RecommendationConversationPendingPatch | null;
@@ -99,6 +135,7 @@ export interface RecommendationConversationMessageRequest {
   manualFilterPatch?: RecommendationSearchFilters;
   replaceManualFilters?: boolean;
   clientTurnId?: string;
+  filterMode?: RecommendationFilterMode;
   useProfileContext?: boolean;
   useEligibilityProfile?: boolean;
   usePublicationContext?: boolean;
@@ -109,3 +146,35 @@ export interface RecommendationConversationMutationResponse {
   stale: boolean;
   clientTurnId?: string | null;
 }
+
+export type FinderTurnStreamStage = 'understanding' | 'searching' | 'reading_documents' | 'composing';
+
+/**
+ * Events emitted by the streaming chat route, in order:
+ * turn → stage* → results? → token* → final (or error) → done.
+ * `final` carries the exact classic-route response and is always authoritative —
+ * clients replace any accumulated streamed text with it.
+ */
+export type FinderTurnStreamEvent =
+  | { type: 'turn'; turnIndex: number; clientTurnId: string | null }
+  | { type: 'stage'; stage: FinderTurnStreamStage; label: string; detail?: string }
+  | {
+      type: 'results';
+      results: RecommendationRawResultItem[];
+      totalResults: number;
+      appliedFilters: Required<RecommendationSearchFilters>;
+      noResultsReason: RecommendationNoResultsReason;
+      lowConfidence: boolean;
+      degradedMode: RecommendationDegradedMode;
+    }
+  | { type: 'token'; delta: string }
+  | { type: 'final'; response: RecommendationConversationMutationResponse }
+  | {
+      type: 'error';
+      error: string;
+      code?: 'GEMINI_RATE_LIMITED' | 'RATE_LIMITED' | 'INTERNAL';
+      retryAfterMs?: number | null;
+      persisted: boolean;
+    };
+
+export type FinderTurnStreamEmitter = (event: FinderTurnStreamEvent) => void;

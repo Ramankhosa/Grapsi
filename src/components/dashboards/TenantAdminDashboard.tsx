@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { isFeatureEnabled } from '@/lib/feature-flags'
+import InviteMembersPanel from '@/components/admin/InviteMembersPanel'
 
 interface ATIToken {
   id: string
@@ -614,6 +615,9 @@ export default function TenantAdminDashboard() {
             )}
           </>
         )}
+
+        {/* Invite Members (email invites — the default way to add people) */}
+        <InviteMembersPanel />
 
         {/* Create Token Section */}
         <div className="bg-white shadow rounded-lg mb-8">

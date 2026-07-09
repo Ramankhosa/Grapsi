@@ -455,6 +455,23 @@ enum ATITokenStatus {
   USED_UP
 }
 
+// How the tenant behind an ATI token is governed.
+// STANDARD: self-administered org (first user becomes OWNER, admins manage members)
+// MANAGED:  administered from platform only — members never get OWNER/ADMIN
+// EVENT:    MANAGED + time-boxed member access (workshops, demos, conferences)
+enum ATITokenKind {
+  STANDARD
+  MANAGED
+  EVENT
+}
+
+enum TenantInviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
 model Tenant {
   id        String       @id @default(cuid())
   name      String
@@ -522,6 +539,9 @@ model Tenant {
   // Trial campaign relations
   trialCampaigns TrialCampaign[]
 
+  // Tenant member invites
+  memberInvites TenantMemberInvite[]
+
   @@map("tenants")
 }
 
@@ -544,6 +564,7 @@ model User {
   roles                    UserRole[] @default([ANALYST])
   status                   UserStatus @default(ACTIVE)
   emailVerified            Boolean    @default(false)
+  accessExpiresAt          DateTime? // EVENT-kind signups: when this user's access ends (null = no expiry)
   noveltySearchesCompleted Int        @default(0) // Track successful novelty searches
 
   // Social login fields
@@ -643,6 +664,10 @@ model User {
   platform_role_assignments          PlatformTeamRoleAssignment[]      @relation("PlatformRoleAssignmentUser")
   platform_role_assignments_assigned PlatformTeamRoleAssignment[]      @relation("PlatformRoleAssignmentAssigner")
 
+  // Onboarding journey and tenant member invites
+  journeyState      UserJourneyState?
+  sentTenantInvites TenantMemberInvite[] @relation("TenantInviteSender")
+
   @@map("users")
 }
 
@@ -735,11 +760,62 @@ model ATIToken {
   assignedRole   UserRole? // Explicit role for users who sign up with this token
   assignedTeamId String? // Team to auto-add user to on signup
 
-  tenant       Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  signupUsers  User[]  @relation("SignupATIToken")
-  assignedTeam Team?   @relation("ATITokenTeam", fields: [assignedTeamId], references: [id], onDelete: SetNull)
+  // Governance kind and time-boxed access (EVENT kind)
+  kind              ATITokenKind @default(STANDARD)
+  memberAccessHours Int? // EVENT: each member's access duration from their signup
+  accessEndsAt      DateTime? // EVENT: hard cutoff for all members (event end)
+  eventLabel        String? // e.g. "AI Grants Workshop – July 15"
+
+  tenant       Tenant?             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signupUsers  User[]              @relation("SignupATIToken")
+  assignedTeam Team?               @relation("ATITokenTeam", fields: [assignedTeamId], references: [id], onDelete: SetNull)
+  memberInvite TenantMemberInvite?
 
   @@map("ati_tokens")
+}
+
+// Named, email-locked invitation to join a tenant. Backed by a single-use ATI
+// token — the invite adds identity (who was invited, by whom, as what role)
+// on top of the ATI redemption mechanism.
+model TenantMemberInvite {
+  id              String             @id @default(cuid())
+  tenantId        String
+  email           String
+  role            UserRole           @default(ANALYST)
+  teamId          String?
+  atiTokenId      String             @unique
+  status          TenantInviteStatus @default(PENDING)
+  invitedByUserId String?
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  acceptedUserId  String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  atiToken  ATIToken @relation(fields: [atiTokenId], references: [id], onDelete: Cascade)
+  invitedBy User?    @relation("TenantInviteSender", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([email])
+  @@map("tenant_member_invites")
+}
+
+// Per-user onboarding journey state. Milestones are primarily computed from
+// real data at read time; this table stores event-only milestones (first
+// match viewed, tours dismissed) and the dismissal of the checklist itself.
+model UserJourneyState {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  milestones     Json     @default("{}")
+  dismissedTours String[] @default([])
+  checklistDone  Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_journey_states")
 }
 
 model AuditLog {
@@ -2293,6 +2369,7 @@ model RecommendationConversation {
   user_id                         String
   tenantId                        String?                             @map("tenant_id")
   title                           String                              @default("New Funding Chat")
+  filter_mode                     String                              @default("manual")
   current_input_mode              String                              @default("research_area")
   current_query_json              Json                                @default("{}")
   current_filters_json            Json                                @default("{}")

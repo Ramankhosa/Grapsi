@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { verifyPassword, generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
+import { isAccessExpired } from '@/lib/ati-kind-policy'
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -70,6 +71,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Time-boxed (EVENT/workshop) accounts stop working after their window
+    if (isAccessExpired(user.accessExpiresAt, new Date())) {
+      return NextResponse.json(
+        {
+          code: 'ACCESS_EXPIRED',
+          message: 'Your event access has ended. Contact your organizer or sign up for a full account to continue.'
+        },
+        { status: 401 }
+      )
+    }
+
     // Determine scope based on tenant membership
     const isPlatformScope = !!(user.tenantId && user.tenant?.atiId === 'PLATFORM')
     const isTenantScope = !!(user.tenantId && user.tenant?.atiId !== 'PLATFORM')
@@ -99,7 +111,8 @@ export async function POST(request: NextRequest) {
       roles: user.roles,
       ati_id: user.tenant?.atiId || null,
       tenant_ati_id: user.tenant?.atiId || null, // For middleware validation
-      scope: isPlatformScope ? 'platform' : 'tenant' // Add explicit scope
+      scope: isPlatformScope ? 'platform' : 'tenant', // Add explicit scope
+      access_expires_at: user.accessExpiresAt ? user.accessExpiresAt.toISOString() : null
     })
 
     // Get request metadata for token tracking

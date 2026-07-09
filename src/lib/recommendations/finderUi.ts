@@ -4,81 +4,13 @@ import type {
   RecommendationStrictFilterRecovery,
 } from './types';
 import type { ResearcherFinderContext } from '../researcherProfile/types';
+import {
+  cloneRequiredFilters,
+  formatFilterDescription,
+  isActiveFilterValue,
+} from './filterChips';
 
-const FILTER_LABELS: Partial<Record<keyof RecommendationSearchFilters, string>> = {
-  geographyScope: 'Geography scope',
-  eligibleCountries: 'Eligible countries',
-  eligibleRegions: 'Eligible regions',
-  hostCountries: 'Host countries',
-  funderCountries: 'Funder countries',
-  fundingKinds: 'Funding types',
-  institutionTypes: 'Institution types',
-  careerStages: 'Career stages',
-  citizenshipRequirements: 'Citizenship',
-  residencyRequirements: 'Residency',
-  applicationLanguages: 'Application languages',
-  sponsorTypes: 'Sponsor types',
-  taxonomyAreaIds: 'Research taxonomy',
-  deadlineFrom: 'Deadline window',
-  deadlineTo: 'Deadline window',
-  rollingOnly: 'Rolling only',
-  amountMin: 'Minimum amount',
-  amountMax: 'Maximum amount',
-};
-
-function cloneRequiredFilters(filters: Required<RecommendationSearchFilters>): Required<RecommendationSearchFilters> {
-  return {
-    ...filters,
-    geographyScope: [...filters.geographyScope],
-    eligibleCountries: [...filters.eligibleCountries],
-    eligibleRegions: [...filters.eligibleRegions],
-    hostCountries: [...filters.hostCountries],
-    funderCountries: [...filters.funderCountries],
-    fundingKinds: [...filters.fundingKinds],
-    institutionTypes: [...filters.institutionTypes],
-    careerStages: [...filters.careerStages],
-    citizenshipRequirements: [...filters.citizenshipRequirements],
-    residencyRequirements: [...filters.residencyRequirements],
-    applicationLanguages: [...filters.applicationLanguages],
-    sponsorTypes: [...filters.sponsorTypes],
-    taxonomyAreaIds: [...filters.taxonomyAreaIds],
-  };
-}
-
-function isActiveFilterValue(value: Required<RecommendationSearchFilters>[keyof RecommendationSearchFilters]) {
-  if (Array.isArray(value)) {
-    return value.length > 0;
-  }
-  return value !== null && value !== undefined && value !== false && value !== '';
-}
-
-function formatFilterDescription(
-  filters: Required<RecommendationSearchFilters>,
-  key: keyof RecommendationSearchFilters
-) {
-  const label = FILTER_LABELS[key] || String(key);
-
-  switch (key) {
-    case 'deadlineFrom':
-    case 'deadlineTo': {
-      if (!filters.deadlineFrom && !filters.deadlineTo) return null;
-      return `${label}: ${filters.deadlineFrom || 'any time'} to ${filters.deadlineTo || 'open end'}`;
-    }
-    case 'rollingOnly':
-      return filters.rollingOnly ? 'Rolling only' : null;
-    case 'amountMin':
-      return filters.amountMin !== null ? `${label}: ${filters.amountMin}` : null;
-    case 'amountMax':
-      return filters.amountMax !== null ? `${label}: ${filters.amountMax}` : null;
-    default: {
-      const value = filters[key];
-      if (!Array.isArray(value) || value.length === 0) {
-        return null;
-      }
-      return `${label}: ${value.slice(0, 3).join(', ')}`;
-    }
-  }
-}
+export { FILTER_LABELS } from './filterChips';
 
 export function describeFiltersByKeys(
   filters: Required<RecommendationSearchFilters>,

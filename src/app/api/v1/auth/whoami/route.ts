@@ -49,6 +49,7 @@ export async function GET(request: NextRequest) {
       tenant_id: payload.tenant_id,
       roles: payload.roles,
       ati_id: payload.ati_id,
+      access_expires_at: payload.access_expires_at || null,
       platformPermissions
     }, { status: 200 })
 

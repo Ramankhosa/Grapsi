@@ -12,8 +12,14 @@ const createTokenSchema = z.object({
   max_uses: z.number().int().min(1).optional(),
   plan_tier: z.string().optional(),
   notes: z.string().optional(),
-  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST']).optional(),
-  assigned_team_id: z.string().optional()
+  assigned_role: z.enum(['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER']).optional(),
+  assigned_team_id: z.string().optional(),
+  // Governance kind: STANDARD (self-administered), MANAGED (platform-run),
+  // EVENT (MANAGED + time-boxed member access for workshops/demos)
+  kind: z.enum(['STANDARD', 'MANAGED', 'EVENT']).default('STANDARD'),
+  member_access_hours: z.number().int().min(1).max(8760).optional(),
+  access_ends_at: z.string().datetime().optional(),
+  event_label: z.string().max(200).optional()
 })
 
 export async function POST(request: NextRequest) {
@@ -32,6 +38,35 @@ export async function POST(request: NextRequest) {
     if (!tenant || tenant.status !== 'ACTIVE' || tenant.atiId === 'PLATFORM') {
       return NextResponse.json(
         { code: 'INVALID_TENANT', message: 'Select an active customer tenant' },
+        { status: 400 }
+      )
+    }
+
+    if (body.kind !== 'EVENT' && (body.member_access_hours || body.access_ends_at || body.event_label)) {
+      return NextResponse.json(
+        { code: 'INVALID_INPUT', message: 'member_access_hours, access_ends_at and event_label only apply to EVENT tokens' },
+        { status: 400 }
+      )
+    }
+
+    if (body.kind === 'EVENT' && body.access_ends_at && new Date(body.access_ends_at) <= new Date()) {
+      return NextResponse.json(
+        { code: 'INVALID_INPUT', message: 'access_ends_at must be in the future' },
+        { status: 400 }
+      )
+    }
+
+    // MANAGED/EVENT members never get admin-capable roles; STANDARD tokens
+    // assign service roles only (VIEWER is reserved for managed groups)
+    if (body.kind !== 'STANDARD' && body.assigned_role && !['ANALYST', 'VIEWER'].includes(body.assigned_role)) {
+      return NextResponse.json(
+        { code: 'INVALID_INPUT', message: `${body.kind} tokens can only assign ANALYST or VIEWER roles` },
+        { status: 400 }
+      )
+    }
+    if (body.kind === 'STANDARD' && body.assigned_role === 'VIEWER') {
+      return NextResponse.json(
+        { code: 'INVALID_INPUT', message: 'STANDARD tokens can only assign ADMIN, MANAGER or ANALYST roles' },
         { status: 400 }
       )
     }
@@ -65,7 +100,11 @@ export async function POST(request: NextRequest) {
         planTier: body.plan_tier,
         notes: body.notes,
         assignedRole: body.assigned_role || null,
-        assignedTeamId: body.assigned_team_id || null
+        assignedTeamId: body.assigned_team_id || null,
+        kind: body.kind,
+        memberAccessHours: body.kind === 'EVENT' ? body.member_access_hours || null : null,
+        accessEndsAt: body.kind === 'EVENT' && body.access_ends_at ? new Date(body.access_ends_at) : null,
+        eventLabel: body.kind === 'EVENT' ? body.event_label || null : null
       }
     })
 
@@ -81,16 +120,22 @@ export async function POST(request: NextRequest) {
         maxUses: token.maxUses,
         assignedRole: token.assignedRole,
         assignedTeamId: token.assignedTeamId,
+        kind: token.kind,
+        eventLabel: token.eventLabel,
         issuedByPlatform: true
       }
     })
 
+    const siteUrl = process.env.SITE_URL || process.env.NEXTAUTH_URL || ''
     return NextResponse.json({
       token_id: token.id,
       token_display_once: rawToken,
       fingerprint,
       assigned_role: token.assignedRole,
       assigned_team_id: token.assignedTeamId,
+      kind: token.kind,
+      event_label: token.eventLabel,
+      invite_link: `${siteUrl}/register?invite=${encodeURIComponent(rawToken)}`,
       warning: 'Copy this token now and store it securely.'
     }, { status: 201 })
   } catch (error) {
@@ -171,6 +216,10 @@ export async function GET(request: NextRequest) {
       notes: token.notes,
       assigned_role: token.assignedRole,
       assigned_team_id: token.assignedTeamId,
+      kind: token.kind,
+      member_access_hours: token.memberAccessHours,
+      access_ends_at: token.accessEndsAt?.toISOString() || null,
+      event_label: token.eventLabel,
       created_at: token.createdAt.toISOString(),
       updated_at: token.updatedAt.toISOString(),
       ...(token.tenant && {

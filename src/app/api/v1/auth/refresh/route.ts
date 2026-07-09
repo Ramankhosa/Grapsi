@@ -8,6 +8,7 @@ import {
   revokeRefreshToken,
   storeRefreshToken
 } from '@/lib/auth'
+import { isAccessExpired } from '@/lib/ati-kind-policy'
 import { cookies } from 'next/headers'
 
 export async function POST(request: NextRequest) {
@@ -66,6 +67,19 @@ export async function POST(request: NextRequest) {
       return response
     }
 
+    // Step 3b: Time-boxed (EVENT/workshop) accounts cannot refresh past their window
+    if (isAccessExpired(user.accessExpiresAt, new Date())) {
+      const response = NextResponse.json(
+        {
+          code: 'ACCESS_EXPIRED',
+          message: 'Your event access has ended. Contact your organizer or sign up for a full account to continue.'
+        },
+        { status: 401 }
+      )
+      response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
+      return response
+    }
+
     // Step 4: Determine user scope
     const isPlatformScope = user.tenantId && user.tenant?.atiId === 'PLATFORM'
     const isTenantScope = user.tenantId && user.tenant?.atiId !== 'PLATFORM'
@@ -90,7 +104,8 @@ export async function POST(request: NextRequest) {
       roles: user.roles,
       ati_id: user.tenant?.atiId || null,
       tenant_ati_id: user.tenant?.atiId || null,
-      scope: isPlatformScope ? 'platform' : 'tenant'
+      scope: isPlatformScope ? 'platform' : 'tenant',
+      access_expires_at: user.accessExpiresAt ? user.accessExpiresAt.toISOString() : null
     })
 
     // Step 7: Generate new refresh token (same family for rotation tracking)

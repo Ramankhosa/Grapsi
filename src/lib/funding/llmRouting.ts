@@ -13,6 +13,7 @@ export const FUNDING_CHAT_TASK_CODE = 'FUNDING_CHAT' as TaskCode
 export const FUNDING_CHAT_ORCHESTRATOR_STAGE_CODE = 'FUNDING_CHAT_ORCHESTRATOR'
 export const FUNDING_CHAT_NARRATIVE_STAGE_CODE = 'FUNDING_CHAT_NARRATIVE'
 export const FUNDING_CHAT_QUERY_ENRICHMENT_STAGE_CODE = 'FUNDING_CHAT_QUERY_ENRICHMENT'
+export const FUNDING_CHAT_ANSWER_STAGE_CODE = 'FUNDING_CHAT_ANSWER'
 export const IDEA_INTELLIGENCE_TASK_CODE = 'IDEA_INTELLIGENCE' as TaskCode
 export const IDEA_INTELLIGENCE_STRUCTURE_STAGE_CODE = 'IDEA_INTELLIGENCE_STRUCTURE'
 export const IDEA_INTELLIGENCE_EVIDENCE_MAP_STAGE_CODE = 'IDEA_INTELLIGENCE_EVIDENCE_MAP'
@@ -233,6 +234,10 @@ export async function runFundingGatewayExtraction(options: {
   }
 }
 
+export interface FundingGatewayStreamOptions {
+  onToken: (delta: string, output: string) => void | Promise<void>
+}
+
 export async function runFundingGatewayText(options: {
   taskCode: TaskCode
   stageCode: string
@@ -248,6 +253,7 @@ export async function runFundingGatewayText(options: {
   structuredSchema?: FundingGatewayStructuredSchema
   metadata?: Record<string, unknown>
   skipFeaturePolicy?: boolean
+  stream?: FundingGatewayStreamOptions
 }): Promise<FundingGatewayExtractionResult | null> {
   const tenantContext = await resolveFundingLlmTenantContext(options.context)
   if (!tenantContext) {
@@ -298,6 +304,14 @@ export async function runFundingGatewayText(options: {
         ...options.metadata,
       },
       idempotencyKey: crypto.randomUUID(),
+      ...(options.stream
+        ? {
+            stream: {
+              onToken: (token: { delta: string; output: string }) =>
+                options.stream!.onToken(token.delta, token.output),
+            },
+          }
+        : {}),
     }
   )
 

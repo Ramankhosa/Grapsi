@@ -37,6 +37,41 @@ export function verificationTemplate(email: string, name: string | null | undefi
   return { subject: `Verify your ${brand.name} email`, html, text }
 }
 
+export function tenantInviteTemplate(params: {
+  email: string
+  inviterName: string
+  tenantName: string
+  role: string
+  inviteLink: string
+  expiresAt: Date
+}) {
+  const displayName = friendlyName(params.email)
+  const roleLabel = params.role.charAt(0) + params.role.slice(1).toLowerCase()
+  const expiryDate = params.expiresAt.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+  const html = `
+  <div style="font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 640px; margin: 0 auto; padding: 24px; background: #ffffff">
+    <div style="text-align:center; margin-bottom: 16px">
+      <div style="display:inline-block; background:${brand.primary}; color:#fff; padding:8px 12px; border-radius:12px; font-weight:600;">${brand.name}</div>
+    </div>
+    <h2 style="color:${brand.gray700}; margin: 12px 0 8px">You're invited to join ${params.tenantName}</h2>
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6"><strong>${params.inviterName}</strong> invited you to join <strong>${params.tenantName}</strong> on ${brand.name} as a <strong>${roleLabel}</strong>. Click the button below to create your account — your access is already set up.</p>
+    <div style="margin:24px 0">
+      <a href="${params.inviteLink}" style="background:${brand.primary}; color:#fff; text-decoration:none; padding:12px 20px; border-radius:10px; display:inline-block; font-weight:600">Accept Invitation</a>
+    </div>
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${params.inviteLink}" style="color:${brand.primary}">${params.inviteLink}</a>
+    </p>
+    <p style="color:${brand.gray500}; font-size:12px">This invitation is for ${params.email} and expires on ${expiryDate}. If you weren't expecting it, you can safely ignore this email.</p>
+  </div>`
+  const text = `Hi ${displayName}, ${params.inviterName} invited you to join ${params.tenantName} on ${brand.name} as ${roleLabel}. Accept: ${params.inviteLink} (expires ${expiryDate})`
+  return { subject: `${params.inviterName} invited you to ${params.tenantName} on ${brand.name}`, html, text }
+}
+
 export function resetTemplate(email: string, name: string | null | undefined, token: string) {
   const displayName = friendlyName(email, name)
   const url = `${SITE_URL}/reset-password?token=${encodeURIComponent(token)}`

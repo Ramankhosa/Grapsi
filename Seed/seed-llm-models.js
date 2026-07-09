@@ -1185,6 +1185,24 @@ async function main() {
       models: { FREE_PLAN: 'voyage-4-lite', PRO_PLAN: 'voyage-4-lite', ENTERPRISE_PLAN: 'voyage-4-lite' }
     },
     {
+      code: 'FUNDING_CHAT_ANSWER',
+      displayName: 'AI Fund Finder Conversational Answer',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 17,
+      description: 'Answer funding-strategy and general questions conversationally inside the finder chat.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 4000 },
+      models: { FREE_PLAN: 'gemini-2.0-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
+      code: 'FUNDING_DOC_QA',
+      displayName: 'Funding Document Q&A',
+      featureCode: 'FUNDING_DISCOVERY',
+      sortOrder: 18,
+      description: 'Answer questions about a specific funding call grounded in its ingested document chunks.',
+      tokenLimits: { maxTokensIn: 48000, maxTokensOut: 4000 },
+      models: { FREE_PLAN: 'gemini-2.0-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+    },
+    {
       code: 'IDEA_INTELLIGENCE_STRUCTURE',
       displayName: 'Idea Intelligence Structuring',
       featureCode: 'FUNDING_DISCOVERY',

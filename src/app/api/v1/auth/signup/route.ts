@@ -9,6 +9,13 @@ import { validateInviteToken, recordSignupInTransaction } from '@/lib/trial-invi
 import { assignTrialPlanToTenant } from '@/lib/trial-plan-service'
 import { ATIRedemptionError, assignSignupTeam, claimATITokenUse } from '@/lib/ati-redemption-service'
 import { ensureTenantEntitlementForSignup } from '@/lib/entitlement-service'
+import {
+  computeAccessExpiresAt,
+  resolveAssignedRole,
+  shouldPromoteFirstUserToOwner,
+  type ATIKind
+} from '@/lib/ati-kind-policy'
+import { markInviteAccepted, validateInviteEmailLock } from '@/lib/tenant-invite-service'
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -101,6 +108,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // If this token is backed by a named member invite, signup is locked to
+    // the invited email address
+    const inviteLock = await validateInviteEmailLock(tokenValidation.atiToken!.id, email)
+    if (!inviteLock.ok) {
+      return NextResponse.json(
+        { code: 'INVITE_EMAIL_MISMATCH', message: inviteLock.error },
+        { status: 400 }
+      )
+    }
+
+    // Governance kind drives role assignment and access expiry below.
+    // Tokens from trial-invite pseudo-validation have no kind — treat as STANDARD.
+    const tokenKind: ATIKind = (fullToken?.kind as ATIKind) || 'STANDARD'
+
     // Determine role based on context
     // Priority for non-first users: 1. Explicit assignedRole on token,
     // 2. Token creator logic, 3. Default ANALYST. The first user is promoted
@@ -109,18 +130,23 @@ export async function POST(request: NextRequest) {
     let tokenCreator = null
     let roleReason = 'default'
 
-    if (fullToken?.assignedRole) {
-      // Explicit role set on the ATI token (highest priority for non-first users)
-      // Only service-capable roles are honored for ATI signups.
-      const explicitRole = fullToken.assignedRole
-      if (!['ADMIN', 'MANAGER', 'ANALYST'].includes(explicitRole)) {
-        console.warn('ATI token has invalid assignedRole:', explicitRole)
-        // Fall through to default logic
-      } else {
-        userRole = explicitRole
-        roleReason = 'ati_token_explicit_role'
-        console.log('Using explicit assignedRole from ATI token:', userRole)
+    const resolvedRole = resolveAssignedRole(tokenKind, fullToken?.assignedRole)
+    if (resolvedRole.role) {
+      userRole = resolvedRole.role
+      roleReason = resolvedRole.clamped
+        ? 'ati_token_role_clamped_by_kind'
+        : 'ati_token_explicit_role'
+      if (resolvedRole.clamped) {
+        console.warn(
+          `ATI token assignedRole ${fullToken?.assignedRole} clamped to ${userRole} for ${tokenKind} kind`
+        )
       }
+    } else if (fullToken?.assignedRole) {
+      console.warn('ATI token has invalid assignedRole:', fullToken.assignedRole)
+      // Fall through to the default ANALYST role
+    } else if (tokenKind !== 'STANDARD') {
+      // MANAGED/EVENT tokens never grant admin roles via creator heuristics
+      roleReason = 'managed_kind_default'
     } else {
       // Legacy logic: check if this token was created by super admin (platform scope)
       // or by tenant admin
@@ -188,8 +214,23 @@ export async function POST(request: NextRequest) {
       const transactionExistingUsersCount = await tx.user.count({
         where: { tenantId: tenant.id }
       })
-      const assignedUserRole = transactionExistingUsersCount === 0 ? 'OWNER' : userRole
-      const assignedRoleReason = transactionExistingUsersCount === 0 ? 'first_tenant_user' : roleReason
+      // Only self-administered (STANDARD) tenants promote their first user to
+      // OWNER. MANAGED/EVENT tenants are governed from the platform.
+      const promoteToOwner =
+        transactionExistingUsersCount === 0 && shouldPromoteFirstUserToOwner(tokenKind)
+      const assignedUserRole = promoteToOwner ? 'OWNER' : userRole
+      const assignedRoleReason = promoteToOwner ? 'first_tenant_user' : roleReason
+
+      // EVENT signups get a hard access expiry (min of per-member window and
+      // the event's end)
+      const accessExpiresAt = computeAccessExpiresAt(
+        {
+          kind: tokenKind,
+          memberAccessHours: fullToken?.memberAccessHours ?? null,
+          accessEndsAt: fullToken?.accessEndsAt ?? null
+        },
+        new Date()
+      )
 
       // Create user
       const user = await tx.user.create({
@@ -203,9 +244,13 @@ export async function POST(request: NextRequest) {
           emailVerified: true,
           firstName,
           lastName,
-          name: `${firstName} ${lastName}`
+          name: `${firstName} ${lastName}`,
+          accessExpiresAt
         }
       })
+
+      // If this signup redeemed a named member invite, mark it accepted
+      await markInviteAccepted(tx, tokenValidation.atiToken!.id, user.id)
 
       // Create default project for the user
       const defaultProjectName = 'Default Project'
@@ -244,6 +289,8 @@ export async function POST(request: NextRequest) {
             ati_token_creator: tokenCreator?.actorUserId || null,
             ati_explicit_role: fullToken?.assignedRole || null,
             ati_assigned_team: fullToken?.assignedTeamId || null,
+            ati_kind: tokenKind,
+            access_expires_at: accessExpiresAt,
             is_first_tenant_user: transactionExistingUsersCount === 0
           }
         }

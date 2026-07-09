@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useAuth } from '@/lib/auth-context'
+import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowRight,
@@ -12,10 +12,27 @@ import {
   Search,
   ShieldCheck,
   UserCircle,
+  Users,
   Sparkles
 } from 'lucide-react'
+import GettingStartedCard from '@/components/dashboards/GettingStartedCard'
+import WorkshopAccessBanner from '@/components/dashboards/WorkshopAccessBanner'
 
-const productOptions = [
+interface ProductOption {
+  title: string
+  description: string
+  href: string
+  icon: typeof Search
+  gradient: string
+  glowColor: string
+  iconBg: string
+  iconColor: string
+  borderHover: string
+  tag: string
+  orbColor: string
+}
+
+const productOptions: ProductOption[] = [
   {
     title: 'Fund Finder',
     description: 'Discover funding opportunities with AI-powered search and intelligent matching.',
@@ -81,7 +98,21 @@ const productOptions = [
     tag: 'Analysis',
     orbColor: 'bg-violet-200/40'
   }
-] as const
+]
+
+const adminOption: ProductOption = {
+  title: 'Team & Workspace Admin',
+  description: 'Invite members, manage access codes, and oversee workspace usage.',
+  href: '/admin',
+  icon: Users,
+  gradient: 'from-slate-500 to-slate-700',
+  glowColor: 'rgba(100, 116, 139, 0.08)',
+  iconBg: 'bg-slate-100',
+  iconColor: 'text-slate-600',
+  borderHover: 'hover:border-slate-300',
+  tag: 'Admin',
+  orbColor: 'bg-slate-200/40'
+}
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -122,13 +153,16 @@ function FloatingOrb({ className, delay = 0 }: { className: string; delay?: numb
 
 function ProductCard({
   option,
-  index
+  index,
+  totalCount
 }: {
-  option: (typeof productOptions)[number]
+  option: ProductOption
   index: number
+  totalCount: number
 }) {
   const Icon = option.icon
-  const isWide = index === productOptions.length - 1
+  // Only stretch the last card across the grid when the count is odd
+  const isWide = index === totalCount - 1 && totalCount % 2 === 1
 
   return (
     <motion.div variants={itemVariants} className={isWide ? 'md:col-span-2 lg:col-span-2' : ''}>
@@ -198,6 +232,8 @@ function ProductCard({
 
 export default function UserProductChooser() {
   const { user } = useAuth()
+  const { isTenantAdmin } = useRoleAccess()
+  const options = isTenantAdmin ? [...productOptions, adminOption] : productOptions
   const [mounted, setMounted] = useState(false)
   const firstName =
     user?.email?.split('@')[0]?.split('.')[0]?.replace(/^\w/, (c: string) => c.toUpperCase()) ?? ''
@@ -270,14 +306,18 @@ export default function UserProductChooser() {
                 </p>
               </motion.div>
 
+              <WorkshopAccessBanner />
+
+              <GettingStartedCard />
+
               <motion.div
                 variants={containerVariants}
                 initial="hidden"
                 animate="show"
                 className="grid gap-4 md:grid-cols-2 lg:grid-cols-2"
               >
-                {productOptions.map((option, i) => (
-                  <ProductCard key={option.title} option={option} index={i} />
+                {options.map((option, i) => (
+                  <ProductCard key={option.title} option={option} index={i} totalCount={options.length} />
                 ))}
               </motion.div>
 

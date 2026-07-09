@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyJWT, JWTPayload } from '@/lib/auth'
+import { isAccessExpired } from '@/lib/ati-kind-policy'
 
 export interface AuthenticatedRequest extends NextRequest {
   user?: JWTPayload
@@ -42,6 +43,18 @@ export async function authenticateRequest(request: NextRequest): Promise<{
       user: null,
       error: NextResponse.json(
         { code: 'EXPIRED_TOKEN', message: 'Token has expired' },
+        { status: 401 }
+      )
+    }
+  }
+
+  // Time-boxed (EVENT/workshop) accounts: a JWT issued before the access
+  // window closed must stop working the moment it does
+  if (isAccessExpired(payload.access_expires_at, new Date())) {
+    return {
+      user: null,
+      error: NextResponse.json(
+        { code: 'ACCESS_EXPIRED', message: 'Your event access has ended' },
         { status: 401 }
       )
     }

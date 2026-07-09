@@ -7,7 +7,8 @@ import { recommendationConversationService } from '@/lib/services/recommendation
 export const runtime = 'nodejs'
 
 const updateSchema = z.object({
-  title: z.string().max(120),
+  title: z.string().max(120).optional(),
+  filterMode: z.enum(['manual', 'auto']).optional(),
 })
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
@@ -42,7 +43,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       auth.userId,
       auth.tenantId,
       params.id,
-      parsed.title
+      { title: parsed.title, filterMode: parsed.filterMode }
     )
     return NextResponse.json({ conversation })
   } catch (error) {

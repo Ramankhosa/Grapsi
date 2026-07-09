@@ -27,8 +27,8 @@ export default function FinderPreferencesPanel({
         <div>
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-800">My Preferences</div>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-emerald-950">
-            Choose what personal context this search may use. Eligibility uses country, citizenship, career stage,
-            institution type, and language. Publications use library items tagged <span className="font-semibold">my-publication</span>.
+            Choose what personal context this search may use. Profile uses your research areas plus country, citizenship,
+            career stage, institution type, and language. Publications use library items tagged <span className="font-semibold">my-publication</span>.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -71,7 +71,7 @@ export default function FinderPreferencesPanel({
               {preferences.useEligibilityProfile ? <FaCheck className="text-xs text-emerald-600" /> : null}
             </span>
             <span className="mt-1 block text-xs leading-5 text-slate-600">
-              Lets the bot check eligibility against your profile fields.
+              Matches calls to your research areas and checks eligibility against your profile fields.
             </span>
           </span>
         </label>

@@ -12,6 +12,10 @@ interface ATIToken {
   usage_count: number
   plan_tier: string | null
   notes: string | null
+  kind?: 'STANDARD' | 'MANAGED' | 'EVENT'
+  member_access_hours?: number | null
+  access_ends_at?: string | null
+  event_label?: string | null
   created_at: string
   updated_at: string
   tenant: {
@@ -68,6 +72,7 @@ export default function SuperAdminATIDashboard() {
   const [usersError, setUsersError] = useState<string | null>(null)
   const [tenants, setTenants] = useState<TenantOption[]>([])
   const [isCreating, setIsCreating] = useState(false)
+  const [createdInviteLink, setCreatedInviteLink] = useState<string | null>(null)
   const [createForm, setCreateForm] = useState({
     tenant_id: '',
     expires_at: '',
@@ -76,6 +81,10 @@ export default function SuperAdminATIDashboard() {
     notes: '',
     assigned_role: 'ANALYST',
     assigned_team_id: '',
+    kind: 'STANDARD',
+    member_access_hours: '',
+    access_ends_at: '',
+    event_label: '',
     entitlement_plan_code: '',
     entitlement_expires_at: ''
   })
@@ -307,7 +316,15 @@ export default function SuperAdminATIDashboard() {
           plan_tier: createForm.plan_tier || undefined,
           notes: createForm.notes || undefined,
           assigned_role: createForm.assigned_role || undefined,
-          assigned_team_id: createForm.assigned_team_id || undefined
+          assigned_team_id: createForm.assigned_team_id || undefined,
+          kind: createForm.kind,
+          member_access_hours: createForm.kind === 'EVENT' && createForm.member_access_hours
+            ? parseInt(createForm.member_access_hours)
+            : undefined,
+          access_ends_at: createForm.kind === 'EVENT' && createForm.access_ends_at
+            ? new Date(createForm.access_ends_at).toISOString()
+            : undefined,
+          event_label: createForm.kind === 'EVENT' ? createForm.event_label || undefined : undefined
         })
       })
       const data = await response.json()
@@ -316,6 +333,7 @@ export default function SuperAdminATIDashboard() {
       }
 
       setRevealedToken(data.token_display_once)
+      setCreatedInviteLink(data.invite_link || null)
       setCreateForm({
         tenant_id: '',
         expires_at: '',
@@ -324,6 +342,10 @@ export default function SuperAdminATIDashboard() {
         notes: '',
         assigned_role: 'ANALYST',
         assigned_team_id: '',
+        kind: 'STANDARD',
+        member_access_hours: '',
+        access_ends_at: '',
+        event_label: '',
         entitlement_plan_code: '',
         entitlement_expires_at: ''
       })
@@ -402,6 +424,56 @@ export default function SuperAdminATIDashboard() {
             <h3 className="text-lg leading-6 font-medium text-gray-900">Create Tenant ATI Token</h3>
             <form onSubmit={handleCreateToken} className="mt-4 space-y-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="sm:col-span-3">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Token kind</label>
+                  <select
+                    value={createForm.kind}
+                    onChange={(e) => {
+                      const kind = e.target.value
+                      setCreateForm(prev => ({
+                        ...prev,
+                        kind,
+                        // Managed groups never assign admin-capable roles
+                        assigned_role:
+                          kind !== 'STANDARD' && !['ANALYST', 'VIEWER'].includes(prev.assigned_role)
+                            ? 'ANALYST'
+                            : prev.assigned_role
+                      }))
+                    }}
+                    className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                  >
+                    <option value="STANDARD">Standard — self-administered organization</option>
+                    <option value="MANAGED">Managed — platform-administered group (no tenant admin)</option>
+                    <option value="EVENT">Event — time-boxed workshop/demo access</option>
+                  </select>
+                </div>
+                {createForm.kind === 'EVENT' && (
+                  <>
+                    <input
+                      type="text"
+                      placeholder="Event label (e.g. AI Grants Workshop)"
+                      value={createForm.event_label}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, event_label: e.target.value }))}
+                      className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                    />
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="Access hours per member (default 24)"
+                      value={createForm.member_access_hours}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, member_access_hours: e.target.value }))}
+                      className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                    />
+                    <input
+                      type="datetime-local"
+                      aria-label="Event access hard cutoff"
+                      title="Event access hard cutoff — all member access ends at this time"
+                      value={createForm.access_ends_at}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, access_ends_at: e.target.value }))}
+                      className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                    />
+                  </>
+                )}
                 <select
                   required
                   value={createForm.tenant_id}
@@ -418,9 +490,18 @@ export default function SuperAdminATIDashboard() {
                   onChange={(e) => setCreateForm(prev => ({ ...prev, assigned_role: e.target.value }))}
                   className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
                 >
-                  <option value="ADMIN">Admin</option>
-                  <option value="MANAGER">Manager</option>
-                  <option value="ANALYST">Analyst</option>
+                  {createForm.kind === 'STANDARD' ? (
+                    <>
+                      <option value="ADMIN">Admin</option>
+                      <option value="MANAGER">Manager</option>
+                      <option value="ANALYST">Analyst</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="ANALYST">Analyst</option>
+                      <option value="VIEWER">Viewer</option>
+                    </>
+                  )}
                 </select>
                 <input
                   type="number"
@@ -751,7 +832,21 @@ export default function SuperAdminATIDashboard() {
                             {token.plan_tier && (
                               <span>Tier: {token.plan_tier}</span>
                             )}
+                            {token.kind && token.kind !== 'STANDARD' && (
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full font-medium ${
+                                token.kind === 'EVENT' ? 'bg-purple-100 text-purple-800' : 'bg-cyan-100 text-cyan-800'
+                              }`}>
+                                {token.kind}
+                              </span>
+                            )}
                           </div>
+                          {token.kind === 'EVENT' && (
+                            <div className="mt-1 text-xs text-gray-500">
+                              {token.event_label ? `Event: ${token.event_label}` : 'Event access'}
+                              {token.member_access_hours ? ` · ${token.member_access_hours}h per member` : ''}
+                              {token.access_ends_at ? ` · ends ${new Date(token.access_ends_at).toLocaleString()}` : ''}
+                            </div>
+                          )}
                           {token.expires_at && (
                             <div className="mt-1 text-xs text-gray-500">
                               Expires: {new Date(token.expires_at).toLocaleString()}
@@ -886,7 +981,33 @@ export default function SuperAdminATIDashboard() {
                 <div className="bg-gray-50 p-3 rounded-md border font-mono text-sm break-all">
                   {revealedToken}
                 </div>
+                <button
+                  onClick={() => navigator.clipboard.writeText(revealedToken)}
+                  className="mt-2 inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  Copy Token
+                </button>
               </div>
+
+              {createdInviteLink && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Signup Invite Link
+                  </label>
+                  <div className="bg-gray-50 p-3 rounded-md border font-mono text-xs break-all">
+                    {createdInviteLink}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Share this link (or turn it into a QR code) — the access code is pre-filled for participants.
+                  </p>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(createdInviteLink)}
+                    className="mt-2 inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  >
+                    Copy Invite Link
+                  </button>
+                </div>
+              )}
 
               <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-4">
                 <div className="flex">
@@ -908,7 +1029,10 @@ export default function SuperAdminATIDashboard() {
 
               <div className="flex justify-end">
                 <button
-                  onClick={() => setRevealedToken(null)}
+                  onClick={() => {
+                    setRevealedToken(null)
+                    setCreatedInviteLink(null)
+                  }}
                   className="px-4 py-2 bg-gray-500 text-white text-sm font-medium rounded-md hover:bg-gray-600"
                 >
                   Close

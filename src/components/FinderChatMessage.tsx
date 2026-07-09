@@ -2,17 +2,22 @@ import React from 'react';
 import { FaRobot, FaUserCircle } from 'react-icons/fa';
 
 import type {
+  FinderFilterSuggestionChip,
   RecommendationConversationMessageRecord,
   RecommendationConversationRunRecord,
 } from '../lib/recommendations/chatTypes';
-import type { RecommendationRawResultItem } from '../lib/recommendations/types';
+import FinderFilterSuggestionChips from './finder/FinderFilterSuggestionChips';
+import FinderMarkdown from './finder/FinderMarkdown';
+import FinderResultCard from './finder/FinderResultCard';
 
 interface FinderChatMessageProps {
   message: RecommendationConversationMessageRecord;
   runs: RecommendationConversationRunRecord[];
   onExplainResult?: (payload: { runId: string; resultId: string; ordinal: number }) => void;
+  onAskAboutCall?: (payload: { runId: string; resultId: string; ordinal: number }) => void;
   onBeginWriting?: (payload: { resultId: string }) => void;
   onSuggestedReply?: (message: string) => void;
+  onApplyFilterChip?: (chip: FinderFilterSuggestionChip) => void;
   getCallDetailsHref?: (resultId: string) => string;
   strictRecoveryAction?: {
     summary: string;
@@ -29,84 +34,14 @@ function formatTime(value: string) {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function formatAmountValue(value: number) {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
-}
-
-function formatAmountRange(result: RecommendationRawResultItem) {
-  if (result.amountMin === null && result.amountMax === null) {
-    return null;
-  }
-
-  const currency = result.currency ? `${result.currency} ` : '';
-  if (result.amountMin !== null && result.amountMax !== null) {
-    return `${currency}${formatAmountValue(result.amountMin)} - ${formatAmountValue(result.amountMax)}`.trim();
-  }
-
-  return `${currency}${formatAmountValue(result.amountMin ?? result.amountMax ?? 0)}`.trim();
-}
-
-function formatDeadlineStatus(result: RecommendationRawResultItem) {
-  if (result.isRolling) {
-    return {
-      label: 'Rolling',
-      className: 'bg-slate-950 text-white',
-    };
-  }
-
-  if (!result.closeDate) {
-    return {
-      label: 'Open',
-      className: 'bg-slate-100 text-slate-700',
-    };
-  }
-
-  const closeDate = new Date(result.closeDate);
-  if (Number.isNaN(closeDate.getTime())) {
-    return {
-      label: 'Open',
-      className: 'bg-slate-100 text-slate-700',
-    };
-  }
-
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const startOfCloseDate = new Date(closeDate.getFullYear(), closeDate.getMonth(), closeDate.getDate());
-  const daysUntilClose = Math.ceil((startOfCloseDate.getTime() - startOfToday.getTime()) / 86400000);
-
-  if (daysUntilClose < 0) {
-    return {
-      label: 'Closed',
-      className: 'bg-rose-100 text-rose-900',
-    };
-  }
-
-  if (daysUntilClose === 0) {
-    return {
-      label: 'Closes today',
-      className: 'bg-amber-100 text-amber-900',
-    };
-  }
-
-  if (daysUntilClose <= 30) {
-    return {
-      label: `Closes in ${daysUntilClose} day${daysUntilClose === 1 ? '' : 's'}`,
-      className: 'bg-amber-100 text-amber-900',
-    };
-  }
-
-  return {
-    label: closeDate.toLocaleDateString(),
-    className: 'bg-slate-100 text-slate-700',
-  };
-}
-
 export default function FinderChatMessage({
   message,
   runs,
   onExplainResult,
+  onAskAboutCall,
   onBeginWriting,
   onSuggestedReply,
+  onApplyFilterChip,
   getCallDetailsHref,
   strictRecoveryAction = null,
   suggestedReplyDisabled = false,
@@ -115,6 +50,7 @@ export default function FinderChatMessage({
   const citedResults = message.citations
     ? citedRun?.results.filter((result) => message.citations?.resultIds.includes(result.id)) || []
     : [];
+  const documentCitations = message.citations?.documentCitations || [];
   const assistant = message.role === 'assistant';
   const bubbleClass = assistant
     ? 'border-white/60 bg-white/92 text-slate-900'
@@ -141,7 +77,25 @@ export default function FinderChatMessage({
           <div className={`text-[11px] uppercase tracking-[0.16em] ${timeClass}`}>{formatTime(message.createdAt)}</div>
         </div>
 
-        <div className={`mt-3 whitespace-pre-wrap text-sm leading-7 ${bodyClass}`}>{message.content}</div>
+        <div className={`mt-3 text-sm leading-7 ${bodyClass}`}>
+          <FinderMarkdown content={message.content} inverted={!assistant} />
+        </div>
+
+        {assistant && documentCitations.length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {documentCitations.slice(0, 4).map((citation, index) => (
+              <span
+                key={`${citation.sectionType}-${citation.pageStart}-${index}`}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600"
+                title="Cited from the call's uploaded document"
+              >
+                {citation.sectionTitle || citation.sectionType.replace(/_/g, ' ')}
+                {citation.pageStart ? ` · p. ${citation.pageStart}${citation.pageEnd !== citation.pageStart ? `-${citation.pageEnd}` : ''}` : ''}
+                {` · v${citation.documentVersion}`}
+              </span>
+            ))}
+          </div>
+        ) : null}
 
         {assistant && onSuggestedReply && message.suggestedReplies?.length ? (
           <div className="mt-4 flex flex-wrap gap-2">
@@ -157,6 +111,14 @@ export default function FinderChatMessage({
               </button>
             ))}
           </div>
+        ) : null}
+
+        {assistant && onApplyFilterChip && message.filterSuggestions?.length ? (
+          <FinderFilterSuggestionChips
+            chips={message.filterSuggestions}
+            onApplyChip={onApplyFilterChip}
+            disabled={suggestedReplyDisabled}
+          />
         ) : null}
 
         {assistant && strictRecoveryAction ? (
@@ -176,127 +138,22 @@ export default function FinderChatMessage({
         {citedResults.length > 0 ? (
           <div className="mt-4 grid gap-3">
             {citedResults.map((result, index) => {
-              const amount = formatAmountRange(result);
-              const deadlineStatus = formatDeadlineStatus(result);
-              const eligibilityCopy = result.eligibilitySummary || result.eligibilityText || null;
-              const description =
-                result.shortDescription ||
-                result.matchReasons.slice(0, 2).join(' | ') ||
-                result.eligibilitySummary ||
-                result.eligibilityText;
-
+              const ordinal = (citedRun?.results.findIndex((item) => item.id === result.id) ?? index) + 1;
+              const runId = citedRun?.id || message.citations?.runId || '';
               return (
-                <div
+                <FinderResultCard
                   key={result.id}
-                  className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
-                        {result.agencyName}
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-slate-950">
-                        {index + 1}. {result.schemeTitle}
-                      </div>
-                    </div>
-                    <div
-                      className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${deadlineStatus.className}`}
-                    >
-                      {deadlineStatus.label}
-                    </div>
-                  </div>
-
-                  <div className="mt-3 text-sm leading-6 text-slate-700">{description}</div>
-
-                  {eligibilityCopy ? (
-                    <div className="mt-3 rounded-[18px] border border-white/70 bg-white/75 px-3 py-3 text-sm leading-6 text-slate-700">
-                      <span className="font-semibold text-slate-900">Eligibility:</span> {eligibilityCopy}
-                    </div>
-                  ) : null}
-
-                  {result.profileMatch?.reasons.length ? (
-                    <div className="mt-3 rounded-[18px] border border-violet-100 bg-violet-50 px-3 py-3 text-sm leading-6 text-violet-950">
-                      <span className="font-semibold">Preference match:</span> {result.profileMatch.reasons.slice(0, 3).join(' | ')}
-                    </div>
-                  ) : null}
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {amount ? (
-                      <span className="rounded-full border border-white bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700">
-                        Amount: {amount}
-                      </span>
-                    ) : null}
-                    {result.fundingKinds.slice(0, 2).map((kind) => (
-                      <span
-                        key={kind}
-                        className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700"
-                      >
-                        {kind}
-                      </span>
-                    ))}
-                    {result.eligibleCountries.slice(0, 1).map((country) => (
-                      <span
-                        key={country}
-                        className="rounded-full border border-white bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-900"
-                      >
-                        {country}
-                      </span>
-                    ))}
-                    {!result.eligibleCountries.length && result.hostCountries.slice(0, 1).map((country) => (
-                      <span
-                        key={country}
-                        className="rounded-full border border-white bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-900"
-                      >
-                        Host: {country}
-                      </span>
-                    ))}
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {onBeginWriting ? (
-                      <button
-                        type="button"
-                        onClick={() => onBeginWriting({ resultId: result.id })}
-                        className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:border-emerald-700 hover:bg-emerald-700"
-                      >
-                        Write Grant
-                      </button>
-                    ) : null}
-                    {onExplainResult ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onExplainResult({
-                            runId: citedRun?.id || message.citations?.runId || '',
-                            resultId: result.id,
-                            ordinal: (citedRun?.results.findIndex((item) => item.id === result.id) ?? index) + 1,
-                          })
-                        }
-                        className="rounded-full border border-emerald-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800 transition-colors hover:bg-emerald-100"
-                      >
-                        Explain In Chat
-                      </button>
-                    ) : null}
-                    <a
-                      href={getCallDetailsHref?.(result.id) || `/finder/calls/${encodeURIComponent(result.id)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-full border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800"
-                    >
-                      Show Details
-                    </a>
-                    {result.officialUrls[0] ? (
-                      <a
-                        href={result.officialUrls[0]}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-full border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800"
-                      >
-                        Open Source
-                      </a>
-                    ) : null}
-                  </div>
-                </div>
+                  result={result}
+                  ordinal={ordinal}
+                  onBeginWriting={onBeginWriting}
+                  onExplainResult={
+                    onExplainResult ? () => onExplainResult({ runId, resultId: result.id, ordinal }) : undefined
+                  }
+                  onAskAboutCall={
+                    onAskAboutCall ? () => onAskAboutCall({ runId, resultId: result.id, ordinal }) : undefined
+                  }
+                  getCallDetailsHref={getCallDetailsHref}
+                />
               );
             })}
           </div>

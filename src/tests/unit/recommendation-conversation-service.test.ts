@@ -111,6 +111,7 @@ function makeConversationDetail(run?: RecommendationConversationRunRecord): Reco
     title: 'Funding Chat',
     updatedAt: new Date().toISOString(),
     currentInputMode: 'research_area',
+    filterMode: 'auto',
     currentQuery: defaultState.query,
     currentFilters: createDefaultFilters(),
     pendingFilterPatch: null,

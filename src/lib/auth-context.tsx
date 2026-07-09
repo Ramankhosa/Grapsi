@@ -10,6 +10,8 @@ export interface User {
   tenant_id: string | null
   roles: ('SUPER_ADMIN' | 'SUPER_ADMIN_VIEWER' | 'OWNER' | 'ADMIN' | 'MANAGER' | 'ANALYST' | 'VIEWER')[]
   ati_id: string | null
+  /** EVENT/workshop accounts: ISO timestamp when access ends */
+  access_expires_at?: string | null
   platformPermissions?: string[]
 }
 

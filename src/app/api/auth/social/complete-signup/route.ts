@@ -5,6 +5,13 @@ import { validateATIToken, generateJWT, generateRefreshToken, storeRefreshToken,
 import { ATIRedemptionError, assignSignupTeam, claimATITokenUse } from '@/lib/ati-redemption-service'
 import { ensureTenantEntitlementForSignup } from '@/lib/entitlement-service'
 import { verifySocialSignupToken } from '@/lib/social-signup-token'
+import {
+  computeAccessExpiresAt,
+  resolveAssignedRole,
+  shouldPromoteFirstUserToOwner,
+  type ATIKind
+} from '@/lib/ati-kind-policy'
+import { markInviteAccepted, validateInviteEmailLock } from '@/lib/tenant-invite-service'
 
 const completeSignupSchema = z.object({
   atiToken: z.string().min(1),
@@ -75,13 +82,25 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Determine user role
-    let userRole = 'ANALYST'
-    let roleReason = 'default'
+    // If this token is backed by a named member invite, signup is locked to
+    // the invited email address
+    const inviteLock = await validateInviteEmailLock(tokenValidation.atiToken!.id, pendingData.email)
+    if (!inviteLock.ok) {
+      return NextResponse.json(
+        { code: 'INVITE_EMAIL_MISMATCH', message: inviteLock.error },
+        { status: 400 }
+      )
+    }
 
-    if (fullToken?.assignedRole && ['ADMIN', 'MANAGER', 'ANALYST'].includes(fullToken.assignedRole)) {
-      userRole = fullToken.assignedRole
-      roleReason = 'ati_token_explicit_role'
+    // Determine user role under the token's governance kind
+    const tokenKind: ATIKind = (fullToken?.kind as ATIKind) || 'STANDARD'
+    let userRole = 'ANALYST'
+    let roleReason = tokenKind !== 'STANDARD' ? 'managed_kind_default' : 'default'
+
+    const resolvedRole = resolveAssignedRole(tokenKind, fullToken?.assignedRole)
+    if (resolvedRole.role) {
+      userRole = resolvedRole.role
+      roleReason = resolvedRole.clamped ? 'ati_token_role_clamped_by_kind' : 'ati_token_explicit_role'
     }
 
     // Create user with social OAuth data
@@ -98,8 +117,21 @@ export async function POST(request: NextRequest) {
       const transactionExistingUsersCount = await tx.user.count({
         where: { tenantId: tenant.id }
       })
-      const assignedUserRole = transactionExistingUsersCount === 0 ? 'OWNER' : userRole
-      const assignedRoleReason = transactionExistingUsersCount === 0 ? 'first_tenant_user' : roleReason
+      // Only self-administered (STANDARD) tenants promote their first user to OWNER
+      const promoteToOwner =
+        transactionExistingUsersCount === 0 && shouldPromoteFirstUserToOwner(tokenKind)
+      const assignedUserRole = promoteToOwner ? 'OWNER' : userRole
+      const assignedRoleReason = promoteToOwner ? 'first_tenant_user' : roleReason
+
+      // EVENT signups get a hard access expiry
+      const accessExpiresAt = computeAccessExpiresAt(
+        {
+          kind: tokenKind,
+          memberAccessHours: fullToken?.memberAccessHours ?? null,
+          accessEndsAt: fullToken?.accessEndsAt ?? null
+        },
+        new Date()
+      )
 
       const user = await tx.user.create({
         data: {
@@ -114,9 +146,13 @@ export async function POST(request: NextRequest) {
           emailVerified: true, // Social logins are verified
           oauthProvider: pendingData.provider.toUpperCase() as any,
           oauthProviderId: pendingData.providerId,
-          oauthProfile: pendingData.profile
+          oauthProfile: pendingData.profile,
+          accessExpiresAt
         }
       })
+
+      // If this signup redeemed a named member invite, mark it accepted
+      await markInviteAccepted(tx, tokenValidation.atiToken!.id, user.id)
 
       // Create default project
       await tx.project.create({
