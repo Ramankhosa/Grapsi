@@ -1,6 +1,7 @@
 import type { Prisma } from '@/lib/prisma-generated'
 
 import { prisma } from './prisma'
+import { PRODUCT_MODULE_LIST, isModuleUnlocked, planCodeToTier } from './access/modules'
 
 export const ENTITLEMENT_SOURCES = [
   'LEGACY',
@@ -177,6 +178,52 @@ export async function ensureTenantEntitlementForSignup(
   const entitlement = await client.tenantPlan.create({ data })
 
   return { entitlement, created: true, planCode: plan.code }
+}
+
+/**
+ * Feature-access summary for a tenant, derived from its active plan. This is the
+ * central read used by the `/api/v1/me/entitlements` endpoint and by any code
+ * that needs to know "which features/modules does this tenant have".
+ */
+export async function getTenantEntitlementSummary(tenantId: string, now = new Date()) {
+  const entitlement = await getActiveTenantEntitlement(tenantId, now)
+
+  const featureCodes = entitlement
+    ? entitlement.plan.planFeatures.map((pf) => pf.feature.code as string)
+    : []
+  const featureSet = new Set(featureCodes)
+
+  const modules = PRODUCT_MODULE_LIST.map((module) => ({
+    key: module.key,
+    name: module.name,
+    description: module.description,
+    entryRoute: module.entryRoute,
+    minTier: module.minTier,
+    icon: module.icon,
+    featureCodes: module.featureCodes,
+    unlocked: isModuleUnlocked(module, featureSet)
+  }))
+
+  return {
+    plan: entitlement
+      ? {
+          code: entitlement.plan.code,
+          name: entitlement.plan.name,
+          tier: planCodeToTier(entitlement.plan.code)
+        }
+      : null,
+    featureCodes,
+    modules
+  }
+}
+
+export type TenantEntitlementSummary = Awaited<ReturnType<typeof getTenantEntitlementSummary>>
+
+/** Does the tenant's active plan include the given FeatureCode? */
+export async function hasFeature(tenantId: string, featureCode: string, now = new Date()) {
+  const entitlement = await getActiveTenantEntitlement(tenantId, now)
+  if (!entitlement) return false
+  return entitlement.plan.planFeatures.some((pf) => (pf.feature.code as string) === featureCode)
 }
 
 export async function grantTenantEntitlement(input: GrantTenantEntitlementInput) {

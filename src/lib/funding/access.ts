@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { ServiceType } from '@prisma/client'
 
 import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
@@ -52,6 +53,14 @@ export async function requireFundingActor(
     allowPlatform?: boolean
     requireWriteSuperAdmin?: boolean
     requiredPlatformPermission?: PlatformPermissionCode
+    /**
+     * Which module/feature to enforce for tenant users. Defaults to
+     * FUNDING_DISCOVERY (the funding directory). Sub-modules that live in a
+     * higher tier (e.g. the AI chatbot = FUNDING_CHAT, funding intelligence =
+     * FUNDING_INTELLIGENCE) pass their own ServiceType so Starter tenants are
+     * blocked from them while still reaching the directory.
+     */
+    requiredServiceType?: ServiceType
   }
 ): Promise<{ actor: FundingActor; user: any } | { response: NextResponse }> {
   const { user, error } = await authenticateUser(request)
@@ -145,7 +154,11 @@ export async function requireFundingActor(
   }
 
   if (actor.tenantId) {
-    const access = await enforceServiceAccess(actor.id, actor.tenantId, 'FUNDING_DISCOVERY')
+    const access = await enforceServiceAccess(
+      actor.id,
+      actor.tenantId,
+      options?.requiredServiceType ?? 'FUNDING_DISCOVERY'
+    )
     if (!access.allowed) {
       return { response: access.response }
     }

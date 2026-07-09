@@ -104,7 +104,10 @@ const SERVICE_TO_FEATURE: Record<ServiceType, string> = {
   IDEATION: 'IDEATION',
   FUNDING_DISCOVERY: 'FUNDING_DISCOVERY',
   GRANT_PREP: 'GRANT_PREP',
-  GRANT_DRAFTING: 'GRANT_DRAFTING'
+  GRANT_DRAFTING: 'GRANT_DRAFTING',
+  FUNDING_CHAT: 'FUNDING_CHAT',
+  FUNDING_INTELLIGENCE: 'FUNDING_INTELLIGENCE',
+  GRANT_REVIEW: 'GRANT_REVIEW'
 }
 
 // Roles that can use each service (default, can be overridden by team/user settings)
@@ -119,7 +122,10 @@ const SERVICE_DEFAULT_ROLES: Record<ServiceType, UserRole[]> = {
   IDEATION: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
   FUNDING_DISCOVERY: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
   GRANT_PREP: ['SUPER_ADMIN', 'OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
-  GRANT_DRAFTING: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
+  GRANT_DRAFTING: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
+  FUNDING_CHAT: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
+  FUNDING_INTELLIGENCE: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
+  GRANT_REVIEW: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
 }
 
 function isServiceQuotaExempt(serviceType: ServiceType): boolean {
@@ -863,7 +869,10 @@ function getTaskCodeForService(serviceType: ServiceType): TaskCode | null {
     IDEATION: null,  // IDEATION has multiple task codes
     FUNDING_DISCOVERY: TaskCode.FUNDING_CALL_INGEST,
     GRANT_PREP: TaskCode.GRANT_PREP_CHAT,
-    GRANT_DRAFTING: TaskCode.GRANT_SECTION_GENERATE
+    GRANT_DRAFTING: TaskCode.GRANT_SECTION_GENERATE,
+    FUNDING_CHAT: TaskCode.FUNDING_CHAT,
+    FUNDING_INTELLIGENCE: TaskCode.IDEA_INTELLIGENCE,
+    GRANT_REVIEW: null // reviewer LLM metering handled separately; entry gate only
   }
   return mapping[serviceType]
 }

@@ -25,6 +25,7 @@ import type {
 } from '../recommendations/types';
 import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
 import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
+import { fundingPublicationService } from '../researcherProfile/funding-publications';
 
 const embeddingService = new EmbeddingService();
 const RESEARCH_AREA_EMBEDDING_TASK_TYPE = 'RETRIEVAL_DOCUMENT' as const;
@@ -876,9 +877,10 @@ export class ResearcherProfileService {
   }
 
   async getFinderContext(userId: string): Promise<ResearcherFinderContext> {
-    const [profile, researchAreas] = await Promise.all([
+    const [profile, researchAreas, publications] = await Promise.all([
       this.getProfile(userId),
       this.listResearchAreas(userId),
+      fundingPublicationService.list(userId).catch(() => []),
     ]);
 
     const defaultArea =
@@ -913,6 +915,13 @@ export class ResearcherProfileService {
       profile: profile.profile,
       notificationPreferences: profile.notificationPreferences,
       researchAreas,
+      publications: publications.map((publication) => ({
+        id: publication.id,
+        title: publication.title,
+        abstract: publication.abstract,
+        year: publication.year,
+        venue: publication.venue,
+      })),
       profileDefaultContext,
     };
   }

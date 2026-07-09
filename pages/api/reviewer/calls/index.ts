@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import { getReviewerSession as getServerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../lib/prisma';
 import { createStandaloneReviewerCall } from '@/lib/reviewer/template-bridge';
 
@@ -11,6 +11,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Not authenticated' });
   }
   
+  if (!(await requireGrantReviewFeature(session, res))) return;
+
   const userId = session.user.id;
   
   // GET request - List reviewer calls

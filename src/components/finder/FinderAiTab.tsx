@@ -243,7 +243,11 @@ export default function FinderAiTab({
           }}
           savedResearchAreas={finderContext?.researchAreas || []}
           profileResearchAreas={finderContext?.profile.researchAreas || []}
+          publications={finderContext?.publications || []}
           onAttachResearchContext={chat.handleAttachResearchContext}
+          onAttachPublicationContext={chat.handleAttachPublicationContext}
+          onConfirmPublications={chat.handleConfirmPublications}
+          selectedPublicationTitles={chat.attachedContext?.papers?.map((p) => p.title) || []}
           activeFilterCount={activeFilterCount}
           onOpenFilters={() => chat.setFilterDrawerOpen(true)}
           showFilterButton

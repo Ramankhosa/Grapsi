@@ -25,8 +25,31 @@ export async function requireRecommendationUser(request: NextRequest): Promise<A
   }
 }
 
+/**
+ * Auth for the AI funding chatbot (conversational recommendations). Enforces the
+ * FUNDING_CHAT module (Pro tier) rather than the plain funding directory, so
+ * Starter tenants can browse the directory but not use the chatbot.
+ */
+export async function requireRecommendationChatUser(request: NextRequest): Promise<AuthResult> {
+  const auth = await requireFundingActor(request, {
+    allowPlatform: true,
+    requiredServiceType: 'FUNDING_CHAT',
+  })
+  if ('response' in auth) {
+    return auth
+  }
+
+  return {
+    actor: auth.actor,
+    userId: auth.actor.id,
+    tenantId: auth.actor.tenantId,
+  }
+}
+
+// Chatbot conversation routes are all tenant-scoped and gated on FUNDING_CHAT
+// (Pro tier). Routed through the chat actor so Starter tenants are blocked.
 export async function requireRecommendationTenantUser(request: NextRequest): Promise<TenantAuthResult> {
-  const auth = await requireRecommendationUser(request)
+  const auth = await requireRecommendationChatUser(request)
   if ('response' in auth) {
     return auth
   }

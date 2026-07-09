@@ -28,7 +28,7 @@ const searchSchema = z.object({
 })
 
 export async function POST(request: NextRequest) {
-  const auth = await requireFundingActor(request, { allowPlatform: true })
+  const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
   try {

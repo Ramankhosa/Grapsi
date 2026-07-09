@@ -170,9 +170,12 @@ async function getPlanQuotaLimits(tenantId: string, serviceType: ServiceType, cl
     IDEATION: 'IDEATION',
     FUNDING_DISCOVERY: 'FUNDING_DISCOVERY',
     GRANT_PREP: 'GRANT_PREP',
-    GRANT_DRAFTING: 'GRANT_DRAFTING'
+    GRANT_DRAFTING: 'GRANT_DRAFTING',
+    FUNDING_CHAT: 'FUNDING_CHAT',
+    FUNDING_INTELLIGENCE: 'FUNDING_INTELLIGENCE',
+    GRANT_REVIEW: 'GRANT_REVIEW'
   }
-  
+
   const tenantPlan = await client.tenantPlan.findFirst({
     where: {
       tenantId,

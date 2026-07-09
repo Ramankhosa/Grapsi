@@ -56,6 +56,12 @@ function getServiceDisplayName(serviceType: ServiceType): string {
       return 'grant prep'
     case 'GRANT_DRAFTING':
       return 'grant drafting'
+    case 'FUNDING_CHAT':
+      return 'AI funding chatbot'
+    case 'FUNDING_INTELLIGENCE':
+      return 'funding intelligence'
+    case 'GRANT_REVIEW':
+      return 'AI grant review'
     default:
       return String(serviceType).toLowerCase()
   }

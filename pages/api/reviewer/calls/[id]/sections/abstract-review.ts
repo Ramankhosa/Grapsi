@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import { getReviewerSession as getServerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
 import { hasMeaningfulSectionContent, parseReviewerScore } from '@/lib/reviewer/content';
 import prisma from '../../../../../../lib/prisma';
 import { ReviewerService } from '../../../../../../lib/services/reviewerService';
@@ -22,6 +22,8 @@ export default async function handler(
   if (!session || !session.user?.id) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
+
+  if (!(await requireGrantReviewFeature(session, res))) return;
   
   // Get the call ID from the URL
   const callId = req.query.id as string;

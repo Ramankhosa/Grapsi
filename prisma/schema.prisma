@@ -437,6 +437,9 @@ enum ServiceType {
   FUNDING_DISCOVERY
   GRANT_PREP
   GRANT_DRAFTING
+  FUNDING_CHAT // AI funding chatbot (Pro tier)
+  FUNDING_INTELLIGENCE // Funding intelligence / RAG / idea intelligence (Pro tier)
+  GRANT_REVIEW // AI grant review / reviewer module (Pro tier)
 }
 
 // Team roles within a team
@@ -2690,6 +2693,9 @@ enum FeatureCode {
   FUNDING_DISCOVERY
   GRANT_PREP
   GRANT_DRAFTING
+  FUNDING_CHAT // AI funding chatbot (Pro tier)
+  FUNDING_INTELLIGENCE // Funding call intelligence / RAG / idea intelligence (Pro tier)
+  GRANT_REVIEW // AI grant review / reviewer module (Pro tier)
 }
 
 enum TaskCode {

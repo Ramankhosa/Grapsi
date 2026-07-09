@@ -7,7 +7,7 @@ export const runtime = 'nodejs'
 export const maxDuration = 60
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireFundingActor(request, { allowPlatform: true })
+  const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
   try {

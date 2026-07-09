@@ -6,7 +6,7 @@ import { ideaIntelligenceService } from '@/lib/ideaIntelligence/service'
 export const runtime = 'nodejs'
 
 export async function GET(request: NextRequest, { params }: { params: { runId: string } }) {
-  const auth = await requireFundingActor(request, { allowPlatform: true })
+  const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
   const run = await ideaIntelligenceService.getRun(params.runId, auth.actor.id)
   if (!run) return NextResponse.json({ error: 'Idea analysis not found' }, { status: 404 })

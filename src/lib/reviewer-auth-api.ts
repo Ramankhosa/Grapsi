@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { verifyJWT } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { assertProjectCapability, ProjectAccessError } from '@/lib/project-access'
+import { checkServiceAccess } from '@/lib/org-access-service'
 
 type SessionLike = {
   user: {
@@ -76,12 +77,50 @@ export function requireReviewerSession(
   return false
 }
 
+/**
+ * Enforces the GRANT_REVIEW module (Pro tier) for the reviewer surface. Call
+ * this after `requireReviewerSession` in reviewer API routes. Super admins and
+ * platform-scope users bypass tenant feature gates. Returns true when access is
+ * allowed; otherwise writes a 403 and returns false.
+ */
+export async function requireGrantReviewFeature(
+  session: SessionLike,
+  res: NextApiResponse
+): Promise<boolean> {
+  const roles = session.user.roles || []
+  if (roles.includes('SUPER_ADMIN') || roles.includes('SUPER_ADMIN_VIEWER')) {
+    return true
+  }
+
+  const tenantId = session.user.tenantId
+  if (!tenantId) {
+    res.status(403).json({ error: 'A tenant-scoped account is required', code: 'TENANT_REQUIRED' })
+    return false
+  }
+
+  const access = await checkServiceAccess(session.user.id, tenantId, 'GRANT_REVIEW')
+  if (!access.allowed) {
+    res.status(403).json({
+      error: access.reason || 'AI grant review is not included in your plan',
+      code: 'SERVICE_ACCESS_DENIED',
+    })
+    return false
+  }
+
+  return true
+}
+
 export async function requireReviewerCallAccess(
   callId: string,
   session: SessionLike,
   res: NextApiResponse,
   capability: 'read' | 'editContent' = 'read'
 ) {
+  // Hard-enforce the GRANT_REVIEW module before any call-scoped operation.
+  if (!(await requireGrantReviewFeature(session, res))) {
+    return null
+  }
+
   const call = await prisma.reviewerCall.findUnique({
     where: { id: callId },
     select: {

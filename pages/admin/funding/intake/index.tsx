@@ -133,12 +133,20 @@ function getBatchStatusBadgeClass(status: string) {
 export default function FundingIntakeAdminPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
-  const [inputType, setInputType] = useState<'url' | 'text' | 'pdf' | 'json' | 'csv'>('url');
+  const [inputType, setInputType] = useState<'url' | 'text' | 'pdf' | 'json' | 'csv' | 'zip'>('url');
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceText, setSourceText] = useState('');
   const [sourcePdf, setSourcePdf] = useState<File | null>(null);
   const [sourceJson, setSourceJson] = useState<File | null>(null);
   const [sourceCsv, setSourceCsv] = useState<File | null>(null);
+  const [sourceZip, setSourceZip] = useState<File | null>(null);
+  const [bulkResult, setBulkResult] = useState<{
+    totalCsvFiles: number;
+    queued: number;
+    failed: number;
+    batches: Array<{ id: string; label: string; totalJobs: number }>;
+    results: Array<{ name: string; ok: boolean; error?: string; agencyName?: string | null; schemeTitle?: string | null }>;
+  } | null>(null);
   const [showJsonPrompt, setShowJsonPrompt] = useState(false);
   const [showCsvPrompt, setShowCsvPrompt] = useState(false);
   const [operatorNotes, setOperatorNotes] = useState('');
@@ -364,12 +372,60 @@ export default function FundingIntakeAdminPage() {
     }
   }
 
+  async function handleBulkZipSubmit() {
+    if (!sourceZip) {
+      toast.error('Choose a .zip archive of call CSVs first.');
+      return;
+    }
+    setSubmitting(true);
+    setBulkResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', sourceZip);
+      formData.append('operatorNotes', operatorNotes);
+      const response = await fetch('/api/admin/funding/intake/bulk-csv', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        // A 400 with a results array (e.g. no CSV parsed) still shows the per-file detail.
+        if (data && Array.isArray(data.results)) {
+          setBulkResult({
+            totalCsvFiles: data.totalCsvFiles || 0,
+            queued: data.queued || 0,
+            failed: data.failed || 0,
+            batches: data.batches || [],
+            results: data.results,
+          });
+        }
+        throw new Error(readApiErrorMessage(data, 'Failed to import CSV archive'));
+      }
+
+      setBulkResult(data);
+      toast.success(`Queued ${data.queued} call${data.queued === 1 ? '' : 's'} from ${data.totalCsvFiles} CSV file${data.totalCsvFiles === 1 ? '' : 's'}`);
+      setSourceZip(null);
+      setOperatorNotes('');
+      await Promise.all([loadJobs(false), loadBatches(false)]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to import CSV archive');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canWriteFundingIntake) {
       toast.error('Funding operations write access required.');
       return;
     }
+
+    if (inputType === 'zip') {
+      await handleBulkZipSubmit();
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -577,9 +633,9 @@ export default function FundingIntakeAdminPage() {
         <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Funding Intake</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Create structured funding drafts from URL, text, PDF, JSON, or CSV</h1>
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Create structured funding drafts from URL, text, PDF, JSON, CSV, or a ZIP of CSVs</h1>
             <p className="mt-3 max-w-3xl text-sm text-slate-600">
-              Submit a funding opportunity source, or upload a ChatGPT-extracted JSON/CSV file that can seed call fields and guidelines from one intake job.
+              Submit a funding opportunity source, upload a ChatGPT-extracted JSON/CSV file that seeds call fields and guidelines from one intake job, or bulk-upload a .zip of per-call CSVs to queue many calls at once.
             </p>
           </div>
           <Link href="/admin" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
@@ -631,6 +687,13 @@ export default function FundingIntakeAdminPage() {
                   className={`rounded-full px-4 py-2 text-sm font-medium ${inputType === 'csv' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
                 >
                   CSV Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInputType('zip')}
+                  className={`rounded-full px-4 py-2 text-sm font-medium ${inputType === 'zip' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+                >
+                  Bulk ZIP
                 </button>
               </div>
 
@@ -715,7 +778,7 @@ export default function FundingIntakeAdminPage() {
                     )}
                   </div>
                 </div>
-              ) : (
+              ) : inputType === 'csv' ? (
                 <div key="intake-csv-input" className="space-y-4">
                   <label className="block">
                     <span className="mb-2 block text-sm font-medium text-slate-700">Funding call CSV</span>
@@ -768,6 +831,62 @@ export default function FundingIntakeAdminPage() {
                     )}
                   </div>
                 </div>
+              ) : (
+                <div key="intake-zip-input" className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Bulk CSV archive (.zip)</span>
+                    <input
+                      type="file"
+                      accept=".zip,application/zip,application/x-zip-compressed"
+                      onChange={(event) => {
+                        setSourceZip(event.target.files?.[0] || null);
+                        setBulkResult(null);
+                      }}
+                      disabled={!canWriteFundingIntake}
+                      className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                    <p className="mt-2 text-xs text-slate-500">
+                      Upload a single <strong>.zip</strong> containing one funding-call CSV per file (same two-column
+                      field,value format as the CSV Upload tab). Each CSV becomes its own intake job that auto-creates a
+                      draft and imports its guidelines, template, and any document_url — processed one by one through the
+                      intake queue. Large archives are split into batches of 100; track progress under Recent batches
+                      below. RAR archives are not supported — re-compress as .zip.
+                    </p>
+                  </label>
+
+                  {bulkResult && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex flex-wrap gap-4 text-sm">
+                        <span className="font-medium text-slate-900">{bulkResult.totalCsvFiles} CSV file{bulkResult.totalCsvFiles === 1 ? '' : 's'} found</span>
+                        <span className="text-emerald-700">{bulkResult.queued} queued</span>
+                        {bulkResult.failed > 0 && <span className="text-rose-700">{bulkResult.failed} failed</span>}
+                        {bulkResult.batches.length > 0 && (
+                          <span className="text-slate-600">{bulkResult.batches.length} batch{bulkResult.batches.length === 1 ? '' : 'es'} created</span>
+                        )}
+                      </div>
+                      {bulkResult.results.some((item) => !item.ok) && (
+                        <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-rose-100 bg-white">
+                          <table className="min-w-full text-xs">
+                            <thead className="bg-rose-50 text-rose-700">
+                              <tr>
+                                <th className="px-3 py-2 text-left font-medium">File</th>
+                                <th className="px-3 py-2 text-left font-medium">Parse error</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-rose-50">
+                              {bulkResult.results.filter((item) => !item.ok).map((item) => (
+                                <tr key={item.name}>
+                                  <td className="px-3 py-2 align-top font-mono text-slate-700 break-all">{item.name}</td>
+                                  <td className="px-3 py-2 align-top text-rose-700">{item.error || 'Failed to parse'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
 
               <label className="block">
@@ -788,10 +907,10 @@ export default function FundingIntakeAdminPage() {
 
                 <button
                   type="submit"
-                  disabled={!canWriteFundingIntake || submitting || (inputType === 'pdf' && !sourcePdf) || (inputType === 'json' && !sourceJson) || (inputType === 'csv' && !sourceCsv)}
+                  disabled={!canWriteFundingIntake || submitting || (inputType === 'pdf' && !sourcePdf) || (inputType === 'json' && !sourceJson) || (inputType === 'csv' && !sourceCsv) || (inputType === 'zip' && !sourceZip)}
                   className="inline-flex items-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
-                {submitting ? 'Submitting...' : 'Create Intake Job'}
+                {submitting ? 'Submitting...' : inputType === 'zip' ? 'Import CSV Archive' : 'Create Intake Job'}
               </button>
             </form>
           </section>

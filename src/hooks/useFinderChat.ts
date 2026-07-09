@@ -35,6 +35,8 @@ type AttachedQueryContext = {
   label: string;
   queryText: string;
   sourceLabel: string;
+  paper?: { title: string; abstract: string; keywords: string[] } | null;
+  papers?: { title: string; abstract: string }[];
 } | null;
 
 type AuthFetch = (url: string, options?: RequestInit) => Promise<Response>;
@@ -381,8 +383,12 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     await postConversationMessage(
       {
         message: trimmed,
-        inputMode: attachedContext ? 'research_area' : undefined,
-        manualQueryPatch: attachedContext ? { researchArea: attachedContext.queryText } : undefined,
+        inputMode: attachedContext ? (attachedContext.paper ? 'paper_metadata' : 'research_area') : undefined,
+        manualQueryPatch: attachedContext
+          ? attachedContext.paper
+            ? { ...attachedContext.paper }
+            : { researchArea: attachedContext.queryText }
+          : undefined,
       },
       {
         clearComposerOnSuccess: true,
@@ -551,6 +557,44 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     setAttachMenuOpen(false);
   }
 
+  function handleAttachPublicationContext(publication: { title: string; abstract: string }) {
+    setAttachedContext((prev) => {
+      const prevPapers = prev?.papers || [];
+      const alreadySelected = prevPapers.some((p) => p.title === publication.title);
+      const nextPapers = alreadySelected
+        ? prevPapers.filter((p) => p.title !== publication.title)
+        : [...prevPapers, { title: publication.title, abstract: publication.abstract }];
+
+      if (nextPapers.length === 0) return null;
+
+      const combinedTitle = nextPapers.map((p) => p.title).join('; ');
+      const combinedAbstract = nextPapers.map((p) => p.abstract).join('\n\n');
+      const label = nextPapers.length === 1
+        ? nextPapers[0].title
+        : `${nextPapers.length} publications`;
+      return {
+        label,
+        queryText: combinedTitle,
+        sourceLabel: nextPapers.length === 1
+          ? `Publication: ${nextPapers[0].title.slice(0, 60)}${nextPapers[0].title.length > 60 ? '…' : ''}`
+          : `${nextPapers.length} publications attached`,
+        paper: { title: combinedTitle, abstract: combinedAbstract, keywords: [] },
+        papers: nextPapers,
+      };
+    });
+  }
+
+  function handleConfirmPublications() {
+    if (!attachedContext?.papers?.length) return;
+    const titles = attachedContext.papers.map((p) => p.title);
+    setComposer(
+      titles.length === 1
+        ? `funding opportunities matching my publication - ${titles[0]}`
+        : `funding opportunities matching my ${titles.length} publications`
+    );
+    setAttachMenuOpen(false);
+  }
+
   async function handleSearchResearchArea(label: string, queryText: string) {
     const message = `Find funding opportunities for ${label}.`;
     await postConversationMessage(
@@ -654,6 +698,8 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     handleEditPendingTurn,
     handleDismissPendingTurn,
     handleAttachResearchContext,
+    handleAttachPublicationContext,
+    handleConfirmPublications,
     handleSearchResearchArea,
   };
 }

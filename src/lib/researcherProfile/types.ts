@@ -116,10 +116,19 @@ export interface ResearcherProfilePayload {
   notificationPreferences: ResearcherNotificationPreferencesRecord;
 }
 
+export interface ResearcherFinderPublication {
+  id: string;
+  title: string;
+  abstract: string;
+  year: number | null;
+  venue: string | null;
+}
+
 export interface ResearcherFinderContext {
   profile: ResearcherProfilePayload['profile'];
   notificationPreferences: ResearcherProfilePayload['notificationPreferences'];
   researchAreas: ResearcherSavedResearchAreaRecord[];
+  publications?: ResearcherFinderPublication[];
   profileDefaultContext: {
     query: { researchArea: string };
     filters: RecommendationSearchFilters;

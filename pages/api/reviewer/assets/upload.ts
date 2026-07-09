@@ -1,6 +1,6 @@
 // @ts-nocheck
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import { getReviewerSession as getServerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../lib/prisma';
 import formidable, { File } from 'formidable';
 import path from 'path';
@@ -80,6 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 	const session = await getServerSession(req, res);
 	if (!session?.user?.id) return res.status(401).json({ error: 'Not authenticated' });
+  if (!(await requireGrantReviewFeature(session, res))) return;
 
 	try {
 		const { fields, files } = await parseForm(req);

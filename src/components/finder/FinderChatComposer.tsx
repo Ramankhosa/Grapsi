@@ -1,8 +1,8 @@
 import React from 'react';
-import { FaFilter, FaPaperclip, FaPaperPlane, FaTimes } from 'react-icons/fa';
+import { FaCheck, FaFilter, FaPaperclip, FaPaperPlane, FaTimes } from 'react-icons/fa';
 
 import { CHAT_MESSAGE_MAX_LENGTH } from '../../lib/recommendations/constants';
-import type { ResearcherFinderContext } from '../../lib/researcherProfile/types';
+import type { ResearcherFinderContext, ResearcherFinderPublication } from '../../lib/researcherProfile/types';
 
 type SavedResearchArea = ResearcherFinderContext['researchAreas'][number];
 
@@ -20,7 +20,11 @@ export interface FinderChatComposerProps {
   onRemoveAttachedContext: () => void;
   savedResearchAreas: SavedResearchArea[];
   profileResearchAreas: string[];
+  publications?: ResearcherFinderPublication[];
   onAttachResearchContext: (label: string, queryText: string, sourceLabel: string) => void;
+  onAttachPublicationContext?: (publication: ResearcherFinderPublication) => void;
+  onConfirmPublications?: () => void;
+  selectedPublicationTitles?: string[];
   activeFilterCount: number;
   onOpenFilters?: () => void;
   showFilterButton?: boolean;
@@ -51,7 +55,11 @@ export default function FinderChatComposer({
   onRemoveAttachedContext,
   savedResearchAreas,
   profileResearchAreas,
+  publications = [],
   onAttachResearchContext,
+  onAttachPublicationContext,
+  onConfirmPublications,
+  selectedPublicationTitles = [],
   activeFilterCount,
   onOpenFilters,
   showFilterButton = false,
@@ -90,7 +98,7 @@ export default function FinderChatComposer({
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Attach Research Context</div>
                 <div className="mt-2 text-sm leading-6 text-slate-600">
-                  Choose a saved research area or one of your profile research areas. The selected topic will be inserted into the chat query.
+                  Pick a research area or one of your publications. The selected topic guides the funding search.
                 </div>
               </div>
               <button
@@ -148,6 +156,66 @@ export default function FinderChatComposer({
                   </div>
                 )}
               </div>
+
+              {onAttachPublicationContext ? (
+                <div className="space-y-3 md:col-span-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">My Publications</div>
+                    {selectedPublicationTitles.length > 0 && onConfirmPublications ? (
+                      <button
+                        type="button"
+                        onClick={onConfirmPublications}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white shadow transition-colors hover:bg-emerald-700"
+                      >
+                        <FaCheck className="text-[10px]" />
+                        Use {selectedPublicationTitles.length} {selectedPublicationTitles.length === 1 ? 'publication' : 'publications'}
+                      </button>
+                    ) : null}
+                  </div>
+                  {publications.length > 0 ? (
+                    publications.map((publication) => {
+                      const isSelected = selectedPublicationTitles.includes(publication.title);
+                      return (
+                        <button
+                          key={publication.id}
+                          type="button"
+                          onClick={() => onAttachPublicationContext(publication)}
+                          className={`w-full rounded-2xl border px-4 py-3 text-left text-sm transition-colors ${
+                            isSelected
+                              ? 'border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200'
+                              : 'border-slate-200 bg-slate-50 hover:border-emerald-300 hover:bg-emerald-50'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-colors ${
+                              isSelected
+                                ? 'border-emerald-500 bg-emerald-500 text-white'
+                                : 'border-slate-300 bg-white'
+                            }`}>
+                              {isSelected ? <FaCheck className="text-[10px]" /> : null}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="font-semibold text-slate-900">{publication.title}</div>
+                              {publication.venue || publication.year ? (
+                                <div className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-800">
+                                  {[publication.venue, publication.year].filter(Boolean).join(' · ')}
+                                </div>
+                              ) : null}
+                              {publication.abstract ? (
+                                <div className="mt-1 line-clamp-2 text-slate-600">{publication.abstract}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500">
+                      Tag library items as <span className="font-semibold">my-publication</span> in Research Fit to attach them here.
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}

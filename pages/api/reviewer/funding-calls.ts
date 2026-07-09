@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-import { getReviewerSession } from '@/lib/reviewer-auth-api'
+import { getReviewerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api'
 import prisma from '../../../lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -13,6 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!session?.user?.id) {
     return res.status(401).json({ error: 'Not authenticated' })
   }
+
+  if (!(await requireGrantReviewFeature(session, res))) return
 
   const calls = await prisma.fundingCall.findMany({
     where: {

@@ -8,7 +8,7 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {
-  const auth = await requireFundingActor(request, { allowPlatform: true })
+  const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
   const reservation = await reserveIdeaIntelligenceUsage(auth.actor, params.runId, 'idea_intelligence_execute')
   if ('response' in reservation) return reservation.response

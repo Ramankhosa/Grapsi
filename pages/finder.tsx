@@ -71,7 +71,7 @@ export default function FinderPage() {
   const router = useRouter();
   const projectId = typeof router.query.projectId === 'string' ? router.query.projectId : null;
 
-  const [finderTab, setFinderTab] = useState<FinderTab>('manual');
+  const [finderTab, setFinderTab] = useState<FinderTab>('ai');
   const [preferences, setPreferences] = useState<FinderPreferenceValues>({
     useEligibilityProfile: false,
     usePublicationContext: false,
@@ -421,17 +421,6 @@ export default function FinderPage() {
         <div className="mb-6 flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={() => setFinderTab('manual')}
-            className={`rounded-full px-5 py-3 text-sm font-semibold transition-colors ${
-              finderTab === 'manual'
-                ? 'bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.18)]'
-                : 'border border-slate-300 bg-white text-slate-700 hover:border-emerald-400 hover:text-emerald-800'
-            }`}
-          >
-            Funding Directory
-          </button>
-          <button
-            type="button"
             onClick={() => setFinderTab('ai')}
             className={`rounded-full px-5 py-3 text-sm font-semibold transition-colors ${
               finderTab === 'ai'
@@ -440,6 +429,17 @@ export default function FinderPage() {
             }`}
           >
             AI Assisted Search
+          </button>
+          <button
+            type="button"
+            onClick={() => setFinderTab('manual')}
+            className={`rounded-full px-5 py-3 text-sm font-semibold transition-colors ${
+              finderTab === 'manual'
+                ? 'bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.18)]'
+                : 'border border-slate-300 bg-white text-slate-700 hover:border-emerald-400 hover:text-emerald-800'
+            }`}
+          >
+            Funding Directory
           </button>
           <button
             type="button"

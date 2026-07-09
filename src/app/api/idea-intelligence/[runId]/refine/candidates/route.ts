@@ -16,7 +16,7 @@ const candidateSchema = z.object({
 })
 
 export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {
-  const auth = await requireFundingActor(request, { allowPlatform: true })
+  const auth = await requireFundingActor(request, { allowPlatform: true, requiredServiceType: 'FUNDING_INTELLIGENCE' })
   if ('response' in auth) return auth.response
 
   let reservation: Awaited<ReturnType<typeof reserveIdeaIntelligenceUsage>> | null = null

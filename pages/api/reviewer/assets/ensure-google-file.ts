@@ -1,6 +1,6 @@
 // @ts-nocheck
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getServerSession } from '@/lib/reviewer-auth-api';
+import { getReviewerSession as getServerSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../lib/prisma';
 
 // Placeholder for Google file upload, wire to Vertex/Gemini Files API later
@@ -18,6 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const session = await getServerSession(req, res);
   if (!session?.user?.id) return res.status(401).json({ error: 'Not authenticated' });
+  if (!(await requireGrantReviewFeature(session, res))) return;
 
   const { asset_id } = req.body || {};
   if (!asset_id) return res.status(400).json({ error: 'asset_id is required' });

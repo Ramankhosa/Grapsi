@@ -71,6 +71,7 @@ export default function SuperAdminATIDashboard() {
   const [isLoadingUsers, setIsLoadingUsers] = useState(false)
   const [usersError, setUsersError] = useState<string | null>(null)
   const [tenants, setTenants] = useState<TenantOption[]>([])
+  const [availablePlans, setAvailablePlans] = useState<Array<{ code: string; name: string }>>([])
   const [isCreating, setIsCreating] = useState(false)
   const [createdInviteLink, setCreatedInviteLink] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -96,7 +97,28 @@ export default function SuperAdminATIDashboard() {
   useEffect(() => {
     fetchTokens()
     fetchTenants()
+    fetchPlans()
   }, [])
+
+  const fetchPlans = async () => {
+    try {
+      const response = await fetch('/api/v1/admin/plans', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setAvailablePlans(
+          (data.plans || [])
+            .filter((p: any) => p.status === 'ACTIVE')
+            .map((p: any) => ({ code: p.code, name: p.name }))
+        )
+      }
+    } catch (error) {
+      console.error('Failed to fetch plans:', error)
+    }
+  }
 
   const fetchTenants = async () => {
     try {
@@ -353,7 +375,7 @@ export default function SuperAdminATIDashboard() {
           tenant_id: tenantId,
           expires_at: createForm.expires_at ? new Date(createForm.expires_at).toISOString() : undefined,
           max_uses: createForm.max_uses ? parseInt(createForm.max_uses) : undefined,
-          plan_tier: createForm.plan_tier || undefined,
+          plan_tier: createForm.plan_tier || createForm.entitlement_plan_code || undefined,
           notes: createForm.notes || undefined,
           assigned_role: createForm.assigned_role || undefined,
           assigned_team_id: createForm.assigned_team_id || undefined,
@@ -674,14 +696,30 @@ export default function SuperAdminATIDashboard() {
                 {showAdvanced && (
                   <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Entitlement plan code (optional)</label>
-                      <input
-                        type="text"
-                        placeholder="Grants this plan to the tenant"
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Plan (optional)</label>
+                      <select
                         value={createForm.entitlement_plan_code}
-                        onChange={(e) => setCreateForm(prev => ({ ...prev, entitlement_plan_code: e.target.value }))}
+                        onChange={(e) =>
+                          setCreateForm(prev => ({
+                            ...prev,
+                            // Bind the token tier to the granted plan so signups
+                            // land on the same plan the tenant was granted.
+                            entitlement_plan_code: e.target.value,
+                            plan_tier: e.target.value
+                          }))
+                        }
                         className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                      />
+                      >
+                        <option value="">No plan (default at signup)</option>
+                        {availablePlans.map((p) => (
+                          <option key={p.code} value={p.code}>
+                            {p.name} ({p.code})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-gray-400">
+                        Grants this plan to the tenant and tags the token so new signups inherit it.
+                      </p>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">Entitlement expires (optional)</label>

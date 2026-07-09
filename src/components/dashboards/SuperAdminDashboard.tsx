@@ -314,6 +314,7 @@ export default function SuperAdminDashboard() {
       title: 'Access Management',
       icon: '🔐',
       items: [
+        { label: 'Plans & Feature Access', icon: '🧩', href: '/super-admin/plans', badge: 'NEW' },
         { label: 'Team Roles', icon: 'Roles', href: '/super-admin/team-roles', badge: 'NEW' },
         { label: 'Funding Control', icon: '$', href: '/super-admin/funding', badge: 'NEW' },
         { label: 'Project Intelligence', icon: 'PI', href: '/super-admin/project-intelligence/crawlers', badge: 'NEW' },

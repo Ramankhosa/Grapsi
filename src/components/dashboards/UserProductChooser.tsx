@@ -3,12 +3,16 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
+import { useEntitlements } from '@/hooks/useEntitlements'
+import type { ProductModuleKey } from '@/lib/access/modules'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowRight,
   Compass,
   FileText,
   LayoutDashboard,
+  Lock,
+  MessageSquare,
   Search,
   ShieldCheck,
   UserCircle,
@@ -30,6 +34,10 @@ interface ProductOption {
   borderHover: string
   tag: string
   orbColor: string
+  /** Product module this card maps to (for plan gating). Undefined = always available. */
+  moduleKey?: ProductModuleKey
+  /** Lowest tier that unlocks it, shown on the locked overlay. */
+  minTier?: string
 }
 
 const productOptions: ProductOption[] = [
@@ -44,7 +52,39 @@ const productOptions: ProductOption[] = [
     iconColor: 'text-cyan-600',
     borderHover: 'hover:border-cyan-200',
     tag: 'Discovery',
-    orbColor: 'bg-cyan-200/40'
+    orbColor: 'bg-cyan-200/40',
+    moduleKey: 'FUNDING_DIRECTORY',
+    minTier: 'Starter'
+  },
+  {
+    title: 'AI Funding Chatbot',
+    description: 'Chat with an AI assistant that recommends calls and answers funding questions.',
+    href: '/finder?tab=ai',
+    icon: MessageSquare,
+    gradient: 'from-teal-500 to-emerald-500',
+    glowColor: 'rgba(20, 184, 166, 0.08)',
+    iconBg: 'bg-teal-50',
+    iconColor: 'text-teal-600',
+    borderHover: 'hover:border-teal-200',
+    tag: 'Assistant',
+    orbColor: 'bg-teal-200/40',
+    moduleKey: 'FUNDING_CHAT',
+    minTier: 'Pro'
+  },
+  {
+    title: 'Funding Intelligence',
+    description: 'Deep call intelligence, document Q&A, and idea intelligence over the funding corpus.',
+    href: '/funding/intelligence',
+    icon: Sparkles,
+    gradient: 'from-fuchsia-500 to-purple-500',
+    glowColor: 'rgba(217, 70, 239, 0.08)',
+    iconBg: 'bg-fuchsia-50',
+    iconColor: 'text-fuchsia-600',
+    borderHover: 'hover:border-fuchsia-200',
+    tag: 'Intelligence',
+    orbColor: 'bg-fuchsia-200/40',
+    moduleKey: 'FUNDING_INTELLIGENCE',
+    minTier: 'Pro'
   },
   {
     title: 'Grant Writer',
@@ -57,7 +97,9 @@ const productOptions: ProductOption[] = [
     iconColor: 'text-blue-600',
     borderHover: 'hover:border-blue-200',
     tag: 'Writing',
-    orbColor: 'bg-blue-200/40'
+    orbColor: 'bg-blue-200/40',
+    moduleKey: 'GRANT_STUDIO',
+    minTier: 'Pro'
   },
   {
     title: 'Researcher Profile',
@@ -96,7 +138,9 @@ const productOptions: ProductOption[] = [
     iconColor: 'text-violet-600',
     borderHover: 'hover:border-violet-200',
     tag: 'Analysis',
-    orbColor: 'bg-violet-200/40'
+    orbColor: 'bg-violet-200/40',
+    moduleKey: 'GRANT_REVIEW',
+    minTier: 'Pro'
   }
 ]
 
@@ -154,15 +198,49 @@ function FloatingOrb({ className, delay = 0 }: { className: string; delay?: numb
 function ProductCard({
   option,
   index,
-  totalCount
+  totalCount,
+  locked
 }: {
   option: ProductOption
   index: number
   totalCount: number
+  locked?: boolean
 }) {
   const Icon = option.icon
   // Only stretch the last card across the grid when the count is odd
   const isWide = index === totalCount - 1 && totalCount % 2 === 1
+
+  if (locked) {
+    return (
+      <motion.div variants={itemVariants} className={isWide ? 'md:col-span-2 lg:col-span-2' : ''}>
+        <div
+          className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-slate-50/60 p-6 shadow-sm"
+          title={`Included in the ${option.minTier || 'Pro'} plan`}
+        >
+          <div className="relative z-10 flex items-start justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100">
+                <Icon className="h-5 w-5 text-slate-400" />
+              </div>
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium tracking-wider text-amber-600 uppercase">
+                {option.minTier || 'Pro'}
+              </span>
+            </div>
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
+              <Lock className="h-4 w-4 text-slate-400" />
+            </div>
+          </div>
+          <div className="relative z-10 mt-5 flex-1">
+            <h3 className="text-lg font-semibold tracking-tight text-slate-500">{option.title}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">{option.description}</p>
+          </div>
+          <div className="relative z-10 mt-5 text-xs font-medium text-amber-600">
+            🔒 Upgrade to {option.minTier || 'Pro'} to unlock
+          </div>
+        </div>
+      </motion.div>
+    )
+  }
 
   return (
     <motion.div variants={itemVariants} className={isWide ? 'md:col-span-2 lg:col-span-2' : ''}>
@@ -233,8 +311,14 @@ function ProductCard({
 export default function UserProductChooser() {
   const { user } = useAuth()
   const { isTenantAdmin } = useRoleAccess()
+  const { hasModule, isLoading: entitlementsLoading, isPlatform } = useEntitlements()
   const options = isTenantAdmin ? [...productOptions, adminOption] : productOptions
   const [mounted, setMounted] = useState(false)
+
+  // A card is locked when its module is not in the tenant's plan. While
+  // entitlements load (or for platform/super-admin users) nothing is locked.
+  const isOptionLocked = (option: ProductOption) =>
+    Boolean(option.moduleKey) && !entitlementsLoading && !isPlatform && !hasModule(option.moduleKey!)
   const firstName =
     user?.email?.split('@')[0]?.split('.')[0]?.replace(/^\w/, (c: string) => c.toUpperCase()) ?? ''
 
@@ -317,7 +401,13 @@ export default function UserProductChooser() {
                 className="grid gap-4 md:grid-cols-2 lg:grid-cols-2"
               >
                 {options.map((option, i) => (
-                  <ProductCard key={option.title} option={option} index={i} totalCount={options.length} />
+                  <ProductCard
+                    key={option.title}
+                    option={option}
+                    index={i}
+                    totalCount={options.length}
+                    locked={isOptionLocked(option)}
+                  />
                 ))}
               </motion.div>
 

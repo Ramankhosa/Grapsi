@@ -2,13 +2,10 @@ import React from 'react';
 import Link from 'next/link';
 import { FaGraduationCap, FaSearch, FaUserCircle } from 'react-icons/fa';
 
-import FinderPreferencesPanel, { type FinderPreferenceValues } from '../FinderPreferencesPanel';
 import type { ResearcherFinderContext } from '../../lib/researcherProfile/types';
 
 interface FinderSidebarProfileProps {
   finderContext: ResearcherFinderContext | null;
-  preferences: FinderPreferenceValues;
-  onPreferencesChange: (preferences: FinderPreferenceValues) => void;
   onSearchResearchArea: (label: string, queryText: string) => void;
   disabled?: boolean;
 }
@@ -20,13 +17,11 @@ function savedAreaQueryText(area: ResearcherFinderContext['researchAreas'][numbe
 }
 
 /**
- * Profile context in the sidebar: who the researcher is, their saved research areas as
- * one-click searches, and the eligibility/publication matching opt-ins.
+ * Profile context in the sidebar: who the researcher is and their saved research areas
+ * as one-click searches. Matching opt-ins live in the collapsible Settings section.
  */
 export default function FinderSidebarProfile({
   finderContext,
-  preferences,
-  onPreferencesChange,
   onSearchResearchArea,
   disabled = false,
 }: FinderSidebarProfileProps) {
@@ -105,9 +100,6 @@ export default function FinderSidebarProfile({
         </div>
       ) : null}
 
-      <div className="mt-4 border-t border-slate-100 pt-3">
-        <FinderPreferencesPanel preferences={preferences} onChange={onPreferencesChange} compact />
-      </div>
     </div>
   );
 }

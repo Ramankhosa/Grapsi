@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { listAccessibleProjects } from '@/lib/project-access'
 import { prisma } from '@/lib/prisma'
+import { enforceServiceAccess } from '@/lib/service-access-middleware'
 
 const createProjectSchema = z.object({
   name: z.string().min(1, 'Project name is required').max(200, 'Project name too long'),
@@ -59,6 +60,15 @@ export async function POST(request: NextRequest) {
     const hasPermission = user.roles?.some((role: string) => allowedRoles.includes(role))
     if (!hasPermission) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+    }
+
+    // Grant projects belong to the Grant Studio module (Pro tier). Patent
+    // projects are unaffected by this gate.
+    if (projectType === 'GRANT') {
+      const access = await enforceServiceAccess(user.id, user.tenantId, 'GRANT_PREP')
+      if (!access.allowed) {
+        return access.response
+      }
     }
 
     const project = await prisma.project.create({

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getSession } from '@/lib/reviewer-auth-api';
+import { getReviewerSession as getSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 import { 
   Document, 
@@ -608,6 +608,8 @@ export default async function handler(
   if (!session || !session.user?.email) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
+
+  if (!(await requireGrantReviewFeature(session, res))) return;
 
   if (req.method !== 'GET') {
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
