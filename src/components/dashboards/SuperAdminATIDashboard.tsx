@@ -73,8 +73,12 @@ export default function SuperAdminATIDashboard() {
   const [tenants, setTenants] = useState<TenantOption[]>([])
   const [isCreating, setIsCreating] = useState(false)
   const [createdInviteLink, setCreatedInviteLink] = useState<string | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [createForm, setCreateForm] = useState({
+    tenant_mode: 'existing' as 'existing' | 'new',
     tenant_id: '',
+    new_tenant_name: '',
+    new_tenant_ati_id: '',
     expires_at: '',
     max_uses: '',
     plan_tier: '',
@@ -281,6 +285,42 @@ export default function SuperAdminATIDashboard() {
     setIsCreating(true)
 
     try {
+      // Resolve the tenant: either an existing one or create a fresh one inline
+      // (typical for workshops/events and new customer organizations)
+      let tenantId = createForm.tenant_id
+      if (createForm.tenant_mode === 'new') {
+        const name = createForm.new_tenant_name.trim()
+        if (!name) {
+          throw new Error('Enter a name for the new tenant')
+        }
+        const atiId = (createForm.new_tenant_ati_id || name).toUpperCase().replace(/[^A-Z0-9]/g, '')
+        if (!atiId) {
+          throw new Error('Tenant ID must contain letters or numbers')
+        }
+        const tenantResponse = await fetch('/api/v1/platform/tenants', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({
+            name,
+            atiId,
+            generateInitialToken: false // the token below is the one we hand out
+          })
+        })
+        const tenantData = await tenantResponse.json()
+        if (!tenantResponse.ok) {
+          throw new Error(tenantData.message || 'Failed to create tenant')
+        }
+        tenantId = tenantData.id
+        fetchTenants()
+      }
+
+      if (!tenantId) {
+        throw new Error('Select a tenant or create a new one')
+      }
+
       if (createForm.entitlement_plan_code) {
         const entitlementResponse = await fetch('/api/v1/platform/entitlements', {
           method: 'POST',
@@ -289,7 +329,7 @@ export default function SuperAdminATIDashboard() {
             'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
           },
           body: JSON.stringify({
-            tenant_id: createForm.tenant_id,
+            tenant_id: tenantId,
             plan_code: createForm.entitlement_plan_code,
             expires_at: createForm.entitlement_expires_at
               ? new Date(createForm.entitlement_expires_at).toISOString()
@@ -310,7 +350,7 @@ export default function SuperAdminATIDashboard() {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         },
         body: JSON.stringify({
-          tenant_id: createForm.tenant_id,
+          tenant_id: tenantId,
           expires_at: createForm.expires_at ? new Date(createForm.expires_at).toISOString() : undefined,
           max_uses: createForm.max_uses ? parseInt(createForm.max_uses) : undefined,
           plan_tier: createForm.plan_tier || undefined,
@@ -335,7 +375,10 @@ export default function SuperAdminATIDashboard() {
       setRevealedToken(data.token_display_once)
       setCreatedInviteLink(data.invite_link || null)
       setCreateForm({
+        tenant_mode: 'existing',
         tenant_id: '',
+        new_tenant_name: '',
+        new_tenant_ati_id: '',
         expires_at: '',
         max_uses: '',
         plan_tier: '',
@@ -421,143 +464,269 @@ export default function SuperAdminATIDashboard() {
 
         <div className="bg-white shadow rounded-lg mb-8">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Create Tenant ATI Token</h3>
-            <form onSubmit={handleCreateToken} className="mt-4 space-y-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div className="sm:col-span-3">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Token kind</label>
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Create Access Token</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              An access token lets people sign up into a tenant. Pick who it&apos;s for, what kind of access it grants, and share the link.
+            </p>
+            <form onSubmit={handleCreateToken} className="mt-5 space-y-6">
+              {/* Step 1: Token kind */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-800 mb-1">1. What kind of access?</label>
+                <select
+                  value={createForm.kind}
+                  onChange={(e) => {
+                    const kind = e.target.value
+                    setCreateForm(prev => ({
+                      ...prev,
+                      kind,
+                      // Managed groups never assign admin-capable roles
+                      assigned_role:
+                        kind !== 'STANDARD' && !['ANALYST', 'VIEWER'].includes(prev.assigned_role)
+                          ? 'ANALYST'
+                          : prev.assigned_role
+                    }))
+                  }}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                >
+                  <option value="STANDARD">Standard — an organization that manages itself (first user becomes owner)</option>
+                  <option value="MANAGED">Managed — a group you administer from here (members can&apos;t become admins)</option>
+                  <option value="EVENT">Event — workshop or demo access that expires automatically</option>
+                </select>
+              </div>
+
+              {/* Step 2: Tenant */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-800 mb-1">2. Which tenant do signups join?</label>
+                <div className="flex gap-4 mb-2">
+                  <label className="inline-flex items-center gap-1.5 text-sm text-gray-700">
+                    <input
+                      type="radio"
+                      name="tenant_mode"
+                      checked={createForm.tenant_mode === 'existing'}
+                      onChange={() => setCreateForm(prev => ({ ...prev, tenant_mode: 'existing' }))}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    Existing tenant
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-sm text-gray-700">
+                    <input
+                      type="radio"
+                      name="tenant_mode"
+                      checked={createForm.tenant_mode === 'new'}
+                      onChange={() => setCreateForm(prev => ({ ...prev, tenant_mode: 'new' }))}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    Create a new tenant
+                  </label>
+                </div>
+                {createForm.tenant_mode === 'existing' ? (
                   <select
-                    value={createForm.kind}
-                    onChange={(e) => {
-                      const kind = e.target.value
-                      setCreateForm(prev => ({
-                        ...prev,
-                        kind,
-                        // Managed groups never assign admin-capable roles
-                        assigned_role:
-                          kind !== 'STANDARD' && !['ANALYST', 'VIEWER'].includes(prev.assigned_role)
-                            ? 'ANALYST'
-                            : prev.assigned_role
-                      }))
-                    }}
+                    required
+                    value={createForm.tenant_id}
+                    onChange={(e) => setCreateForm(prev => ({ ...prev, tenant_id: e.target.value }))}
                     className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
                   >
-                    <option value="STANDARD">Standard — self-administered organization</option>
-                    <option value="MANAGED">Managed — platform-administered group (no tenant admin)</option>
-                    <option value="EVENT">Event — time-boxed workshop/demo access</option>
+                    <option value="">Select tenant…</option>
+                    {tenants.filter(tenant => tenant.status === 'ACTIVE').map(tenant => (
+                      <option key={tenant.id} value={tenant.id}>{tenant.name} ({tenant.ati_id})</option>
+                    ))}
                   </select>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Tenant name</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. LPU AI Grants Workshop"
+                        value={createForm.new_tenant_name}
+                        onChange={(e) => {
+                          const name = e.target.value
+                          setCreateForm(prev => ({
+                            ...prev,
+                            new_tenant_name: name,
+                            new_tenant_ati_id: name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20)
+                          }))
+                        }}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Tenant ID (uppercase letters/numbers)</label>
+                      <input
+                        type="text"
+                        placeholder="Auto-generated from name"
+                        value={createForm.new_tenant_ati_id}
+                        onChange={(e) =>
+                          setCreateForm(prev => ({
+                            ...prev,
+                            new_tenant_ati_id: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+                          }))
+                        }
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Step 3: Event settings (EVENT only) */}
+              {createForm.kind === 'EVENT' && (
+                <div className="rounded-md border border-purple-200 bg-purple-50/50 p-4">
+                  <label className="block text-sm font-semibold text-gray-800 mb-3">3. Event settings</label>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Event name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. AI Grants Workshop"
+                        value={createForm.event_label}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, event_label: e.target.value }))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Access hours per participant</label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="24 if empty"
+                        value={createForm.member_access_hours}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, member_access_hours: e.target.value }))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">All access ends at (optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={createForm.access_ends_at}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, access_ends_at: e.target.value }))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs text-gray-500">
+                    Each participant&apos;s access ends at whichever comes first: their personal window or the hard cutoff.
+                  </p>
                 </div>
-                {createForm.kind === 'EVENT' && (
-                  <>
-                    <input
-                      type="text"
-                      placeholder="Event label (e.g. AI Grants Workshop)"
-                      value={createForm.event_label}
-                      onChange={(e) => setCreateForm(prev => ({ ...prev, event_label: e.target.value }))}
+              )}
+
+              {/* Step 4: Signup rules */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-800 mb-3">
+                  {createForm.kind === 'EVENT' ? '4' : '3'}. Signup rules
+                </label>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Role for new signups</label>
+                    <select
+                      value={createForm.assigned_role}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, assigned_role: e.target.value }))}
                       className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                    />
+                    >
+                      {createForm.kind === 'STANDARD' ? (
+                        <>
+                          <option value="ADMIN">Admin</option>
+                          <option value="MANAGER">Manager</option>
+                          <option value="ANALYST">Analyst</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="ANALYST">Analyst</option>
+                          <option value="VIEWER">Viewer</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Max signups</label>
                     <input
                       type="number"
                       min="1"
-                      placeholder="Access hours per member (default 24)"
-                      value={createForm.member_access_hours}
-                      onChange={(e) => setCreateForm(prev => ({ ...prev, member_access_hours: e.target.value }))}
+                      placeholder="Unlimited if empty"
+                      value={createForm.max_uses}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, max_uses: e.target.value }))}
                       className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Signup link valid until (optional)</label>
                     <input
                       type="datetime-local"
-                      aria-label="Event access hard cutoff"
-                      title="Event access hard cutoff — all member access ends at this time"
-                      value={createForm.access_ends_at}
-                      onChange={(e) => setCreateForm(prev => ({ ...prev, access_ends_at: e.target.value }))}
+                      value={createForm.expires_at}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, expires_at: e.target.value }))}
                       className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
                     />
-                  </>
+                  </div>
+                </div>
+              </div>
+
+              {/* Advanced options (collapsed by default) */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(prev => !prev)}
+                  className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                >
+                  {showAdvanced ? '▾ Hide advanced options' : '▸ Advanced options (entitlement plan, team, notes)'}
+                </button>
+                {showAdvanced && (
+                  <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Entitlement plan code (optional)</label>
+                      <input
+                        type="text"
+                        placeholder="Grants this plan to the tenant"
+                        value={createForm.entitlement_plan_code}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, entitlement_plan_code: e.target.value }))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Entitlement expires (optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={createForm.entitlement_expires_at}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, entitlement_expires_at: e.target.value }))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Auto-assign team ID (optional)</label>
+                      <input
+                        type="text"
+                        placeholder="Signups join this team"
+                        value={createForm.assigned_team_id}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, assigned_team_id: e.target.value }))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
+                      <input
+                        type="text"
+                        placeholder="Purpose or recipient"
+                        value={createForm.notes}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, notes: e.target.value }))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                      />
+                    </div>
+                  </div>
                 )}
-                <select
-                  required
-                  value={createForm.tenant_id}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, tenant_id: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                >
-                  <option value="">Select tenant</option>
-                  {tenants.filter(tenant => tenant.status === 'ACTIVE').map(tenant => (
-                    <option key={tenant.id} value={tenant.id}>{tenant.name} ({tenant.ati_id})</option>
-                  ))}
-                </select>
-                <select
-                  value={createForm.assigned_role}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, assigned_role: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                >
-                  {createForm.kind === 'STANDARD' ? (
-                    <>
-                      <option value="ADMIN">Admin</option>
-                      <option value="MANAGER">Manager</option>
-                      <option value="ANALYST">Analyst</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="ANALYST">Analyst</option>
-                      <option value="VIEWER">Viewer</option>
-                    </>
-                  )}
-                </select>
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="Max signups (unlimited if empty)"
-                  value={createForm.max_uses}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, max_uses: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                />
               </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <input
-                  type="text"
-                  placeholder="Optional entitlement plan code"
-                  value={createForm.entitlement_plan_code}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, entitlement_plan_code: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                />
-                <input
-                  type="datetime-local"
-                  aria-label="Optional entitlement expiry"
-                  title="Optional entitlement expiry"
-                  value={createForm.entitlement_expires_at}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, entitlement_expires_at: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                />
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <input
-                  type="datetime-local"
-                  value={createForm.expires_at}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, expires_at: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                />
-                <input
-                  type="text"
-                  placeholder="Optional team id"
-                  value={createForm.assigned_team_id}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, assigned_team_id: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                />
-                <input
-                  type="text"
-                  placeholder="Notes"
-                  value={createForm.notes}
-                  onChange={(e) => setCreateForm(prev => ({ ...prev, notes: e.target.value }))}
-                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                />
-              </div>
-              <div className="flex justify-end">
+
+              <div className="flex justify-end border-t border-gray-100 pt-4">
                 <button
                   type="submit"
                   disabled={isCreating}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
                 >
-                  {isCreating ? 'Creating...' : 'Create Token'}
+                  {isCreating
+                    ? 'Creating…'
+                    : createForm.tenant_mode === 'new'
+                      ? 'Create Tenant & Token'
+                      : 'Create Token'}
                 </button>
               </div>
             </form>
