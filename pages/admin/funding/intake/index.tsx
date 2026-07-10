@@ -159,6 +159,7 @@ export default function FundingIntakeAdminPage() {
   const [submitting, setSubmitting] = useState(false);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [actioningJobId, setActioningJobId] = useState<string | null>(null);
+  const [publishingBatchId, setPublishingBatchId] = useState<string | null>(null);
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
@@ -304,6 +305,52 @@ export default function FundingIntakeAdminPage() {
         templateSourceKey: availableKeys.includes(job.templateSourceKey) ? job.templateSourceKey : fallbackKey,
       };
     }));
+  }
+
+  async function handleBulkPublishBatch(batchId: string) {
+    if (!canPublishFunding) {
+      toast.error('Funding publishing access required.');
+      return;
+    }
+    if (!window.confirm('Publish every ready draft from this batch? Drafts still missing required fields are skipped.')) {
+      return;
+    }
+
+    try {
+      setPublishingBatchId(batchId);
+      const response = await fetch('/api/admin/funding/calls/bulk-publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchId }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(readApiErrorMessage(data, 'Failed to bulk publish drafts'));
+      }
+
+      const publishedCount = data.published?.length || 0;
+      const skippedCount = data.skipped?.length || 0;
+      const failedCount = data.failed?.length || 0;
+
+      if (publishedCount === 0 && skippedCount === 0 && failedCount === 0) {
+        toast('No draft calls left to publish in this batch.');
+      } else {
+        const parts = [`${publishedCount} published`];
+        if (skippedCount) {
+          parts.push(`${skippedCount} skipped (missing fields)`);
+        }
+        if (failedCount) {
+          parts.push(`${failedCount} failed`);
+        }
+        (failedCount ? toast.error : toast.success)(parts.join(' · '));
+      }
+
+      await Promise.all([loadJobs(false), loadBatches(false)]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to bulk publish drafts');
+    } finally {
+      setPublishingBatchId(null);
+    }
   }
 
   async function handleBatchSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1152,12 +1199,24 @@ export default function FundingIntakeAdminPage() {
                       </td>
                       <td className="px-4 py-4 align-top text-slate-600">{new Date(batch.created_at).toLocaleString()}</td>
                       <td className="px-4 py-4 align-top">
-                        <Link
-                          href={`/api/admin/funding/intake/batches/${batch.id}`}
-                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700"
-                        >
-                          JSON Detail
-                        </Link>
+                        <div className="flex flex-wrap gap-2">
+                          {canPublishFunding && (batch.counts.draft_created || 0) > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleBulkPublishBatch(batch.id)}
+                              disabled={publishingBatchId !== null}
+                              className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {publishingBatchId === batch.id ? 'Publishing...' : 'Publish Ready'}
+                            </button>
+                          )}
+                          <Link
+                            href={`/api/admin/funding/intake/batches/${batch.id}`}
+                            className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700"
+                          >
+                            JSON Detail
+                          </Link>
+                        </div>
                       </td>
                     </tr>
                   ))}

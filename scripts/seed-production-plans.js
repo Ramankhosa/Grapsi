@@ -37,8 +37,11 @@ async function seedProductionPlans() {
       { code: 'IDEATION', name: 'Patent Ideation Engine', unit: 'sessions' },
       { code: 'PAPER_DRAFTING', name: 'Academic Paper Drafting', unit: 'tokens' },
       { code: 'FUNDING_DISCOVERY', name: 'Funding Discovery', unit: 'calls' },
+      { code: 'FUNDING_CHAT', name: 'AI Funding Chatbot', unit: 'messages' },
+      { code: 'FUNDING_INTELLIGENCE', name: 'Funding Intelligence', unit: 'runs' },
       { code: 'GRANT_PREP', name: 'Grant Prep', unit: 'sessions' },
-      { code: 'GRANT_DRAFTING', name: 'Grant Drafting', unit: 'tokens' }
+      { code: 'GRANT_DRAFTING', name: 'Grant Drafting', unit: 'tokens' },
+      { code: 'GRANT_REVIEW', name: 'AI Grant Review', unit: 'reviews' }
     ]
 
     const featuresByCode = {}
@@ -187,8 +190,11 @@ async function seedProductionPlans() {
       { planCode: 'PRO_PLAN', featureCode: 'IDEATION', monthlyQuota: 500, dailyQuota: 50, monthlyTokenLimit: 5000000, dailyTokenLimit: 500000 },
       { planCode: 'PRO_PLAN', featureCode: 'PAPER_DRAFTING', monthlyQuota: 10000, dailyQuota: 1000, monthlyTokenLimit: 10000000, dailyTokenLimit: 1000000 },
       { planCode: 'PRO_PLAN', featureCode: 'FUNDING_DISCOVERY', monthlyQuota: 2500, dailyQuota: 250 },
+      { planCode: 'PRO_PLAN', featureCode: 'FUNDING_CHAT', monthlyQuota: 500, dailyQuota: 50 },
+      { planCode: 'PRO_PLAN', featureCode: 'FUNDING_INTELLIGENCE', monthlyQuota: 200, dailyQuota: 20 },
       { planCode: 'PRO_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
       { planCode: 'PRO_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: 250, dailyQuota: 50, monthlyTokenLimit: 5000000, dailyTokenLimit: 500000 },
+      { planCode: 'PRO_PLAN', featureCode: 'GRANT_REVIEW', monthlyQuota: 100, dailyQuota: 10 },
 
       // ENTERPRISE PLAN - Everything (all features)
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 5000, dailyQuota: 500 },
@@ -199,8 +205,11 @@ async function seedProductionPlans() {
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'IDEATION', monthlyQuota: 2000, dailyQuota: 200, monthlyTokenLimit: 20000000, dailyTokenLimit: 2000000 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PAPER_DRAFTING', monthlyQuota: 50000, dailyQuota: 5000, monthlyTokenLimit: 50000000, dailyTokenLimit: 5000000 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'FUNDING_DISCOVERY', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'FUNDING_CHAT', monthlyQuota: null, dailyQuota: null },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'FUNDING_INTELLIGENCE', monthlyQuota: null, dailyQuota: null },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_PREP', monthlyQuota: null, dailyQuota: null },
-      { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: null, dailyQuota: null, monthlyTokenLimit: null, dailyTokenLimit: null }
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_DRAFTING', monthlyQuota: null, dailyQuota: null, monthlyTokenLimit: null, dailyTokenLimit: null },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'GRANT_REVIEW', monthlyQuota: null, dailyQuota: null }
     ]
 
     for (const def of planFeatureDefs) {

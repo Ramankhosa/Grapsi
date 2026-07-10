@@ -791,6 +791,57 @@ export class FundingCatalogService {
     };
   }
 
+  async bulkPublishReadyFundingCalls(
+    operator: IntakeOperator,
+    options: { batchId?: string } = {}
+  ): Promise<{
+    totalCandidates: number;
+    published: string[];
+    skipped: Array<{ id: string; agency_name: string; scheme_title: string; missingFields: string[] }>;
+    failed: Array<{ id: string; agency_name: string; scheme_title: string; error: string }>;
+  }> {
+    const candidates = await prisma.fundingCall.findMany({
+      where: {
+        catalog_status: 'DRAFT',
+        ...(options.batchId ? { intake_jobs: { some: { batch_id: options.batchId } } } : {}),
+      },
+      select: { id: true, agency_name: true, scheme_title: true },
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    const published: string[] = [];
+    const skipped: Array<{ id: string; agency_name: string; scheme_title: string; missingFields: string[] }> = [];
+    const failed: Array<{ id: string; agency_name: string; scheme_title: string; error: string }> = [];
+
+    // Publish sequentially so each call's embedding generation stays within the
+    // same limits as a single publish; drafts with missing required fields are
+    // skipped rather than failing the whole run.
+    for (const candidate of candidates) {
+      const label = {
+        id: candidate.id,
+        agency_name: candidate.agency_name || '',
+        scheme_title: candidate.scheme_title || '',
+      };
+      try {
+        const result = await this.publishFundingCall(candidate.id, operator);
+        if (result.ok) {
+          published.push(candidate.id);
+        } else {
+          skipped.push({ ...label, missingFields: result.requiredFieldsRemaining || [] });
+        }
+      } catch (error) {
+        failed.push({ ...label, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    return {
+      totalCandidates: candidates.length,
+      published,
+      skipped,
+      failed,
+    };
+  }
+
   async archiveFundingCall(fundingCallId: string, operator: IntakeOperator) {
     const current = await prisma.fundingCall.findUnique({
       where: { id: fundingCallId },
