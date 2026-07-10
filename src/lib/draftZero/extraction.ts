@@ -10,6 +10,7 @@ import type {
 import {
   DRAFT_ZERO_PROMPT_VERSION,
   DRAFT_ZERO_STATE_VERSION,
+  type DraftZeroAiFillOutput,
   type DraftZeroCatalogPoint,
   type DraftZeroClaim,
   type DraftZeroExtractionOutput,
@@ -203,6 +204,86 @@ export function parseDraftZeroExtraction(
   return { idea, claims, gaps, warnings }
 }
 
+export interface ParsedDraftZeroAiFill {
+  claims: DraftZeroClaim[]
+  warnings: string[]
+}
+
+/**
+ * Validate the AI-fill LLM output against the open gaps it was asked to
+ * answer. Only requested gap points are accepted; everything lands as an
+ * ai_generated, unconfirmed claim so the existing confirm/edit/strike trust
+ * gate applies unchanged. Gaps the model skipped stay open and are surfaced
+ * as a warning instead of silently vanishing.
+ */
+export function parseDraftZeroAiFill(raw: unknown, targetGaps: DraftZeroGap[]): ParsedDraftZeroAiFill {
+  const warnings: string[] = []
+  const output = (raw && typeof raw === 'object' ? raw : {}) as Partial<DraftZeroAiFillOutput>
+  const gapById = new Map(targetGaps.map((gap) => [gap.id, gap]))
+  const claims: DraftZeroClaim[] = []
+  const answered = new Set<string>()
+
+  for (const entry of Array.isArray(output.answers) ? output.answers : []) {
+    const pointId = typeof entry?.point === 'string' ? entry.point.trim() : ''
+    const gap = gapById.get(pointId)
+    if (!gap) {
+      if (pointId) warnings.push(`Dropped AI answer for point "${pointId}" — it was not an open gap.`)
+      continue
+    }
+    if (answered.has(pointId)) continue
+    const claimText = typeof entry.answer === 'string' ? scrub(entry.answer) : ''
+    if (!claimText) continue
+    answered.add(pointId)
+    const assumption = typeof entry.assumption === 'string' && entry.assumption.trim() ? scrub(entry.assumption).slice(0, 300) : null
+    claims.push({
+      id: pointId,
+      stageKey: gap.stageKey,
+      pointKey: gap.pointKey,
+      pointLabel: gap.pointLabel,
+      priority: gap.priority,
+      conversationRole: null,
+      claimText,
+      factBullets: asStringArray(entry.facts, 3),
+      keywords: asStringArray(entry.keywords, 6),
+      provenance: 'ai_generated',
+      sourceQuote: null,
+      // AI drafts never outrank inferred extraction claims in trust.
+      confidence: Math.min(clamp01(entry.confidence, 0.55), 0.7),
+      spotCheck: null,
+      status: 'unconfirmed',
+      decidedAt: null,
+      assumption,
+    })
+  }
+
+  const unanswered = targetGaps.filter((gap) => !answered.has(gap.id))
+  if (unanswered.length) {
+    warnings.push(
+      `AI left ${unanswered.length} question${unanswered.length === 1 ? '' : 's'} unanswered — ${unanswered
+        .map((gap) => `"${gap.pointLabel}"`)
+        .slice(0, 3)
+        .join(', ')}${unanswered.length > 3 ? '…' : ''} still need${unanswered.length === 1 ? 's' : ''} you.`
+    )
+  }
+
+  return { claims, warnings }
+}
+
+/**
+ * Merge AI-fill claims into the ledger. A point can already carry a rejected
+ * claim (struck, gap reopened, then AI-filled) — the fresh AI draft replaces
+ * it so claim ids stay unique.
+ */
+export function applyAiFillToLedger(state: DraftZeroState, aiClaims: DraftZeroClaim[]): DraftZeroState {
+  if (!aiClaims.length) return state
+  const incomingById = new Map(aiClaims.map((claim) => [claim.id, claim]))
+  const claims = [
+    ...state.claims.map((claim) => incomingById.get(claim.id) || claim),
+    ...aiClaims.filter((claim) => !state.claims.some((existing) => existing.id === claim.id)),
+  ]
+  return { ...state, claims }
+}
+
 /**
  * Points whose coverage requires a thrust/priority linkage — without it the
  * deterministic hard block in getGrantPrepPointStatus keeps them needs_review
@@ -329,7 +410,11 @@ export function syncDraftZeroStateWithStageStates(state: DraftZeroState, stageSt
   const gaps = state.gaps.map((gap) => {
     const point = findPoint(gap.stageKey, gap.pointKey)
     if (!point) return gap
-    const filled = point.status === 'covered'
+    // An active (non-rejected) claim also fills its gap: AI-fill turns an open
+    // gap into an unconfirmed claim, and both must not render at once. A later
+    // strike flips the claim to rejected, which reopens the gap here.
+    const hasActiveClaim = claims.some((claim) => claim.id === gap.id && claim.status !== 'rejected')
+    const filled = point.status === 'covered' || hasActiveClaim
     if (filled && gap.status === 'open') return { ...gap, status: 'filled' as const }
     if (!filled && gap.status === 'filled') return { ...gap, status: 'open' as const }
     return gap

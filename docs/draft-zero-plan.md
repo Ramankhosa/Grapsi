@@ -91,7 +91,18 @@ The ledger is DISPLAY state. The AUTHORITATIVE state is `stage_states_json` (poi
 - Service metering: one `reserveServiceUsage` per generation, `operationId = draft-zero-generate:{sessionId}:{clientRequestId}`, `operationType 'draft_zero_generate'`; `trackServiceUsage(isCompleted:true)` runs ONLY after the optimistic-lock write succeeds (a lost race releases the reservation instead of billing). Claims PATCH: no reservation (zero LLM), matching the points route.
 - Idempotency: a replayed `clientRequestId` returns the stored result — this check runs BEFORE the `expectedSessionUpdatedAt` 409 so retries after a lost response actually hit the replay path. Gateway keys: `{operationId}:extract`, `{operationId}:anchor`.
 
-### 3.4 Existing machinery reused (all verified, exact names)
+### 3.4 AI-fill, mind map & section norms (July 2026 addition)
+
+For users who don't want to answer gaps themselves, Draft Zero can now draft the answers too — without weakening the trust gate:
+
+- **AI-fill** — POST `.../draft-zero/ai-fill` `{ points?: gapIds[], clientRequestId, expectedSessionUpdatedAt }`. Collects the requested **open** gaps (enabled, non-ideation stages only), runs ONE LLM call (`action 'draft_zero_ai_fill'`, temp 0.3, JSON mode, `operationType 'draft_zero_ai_fill'` metered like generate), and lands every answer as an **`ai_generated` provenance, `unconfirmed` claim** with the same amber `needs_review` marker as extraction claims. Launch stays blocked until the user confirms — "AI answers, user reviews" is the contract. Retry safety: if the requested gaps are no longer open (lost response replay), the route returns current state with no LLM call.
+- **Section-type-specific prompts** — `buildDraftZeroAiFillPrompt` builds a per-stage "Section norms" block from `GRANT_PREP_STAGE_BY_KEY` (description + askStyle + `reviewerRubric.strong` + steeringRule) plus the guideline rules `getGuidelineContextForStage` routes to that stage — an answer for `budget_strategy` is steered differently from one for `beneficiaries`. Consistency context: idea anchor + up to 30 non-rejected claims (confirmed first) + an 8k-char seed excerpt (tag-stripped, fenced, untrusted).
+- **Assumptions, not fabrications** — when an answer needs a specific (budget figure, duration, team size), the model must propose a call-limit-respecting value AND set `assumption` ("Assumes …"); the UI renders it as a violet "verify before you confirm" note. Confidence hard-capped at 0.7 in `parseDraftZeroAiFill`; trap phrases scrubbed.
+- **Gap ↔ claim invariant** — `syncDraftZeroStateWithStageStates` now treats a gap as `filled` when an active (non-rejected) claim exists for the same point, so an AI-filled gap and its claim never render together; striking the AI claim reopens the gap (and a re-fill replaces the rejected claim via `applyAiFillToLedger`).
+- **Mind map view** — `DraftZeroMindMap` renders the proof as a two-sided map: idea anchor center, stage nodes branching out, claim/gap leaves one column further (violet = AI-drafted, dashed = gap). Pure React + SVG beziers, zoom/fit, greedy side-balancing. Clicking any node opens an inspector with the full claim/gap, confirm/edit/strike/fill/AI-draft actions, and that section's norms. List/Map toggle persists in `localStorage('draft_zero_view')`.
+- **Norms next to the section** — `DraftZeroNorms.tsx` (`getStageNorms` + `StageNormsPanel`) shows each section's intent, the reviewer "strong" bar, and its routed call rules — as an accordion under every stage header in list view and inside the map inspector. Because it uses the same router as the AI-fill prompt, what the user reads is exactly what the AI was told to respect.
+
+### 3.5 Existing machinery reused (all verified, exact names)
 
 `applyMarkerToStageStates`, `getGrantPrepPointStatus`, `computeStageReadiness`, `recomputeStageState`, `collectGlobalKeywords`, `isGrantPrepSessionReady`, `seedGrantPrepStagePointsFromIdeaAnchor`, `propagateDependentNeedsReview` (sessionState.ts) · `compileGrantPrepIdeaAnchor`, `hashGrantPrepIdeaAnchor`, `hashGrantPrepIdeaConstraints` (ideaAnchor.ts) · `buildGrantPrepIdeationDecisionMarker` (decisionMarker.ts — extracted from the decision route so both paths share the thin-anchor check) · `inflateGrantPrepSessionContext`, `normalizeGrantPrepForPersistence`, `loadGrantPrepSession`, `resolveGrantPrepContext` (server.ts) · `requireGrantPrepActor`, `assertGrantPrepProjectCapability` (access.ts) · `isPostLaunchGrantPrepStatus`, `resolveMutableGrantPrepStatus` (status.ts) · `getNextEnabledPickableStageKey` (stageLibrary.ts) · `normalizeGuidelinePack` (fundingGuidelines/utils.ts) · `withGrantWorkspaceStage` (grants/workspaceNavigation.ts) · existing handoff routes (unchanged).
 
@@ -116,6 +127,10 @@ The ledger is DISPLAY state. The AUTHORITATIVE state is `stage_states_json` (poi
 | `src/app/projects/[projectId]/grants/[grantId]/prep/page.tsx` | "Try Draft Zero" banner (non-embedded, non-fullscreen, non-locked, pre-handoff only) |
 | `src/tests/unit/draft-zero-extraction.test.ts` | 10 tests: catalog, parsing, quote downgrade, trap scrub, amber landing, confirm flip, priority_match linkage, ledger sync, prompt content, injection strip |
 | `src/app/api/grant-prep/sessions/[id]/stages/ideation/decision/route.ts` | now imports the shared decision marker (behavior identical) |
+| `.../draft-zero/ai-fill/route.ts` | POST: AI drafts answers for open gaps → `ai_generated` unconfirmed claims (see §3.4) |
+| `src/components/draftZero/DraftZeroMindMap.tsx` | two-sided mind map view with inspector (confirm/edit/strike/fill/AI-draft + section norms) |
+| `src/components/draftZero/DraftZeroNorms.tsx` | `getStageNorms` + `StageNormsPanel`: stage intent + reviewer bar + routed call rules |
+| `src/tests/unit/draft-zero-ai-fill.test.ts` | 7 tests: AI-fill parsing/trust caps, trap scrub, rejected-claim replacement, gap↔claim sync, prompt norms/injection |
 
 ---
 
@@ -174,6 +189,7 @@ A 4-lens adversarial review (state-machine, regression, UI logic, security/meter
 ```powershell
 # from C:\Users\raman\Documents\Grapsi
 npx vitest run src/tests/unit/draft-zero-extraction.test.ts   # expect 10/10
+npx vitest run src/tests/unit/draft-zero-ai-fill.test.ts      # expect 7/7
 npx tsc --noEmit                                              # expect exit 0
 npm run lint
 npx vitest run                                                # full suite — no new failures

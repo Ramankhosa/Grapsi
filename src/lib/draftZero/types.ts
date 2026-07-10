@@ -6,11 +6,15 @@ import type {
 
 export const DRAFT_ZERO_STATE_VERSION = 'draft_zero_v1'
 export const DRAFT_ZERO_PROMPT_VERSION = 'draft-zero-extract-v1'
+export const DRAFT_ZERO_AI_FILL_PROMPT_VERSION = 'draft-zero-ai-fill-v1'
 
 /** Max characters of pasted seed material forwarded to the extraction prompt. */
 export const DRAFT_ZERO_SEED_MAX_CHARS = 60000
 
-export type DraftZeroProvenance = 'quoted' | 'inferred'
+/** Seed excerpt forwarded to the AI-fill prompt for grounding (already mined once by extraction). */
+export const DRAFT_ZERO_AI_FILL_SEED_MAX_CHARS = 8000
+
+export type DraftZeroProvenance = 'quoted' | 'inferred' | 'ai_generated'
 
 export type DraftZeroClaimStatus = 'unconfirmed' | 'confirmed' | 'edited' | 'rejected'
 
@@ -37,6 +41,8 @@ export interface DraftZeroClaim {
   spotCheck: string | null
   status: DraftZeroClaimStatus
   decidedAt: string | null
+  /** Present on ai_generated claims when the AI had to assume a specific (figure, role, commitment) the researcher must verify. */
+  assumption?: string | null
 }
 
 export interface DraftZeroGap {
@@ -103,6 +109,18 @@ export interface DraftZeroExtractionOutput {
   gaps: Array<{
     point: string
     ask: string
+  }>
+}
+
+/** Shape the AI-fill LLM is asked to return (before validation). */
+export interface DraftZeroAiFillOutput {
+  answers: Array<{
+    point: string // `${stageKey}.${pointKey}`
+    answer: string
+    facts: string[]
+    keywords: string[]
+    confidence: number
+    assumption: string | null
   }>
 }
 

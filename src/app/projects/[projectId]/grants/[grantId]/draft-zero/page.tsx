@@ -6,9 +6,12 @@ import axios from 'axios'
 import { toast, Toaster } from 'react-hot-toast'
 import {
   HiArrowRight,
+  HiBookOpen,
   HiCheck,
   HiExclamationTriangle,
+  HiListBullet,
   HiPencilSquare,
+  HiShare,
   HiSparkles,
   HiXMark,
 } from 'react-icons/hi2'
@@ -18,6 +21,8 @@ import { withGrantWorkspaceStage } from '@/lib/grants/workspaceNavigation'
 import type { GuidelinePackDocument } from '@/lib/fundingGuidelines/types'
 import type { DraftZeroClaim, DraftZeroGap, DraftZeroState } from '@/lib/draftZero/types'
 import type { PrepContext, PrepHandoffPreview } from '@/components/grantPrep/types'
+import DraftZeroMindMap from '@/components/draftZero/DraftZeroMindMap'
+import { getStageNorms, StageNormsPanel } from '@/components/draftZero/DraftZeroNorms'
 
 function clsx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
@@ -86,6 +91,9 @@ export default function DraftZeroPage() {
   const [launchPreview, setLaunchPreview] = useState<PrepHandoffPreview | null>(null)
   const [launchOpen, setLaunchOpen] = useState(false)
   const [launching, setLaunching] = useState(false)
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list')
+  const [aiFilling, setAiFilling] = useState(false)
+  const [normsOpenStages, setNormsOpenStages] = useState<Record<string, boolean>>({})
 
   const featureEnabled = isFeatureEnabled('ENABLE_DRAFT_ZERO')
   const readOnly = ['launched', 'handed_off', 'archived'].includes(sessionStatus)
@@ -164,6 +172,16 @@ export default function DraftZeroPage() {
     return () => clearInterval(timer)
   }, [generating])
 
+  // View preference survives reloads; read after mount to stay hydration-safe.
+  useEffect(() => {
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem('draft_zero_view') : null
+    if (stored === 'map' || stored === 'list') setViewMode(stored)
+  }, [])
+  const switchView = useCallback((mode: 'list' | 'map') => {
+    setViewMode(mode)
+    if (typeof window !== 'undefined') window.localStorage.setItem('draft_zero_view', mode)
+  }, [])
+
   const applyMutationResponse = useCallback((data: { prepContext?: PrepContext; draftZero?: DraftZeroState; sessionStatus?: string; sessionUpdatedAt?: string }) => {
     if (data.prepContext) setPrepContext(data.prepContext)
     if (data.draftZero) setDraftZero(data.draftZero)
@@ -230,13 +248,10 @@ export default function DraftZeroPage() {
     return (data.warnings || []).find((warning) => warning.stageKey === stageKey && warning.pointKey === pointKey) || null
   }, [])
 
-  const handleConfirm = useCallback(
+  // Shared low-level actions (used by both the list view and the mind map;
+  // the spot-check gate lives in each view's own UI state).
+  const confirmClaim = useCallback(
     async (claim: DraftZeroClaim) => {
-      if (claim.spotCheck && spotCheckClaim !== claim.id) {
-        setSpotCheckClaim(claim.id)
-        return
-      }
-      setSpotCheckClaim(null)
       const data = await sendActions([{ stageKey: claim.stageKey, pointKey: claim.pointKey, action: 'confirm' }], claim.id)
       if (data) {
         const warning = warningFor(data, claim.stageKey, claim.pointKey)
@@ -244,46 +259,113 @@ export default function DraftZeroPage() {
         else toast.success('Confirmed')
       }
     },
-    [sendActions, spotCheckClaim, warningFor]
+    [sendActions, warningFor]
   )
 
-  const handleEditSave = useCallback(
-    async (claim: DraftZeroClaim) => {
-      const text = editText.trim()
-      if (!text) return
+  const saveClaimEdit = useCallback(
+    async (claim: DraftZeroClaim, text: string): Promise<boolean> => {
+      if (!text) return false
       const data = await sendActions([{ stageKey: claim.stageKey, pointKey: claim.pointKey, action: 'edit', text }], claim.id)
-      if (data) {
-        setEditingClaim(null)
-        setEditText('')
-        const warning = warningFor(data, claim.stageKey, claim.pointKey)
-        if (warning) toast(warning.message, { icon: '⚠️', duration: 6000 })
-        else toast.success('Updated with your wording')
-      }
+      if (!data) return false
+      const warning = warningFor(data, claim.stageKey, claim.pointKey)
+      if (warning) toast(warning.message, { icon: '⚠️', duration: 6000 })
+      else toast.success('Updated with your wording')
+      return true
     },
-    [editText, sendActions, warningFor]
+    [sendActions, warningFor]
   )
 
-  const handleReject = useCallback(
+  const rejectClaim = useCallback(
     async (claim: DraftZeroClaim) => {
       const data = await sendActions([{ stageKey: claim.stageKey, pointKey: claim.pointKey, action: 'reject' }], claim.id)
-      if (data) toast('Struck — answer it below in your own words', { icon: '✂️' })
+      if (data) toast('Struck — answer it in your own words, or let the AI draft a fresh take', { icon: '✂️' })
     },
     [sendActions]
   )
 
-  const handleGapFill = useCallback(
-    async (gap: DraftZeroGap) => {
-      const text = (gapDrafts[gap.id] || '').trim()
-      if (!text) return
+  const fillGap = useCallback(
+    async (gap: DraftZeroGap, text: string): Promise<boolean> => {
+      if (!text) return false
       const data = await sendActions([{ stageKey: gap.stageKey, pointKey: gap.pointKey, action: 'fill_gap', text }], gap.id)
-      if (data) {
-        setGapDrafts((drafts) => ({ ...drafts, [gap.id]: '' }))
-        const warning = warningFor(data, gap.stageKey, gap.pointKey)
-        if (warning) toast(warning.message, { icon: '⚠️', duration: 6000 })
-        else toast.success('Gap closed with your answer')
+      if (!data) return false
+      const warning = warningFor(data, gap.stageKey, gap.pointKey)
+      if (warning) toast(warning.message, { icon: '⚠️', duration: 6000 })
+      else toast.success('Gap closed with your answer')
+      return true
+    },
+    [sendActions, warningFor]
+  )
+
+  const handleConfirm = useCallback(
+    async (claim: DraftZeroClaim) => {
+      if (claim.spotCheck && spotCheckClaim !== claim.id) {
+        setSpotCheckClaim(claim.id)
+        return
+      }
+      setSpotCheckClaim(null)
+      await confirmClaim(claim)
+    },
+    [confirmClaim, spotCheckClaim]
+  )
+
+  const handleEditSave = useCallback(
+    async (claim: DraftZeroClaim) => {
+      if (await saveClaimEdit(claim, editText.trim())) {
+        setEditingClaim(null)
+        setEditText('')
       }
     },
-    [gapDrafts, sendActions, warningFor]
+    [editText, saveClaimEdit]
+  )
+
+  const handleGapFill = useCallback(
+    async (gap: DraftZeroGap) => {
+      if (await fillGap(gap, (gapDrafts[gap.id] || '').trim())) {
+        setGapDrafts((drafts) => ({ ...drafts, [gap.id]: '' }))
+      }
+    },
+    [gapDrafts, fillGap]
+  )
+
+  // Hand a set of open gaps to the AI. Answers come back as violet
+  // "AI-drafted" claims that still need the user's confirm — same trust gate
+  // as extraction claims, so launch stays blocked until they are reviewed.
+  const handleAiFill = useCallback(
+    async (pointIds: string[]) => {
+      if (!sessionId || !sessionUpdatedAtRef.current || aiFilling || readOnly) return
+      setAiFilling(true)
+      try {
+        const response = await axios.post(
+          `/api/grant-prep/sessions/${sessionId}/draft-zero/ai-fill`,
+          {
+            points: pointIds,
+            clientRequestId: `dzf_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            expectedSessionUpdatedAt: sessionUpdatedAtRef.current,
+          },
+          axiosConfig()
+        )
+        applyMutationResponse(response.data)
+        const filledCount = Number(response.data?.filledCount || 0)
+        if (filledCount) {
+          toast.success(
+            `AI drafted ${filledCount} answer${filledCount === 1 ? '' : 's'} — review the violet claims and confirm what's right.`
+          )
+        } else {
+          toast('Nothing left for the AI to fill.', { icon: 'ℹ️' })
+        }
+        for (const warning of (response.data?.warnings || []).slice(0, 2)) {
+          toast(warning, { icon: '⚠️', duration: 6000 })
+        }
+      } catch (error) {
+        surfaceError(error, 'AI fill failed')
+        if (axios.isAxiosError(error) && error.response?.status === 409 && sessionId) {
+          await hydrateDraftZero(sessionId).catch(() => undefined)
+        }
+      } finally {
+        setAiFilling(false)
+      }
+    },
+    [sessionId, aiFilling, readOnly, axiosConfig, applyMutationResponse, surfaceError, hydrateDraftZero]
   )
 
   // Stages can be disabled after generation — only enabled stages count toward
@@ -431,6 +513,30 @@ export default function DraftZeroPage() {
                 Deadline {funding.deadline}
               </span>
             ) : null}
+            {draftZero ? (
+              <div className="flex rounded-lg border border-slate-200 bg-white p-0.5">
+                <button
+                  onClick={() => switchView('list')}
+                  title="List view"
+                  className={clsx(
+                    'flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium',
+                    viewMode === 'list' ? 'bg-prep-surface text-prep-accent' : 'text-slate-500 hover:text-slate-700'
+                  )}
+                >
+                  <HiListBullet className="h-3.5 w-3.5" /> List
+                </button>
+                <button
+                  onClick={() => switchView('map')}
+                  title="Mind map view"
+                  className={clsx(
+                    'flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium',
+                    viewMode === 'map' ? 'bg-prep-surface text-prep-accent' : 'text-slate-500 hover:text-slate-700'
+                  )}
+                >
+                  <HiShare className="h-3.5 w-3.5 rotate-90" /> Map
+                </button>
+              </div>
+            ) : null}
             <span className="rounded-full border border-prep-border bg-prep-surface px-3 py-1 text-xs font-medium text-prep-accent">
               {Math.round(overallReadiness * 100)}% ready
             </span>
@@ -488,7 +594,8 @@ export default function DraftZeroPage() {
                 <p className="mt-2 text-sm text-slate-500">
                   Paste an old proposal, an abstract, or rough notes. Draft Zero extracts a complete proposal plan from it in
                   one pass — you review claims instead of answering questions. No material? It will infer a starting point
-                  from the call itself.
+                  from the call itself. Whatever it can’t extract becomes a gap — answer gaps yourself, or let the AI draft
+                  those too and just review.
                 </p>
                 <textarea
                   value={seedText}
@@ -518,6 +625,30 @@ export default function DraftZeroPage() {
               </div>
             </div>
           )
+        ) : viewMode === 'map' ? (
+          <div className="space-y-4">
+            {draftZero.generation.warnings.length ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                {draftZero.generation.warnings.slice(0, 4).map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </div>
+            ) : null}
+            <DraftZeroMindMap
+              anchorTitle={anchor?.title || draftZero.generation.ideaTitle}
+              anchorSummary={anchor?.oneSentenceSummary || draftZero.generation.ideaSummary}
+              stageGroups={stageGroups}
+              guidelinePack={guidelinePack}
+              readOnly={readOnly}
+              busy={anyBusy}
+              aiFillBusy={aiFilling}
+              onConfirm={confirmClaim}
+              onEditSave={saveClaimEdit}
+              onReject={rejectClaim}
+              onGapFill={fillGap}
+              onAiFill={handleAiFill}
+            />
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_290px]">
             {/* Center: the proof */}
@@ -534,10 +665,32 @@ export default function DraftZeroPage() {
 
               {stageGroups.map((stage) => (
                 <section key={stage.key} className="rounded-2xl border border-prep-border bg-white shadow-prep-card">
-                  <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+                  <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-3">
                     <h3 className="text-sm font-semibold text-slate-900">{stage.title}</h3>
-                    <span className="text-xs text-slate-400">{Math.round((stage.readiness || 0) * 100)}%</span>
+                    {(() => {
+                      const ruleCount = getStageNorms(stage.key, guidelinePack)?.ruleCount || 0
+                      return (
+                        <button
+                          onClick={() => setNormsOpenStages((open) => ({ ...open, [stage.key]: !open[stage.key] }))}
+                          className={clsx(
+                            'flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                            normsOpenStages[stage.key]
+                              ? 'border-prep-border bg-prep-surface text-prep-accent'
+                              : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700'
+                          )}
+                          title="What this section must satisfy"
+                        >
+                          <HiBookOpen className="h-3 w-3" /> Norms{ruleCount ? ` · ${ruleCount}` : ''}
+                        </button>
+                      )
+                    })()}
+                    <span className="ml-auto text-xs text-slate-400">{Math.round((stage.readiness || 0) * 100)}%</span>
                   </div>
+                  {normsOpenStages[stage.key] ? (
+                    <div className="border-b border-slate-100 bg-prep-surface/60 px-5 py-3">
+                      <StageNormsPanel stageKey={stage.key} guidelinePack={guidelinePack} />
+                    </div>
+                  ) : null}
                   <div className="divide-y divide-slate-50">
                     {stage.claims.map((claim) => {
                       const busy = anyBusy
@@ -555,7 +708,9 @@ export default function DraftZeroPage() {
                                     ? 'bg-slate-300'
                                     : claim.provenance === 'quoted'
                                       ? 'bg-sky-500'
-                                      : 'bg-amber-500'
+                                      : claim.provenance === 'ai_generated'
+                                        ? 'bg-violet-500'
+                                        : 'bg-amber-500'
                               )}
                             />
                             <div className="min-w-0 flex-1">
@@ -565,6 +720,10 @@ export default function DraftZeroPage() {
                                 {claim.provenance === 'quoted' ? (
                                   <span className="rounded bg-sky-50 px-1.5 py-0.5 text-sky-700" title={claim.sourceQuote || ''}>
                                     from your material
+                                  </span>
+                                ) : claim.provenance === 'ai_generated' ? (
+                                  <span className="rounded bg-violet-50 px-1.5 py-0.5 text-violet-700">
+                                    AI-drafted · {Math.round(claim.confidence * 100)}%
                                   </span>
                                 ) : (
                                   <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">
@@ -615,6 +774,11 @@ export default function DraftZeroPage() {
                               {claim.sourceQuote && !isEditing ? (
                                 <p className="mt-1 border-l-2 border-sky-200 pl-2 text-xs italic text-slate-400">
                                   “{claim.sourceQuote}”
+                                </p>
+                              ) : null}
+                              {claim.assumption && claim.status !== 'rejected' && !isEditing ? (
+                                <p className="mt-1 rounded-lg bg-violet-50 px-2 py-1 text-xs text-violet-700">
+                                  {claim.assumption} — verify before you confirm.
                                 </p>
                               ) : null}
                               {showSpotCheck && claim.spotCheck ? (
@@ -669,7 +833,7 @@ export default function DraftZeroPage() {
                                 </button>
                                 {claim.status === 'unconfirmed' ? (
                                   <button
-                                    onClick={() => handleReject(claim)}
+                                    onClick={() => rejectClaim(claim)}
                                     disabled={busy || readOnly}
                                     title="Strike"
                                     className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 disabled:opacity-40"
@@ -690,10 +854,10 @@ export default function DraftZeroPage() {
                           <HiExclamationTriangle className="h-3.5 w-3.5 text-slate-400" />
                           <span className="font-medium">{gap.pointLabel}</span>
                           <span className="rounded bg-slate-200/70 px-1.5 py-0.5">{gap.priority}</span>
-                          <span className="text-slate-400">needs you — AI won’t invent this</span>
+                          <span className="text-slate-400">answer it yourself — or let the AI draft it for your review</span>
                         </div>
                         <p className="mt-1 text-sm text-slate-700">{gap.ask}</p>
-                        <div className="mt-2 flex gap-2">
+                        <div className="mt-2 flex flex-wrap gap-2">
                           <input
                             value={gapDrafts[gap.id] || ''}
                             onChange={(event) => setGapDrafts((drafts) => ({ ...drafts, [gap.id]: event.target.value }))}
@@ -709,6 +873,14 @@ export default function DraftZeroPage() {
                             className="rounded-lg bg-prep-accent px-3 py-2 text-xs font-medium text-white hover:bg-prep-accentDark disabled:bg-slate-200 disabled:text-slate-400"
                           >
                             Save
+                          </button>
+                          <button
+                            onClick={() => handleAiFill([gap.id])}
+                            disabled={anyBusy || aiFilling || readOnly}
+                            title="The AI drafts an answer from your material, the call rules, and this section's norms — you review and confirm it."
+                            className="flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                          >
+                            <HiSparkles className="h-3.5 w-3.5" /> {aiFilling ? 'Drafting…' : 'Let AI draft it'}
                           </button>
                         </div>
                       </div>
@@ -796,6 +968,17 @@ export default function DraftZeroPage() {
               )}
             </span>
             <div className="ml-auto flex items-center gap-2">
+              {openGaps.length ? (
+                <button
+                  onClick={() => handleAiFill(openGaps.map((gap) => gap.id))}
+                  disabled={pendingPoint !== null || aiFilling}
+                  title="The AI drafts an answer for every open gap using each section's norms — you review and confirm them."
+                  className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+                >
+                  <HiSparkles className="h-4 w-4" />
+                  {aiFilling ? 'AI drafting…' : `AI-fill ${openGaps.length} gap${openGaps.length === 1 ? '' : 's'}`}
+                </button>
+              ) : null}
               {unconfirmedClaims.some((claim) => !claim.spotCheck) ? (
                 <button
                   onClick={handleConfirmAllSimple}
