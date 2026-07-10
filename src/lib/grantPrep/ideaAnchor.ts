@@ -14,19 +14,23 @@ import type {
 const MAX_TEXT = 600
 const MAX_LIST_TEXT = 240
 
+// Shape/presence validation only. Length limits are deliberately NOT enforced
+// here: normalizeGrantPrepIdeaAnchor truncates via cleanText/cleanList after
+// parsing. Putting .max() here would reject over-length input before the
+// normalizer gets a chance to truncate it.
 const anchorSchema = z.object({
   version: z.literal('idea_anchor_v1').optional(),
-  title: z.string().min(1).max(MAX_TEXT),
-  oneSentenceSummary: z.string().min(1).max(MAX_TEXT),
-  problemOrOpportunity: z.string().max(MAX_TEXT).default(''),
-  coreApproach: z.string().max(MAX_TEXT).default(''),
-  targetBeneficiariesOrSetting: z.string().max(MAX_TEXT).nullable().optional(),
-  funderFit: z.array(z.string().max(MAX_LIST_TEXT)).max(6).default([]),
-  distinguishingFeatures: z.array(z.string().max(MAX_LIST_TEXT)).max(6).default([]),
-  nonNegotiables: z.array(z.string().max(MAX_LIST_TEXT)).max(8).default([]),
-  scopeBoundaries: z.array(z.string().max(MAX_LIST_TEXT)).max(8).default([]),
-  unresolvedQuestions: z.array(z.string().max(MAX_LIST_TEXT)).max(8).default([]),
-  keywords: z.array(z.string().max(80)).max(16).default([]),
+  title: z.string().min(1),
+  oneSentenceSummary: z.string().min(1),
+  problemOrOpportunity: z.string().default(''),
+  coreApproach: z.string().default(''),
+  targetBeneficiariesOrSetting: z.string().nullable().optional(),
+  funderFit: z.array(z.string()).default([]),
+  distinguishingFeatures: z.array(z.string()).default([]),
+  nonNegotiables: z.array(z.string()).default([]),
+  scopeBoundaries: z.array(z.string()).default([]),
+  unresolvedQuestions: z.array(z.string()).default([]),
+  keywords: z.array(z.string()).default([]),
 })
 
 function cleanText(value: unknown, maxLength = MAX_TEXT) {
@@ -34,7 +38,8 @@ function cleanText(value: unknown, maxLength = MAX_TEXT) {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trim()}...` : text
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, Math.max(1, maxLength - 3)).trim()}...`
 }
 
 function cleanList(value: unknown, limit: number, maxLength = MAX_LIST_TEXT) {
