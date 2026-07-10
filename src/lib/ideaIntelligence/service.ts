@@ -11,6 +11,13 @@ import {
 } from '@/lib/funding/llmRouting'
 import { extractJsonObject } from '@/lib/recommendations/conversationUtils'
 import type { RecommendationAccessScope } from '@/lib/recommendations/types'
+import { fundingDocumentRetrievalService } from '@/lib/fundingDocuments/retrieval'
+import {
+  calculateCallAlignments,
+  statusValue,
+  type FundingCallFacetAssessment as PureFundingCallFacetAssessment,
+} from '@/lib/ideaIntelligence/callSignals'
+import { VISIBLE_GRANT_PREP_STAGE_KEYS } from '@/lib/grantPrep/stageModel'
 import { retrieveIdeaEvidence } from '@/lib/ideaIntelligence/evidenceSources'
 import type { PatentEvidence, PublicationEvidence, WebEvidence } from '@/lib/ideaIntelligence/evidenceSources'
 import { publicProjectSearchService, type PublicProjectSearchItem } from '@/lib/publicProjects/searchService'
@@ -67,6 +74,34 @@ export type CrossCorpusFacetSignal = {
   web: FacetStatus
   signal: 'saturated' | 'translation_gap' | 'commercialization_prior_art' | 'white_space_candidate' | 'insufficient_evidence' | 'mixed'
   rationale: string
+}
+
+export type FundingCallFacetAssessment = PureFundingCallFacetAssessment
+
+export type IdeaCallGap = {
+  id: string
+  kind: 'unaddressed_priority' | 'missing_methodology' | 'weak_differentiation' | 'scale_mismatch' | 'eligibility_risk' | 'missing_evidence'
+  severity: 'critical' | 'major' | 'minor'
+  title: string
+  detail: string
+  evidence: Array<{ sourceType: 'call' | 'funded_project' | 'publication' | 'patent' | 'web'; evidenceId: string; quote: string | null }>
+  fixSuggestion: string
+  grantPrepStageKey: string | null
+}
+
+export type IdeaReviewerObjection = {
+  objection: string
+  severity: 'critical' | 'major' | 'minor'
+  basedOn: string
+  preemption: string
+  grantPrepStageKey: string | null
+}
+
+export type IdeaReviewerPersona = {
+  persona: 'scientific_merit' | 'feasibility_budget' | 'societal_impact'
+  personaLabel: string
+  overallStance: string
+  objections: IdeaReviewerObjection[]
 }
 
 type RefinementObjective = 'maximize_white_space' | 'target_funder' | 'reduce_risk'
@@ -300,9 +335,227 @@ function normalizeCrossCorpusAnalysis(
   }
 }
 
-function statusValue(status: FacetStatus) {
-  return status === 'PRESENT' ? 1 : status === 'PARTIAL' ? 0.5 : status === 'ABSENT' ? 0 : null
+function fundingCallAccessWhere(access: RecommendationAccessScope): Prisma.FundingCallWhereInput {
+  if (access?.isSuperAdmin) return {}
+  return {
+    OR: [
+      {
+        visibility: 'GLOBAL_PUBLISHED',
+        is_active: { not: false },
+        OR: [{ status: 'PUBLISHED' }, { catalog_status: 'PUBLISHED' }],
+      },
+      ...(access?.tenantId
+        ? [{ visibility: 'TENANT_PRIVATE' as const, tenantId: access.tenantId }]
+        : []),
+    ],
+  }
 }
+
+const ANCHORED_CALL_SELECT = {
+  id: true,
+  agency_name: true,
+  agencyName: true,
+  scheme_title: true,
+  title: true,
+  description: true,
+  summary: true,
+  eligibility_text: true,
+  expected_deliverables_text: true,
+  funding_kinds: true,
+  disciplines: true,
+  career_stages: true,
+  institution_types: true,
+  amount_min: true,
+  amount_max: true,
+  currency: true,
+  close_date: true,
+  is_rolling: true,
+  project_duration_text: true,
+  official_urls: true,
+} satisfies Prisma.FundingCallSelect
+
+export async function loadAnchoredFundingCall(callId: string, access: RecommendationAccessScope) {
+  try {
+    return await prisma.fundingCall.findFirst({
+      where: { AND: [{ id: callId }, fundingCallAccessWhere(access)] },
+      select: ANCHORED_CALL_SELECT,
+    })
+  } catch {
+    return null
+  }
+}
+
+async function loadAnchoredCallGuidelineChunks(callId: string, query: string, access: RecommendationAccessScope) {
+  try {
+    const chunks = await fundingDocumentRetrievalService.searchChunks({
+      query,
+      fundingCallId: callId,
+      topK: 8,
+      minSimilarity: 0.2,
+      access: { tenantId: access.tenantId, isSuperAdmin: access.isSuperAdmin },
+      callStatus: 'any',
+    })
+    return (Array.isArray(chunks) ? chunks : [])
+      .map((chunk: any) => ({
+        chunkId: String(chunk.chunkId || ''),
+        sectionType: String(chunk.sectionType || 'other'),
+        sectionTitle: chunk.sectionTitle ? String(chunk.sectionTitle) : null,
+        pageStart: Number(chunk.pageStart || 0),
+        pageEnd: Number(chunk.pageEnd || 0),
+        text: normalizeText(chunk.chunkText, 900),
+      }))
+      .filter((chunk) => chunk.chunkId && chunk.text)
+  } catch {
+    // Document intelligence may be disabled or the call may have no embedded
+    // documents; the comparison then falls back to catalog text only.
+    return []
+  }
+}
+
+function mapAnchoredCallForRetrieval(call: NonNullable<Awaited<ReturnType<typeof loadAnchoredFundingCall>>>) {
+  return {
+    id: call.id,
+    agencyName: call.agency_name || call.agencyName || '',
+    schemeTitle: call.scheme_title || call.title || '',
+    shortDescription: normalizeText(call.description || call.summary, 600),
+    closeDate: call.close_date ? call.close_date.toISOString() : null,
+    isRolling: Boolean(call.is_rolling),
+    amountMin: call.amount_min,
+    amountMax: call.amount_max,
+    currency: call.currency,
+    eligibilitySummary: normalizeText(call.eligibility_text, 500),
+    officialUrls: call.official_urls || [],
+    score: 0,
+    matchReasons: ['Anchored by you for this validation'],
+  }
+}
+
+function normalizeCallItems(
+  rawItems: unknown,
+  callRoles: Map<string, 'anchored' | 'matched'>,
+  facets: string[]
+): FundingCallFacetAssessment[] {
+  return (Array.isArray(rawItems) ? rawItems : [])
+    .filter((item: any) => callRoles.has(String(item?.fundingCallId || '')))
+    .map((item: any) => ({
+      fundingCallId: String(item.fundingCallId),
+      role: callRoles.get(String(item.fundingCallId))!,
+      summary: normalizeText(item.summary, 600),
+      callPriorities: Array.isArray(item.callPriorities)
+        ? item.callPriorities.map((priority: unknown) => normalizeText(priority, 220)).filter(Boolean).slice(0, 8)
+        : [],
+      facetAssessments: facets.map((facet) => {
+        const raw = Array.isArray(item.facetAssessments)
+          ? item.facetAssessments.find((assessment: any) => normalizeText(assessment?.facet, 180).toLowerCase() === facet.toLowerCase())
+          : null
+        return {
+          facet,
+          status: normalizeStatus(raw?.status),
+          evidence: normalizeText(raw?.evidence, 500),
+          reason: normalizeText(raw?.reason, 500),
+        }
+      }),
+    }))
+}
+
+export { calculateCallAlignments }
+
+const GAP_KINDS = ['unaddressed_priority', 'missing_methodology', 'weak_differentiation', 'scale_mismatch', 'eligibility_risk', 'missing_evidence'] as const
+const GAP_SEVERITIES = ['critical', 'major', 'minor'] as const
+const REVIEWER_PERSONA_KEYS = ['scientific_merit', 'feasibility_budget', 'societal_impact'] as const
+const REVIEWER_PERSONA_LABELS: Record<(typeof REVIEWER_PERSONA_KEYS)[number], string> = {
+  scientific_merit: 'Scientific merit reviewer',
+  feasibility_budget: 'Feasibility and budget reviewer',
+  societal_impact: 'Societal impact reviewer',
+}
+
+function normalizeGrantPrepStageKey(value: unknown): string | null {
+  const key = String(value || '').toLowerCase().trim()
+  return (VISIBLE_GRANT_PREP_STAGE_KEYS as string[]).includes(key) ? key : null
+}
+
+function normalizeCallGaps(raw: unknown, validEvidenceIds: Set<string>): IdeaCallGap[] {
+  return (Array.isArray(raw) ? raw : [])
+    .map((item: any, index: number): IdeaCallGap | null => {
+      const title = normalizeText(item?.title, 180)
+      const detail = normalizeText(item?.detail, 700)
+      if (!title || !detail) return null
+      const evidence = (Array.isArray(item?.evidence) ? item.evidence : [])
+        .map((entry: any) => {
+          const sourceType = normalizeDirection(entry?.sourceType, ['call', 'funded_project', 'publication', 'patent', 'web'], '')
+          const evidenceId = normalizeText(entry?.evidenceId, 300)
+          if (!sourceType || !evidenceId || !validEvidenceIds.has(evidenceId)) return null
+          return {
+            sourceType: sourceType as IdeaCallGap['evidence'][number]['sourceType'],
+            evidenceId,
+            quote: normalizeQuoteText(entry?.quote) || null,
+          }
+        })
+        .filter((entry: IdeaCallGap['evidence'][number] | null): entry is IdeaCallGap['evidence'][number] => Boolean(entry))
+        .slice(0, 4)
+      return {
+        id: `gap-${index + 1}`,
+        kind: normalizeDirection(item?.kind, [...GAP_KINDS], 'missing_evidence') as IdeaCallGap['kind'],
+        severity: normalizeDirection(item?.severity, [...GAP_SEVERITIES], 'major') as IdeaCallGap['severity'],
+        title,
+        detail,
+        evidence,
+        fixSuggestion: normalizeText(item?.fixSuggestion, 500),
+        grantPrepStageKey: normalizeGrantPrepStageKey(item?.grantPrepStageKey),
+      }
+    })
+    .filter((item): item is IdeaCallGap => Boolean(item))
+    .slice(0, 8)
+}
+
+function normalizeReviewerPanel(raw: unknown): IdeaReviewerPersona[] {
+  const seen = new Set<string>()
+  return (Array.isArray(raw) ? raw : [])
+    .map((item: any): IdeaReviewerPersona | null => {
+      const persona = normalizeDirection(item?.persona, [...REVIEWER_PERSONA_KEYS], '')
+      if (!persona || seen.has(persona)) return null
+      seen.add(persona)
+      const objections = (Array.isArray(item?.objections) ? item.objections : [])
+        .map((objection: any): IdeaReviewerObjection | null => {
+          const text = normalizeText(objection?.objection, 400)
+          if (!text) return null
+          return {
+            objection: text,
+            severity: normalizeDirection(objection?.severity, [...GAP_SEVERITIES], 'major') as IdeaReviewerObjection['severity'],
+            basedOn: normalizeText(objection?.basedOn, 300),
+            preemption: normalizeText(objection?.preemption, 400),
+            grantPrepStageKey: normalizeGrantPrepStageKey(objection?.grantPrepStageKey),
+          }
+        })
+        .filter((objection: IdeaReviewerObjection | null): objection is IdeaReviewerObjection => Boolean(objection))
+        .slice(0, 4)
+      if (!objections.length) return null
+      return {
+        persona: persona as IdeaReviewerPersona['persona'],
+        personaLabel: REVIEWER_PERSONA_LABELS[persona as IdeaReviewerPersona['persona']],
+        overallStance: normalizeText(item?.overallStance, 300),
+        objections,
+      }
+    })
+    .filter((item): item is IdeaReviewerPersona => Boolean(item))
+    .slice(0, 3)
+}
+
+function normalizeCallFit(raw: unknown, callRoles: Map<string, 'anchored' | 'matched'>) {
+  return (Array.isArray(raw) ? raw : [])
+    .filter((item: any) => callRoles.has(String(item?.fundingCallId || '')))
+    .map((item: any) => ({
+      fundingCallId: String(item.fundingCallId),
+      role: callRoles.get(String(item.fundingCallId))!,
+      fitSummary: normalizeText(item?.fitSummary, 700),
+      strengths: Array.isArray(item?.strengths) ? item.strengths.map((entry: unknown) => normalizeText(entry, 300)).filter(Boolean).slice(0, 5) : [],
+      concerns: Array.isArray(item?.concerns) ? item.concerns.map((entry: unknown) => normalizeText(entry, 300)).filter(Boolean).slice(0, 5) : [],
+      verifyBeforeApplying: Array.isArray(item?.verifyBeforeApplying) ? item.verifyBeforeApplying.map((entry: unknown) => normalizeText(entry, 300)).filter(Boolean).slice(0, 5) : [],
+    }))
+    .filter((item) => item.fitSummary)
+    .slice(0, 6)
+}
+
 
 function aggregateFacetStatus(cells: FacetAssessment[]): FacetStatus {
   const assessed = cells.filter((cell) => cell.status !== 'UNASSESSED')
@@ -458,6 +711,9 @@ function publicRun(run: any) {
     title: run.title,
     ideaText: run.ideaText,
     anchorPublicProjectId: run.anchorPublicProjectId,
+    anchorFundingCallId: run.anchorFundingCallId ?? run.session?.anchorFundingCallId ?? null,
+    linkedGrantPrepSessionId: run.session?.linkedGrantPrepSessionId || null,
+    linkedProjectId: run.session?.projectId || null,
     status: run.status,
     currentStage: run.currentStage,
     structuredIdea: run.structuredIdeaJson,
@@ -766,16 +1022,23 @@ function publicCandidate(candidate: any) {
 }
 
 export class IdeaIntelligenceService {
-  async createRun(input: { ideaText: string; title?: string; anchorPublicProjectId?: string }, actor: ActorContext) {
+  async createRun(input: { ideaText: string; title?: string; anchorPublicProjectId?: string; anchorFundingCallId?: string }, actor: ActorContext) {
     const ideaText = normalizeText(input.ideaText, 12000)
     if (ideaText.length < 50) throw new Error('Describe the idea in at least 50 characters.')
     const title = normalizeText(input.title, 140) || ideaText.split(/[.!?]/)[0].slice(0, 120)
+    let anchorFundingCallId: string | null = null
+    if (input.anchorFundingCallId) {
+      const anchoredCall = await loadAnchoredFundingCall(input.anchorFundingCallId, actor.access)
+      if (!anchoredCall) throw new Error('The selected funding call was not found or is not accessible.')
+      anchorFundingCallId = anchoredCall.id
+    }
     const run = await prisma.$transaction(async (tx) => {
       const session = await tx.ideaIntelligenceSession.create({
         data: {
           tenantId: actor.tenantId,
           userId: actor.userId,
           anchorPublicProjectId: input.anchorPublicProjectId || null,
+          anchorFundingCallId,
           title,
         },
       })
@@ -798,6 +1061,7 @@ export class IdeaIntelligenceService {
           sessionId: session.id,
           versionId: version.id,
           anchorPublicProjectId: input.anchorPublicProjectId || null,
+          anchorFundingCallId,
           title,
           ideaText,
         },
@@ -927,6 +1191,7 @@ Rules:
             tenantId: sourceRun.tenantId,
             userId: sourceRun.userId,
             anchorPublicProjectId: sourceRun.anchorPublicProjectId,
+            anchorFundingCallId: sourceRun.anchorFundingCallId,
             title: sourceRun.title,
           },
         })
@@ -984,6 +1249,7 @@ Rules:
           sessionId: sessionId!,
           versionId: version.id,
           anchorPublicProjectId: sourceRun.anchorPublicProjectId,
+          anchorFundingCallId: sourceRun.anchorFundingCallId,
           title: refined.title,
           ideaText: refined.ideaText,
         },
@@ -998,7 +1264,7 @@ Rules:
     return publicRun(created)
   }
 
-  async generateRefinementCandidates(runId: string, input: { objective?: string; instructions?: string }, actor: ActorContext) {
+  async generateRefinementCandidates(runId: string, input: { objective?: string; instructions?: string; targetGapId?: string }, actor: ActorContext) {
     const sourceRun = await prisma.ideaIntelligenceRun.findFirst({
       where: { id: runId, userId: actor.userId },
       include: {
@@ -1010,7 +1276,13 @@ Rules:
     if (!sourceRun) throw new Error('Idea analysis not found')
     if (sourceRun.status !== 'COMPLETED') throw new Error('Refinement suggestions are available after the analysis completes.')
 
-    const objective = (normalizeText(input.objective, 80) || 'maximize_white_space') as RefinementObjective
+    let targetGap: IdeaCallGap | null = null
+    if (input.targetGapId) {
+      const gaps = Array.isArray((sourceRun.reportJson as any)?.callGaps) ? (sourceRun.reportJson as any).callGaps : []
+      targetGap = gaps.find((gap: any) => gap?.id === input.targetGapId) || null
+      if (!targetGap) throw new Error('That gap is no longer part of this analysis. Re-run the analysis and try again.')
+    }
+    const objective = (normalizeText(input.objective, 80) || (targetGap ? 'target_funder' : 'maximize_white_space')) as RefinementObjective
     const instructions = normalizeText(input.instructions, 1500)
     const structured = sourceRun.structuredIdeaJson as StructuredIdea | null
     const evidenceRefs = buildRunEvidenceReferences(sourceRun.retrievalResultsJson)
@@ -1032,7 +1304,7 @@ Rules:
 
 OBJECTIVE: ${refinementObjectiveLabel(objective)}
 USER INSTRUCTIONS: ${instructions || 'None'}
-
+${targetGap ? `\nTARGET GAP TO CLOSE (every candidate must directly address this specific gap):\n${JSON.stringify(targetGap)}\n` : ''}
 CURRENT IDEA:
 ${sourceRun.ideaText}
 
@@ -1060,7 +1332,7 @@ Rules:
 - Cite only evidence IDs from ALLOWED EVIDENCE IDS.
 - Quotes must be verbatim substrings of the supplied evidence excerpts.
 - Do not claim the idea is novel, patentable, or likely to be funded.
-- Treat absence of corpus evidence as a signal to verify, not proof of novelty.`,
+- Treat absence of corpus evidence as a signal to verify, not proof of novelty.${targetGap ? '\n- Every candidate must directly close the TARGET GAP while preserving the idea\'s core intent; say in the rationale how the gap is closed.' : ''}`,
       })
       rawCandidates = extractCandidateArray(response ? extractJsonObject(response.rawText) : {})
     } catch {
@@ -1090,7 +1362,7 @@ Rules:
             strategy: candidate.payload.strategy,
             title: candidate.payload.title,
             ideaText: candidate.payload.ideaText,
-            payloadJson: candidate.payload as Prisma.InputJsonValue,
+            payloadJson: { ...candidate.payload, targetGapId: targetGap?.id || null } as unknown as Prisma.InputJsonValue,
             groundednessScore: candidate.groundednessScore,
             status: 'PROPOSED',
           },
@@ -1172,7 +1444,8 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
         })
       })()
 
-      const [projectSearch, fundingSearch, evidenceSearch] = await Promise.all([
+      const anchorFundingCallId = existing.anchorFundingCallId || null
+      const [projectSearch, fundingSearch, evidenceSearch, anchoredCallRecord] = await Promise.all([
         projectSearchPromise,
         recommendationSearchService.search({
           inputMode: 'research_area',
@@ -1182,9 +1455,15 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
           llmContext: { tenantId: actor.tenantId, userId: actor.userId },
         }),
         retrieveIdeaEvidence(structured.semanticQuery, { publicationLimit: 10, patentLimit: 10, webLimit: 8 }),
+        anchorFundingCallId
+          ? loadAnchoredFundingCall(anchorFundingCallId, actor.access)
+          : Promise.resolve(null),
       ])
+      const anchoredCallChunks = anchoredCallRecord
+        ? await loadAnchoredCallGuidelineChunks(anchoredCallRecord.id, structured.semanticQuery, actor.access)
+        : []
       const projects = projectSearch.results
-      const fundingCalls = fundingSearch.rawResults.map((call) => ({
+      let fundingCalls = fundingSearch.rawResults.map((call) => ({
         id: call.id,
         agencyName: call.agencyName,
         schemeTitle: call.schemeTitle,
@@ -1199,9 +1478,27 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
         score: call.score,
         matchReasons: call.matchReasons,
       }))
+      if (anchoredCallRecord && !fundingCalls.some((call) => call.id === anchoredCallRecord.id)) {
+        fundingCalls = [mapAnchoredCallForRetrieval(anchoredCallRecord), ...fundingCalls]
+      }
+      const anchoredCall = anchoredCallRecord
+        ? {
+            ...mapAnchoredCallForRetrieval(anchoredCallRecord),
+            description: normalizeText(anchoredCallRecord.description || anchoredCallRecord.summary, 2400),
+            eligibilityText: normalizeText(anchoredCallRecord.eligibility_text, 2000),
+            deliverablesText: normalizeText(anchoredCallRecord.expected_deliverables_text, 1200),
+            fundingKinds: anchoredCallRecord.funding_kinds || [],
+            disciplines: anchoredCallRecord.disciplines || [],
+            careerStages: anchoredCallRecord.career_stages || [],
+            institutionTypes: anchoredCallRecord.institution_types || [],
+            projectDurationText: anchoredCallRecord.project_duration_text || null,
+            guidelineChunks: anchoredCallChunks,
+          }
+        : null
       const retrieval = {
         projects,
         fundingCalls,
+        anchoredCall,
         publications: evidenceSearch.publications,
         patents: evidenceSearch.patents,
         webResults: evidenceSearch.webResults,
@@ -1247,15 +1544,53 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
         date: item.date,
         snippet: item.snippet?.slice(0, 900) || null,
       }))
+      const callRoles = new Map<string, 'anchored' | 'matched'>()
+      if (anchoredCall) callRoles.set(anchoredCall.id, 'anchored')
+      for (const call of fundingCalls) {
+        if (callRoles.size >= 5) break
+        if (!callRoles.has(call.id)) callRoles.set(call.id, 'matched')
+      }
+      const comparisonCalls = Array.from(callRoles.entries()).map(([callId, role]) => {
+        if (role === 'anchored' && anchoredCall) {
+          return {
+            fundingCallId: callId,
+            role,
+            agency: anchoredCall.agencyName,
+            scheme: anchoredCall.schemeTitle,
+            description: anchoredCall.description || anchoredCall.shortDescription || null,
+            eligibility: anchoredCall.eligibilityText || null,
+            deliverables: anchoredCall.deliverablesText || null,
+            disciplines: anchoredCall.disciplines.slice(0, 10),
+            fundingKinds: anchoredCall.fundingKinds.slice(0, 6),
+            guidelineExcerpts: anchoredCall.guidelineChunks.slice(0, 6).map((chunk) => ({
+              sectionType: chunk.sectionType,
+              text: chunk.text.slice(0, 700),
+            })),
+          }
+        }
+        const call = fundingCalls.find((item) => item.id === callId)
+        return {
+          fundingCallId: callId,
+          role,
+          agency: call?.agencyName || null,
+          scheme: call?.schemeTitle || null,
+          description: normalizeText(call?.shortDescription, 1200) || null,
+          eligibility: normalizeText(call?.eligibilitySummary, 700) || null,
+          deliverables: null,
+          disciplines: [],
+          fundingKinds: [],
+          guidelineExcerpts: [],
+        }
+      })
       const comparisonResponse = await runFundingGatewayText({
         taskCode: IDEA_INTELLIGENCE_TASK_CODE,
         stageCode: IDEA_INTELLIGENCE_EVIDENCE_MAP_STAGE_CODE,
         context: { tenantId: actor.tenantId, userId: actor.userId },
         responseMimeType: 'application/json',
         temperature: 0.1,
-        maxTokensOut: 6500,
+        maxTokensOut: 7500,
         metadata: { purpose: 'idea_intelligence_overlap', runId },
-        prompt: `Compare an idea with funded-project, publication, patent, and web evidence.
+        prompt: `Compare an idea with funded-project, publication, patent, web, and funding-call evidence.
 
 IDEA FACETS:
 ${JSON.stringify(structured.facets)}
@@ -1272,23 +1607,30 @@ ${JSON.stringify(comparisonPatents)}
 WEB RESULTS:
 ${JSON.stringify(comparisonWebResults)}
 
+FUNDING CALLS (what each call invites or requires):
+${JSON.stringify(comparisonCalls)}
+
 Return JSON only:
-{"items":[{"projectId":"exact id","summary":"what this project actually addresses","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short exact or faithful evidence from supplied text","reason":"brief comparison"}]}],"publicationItems":[{"evidenceId":"exact id","title":"source title","summary":"what this publication addresses","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short faithful evidence","reason":"brief comparison"}]}],"patentItems":[{"evidenceId":"exact id","title":"source title","summary":"what this patent addresses","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short faithful evidence","reason":"brief comparison"}]}],"webItems":[{"evidenceId":"exact id","title":"source title","summary":"what this web source says","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short faithful evidence","reason":"brief comparison"}]}],"strongestOverlap":["..."],"whiteSpace":["..."],"cautions":["..."]}
+{"items":[{"projectId":"exact id","summary":"what this project actually addresses","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short exact or faithful evidence from supplied text","reason":"brief comparison"}]}],"publicationItems":[{"evidenceId":"exact id","title":"source title","summary":"what this publication addresses","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short faithful evidence","reason":"brief comparison"}]}],"patentItems":[{"evidenceId":"exact id","title":"source title","summary":"what this patent addresses","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short faithful evidence","reason":"brief comparison"}]}],"webItems":[{"evidenceId":"exact id","title":"source title","summary":"what this web source says","facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short faithful evidence","reason":"brief comparison"}]}],"callItems":[{"fundingCallId":"exact id","summary":"what this call seeks from applicants","callPriorities":["explicit priorities, themes, or requirements stated in the call text"],"facetAssessments":[{"facet":"exact idea facet","status":"PRESENT|PARTIAL|ABSENT|UNASSESSED","evidence":"short faithful quote or paraphrase from the call text","reason":"brief comparison"}]}],"strongestOverlap":["..."],"whiteSpace":["..."],"cautions":["..."]}
 
 Rules:
 - Never infer capabilities not supported by supplied text.
 - Use UNASSESSED when the abstract/summary does not contain enough evidence.
 - ABSENT means the supplied evidence actively supports absence; missing text is UNASSESSED.
 - Treat web snippets as weak supporting evidence only.
+- For callItems the statuses mean something different: PRESENT = the call text explicitly invites, prioritizes, or requires this facet; PARTIAL = the call invites something related but not this exact facet; ABSENT = the call text indicates this facet is out of scope or excluded; UNASSESSED = the supplied call text does not say.
+- callPriorities must come from the supplied call text, not from general knowledge about the agency.
 - Do not call anything novel or fundable.`,
       })
-      const analysis = normalizeCrossCorpusAnalysis(
-        comparisonResponse ? extractJsonObject(comparisonResponse.rawText) : {},
-        projects,
-        evidenceSearch,
-        structured.facets
-      )
-      const scores = calculateLandscapeSignals(projects, analysis, evidenceSearch)
+      const comparisonJson = comparisonResponse ? extractJsonObject(comparisonResponse.rawText) as any : {}
+      const analysis = {
+        ...normalizeCrossCorpusAnalysis(comparisonJson, projects, evidenceSearch, structured.facets),
+        callItems: normalizeCallItems(comparisonJson?.callItems, callRoles, structured.facets),
+      }
+      const scores = {
+        ...calculateLandscapeSignals(projects, analysis, evidenceSearch),
+        callAlignments: calculateCallAlignments(analysis.callItems),
+      }
       await prisma.ideaIntelligenceRun.update({
         where: { id: runId }, data: { analysisJson: analysis as any, scoresJson: scores as any, currentStage: 4 },
       })
@@ -1324,14 +1666,15 @@ STRUCTURED IDEA: ${JSON.stringify(structured)}
 LANDSCAPE SIGNALS: ${JSON.stringify(scores)}
 OVERLAP ANALYSIS: ${JSON.stringify(analysis)}
 MATCHING OPEN CALLS: ${JSON.stringify(fundingCalls)}
+CALL TEXT COMPARED (per-facet call fit): ${JSON.stringify(analysis.callItems)}
 PUBLICATION EVIDENCE: ${JSON.stringify(evidenceSearch.publications.slice(0, 8))}
 PATENT EVIDENCE: ${JSON.stringify(evidenceSearch.patents.slice(0, 8))}
 WEB EVIDENCE: ${JSON.stringify(evidenceSearch.webResults.slice(0, 6))}
 
 Return JSON only:
-{"executiveVerdict":"2-3 sentences","landscapeSummary":"short evidence-grounded paragraph","differentiators":["up to 5"],"risks":["up to 5"],"positioningRecommendations":["up to 5 concrete changes"],"funderRationale":[{"fundingCallId":"exact id","rationale":"why it matches and what to verify"}],"nextSteps":["up to 5"],"evidenceDisclaimer":"..."}
+{"executiveVerdict":"2-3 sentences","landscapeSummary":"short evidence-grounded paragraph","differentiators":["up to 5"],"risks":["up to 5"],"positioningRecommendations":["up to 5 concrete changes"],"funderRationale":[{"fundingCallId":"exact id","rationale":"why it matches and what to verify"}],"callFit":[{"fundingCallId":"exact id from CALL TEXT COMPARED","fitSummary":"2-3 sentences on how well the idea matches what this call invites, grounded in the per-facet call fit","strengths":["facet-level strengths"],"concerns":["facet-level concerns or scope mismatches"],"verifyBeforeApplying":["eligibility, deadline, or scope items to verify in the official call document"]}],"nextSteps":["up to 5"],"evidenceDisclaimer":"..."}
 
-Never predict funding success. Do not claim novelty. Distinguish absence of evidence from evidence of absence. Mention when the corpus or abstract coverage is limited.`,
+Never predict funding success. Do not claim novelty. Distinguish absence of evidence from evidence of absence. Mention when the corpus or abstract coverage is limited. Only include callFit entries for calls present in CALL TEXT COMPARED.`,
         })
         report = reportResponse ? extractJsonObject(reportResponse.rawText) as Record<string, unknown> : {}
       } catch {
@@ -1342,10 +1685,85 @@ Never predict funding success. Do not claim novelty. Distinguish absence of evid
           risks: analysis.cautions,
           positioningRecommendations: analysis.whiteSpace.map((item: string) => `Explain and validate this potential distinction: ${item}`),
           funderRationale: [],
+          callFit: [],
           nextSteps: ['Validate the strongest differentiation claim with publications and subject-matter experts.', "Check every shortlisted call's current eligibility and deadline."],
           evidenceDisclaimer: 'This is a descriptive landscape analysis based on available records, not a prediction of funding success.',
         }
       }
+      report.callFit = normalizeCallFit((report as any).callFit, callRoles)
+
+      // Target-call gap analysis + reviewer simulation. The target is the anchored
+      // call when one exists, otherwise the best-aligned matched call.
+      const rankedAlignments = [...scores.callAlignments].sort((a, b) => (b.alignment || 0) - (a.alignment || 0))
+      const targetCallId = anchoredCall?.id
+        || rankedAlignments.find((item) => item.assessedFacets > 0)?.fundingCallId
+        || rankedAlignments[0]?.fundingCallId
+        || null
+      let callGaps: IdeaCallGap[] = []
+      let reviewerPanel: IdeaReviewerPersona[] = []
+      if (targetCallId) {
+        const targetComparison = comparisonCalls.find((call) => call.fundingCallId === targetCallId) || null
+        const targetItems = analysis.callItems.find((item) => item.fundingCallId === targetCallId) || null
+        const validEvidenceIds = new Set<string>([
+          targetCallId,
+          ...projects.map((project) => project.id),
+          ...evidenceSearch.publications.map((item) => item.id),
+          ...evidenceSearch.patents.map((item) => item.id),
+          ...evidenceSearch.webResults.map((item) => item.id),
+        ])
+        try {
+          const gapResponse = await runFundingGatewayText({
+            taskCode: IDEA_INTELLIGENCE_TASK_CODE,
+            stageCode: IDEA_INTELLIGENCE_REPORT_STAGE_CODE,
+            context: { tenantId: actor.tenantId, userId: actor.userId },
+            responseMimeType: 'application/json',
+            temperature: 0.2,
+            maxTokensOut: 3800,
+            metadata: { purpose: 'idea_intelligence_call_gaps', runId, targetCallId },
+            prompt: `Identify the concrete gaps between a research idea and a specific funding call, then simulate a fair but demanding review panel.
+
+STRUCTURED IDEA: ${JSON.stringify(structured)}
+TARGET FUNDING CALL: ${JSON.stringify(targetComparison)}
+PER-FACET CALL FIT FOR THIS CALL: ${JSON.stringify(targetItems)}
+FUNDED-NEIGHBOR OVERLAP: ${JSON.stringify({ strongestOverlap: analysis.strongestOverlap, whiteSpace: analysis.whiteSpace, cautions: analysis.cautions })}
+FUNDED PROJECT SUMMARIES: ${JSON.stringify(comparisonProjects.slice(0, 6))}
+
+Return JSON only:
+{"gaps":[{"kind":"unaddressed_priority|missing_methodology|weak_differentiation|scale_mismatch|eligibility_risk|missing_evidence","severity":"critical|major|minor","title":"<=180 chars naming the gap","detail":"what exactly is missing and why it matters for this call","evidence":[{"sourceType":"call|funded_project|publication|patent|web","evidenceId":"exact id from supplied data (use the target call id for call evidence)","quote":"short verbatim quote from supplied text, or null"}],"fixSuggestion":"one concrete change or addition the applicant can make","grantPrepStageKey":"ideation|problem_definition|root_cause|beneficiaries|fit_and_scope|methodology|team_and_partnerships|outcomes|evaluation|risk_and_ethics|budget_strategy|innovation or null"}],"reviewerPanel":[{"persona":"scientific_merit|feasibility_budget|societal_impact","overallStance":"one sentence on how this reviewer reads the idea against this call","objections":[{"objection":"the hardest fair question this reviewer would ask","severity":"critical|major|minor","basedOn":"which supplied call text or evidence motivates it","preemption":"how the applicant could pre-empt it in the proposal","grantPrepStageKey":"same stage enum or null"}]}]}
+
+Rules:
+- Ground every gap in the supplied call text, per-facet fit, or evidence. Do not invent call requirements that are not in the supplied text.
+- Return 3 to 8 gaps ordered most severe first, and exactly 3 reviewer personas with 2-4 objections each.
+- eligibility_risk gaps must quote the call text they are based on when it is available.
+- If the supplied call text is too thin to assess something, make that a missing_evidence gap that tells the user what to verify, instead of guessing.
+- Never predict funding success and never claim novelty.`,
+          })
+          const gapJson = gapResponse ? extractJsonObject(gapResponse.rawText) as any : {}
+          callGaps = normalizeCallGaps(gapJson?.gaps, validEvidenceIds)
+          reviewerPanel = normalizeReviewerPanel(gapJson?.reviewerPanel)
+        } catch {
+          callGaps = []
+          reviewerPanel = []
+        }
+        if (!callGaps.length && targetItems) {
+          callGaps = targetItems.facetAssessments
+            .filter((cell) => cell.status === 'ABSENT' || cell.status === 'UNASSESSED')
+            .slice(0, 5)
+            .map((cell, index): IdeaCallGap => ({
+              id: `gap-${index + 1}`,
+              kind: cell.status === 'ABSENT' ? 'unaddressed_priority' : 'missing_evidence',
+              severity: cell.status === 'ABSENT' ? 'major' : 'minor',
+              title: cell.status === 'ABSENT' ? `Call scope concern: ${cell.facet}` : `Unverified call fit: ${cell.facet}`,
+              detail: cell.reason || cell.evidence || 'The supplied call text did not confirm that this facet fits what the call invites. Verify it against the full call document.',
+              evidence: [{ sourceType: 'call', evidenceId: targetCallId, quote: null }],
+              fixSuggestion: 'Check the official call document for this facet and adjust the idea framing or scope accordingly.',
+              grantPrepStageKey: 'fit_and_scope',
+            }))
+        }
+      }
+      report.callGaps = callGaps
+      report.reviewerPanel = reviewerPanel
+      report.targetFundingCallId = targetCallId
 
       await prisma.ideaIntelligenceRun.update({
         where: { id: runId },

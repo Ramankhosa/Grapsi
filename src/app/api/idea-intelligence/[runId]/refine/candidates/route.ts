@@ -11,8 +11,9 @@ export const runtime = 'nodejs'
 export const maxDuration = 120
 
 const candidateSchema = z.object({
-  objective: z.enum(['maximize_white_space', 'target_funder', 'reduce_risk']).default('maximize_white_space'),
+  objective: z.enum(['maximize_white_space', 'target_funder', 'reduce_risk']).optional(),
   instructions: z.string().max(1500).optional(),
+  targetGapId: z.string().max(40).optional(),
 })
 
 export async function POST(request: NextRequest, { params }: { params: { runId: string } }) {

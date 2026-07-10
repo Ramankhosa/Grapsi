@@ -15,8 +15,10 @@ export default function NewIdeaAnalysisPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const anchorProjectId = searchParams?.get('projectId') || undefined
+  const anchorCallId = searchParams?.get('callId') || undefined
   const [ideaText, setIdeaText] = useState('')
   const [anchorTitle, setAnchorTitle] = useState<string | null>(null)
+  const [anchorCallTitle, setAnchorCallTitle] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -28,6 +30,18 @@ export default function NewIdeaAnalysisPage() {
       .catch(() => undefined)
   }, [anchorProjectId, token])
 
+  useEffect(() => {
+    if (!token || !anchorCallId) return
+    fetch(`/api/funding/calls/${anchorCallId}/summary`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((response) => response.ok ? response.json() : null)
+      .then((body) => {
+        const summary = body?.summary
+        if (!summary) return
+        setAnchorCallTitle([summary.agency_name, summary.scheme_title].filter(Boolean).join(' — ') || null)
+      })
+      .catch(() => undefined)
+  }, [anchorCallId, token])
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (!token || ideaText.trim().length < 50) return
@@ -37,7 +51,7 @@ export default function NewIdeaAnalysisPage() {
       const response = await fetch('/api/idea-intelligence', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ideaText: ideaText.trim(), anchorPublicProjectId: anchorProjectId }),
+        body: JSON.stringify({ ideaText: ideaText.trim(), anchorPublicProjectId: anchorProjectId, anchorFundingCallId: anchorCallId }),
       })
       const body = await response.json()
       if (!response.ok) throw new Error(body.error || 'Could not start the analysis')
@@ -80,6 +94,7 @@ export default function NewIdeaAnalysisPage() {
             <p className="mt-2 text-sm leading-6 text-slate-500">Include the problem, proposed approach, intended users, deployment context, and expected outcome.</p>
 
             {anchorTitle ? <div className="mt-5 rounded-xl border border-teal-100 bg-teal-50 px-4 py-3 text-sm text-teal-900"><span className="font-semibold">Landscape anchor:</span> {anchorTitle}</div> : null}
+            {anchorCallId ? <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-900"><span className="font-semibold">Validating against call:</span> {anchorCallTitle || anchorCallId}<span className="mt-1 block text-xs text-indigo-700">Your idea will be compared facet-by-facet against this call's text, and you'll get a gap report and simulated reviewer objections for it.</span></div> : null}
 
             <form onSubmit={submit} className="mt-6">
               <div className="relative">

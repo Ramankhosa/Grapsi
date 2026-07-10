@@ -1442,6 +1442,7 @@ model IdeaIntelligenceRun {
   sessionId             String?   @map("session_id")
   versionId             String?   @map("version_id")
   anchorPublicProjectId String?   @map("anchor_public_project_id")
+  anchorFundingCallId   String?   @map("anchor_funding_call_id")
   title                 String
   ideaText              String    @map("idea_text")
   status                String    @default("PENDING")
@@ -1466,6 +1467,7 @@ model IdeaIntelligenceRun {
   @@index([tenantId, status], map: "idea_intelligence_runs_tenant_status_idx")
   @@index([sessionId, createdAt], map: "idea_intelligence_runs_session_created_idx")
   @@index([versionId], map: "idea_intelligence_runs_version_idx")
+  @@index([anchorFundingCallId], map: "idea_intelligence_runs_anchor_call_idx")
   @@map("idea_intelligence_runs")
 }
 
@@ -1476,6 +1478,8 @@ model IdeaIntelligenceSession {
   projectId             String?  @map("project_id")
   ideaBankIdeaId        String?  @map("idea_bank_idea_id")
   anchorPublicProjectId String?  @map("anchor_public_project_id")
+  anchorFundingCallId   String?  @map("anchor_funding_call_id")
+  linkedGrantPrepSessionId String? @map("linked_grant_prep_session_id")
   title                 String
   currentVersionId      String?  @map("current_version_id")
   status                String   @default("ACTIVE")
@@ -1488,6 +1492,8 @@ model IdeaIntelligenceSession {
 
   @@index([userId, createdAt], map: "idea_intelligence_sessions_user_created_idx")
   @@index([tenantId, status], map: "idea_intelligence_sessions_tenant_status_idx")
+  @@index([anchorFundingCallId], map: "idea_intelligence_sessions_anchor_call_idx")
+  @@index([linkedGrantPrepSessionId], map: "idea_intelligence_sessions_linked_prep_idx")
   @@map("idea_intelligence_sessions")
 }
 

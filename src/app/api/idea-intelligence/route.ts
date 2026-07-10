@@ -10,6 +10,7 @@ const createSchema = z.object({
   ideaText: z.string().min(50, 'Describe the idea in at least 50 characters.').max(12000),
   title: z.string().max(140).optional(),
   anchorPublicProjectId: z.string().max(80).optional(),
+  anchorFundingCallId: z.string().max(80).optional(),
 })
 
 function actorContext(actor: FundingActor) {

@@ -19,6 +19,7 @@ import PaperFigurePlannerStage from '@/components/stages/PaperFigurePlannerStage
 import PaperVerticalStageNav from '@/components/stages/PaperVerticalStageNav'
 import LoadingBird from '@/components/ui/loading-bird'
 import { useAuth } from '@/lib/auth-context'
+import { isFeatureEnabled } from '@/lib/feature-flags'
 import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 import { isGrantBibliographySection } from '@/lib/grants/workflowMode'
 import { withGrantWorkspaceStage } from '@/lib/grants/workspaceNavigation'
@@ -870,6 +871,36 @@ export default function GrantWorkspacePage() {
             </div>
           ) : null}
 
+          {resolvedCurrentStage === 'GRANTMENTOR' && isFeatureEnabled('ENABLE_DRAFT_ZERO') ? (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50/70 px-4 py-2.5">
+              <div className="text-sm text-teal-900">
+                <span className="font-semibold">⚡ Draft Zero — fast path:</span> paste your notes once, review a generated
+                proof instead of answering questions, and reach the blueprint in minutes.
+              </div>
+              <button
+                onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/draft-zero`)}
+                className="whitespace-nowrap rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-800"
+              >
+                Open Draft Zero
+              </button>
+            </div>
+          ) : null}
+
+          {resolvedCurrentStage === 'BLUEPRINT' && isFeatureEnabled('ENABLE_DRAFT_ONE') ? (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50/70 px-4 py-2.5">
+              <div className="text-sm text-teal-900">
+                <span className="font-semibold">⚡ Draft One — fast path:</span> draft every section in one run, each
+                auto-repaired against the agency rules, then export through the compliance gate.
+              </div>
+              <button
+                onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/draft-one`)}
+                className="whitespace-nowrap rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-800"
+              >
+                Open Draft One
+              </button>
+            </div>
+          ) : null}
+
           <div
             className={
               resolvedCurrentStage === 'GRANTMENTOR'
@@ -940,6 +971,21 @@ export default function GrantWorkspacePage() {
               ) : (
                 <div className="p-6 text-sm text-slate-600">Shadow drafting session is not available yet.</div>
               )
+            ) : null}
+
+            {resolvedCurrentStage === 'SECTION_DRAFTING' && isFeatureEnabled('ENABLE_DRAFT_ONE') ? (
+              <div className="mx-6 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-4 py-2.5">
+                <div className="text-sm text-teal-900">
+                  <span className="font-semibold">Draft One:</span> draft every section in one run — each checked and
+                  auto-repaired against the agency rules before you review it.
+                </div>
+                <button
+                  onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/draft-one`)}
+                  className="rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-800"
+                >
+                  Open Draft One
+                </button>
+              </div>
             ) : null}
 
             {resolvedCurrentStage === 'SECTION_DRAFTING' ? (

@@ -114,6 +114,13 @@ export function planCodeToTier(planCode?: string | null): PlanTierKey | null {
   }
 }
 
+const TIER_RANK: Record<PlanTierKey, number> = { STARTER: 0, PRO: 1, ENTERPRISE: 2 }
+
+export function planTierRank(planCode?: string | null): number {
+  const tier = planCodeToTier(planCode)
+  return tier ? TIER_RANK[tier] : -1
+}
+
 /**
  * Given the set of FeatureCodes an entitlement grants, decide whether a module
  * is unlocked.

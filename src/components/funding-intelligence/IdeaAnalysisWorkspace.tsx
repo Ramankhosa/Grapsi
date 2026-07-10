@@ -65,6 +65,60 @@ type FundingCallMatch = {
   matchReasons: string[]
 }
 
+type FundingCallFacetAssessment = {
+  fundingCallId: string
+  role: 'anchored' | 'matched'
+  summary: string
+  callPriorities: string[]
+  facetAssessments: FacetAssessment[]
+}
+
+type CallAlignment = {
+  fundingCallId: string
+  role: 'anchored' | 'matched'
+  alignment: number
+  assessedFacets: number
+  invitedFacets: string[]
+  partialFacets: string[]
+  outsideScopeFacets: string[]
+  unassessedFacets: string[]
+  callPriorities: string[]
+  methodology: string
+}
+
+type CallFitEntry = {
+  fundingCallId: string
+  role: string
+  fitSummary: string
+  strengths: string[]
+  concerns: string[]
+  verifyBeforeApplying: string[]
+}
+
+type IdeaCallGap = {
+  id: string
+  kind: string
+  severity: 'critical' | 'major' | 'minor'
+  title: string
+  detail: string
+  evidence: Array<{ sourceType: string; evidenceId: string; quote: string | null }>
+  fixSuggestion: string
+  grantPrepStageKey: string | null
+}
+
+type IdeaReviewerPersona = {
+  persona: string
+  personaLabel: string
+  overallStance: string
+  objections: Array<{
+    objection: string
+    severity: 'critical' | 'major' | 'minor'
+    basedOn: string
+    preemption: string
+    grantPrepStageKey: string | null
+  }>
+}
+
 type PublicationEvidence = {
   id: string
   title: string
@@ -108,10 +162,14 @@ type AnalysisRun = {
   ideaText: string
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
   currentStage: number
+  anchorFundingCallId?: string | null
+  linkedGrantPrepSessionId?: string | null
+  linkedProjectId?: string | null
   structuredIdea: null | { problem: string; approach: string; intendedUsers: string; domain: string; trl: number | null; facets: string[]; keywords: string[]; semanticQuery: string }
   retrievalResults: null | {
     projects: ProjectSearchItem[]
     fundingCalls: FundingCallMatch[]
+    anchoredCall?: (FundingCallMatch & { description?: string | null; eligibilityText?: string | null }) | null
     publications?: PublicationEvidence[]
     patents?: PatentEvidence[]
     webResults?: WebEvidence[]
@@ -119,7 +177,7 @@ type AnalysisRun = {
     degradedMode: string | null
     query: string
   }
-  analysis: null | { items: ProjectAssessment[]; strongestOverlap: string[]; whiteSpace: string[]; cautions: string[] }
+  analysis: null | { items: ProjectAssessment[]; callItems?: FundingCallFacetAssessment[]; strongestOverlap: string[]; whiteSpace: string[]; cautions: string[] }
   scores: null | {
     landscapePositioning: number
     saturation: number
@@ -131,6 +189,7 @@ type AnalysisRun = {
     evidencePatents?: number
     evidenceWeb?: number
     crossCorpusFacets?: CrossCorpusFacetSignal[]
+    callAlignments?: CallAlignment[]
     methodology: string
   }
   report: null | Record<string, unknown>
@@ -145,11 +204,30 @@ const STAGES = [
   ['Structure idea', 'Extracting specific, comparable facets'],
   ['Search evidence', 'Finding related funded projects and calls'],
   ['Check relevance', 'Selecting the strongest evidence'],
-  ['Compare facets', 'Mapping overlap and differentiation'],
+  ['Compare facets', 'Mapping overlap, differentiation, and call fit'],
   ['Calculate signals', 'Computing transparent landscape measures'],
-  ['Build brief', 'Writing evidence-grounded recommendations'],
+  ['Build brief', 'Writing recommendations, gap report, and reviewer panel'],
   ['Ready', 'Analysis complete'],
 ]
+
+const SEVERITY_STYLES: Record<string, string> = {
+  critical: 'border-rose-200 bg-rose-50 text-rose-700',
+  major: 'border-amber-200 bg-amber-50 text-amber-700',
+  minor: 'border-slate-200 bg-slate-50 text-slate-600',
+}
+
+const GAP_KIND_LABELS: Record<string, string> = {
+  unaddressed_priority: 'Unaddressed call priority',
+  missing_methodology: 'Missing methodology element',
+  weak_differentiation: 'Weak differentiation',
+  scale_mismatch: 'Scale mismatch',
+  eligibility_risk: 'Eligibility risk',
+  missing_evidence: 'Needs verification',
+}
+
+function stageLabel(stageKey: string | null) {
+  return stageKey ? stageKey.replace(/_/g, ' ') : null
+}
 
 const STATUS_STYLES: Record<FacetStatus, string> = {
   PRESENT: 'border-rose-200 bg-rose-50 text-rose-700',
@@ -290,12 +368,13 @@ function ImpactPill({ label, value, goodDirection }: { label: string; value?: st
   return <span className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${tone}`}>{label}: {direction}</span>
 }
 
-function RefinementPanel({ run, token }: { run: AnalysisRun; token: string | null }) {
+function RefinementPanel({ run, token, strengthenGap, onStrengthenHandled }: { run: AnalysisRun; token: string | null; strengthenGap?: IdeaCallGap | null; onStrengthenHandled?: () => void }) {
   const router = useRouter()
   const [objective, setObjective] = useState<'maximize_white_space' | 'target_funder' | 'reduce_risk'>('maximize_white_space')
   const [instructions, setInstructions] = useState('')
   const [candidates, setCandidates] = useState<RefinementCandidate[]>(run.refinementCandidates || [])
   const [generating, setGenerating] = useState(false)
+  const [activeGap, setActiveGap] = useState<IdeaCallGap | null>(null)
   const [submittingCandidateId, setSubmittingCandidateId] = useState<string | null>(null)
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
   const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null)
@@ -315,15 +394,20 @@ function RefinementPanel({ run, token }: { run: AnalysisRun; token: string | nul
     setEditedIdeaText('')
   }, [run.id, run.refinementCandidates])
 
-  const proposeCandidates = async () => {
+  const proposeCandidates = async (targetGap?: IdeaCallGap | null) => {
     if (!token || generating) return
     setGenerating(true)
     setError(null)
+    setActiveGap(targetGap || null)
     try {
       const response = await fetch(`/api/idea-intelligence/${run.id}/refine/candidates`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ objective, instructions }),
+        body: JSON.stringify({
+          objective: targetGap ? 'target_funder' : objective,
+          instructions,
+          targetGapId: targetGap?.id,
+        }),
       })
       const body = await response.json()
       if (!response.ok) throw new Error(body.error || 'Failed to generate refinement candidates')
@@ -336,6 +420,14 @@ function RefinementPanel({ run, token }: { run: AnalysisRun; token: string | nul
       setGenerating(false)
     }
   }
+
+  useEffect(() => {
+    if (!strengthenGap) return
+    setObjective('target_funder')
+    void proposeCandidates(strengthenGap)
+    onStrengthenHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strengthenGap])
 
   const startEditing = (candidate: RefinementCandidate) => {
     setEditingCandidateId(candidate.id)
@@ -368,12 +460,13 @@ function RefinementPanel({ run, token }: { run: AnalysisRun; token: string | nul
   }
 
   return (
-    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section id="refinement-panel" className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="font-semibold text-slate-900">Refine and re-run</h2>
           <p className="mt-1 text-sm text-slate-500">Create a new version from this evidence view, then run the pipeline again.</p>
           {run.versionNumber ? <p className="mt-2 text-xs font-semibold text-slate-500">Current version: v{run.versionNumber}</p> : null}
+          {activeGap ? <p className="mt-2 rounded-lg bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800">Candidates target the gap: {activeGap.title}</p> : null}
         </div>
         <div className="flex flex-wrap gap-2">
           {run.versions?.filter((version) => version.runId).map((version) => (
@@ -390,7 +483,7 @@ function RefinementPanel({ run, token }: { run: AnalysisRun; token: string | nul
           <option value="reduce_risk">Reduce reviewer risk</option>
         </select>
         <input value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Optional refinement instruction" className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-teal-500" />
-        <button type="button" onClick={proposeCandidates} disabled={generating} className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">
+        <button type="button" onClick={() => proposeCandidates()} disabled={generating} className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           Propose refinements
         </button>
@@ -474,6 +567,151 @@ function RefinementPanel({ run, token }: { run: AnalysisRun; token: string | nul
   )
 }
 
+function CallFitSection({ run }: { run: AnalysisRun }) {
+  const alignments = run.scores?.callAlignments || []
+  if (!alignments.length) return null
+  const callById = new Map((run.retrievalResults?.fundingCalls || []).map((call) => [call.id, call]))
+  const callFitById = new Map(
+    (Array.isArray((run.report as any)?.callFit) ? ((run.report as any).callFit as CallFitEntry[]) : []).map((entry) => [entry.fundingCallId, entry])
+  )
+  const ordered = [...alignments].sort((a, b) => (a.role === 'anchored' ? -1 : b.role === 'anchored' ? 1 : (b.alignment || 0) - (a.alignment || 0)))
+  return (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-slate-900">Call fit</h2>
+          <p className="mt-1 text-sm text-slate-500">How your idea's facets line up against what each call's text actually invites.</p>
+        </div>
+        <p className="text-xs text-slate-500">Alignment = share of assessed facets the call explicitly invites. Descriptive, not a funding prediction.</p>
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        {ordered.map((alignment) => {
+          const call = callById.get(alignment.fundingCallId)
+          const fit = callFitById.get(alignment.fundingCallId)
+          return (
+            <article key={alignment.fundingCallId} className={`rounded-2xl border p-5 shadow-sm ${alignment.role === 'anchored' ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-white'}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-teal-700">{call?.agencyName || 'Funding call'}</span>
+                  <h3 className="mt-1 text-base font-semibold leading-6 text-slate-900">{call?.schemeTitle || alignment.fundingCallId}</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  {alignment.role === 'anchored' ? <span className="rounded-full bg-indigo-100 px-2.5 py-1 text-[11px] font-bold text-indigo-700">Your target call</span> : null}
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${alignment.alignment >= 60 ? 'bg-emerald-50 text-emerald-700' : alignment.alignment >= 30 ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>{alignment.alignment}% aligned</span>
+                </div>
+              </div>
+              {fit?.fitSummary ? <p className="mt-3 text-sm leading-6 text-slate-600">{fit.fitSummary}</p> : null}
+              {alignment.callPriorities.length ? (
+                <div className="mt-3">
+                  <p className="text-xs font-semibold text-slate-500">What this call asks for</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">{alignment.callPriorities.slice(0, 6).map((priority) => <span key={priority} className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{priority}</span>)}</div>
+                </div>
+              ) : null}
+              <div className="mt-3 space-y-1.5 text-xs">
+                {alignment.invitedFacets.length ? <p><span className="font-bold text-emerald-700">Invited:</span> <span className="text-slate-600">{alignment.invitedFacets.join(' · ')}</span></p> : null}
+                {alignment.partialFacets.length ? <p><span className="font-bold text-amber-700">Related:</span> <span className="text-slate-600">{alignment.partialFacets.join(' · ')}</span></p> : null}
+                {alignment.outsideScopeFacets.length ? <p><span className="font-bold text-rose-700">Possibly out of scope:</span> <span className="text-slate-600">{alignment.outsideScopeFacets.join(' · ')}</span></p> : null}
+                {alignment.unassessedFacets.length ? <p><span className="font-bold text-slate-500">Not covered by supplied call text:</span> <span className="text-slate-500">{alignment.unassessedFacets.join(' · ')}</span></p> : null}
+              </div>
+              {fit?.verifyBeforeApplying?.length ? (
+                <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold text-amber-800">Verify before applying</p>
+                  <ul className="mt-1 space-y-1 text-xs leading-5 text-amber-800">{fit.verifyBeforeApplying.slice(0, 4).map((item) => <li key={item}>- {item}</li>)}</ul>
+                </div>
+              ) : null}
+              <Link href={`/funding/calls/${alignment.fundingCallId}`} className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700">Open call <ArrowRight className="h-3.5 w-3.5" /></Link>
+            </article>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function GapSection({ run, onStrengthen, strengthenBusyGapId }: { run: AnalysisRun; onStrengthen: (gap: IdeaCallGap) => void; strengthenBusyGapId: string | null }) {
+  const gaps = Array.isArray((run.report as any)?.callGaps) ? ((run.report as any).callGaps as IdeaCallGap[]) : []
+  if (!gaps.length) return null
+  const targetCallId = (run.report as any)?.targetFundingCallId || null
+  const targetCall = (run.retrievalResults?.fundingCalls || []).find((call) => call.id === targetCallId) || null
+  return (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-slate-900">Gap report{targetCall ? ` — ${targetCall.schemeTitle}` : ''}</h2>
+          <p className="mt-1 text-sm text-slate-500">What is missing between this idea and the target call, and how to fix it. Strengthening a gap proposes evidence-grounded revisions of your idea.</p>
+        </div>
+      </div>
+      <div className="mt-4 space-y-3">
+        {gaps.map((gap) => (
+          <article key={gap.id} className="rounded-2xl border border-slate-200 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase ${SEVERITY_STYLES[gap.severity] || SEVERITY_STYLES.minor}`}>{gap.severity}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{GAP_KIND_LABELS[gap.kind] || gap.kind.replace(/_/g, ' ')}</span>
+                  {gap.grantPrepStageKey ? <span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-semibold capitalize text-teal-700">Fix in: {stageLabel(gap.grantPrepStageKey)}</span> : null}
+                </div>
+                <h3 className="mt-2 font-semibold leading-6 text-slate-900">{gap.title}</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{gap.detail}</p>
+                {gap.fixSuggestion ? <p className="mt-2 text-sm leading-6 text-slate-700"><span className="font-semibold text-teal-800">Suggested fix:</span> {gap.fixSuggestion}</p> : null}
+                {gap.evidence.some((item) => item.quote) ? (
+                  <div className="mt-2 space-y-1">
+                    {gap.evidence.filter((item) => item.quote).slice(0, 2).map((item, index) => (
+                      <p key={`${item.evidenceId}-${index}`} className="text-xs leading-5 text-slate-500"><span className="font-semibold text-slate-600">{item.sourceType.replace(/_/g, ' ')}:</span> &quot;{item.quote}&quot;</p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => onStrengthen(gap)}
+                disabled={Boolean(strengthenBusyGapId)}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {strengthenBusyGapId === gap.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                Strengthen this
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ReviewerSection({ run }: { run: AnalysisRun }) {
+  const panel = Array.isArray((run.report as any)?.reviewerPanel) ? ((run.report as any).reviewerPanel as IdeaReviewerPersona[]) : []
+  if (!panel.length) return null
+  return (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div>
+        <h2 className="font-semibold text-slate-900">Simulated review panel</h2>
+        <p className="mt-1 text-sm text-slate-500">The hardest fair questions each reviewer archetype would ask about this idea against the target call — with how to pre-empt them.</p>
+      </div>
+      <div className="mt-4 grid gap-4 xl:grid-cols-3">
+        {panel.map((persona) => (
+          <article key={persona.persona} className="rounded-2xl border border-slate-200 p-4">
+            <h3 className="font-semibold text-slate-900">{persona.personaLabel}</h3>
+            {persona.overallStance ? <p className="mt-1 text-xs leading-5 text-slate-500">{persona.overallStance}</p> : null}
+            <div className="mt-3 space-y-3">
+              {persona.objections.map((objection, index) => (
+                <div key={`${persona.persona}-${index}`} className="rounded-xl bg-slate-50 p-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${SEVERITY_STYLES[objection.severity] || SEVERITY_STYLES.minor}`}>{objection.severity}</span>
+                    {objection.grantPrepStageKey ? <span className="text-[10px] font-semibold capitalize text-teal-700">Address in {stageLabel(objection.grantPrepStageKey)}</span> : null}
+                  </div>
+                  <p className="mt-2 text-sm font-medium leading-6 text-slate-800">&quot;{objection.objection}&quot;</p>
+                  {objection.preemption ? <p className="mt-1.5 text-xs leading-5 text-slate-600"><span className="font-semibold text-emerald-700">Pre-empt:</span> {objection.preemption}</p> : null}
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function ReportView({ report }: { report: Record<string, unknown> }) {
   const sections = [
     ['Potential differentiators', asStrings(report.differentiators), Lightbulb, 'text-emerald-700'],
@@ -486,12 +724,17 @@ function ReportView({ report }: { report: Record<string, unknown> }) {
 
 export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
   const { token, isLoading: authLoading } = useAuth()
+  const router = useRouter()
   const [run, setRun] = useState<AnalysisRun | null>(null)
   const [loading, setLoading] = useState(true)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [tab, setTab] = useState<'report' | 'projects' | 'publications' | 'patents' | 'web' | 'funders'>('report')
   const [exportingIdea, setExportingIdea] = useState(false)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
+  const [strengthenGap, setStrengthenGap] = useState<IdeaCallGap | null>(null)
+  const [strengthenBusyGapId, setStrengthenBusyGapId] = useState<string | null>(null)
+  const [handoffBusy, setHandoffBusy] = useState(false)
+  const [handoffError, setHandoffError] = useState<string | null>(null)
   const executeStarted = useRef(false)
 
   const loadRun = useCallback(async () => {
@@ -537,6 +780,42 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
   const retry = () => { executeStarted.current = false; setRequestError(null); void execute() }
   const assessmentByProject = useMemo(() => new Map((run?.analysis?.items || []).map((item) => [item.projectId, item])), [run?.analysis?.items])
   const topFundingCall = run?.retrievalResults?.fundingCalls?.[0] || null
+  const targetCallId = (run?.report as any)?.targetFundingCallId || run?.anchorFundingCallId || topFundingCall?.id || null
+
+  const handleStrengthen = (gap: IdeaCallGap) => {
+    setStrengthenBusyGapId(gap.id)
+    setStrengthenGap(gap)
+    document.getElementById('refinement-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const startGrantPrep = async () => {
+    if (!token || !run || handoffBusy) return
+    if (run.linkedGrantPrepSessionId && run.linkedProjectId) {
+      router.push(`/projects/${run.linkedProjectId}/grants/${run.linkedGrantPrepSessionId}/prep`)
+      return
+    }
+    if (!targetCallId) {
+      router.push('/finder')
+      return
+    }
+    setHandoffBusy(true)
+    setHandoffError(null)
+    try {
+      const response = await fetch(`/api/idea-intelligence/${run.id}/grant-prep-handoff`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fundingCallId: targetCallId }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || 'Failed to start Grant Prep from this analysis')
+      const destination = body.handoff?.launchUrl || body.handoff?.prepUrl
+      if (!destination) throw new Error('Grant Prep was created but no workspace URL was returned.')
+      router.push(destination)
+    } catch (error) {
+      setHandoffError(error instanceof Error ? error.message : 'Failed to start Grant Prep from this analysis')
+      setHandoffBusy(false)
+    }
+  }
 
   const exportToIdeaBank = async () => {
     if (!token || !run || run.status !== 'COMPLETED') return
@@ -593,27 +872,43 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
             <SignalCard label="Evidence confidence" value={run.scores.evidenceConfidence} icon={ShieldCheck} tone="text-violet-600" />
           </div>
 
+          <CallFitSection run={run} />
+
+          <GapSection run={run} onStrengthen={handleStrengthen} strengthenBusyGapId={strengthenBusyGapId} />
+
+          <ReviewerSection run={run} />
+
           <CrossCorpusTable rows={run.scores.crossCorpusFacets || []} />
 
           <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <h2 className="font-semibold text-slate-900">Continue from this analysis</h2>
-                <p className="mt-1 text-sm text-slate-500">Save the idea for later or move into call-specific grant preparation.</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {run.linkedGrantPrepSessionId
+                    ? 'This idea has already been handed off to Grant Prep — continue where you left off.'
+                    : targetCallId
+                      ? 'Start Grant Prep with this validated idea locked in: the gaps and reviewer objections carry over with it.'
+                      : 'Save the idea for later or move into call-specific grant preparation.'}
+                </p>
                 {exportMessage ? <p className="mt-2 text-xs font-semibold text-teal-700">{exportMessage}</p> : null}
+                {handoffError ? <p className="mt-2 text-xs font-semibold text-rose-700">{handoffError}</p> : null}
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={exportToIdeaBank} disabled={exportingIdea} className="inline-flex items-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">
+                <button type="button" onClick={exportToIdeaBank} disabled={exportingIdea} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
                   {exportingIdea ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lightbulb className="h-4 w-4" />}
                   Export to Idea Bank
                 </button>
                 <Link href="/idea-bank" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Open Idea Bank</Link>
-                <Link href={topFundingCall ? `/finder/calls/${topFundingCall.id}` : '/finder'} className="inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-4 py-2.5 text-sm font-semibold text-teal-800 hover:bg-teal-100">Start Grant Prep <ArrowRight className="h-4 w-4" /></Link>
+                <button type="button" onClick={startGrantPrep} disabled={handoffBusy} className="inline-flex items-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">
+                  {handoffBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {run.linkedGrantPrepSessionId ? 'Continue in Grant Prep' : 'Start Grant Prep with this idea'} <ArrowRight className="h-4 w-4" />
+                </button>
               </div>
             </div>
           </section>
 
-          <RefinementPanel run={run} token={token} />
+          <RefinementPanel run={run} token={token} strengthenGap={strengthenGap} onStrengthenHandled={() => { setStrengthenGap(null); setStrengthenBusyGapId(null) }} />
 
           <div className="mt-7 border-b border-slate-200"><nav className="flex gap-1 overflow-x-auto">{([
             ['report', 'Positioning brief', Sparkles],

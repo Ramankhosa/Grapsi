@@ -1,7 +1,7 @@
 import type { Prisma } from '@/lib/prisma-generated'
 
 import { prisma } from './prisma'
-import { PRODUCT_MODULE_LIST, isModuleUnlocked, planCodeToTier } from './access/modules'
+import { PRODUCT_MODULE_LIST, isModuleUnlocked, planCodeToTier, planTierRank } from './access/modules'
 
 export const ENTITLEMENT_SOURCES = [
   'LEGACY',
@@ -126,16 +126,49 @@ export async function ensureTenantEntitlementForSignup(
 ) {
   const now = new Date()
   const existingActiveEntitlement = await findActiveTenantPlan(client, input.tenantId, now)
+  const requestedPlanCode = resolveSignupPlanCode(input.planTier)
 
   if (existingActiveEntitlement) {
+    const existingRank = planTierRank(existingActiveEntitlement.plan.code)
+    const requestedRank = planTierRank(requestedPlanCode)
+
+    if (requestedRank <= existingRank) {
+      return {
+        entitlement: existingActiveEntitlement,
+        created: false,
+        planCode: existingActiveEntitlement.plan.code
+      }
+    }
+
+    const upgradePlan = await resolveExistingPlan(client, requestedPlanCode)
+    if (upgradePlan) {
+      const upgraded = await client.tenantPlan.update({
+        where: { id: existingActiveEntitlement.id },
+        data: {
+          planId: upgradePlan.id,
+          metadata: {
+            ...(existingActiveEntitlement.metadata as any || {}),
+            upgradedFrom: existingActiveEntitlement.plan.code,
+            upgradedAt: now.toISOString(),
+            upgradedViaAtiTokenId: input.atiTokenId || null,
+            upgradedViaPlanTier: input.planTier || null
+          } as any
+        }
+      })
+
+      return {
+        entitlement: upgraded,
+        created: false,
+        planCode: upgradePlan.code
+      }
+    }
+
     return {
       entitlement: existingActiveEntitlement,
       created: false,
       planCode: existingActiveEntitlement.plan.code
     }
   }
-
-  const requestedPlanCode = resolveSignupPlanCode(input.planTier)
   const plan = await resolveExistingPlan(client, requestedPlanCode)
 
   if (!plan) {
