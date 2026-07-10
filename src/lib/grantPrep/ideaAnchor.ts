@@ -144,12 +144,12 @@ export function buildDeterministicIdeaAnchor(
     targetBeneficiariesOrSetting: null,
     funderFit: cleanList([fitSentence, ...selectedPriorityAreas], 6),
     distinguishingFeatures: cleanList(option.rationale ? [option.rationale] : [], 6),
-    nonNegotiables: [text],
+    nonNegotiables: cleanList([text], 8),
     scopeBoundaries: [],
     unresolvedQuestions: [
       'Confirm any beneficiaries, geography, partners, quantified outcomes, budget, and implementation details not explicitly stated in the chosen idea.',
     ],
-    keywords: selectedPriorityAreas,
+    keywords: cleanList(selectedPriorityAreas, 16, 80),
   })
   if (!anchor) throw new Error('The selected idea could not be normalized into an anchor.')
   return anchor
