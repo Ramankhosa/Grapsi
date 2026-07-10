@@ -547,7 +547,10 @@ export default function GrantWorkspacePage() {
       const response = await authFetch(`/api/projects/${projectId}/grants/${grantId}/blueprint`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'regenerate' }),
+        // Idempotent launch/self-heal: never re-runs the blueprint LLM for an
+        // already-launched, unchanged session (was 'regenerate', which forced a
+        // rebuild on every mount/refresh of the BLUEPRINT stage).
+        body: JSON.stringify({ action: 'launch' }),
       })
       const payload = await response.json().catch(() => ({})) as GrantWorkspaceResponse & { message?: string }
       if (!response.ok) {

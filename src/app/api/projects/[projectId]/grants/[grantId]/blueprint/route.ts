@@ -88,7 +88,9 @@ const updateBlueprintSchema = z.object({
 })
 
 const blueprintActionSchema = z.object({
-  action: z.enum(['freeze', 'unfreeze', 'regenerate', 'generate_dimensions']),
+  // 'launch' = idempotent initial launch / self-heal (no LLM re-run if already
+  // launched and unchanged). 'regenerate' = explicit user rebuild (always runs).
+  action: z.enum(['freeze', 'unfreeze', 'launch', 'regenerate', 'generate_dimensions']),
   overrideReason: z.string().trim().max(1000).optional(),
 })
 
@@ -287,6 +289,9 @@ export async function POST(
         sessionId: workspace.grantSession.prepSession.id,
         actor,
         overrideReason: payload.overrideReason,
+        // Explicit 'regenerate' rebuilds even if nothing changed; 'launch' (auto
+        // launch / self-heal) is idempotent and skips a redundant LLM run.
+        forceRelaunch: payload.action === 'regenerate',
       })
     }
 

@@ -1766,8 +1766,44 @@ export async function launchGrantPrepToLocalWorkspace(input: {
   sessionId: string
   actor: GrantPrepActor
   overrideReason?: string | null
+  /** Regeneration bypasses the already-launched short-circuit. */
+  forceRelaunch?: boolean
 }) {
   const state = await buildLaunchState(input.sessionId, input.actor)
+
+  // Idempotent launch. Re-hitting handoff for an already-launched session whose
+  // frozen payload has not changed (double-click, retry after a lost response,
+  // the workspace BLUEPRINT auto-launch effect firing again on refresh) must NOT
+  // re-run the blueprint LLM or rewrite drafts. It previously did both — burning
+  // tokens on every attempt and, before the upsert fix, crashing on P2002.
+  // Regeneration passes forceRelaunch to intentionally rebuild.
+  if (
+    !input.forceRelaunch &&
+    state.prepSession.status === 'launched' &&
+    state.prepSession.grant_session_id &&
+    state.prepSession.frozen_payload_hash === state.freeze.payloadHash
+  ) {
+    const existingBlueprint = await prisma.grantBlueprint.findUnique({
+      where: { grantSessionId: state.prepSession.grant_session_id },
+      select: { id: true },
+    })
+    if (existingBlueprint) {
+      return {
+        grantSessionId: state.prepSession.grant_session_id,
+        blueprintId: existingBlueprint.id,
+        launchUrl:
+          state.prepSession.papsi_launch_url
+          || buildGrantWorkspaceUrl({
+            projectId: state.prepSession.project_id,
+            grantSessionId: state.prepSession.grant_session_id,
+            stage: 'SECTION_DRAFTING',
+          })
+          || `/projects/${state.prepSession.project_id}/grants/${state.prepSession.grant_session_id}/workspace?stage=SECTION_DRAFTING`,
+        alreadyLaunched: true as const,
+      }
+    }
+  }
+
   const overrideReason = input.overrideReason?.trim()
     || (state.freeze.blockers.length > 0
       ? 'User confirmed launch warning for incomplete Grant Prep.'
@@ -1848,76 +1884,104 @@ export async function launchGrantPrepToLocalWorkspace(input: {
           },
         })
 
+    // Dedupe the plan by sectionKey (last wins). A compiled template or LLM
+    // merge that emits the same key twice must never reach a second create() on
+    // the (grantSessionId, sectionKey) unique index — that was the P2002 crash.
+    const planByKey = new Map<string, (typeof generatedBlueprint.sectionPlan)[number]>()
+    for (const section of generatedBlueprint.sectionPlan) {
+      planByKey.set(section.sectionKey, section)
+    }
+    const uniqueSectionPlan = Array.from(planByKey.values())
+
     const existingDrafts = await tx.grantSectionDraft.findMany({
       where: { grantSessionId: grantSession.id },
+      select: { sectionKey: true },
     })
-    const draftByKey = new Map(existingDrafts.map((draft) => [draft.sectionKey, draft]))
+    const existingDraftKeys = new Set(existingDrafts.map((draft) => draft.sectionKey))
 
-    for (const section of generatedBlueprint.sectionPlan) {
-      const existingDraft = draftByKey.get(section.sectionKey)
-      if (existingDraft) {
-        await tx.grantSectionDraft.update({
-          where: { id: existingDraft.id },
-          data: {
-            blueprintId: blueprint.id,
-            tenantId: input.actor.tenantId,
-            projectId: state.prepSession.project_id,
-            label: section.label,
-            sectionType: section.sectionType,
-            sectionOrder: section.order,
-            required: section.required,
-            wordBudget: section.wordBudget,
-            characterLimit: section.characterLimit,
-            purpose: section.purpose,
-            reviewerIntent: section.reviewerIntent,
-            dependenciesJson: asJson(section.dependencies),
-            mustCoverJson: asJson(section.mustCover),
-            mustAvoidJson: asJson(section.mustAvoid),
-            sourceTemplatePointer: section.sourceTemplatePointer,
-            updatedByUserId: input.actor.id,
-          },
-        })
-      } else {
-        const createdDraft = await tx.grantSectionDraft.create({
-          data: {
+    for (const section of uniqueSectionPlan) {
+      const isNewDraft = !existingDraftKeys.has(section.sectionKey)
+      // Upsert on the compound unique so a retry / concurrent launch is
+      // idempotent instead of crashing. The update path deliberately leaves
+      // content, status, and version untouched so a re-launch never wipes a
+      // draft the user already wrote.
+      const draft = await tx.grantSectionDraft.upsert({
+        where: {
+          grantSessionId_sectionKey: {
             grantSessionId: grantSession.id,
-            blueprintId: blueprint.id,
+            sectionKey: section.sectionKey,
+          },
+        },
+        update: {
+          blueprintId: blueprint.id,
+          tenantId: input.actor.tenantId,
+          projectId: state.prepSession.project_id,
+          label: section.label,
+          sectionType: section.sectionType,
+          sectionOrder: section.order,
+          required: section.required,
+          wordBudget: section.wordBudget,
+          characterLimit: section.characterLimit,
+          purpose: section.purpose,
+          reviewerIntent: section.reviewerIntent,
+          dependenciesJson: asJson(section.dependencies),
+          mustCoverJson: asJson(section.mustCover),
+          mustAvoidJson: asJson(section.mustAvoid),
+          sourceTemplatePointer: section.sourceTemplatePointer,
+          updatedByUserId: input.actor.id,
+        },
+        create: {
+          grantSessionId: grantSession.id,
+          blueprintId: blueprint.id,
+          tenantId: input.actor.tenantId,
+          projectId: state.prepSession.project_id,
+          sectionKey: section.sectionKey,
+          label: section.label,
+          sectionType: section.sectionType,
+          sectionOrder: section.order,
+          required: section.required,
+          wordBudget: section.wordBudget,
+          characterLimit: section.characterLimit,
+          purpose: section.purpose,
+          reviewerIntent: section.reviewerIntent,
+          dependenciesJson: asJson(section.dependencies),
+          mustCoverJson: asJson(section.mustCover),
+          mustAvoidJson: asJson(section.mustAvoid),
+          sourceTemplatePointer: section.sourceTemplatePointer,
+          sourceIdeaAnchorHash: state.freeze.payload.ideaAnchorHash || null,
+          isStale: false,
+          createdByUserId: input.actor.id,
+          updatedByUserId: input.actor.id,
+        },
+      })
+
+      if (
+        isNewDraft &&
+        (section.sectionType === 'checklist' || section.sectionType === 'table' || section.sectionType === 'budget_rows')
+      ) {
+        // Only scaffold structured data for brand-new drafts, and upsert so a
+        // retry after a partial failure cannot double-insert on
+        // (sectionDraftId, fieldKey). An existing scaffold is left as-is to
+        // preserve any structured data the user already entered.
+        await tx.grantStructuredFieldResponse.upsert({
+          where: {
+            sectionDraftId_fieldKey: {
+              sectionDraftId: draft.id,
+              fieldKey: 'structuredData',
+            },
+          },
+          update: {},
+          create: {
+            grantSessionId: grantSession.id,
+            sectionDraftId: draft.id,
             tenantId: input.actor.tenantId,
             projectId: state.prepSession.project_id,
             sectionKey: section.sectionKey,
-            label: section.label,
-            sectionType: section.sectionType,
-            sectionOrder: section.order,
-            required: section.required,
-            wordBudget: section.wordBudget,
-            characterLimit: section.characterLimit,
-            purpose: section.purpose,
-            reviewerIntent: section.reviewerIntent,
-            dependenciesJson: asJson(section.dependencies),
-            mustCoverJson: asJson(section.mustCover),
-            mustAvoidJson: asJson(section.mustAvoid),
-            sourceTemplatePointer: section.sourceTemplatePointer,
-            sourceIdeaAnchorHash: state.freeze.payload.ideaAnchorHash || null,
-            isStale: false,
-            createdByUserId: input.actor.id,
+            fieldKey: 'structuredData',
+            responseJson: asJson(buildStructuredScaffold(section, state.freeze.payload)),
             updatedByUserId: input.actor.id,
           },
         })
-
-        if (section.sectionType === 'checklist' || section.sectionType === 'table' || section.sectionType === 'budget_rows') {
-          await tx.grantStructuredFieldResponse.create({
-            data: {
-              grantSessionId: grantSession.id,
-              sectionDraftId: createdDraft.id,
-              tenantId: input.actor.tenantId,
-              projectId: state.prepSession.project_id,
-              sectionKey: section.sectionKey,
-              fieldKey: 'structuredData',
-              responseJson: asJson(buildStructuredScaffold(section, state.freeze.payload)),
-              updatedByUserId: input.actor.id,
-            },
-          })
-        }
       }
     }
 
@@ -1930,7 +1994,7 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       fundingCallTitle: state.serverContext.fundingContext.title || null,
       templateRevisionId: state.templateState.templateRevisionId,
       userId: input.actor.id,
-      sectionPlan: generatedBlueprint.sectionPlan,
+      sectionPlan: uniqueSectionPlan,
       globalKeywords: state.freeze.payload.globalKeywords,
       blueprintStatus: 'DRAFT',
       foundation: generatedBlueprint.proposalFoundation,
@@ -1951,11 +2015,14 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       })
     }
 
+    // Fast path bypasses the blueprint review stage: land the user straight in
+    // section drafting. The blueprint plan is still generated (as data); we just
+    // don't stop at the review/freeze UI.
     const launchUrl = buildGrantWorkspaceUrl({
       projectId: state.prepSession.project_id,
       grantSessionId: grantSession.id,
-      stage: 'BLUEPRINT',
-    }) || `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/workspace?stage=BLUEPRINT`
+      stage: 'SECTION_DRAFTING',
+    }) || `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/workspace?stage=SECTION_DRAFTING`
     await tx.grantPrepSession.update({
       where: { id: state.prepSession.id },
       data: {
@@ -1974,7 +2041,9 @@ export async function launchGrantPrepToLocalWorkspace(input: {
     await tx.grantSession.update({
       where: { id: grantSession.id },
       data: {
-        status: 'BLUEPRINT',
+        // Skip the BLUEPRINT review stage — the fast path drives Draft One,
+        // which drafts each section without requiring a frozen blueprint.
+        status: 'DRAFTING',
         updatedByUserId: input.actor.id,
       },
     })
