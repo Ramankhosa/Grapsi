@@ -1821,15 +1821,17 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       message: state.generationBlockedMessage,
     },
   }
-  const tenantContext = await resolveGrantTenantContext(input.actor.tenantId, input.actor.id)
-  const generatedBlueprint = await generateGrantBlueprintWithLlm({
-    baseSectionPlan: state.sectionPlan,
-    context: state.enrichmentContext,
-    proposalFoundationHint: state.proposalFoundation,
-    tenantContext,
-    sessionId: input.sessionId,
-    overrideReason: overrideReason || undefined,
-  })
+  // Launch must finish well under the reverse-proxy timeout (~60s). The inline
+  // blueprint LLM enrichment took 60-70s in production, so every handoff 504ed
+  // at the proxy while the server kept working (and billing). The deterministic
+  // plan below is exactly what generateGrantBlueprintWithLlm falls back to on
+  // any LLM failure — complete for drafting. The LLM only adds literature
+  // dimensions / citation hints, which stay available on demand through the
+  // blueprint's explicit `generate_dimensions` action.
+  const generatedBlueprint = {
+    sectionPlan: state.sectionPlan,
+    proposalFoundation: state.proposalFoundation,
+  }
 
   return prisma.$transaction(async (tx) => {
     const grantSession = await ensureGrantSessionAnchor(tx, {

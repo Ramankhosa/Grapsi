@@ -425,25 +425,45 @@ export default function DraftZeroPage() {
     }
   }, [sessionId, pendingPoint, axiosConfig, surfaceError])
 
+  const navigateAfterLaunch = useCallback(
+    (launchUrl: string | null | undefined) => {
+      if (isFeatureEnabled('ENABLE_DRAFT_ONE')) {
+        // Phase 2 of the fast path: straight into Draft One's batch drafting.
+        toast.success('Launched — drafting the proposal next')
+        router.push(`/projects/${projectId}/grants/${grantId}/draft-one`)
+      } else {
+        toast.success('Launched — opening the drafting workspace')
+        if (launchUrl) router.push(withGrantWorkspaceStage(launchUrl, 'SECTION_DRAFTING'))
+      }
+    },
+    [router, projectId, grantId]
+  )
+
   const handleLaunch = useCallback(async () => {
     if (!sessionId || launching || readOnly) return
     setLaunching(true)
     try {
       const response = await axios.post(`/api/grant-prep/sessions/${sessionId}/handoff`, {}, axiosConfig())
-      const launchUrl = response.data?.launchUrl
-      if (isFeatureEnabled('ENABLE_DRAFT_ONE')) {
-        // Phase 2 of the fast path: straight into Draft One's batch drafting.
-        toast.success('Blueprint launched — drafting the proposal next')
-        router.push(`/projects/${projectId}/grants/${grantId}/draft-one`)
-      } else {
-        toast.success('Blueprint launched — opening the workspace')
-        if (launchUrl) router.push(withGrantWorkspaceStage(launchUrl, 'BLUEPRINT'))
-      }
+      navigateAfterLaunch(response.data?.launchUrl)
     } catch (error) {
+      // The launch can complete server-side while the response is lost (proxy
+      // timeout, network blip). Check the session before reporting failure — a
+      // replayed handoff on a launched session returns the stored launch info
+      // instantly instead of relaunching.
+      try {
+        const check = await axios.get(`/api/grant-prep/sessions/${sessionId}/draft-zero`, axiosConfig())
+        if (['launched', 'handed_off'].includes(check.data?.sessionStatus)) {
+          const replay = await axios.post(`/api/grant-prep/sessions/${sessionId}/handoff`, {}, axiosConfig())
+          navigateAfterLaunch(replay.data?.launchUrl)
+          return
+        }
+      } catch {
+        // Recovery probe failed too — surface the original launch error.
+      }
       surfaceError(error, 'Launch failed')
       setLaunching(false)
     }
-  }, [sessionId, launching, readOnly, axiosConfig, router, surfaceError, projectId, grantId])
+  }, [sessionId, launching, readOnly, axiosConfig, navigateAfterLaunch, surfaceError])
 
   const overallReadiness = useMemo(() => {
     if (!prepContext) return 0
@@ -555,10 +575,26 @@ export default function DraftZeroPage() {
 
       <main className="mx-auto max-w-6xl px-4 pt-6">
         {readOnly ? (
-          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            {sessionStatus === 'archived'
-              ? 'This session is archived. Claims are read-only reference now.'
-              : 'This session already launched a workspace. Claims are read-only reference now — continue in the workspace.'}
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <span>
+              {sessionStatus === 'archived'
+                ? 'This session is archived. Claims are read-only reference now.'
+                : 'This session already launched. Claims are read-only reference now.'}
+            </span>
+            {sessionStatus !== 'archived' ? (
+              <button
+                onClick={() =>
+                  router.push(
+                    isFeatureEnabled('ENABLE_DRAFT_ONE')
+                      ? `/projects/${projectId}/grants/${grantId}/draft-one`
+                      : `/projects/${projectId}/grants/${grantId}/workspace?stage=SECTION_DRAFTING`
+                  )
+                }
+                className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+              >
+                Continue drafting <HiArrowRight className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
           </div>
         ) : null}
 

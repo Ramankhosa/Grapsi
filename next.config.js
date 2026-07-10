@@ -9,7 +9,7 @@ const nextConfig = {
 
   // Minimal config for development
   experimental: {
-    webpackBuildWorker: false,
+    webpackBuildWorker: true,
     optimizeCss: true,
     serverComponentsExternalPackages: ['pdfjs-dist'],
   },
