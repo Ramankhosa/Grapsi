@@ -2085,6 +2085,7 @@ model GrantPrepSession {
   papsi_session_id               String?
   papsi_launch_url               String?
   last_handoff_error             String?
+  draft_zero_state_json          Json?
   created_at                     DateTime                @default(now())
   updated_at                     DateTime                @updatedAt
   funding_call                   FundingCall?            @relation(fields: [funding_call_id], references: [id], onDelete: SetNull)

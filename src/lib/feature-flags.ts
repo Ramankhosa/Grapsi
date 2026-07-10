@@ -33,6 +33,10 @@ export interface FeatureFlags {
   ENABLE_TWO_PASS_GENERATION: boolean;
   ENABLE_FUNDING_DOC_INTELLIGENCE: boolean;
 
+  // Grant Prep
+  ENABLE_DRAFT_ZERO: boolean;
+  ENABLE_DRAFT_ONE: boolean;
+
   // Paper Writing Upgrade (SRS V2)
   ENABLE_ARGUMENT_PLAN: boolean;
   ENABLE_CITATION_BUDGET_VALIDATOR: boolean;
@@ -75,6 +79,11 @@ const DEFAULT_FLAGS: FeatureFlags = {
   ENABLE_TWO_PASS_GENERATION: true,
   ENABLE_FUNDING_DOC_INTELLIGENCE: false,
 
+  // Grant Prep - Draft Zero fast path (generate-first proof review)
+  ENABLE_DRAFT_ZERO: false,
+  // Grant Drafting - Draft One fast path (batch draft + compliance repair loop)
+  ENABLE_DRAFT_ONE: false,
+
   // Paper Writing Upgrade (SRS V2)
   ENABLE_ARGUMENT_PLAN: false, // Tier 2 — disabled until ArgumentPlan service is ready
   ENABLE_CITATION_BUDGET_VALIDATOR: true, // Tier 1 — citation-density lint only; no rewrite loop
@@ -105,6 +114,8 @@ const ENV_VAR_MAPPINGS: Record<keyof FeatureFlags, string[]> = {
   ENABLE_COLLABORATIVE_EDITING: ['NEXT_PUBLIC_FEATURE_ENABLE_COLLABORATIVE_EDITING', 'FEATURE_ENABLE_COLLABORATIVE_EDITING', 'FEATURE_COLLABORATIVE_EDITING'],
   ENABLE_TWO_PASS_GENERATION: ['FEATURE_ENABLE_TWO_PASS_GENERATION', 'FEATURE_TWO_PASS_GENERATION'],
   ENABLE_FUNDING_DOC_INTELLIGENCE: ['FEATURE_FUNDING_DOC_INTELLIGENCE', 'FEATURE_ENABLE_FUNDING_DOC_INTELLIGENCE'],
+  ENABLE_DRAFT_ZERO: ['NEXT_PUBLIC_FEATURE_ENABLE_DRAFT_ZERO', 'FEATURE_ENABLE_DRAFT_ZERO', 'FEATURE_DRAFT_ZERO'],
+  ENABLE_DRAFT_ONE: ['NEXT_PUBLIC_FEATURE_ENABLE_DRAFT_ONE', 'FEATURE_ENABLE_DRAFT_ONE', 'FEATURE_DRAFT_ONE'],
   ENABLE_ARGUMENT_PLAN: ['FEATURE_ENABLE_ARGUMENT_PLAN', 'FEATURE_ARGUMENT_PLAN'],
   ENABLE_CITATION_BUDGET_VALIDATOR: ['FEATURE_ENABLE_CITATION_BUDGET_VALIDATOR', 'FEATURE_CITATION_BUDGET_VALIDATOR'],
   ENABLE_RHETORICAL_BLUEPRINT: ['FEATURE_ENABLE_RHETORICAL_BLUEPRINT', 'FEATURE_RHETORICAL_BLUEPRINT'],
@@ -124,6 +135,16 @@ function parseBooleanEnvVar(value: string | undefined): boolean {
 }
 
 /**
+ * Literal NEXT_PUBLIC accesses so Next.js inlines the values into client
+ * bundles. Dynamic process.env[name] lookups resolve to undefined in the
+ * browser, so client-checked flags must be listed here explicitly.
+ */
+const STATIC_CLIENT_OVERRIDES: Partial<Record<keyof FeatureFlags, string | undefined>> = {
+  ENABLE_DRAFT_ZERO: process.env.NEXT_PUBLIC_FEATURE_ENABLE_DRAFT_ZERO,
+  ENABLE_DRAFT_ONE: process.env.NEXT_PUBLIC_FEATURE_ENABLE_DRAFT_ONE,
+};
+
+/**
  * Get current feature flag configuration
  * Reads from environment variables with fallback to defaults
  * Only NEXT_PUBLIC_ prefixed vars are available on client-side
@@ -135,7 +156,10 @@ export function getFeatureFlags(): FeatureFlags {
 
   // Read each flag from environment variables (only if explicitly set)
   for (const [flagKey, envVarNames] of Object.entries(ENV_VAR_MAPPINGS)) {
-    const envValue = envVarNames.map(name => process.env[name]).find(value => value !== undefined);
+    const staticValue = STATIC_CLIENT_OVERRIDES[flagKey as keyof FeatureFlags];
+    const envValue = staticValue !== undefined
+      ? staticValue
+      : envVarNames.map(name => process.env[name]).find(value => value !== undefined);
     // Only override default if env var is explicitly set
     if (envValue !== undefined) {
       flags[flagKey as keyof FeatureFlags] = parseBooleanEnvVar(envValue);

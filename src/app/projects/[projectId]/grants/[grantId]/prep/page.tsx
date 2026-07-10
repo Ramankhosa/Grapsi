@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { isFeatureEnabled } from '@/lib/feature-flags';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import { toast, Toaster } from 'react-hot-toast';
@@ -1071,6 +1072,20 @@ export default function GrantPrepPage(props: any) {
           {!isEmbeddedGrantMentor && !effectiveChatFullscreen && postLaunchWarning ? (
             <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               {postLaunchWarning}
+            </div>
+          ) : null}
+          {!isEmbeddedGrantMentor && !effectiveChatFullscreen && !sessionLocked && isFeatureEnabled('ENABLE_DRAFT_ZERO') && !['launched', 'handed_off'].includes(sessionData.status) ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50/70 px-4 py-2.5">
+              <div className="text-sm text-teal-900">
+                <span className="font-semibold">Draft Zero:</span> paste your notes once, review a generated proof, and reach the
+                blueprint in minutes — no interview.
+              </div>
+              <button
+                onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/draft-zero`)}
+                className="rounded-lg bg-prep-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-prep-accentDark"
+              >
+                Try Draft Zero
+              </button>
             </div>
           ) : null}
           {isEmbeddedGrantMentor && !effectiveChatFullscreen ? (

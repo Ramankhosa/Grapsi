@@ -10,6 +10,7 @@ import {
   hashGrantPrepIdeaConstraints,
   normalizeGrantPrepIdeaAnchor,
 } from '@/lib/grantPrep/ideaAnchor'
+import { buildGrantPrepIdeationDecisionMarker } from '@/lib/grantPrep/decisionMarker'
 import { resolveGrantPrepTenantContext } from '@/lib/grantPrep/llm'
 import {
   buildGrantPrepModeWarning,
@@ -28,7 +29,7 @@ import {
 import { getNextEnabledPickableStageKey } from '@/lib/grantPrep/stageLibrary'
 import { buildDeterministicGrantPrepStageMemory } from '@/lib/grantPrep/stageMemory'
 import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
-import type { GrantPrepIdeationDecision, GrantPrepMarkerPayload, GrantPrepSuggestedAnswer } from '@/lib/grantPrep/types'
+import type { GrantPrepIdeationDecision, GrantPrepSuggestedAnswer } from '@/lib/grantPrep/types'
 import {
   releaseReservedServiceUsage,
   reserveServiceUsage,
@@ -61,52 +62,7 @@ function findPersistedOption(message: { suggested_answers?: unknown }, label: st
   return options.find((option) => String(option.label || '').trim().toLowerCase() === label.trim().toLowerCase()) || null
 }
 
-function buildDecisionMarker(
-  anchor: GrantPrepIdeationDecision['anchor'],
-  selectedPriorityAreas: string[]
-): GrantPrepMarkerPayload {
-  const ideaFacts = [anchor.oneSentenceSummary, anchor.problemOrOpportunity, anchor.coreApproach].filter(Boolean)
-  const fundabilityFacts = [...anchor.distinguishingFeatures, ...anchor.funderFit].filter(Boolean)
-  const priorityFacts = [...anchor.funderFit, ...selectedPriorityAreas].filter(Boolean)
-  const summaryWordCount = anchor.oneSentenceSummary.trim().split(/\s+/).filter(Boolean).length
-  const isThin = summaryWordCount < 12 || !anchor.problemOrOpportunity || !anchor.coreApproach || priorityFacts.length === 0
-  return {
-    version: 'brainstorm_marker_v1',
-    stageKey: 'ideation',
-    pointsCovered: [
-      {
-        pointKey: 'idea_core',
-        keywords: [],
-        factBullets: ideaFacts,
-        confidence: 1,
-        captureBasis: ['user_confirmed'],
-        ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
-      },
-      {
-        pointKey: 'fundability_signals',
-        keywords: [],
-        factBullets: fundabilityFacts,
-        confidence: 0.95,
-        captureBasis: ['user_confirmed'],
-        ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
-      },
-      {
-        pointKey: 'selected_priority_fit',
-        keywords: selectedPriorityAreas,
-        thrustLinkage: selectedPriorityAreas,
-        factBullets: priorityFacts,
-        confidence: 0.9,
-        captureBasis: ['user_confirmed'],
-        ruleCompliance: { status: 'ok', reason: null, rescopeNeeded: false },
-      },
-    ],
-    currentPoint: null,
-    suggestedAnswers: null,
-    qualityAssessment: isThin ? 'weak' : 'strong',
-    steeringEvents: [],
-    anchorAssessment: { status: 'aligned', reason: 'The user explicitly selected this idea.' },
-  }
-}
+const buildDecisionMarker = buildGrantPrepIdeationDecisionMarker
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireGrantPrepActor(request)
