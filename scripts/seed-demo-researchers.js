@@ -683,6 +683,7 @@ async function main() {
         source: 'MANUAL',
         sourceRef: `demo-seed-${tenantId}`,
         status: 'ACTIVE',
+        effectiveFrom: new Date(),
         metadata: { reason: 'demo_seed_enterprise_access' },
       }
     })
