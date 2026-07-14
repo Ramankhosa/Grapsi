@@ -8,6 +8,7 @@
     "build:cached": "node scripts/run-local-command.js next build",
     "build:clean": "node scripts/clean-next.js && node scripts/run-local-command.js next build",
     "build:low-impact": "node scripts/low-impact-build.js",
+    "build:safe": "bash scripts/safe-build.sh",
     "start": "node scripts/run-local-command.js next start -p 3010",
     "start:standalone": "node .next/standalone/server.js",
     "deploy": "bash scripts/deploy.sh",

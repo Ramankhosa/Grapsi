@@ -7,6 +7,13 @@ const nextConfig = {
   // adds the standalone output, it does not remove anything.
   output: 'standalone',
 
+  // Build output directory. Defaults to `.next` (what `next start` serves).
+  // `scripts/safe-build.sh` sets NEXT_DIST_DIR to a temp dir so a rebuild never
+  // overwrites the live `.next` the running server is serving from; it swaps the
+  // finished build in only after it succeeds. Serve-time (`next start` with no
+  // NEXT_DIST_DIR) always uses `.next`, so this is fully backward compatible.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+
   // Minimal config for development
   experimental: {
     webpackBuildWorker: true,
