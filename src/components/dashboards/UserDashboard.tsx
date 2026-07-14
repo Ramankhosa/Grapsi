@@ -188,6 +188,18 @@ export default function UserDashboard() {
         </div>
       </button>
       <button
+        onClick={() => router.push('/researcher-matching')}
+        className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50 transition-colors text-left"
+      >
+        <div className="p-2 bg-indigo-100 rounded-lg">
+          <Target className="w-4 h-4 text-indigo-600" />
+        </div>
+        <div>
+          <div className="font-medium text-slate-900">Find Researchers</div>
+          <div className="text-xs text-slate-500">Match colleagues in your organization to a funding call or topic</div>
+        </div>
+      </button>
+      <button
         onClick={() => router.push('/projects/new/grant')}
         className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-amber-200 hover:bg-amber-50 transition-colors text-left"
       >

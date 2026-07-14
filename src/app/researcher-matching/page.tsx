@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 
 interface FundingCall {
@@ -43,12 +43,12 @@ interface Stats {
   researchers: number
   researchersWithEmbedding: number
   researchAreas: number
-  researchAreasWithEmbedding: number
   publications: number
+  publicationsWithEmbedding: number
   fundingCalls: number
 }
 
-export default function ResearcherMatchingPage() {
+export default function TenantResearcherMatchingPage() {
   const { user, isLoading: authLoading, authFetch } = useAuth()
 
   const [calls, setCalls] = useState<FundingCall[]>([])
@@ -61,17 +61,10 @@ export default function ResearcherMatchingPage() {
   const [loadingCalls, setLoadingCalls] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState<'call' | 'text'>('call')
-  const [backfillStatus, setBackfillStatus] = useState<string | null>(null)
-  const [backfillRunning, setBackfillRunning] = useState(false)
-
-  const isSuperAdmin = useMemo(() => {
-    if (!user?.roles) return false
-    return user.roles.some((r: string) => r === 'SUPER_ADMIN' || r === 'SUPER_ADMIN_VIEWER')
-  }, [user])
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await authFetch('/api/super-admin/researcher-matching?action=stats')
+      const res = await authFetch('/api/researcher-matching?action=stats')
       if (res.ok) setStats(await res.json())
     } catch {}
   }, [authFetch])
@@ -81,7 +74,7 @@ export default function ResearcherMatchingPage() {
     try {
       const params = new URLSearchParams({ limit: '50' })
       if (q) params.set('q', q)
-      const res = await authFetch(`/api/super-admin/researcher-matching?${params}`)
+      const res = await authFetch(`/api/researcher-matching?${params}`)
       if (res.ok) {
         const data = await res.json()
         setCalls(data.calls || [])
@@ -92,11 +85,11 @@ export default function ResearcherMatchingPage() {
   }, [authFetch])
 
   useEffect(() => {
-    if (isSuperAdmin) {
+    if (user) {
       fetchStats()
       fetchCalls()
     }
-  }, [isSuperAdmin, fetchStats, fetchCalls])
+  }, [user, fetchStats, fetchCalls])
 
   const handleSearch = useCallback(async () => {
     if (mode === 'call' && !selectedCall) return
@@ -114,7 +107,7 @@ export default function ResearcherMatchingPage() {
         body.query = searchQuery
       }
 
-      const res = await authFetch('/api/super-admin/researcher-matching', {
+      const res = await authFetch('/api/researcher-matching', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -133,76 +126,15 @@ export default function ResearcherMatchingPage() {
     }
   }, [mode, selectedCall, searchQuery, authFetch])
 
-  // Drain the entire embedding queue: the backfill endpoint processes at most
-  // 100 items per target per call, so we loop until a full pass finds nothing
-  // left to process (or stalls on permanently-failing items).
-  const handleBackfill = useCallback(async () => {
-    const TARGET_KEYS = ['funding', 'researchAreas', 'researcherProfiles', 'fundingPublications', 'fundingDocuments']
-    const COVERAGE_KEYS = ['coverage', 'researchAreaCoverage', 'researcherProfileCoverage', 'fundingPublicationCoverage']
-    const MAX_PASSES = 60
-
-    setBackfillRunning(true)
-    setBackfillStatus('Starting embedding backfill...')
-    let totalEmbedded = 0
-    let noProgressPasses = 0
-
-    try {
-      for (let pass = 1; pass <= MAX_PASSES; pass++) {
-        const res = await authFetch('/api/admin/funding/embeddings/backfill', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target: 'all', limit: 100 }),
-        })
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          setBackfillStatus(`Backfill failed: ${err.message || `HTTP ${res.status}`}`)
-          return
-        }
-
-        const data = await res.json()
-        const processed = TARGET_KEYS.reduce((sum, k) => sum + (data[k]?.processed || 0), 0)
-        const succeeded = TARGET_KEYS.reduce((sum, k) => sum + (data[k]?.succeeded || 0), 0)
-        const remaining = COVERAGE_KEYS.reduce(
-          (sum, k) => sum + Number(data[k]?.missing || 0) + Number(data[k]?.stale || 0),
-          0
-        )
-        totalEmbedded += succeeded
-        setBackfillStatus(`Pass ${pass}: ${totalEmbedded} embedded, ~${remaining} remaining...`)
-
-        if (processed === 0) break // queue fully drained
-        if (succeeded === 0) {
-          // No progress this pass — allow a couple of retries for transient API
-          // errors, then stop so stuck items don't loop to MAX_PASSES.
-          noProgressPasses += 1
-          if (noProgressPasses >= 3) {
-            setBackfillStatus(`Stopped: ${totalEmbedded} embedded, ~${remaining} still pending (could not embed — check logs).`)
-            fetchStats()
-            return
-          }
-        } else {
-          noProgressPasses = 0
-        }
-      }
-
-      setBackfillStatus(`Done — ${totalEmbedded} embedding${totalEmbedded === 1 ? '' : 's'} generated. All pending cleared.`)
-      fetchStats()
-    } catch (e: any) {
-      setBackfillStatus(`Error: ${e.message}`)
-    } finally {
-      setBackfillRunning(false)
-    }
-  }, [authFetch, fetchStats])
-
   if (authLoading) {
     return <div style={{ padding: 40, textAlign: 'center' }}>Loading...</div>
   }
 
-  if (!isSuperAdmin) {
+  if (!user) {
     return (
       <div style={{ padding: 40, textAlign: 'center' }}>
-        <h2>Access Denied</h2>
-        <p>Super admin access required.</p>
+        <h2>Sign in required</h2>
+        <p>Please log in to find researchers in your organization.</p>
       </div>
     )
   }
@@ -210,10 +142,10 @@ export default function ResearcherMatchingPage() {
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 16px' }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>
-        Researcher Matching
+        Find Researchers
       </h1>
       <p style={{ color: '#6b7280', marginBottom: 24 }}>
-        Find researchers whose expertise matches a funding call using semantic embeddings.
+        Match colleagues in your organization to a funding call or research topic using semantic embeddings.
       </p>
 
       {/* Stats bar */}
@@ -224,9 +156,9 @@ export default function ResearcherMatchingPage() {
         }}>
           {[
             { label: 'Researchers', value: stats.researchers, sub: `${stats.researchersWithEmbedding} embedded` },
-            { label: 'Research Areas', value: stats.researchAreas, sub: `${stats.researchAreasWithEmbedding} embedded` },
-            { label: 'Publications', value: stats.publications, sub: 'funding-tagged' },
-            { label: 'Funding Calls', value: stats.fundingCalls, sub: 'published' },
+            { label: 'Research Areas', value: stats.researchAreas, sub: 'in your org' },
+            { label: 'Publications', value: stats.publications, sub: `${stats.publicationsWithEmbedding} embedded` },
+            { label: 'Funding Calls', value: stats.fundingCalls, sub: 'available' },
           ].map(s => (
             <div key={s.label} style={{
               background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
@@ -239,26 +171,6 @@ export default function ResearcherMatchingPage() {
           ))}
         </div>
       )}
-
-      {/* Backfill button */}
-      <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button
-          onClick={handleBackfill}
-          disabled={backfillRunning}
-          style={{
-            padding: '8px 16px', borderRadius: 6, border: '1px solid #d1d5db',
-            background: backfillRunning ? '#f3f4f6' : '#fff',
-            cursor: backfillRunning ? 'wait' : 'pointer', fontSize: 13, fontWeight: 500,
-          }}
-        >
-          {backfillRunning ? 'Backfilling all pending...' : 'Run Embedding Backfill (all pending)'}
-        </button>
-        {backfillStatus && (
-          <span style={{ fontSize: 13, color: backfillStatus.startsWith('Error') ? '#dc2626' : '#059669' }}>
-            {backfillStatus}
-          </span>
-        )}
-      </div>
 
       {/* Mode selector */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -424,7 +336,7 @@ export default function ResearcherMatchingPage() {
               padding: 32, textAlign: 'center', color: '#9ca3af',
               border: '1px dashed #d1d5db', borderRadius: 8,
             }}>
-              No matching researchers found. Try a different funding call or broaden the search.
+              No matching researchers found in your organization. Try a different funding call or broaden the search.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
