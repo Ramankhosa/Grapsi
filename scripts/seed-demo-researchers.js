@@ -794,6 +794,7 @@ async function main() {
             year: pub.year,
             venue: pub.venue || null,
             citationType: 'JOURNAL',
+            sourceType: 'JOURNAL_ARTICLE',
             tags: ['my-publication'],
             fundingMatchText: matchText,
             fundingMatchHash: matchHash,
