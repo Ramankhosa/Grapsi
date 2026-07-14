@@ -495,7 +495,7 @@ export class FundingCatalogService {
             OR COALESCE(metadata ->> 'embedding_status', '') = 'failed'
             OR COALESCE(metadata ->> 'embedding_version', '') <> ${currentEmbeddingVersion}
           )
-        ORDER BY updated_at DESC
+        ORDER BY "updatedAt" DESC
         LIMIT ${Math.max(1, Math.min(limit, 100))}
       `
     );
