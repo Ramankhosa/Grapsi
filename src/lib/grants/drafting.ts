@@ -457,6 +457,7 @@ export async function saveGrantSectionDraft(input: {
         },
       })
       savedDraft = {
+        ...sectionDraft,
         ...updatedDraft,
         workflowMode: sectionDraft.workflowMode,
         citationMode: sectionDraft.citationMode,
@@ -500,6 +501,7 @@ export async function saveGrantSectionDraft(input: {
         },
       })
       savedDraft = {
+        ...sectionDraft,
         ...updatedDraft,
         workflowMode: sectionDraft.workflowMode,
         citationMode: sectionDraft.citationMode,

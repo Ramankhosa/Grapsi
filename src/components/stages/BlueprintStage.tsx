@@ -2520,6 +2520,53 @@ export default function BlueprintStage({
     }
   };
 
+  /**
+   * Fingerprint of the AI-fill suggestions so we can detect when the server
+   * persisted new ones, even if the HTTP round-trip itself was lost.
+   */
+  const dimensionSuggestionFingerprint = (candidate: Blueprint | null): string =>
+    JSON.stringify(
+      (candidate?.sectionPlan || []).map((section) => [
+        section.sectionKey,
+        section.citationMode || null,
+        section.suggestedCitationCount ?? null,
+        section.dimensions || [],
+      ])
+    );
+
+  /**
+   * The generate_dimensions LLM call runs inline on the server and regularly
+   * outlives the reverse-proxy timeout. The server still finishes and persists
+   * the suggestions — so instead of asking the user to reload the page, poll
+   * the GET endpoint until the persisted suggestions differ from the baseline
+   * and merge them into state.
+   */
+  const pollForDimensionSuggestions = async (baselineFingerprint: string): Promise<Blueprint | null> => {
+    const POLL_INTERVAL_MS = 10_000;
+    const MAX_ATTEMPTS = 24; // ~4 minutes — the inline LLM call takes 60-70s
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      try {
+        const res = await fetch(blueprintApiUrl, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const candidate = buildGrantBlueprintState({
+          sessionId,
+          blueprint: data.blueprint,
+          proposalFoundation: data.proposalFoundation,
+        });
+        if (candidate && dimensionSuggestionFingerprint(candidate) !== baselineFingerprint) {
+          return candidate;
+        }
+      } catch {
+        // Transient network error — keep polling.
+      }
+    }
+    return null;
+  };
+
   const handleGenerateDimensions = async () => {
     if (!authToken || !isGrantWorkspace) return;
     if (generationDisabledReason) {
@@ -2531,46 +2578,89 @@ export default function BlueprintStage({
       return;
     }
 
-    try {
-      setGeneratingDimensions(true);
-      const res = await fetch(blueprintApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ action: 'generate_dimensions' })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || data.message || 'Failed to generate literature dimensions');
-
-      // Debug: backend tells us whether dimensions came from the LLM or deterministic fallback.
-      console.log('[BlueprintStage] generate_dimensions diagnostics:', data?.generationDiagnostics || null);
-
-      const nextBlueprint = buildGrantBlueprintState({
-        sessionId,
-        blueprint: data.blueprint,
-        proposalFoundation: data.proposalFoundation,
-      });
-
+    const baselineFingerprint = dimensionSuggestionFingerprint(blueprint);
+    const mergeGenerated = (nextBlueprint: Blueprint | null) => {
       setBlueprint(nextBlueprint);
       setThesisValue(nextBlueprint?.thesisStatement || '');
       setObjectiveValue(nextBlueprint?.centralObjective || '');
-      await refreshShadowSession();
+    };
+
+    try {
+      setGeneratingDimensions(true);
+      let recoverable = false;
+      try {
+        const res = await fetch(blueprintApiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`
+          },
+          body: JSON.stringify({ action: 'generate_dimensions' }),
+          // Cap the round-trip so a hung connection still falls through to the
+          // reconciliation poll below instead of spinning forever.
+          signal: AbortSignal.timeout(90_000)
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          // 5xx / gateway timeouts are recoverable: the server-side generation
+          // usually completes and persists anyway. 4xx are genuine rejections.
+          recoverable = res.status >= 500;
+          throw new Error(data.error || data.message || 'Failed to generate literature dimensions');
+        }
+
+        // Debug: backend tells us whether dimensions came from the LLM or deterministic fallback.
+        console.log('[BlueprintStage] generate_dimensions diagnostics:', data?.generationDiagnostics || null);
+
+        mergeGenerated(buildGrantBlueprintState({
+          sessionId,
+          blueprint: data.blueprint,
+          proposalFoundation: data.proposalFoundation,
+        }));
+        await refreshShadowSession();
+        showToast({
+          type: 'success',
+          title: 'Dimensions generated',
+          message:
+            `Citation dimensions were generated only for sections marked for mapped evidence. ` +
+            `Source: ${data?.generationDiagnostics?.source || 'unknown'}.`
+        });
+        return;
+      } catch (err) {
+        const networkError = err instanceof TypeError
+          || (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError'));
+        if (!recoverable && !networkError) {
+          showToast({
+            type: 'error',
+            title: 'Dimension generation failed',
+            message: err instanceof Error ? err.message : 'Unknown error'
+          });
+          return;
+        }
+      }
+
+      // Lost the response but generation may still be running server-side.
       showToast({
-        type: 'success',
-        title: 'Dimensions generated',
-        message:
-          `Citation dimensions were generated only for sections marked for mapped evidence. ` +
-          `Source: ${data?.generationDiagnostics?.source || 'unknown'}.`
+        type: 'info',
+        title: 'Still generating…',
+        message: 'The AI is taking longer than the connection allowed. Watching for the suggestions to arrive — no reload needed.'
       });
-    } catch (err) {
-      showToast({
-        type: 'error',
-        title: 'Dimension generation failed',
-        message: err instanceof Error ? err.message : 'Unknown error'
-      });
+      const recovered = await pollForDimensionSuggestions(baselineFingerprint);
+      if (recovered) {
+        mergeGenerated(recovered);
+        await refreshShadowSession();
+        showToast({
+          type: 'success',
+          title: 'Dimensions generated',
+          message: 'The AI suggestions arrived and were loaded automatically.'
+        });
+      } else {
+        showToast({
+          type: 'error',
+          title: 'Dimension generation failed',
+          message: 'The AI suggestions did not arrive in time. Try again — if this repeats, the generation itself is failing.'
+        });
+      }
     } finally {
       setGeneratingDimensions(false);
     }

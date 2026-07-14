@@ -11,6 +11,11 @@ import {
   getBudgetStructuredOpenQuestions,
 } from '@/lib/grants/budgetTemplate'
 import { requiresMappedGrantEvidence } from '@/lib/grants/citationMode'
+import {
+  getGrantAiReviewReportFromResponses,
+  grantAiReviewHasBlockingFindings,
+  isGrantAiReviewStale,
+} from '@/lib/grants/aiReviewReport'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import type { GrantPrepIdeaAnchorV1 } from '@/lib/grantPrep/types'
 import type {
@@ -377,16 +382,13 @@ export function validateGrantFinalExportReadiness(input: {
     const validation = section.validationReport && typeof section.validationReport === 'object' && !Array.isArray(section.validationReport)
       ? section.validationReport as Record<string, unknown>
       : {}
-    const report = section.grantComplianceReport
-      || (validation.grantComplianceReport && typeof validation.grantComplianceReport === 'object'
-        ? validation.grantComplianceReport as GrantComplianceReport
-        : null)
     const readiness = validation.grantDraftReadiness && typeof validation.grantDraftReadiness === 'object' && !Array.isArray(validation.grantDraftReadiness)
       ? validation.grantDraftReadiness as { issues?: unknown }
       : null
     const readinessIssues = normalizeStrings(readiness?.issues || [], 12)
+    const content = String(section.content || '').trim()
 
-    if (section.required !== false && !String(section.content || '').trim()) {
+    if (section.required !== false && !content) {
       issues.push(`${label} has no final draft content.`)
     }
     if (section.isStale) {
@@ -396,10 +398,17 @@ export function validateGrantFinalExportReadiness(input: {
     if (readinessIssues.length > 0) {
       issues.push(`${label} is not ready: ${readinessIssues.join('; ')}`)
     }
-    if (!report) {
-      issues.push(`${label} has not been validated against grant rules and Grant Prep evidence.`)
-    } else if (!report.passed) {
-      issues.push(`${label} still has grant compliance failures.`)
+    // Agency rules are enforced by the LLM review stage, not the deterministic
+    // keyword matcher — the AI reviewer's verdict is the export gate.
+    if (content) {
+      const aiReview = getGrantAiReviewReportFromResponses(section.structuredResponses)
+      if (!aiReview) {
+        issues.push(`${label} has not been AI-reviewed against the agency rules yet.`)
+      } else if (isGrantAiReviewStale(aiReview, content)) {
+        issues.push(`${label} changed after its last AI review — run the review again.`)
+      } else if (grantAiReviewHasBlockingFindings(aiReview)) {
+        issues.push(`${label} has unresolved critical findings from the AI review.`)
+      }
     }
   }
 

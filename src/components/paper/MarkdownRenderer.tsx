@@ -23,11 +23,55 @@ type ListNode = {
   children: ListNode[];
 };
 
+type TableAlign = 'left' | 'center' | 'right' | null;
+
 type Block =
   | { kind: 'heading'; level: number; text: string }
   | { kind: 'paragraph'; text: string }
   | { kind: 'list'; items: ParsedListLine[] }
-  | { kind: 'blockquote'; lines: string[] };
+  | { kind: 'blockquote'; lines: string[] }
+  | { kind: 'table'; header: string[] | null; align: TableAlign[]; rows: string[][] };
+
+const TABLE_ROW_REGEX = /^\s*\|.*\|\s*$/;
+const TABLE_SEPARATOR_REGEX = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/;
+
+/** Split `| a | b |` into cells, honoring escaped pipes (`\|`). */
+function splitTableRow(line: string): string[] {
+  let inner = line.trim();
+  if (inner.startsWith('|')) inner = inner.slice(1);
+  if (inner.endsWith('|') && !inner.endsWith('\\|')) inner = inner.slice(0, -1);
+  const cells: string[] = [];
+  let current = '';
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i];
+    if (char === '\\' && inner[i + 1] === '|') {
+      current += '|';
+      i++;
+    } else if (char === '|') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function padCells(cells: string[], columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, i) => cells[i] ?? '');
+}
+
+function parseSeparatorAlignment(line: string): TableAlign[] {
+  return splitTableRow(line).map(cell => {
+    const left = cell.startsWith(':');
+    const right = cell.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return null;
+  });
+}
 
 function parseListLine(line: string): ParsedListLine | null {
   const unordered = line.match(/^(\s*)-\s+(.+)$/);
@@ -60,6 +104,41 @@ function parseMarkdownBlocks(content: string): Block[] {
     const line = (lines[index] || '').replace(/\s+$/g, '');
     if (!line.trim()) {
       index++;
+      continue;
+    }
+
+    if (TABLE_ROW_REGEX.test(line)) {
+      const rowLines: string[] = [line];
+      index++;
+      while (index < lines.length) {
+        const current = (lines[index] || '').replace(/\s+$/g, '');
+        if (TABLE_ROW_REGEX.test(current) || TABLE_SEPARATOR_REGEX.test(current)) {
+          rowLines.push(current);
+          index++;
+          continue;
+        }
+        break;
+      }
+
+      // Header row + separator row + body; body-only when the LLM omits the separator
+      let header: string[] | null = null;
+      let align: TableAlign[] = [];
+      let bodyLines = rowLines;
+      if (rowLines.length >= 2 && TABLE_SEPARATOR_REGEX.test(rowLines[1])) {
+        header = splitTableRow(rowLines[0]);
+        align = parseSeparatorAlignment(rowLines[1]);
+        bodyLines = rowLines.slice(2);
+      }
+      const rows = bodyLines.filter(row => !TABLE_SEPARATOR_REGEX.test(row)).map(splitTableRow);
+      const columnCount = Math.max(header?.length || 0, 0, ...rows.map(row => row.length));
+      if (columnCount > 0) {
+        blocks.push({
+          kind: 'table',
+          header: header ? padCells(header, columnCount) : null,
+          align: Array.from({ length: columnCount }, (_, i) => align[i] ?? null),
+          rows: rows.map(row => padCells(row, columnCount))
+        });
+      }
       continue;
     }
 
@@ -133,6 +212,7 @@ function parseMarkdownBlocks(content: string): Block[] {
       if (!current.trim()) break;
       if (/^(#{2,4})\s+/.test(current)) break;
       if (parseListLine(current)) break;
+      if (TABLE_ROW_REGEX.test(current)) break;
       paragraphLines.push(current.trim());
       index++;
     }
@@ -288,6 +368,45 @@ export default function MarkdownRenderer({ content, className = '', figureDispla
               <p key={i} className="my-1">{formatInlineText(line, figureDisplayMeta, onFigureClick)}</p>
             ))}
           </blockquote>
+        );
+      }
+
+      if (block.kind === 'table') {
+        return (
+          <div key={index} className="my-4 overflow-x-auto">
+            <table className="w-full border-collapse" style={{ fontSize: '10.5pt', lineHeight: '1.5' }}>
+              {block.header ? (
+                <thead>
+                  <tr>
+                    {block.header.map((cell, cellIndex) => (
+                      <th
+                        key={cellIndex}
+                        className="border-b-2 border-t border-gray-300 bg-gray-50/60 px-3 py-2 font-semibold text-gray-900"
+                        style={{ textAlign: block.align[cellIndex] || 'left' }}
+                      >
+                        {formatInlineText(cell, figureDisplayMeta, onFigureClick)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+              ) : null}
+              <tbody>
+                {block.rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {row.map((cell, cellIndex) => (
+                      <td
+                        key={cellIndex}
+                        className="border-b border-gray-200 px-3 py-1.5 align-top text-gray-800"
+                        style={{ textAlign: block.align[cellIndex] || 'left' }}
+                      >
+                        {formatInlineText(cell, figureDisplayMeta, onFigureClick)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         );
       }
 

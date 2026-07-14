@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { formatBibliographyMarkdown, polishDraftMarkdown } from '../../lib/markdown-draft-formatter';
+import {
+  formatBibliographyMarkdown,
+  parseGfmTableLines,
+  polishDraftMarkdown,
+} from '../../lib/markdown-draft-formatter';
 
 describe('polishDraftMarkdown', () => {
   it('extracts fenced markdown and normalizes list markers', () => {
@@ -81,6 +85,53 @@ Some text after.`;
     expect(output).toContain('- Contribution A');
     expect(output).toContain('- Contribution B');
     expect(output).not.toContain('\\n');
+  });
+
+  it('preserves GFM pipe tables verbatim with gaps around them', () => {
+    const input = `The budget is summarized below.
+| Item | Year 1 | Year 2 |
+|------|-------:|-------:|
+| Equipment | 40,000 | 12,000 |
+| Personnel | 85,000 | 88,000 |
+Totals include institutional overheads.`;
+
+    const output = polishDraftMarkdown(input);
+    const lines = output.split('\n');
+
+    expect(lines).toContain('| Item | Year 1 | Year 2 |');
+    expect(lines).toContain('|------|-------:|-------:|');
+    expect(lines).toContain('| Equipment | 40,000 | 12,000 |');
+    // Table separated from surrounding prose by blank lines
+    expect(output).toContain('below.\n\n| Item');
+    expect(output).toContain('88,000 |\n\nTotals');
+  });
+
+  it('does not promote bold table cells into headings', () => {
+    const input = `| **Milestone** | Date |
+|---|---|
+| **Kickoff** | Jan |`;
+
+    const output = polishDraftMarkdown(input);
+    expect(output).not.toContain('###');
+    expect(output).toContain('| **Milestone** | Date |');
+  });
+
+  it('parses well-formed GFM tables into headers and padded rows, rejects header-less runs', () => {
+    const parsed = parseGfmTableLines([
+      '| Item | Year 1 | Year 2 |',
+      '|:-----|-------:|-------:|',
+      '| Equipment | 40,000 |',
+      '| Personnel \\| Staff | 85,000 | 88,000 |',
+    ]);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.headers).toEqual(['Item', 'Year 1', 'Year 2']);
+    expect(parsed!.rows).toEqual([
+      ['Equipment', '40,000', ''],
+      ['Personnel | Staff', '85,000', '88,000'],
+    ]);
+
+    // No separator row → not a proper table
+    expect(parseGfmTableLines(['| a | b |', '| c | d |'])).toBeNull();
   });
 
   it('formats alphabetical bibliography as markdown bullets', () => {

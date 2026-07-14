@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildAiFixInstructions,
+  buildAiReviewQueue,
   buildDraftOneQueue,
-  buildRepairInstructions,
   countWords,
   normalizeDraftOneSection,
-  shouldAutoRepair,
   summarizeDraftOneSections,
 } from '@/lib/draftOne/logic'
-import type { GrantComplianceReport } from '@/types/grant'
+import type { GrantAiReviewReport } from '@/types/grant'
 
 function makeRawSection(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -23,8 +23,8 @@ function makeRawSection(overrides: Record<string, unknown> = {}): Record<string,
     characterLimit: null,
     content: '',
     isStale: false,
-    grantComplianceReport: null,
-    reviewerReadinessReport: null,
+    grantAiReviewReport: null,
+    grantAiReviewStale: false,
     grantRuleProfile: {
       requiredPoints: ['Name the beneficiary group'],
       evaluationFocus: [],
@@ -36,43 +36,51 @@ function makeRawSection(overrides: Record<string, unknown> = {}): Record<string,
   }
 }
 
-function makeComplianceReport(overrides: Partial<GrantComplianceReport> = {}): GrantComplianceReport {
+function makeAiReview(overrides: Partial<GrantAiReviewReport> = {}): GrantAiReviewReport {
   return {
-    stage: 'pass2',
-    passed: false,
-    coveredRequiredPoints: [],
-    unmetRequiredPoints: ['Name the beneficiary group'],
-    violatedAvoidRules: [],
-    missingEvidence: [],
-    hardFailures: [
-      { key: 'word_budget', message: 'Section exceeds the word budget of 800.', ruleText: null, source: 'template' },
+    version: 1,
+    verdict: 'minor_revisions',
+    score: 78,
+    summary: 'Solid framing but the beneficiary group is never named.',
+    strengths: ['Clear problem statement'],
+    findings: [
+      {
+        severity: 'important',
+        rule: 'Name the beneficiary group',
+        issue: 'The target beneficiary group is never explicitly named.',
+        fix: 'Name the beneficiary group (rural adolescent girls, 10-19) in the opening paragraph.',
+      },
     ],
-    softWarnings: [],
-    usedPrepEvidence: [],
+    reviewedContentHash: 'abc123',
     generatedAt: new Date().toISOString(),
     ...overrides,
   }
 }
 
 describe('draft one section normalization', () => {
-  it('derives status from content, staleness, and compliance', () => {
+  it('derives status from content, staleness, and the AI review verdict', () => {
     expect(normalizeDraftOneSection(makeRawSection()).status).toBe('pending')
-    expect(normalizeDraftOneSection(makeRawSection({ content: 'Drafted text.' })).status).toBe('unvalidated')
+    expect(normalizeDraftOneSection(makeRawSection({ content: 'Drafted text.' })).status).toBe('unreviewed')
     expect(
       normalizeDraftOneSection(
-        makeRawSection({ content: 'Drafted text.', grantComplianceReport: makeComplianceReport({ passed: true, hardFailures: [] }) })
+        makeRawSection({ content: 'Drafted text.', grantAiReviewReport: makeAiReview({ verdict: 'ready', findings: [] }) })
       ).status
-    ).toBe('passed')
+    ).toBe('ready')
     expect(
-      normalizeDraftOneSection(makeRawSection({ content: 'Drafted text.', grantComplianceReport: makeComplianceReport() })).status
+      normalizeDraftOneSection(makeRawSection({ content: 'Drafted text.', grantAiReviewReport: makeAiReview() })).status
     ).toBe('issues')
+    expect(
+      normalizeDraftOneSection(
+        makeRawSection({ content: 'Edited.', grantAiReviewReport: makeAiReview({ verdict: 'ready', findings: [] }), grantAiReviewStale: true })
+      ).status
+    ).toBe('unreviewed')
     expect(normalizeDraftOneSection(makeRawSection({ content: 'Drafted text.', isStale: true })).status).toBe('stale')
     expect(normalizeDraftOneSection(makeRawSection({ workflowMode: 'team_manual' })).status).toBe('manual')
     expect(normalizeDraftOneSection(makeRawSection({ sectionKey: 'bibliography' })).status).toBe('manual')
   })
 })
 
-describe('draft one queue', () => {
+describe('draft one queues', () => {
   it('queues only auto-draftable sections without content (or stale), in template order', () => {
     const sections = [
       normalizeDraftOneSection(makeRawSection({ sectionKey: 'summary', sectionOrder: 1 })),
@@ -86,53 +94,82 @@ describe('draft one queue', () => {
     const full = buildDraftOneQueue(sections, { includeDrafted: true })
     expect(full.map((section) => section.sectionKey)).toEqual(['summary', 'drafted', 'methodology', 'stale_one'])
   })
+
+  it('review queue covers drafted sections without a current verdict', () => {
+    const sections = [
+      normalizeDraftOneSection(makeRawSection({ sectionKey: 'unreviewed', sectionOrder: 1, content: 'Text.' })),
+      normalizeDraftOneSection(
+        makeRawSection({ sectionKey: 'edited', sectionOrder: 2, content: 'Text.', grantAiReviewReport: makeAiReview(), grantAiReviewStale: true })
+      ),
+      normalizeDraftOneSection(
+        makeRawSection({ sectionKey: 'done', sectionOrder: 3, content: 'Text.', grantAiReviewReport: makeAiReview({ verdict: 'ready', findings: [] }) })
+      ),
+      normalizeDraftOneSection(makeRawSection({ sectionKey: 'empty', sectionOrder: 4 })),
+      normalizeDraftOneSection(makeRawSection({ sectionKey: 'manual', sectionOrder: 5, workflowMode: 'team_manual' })),
+    ]
+    expect(buildAiReviewQueue(sections).map((section) => section.sectionKey)).toEqual(['unreviewed', 'edited'])
+    expect(buildAiReviewQueue(sections, { includeReviewed: true }).map((section) => section.sectionKey)).toEqual([
+      'unreviewed',
+      'edited',
+      'done',
+    ])
+  })
 })
 
-describe('repair instructions', () => {
-  it('folds unmet points, violations, word overage, and reviewer actions into the instruction, capped for the engine', () => {
+describe('AI fix instructions', () => {
+  it('folds findings by severity, word overage, and the author note into the instruction, capped for the engine', () => {
     const content = Array.from({ length: 900 }, (_, index) => `word${index}`).join(' ')
-    const instructions = buildRepairInstructions({
+    const instructions = buildAiFixInstructions({
       section: { label: 'Problem & Need', wordBudget: 800, characterLimit: null, content },
-      compliance: makeComplianceReport({ violatedAvoidRules: ['Do not promise regulatory approval'] }),
-      readiness: {
-        score: 55,
-        strengths: [],
-        risks: [],
-        missingSignals: [],
-        recommendedActions: ['Quantify the baseline need'],
-        generatedAt: new Date().toISOString(),
-      },
+      report: makeAiReview({
+        findings: [
+          {
+            severity: 'critical',
+            rule: 'No unsupported claims',
+            issue: 'Claims a 40% reduction with no source.',
+            fix: 'Cite the pilot evaluation or soften the claim to "reported reductions".',
+          },
+          {
+            severity: 'polish',
+            rule: null,
+            issue: 'Opening sentence is passive.',
+            fix: 'Rewrite the opening sentence in active voice.',
+          },
+        ],
+      }),
       userNote: 'Keep the One Health framing.',
     })
-    expect(instructions).toContain('REPAIR PASS')
-    expect(instructions).toContain('Name the beneficiary group')
-    expect(instructions).toContain('Do not promise regulatory approval')
+    expect(instructions).toContain('REVISION PASS')
+    expect(instructions).toContain('CRITICAL FINDINGS')
+    expect(instructions).toContain('Claims a 40% reduction with no source.')
+    expect(instructions).toContain('POLISH')
     expect(instructions).toContain('the agency limit is 800')
-    expect(instructions).toContain('Quantify the baseline need')
     expect(instructions).toContain('Keep the One Health framing.')
     expect(instructions.length).toBeLessThanOrEqual(4900)
-  })
-
-  it('shouldAutoRepair fires only on actionable failed reports', () => {
-    expect(shouldAutoRepair(null)).toBe(false)
-    expect(shouldAutoRepair(makeComplianceReport({ passed: true, hardFailures: [] }))).toBe(false)
-    expect(shouldAutoRepair(makeComplianceReport())).toBe(true)
-    expect(
-      shouldAutoRepair(makeComplianceReport({ unmetRequiredPoints: [], hardFailures: [], violatedAvoidRules: [] }))
-    ).toBe(false)
   })
 })
 
 describe('summary + words', () => {
   it('summarizes drafting state across sections', () => {
     const sections = [
-      normalizeDraftOneSection(makeRawSection({ sectionKey: 'a', content: 'Text', grantComplianceReport: makeComplianceReport({ passed: true, hardFailures: [] }) })),
-      normalizeDraftOneSection(makeRawSection({ sectionKey: 'b', content: 'Text', grantComplianceReport: makeComplianceReport() })),
-      normalizeDraftOneSection(makeRawSection({ sectionKey: 'c' })),
+      normalizeDraftOneSection(
+        makeRawSection({ sectionKey: 'a', content: 'Text', grantAiReviewReport: makeAiReview({ verdict: 'ready', findings: [] }) })
+      ),
+      normalizeDraftOneSection(makeRawSection({ sectionKey: 'b', content: 'Text', grantAiReviewReport: makeAiReview() })),
+      normalizeDraftOneSection(makeRawSection({ sectionKey: 'c', content: 'Text' })),
+      normalizeDraftOneSection(makeRawSection({ sectionKey: 'd' })),
       normalizeDraftOneSection(makeRawSection({ sectionKey: 'attachments', workflowMode: 'team_manual' })),
     ]
     const summary = summarizeDraftOneSections(sections)
-    expect(summary).toMatchObject({ total: 4, draftable: 3, drafted: 2, passed: 1, withIssues: 1, manual: 1 })
+    expect(summary).toMatchObject({
+      total: 5,
+      draftable: 4,
+      drafted: 3,
+      ready: 1,
+      withIssues: 1,
+      unreviewed: 1,
+      manual: 1,
+    })
   })
 
   it('counts words robustly', () => {

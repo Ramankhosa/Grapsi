@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import MatchResults, { SearchResponse } from '@/components/researcher-matching/MatchResults'
 
 interface FundingCall {
   id: string
@@ -11,32 +12,6 @@ interface FundingCall {
   closeDate: string | null
   disciplines: string[]
   fundingKinds: string[]
-}
-
-interface MatchResult {
-  userId: string
-  displayName: string
-  countryOfResidence: string | null
-  institutionName: string | null
-  institutionType: string | null
-  department: string | null
-  careerStage: string | null
-  researchSummary: string | null
-  researchAreas: string[]
-  keywords: string[]
-  score: number
-  semanticSimilarity: number
-  textRank: number
-  matchedSources: string[]
-  matchReason: string
-}
-
-interface SearchResponse {
-  query: string
-  fundingCallId: string | null
-  totalResults: number
-  results: MatchResult[]
-  degradedMode: string | null
 }
 
 interface Stats {
@@ -100,7 +75,7 @@ export default function TenantResearcherMatchingPage() {
     setResults(null)
 
     try {
-      const body: any = { limit: 50 }
+      const body: any = { limit: 20 }
       if (mode === 'call' && selectedCall) {
         body.fundingCallId = selectedCall.id
       } else {
@@ -313,138 +288,10 @@ export default function TenantResearcherMatchingPage() {
 
       {/* Results */}
       {results && (
-        <div>
-          <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            marginBottom: 16,
-          }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700 }}>
-              {results.totalResults} Matching Researcher{results.totalResults !== 1 ? 's' : ''} Found
-            </h2>
-            {results.degradedMode && (
-              <span style={{
-                fontSize: 12, background: '#fef3c7', color: '#92400e',
-                padding: '4px 8px', borderRadius: 4,
-              }}>
-                Degraded mode: {results.degradedMode}
-              </span>
-            )}
-          </div>
-
-          {results.results.length === 0 ? (
-            <div style={{
-              padding: 32, textAlign: 'center', color: '#9ca3af',
-              border: '1px dashed #d1d5db', borderRadius: 8,
-            }}>
-              No matching researchers found in your organization. Try a different funding call or broaden the search.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {results.results.map((r, idx) => (
-                <div
-                  key={r.userId}
-                  style={{
-                    border: '1px solid #e5e7eb', borderRadius: 8, padding: 16,
-                    background: '#fff',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <span style={{
-                          width: 28, height: 28, borderRadius: '50%',
-                          background: '#2563eb', color: '#fff', display: 'flex',
-                          alignItems: 'center', justifyContent: 'center',
-                          fontWeight: 700, fontSize: 13, flexShrink: 0,
-                        }}>
-                          {idx + 1}
-                        </span>
-                        <span style={{ fontWeight: 700, fontSize: 16 }}>{r.displayName}</span>
-                      </div>
-                      <div style={{ fontSize: 13, color: '#6b7280', marginLeft: 36 }}>
-                        {[r.department, r.institutionName, r.countryOfResidence].filter(Boolean).join(' · ')}
-                      </div>
-                      {r.careerStage && (
-                        <div style={{ fontSize: 12, color: '#9ca3af', marginLeft: 36, marginTop: 2 }}>
-                          {r.careerStage.replace(/_/g, ' ')}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{
-                        fontSize: 20, fontWeight: 700,
-                        color: r.score >= 0.7 ? '#059669' : r.score >= 0.4 ? '#d97706' : '#6b7280',
-                      }}>
-                        {(r.score * 100).toFixed(0)}%
-                      </div>
-                      <div style={{ fontSize: 11, color: '#9ca3af' }}>match score</div>
-                    </div>
-                  </div>
-
-                  {/* Research summary */}
-                  {r.researchSummary && (
-                    <div style={{
-                      marginTop: 8, marginLeft: 36, fontSize: 13, color: '#374151',
-                      lineHeight: 1.5,
-                    }}>
-                      {r.researchSummary.length > 300
-                        ? r.researchSummary.slice(0, 300) + '...'
-                        : r.researchSummary}
-                    </div>
-                  )}
-
-                  {/* Research areas */}
-                  {r.researchAreas?.length > 0 && (
-                    <div style={{ marginTop: 8, marginLeft: 36, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {r.researchAreas.map(area => (
-                        <span key={area} style={{
-                          fontSize: 11, padding: '2px 8px', borderRadius: 12,
-                          background: '#eff6ff', color: '#1d4ed8', fontWeight: 500,
-                        }}>
-                          {area}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Keywords */}
-                  {r.keywords?.length > 0 && (
-                    <div style={{ marginTop: 4, marginLeft: 36, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {r.keywords.slice(0, 8).map(kw => (
-                        <span key={kw} style={{
-                          fontSize: 10, padding: '1px 6px', borderRadius: 8,
-                          background: '#f3f4f6', color: '#6b7280',
-                        }}>
-                          {kw}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Match details */}
-                  <div style={{
-                    marginTop: 8, marginLeft: 36, fontSize: 12, color: '#6b7280',
-                    display: 'flex', gap: 16, flexWrap: 'wrap',
-                  }}>
-                    <span>Semantic: {(r.semanticSimilarity * 100).toFixed(0)}%</span>
-                    <span>Text: {(r.textRank * 100).toFixed(0)}%</span>
-                    {r.matchedSources?.length > 0 && (
-                      <span>Sources: {r.matchedSources.join(', ')}</span>
-                    )}
-                  </div>
-                  {r.matchReason && (
-                    <div style={{
-                      marginTop: 4, marginLeft: 36, fontSize: 12, color: '#059669',
-                      fontStyle: 'italic',
-                    }}>
-                      {r.matchReason}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <MatchResults
+          response={results}
+          emptyMessage="No researchers in your organization passed the relevance threshold. Try a different funding call or broaden the search."
+        />
       )}
     </div>
   )

@@ -1,3 +1,5 @@
+import { isFeatureEnabled } from '@/lib/feature-flags'
+
 export type GrantWorkspaceStage =
   | 'GRANTMENTOR'
   | 'BLUEPRINT'
@@ -6,6 +8,21 @@ export type GrantWorkspaceStage =
   | 'FIGURE_PLANNER'
   | 'SECTION_DRAFTING'
   | 'REVIEWER'
+
+/**
+ * Default entry route for grant preparation. Draft Zero (generate-first proof
+ * review) is the default path when enabled; the guided Grant Prep chat stays
+ * reachable from the Draft Zero UI and directly at /prep for users who prefer
+ * a step-by-step conversation. Accepts either a grant session id or a grant
+ * prep session id — both pages resolve either.
+ */
+export function buildGrantPrepEntryUrl(input: {
+  projectId: string
+  grantOrPrepSessionId: string
+}) {
+  const base = `/projects/${input.projectId}/grants/${input.grantOrPrepSessionId}`
+  return isFeatureEnabled('ENABLE_DRAFT_ZERO') ? `${base}/draft-zero` : `${base}/prep`
+}
 
 export function resolveGrantWorkspaceStageForPrepStatus(status?: string | null): GrantWorkspaceStage {
   return status === 'launched' || status === 'handed_off' ? 'BLUEPRINT' : 'GRANTMENTOR'
@@ -65,6 +82,19 @@ export function buildGrantProjectOpenUrl(input: {
 
   const grantSessionId = input.grantSession?.id || input.prepSession?.grant_session_id || null
   if (!grantSessionId) return null
+
+  const stage = resolveGrantWorkspaceStage({
+    prepStatus: input.prepSession?.status,
+    grantStatus: input.grantSession?.status,
+  })
+  // Pre-launch grants open on Draft Zero (when enabled) — the guided Grant
+  // Prep chat is the optional path, reachable from the Draft Zero UI.
+  if (stage === 'GRANTMENTOR' && isFeatureEnabled('ENABLE_DRAFT_ZERO')) {
+    return buildGrantPrepEntryUrl({
+      projectId: input.projectId,
+      grantOrPrepSessionId: grantSessionId,
+    })
+  }
 
   return buildGrantWorkspaceUrl({
     projectId: input.projectId,

@@ -6,7 +6,7 @@ import { fundingGuidelineService } from '../fundingGuidelines/service';
 import { fundingTemplateService } from '../fundingTemplates/service';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { resolveProjectFundingContext } from '../fundingContext';
-import { buildGrantWorkspaceUrl } from '../grants/workspaceNavigation';
+import { buildGrantPrepEntryUrl, buildGrantWorkspaceUrl } from '../grants/workspaceNavigation';
 import {
   GRANT_PREP_STAGE_BY_KEY,
   getFirstEnabledPickableStageKey,
@@ -880,10 +880,13 @@ export async function createOrReuseGrantPrepSession(input: {
       prepStatus,
       grantStatus,
     });
+  // Draft Zero is the default preparation entry (Grant Prep chat stays
+  // reachable from its UI); falls back to /prep when Draft Zero is disabled.
   const resolvePrepUrl = (grantSessionId: string | null, sessionId: string) =>
-    grantSessionId
-      ? `/projects/${input.projectId}/grants/${grantSessionId}/prep`
-      : `/projects/${input.projectId}/grants/${sessionId}/prep`;
+    buildGrantPrepEntryUrl({
+      projectId: input.projectId,
+      grantOrPrepSessionId: grantSessionId || sessionId,
+    });
   const existingSessionWhere = {
     project_id: input.projectId,
     user_id: input.user.id,

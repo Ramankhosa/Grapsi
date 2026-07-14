@@ -251,6 +251,36 @@ export interface ReviewerReadinessReport {
   generatedAt: string
 }
 
+export type GrantAiReviewVerdict = 'ready' | 'minor_revisions' | 'major_revisions'
+
+export type GrantAiReviewSeverity = 'critical' | 'important' | 'polish'
+
+export interface GrantAiReviewFinding {
+  severity: GrantAiReviewSeverity
+  /** The agency rule / template expectation this finding maps to, when identifiable. */
+  rule: string | null
+  issue: string
+  /** Self-contained fix instruction a drafting LLM can apply without other context. */
+  fix: string
+}
+
+/**
+ * LLM reviewer verdict for one grant section — replaces the deterministic
+ * keyword compliance report as the gate for export readiness. Persisted as a
+ * GrantStructuredFieldResponse with fieldKey 'aiReviewReport'.
+ */
+export interface GrantAiReviewReport {
+  version: 1
+  verdict: GrantAiReviewVerdict
+  score: number
+  summary: string
+  strengths: string[]
+  findings: GrantAiReviewFinding[]
+  /** sha1 of the trimmed content that was reviewed — detects post-review edits. */
+  reviewedContentHash: string
+  generatedAt: string
+}
+
 export interface GrantBlueprintDimensionTarget {
   sectionKey: string
   dimension: string

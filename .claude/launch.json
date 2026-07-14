@@ -8,6 +8,13 @@
       "port": 3010
     },
     {
+      "name": "grapsi-dev-autoport",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/run-local-command.js", "npx", "next", "dev"],
+      "port": 3011,
+      "autoPort": true
+    },
+    {
       "name": "spotipr-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "C:/Users/raman/Documents/spotipr", "run", "dev"],

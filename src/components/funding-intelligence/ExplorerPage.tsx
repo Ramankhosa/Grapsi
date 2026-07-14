@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, Building2, ChevronDown, Filter, Landmark, Loader2, MapPin,
-  Search, SlidersHorizontal, Sparkles, X, Zap,
+  Search, SlidersHorizontal, Sparkles, Users, X, Zap,
 } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
@@ -313,7 +313,10 @@ export default function ExplorerPage() {
               <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight sm:text-5xl">See what gets funded. Position what comes next.</h1>
               <p className="mt-4 max-w-2xl text-sm leading-6 text-teal-50/75 sm:text-base">Search awarded research by meaning, not just keywords. Compare ideas with real funding evidence and discover the strongest positioning angle.</p>
             </div>
-            <Link href="/funding/intelligence/idea/new" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Sparkles className="h-4 w-4" /> Analyze an idea</Link>
+            <div className="flex flex-wrap items-center gap-3">
+              <Link href="/researcher-matching" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Users className="h-4 w-4" /> Find researchers</Link>
+              <Link href="/funding/intelligence/idea/new" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Sparkles className="h-4 w-4" /> Analyze an idea</Link>
+            </div>
           </div>
 
           <form onSubmit={submit} className="mt-8 flex max-w-4xl flex-col gap-2 rounded-2xl border border-white/15 bg-white p-2 shadow-2xl shadow-black/20 sm:flex-row">

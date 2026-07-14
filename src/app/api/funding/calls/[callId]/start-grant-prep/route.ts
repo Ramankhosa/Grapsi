@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { requireFundingActor } from '@/lib/funding/access'
 import { buildFundingCallAccessWhere } from '@/lib/fundingIntake/routeAuth'
 import { createOrReuseGrantPrepSession } from '@/lib/grantPrep/server'
+import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
 import { normalizeGrantPrepEngagementMode } from '@/lib/grantPrep/types'
 import { prisma } from '@/lib/prisma'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
@@ -106,7 +107,10 @@ export async function POST(
           grantSessionId: sessionResult.grantSessionId || null,
           // Launch directly into the unified pipeline with GrantMentor as stage 1.
           launchUrl: sessionResult.launchUrl || null,
-          prepUrl: sessionResult.prepUrl || `/projects/${project.id}/grants/${sessionResult.session.id}/prep`,
+          prepUrl: sessionResult.prepUrl || buildGrantPrepEntryUrl({
+            projectId: project.id,
+            grantOrPrepSessionId: sessionResult.session.id,
+          }),
         },
         { status: 201 }
       )

@@ -1,10 +1,12 @@
-type LineKind = 'blank' | 'heading' | 'ul' | 'ol' | 'blockquote' | 'text';
+type LineKind = 'blank' | 'heading' | 'ul' | 'ol' | 'blockquote' | 'table' | 'text';
 
 const FENCED_BLOCK_REGEX = /```(?:markdown|md|text|txt)?\s*([\s\S]*?)```/gi;
 const HEADING_REGEX = /^\s{0,3}(#{1,6})\s*(.+?)\s*#*\s*$/;
 const BULLET_REGEX = /^(\s*)([-*+\u2022\u25E6\u25AA\u2023\u00B7])\s+(.+)$/;
 const ORDERED_REGEX = /^(\s*)(\d+)[.)]\s+(.+)$/;
 const BLOCKQUOTE_REGEX = /^>\s*(.*)$/;
+// GFM pipe-table rows: `| a | b |` (leading pipe) — the shape LLMs emit for tabular data.
+const TABLE_ROW_REGEX = /^\s*\|.*\|\s*$/;
 
 /**
  * Bold-line heading promotion:
@@ -33,6 +35,7 @@ const BOLD_LABEL_REGEX = /^\s*\*\*[^*]+\*\*:\s+\S/;
 
 function lineKind(line: string): LineKind {
   if (!line.trim()) return 'blank';
+  if (TABLE_ROW_REGEX.test(line)) return 'table';
   if (HEADING_REGEX.test(line)) return 'heading';
   if (BULLET_REGEX.test(line)) return 'ul';
   if (ORDERED_REGEX.test(line)) return 'ol';
@@ -64,6 +67,11 @@ function normalizeLine(rawLine: string): string {
     const requested = headingMatch[1].length;
     const level = Math.max(2, Math.min(4, requested));
     return `${'#'.repeat(level)} ${cleanHeadingText(headingMatch[2])}`;
+  }
+
+  // Table rows: preserve verbatim so cell delimiters and alignment markers survive
+  if (TABLE_ROW_REGEX.test(line)) {
+    return line.trim();
   }
 
   // Blockquote lines: preserve as-is after trimming
@@ -168,6 +176,65 @@ export function stripInlineMarkdownStyling(raw: string): string {
   return text;
 }
 
+export interface ParsedGfmTable {
+  headers: string[]
+  rows: string[][]
+}
+
+const TABLE_SEPARATOR_REGEX = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/;
+
+export function isGfmTableRow(line: string): boolean {
+  return TABLE_ROW_REGEX.test(line);
+}
+
+export function isGfmTableSeparator(line: string): boolean {
+  return TABLE_SEPARATOR_REGEX.test(line);
+}
+
+/** Split `| a | b |` into cells, honoring escaped pipes (`\|`). */
+export function splitGfmTableRow(line: string): string[] {
+  let inner = line.trim();
+  if (inner.startsWith('|')) inner = inner.slice(1);
+  if (inner.endsWith('|') && !inner.endsWith('\\|')) inner = inner.slice(0, -1);
+  const cells: string[] = [];
+  let current = '';
+  for (let index = 0; index < inner.length; index++) {
+    const char = inner[index];
+    if (char === '\\' && inner[index + 1] === '|') {
+      current += '|';
+      index++;
+    } else if (char === '|') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+/**
+ * Parse a run of pipe-table lines into headers + rows. Returns null unless the
+ * lines form a proper GFM table (header row followed by a separator row) —
+ * consumers like the DOCX exporter need real headers to build a table.
+ */
+export function parseGfmTableLines(lines: string[]): ParsedGfmTable | null {
+  const rowLines = lines.map(line => line.trim()).filter(Boolean);
+  if (rowLines.length < 2 || !isGfmTableSeparator(rowLines[1])) return null;
+
+  const headers = splitGfmTableRow(rowLines[0]);
+  const rows = rowLines
+    .slice(2)
+    .filter(line => !isGfmTableSeparator(line))
+    .map(splitGfmTableRow);
+  const width = Math.max(headers.length, 0, ...rows.map(row => row.length));
+  if (width === 0 || headers.every(cell => !cell)) return null;
+
+  const pad = (cells: string[]) => Array.from({ length: width }, (_, index) => cells[index] ?? '');
+  return { headers: pad(headers), rows: rows.map(pad) };
+}
+
 export function polishDraftMarkdown(raw: string): string {
   const stripped = decodeEscapedLineBreaks(stripWrappingFences(raw));
   if (!stripped) return '';
@@ -196,8 +263,11 @@ export function polishDraftMarkdown(raw: string): string {
     // Add gap before/after blockquote when transitioning from/to other block types
     const needsGapBeforeBlockquote = kind === 'blockquote' && lastNonBlank !== 'blockquote' && lastNonBlank !== 'blank' && output[output.length - 1] !== '';
     const needsGapAfterBlockquote = kind !== 'blockquote' && lastNonBlank === 'blockquote' && output[output.length - 1] !== '';
+    // Keep table blocks contiguous but separated from surrounding prose
+    const needsGapBeforeTable = kind === 'table' && lastNonBlank !== 'table' && lastNonBlank !== 'blank' && output[output.length - 1] !== '';
+    const needsGapAfterTable = kind !== 'table' && lastNonBlank === 'table' && output[output.length - 1] !== '';
 
-    if (needsGapBeforeHeading || needsGapTextAfterList || needsGapListAfterText || needsGapAfterHeading || needsGapBeforeBlockquote || needsGapAfterBlockquote) {
+    if (needsGapBeforeHeading || needsGapTextAfterList || needsGapListAfterText || needsGapAfterHeading || needsGapBeforeBlockquote || needsGapAfterBlockquote || needsGapBeforeTable || needsGapAfterTable) {
       output.push('');
     }
 

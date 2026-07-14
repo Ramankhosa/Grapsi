@@ -42,6 +42,10 @@ import {
   buildProposalReviewerReadinessReport,
 } from '@/lib/grants/compliance'
 import {
+  getGrantAiReviewReportFromResponses,
+  isGrantAiReviewStale,
+} from '@/lib/grants/aiReviewReport'
+import {
   buildGrantPrepModeWarning,
   inflateGrantPrepSessionContext,
   loadGrantPrepSession,
@@ -934,6 +938,7 @@ function enrichGrantSectionDrafts<T extends { sectionKey: string; sectionType?: 
           workflowMode: section.workflowMode,
           suggestedCitationCount: section.suggestedCitationCount,
         }),
+        grantRuleProfile: section.grantRuleProfile || null,
       },
     ] as const)
   )
@@ -943,6 +948,11 @@ function enrichGrantSectionDrafts<T extends { sectionKey: string; sectionType?: 
     sectionType: sectionMetaByKey.get(draft.sectionKey)?.sectionType || draft.sectionType || 'narrative',
     workflowMode: sectionMetaByKey.get(draft.sectionKey)?.workflowMode || 'team_manual',
     citationMode: sectionMetaByKey.get(draft.sectionKey)?.citationMode || 'direct_draft',
+    // Section drafts don't persist the routed rules — surface them from the
+    // plan so the drafting UI can show agency expectations per section.
+    grantRuleProfile: sectionMetaByKey.get(draft.sectionKey)?.grantRuleProfile
+      || (draft as { grantRuleProfile?: unknown }).grantRuleProfile
+      || null,
   }))
 }
 
@@ -2177,9 +2187,14 @@ export async function getGrantWorkspace(input: {
       ? paperSection.content
       : paperDraftSections[draft.sectionKey] || ''
 
+    const mergedContent = persistedGrantContent || shadowContent || null
+    const grantAiReviewReport = getGrantAiReviewReportFromResponses(
+      (draft as { structuredResponses?: Array<{ fieldKey?: string | null; responseJson?: unknown }> }).structuredResponses
+    )
+
     return {
       ...draft,
-      content: persistedGrantContent || shadowContent || null,
+      content: mergedContent,
       status: persistedGrantContent
         ? String(draft.status || 'NOT_STARTED')
         : String(paperSection?.status || draft.status || 'NOT_STARTED'),
@@ -2193,6 +2208,9 @@ export async function getGrantWorkspace(input: {
         asReviewerReadinessReport(paperValidationReport.reviewerReadinessReport)
         || asReviewerReadinessReport(draftRecord.reviewerReadinessReport)
         || null,
+      grantAiReviewReport,
+      // Computed server-side (crypto) so clients don't have to hash content.
+      grantAiReviewStale: isGrantAiReviewStale(grantAiReviewReport, mergedContent),
     }
   })
   const proposalFoundation = grantSession.draftingSession?.paperBlueprint

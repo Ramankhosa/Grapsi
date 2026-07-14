@@ -24,6 +24,7 @@ import { getNextEnabledPickableStageKey } from '@/lib/grantPrep/stageLibrary'
 import { buildDeterministicGrantPrepStageMemory } from '@/lib/grantPrep/stageMemory'
 import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
 import type { GrantPrepEngagementMode, GrantPrepIdeationDecision } from '@/lib/grantPrep/types'
+import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
 import { loadAnchoredFundingCall } from '@/lib/ideaIntelligence/service'
 import type { IdeaCallGap, IdeaReviewerPersona } from '@/lib/ideaIntelligence/service'
 
@@ -136,7 +137,7 @@ export async function handoffIdeaRunToGrantPrep(input: {
         grantPrepSessionId: linked.id,
         grantSessionId: null,
         launchUrl: null,
-        prepUrl: `/projects/${linked.project_id}/grants/${linked.id}/prep`,
+        prepUrl: buildGrantPrepEntryUrl({ projectId: linked.project_id, grantOrPrepSessionId: linked.id }),
         anchorCompilationSource: null,
         warning: null,
       }
@@ -289,7 +290,7 @@ export async function handoffIdeaRunToGrantPrep(input: {
       grantPrepSessionId: session.id,
       grantSessionId: sessionResult.grantSessionId || null,
       launchUrl: sessionResult.launchUrl || null,
-      prepUrl: sessionResult.prepUrl || `/projects/${project.id}/grants/${session.id}/prep`,
+      prepUrl: sessionResult.prepUrl || buildGrantPrepEntryUrl({ projectId: project.id, grantOrPrepSessionId: session.id }),
       anchorCompilationSource: compiled.compilationSource,
       warning: compiled.warning,
     }

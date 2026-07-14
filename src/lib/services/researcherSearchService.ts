@@ -20,6 +20,47 @@ const TEXT_BRANCH_LIMIT = 80;
 const MERGED_LIMIT = 100;
 const RERANK_LIMIT = 40;
 const FUNDING_PUBLICATION_TAG = 'my-publication';
+const EVIDENCE_SNIPPET_LENGTH = 280;
+const SHARED_TERM_LIMIT = 8;
+
+/**
+ * Relevance gating.
+ *
+ * Vector kNN always returns the nearest rows no matter how far away they are,
+ * so without gates every embedded researcher shows up in every search. Three
+ * mechanisms keep only genuine matches:
+ *  1. A minimum cosine-similarity floor inside each vector branch (cheap,
+ *     coarse; calibrated per embedding provider since their scales differ).
+ *  2. When the Voyage reranker is available, its relevance score replaces the
+ *     retrieval score and results below RESEARCHER_MATCH_RERANK_GATE are
+ *     dropped — rerank scores are far better calibrated than raw cosine.
+ *  3. Without a reranker, results more than RESEARCHER_MATCH_VECTOR_GAP below
+ *     the best score are dropped (cosine scores compress into a narrow band,
+ *     so a relative gap works better than a second absolute threshold).
+ */
+const RERANK_GATE_DEFAULT = 0.35;
+const RERANK_STRONG_TIER = 0.65;
+const RERANK_MODERATE_TIER = 0.5;
+const VECTOR_FLOOR_VOYAGE_DEFAULT = 0.3;
+const VECTOR_FLOOR_DEFAULT = 0.45;
+const VECTOR_GAP_DEFAULT = 0.15;
+const VECTOR_GAP_STRONG_TIER = 0.04;
+const VECTOR_GAP_MODERATE_TIER = 0.1;
+
+const TS_HEADLINE_OPTIONS =
+  'StartSel=**, StopSel=**, MaxWords=25, MinWords=8, MaxFragments=2, FragmentDelimiter=" … "';
+
+const SHARED_TERM_STOPWORDS = new Set([
+  'about', 'across', 'analysis', 'application', 'applications', 'approach', 'approaches',
+  'based', 'between', 'context', 'development', 'their', 'method', 'methods', 'model',
+  'models', 'novel', 'research', 'science', 'studies', 'study', 'system', 'systems',
+  'technique', 'techniques', 'technology', 'technologies', 'through', 'towards', 'using',
+  'within',
+]);
+
+export type ResearcherMatchSource = 'profile' | 'research_area' | 'publication' | 'text';
+export type ResearcherMatchTier = 'strong' | 'moderate' | 'weak';
+export type ResearcherScoreBasis = 'rerank' | 'vector';
 
 export interface ResearcherSearchFilters {
   countries?: string[];
@@ -39,6 +80,18 @@ export interface ResearcherSearchRequest {
   requesterTenantId?: string | null;
 }
 
+export interface ResearcherMatchEvidence {
+  source: ResearcherMatchSource;
+  /** Cosine similarity for vector sources; ts_rank for the text source. */
+  similarity: number;
+  /** Matched text excerpt. Text-branch snippets carry **term** highlights. */
+  snippet: string | null;
+  /** Publication title or saved research-area label, when the source has one. */
+  title: string | null;
+  /** Extra context, e.g. publication year and venue. */
+  detail: string | null;
+}
+
 export interface ResearcherSearchResult {
   userId: string;
   displayName: string;
@@ -51,16 +104,23 @@ export interface ResearcherSearchResult {
   researchAreas: string[];
   keywords: string[];
   score: number;
+  rerankScore: number | null;
+  matchTier: ResearcherMatchTier;
   semanticSimilarity: number;
   textRank: number;
   matchedSources: string[];
   matchReason: string;
+  evidence: ResearcherMatchEvidence[];
+  sharedTerms: string[];
 }
 
 export interface ResearcherSearchResponse {
   query: string;
   fundingCallId: string | null;
   totalResults: number;
+  /** Candidates retrieved before relevance gating — lets the UI say "screened N". */
+  totalCandidates: number;
+  scoreBasis: ResearcherScoreBasis;
   results: ResearcherSearchResult[];
   degradedMode: 'text_only' | null;
 }
@@ -77,10 +137,17 @@ type ResearcherCandidateRow = {
   researchAreas: string[];
   keywords: string[];
   matchedText: string | null;
+  matchedTitle: string | null;
+  matchedDetail: string | null;
   source: string;
   semanticSimilarity: number;
   textRank: number;
 };
+
+function envNumber(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 && value < 1 ? value : fallback;
+}
 
 function sqlLowerTextArray(values: string[]) {
   return Prisma.sql`ARRAY[${Prisma.join(values.map((value) => Prisma.sql`${value.toLowerCase()}`))}]::text[]`;
@@ -156,7 +223,14 @@ function buildHardFilterConditions(input: ResearcherSearchRequest) {
   return combineConditions(conditions);
 }
 
-function profileCandidateColumns(source: string, matchedTextSql: Prisma.Sql, semanticSql: Prisma.Sql, textRankSql: Prisma.Sql) {
+function profileCandidateColumns(
+  source: string,
+  matchedTextSql: Prisma.Sql,
+  semanticSql: Prisma.Sql,
+  textRankSql: Prisma.Sql,
+  matchedTitleSql: Prisma.Sql = Prisma.sql`NULL::text`,
+  matchedDetailSql: Prisma.Sql = Prisma.sql`NULL::text`
+) {
   return Prisma.sql`
     u.id AS "userId",
     COALESCE(rp.display_name, u.name, 'Researcher') AS "displayName",
@@ -169,6 +243,8 @@ function profileCandidateColumns(source: string, matchedTextSql: Prisma.Sql, sem
     COALESCE(rp.research_areas, ARRAY[]::text[]) AS "researchAreas",
     COALESCE(rp.keywords, ARRAY[]::text[]) AS keywords,
     ${matchedTextSql} AS "matchedText",
+    ${matchedTitleSql} AS "matchedTitle",
+    ${matchedDetailSql} AS "matchedDetail",
     ${source}::text AS source,
     ${semanticSql}::float AS "semanticSimilarity",
     ${textRankSql}::float AS "textRank"
@@ -211,11 +287,219 @@ function publicationEmbeddingColumnSql() {
   return Prisma.raw(getPublicationEmbeddingColumn());
 }
 
+/** Minimum cosine similarity a vector candidate must reach. Provider scales differ. */
+function getVectorSimilarityFloor() {
+  const override = Number(process.env.RESEARCHER_MATCH_MIN_SIMILARITY);
+  if (Number.isFinite(override) && override > 0 && override < 1) {
+    return override;
+  }
+  const health = embeddingService.getHealth({ taskType: QUERY_EMBEDDING_TASK_TYPE });
+  return health.provider === 'voyage' ? VECTOR_FLOOR_VOYAGE_DEFAULT : VECTOR_FLOOR_DEFAULT;
+}
+
 function clampScore(value: number) {
   if (!Number.isFinite(value)) {
     return 0;
   }
   return Math.max(0, Math.min(value, 1));
+}
+
+function roundScore(value: number) {
+  return Number(value.toFixed(4));
+}
+
+function truncateSnippet(value: string | null | undefined) {
+  const normalized = normalizeWhitespace(value || '');
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= EVIDENCE_SNIPPET_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, EVIDENCE_SNIPPET_LENGTH).trimEnd()}…`;
+}
+
+function evidenceFromRow(
+  row: ResearcherCandidateRow,
+  semanticSimilarity: number,
+  textRank: number
+): ResearcherMatchEvidence {
+  return {
+    source: row.source as ResearcherMatchSource,
+    similarity: row.source === 'text' ? textRank : semanticSimilarity,
+    snippet: truncateSnippet(row.matchedText),
+    title: normalizeWhitespace(row.matchedTitle || '') || null,
+    detail: normalizeWhitespace(row.matchedDetail || '') || null,
+  };
+}
+
+/** Semantic evidence first (strongest similarity on top), lexical evidence last. */
+function sortEvidence(evidence: ResearcherMatchEvidence[]) {
+  return [...evidence].sort((left, right) => {
+    const leftText = left.source === 'text' ? 1 : 0;
+    const rightText = right.source === 'text' ? 1 : 0;
+    if (leftText !== rightText) {
+      return leftText - rightText;
+    }
+    return right.similarity - left.similarity;
+  });
+}
+
+function buildMatchReason(result: ResearcherSearchResult) {
+  const top = result.evidence[0];
+  if (!top) {
+    return 'Matched researcher profile';
+  }
+  switch (top.source) {
+    case 'publication':
+      return top.title
+        ? `Strongest signal: publication "${top.title}"`
+        : 'Strongest signal: a key publication';
+    case 'research_area':
+      return top.title
+        ? `Strongest signal: saved research area "${top.title}"`
+        : 'Strongest signal: a saved research area';
+    case 'text':
+      return 'Strongest signal: keyword/text match';
+    default:
+      return 'Strongest signal: overall profile similarity';
+  }
+}
+
+/** Researcher keywords/areas that overlap the query — cheap, fully explainable chips. */
+function extractSharedTerms(query: string, phrases: string[]) {
+  const queryLower = query.toLowerCase();
+  const queryWords = new Set(
+    queryLower
+      .split(/[^a-z0-9+#-]+/)
+      .filter((word) => word.length >= 5 && !SHARED_TERM_STOPWORDS.has(word))
+  );
+
+  const shared: string[] = [];
+  const seen = new Set<string>();
+  for (const phrase of phrases) {
+    const label = normalizeWhitespace(phrase);
+    const key = label.toLowerCase();
+    if (!label || seen.has(key)) {
+      continue;
+    }
+    const words = key
+      .split(/[^a-z0-9+#-]+/)
+      .filter((word) => word.length >= 5 && !SHARED_TERM_STOPWORDS.has(word));
+    const matches =
+      (key.length >= 4 && queryLower.includes(key)) ||
+      words.some((word) => queryWords.has(word));
+    if (matches) {
+      seen.add(key);
+      shared.push(label);
+      if (shared.length >= SHARED_TERM_LIMIT) {
+        break;
+      }
+    }
+  }
+  return shared;
+}
+
+function mergeCandidates(rows: ResearcherCandidateRow[], limit: number) {
+  const merged = new Map<string, ResearcherSearchResult>();
+
+  rows.forEach((row) => {
+    const semanticSimilarity = clampScore(Number(row.semanticSimilarity || 0));
+    const textRank = clampScore(Number(row.textRank || 0));
+    const baseScore = Math.max(semanticSimilarity, textRank);
+    const evidence = evidenceFromRow(row, semanticSimilarity, textRank);
+
+    const existing = merged.get(row.userId);
+    if (!existing) {
+      merged.set(row.userId, {
+        userId: row.userId,
+        displayName: normalizeWhitespace(row.displayName || '') || 'Researcher',
+        countryOfResidence: normalizeWhitespace(row.countryOfResidence || '') || null,
+        institutionName: normalizeWhitespace(row.institutionName || '') || null,
+        institutionType: normalizeWhitespace(row.institutionType || '') || null,
+        department: normalizeWhitespace(row.department || '') || null,
+        careerStage: normalizeWhitespace(row.careerStage || '') || null,
+        researchSummary: normalizeWhitespace(row.researchSummary || '') || null,
+        researchAreas: row.researchAreas || [],
+        keywords: row.keywords || [],
+        score: baseScore,
+        rerankScore: null,
+        matchTier: 'weak',
+        semanticSimilarity,
+        textRank,
+        matchedSources: [row.source],
+        matchReason: '',
+        evidence: [evidence],
+        sharedTerms: [],
+      });
+      return;
+    }
+
+    existing.semanticSimilarity = Math.max(existing.semanticSimilarity, semanticSimilarity);
+    existing.textRank = Math.max(existing.textRank, textRank);
+    existing.score = Math.max(existing.score, baseScore);
+    if (!existing.matchedSources.includes(row.source)) {
+      existing.matchedSources.push(row.source);
+    }
+    const priorIndex = existing.evidence.findIndex((entry) => entry.source === evidence.source);
+    if (priorIndex === -1) {
+      existing.evidence.push(evidence);
+    } else if (evidence.similarity > existing.evidence[priorIndex].similarity) {
+      existing.evidence[priorIndex] = evidence;
+    }
+  });
+
+  return Array.from(merged.values())
+    .map((result) => {
+      result.evidence = sortEvidence(result.evidence);
+      result.matchReason = buildMatchReason(result);
+      return result;
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit);
+}
+
+/**
+ * Drop candidates that only made the list because kNN had nothing closer, and
+ * assign display tiers. With rerank scores the gate is absolute (they are well
+ * calibrated); with raw vector scores it is relative to the best result.
+ */
+function applyRelevanceGate(
+  results: ResearcherSearchResult[],
+  basis: ResearcherScoreBasis
+): ResearcherSearchResult[] {
+  if (results.length === 0) {
+    return results;
+  }
+
+  if (basis === 'rerank') {
+    const gate = envNumber('RESEARCHER_MATCH_RERANK_GATE', RERANK_GATE_DEFAULT);
+    return results
+      .filter((result) => result.rerankScore !== null && result.rerankScore >= gate)
+      .map((result) => {
+        const matchTier: ResearcherMatchTier =
+          result.rerankScore! >= RERANK_STRONG_TIER
+            ? 'strong'
+            : result.rerankScore! >= RERANK_MODERATE_TIER
+              ? 'moderate'
+              : 'weak';
+        return { ...result, matchTier };
+      });
+  }
+
+  const gap = envNumber('RESEARCHER_MATCH_VECTOR_GAP', VECTOR_GAP_DEFAULT);
+  const topScore = results[0].score;
+  return results
+    .filter((result) => result.score >= topScore - gap)
+    .map((result) => {
+      const matchTier: ResearcherMatchTier =
+        result.score >= topScore - VECTOR_GAP_STRONG_TIER
+          ? 'strong'
+          : result.score >= topScore - VECTOR_GAP_MODERATE_TIER
+            ? 'moderate'
+            : 'weak';
+      return { ...result, matchTier };
+    });
 }
 
 function buildRerankDocument(result: ResearcherSearchResult) {
@@ -228,68 +512,6 @@ function buildRerankDocument(result: ResearcherSearchResult) {
     result.institutionName ? `Institution: ${result.institutionName}` : '',
     result.careerStage ? `Career stage: ${result.careerStage}` : '',
   ].filter(Boolean).join('\n')).slice(0, 5000);
-}
-
-function buildMatchReason(result: ResearcherSearchResult) {
-  if (result.matchedSources.includes('publication')) {
-    return 'Matched through key publication text';
-  }
-  if (result.matchedSources.includes('research_area')) {
-    return 'Matched through saved research area';
-  }
-  if (result.semanticSimilarity >= 0.5) {
-    return 'Matched through profile semantic similarity';
-  }
-  if (result.textRank > 0) {
-    return 'Matched through text search';
-  }
-  return 'Matched researcher profile';
-}
-
-function mergeCandidates(rows: ResearcherCandidateRow[], limit: number) {
-  const merged = new Map<string, ResearcherSearchResult>();
-
-  rows.forEach((row) => {
-    const existing = merged.get(row.userId);
-    const semanticSimilarity = clampScore(Number(row.semanticSimilarity || 0));
-    const textRank = clampScore(Number(row.textRank || 0));
-    const baseScore = Math.max(semanticSimilarity, textRank);
-
-    if (!existing) {
-      const result: ResearcherSearchResult = {
-        userId: row.userId,
-        displayName: normalizeWhitespace(row.displayName || '') || 'Researcher',
-        countryOfResidence: normalizeWhitespace(row.countryOfResidence || '') || null,
-        institutionName: normalizeWhitespace(row.institutionName || '') || null,
-        institutionType: normalizeWhitespace(row.institutionType || '') || null,
-        department: normalizeWhitespace(row.department || '') || null,
-        careerStage: normalizeWhitespace(row.careerStage || '') || null,
-        researchSummary: normalizeWhitespace(row.researchSummary || '') || null,
-        researchAreas: row.researchAreas || [],
-        keywords: row.keywords || [],
-        score: baseScore,
-        semanticSimilarity,
-        textRank,
-        matchedSources: [row.source],
-        matchReason: '',
-      };
-      result.matchReason = buildMatchReason(result);
-      merged.set(row.userId, result);
-      return;
-    }
-
-    existing.semanticSimilarity = Math.max(existing.semanticSimilarity, semanticSimilarity);
-    existing.textRank = Math.max(existing.textRank, textRank);
-    existing.score = Math.max(existing.score, baseScore);
-    if (!existing.matchedSources.includes(row.source)) {
-      existing.matchedSources.push(row.source);
-    }
-    existing.matchReason = buildMatchReason(existing);
-  });
-
-  return Array.from(merged.values())
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
 }
 
 async function buildFundingCallQuery(fundingCallId: string) {
@@ -354,17 +576,21 @@ export class ResearcherSearchService {
   }
 
   private async searchProfileVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql) {
+    const floor = getVectorSimilarityFloor();
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
       SELECT
         ${profileCandidateColumns(
           'profile',
-          Prisma.sql`rp.normalized_text`,
+          // The card already displays the research summary, so the profile
+          // branch carries no separate snippet.
+          Prisma.sql`NULL::text`,
           Prisma.sql`1 - (${profileEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector))`,
           Prisma.sql`0`
         )}
       FROM researcher_profiles rp
       JOIN users u ON u.id = rp.user_id
       WHERE ${profileEmbeddingColumnSql()} IS NOT NULL
+        AND 1 - (${profileEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY ${profileEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
       LIMIT ${VECTOR_BRANCH_LIMIT}
@@ -372,19 +598,22 @@ export class ResearcherSearchService {
   }
 
   private async searchSavedAreaVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql) {
+    const floor = getVectorSimilarityFloor();
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
       SELECT DISTINCT ON (u.id)
         ${profileCandidateColumns(
           'research_area',
           Prisma.sql`area.normalized_text`,
           Prisma.sql`1 - (area.${savedAreaEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector))`,
-          Prisma.sql`0`
+          Prisma.sql`0`,
+          Prisma.sql`area.label`
         )}
       FROM researcher_saved_research_areas area
       JOIN users u ON u.id = area.user_id
       JOIN researcher_profiles rp ON rp.user_id = u.id
       WHERE area.${savedAreaEmbeddingColumnSql()} IS NOT NULL
         AND area.use_for_alerts = true
+        AND 1 - (area.${savedAreaEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY u.id, area.${savedAreaEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
       LIMIT ${VECTOR_BRANCH_LIMIT}
@@ -392,13 +621,16 @@ export class ResearcherSearchService {
   }
 
   private async searchPublicationVectors(queryVectorLiteral: string, hardConditions: Prisma.Sql) {
+    const floor = getVectorSimilarityFloor();
     return prisma.$queryRaw<ResearcherCandidateRow[]>(Prisma.sql`
       SELECT DISTINCT ON (u.id)
         ${profileCandidateColumns(
           'publication',
           Prisma.sql`ref.funding_match_text`,
           Prisma.sql`1 - (ref.${publicationEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector))`,
-          Prisma.sql`0`
+          Prisma.sql`0`,
+          Prisma.sql`ref.title`,
+          Prisma.sql`NULLIF(CONCAT_WS(' · ', ref.year::text, ref.venue), '')`
         )}
       FROM reference_library ref
       JOIN users u ON u.id = ref.user_id
@@ -406,6 +638,7 @@ export class ResearcherSearchService {
       WHERE ref.${publicationEmbeddingColumnSql()} IS NOT NULL
         AND ref."isActive" = true
         AND ${FUNDING_PUBLICATION_TAG} = ANY(ref.tags)
+        AND 1 - (ref.${publicationEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector)) >= ${floor}
         AND ${hardConditions}
       ORDER BY u.id, ref.${publicationEmbeddingColumnSql()} <=> CAST(${queryVectorLiteral} AS vector) ASC
       LIMIT ${VECTOR_BRANCH_LIMIT}
@@ -417,7 +650,17 @@ export class ResearcherSearchService {
       SELECT
         ${profileCandidateColumns(
           'text',
-          Prisma.sql`rp.normalized_text`,
+          Prisma.sql`ts_headline(
+            'english',
+            CONCAT_WS(
+              ' ',
+              rp.research_summary,
+              array_to_string(rp.research_areas, ' '),
+              array_to_string(rp.keywords, ' ')
+            ),
+            websearch_to_tsquery('english', ${query}),
+            ${TS_HEADLINE_OPTIONS}
+          )`,
           Prisma.sql`0`,
           Prisma.sql`ts_rank_cd(
             to_tsvector(
@@ -451,9 +694,12 @@ export class ResearcherSearchService {
     `);
   }
 
-  private async rerank(query: string, results: ResearcherSearchResult[]) {
+  private async rerank(
+    query: string,
+    results: ResearcherSearchResult[]
+  ): Promise<{ ranked: ResearcherSearchResult[]; basis: ResearcherScoreBasis }> {
     if (!voyageRerankService.isConfigured() || results.length <= 1) {
-      return results;
+      return { ranked: results, basis: 'vector' };
     }
 
     const rerankWindow = results.slice(0, RERANK_LIMIT);
@@ -466,20 +712,21 @@ export class ResearcherSearchService {
         topK: rerankWindow.length,
       });
       if (reranked.length === 0) {
-        return results;
+        return { ranked: results, basis: 'vector' };
       }
 
       const seen = new Set<number>();
-      const ordered = reranked
+      const ordered: ResearcherSearchResult[] = reranked
         .filter((item) => item.index >= 0 && item.index < rerankWindow.length)
         .map((item) => {
           seen.add(item.index);
           const result = rerankWindow[item.index];
-          return {
-            ...result,
-            score: Math.max(result.score, clampScore(item.relevanceScore)),
-          };
-        });
+          const rerankScore = clampScore(item.relevanceScore);
+          // The reranker is far better calibrated than raw cosine similarity,
+          // so its relevance score replaces the retrieval score outright.
+          return { ...result, rerankScore, score: rerankScore };
+        })
+        .sort((left, right) => right.score - left.score);
 
       rerankWindow.forEach((result, index) => {
         if (!seen.has(index)) {
@@ -487,10 +734,10 @@ export class ResearcherSearchService {
         }
       });
 
-      return [...ordered, ...remaining];
+      return { ranked: [...ordered, ...remaining], basis: 'rerank' };
     } catch (error) {
       console.warn('Voyage researcher rerank failed; using first-stage researcher results.', error instanceof Error ? error.message : String(error));
-      return results;
+      return { ranked: results, basis: 'vector' };
     }
   }
 
@@ -498,7 +745,7 @@ export class ResearcherSearchService {
     const query = await this.resolveSearchText(input);
     const limit = Math.max(1, Math.min(Number(input.limit || 20), 50));
     const hardConditions = buildHardFilterConditions(input);
-    const vectorLiteral = await this.buildQueryVectorLiteral(query);
+    const vectorLiteral = await this.buildQueryVectorLiteral(query).catch(() => null);
 
     const vectorBranches = vectorLiteral
       ? await Promise.allSettled([
@@ -516,18 +763,27 @@ export class ResearcherSearchService {
         : 'text_only';
     const textRows = await this.searchText(query, hardConditions).catch(() => []);
     const merged = mergeCandidates([...vectorRows, ...textRows], MERGED_LIMIT);
-    const reranked = await this.rerank(query, merged);
-    const results = reranked.slice(0, limit).map((result) => ({
+    const { ranked, basis } = await this.rerank(query, merged);
+    const gated = applyRelevanceGate(ranked, basis);
+    const results = gated.slice(0, limit).map((result) => ({
       ...result,
-      score: Number(result.score.toFixed(4)),
-      semanticSimilarity: Number(result.semanticSimilarity.toFixed(4)),
-      textRank: Number(result.textRank.toFixed(4)),
+      sharedTerms: extractSharedTerms(query, [...result.keywords, ...result.researchAreas]),
+      score: roundScore(result.score),
+      rerankScore: result.rerankScore === null ? null : roundScore(result.rerankScore),
+      semanticSimilarity: roundScore(result.semanticSimilarity),
+      textRank: roundScore(result.textRank),
+      evidence: result.evidence.map((entry) => ({
+        ...entry,
+        similarity: roundScore(entry.similarity),
+      })),
     }));
 
     return {
       query,
       fundingCallId: input.fundingCallId || null,
       totalResults: results.length,
+      totalCandidates: merged.length,
+      scoreBasis: basis,
       results,
       degradedMode,
     };

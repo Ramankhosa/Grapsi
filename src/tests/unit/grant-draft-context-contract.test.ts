@@ -9,6 +9,7 @@ import {
   buildGrantComplianceReport,
   buildReviewerReadinessReport,
 } from '@/lib/grants/compliance'
+import { computeGrantContentHash } from '@/lib/grants/aiReviewReport'
 import type { GrantSectionComplianceContract } from '@/types/grant'
 
 function makeContract(): GrantSectionComplianceContract {
@@ -200,7 +201,7 @@ describe('GrantDraftContextContract', () => {
     expect(readiness.missingSignals.join(' ')).toMatch(/Measurable metrics or milestones are missing/i)
   })
 
-  it('blocks final export when app draft sections are stale or unvalidated', () => {
+  it('blocks final export when app draft sections are stale or not AI-reviewed', () => {
     const readiness = validateGrantFinalExportReadiness({
       sections: [
         {
@@ -224,8 +225,55 @@ describe('GrantDraftContextContract', () => {
 
     expect(readiness.ok).toBe(false)
     expect(readiness.issues.join(' ')).toMatch(/stale/i)
-    expect(readiness.issues.join(' ')).toMatch(/not been validated/i)
+    expect(readiness.issues.join(' ')).toMatch(/not been AI-reviewed/i)
     expect(readiness.issues.join(' ')).not.toMatch(/Budget has no final draft/)
+  })
+
+  it('gates final export on the AI review verdict, not the keyword compliance report', () => {
+    const content = 'Final draft content that the reviewer assessed.'
+    const makeSection = (aiReview: Record<string, unknown> | null) => ({
+      sectionKey: 'technical_plan',
+      label: 'Technical Plan',
+      workflowMode: 'app_draft',
+      required: true,
+      content,
+      structuredResponses: aiReview
+        ? [{ fieldKey: 'aiReviewReport', responseJson: aiReview }]
+        : [],
+    })
+    const baseReview = {
+      version: 1,
+      verdict: 'ready',
+      score: 92,
+      summary: 'Ready.',
+      strengths: [],
+      findings: [],
+      reviewedContentHash: computeGrantContentHash(content),
+      generatedAt: new Date().toISOString(),
+    }
+
+    // Current, clean review → export unblocked even without a keyword report.
+    expect(validateGrantFinalExportReadiness({ sections: [makeSection(baseReview)] })).toEqual({ ok: true, issues: [] })
+
+    // Content changed after the review → must re-run.
+    const staleReview = validateGrantFinalExportReadiness({
+      sections: [makeSection({ ...baseReview, reviewedContentHash: 'outdated_hash' })],
+    })
+    expect(staleReview.ok).toBe(false)
+    expect(staleReview.issues.join(' ')).toMatch(/changed after its last AI review/i)
+
+    // Critical findings block the final export.
+    const blocked = validateGrantFinalExportReadiness({
+      sections: [
+        makeSection({
+          ...baseReview,
+          verdict: 'major_revisions',
+          findings: [{ severity: 'critical', rule: null, issue: 'Missing required point.', fix: 'Add it.' }],
+        }),
+      ],
+    })
+    expect(blocked.ok).toBe(false)
+    expect(blocked.issues.join(' ')).toMatch(/critical findings/i)
   })
 
   it('blocks final export when a section was prepared against another finalized idea', () => {

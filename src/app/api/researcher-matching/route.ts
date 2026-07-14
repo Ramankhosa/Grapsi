@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
   const results = await researcherSearchService.search({
     fundingCallId: fundingCallId || null,
     query: query || null,
-    limit: Math.min(Number(limit) || 50, 50),
+    limit: Math.min(Number(limit) || 20, 50),
     requesterUserId: user.id,
     requesterTenantId: tenantId,
     filters: { tenantOnly: true, includeSelf: true },

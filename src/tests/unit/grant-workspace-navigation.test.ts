@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  buildGrantPrepEntryUrl,
   buildGrantProjectOpenUrl,
   buildGrantWorkspaceUrl,
   resolveGrantWorkspaceStage,
@@ -134,6 +135,46 @@ describe('grant workspace navigation', () => {
         status: 'DRAFTING',
       },
     })).toBe('/projects/project-1/grants/grant-1/workspace?stage=SECTION_DRAFTING')
+  })
+
+  describe('grant prep entry routing', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('defaults preparation entry to Draft Zero when enabled, Grant Prep otherwise', () => {
+      expect(buildGrantPrepEntryUrl({ projectId: 'project-1', grantOrPrepSessionId: 'prep-1' }))
+        .toBe('/projects/project-1/grants/prep-1/prep')
+
+      vi.stubEnv('FEATURE_ENABLE_DRAFT_ZERO', 'true')
+      expect(buildGrantPrepEntryUrl({ projectId: 'project-1', grantOrPrepSessionId: 'prep-1' }))
+        .toBe('/projects/project-1/grants/prep-1/draft-zero')
+    })
+
+    it('opens pre-launch grant projects on Draft Zero when enabled', () => {
+      vi.stubEnv('FEATURE_ENABLE_DRAFT_ZERO', 'true')
+      expect(buildGrantProjectOpenUrl({
+        projectId: 'project-1',
+        prepSession: {
+          status: 'active',
+          grant_session_id: 'grant-1',
+        },
+        grantSession: null,
+      })).toBe('/projects/project-1/grants/grant-1/draft-zero')
+
+      // Launched sessions keep opening on their workspace stage.
+      expect(buildGrantProjectOpenUrl({
+        projectId: 'project-1',
+        prepSession: {
+          status: 'launched',
+          grant_session_id: 'grant-1',
+        },
+        grantSession: {
+          id: 'grant-1',
+          status: 'BLUEPRINT',
+        },
+      })).toBe('/projects/project-1/grants/grant-1/workspace?stage=BLUEPRINT')
+    })
   })
 
   it('replaces an existing workspace stage query parameter', () => {

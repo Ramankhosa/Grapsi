@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
+import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
 import type { ProjectSearchItem } from './types'
 
 type FacetStatus = 'PRESENT' | 'PARTIAL' | 'ABSENT' | 'UNASSESSED'
@@ -791,7 +792,10 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
   const startGrantPrep = async () => {
     if (!token || !run || handoffBusy) return
     if (run.linkedGrantPrepSessionId && run.linkedProjectId) {
-      router.push(`/projects/${run.linkedProjectId}/grants/${run.linkedGrantPrepSessionId}/prep`)
+      router.push(buildGrantPrepEntryUrl({
+        projectId: run.linkedProjectId,
+        grantOrPrepSessionId: run.linkedGrantPrepSessionId,
+      }))
       return
     }
     if (!targetCallId) {

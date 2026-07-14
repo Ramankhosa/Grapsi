@@ -1,24 +1,31 @@
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
 import { sanitizeGrantRuleText, summarizeGrantRuleText } from '@/lib/grants/ruleText'
-import type { GrantComplianceReport, ReviewerReadinessReport } from '@/types/grant'
+import type { GrantAiReviewReport } from '@/types/grant'
 
 /**
  * Draft One: client-side orchestration logic over the EXISTING drafting
- * engine. No new generation code — these helpers normalize the sections GET
- * payload, order the drafting queue, derive per-section compliance status,
- * and compose the repair instructions fed back to the engine when a section
- * fails its agency-rule validation.
+ * engine. Drafting is never blocked by deterministic rule checks — agency
+ * rules are enforced by the LLM review stage. These helpers normalize the
+ * sections GET payload, order the drafting/review queues, derive per-section
+ * status from the AI review verdict, and compose the fix instructions fed
+ * back to the engine when the reviewer flags issues.
  */
 
 export type DraftOneSectionStatus =
   | 'manual' // team_manual / app_support — not AI-drafted here
   | 'pending' // draftable, no content yet
-  | 'unvalidated' // has content but no compliance report yet
-  | 'issues' // compliance report failed
-  | 'passed' // compliance report passed
+  | 'unreviewed' // has content but no (current) AI review verdict
+  | 'issues' // AI reviewer flagged revisions
+  | 'ready' // AI reviewer verdict: ready
   | 'stale' // blueprint/prep changed after drafting
 
-export type DraftOneRunState = 'queued' | 'writing' | 'checking' | 'repairing' | 'done' | 'failed'
+export type DraftOneRunState =
+  | 'queued'
+  | 'writing'
+  | 'reviewing'
+  | 'fixing'
+  | 'done'
+  | 'failed'
 
 export interface DraftOneSection {
   sectionKey: string
@@ -34,8 +41,9 @@ export interface DraftOneSection {
   isStale: boolean
   autoDraftable: boolean
   status: DraftOneSectionStatus
-  compliance: GrantComplianceReport | null
-  readiness: ReviewerReadinessReport | null
+  aiReview: GrantAiReviewReport | null
+  /** True when content changed after the last AI review (computed server-side). */
+  aiReviewStale: boolean
   ruleProfile: {
     requiredPoints: string[]
     evaluationFocus: string[]
@@ -53,24 +61,12 @@ function asCleanRuleArray(value: unknown): string[] {
   return asStringArray(value).map((entry) => sanitizeGrantRuleText(entry)).filter(Boolean)
 }
 
-/**
- * Reports persisted before the rule-text sanitizers shipped still carry raw
- * URLs / paragraph blobs. Clean them at read time with the SAME transform used
- * for the rule profile, so covered-point set membership stays consistent.
- */
-function sanitizeComplianceReport(report: GrantComplianceReport | null): GrantComplianceReport | null {
-  if (!report) return null
-  return {
-    ...report,
-    coveredRequiredPoints: asCleanRuleArray(report.coveredRequiredPoints),
-    unmetRequiredPoints: asCleanRuleArray(report.unmetRequiredPoints),
-    violatedAvoidRules: asCleanRuleArray(report.violatedAvoidRules),
-    hardFailures: (report.hardFailures || []).map((finding) => ({
-      ...finding,
-      message: sanitizeGrantRuleText(finding.message) || finding.message,
-      ruleText: finding.ruleText ? sanitizeGrantRuleText(finding.ruleText) || null : null,
-    })),
-  }
+function asAiReviewReport(value: unknown): GrantAiReviewReport | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Partial<GrantAiReviewReport>
+  return typeof record.verdict === 'string' && Array.isArray(record.findings)
+    ? (record as GrantAiReviewReport)
+    : null
 }
 
 export function countWords(text: string): number {
@@ -86,18 +82,16 @@ export function normalizeDraftOneSection(raw: Record<string, unknown>): DraftOne
   const workflowMode = String(raw.workflowMode || 'team_manual')
   const content = typeof raw.content === 'string' ? raw.content : ''
   const isStale = Boolean(raw.isStale)
-  const compliance = sanitizeComplianceReport(
-    (raw.grantComplianceReport as GrantComplianceReport | null | undefined) || null
-  )
-  const readiness = (raw.reviewerReadinessReport as ReviewerReadinessReport | null | undefined) || null
+  const aiReview = asAiReviewReport(raw.grantAiReviewReport)
+  const aiReviewStale = Boolean(raw.grantAiReviewStale)
   const autoDraftable = isGrantSectionAutoDraftable({ sectionKey, sectionType, workflowMode })
 
   let status: DraftOneSectionStatus
   if (!autoDraftable) status = 'manual'
   else if (isStale) status = 'stale'
   else if (!content.trim()) status = 'pending'
-  else if (!compliance) status = 'unvalidated'
-  else status = compliance.passed ? 'passed' : 'issues'
+  else if (!aiReview || aiReviewStale) status = 'unreviewed'
+  else status = aiReview.verdict === 'ready' ? 'ready' : 'issues'
 
   const profile = raw.grantRuleProfile as Record<string, unknown> | null | undefined
   return {
@@ -115,8 +109,8 @@ export function normalizeDraftOneSection(raw: Record<string, unknown>): DraftOne
     isStale,
     autoDraftable,
     status,
-    compliance,
-    readiness,
+    aiReview,
+    aiReviewStale,
     ruleProfile: profile
       ? {
           requiredPoints: asCleanRuleArray(profile.requiredPoints),
@@ -129,7 +123,7 @@ export function normalizeDraftOneSection(raw: Record<string, unknown>): DraftOne
   }
 }
 
-/** Sections the Run drafts, in agency template order. */
+/** Sections the writing run drafts, in agency template order. */
 export function buildDraftOneQueue(sections: DraftOneSection[], options?: { includeDrafted?: boolean }): DraftOneSection[] {
   return sections
     .filter((section) => section.autoDraftable)
@@ -137,51 +131,56 @@ export function buildDraftOneQueue(sections: DraftOneSection[], options?: { incl
     .sort((a, b) => a.sectionOrder - b.sectionOrder)
 }
 
+/** Sections the AI review run covers: drafted, but without a current verdict. */
+export function buildAiReviewQueue(sections: DraftOneSection[], options?: { includeReviewed?: boolean }): DraftOneSection[] {
+  return sections
+    .filter((section) => section.autoDraftable && section.content.trim() && !section.isStale)
+    .filter((section) => (options?.includeReviewed ? true : !section.aiReview || section.aiReviewStale))
+    .sort((a, b) => a.sectionOrder - b.sectionOrder)
+}
+
 /**
- * Compose the repair instructions (papers engine `instructions` field, max
- * 5000 chars) from a failed compliance report — the closed loop the engine
- * itself never runs.
+ * Compose the revision instructions (papers engine `instructions` field, max
+ * 5000 chars) from the AI reviewer's findings — the LLM-driven repair loop
+ * that replaced the deterministic keyword one.
  */
-export function buildRepairInstructions(input: {
+export function buildAiFixInstructions(input: {
   section: Pick<DraftOneSection, 'label' | 'wordBudget' | 'characterLimit' | 'content'>
-  compliance: GrantComplianceReport
-  readiness?: ReviewerReadinessReport | null
+  report: GrantAiReviewReport
   userNote?: string | null
 }): string {
-  const { compliance, readiness, section } = input
+  const { report, section } = input
+  const bySeverity = (severity: string) => report.findings.filter((finding) => finding.severity === severity)
   const lines: string[] = [
-    'REPAIR PASS — the previous draft of this section FAILED the agency compliance check.',
-    'Rewrite the section fixing EVERY issue below while preserving all accurate facts and any [CITE:key] anchors.',
+    'REVISION PASS — the agency\'s AI reviewer assessed the previous draft of this section.',
+    'Rewrite the section resolving EVERY finding below while preserving all accurate facts, valid markdown tables, and any [CITE:key] anchors.',
   ]
-  if (compliance.unmetRequiredPoints.length) {
+  if (report.summary) {
+    lines.push(`Reviewer summary: ${report.summary}`)
+  }
+  const addFindings = (title: string, severity: string) => {
+    const findings = bySeverity(severity)
+    if (!findings.length) return
     lines.push(
-      'REQUIRED POINTS THE DRAFT FAILED TO COVER (each must be explicitly and substantively addressed):',
-      ...compliance.unmetRequiredPoints.slice(0, 10).map((point) => `- ${summarizeGrantRuleText(point, 220) || point}`)
+      title,
+      ...findings.slice(0, 8).map((finding) => {
+        const rule = finding.rule ? ` [rule: ${summarizeGrantRuleText(finding.rule, 140) || finding.rule}]` : ''
+        return `- ${finding.issue}${rule} → FIX: ${finding.fix}`
+      })
     )
   }
-  if (compliance.violatedAvoidRules.length) {
-    lines.push(
-      'AVOID-RULE VIOLATIONS (remove or rewrite the offending content):',
-      ...compliance.violatedAvoidRules.slice(0, 6).map((rule) => `- ${rule}`)
-    )
-  }
-  if (compliance.hardFailures.length) {
-    lines.push(
-      'HARD FAILURES:',
-      ...compliance.hardFailures.slice(0, 8).map((finding) => `- ${finding.message}${finding.ruleText ? ` (rule: ${finding.ruleText})` : ''}`)
-    )
-  }
+  addFindings('CRITICAL FINDINGS (must be fully resolved):', 'critical')
+  addFindings('IMPORTANT FINDINGS (resolve unless factually impossible):', 'important')
+  addFindings('POLISH (apply where it does not conflict with the above):', 'polish')
+
   const words = countWords(section.content)
   if (section.wordBudget && words > section.wordBudget) {
     lines.push(
-      `WORD BUDGET: the draft is ${words} words; the agency limit is ${section.wordBudget}. Cut at least ${words - section.wordBudget} words without dropping required points.`
+      `WORD BUDGET: the draft is ${words} words; the agency limit is ${section.wordBudget}. Cut at least ${words - section.wordBudget} words without dropping required content.`
     )
   }
   if (section.characterLimit && section.content.length > section.characterLimit) {
     lines.push(`CHARACTER LIMIT: stay under ${section.characterLimit} characters.`)
-  }
-  if (readiness?.recommendedActions?.length) {
-    lines.push('REVIEWER RECOMMENDATIONS:', ...readiness.recommendedActions.slice(0, 5).map((action) => `- ${action}`))
   }
   if (input.userNote?.trim()) {
     lines.push('AUTHOR NOTE (must be honored):', input.userNote.trim())
@@ -189,23 +188,13 @@ export function buildRepairInstructions(input: {
   return lines.join('\n').slice(0, 4900)
 }
 
-/** True when a failed report is worth an automatic repair generation. */
-export function shouldAutoRepair(compliance: GrantComplianceReport | null): boolean {
-  if (!compliance || compliance.passed) return false
-  return (
-    compliance.unmetRequiredPoints.length > 0
-    || compliance.violatedAvoidRules.length > 0
-    || compliance.hardFailures.length > 0
-  )
-}
-
 export interface DraftOneReadinessSummary {
   total: number
   draftable: number
   drafted: number
-  passed: number
+  ready: number
   withIssues: number
-  unvalidated: number
+  unreviewed: number
   stale: number
   manual: number
 }
@@ -216,9 +205,9 @@ export function summarizeDraftOneSections(sections: DraftOneSection[]): DraftOne
     total: sections.length,
     draftable: draftable.length,
     drafted: draftable.filter((section) => section.content.trim()).length,
-    passed: draftable.filter((section) => section.status === 'passed').length,
+    ready: draftable.filter((section) => section.status === 'ready').length,
     withIssues: draftable.filter((section) => section.status === 'issues').length,
-    unvalidated: draftable.filter((section) => section.status === 'unvalidated').length,
+    unreviewed: draftable.filter((section) => section.status === 'unreviewed').length,
     stale: draftable.filter((section) => section.status === 'stale').length,
     manual: sections.filter((section) => !section.autoDraftable).length,
   }

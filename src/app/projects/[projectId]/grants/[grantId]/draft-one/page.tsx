@@ -16,11 +16,11 @@ import {
 
 import { isFeatureEnabled } from '@/lib/feature-flags'
 import {
+  buildAiFixInstructions,
+  buildAiReviewQueue,
   buildDraftOneQueue,
-  buildRepairInstructions,
   countWords,
   normalizeDraftOneSection,
-  shouldAutoRepair,
   summarizeDraftOneSections,
   type DraftOneRunState,
   type DraftOneSection,
@@ -35,8 +35,8 @@ function clsx(...values: Array<string | false | null | undefined>) {
 const RUN_STATE_LABEL: Record<DraftOneRunState, string> = {
   queued: 'Queued',
   writing: 'Writing…',
-  checking: 'Checking rules…',
-  repairing: 'Repairing…',
+  reviewing: 'AI review…',
+  fixing: 'Revising…',
   done: 'Done',
   failed: 'Failed',
 }
@@ -44,26 +44,28 @@ const RUN_STATE_LABEL: Record<DraftOneRunState, string> = {
 /** Matches the MarkdownRenderer typography so the page reads as one document. */
 const SERIF = '"Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif'
 
-function SectionStatusChip({ section }: { section: DraftOneSection }) {
+const SEVERITY_META: Record<string, { mark: string; className: string; label: string }> = {
+  critical: { mark: '●', className: 'text-rose-500', label: 'critical' },
+  important: { mark: '●', className: 'text-amber-500', label: 'important' },
+  polish: { mark: '○', className: 'text-stone-400', label: 'polish' },
+}
+
+function StatusChip({ section }: { section: DraftOneSection }) {
   if (!section.autoDraftable) {
     return <span className="text-[11px] font-medium uppercase tracking-wide text-stone-400">handled by your team</span>
   }
-  if (section.status === 'passed') {
+  if (section.status === 'ready') {
     return (
       <span className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> meets agency rules
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> reviewer: ready
       </span>
     )
   }
   if (section.status === 'issues') {
-    const count =
-      (section.compliance?.unmetRequiredPoints.length || 0)
-      + (section.compliance?.violatedAvoidRules.length || 0)
-      || section.compliance?.hardFailures.length
-      || 1
+    const count = section.aiReview?.findings.length || 0
     return (
       <span className="flex items-center gap-1.5 text-[11px] font-medium text-amber-700">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> {count} point{count === 1 ? '' : 's'} to address
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> {count} reviewer finding{count === 1 ? '' : 's'}
       </span>
     )
   }
@@ -74,14 +76,61 @@ function SectionStatusChip({ section }: { section: DraftOneSection }) {
       </span>
     )
   }
-  if (section.status === 'unvalidated' && section.content) {
+  if (section.status === 'unreviewed' && section.content) {
     return (
       <span className="flex items-center gap-1.5 text-[11px] font-medium text-stone-400">
-        <span className="h-1.5 w-1.5 rounded-full bg-stone-300" /> not yet validated
+        <span className="h-1.5 w-1.5 rounded-full bg-stone-300" /> {section.aiReviewStale ? 'edited since review' : 'awaiting AI review'}
       </span>
     )
   }
   return null
+}
+
+function WordMeter({ section }: { section: DraftOneSection }) {
+  const words = countWords(section.content)
+  if (!section.content) return null
+  if (!section.wordBudget) {
+    return <span className="text-xs tabular-nums text-stone-400">{words} words</span>
+  }
+  const ratio = Math.min(1, words / section.wordBudget)
+  const over = words > section.wordBudget
+  const near = !over && words > section.wordBudget * 0.9
+  return (
+    <span className="flex items-center gap-2">
+      <span className="hidden h-1 w-16 overflow-hidden rounded-full bg-stone-100 sm:block">
+        <span
+          className={clsx('block h-full rounded-full', over ? 'bg-rose-400' : near ? 'bg-amber-400' : 'bg-stone-300')}
+          style={{ width: `${Math.round(ratio * 100)}%` }}
+        />
+      </span>
+      <span className={clsx('text-xs tabular-nums', over ? 'font-semibold text-rose-600' : near ? 'text-amber-600' : 'text-stone-400')}>
+        {words} / {section.wordBudget}
+      </span>
+    </span>
+  )
+}
+
+function StageStep({ index, label, detail, state }: { index: number; label: string; detail: string; state: 'done' | 'active' | 'todo' }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={clsx(
+          'flex h-5 w-5 flex-none items-center justify-center rounded-full text-[10px] font-semibold',
+          state === 'done'
+            ? 'bg-emerald-500 text-white'
+            : state === 'active'
+              ? 'bg-stone-900 text-white'
+              : 'border border-stone-300 text-stone-400'
+        )}
+      >
+        {state === 'done' ? <HiCheck className="h-3 w-3" /> : index}
+      </span>
+      <span>
+        <span className={clsx('block text-xs font-medium leading-none', state === 'todo' ? 'text-stone-400' : 'text-stone-800')}>{label}</span>
+        <span className="mt-0.5 block text-[10px] leading-none text-stone-400">{detail}</span>
+      </span>
+    </div>
+  )
 }
 
 export default function DraftOnePage() {
@@ -93,14 +142,14 @@ export default function DraftOnePage() {
   const [loading, setLoading] = useState(true)
   const [draftingSessionId, setDraftingSessionId] = useState<string | null>(null)
   const [callTitle, setCallTitle] = useState('')
+  const [agencyName, setAgencyName] = useState('')
   const [sections, setSections] = useState<DraftOneSection[]>([])
-  // Ref mirror so the sequential run loop reads the freshest sections — the
-  // `sections` binding captured by handleRun goes stale the moment the first
-  // mid-run refresh lands, which made later queue items draft against
-  // pre-run content and citation modes.
+  // Ref mirror so sequential run loops read the freshest sections — the
+  // `sections` binding captured by a run handler goes stale the moment the
+  // first mid-run refresh lands.
   const sectionsRef = useRef<DraftOneSection[]>([])
   const [runStates, setRunStates] = useState<Record<string, DraftOneRunState>>({})
-  const [running, setRunning] = useState(false)
+  const [running, setRunning] = useState<false | 'write' | 'review'>(false)
   const stopRequested = useRef(false)
   const selfHealAttempted = useRef(false)
   const [busySection, setBusySection] = useState<string | null>(null)
@@ -108,7 +157,8 @@ export default function DraftOnePage() {
   const [editingSection, setEditingSection] = useState<string | null>(null)
   const [rewriteNotes, setRewriteNotes] = useState<Record<string, string>>({})
   const [focusedSection, setFocusedSection] = useState<string | null>(null)
-  const [expandedIssues, setExpandedIssues] = useState<Record<string, boolean>>({})
+  const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>({})
+  const [evidenceNotes, setEvidenceNotes] = useState<Record<string, string>>({})
   const [exportIssues, setExportIssues] = useState<string[] | null>(null)
   const [exporting, setExporting] = useState(false)
 
@@ -150,7 +200,8 @@ export default function DraftOnePage() {
         const blueprint = await axios.get(`/api/projects/${projectId}/grants/${grantId}/blueprint`, axiosConfig())
         if (cancelled) return
         let engineId: string | null = blueprint.data?.grantSession?.draftingSessionId || null
-        setCallTitle(blueprint.data?.grantSession?.fundingCall?.title || blueprint.data?.grantSession?.title || '')
+        setCallTitle(blueprint.data?.grantSession?.fundingCall?.scheme_title || blueprint.data?.grantSession?.fundingCall?.title || blueprint.data?.grantSession?.title || '')
+        setAgencyName(blueprint.data?.grantSession?.fundingCall?.agency_name || '')
         if (!engineId && !selfHealAttempted.current) {
           // Self-heal instead of bouncing the user to the blueprint page: the
           // 'launch' action is idempotent and LLM-free, so re-running it just
@@ -186,61 +237,62 @@ export default function DraftOnePage() {
   }, [])
 
   /**
-   * Generate one section through the existing engine, persist it to the grant,
-   * re-read its compliance report, and — if the agency check failed — run ONE
-   * automatic repair generation fed the exact failures.
+   * Generate one section through the existing engine and persist it. Drafting
+   * is never blocked: if the deterministic evidence gate 409s, we retry once
+   * without mapped citations and let the AI review stage judge the result.
    */
   const draftSection = useCallback(
-    async (section: DraftOneSection, options?: { instructions?: string; forceRegenerate?: boolean }): Promise<boolean> => {
+    async (section: DraftOneSection, options?: { instructions?: string; runState?: DraftOneRunState }): Promise<boolean> => {
       if (!draftingSessionId) {
         toast.error('The drafting engine is not ready yet — open the blueprint once, then retry.')
         return false
       }
       const key = section.sectionKey
       try {
-        setRunState(key, 'writing')
+        setRunState(key, options?.runState || 'writing')
         const hasContent = Boolean(section.content.trim())
-        const generate = async (instructions: string) => {
+        const generateOnce = async (useMappedEvidence: boolean) => {
           const response = await axios.post(
             `/api/papers/${draftingSessionId}/drafting`,
             {
-              action: hasContent || options?.forceRegenerate || instructions ? 'regenerate_section' : 'generate_section',
+              action: hasContent || options?.instructions ? 'regenerate_section' : 'generate_section',
               sectionKey: key,
-              instructions,
-              useMappedEvidence: section.citationMode !== 'no_citations',
-              allowGrantEvidenceBypass: section.citationMode === 'no_citations',
+              instructions: options?.instructions || '',
+              useMappedEvidence,
+              allowGrantEvidenceBypass: !useMappedEvidence,
               autoCitationRepair: false,
             },
             axiosConfig()
           )
           const content = String(response.data?.content || '')
           if (!content.trim()) throw new Error(`The engine returned no content for "${section.label}".`)
-          await axios.patch(
-            `/api/projects/${projectId}/grants/${grantId}/sections/${encodeURIComponent(key)}`,
-            { content, markReviewed: false },
-            axiosConfig()
-          )
+          return content
         }
 
-        await generate(options?.instructions || '')
-
-        setRunState(key, 'checking')
-        let refreshed = await refreshSections()
-        let current = refreshed.find((entry) => entry.sectionKey === key) || null
-
-        if (current && shouldAutoRepair(current.compliance)) {
-          setRunState(key, 'repairing')
-          const repairInstructions = buildRepairInstructions({
-            section: current,
-            compliance: current.compliance!,
-            readiness: current.readiness,
-          })
-          await generate(repairInstructions)
-          setRunState(key, 'checking')
-          refreshed = await refreshSections()
-          current = refreshed.find((entry) => entry.sectionKey === key) || null
+        let content: string
+        try {
+          content = await generateOnce(section.citationMode !== 'no_citations')
+        } catch (error) {
+          const code = axios.isAxiosError(error) ? error.response?.data?.code : null
+          if (code === 'MAPPED_EVIDENCE_MISSING' || code === 'GRANT_EVIDENCE_READINESS_FAILED') {
+            // Evidence isn't mapped yet — draft without citations instead of
+            // blocking, and say so. Literature mapping can still happen later.
+            content = await generateOnce(false)
+            setEvidenceNotes((notes) => ({
+              ...notes,
+              [key]: 'Drafted without mapped citations — run literature mapping in the workspace to add evidence.',
+            }))
+          } else {
+            throw error
+          }
         }
 
+        await axios.patch(
+          `/api/projects/${projectId}/grants/${grantId}/sections/${encodeURIComponent(key)}`,
+          { content, markReviewed: false },
+          axiosConfig()
+        )
+        await refreshSections()
         setRunState(key, 'done')
         return true
       } catch (error) {
@@ -252,54 +304,120 @@ export default function DraftOnePage() {
     [draftingSessionId, projectId, grantId, axiosConfig, refreshSections, setRunState, surfaceError]
   )
 
-  /** The Run: draft every remaining auto-draftable section, in template order. */
-  const handleRun = useCallback(async () => {
+  /** Run the LLM agency-rule review for one drafted section. */
+  const reviewSection = useCallback(
+    async (section: DraftOneSection): Promise<boolean> => {
+      const key = section.sectionKey
+      try {
+        setRunState(key, 'reviewing')
+        await axios.post(
+          `/api/projects/${projectId}/grants/${grantId}/sections/${encodeURIComponent(key)}/ai-review`,
+          {},
+          axiosConfig()
+        )
+        await refreshSections()
+        setRunState(key, 'done')
+        return true
+      } catch (error) {
+        setRunState(key, 'failed')
+        surfaceError(error, `AI review failed for "${section.label}"`)
+        return false
+      }
+    },
+    [projectId, grantId, axiosConfig, refreshSections, setRunState, surfaceError]
+  )
+
+  /** Write every remaining auto-draftable section, in template order. */
+  const handleWriteAll = useCallback(async () => {
     if (running) return
     const queue = buildDraftOneQueue(sections)
     if (!queue.length) {
       toast('Every AI-draftable section already has content — use per-section actions to revise.', { icon: 'ℹ️' })
       return
     }
-    setRunning(true)
+    setRunning('write')
     stopRequested.current = false
     setRunStates(Object.fromEntries(queue.map((section) => [section.sectionKey, 'queued' as DraftOneRunState])))
     let completed = 0
     for (const section of queue) {
       if (stopRequested.current) break
-      // Read through the ref — the `sections` closure is frozen at run start,
-      // but every drafted section refreshes state mid-run.
       const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey) || section
       const ok = await draftSection(latest)
       if (ok) completed += 1
     }
     setRunning(false)
     if (completed) {
-      toast.success(`Drafted ${completed} of ${queue.length} sections — review the ones flagged with issues.`)
+      toast.success(`Drafted ${completed} of ${queue.length} sections. Next: run the AI review.`)
     }
   }, [running, sections, draftSection])
 
-  const handleSingle = useCallback(
+  /** AI-review every drafted section that lacks a current verdict. */
+  const handleReviewAll = useCallback(async () => {
+    if (running) return
+    const queue = buildAiReviewQueue(sections)
+    if (!queue.length) {
+      toast('Every drafted section already has a current AI review.', { icon: 'ℹ️' })
+      return
+    }
+    setRunning('review')
+    stopRequested.current = false
+    setRunStates(Object.fromEntries(queue.map((section) => [section.sectionKey, 'queued' as DraftOneRunState])))
+    let flagged = 0
+    for (const section of queue) {
+      if (stopRequested.current) break
+      const ok = await reviewSection(section)
+      if (ok) {
+        const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey)
+        if (latest?.status === 'issues') flagged += 1
+      }
+    }
+    setRunning(false)
+    const readyNow = summarizeDraftOneSections(sectionsRef.current)
+    toast.success(
+      flagged
+        ? `AI review finished — ${flagged} section${flagged === 1 ? '' : 's'} need${flagged === 1 ? 's' : ''} attention.`
+        : `AI review finished — ${readyNow.ready} of ${readyNow.draftable} sections are ready.`
+    )
+  }, [running, sections, reviewSection])
+
+  const handleSingleWrite = useCallback(
     async (section: DraftOneSection, instructions?: string) => {
       if (busySection || running) return
       setBusySection(section.sectionKey)
-      await draftSection(section, { instructions, forceRegenerate: true })
+      await draftSection(section, { instructions })
       setBusySection(null)
     },
     [busySection, running, draftSection]
   )
 
-  const handleFixIssues = useCallback(
+  const handleSingleReview = useCallback(
     async (section: DraftOneSection) => {
-      if (!section.compliance || section.compliance.passed) return
-      const instructions = buildRepairInstructions({
+      if (busySection || running) return
+      setBusySection(section.sectionKey)
+      await reviewSection(section)
+      setBusySection(null)
+    },
+    [busySection, running, reviewSection]
+  )
+
+  /** Apply the reviewer's findings via one LLM revision, then re-review. */
+  const handleFixWithAi = useCallback(
+    async (section: DraftOneSection) => {
+      if (!section.aiReview || busySection || running) return
+      const instructions = buildAiFixInstructions({
         section,
-        compliance: section.compliance,
-        readiness: section.readiness,
+        report: section.aiReview,
         userNote: rewriteNotes[section.sectionKey] || null,
       })
-      await handleSingle(section, instructions)
+      setBusySection(section.sectionKey)
+      const ok = await draftSection(section, { instructions, runState: 'fixing' })
+      if (ok) {
+        const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey) || section
+        await reviewSection(latest)
+      }
+      setBusySection(null)
     },
-    [handleSingle, rewriteNotes]
+    [busySection, running, rewriteNotes, draftSection, reviewSection]
   )
 
   const handleSaveEdit = useCallback(
@@ -315,7 +433,7 @@ export default function DraftOnePage() {
         )
         setEditingSection(null)
         await refreshSections()
-        toast.success('Saved')
+        toast.success('Saved — re-run the AI review to refresh this section’s verdict.')
       } catch (error) {
         surfaceError(error, 'Failed to save the section')
       } finally {
@@ -345,7 +463,7 @@ export default function DraftOnePage() {
       anchor.download = 'grant-proposal.docx'
       anchor.click()
       URL.revokeObjectURL(url)
-      toast.success('Final proposal exported — every agency gate passed.')
+      toast.success('Final proposal exported — every section passed the AI review.')
     } catch (error) {
       surfaceError(error, 'Export failed')
     } finally {
@@ -367,7 +485,7 @@ export default function DraftOnePage() {
       anchor.click()
       URL.revokeObjectURL(url)
       setExportIssues(null)
-      toast('Draft exported — the file is watermark-free but has NOT passed the agency gates.', { icon: '⚠️' })
+      toast('Draft exported — this file has NOT passed the AI review gates.', { icon: '⚠️' })
     } catch (error) {
       surfaceError(error, 'Draft export failed')
     }
@@ -381,6 +499,10 @@ export default function DraftOnePage() {
     () => orderedSections.find((section) => section.sectionKey === focusedSection) || orderedSections.find((section) => section.autoDraftable) || null,
     [orderedSections, focusedSection]
   )
+
+  const writeQueueSize = useMemo(() => buildDraftOneQueue(sections).length, [sections])
+  const reviewQueueSize = useMemo(() => buildAiReviewQueue(sections).length, [sections])
+  const allReady = summary.draftable > 0 && summary.ready === summary.draftable
 
   if (!featureEnabled) {
     return (
@@ -410,32 +532,41 @@ export default function DraftOnePage() {
       <Toaster position="top-right" />
 
       <header className="sticky top-0 z-30 border-b border-stone-200 bg-[#fbfaf6]/95 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-stone-900 text-white">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-8 w-8 flex-none items-center justify-center rounded-md bg-stone-900 text-white">
               <HiPencilSquare className="h-4 w-4" />
             </span>
-            <div>
+            <div className="min-w-0">
               <div className="text-sm font-semibold text-stone-900" style={{ fontFamily: SERIF }}>
                 Draft One
               </div>
-              <div className="max-w-[46ch] truncate text-xs text-stone-500">{callTitle || 'Proposal drafting'}</div>
+              <div className="max-w-[42ch] truncate text-xs text-stone-500">
+                {[agencyName, callTitle].filter(Boolean).join(' · ') || 'Proposal drafting'}
+              </div>
             </div>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <span
-              className={clsx(
-                'rounded-full border px-3 py-1 text-xs font-medium',
-                summary.passed === summary.draftable && summary.draftable > 0
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-stone-200 bg-white text-stone-600'
-              )}
-            >
-              {summary.passed}/{summary.draftable} sections pass agency rules
-            </span>
+          <div className="flex items-center gap-5">
+            <StageStep
+              index={1}
+              label="Write"
+              detail={`${summary.drafted}/${summary.draftable} drafted`}
+              state={summary.draftable > 0 && summary.drafted === summary.draftable ? 'done' : 'active'}
+            />
+            <span className="h-px w-6 bg-stone-300" />
+            <StageStep
+              index={2}
+              label="AI review"
+              detail={`${summary.ready}/${summary.draftable} ready`}
+              state={allReady ? 'done' : summary.drafted > 0 ? 'active' : 'todo'}
+            />
+            <span className="h-px w-6 bg-stone-300" />
+            <StageStep index={3} label="Export" detail={allReady ? 'gates passed' : 'after review'} state={allReady ? 'active' : 'todo'} />
+          </div>
+          <div className="ml-auto">
             <button
               onClick={handleExport}
-              disabled={exporting || running}
+              disabled={exporting || Boolean(running)}
               className="flex items-center gap-1.5 rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-50"
             >
               <HiArrowDownTray className="h-4 w-4" /> {exporting ? 'Checking gates…' : 'Export proposal'}
@@ -455,16 +586,22 @@ export default function DraftOnePage() {
           </div>
         ) : null}
 
-        {/* The Run */}
+        {/* Conductor: one primary action for the current stage */}
         <div className="rounded-lg border border-stone-200 bg-white p-6 shadow-[0_1px_2px_rgba(64,55,38,0.05),0_10px_30px_-18px_rgba(64,55,38,0.28)]">
           <div className="flex flex-wrap items-center gap-3">
             <div>
               <h2 className="text-lg font-semibold text-stone-900" style={{ fontFamily: SERIF }}>
-                Draft the proposal
+                {writeQueueSize > 0 || summary.draftable === 0
+                  ? 'Write the proposal'
+                  : reviewQueueSize > 0
+                    ? 'Review against the agency’s rules'
+                    : allReady
+                      ? 'Ready to export'
+                      : 'Resolve the reviewer’s findings'}
               </h2>
               <p className="mt-0.5 text-sm text-stone-500">
-                {summary.drafted} of {summary.draftable} AI sections drafted · {summary.withIssues} with rule issues ·{' '}
-                {summary.manual} handled by your team
+                {summary.drafted} of {summary.draftable} sections drafted · {summary.ready} ready ·{' '}
+                {summary.withIssues} with findings · {summary.manual} handled by your team
               </p>
             </div>
             <div className="ml-auto flex items-center gap-2">
@@ -479,13 +616,31 @@ export default function DraftOnePage() {
                   Stop after this section
                 </button>
               ) : (
-                <button
-                  onClick={handleRun}
-                  disabled={!draftingSessionId || busySection !== null}
-                  className="flex items-center gap-1.5 rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-50"
-                >
-                  <HiPlay className="h-4 w-4" /> {summary.drafted ? 'Draft remaining sections' : 'Draft the proposal'}
-                </button>
+                <>
+                  {writeQueueSize > 0 ? (
+                    <button
+                      onClick={handleWriteAll}
+                      disabled={!draftingSessionId || busySection !== null}
+                      className="flex items-center gap-1.5 rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-50"
+                    >
+                      <HiPlay className="h-4 w-4" /> {summary.drafted ? `Write remaining (${writeQueueSize})` : 'Write the full draft'}
+                    </button>
+                  ) : null}
+                  {reviewQueueSize > 0 ? (
+                    <button
+                      onClick={handleReviewAll}
+                      disabled={busySection !== null}
+                      className={clsx(
+                        'flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50',
+                        writeQueueSize > 0
+                          ? 'border border-stone-300 bg-white text-stone-700 hover:bg-stone-50'
+                          : 'bg-stone-900 text-white hover:bg-stone-700'
+                      )}
+                    >
+                      <HiSparkles className="h-4 w-4" /> Run AI review ({reviewQueueSize})
+                    </button>
+                  ) : null}
+                </>
               )}
             </div>
           </div>
@@ -531,26 +686,16 @@ export default function DraftOnePage() {
           ) : null}
         </div>
 
-        {/* Manuscript + margin notes */}
+        {/* Manuscript + agency lens */}
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_280px]">
           <div className="space-y-6">
             {orderedSections.map((section, index) => {
-              const words = countWords(section.content)
-              const overBudget = section.wordBudget ? words > section.wordBudget : false
-              const nearBudget = section.wordBudget ? !overBudget && words > section.wordBudget * 0.9 : false
               const isEditing = editingSection === section.sectionKey
               const busy = busySection === section.sectionKey || Boolean(runStates[section.sectionKey] && running)
-              const issueItems: Array<{ mark: string; tone: 'point' | 'avoid' | 'hard'; text: string }> = section.compliance && section.status === 'issues'
-                ? [
-                    ...section.compliance.unmetRequiredPoints.map((point) => ({ mark: '○', tone: 'point' as const, text: point })),
-                    ...section.compliance.violatedAvoidRules.map((rule) => ({ mark: '✕', tone: 'avoid' as const, text: rule })),
-                    ...section.compliance.hardFailures
-                      .filter((finding) => !finding.message.startsWith('Required point is still missing'))
-                      .map((finding) => ({ mark: '!', tone: 'hard' as const, text: finding.message })),
-                  ]
-                : []
-              const issuesExpanded = Boolean(expandedIssues[section.sectionKey])
-              const visibleIssues = issuesExpanded ? issueItems : issueItems.slice(0, 4)
+              const findings = section.aiReview?.findings || []
+              const findingsExpanded = Boolean(expandedFindings[section.sectionKey])
+              const visibleFindings = findingsExpanded ? findings : findings.slice(0, 3)
+              const showFindings = section.status === 'issues' && findings.length > 0
               return (
                 <section
                   key={section.sectionKey}
@@ -572,54 +717,57 @@ export default function DraftOnePage() {
                     {section.required ? (
                       <span className="text-[10px] font-medium uppercase tracking-widest text-stone-400">required</span>
                     ) : null}
-                    <SectionStatusChip section={section} />
+                    <StatusChip section={section} />
                     <div className="ml-auto">
-                      {section.wordBudget ? (
-                        <span
-                          className={clsx(
-                            'text-xs tabular-nums',
-                            overBudget ? 'font-semibold text-rose-600' : nearBudget ? 'text-amber-600' : 'text-stone-400'
-                          )}
-                        >
-                          {words} / {section.wordBudget} words
-                        </span>
-                      ) : section.content ? (
-                        <span className="text-xs tabular-nums text-stone-400">{words} words</span>
-                      ) : null}
+                      <WordMeter section={section} />
                     </div>
                   </div>
 
                   {section.autoDraftable ? (
                     <div className="px-6 py-5 sm:px-8">
-                      {issueItems.length ? (
+                      {evidenceNotes[section.sectionKey] ? (
+                        <p className="mb-3 text-[11px] leading-relaxed text-stone-400">
+                          ⓘ {evidenceNotes[section.sectionKey]}
+                        </p>
+                      ) : null}
+
+                      {showFindings ? (
                         <div className="mb-4 rounded-md border border-amber-200/80 bg-[#fdf8ec] px-4 py-3">
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
-                            Agency check — {issueItems.length} point{issueItems.length === 1 ? '' : 's'} to address
+                          <div className="flex flex-wrap items-baseline gap-x-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                              AI reviewer — {findings.length} finding{findings.length === 1 ? '' : 's'}
+                            </span>
+                            {section.aiReview?.summary ? (
+                              <span className="text-[11px] italic text-stone-500">“{section.aiReview.summary}”</span>
+                            ) : null}
                           </div>
                           <ul className="mt-2 space-y-1.5">
-                            {visibleIssues.map((issue, issueIndex) => (
-                              <li key={issueIndex} className="flex items-start gap-2 text-xs leading-relaxed text-stone-700">
-                                <span
-                                  className={clsx(
-                                    'mt-px flex-none font-semibold',
-                                    issue.tone === 'avoid' ? 'text-rose-500' : issue.tone === 'hard' ? 'text-amber-600' : 'text-stone-400'
-                                  )}
-                                >
-                                  {issue.mark}
-                                </span>
-                                {summarizeGrantRuleText(issue.text, 180) || issue.text}
-                              </li>
-                            ))}
+                            {visibleFindings.map((finding, findingIndex) => {
+                              const meta = SEVERITY_META[finding.severity] || SEVERITY_META.important
+                              return (
+                                <li key={findingIndex} className="flex items-start gap-2 text-xs leading-relaxed text-stone-700">
+                                  <span className={clsx('mt-px flex-none font-semibold', meta.className)} title={meta.label}>
+                                    {meta.mark}
+                                  </span>
+                                  <span>
+                                    {finding.issue}
+                                    {finding.fix && finding.fix !== finding.issue ? (
+                                      <span className="text-stone-500"> — {finding.fix}</span>
+                                    ) : null}
+                                  </span>
+                                </li>
+                              )
+                            })}
                           </ul>
-                          {issueItems.length > 4 ? (
+                          {findings.length > 3 ? (
                             <button
                               onClick={(event) => {
                                 event.stopPropagation()
-                                setExpandedIssues((state) => ({ ...state, [section.sectionKey]: !issuesExpanded }))
+                                setExpandedFindings((state) => ({ ...state, [section.sectionKey]: !findingsExpanded }))
                               }}
                               className="mt-2 text-xs font-medium text-amber-800 underline-offset-2 hover:underline"
                             >
-                              {issuesExpanded ? 'Show fewer' : `Show all ${issueItems.length}`}
+                              {findingsExpanded ? 'Show fewer' : `Show all ${findings.length}`}
                             </button>
                           ) : null}
                         </div>
@@ -656,26 +804,35 @@ export default function DraftOnePage() {
                         </div>
                       ) : (
                         <p className="text-sm italic text-stone-400" style={{ fontFamily: SERIF }}>
-                          Not written yet — run the full draft, or draft this section alone.
+                          Not written yet — run the full draft, or write this section alone.
                         </p>
                       )}
 
                       {!isEditing ? (
                         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-stone-100 pt-4">
                           <button
-                            onClick={() => handleSingle(section)}
-                            disabled={busy || running || !draftingSessionId}
+                            onClick={() => handleSingleWrite(section)}
+                            disabled={busy || Boolean(running) || !draftingSessionId}
                             className="rounded-md border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-40"
                           >
-                            {section.content ? 'Regenerate' : 'Draft this section'}
+                            {section.content ? 'Rewrite' : 'Write this section'}
                           </button>
+                          {section.content && (section.status === 'unreviewed' || section.status === 'issues') ? (
+                            <button
+                              onClick={() => handleSingleReview(section)}
+                              disabled={busy || Boolean(running)}
+                              className="rounded-md border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-40"
+                            >
+                              {section.status === 'issues' ? 'Re-run AI review' : 'Run AI review'}
+                            </button>
+                          ) : null}
                           {section.status === 'issues' ? (
                             <button
-                              onClick={() => handleFixIssues(section)}
-                              disabled={busy || running}
+                              onClick={() => handleFixWithAi(section)}
+                              disabled={busy || Boolean(running)}
                               className="rounded-md border border-amber-300 bg-amber-100/70 px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-40"
                             >
-                              Fix rule issues
+                              Fix with AI
                             </button>
                           ) : null}
                           {section.content ? (
@@ -696,7 +853,7 @@ export default function DraftOnePage() {
                             onKeyDown={(event) => {
                               const note = (rewriteNotes[section.sectionKey] || '').trim()
                               if (event.key === 'Enter' && note && !busy && !running) {
-                                handleSingle(section, `AUTHOR NOTE (must be honored): ${note}`)
+                                handleSingleWrite(section, `AUTHOR NOTE (must be honored): ${note}`)
                               }
                             }}
                             placeholder="Steer a rewrite — e.g. “lead with the pilot data” ⏎"
@@ -722,15 +879,54 @@ export default function DraftOnePage() {
             })}
           </div>
 
-          {/* Margin notes: agency rules for the focused section */}
+          {/* Agency lens: what the template expects from the focused section */}
           <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
             <div className="rounded-lg border border-stone-200 bg-[#fbf9f3] p-5">
               <h3 className="text-sm font-semibold text-stone-800" style={{ fontFamily: SERIF }}>
-                Agency rules
+                Agency lens
               </h3>
               <p className="mt-0.5 text-[11px] uppercase tracking-wide text-stone-400">
                 {focused?.label || 'select a section'}
               </p>
+
+              {focused?.aiReview && !focused.aiReviewStale ? (
+                <div className="mt-4 rounded-md border border-stone-200 bg-white px-3 py-3">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-[11px] uppercase tracking-wide text-stone-400">AI review</span>
+                    <span
+                      className={clsx(
+                        'text-[11px] font-semibold',
+                        focused.aiReview.verdict === 'ready'
+                          ? 'text-emerald-700'
+                          : focused.aiReview.verdict === 'minor_revisions'
+                            ? 'text-amber-700'
+                            : 'text-rose-700'
+                      )}
+                    >
+                      {focused.aiReview.verdict.replace('_', ' ')}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-3xl text-stone-800" style={{ fontFamily: SERIF }}>
+                    {focused.aiReview.score}
+                    <span className="text-sm text-stone-400"> / 100</span>
+                  </div>
+                  {focused.aiReview.summary ? (
+                    <p className="mt-1.5 text-[11px] italic leading-relaxed text-stone-500">“{focused.aiReview.summary}”</p>
+                  ) : null}
+                  {focused.aiReview.strengths.slice(0, 2).map((strength) => (
+                    <p key={strength} className="mt-1.5 text-[11px] leading-relaxed text-emerald-700">
+                      ✓ {strength}
+                    </p>
+                  ))}
+                </div>
+              ) : focused?.content ? (
+                <p className="mt-3 text-xs text-stone-400">
+                  {focused.aiReviewStale
+                    ? 'The draft changed after its last review — re-run the AI review.'
+                    : 'Not yet AI-reviewed against the agency rules.'}
+                </p>
+              ) : null}
+
               {focused?.ruleProfile ? (
                 <div className="mt-4 space-y-4 text-xs">
                   {(
@@ -744,16 +940,13 @@ export default function DraftOnePage() {
                   ).map(([field, label, mark]) => {
                     const rules = focused.ruleProfile?.[field] || []
                     if (!rules.length) return null
-                    const covered = new Set(focused.compliance?.coveredRequiredPoints || [])
                     return (
                       <div key={field}>
                         <div className="font-semibold text-stone-600">{label}</div>
                         <ul className="mt-1.5 space-y-1.5 border-l border-stone-200 pl-3">
                           {rules.slice(0, 4).map((rule) => (
                             <li key={rule} className="flex items-start gap-1.5 leading-relaxed text-stone-500">
-                              <span className={clsx('flex-none', field === 'requiredPoints' && covered.has(rule) ? 'text-emerald-500' : 'text-stone-300')}>
-                                {field === 'requiredPoints' && covered.has(rule) ? '●' : mark}
-                              </span>
+                              <span className="flex-none text-stone-300">{mark}</span>
                               {summarizeGrantRuleText(rule, 140) || rule}
                             </li>
                           ))}
@@ -761,24 +954,13 @@ export default function DraftOnePage() {
                       </div>
                     )
                   })}
+                  <p className="border-t border-stone-200 pt-3 text-[11px] leading-relaxed text-stone-400">
+                    These rules guide the writing and are enforced by the AI review — they never block drafting.
+                  </p>
                 </div>
               ) : (
                 <p className="mt-3 text-xs text-stone-400">No routed rules for this section.</p>
               )}
-              {focused?.readiness ? (
-                <div className="mt-5 border-t border-stone-200 pt-4">
-                  <div className="text-[11px] uppercase tracking-wide text-stone-400">Reviewer readiness</div>
-                  <div className="mt-1 text-3xl text-stone-800" style={{ fontFamily: SERIF }}>
-                    {focused.readiness.score}
-                    <span className="text-sm text-stone-400"> / 100</span>
-                  </div>
-                  {focused.readiness.recommendedActions.slice(0, 2).map((action) => (
-                    <p key={action} className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
-                      → {action}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
             </div>
           </aside>
         </div>
@@ -791,7 +973,9 @@ export default function DraftOnePage() {
             <h3 className="text-base font-semibold text-stone-900" style={{ fontFamily: SERIF }}>
               Not ready for final export
             </h3>
-            <p className="mt-1 text-sm text-stone-500">The agency gates found {exportIssues.length} issue{exportIssues.length === 1 ? '' : 's'}:</p>
+            <p className="mt-1 text-sm text-stone-500">
+              The AI review gates found {exportIssues.length} issue{exportIssues.length === 1 ? '' : 's'}:
+            </p>
             <ul className="mt-3 max-h-56 space-y-1.5 overflow-y-auto">
               {exportIssues.map((issue) => (
                 <li key={issue} className="flex items-start gap-2 text-xs text-amber-800">

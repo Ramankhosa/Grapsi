@@ -1,6 +1,12 @@
 import type { PaperDocxBlock, PaperDocxSection } from '@/lib/export/paper-docx-export'
 import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 import {
+  isGfmTableRow,
+  isGfmTableSeparator,
+  parseGfmTableLines,
+  stripInlineMarkdownStyling,
+} from '@/lib/markdown-draft-formatter'
+import {
   resolveCitationKeyFromLookup,
   splitCitationKeyList,
 } from '@/lib/utils/citation-key-normalization'
@@ -197,10 +203,56 @@ function renderStructuredBlocks(sectionDraft: GrantExportSectionDraft): PaperDoc
   return renderGenericStructuredBlocks(structuredData)
 }
 
+/**
+ * Split narrative markdown into paragraph blocks and REAL docx table blocks —
+ * LLM drafts legitimately contain pipe tables (budgets, workplans, milestone
+ * matrices) and they must not export as raw `| … |` text.
+ */
+function renderNarrativeBlocksForExport(content: string): PaperDocxBlock[] {
+  const lines = content.split(/\r?\n/)
+  const blocks: PaperDocxBlock[] = []
+  let paragraphLines: string[] = []
+  const flushParagraph = () => {
+    const text = paragraphLines.join('\n').trim()
+    if (text) blocks.push({ type: 'paragraph', text })
+    paragraphLines = []
+  }
+
+  let index = 0
+  while (index < lines.length) {
+    if (isGfmTableRow(lines[index]) || isGfmTableSeparator(lines[index])) {
+      const tableLines: string[] = []
+      while (index < lines.length && (isGfmTableRow(lines[index]) || isGfmTableSeparator(lines[index]))) {
+        tableLines.push(lines[index])
+        index++
+      }
+      const table = parseGfmTableLines(tableLines)
+      if (table) {
+        flushParagraph()
+        blocks.push({
+          type: 'table',
+          headers: table.headers.map((cell) => stripInlineMarkdownStyling(cell)),
+          rows: table.rows.map((row) => row.map((cell) => stripInlineMarkdownStyling(cell))),
+        })
+      } else {
+        // Not a well-formed table (no separator/header row) — keep as text.
+        paragraphLines.push(...tableLines)
+      }
+      continue
+    }
+    paragraphLines.push(lines[index])
+    index++
+  }
+  flushParagraph()
+  return blocks
+}
+
 function renderGrantSectionBlocksForExport(sectionDraft: GrantExportSectionDraft): PaperDocxBlock[] {
   if (sectionDraft.sectionType === 'narrative' || sectionDraft.sectionType === 'short_answer') {
     const content = String(sectionDraft.content || '').trim()
-    return [{ type: 'paragraph', text: content || GRANT_EXPORT_EMPTY_PLACEHOLDER }]
+    if (!content) return [{ type: 'paragraph', text: GRANT_EXPORT_EMPTY_PLACEHOLDER }]
+    const blocks = renderNarrativeBlocksForExport(content)
+    return blocks.length > 0 ? blocks : [{ type: 'paragraph', text: GRANT_EXPORT_EMPTY_PLACEHOLDER }]
   }
 
   return renderStructuredBlocks(sectionDraft)

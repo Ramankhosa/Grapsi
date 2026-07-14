@@ -7,6 +7,7 @@ import { toast, Toaster } from 'react-hot-toast'
 import {
   HiArrowRight,
   HiBookOpen,
+  HiChatBubbleLeftRight,
   HiCheck,
   HiExclamationTriangle,
   HiListBullet,
@@ -557,6 +558,13 @@ export default function DraftZeroPage() {
                 </button>
               </div>
             ) : null}
+            <button
+              onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/prep`)}
+              title="Prefer a guided, question-by-question preparation? Open the Grant Prep conversation — it works on the same session."
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-prep-accent hover:text-prep-accent"
+            >
+              <HiChatBubbleLeftRight className="h-3.5 w-3.5" /> Grant Prep
+            </button>
             <span className="rounded-full border border-prep-border bg-prep-surface px-3 py-1 text-xs font-medium text-prep-accent">
               {Math.round(overallReadiness * 100)}% ready
             </span>
@@ -659,6 +667,16 @@ export default function DraftZeroPage() {
                   </button>
                 </div>
               </div>
+              <p className="mt-4 text-center text-xs text-slate-400">
+                Prefer to build it up step by step instead?{' '}
+                <button
+                  onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/prep`)}
+                  className="font-medium text-prep-accent underline-offset-2 hover:underline"
+                >
+                  Open Grant Prep
+                </button>{' '}
+                — a guided, question-by-question conversation on the same session.
+              </p>
             </div>
           )
         ) : viewMode === 'map' ? (
