@@ -781,23 +781,25 @@ async function main() {
         `
       }
 
-      // 5. Create funding publications (reference_library entries)
+      // 5. Create funding publications (reference_library entries).
+      //    The researcher search + embedding backfill both read from
+      //    reference_library WHERE 'my-publication' = ANY(tags) AND isActive = true.
       for (const pub of (r.publications || [])) {
         const matchText = buildPublicationMatchText(pub)
         const matchHash = buildContentHash(matchText)
 
-        await tx.citation.create({
+        await tx.referenceLibrary.create({
           data: {
             userId: user.id,
-            tenantId,
             title: pub.title,
+            authors: [`Dr. ${r.firstName} ${r.lastName}`],
             year: pub.year,
             venue: pub.venue || null,
-            citationType: 'JOURNAL',
             sourceType: 'JOURNAL_ARTICLE',
             tags: ['my-publication'],
             fundingMatchText: matchText,
             fundingMatchHash: matchHash,
+            isActive: true,
           }
         })
       }

@@ -36,11 +36,11 @@ export async function GET(request: NextRequest) {
     const [profileCount, areaCount, pubCount, callCount] = await Promise.all([
       prisma.researcherProfile.count(),
       prisma.$queryRaw<[{ count: bigint }]>`SELECT COUNT(*) as count FROM researcher_saved_research_areas`,
-      prisma.citation.count({ where: { tags: { has: 'my-publication' } } }),
+      prisma.referenceLibrary.count({ where: { tags: { has: 'my-publication' }, isActive: true } }),
       prisma.fundingCall.count({ where: { status: 'PUBLISHED' } }),
     ])
 
-    const [profilesWithEmbedding, areasWithEmbedding] = await Promise.all([
+    const [profilesWithEmbedding, areasWithEmbedding, pubsWithEmbedding] = await Promise.all([
       prisma.$queryRaw<[{ count: bigint }]>`
         SELECT COUNT(*) as count FROM researcher_profiles
         WHERE embedding IS NOT NULL OR embedding_voyage_1024 IS NOT NULL
@@ -48,6 +48,11 @@ export async function GET(request: NextRequest) {
       prisma.$queryRaw<[{ count: bigint }]>`
         SELECT COUNT(*) as count FROM researcher_saved_research_areas
         WHERE embedding IS NOT NULL OR embedding_voyage_1024 IS NOT NULL
+      `,
+      prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(*) as count FROM reference_library
+        WHERE 'my-publication' = ANY(tags) AND "isActive" = true
+          AND (funding_embedding IS NOT NULL OR funding_embedding_voyage_1024 IS NOT NULL)
       `,
     ])
 
@@ -57,6 +62,7 @@ export async function GET(request: NextRequest) {
       researchAreas: Number(areaCount[0].count),
       researchAreasWithEmbedding: Number(areasWithEmbedding[0].count),
       publications: Number(pubCount),
+      publicationsWithEmbedding: Number(pubsWithEmbedding[0].count),
       fundingCalls: Number(callCount),
     })
   }

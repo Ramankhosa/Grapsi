@@ -81,11 +81,12 @@ async function main() {
 
   console.log('\nDeleting...')
 
-  // 1. Delete reference_library / citations
-  const citationsDeleted = await prisma.citation.deleteMany({
-    where: { userId: { in: userIds }, tenantId }
+  // 1. Delete reference_library publications (reference_library has no tenantId;
+  //    it cascades on user delete anyway, but we remove explicitly for clear counts)
+  const citationsDeleted = await prisma.referenceLibrary.deleteMany({
+    where: { userId: { in: userIds } }
   })
-  console.log(`  ✓ ${citationsDeleted.count} citations deleted`)
+  console.log(`  ✓ ${citationsDeleted.count} publications deleted`)
 
   // 2. Delete researcher_saved_research_areas (raw — no Prisma model for this)
   const areasDeleted = await prisma.$executeRaw`
