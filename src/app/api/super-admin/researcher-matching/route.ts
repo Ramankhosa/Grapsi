@@ -74,26 +74,38 @@ export async function GET(request: NextRequest) {
   const where: any = { status: 'PUBLISHED' }
   if (q) {
     where.OR = [
-      { schemeTitle: { contains: q, mode: 'insensitive' } },
+      { title: { contains: q, mode: 'insensitive' } },
+      { scheme_title: { contains: q, mode: 'insensitive' } },
       { agencyName: { contains: q, mode: 'insensitive' } },
       { description: { contains: q, mode: 'insensitive' } },
     ]
   }
 
-  const calls = await prisma.fundingCall.findMany({
+  const rows = await prisma.fundingCall.findMany({
     where,
     select: {
       id: true,
-      schemeTitle: true,
+      title: true,
+      scheme_title: true,
       agencyName: true,
       description: true,
-      closeDate: true,
+      close_date: true,
       disciplines: true,
-      fundingKinds: true,
+      funding_kinds: true,
     },
     orderBy: { updatedAt: 'desc' },
     take: limit,
   })
+
+  const calls = rows.map((c) => ({
+    id: c.id,
+    schemeTitle: c.scheme_title || c.title,
+    agencyName: c.agencyName,
+    description: c.description,
+    closeDate: c.close_date,
+    disciplines: c.disciplines,
+    fundingKinds: c.funding_kinds,
+  }))
 
   return NextResponse.json({ calls })
 }
