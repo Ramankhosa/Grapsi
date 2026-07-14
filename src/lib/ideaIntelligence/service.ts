@@ -19,7 +19,7 @@ import {
 } from '@/lib/ideaIntelligence/callSignals'
 import { VISIBLE_GRANT_PREP_STAGE_KEYS } from '@/lib/grantPrep/stageModel'
 import { retrieveIdeaEvidence } from '@/lib/ideaIntelligence/evidenceSources'
-import type { PatentEvidence, PublicationEvidence, WebEvidence } from '@/lib/ideaIntelligence/evidenceSources'
+import type { MultiSourceEvidence, PatentEvidence, PublicationEvidence, WebEvidence } from '@/lib/ideaIntelligence/evidenceSources'
 import { publicProjectSearchService, type PublicProjectSearchItem } from '@/lib/publicProjects/searchService'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
 
@@ -1462,15 +1462,17 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
       for (const s of settled) {
         if (s.status === 'rejected') console.warn('[IdeaIntelligence] source skipped:', s.reason?.message || s.reason)
       }
-      const projectSearch = settled[0].status === 'fulfilled' ? settled[0].value : { results: [], totalCount: 0, facets: {} }
-      const fundingSearch = settled[1].status === 'fulfilled' ? settled[1].value : { rawResults: [] }
-      const evidenceSearch = settled[2].status === 'fulfilled' ? settled[2].value : { publications: [], patents: [], webResults: [], diagnostics: {} }
+      const projectSearch = settled[0].status === 'fulfilled' ? settled[0].value : null
+      const fundingSearch = settled[1].status === 'fulfilled' ? settled[1].value : null
+      const evidenceSearch: MultiSourceEvidence = settled[2].status === 'fulfilled'
+        ? settled[2].value
+        : { publications: [], patents: [], webResults: [], diagnostics: { publicationSources: [], patentnestConfigured: false, patentnestStatus: 'not_configured' } }
       const anchoredCallRecord = settled[3].status === 'fulfilled' ? settled[3].value : null
       const anchoredCallChunks = anchoredCallRecord
         ? await loadAnchoredCallGuidelineChunks(anchoredCallRecord.id, structured.semanticQuery, actor.access).catch(() => [])
         : []
-      const projects = projectSearch.results
-      let fundingCalls = (fundingSearch.rawResults || []).map((call) => ({
+      const projects = projectSearch?.results ?? []
+      let fundingCalls = (fundingSearch?.rawResults || []).map((call) => ({
         id: call.id,
         agencyName: call.agencyName,
         schemeTitle: call.schemeTitle,
@@ -1510,7 +1512,7 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
         patents: evidenceSearch.patents,
         webResults: evidenceSearch.webResults,
         evidenceDiagnostics: evidenceSearch.diagnostics,
-        degradedMode: projectSearch.degradedMode,
+        degradedMode: projectSearch?.degradedMode ?? null,
         query: structured.semanticQuery,
       }
       await prisma.ideaIntelligenceRun.update({
