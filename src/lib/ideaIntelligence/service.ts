@@ -1445,7 +1445,7 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
       })()
 
       const anchorFundingCallId = existing.anchorFundingCallId || null
-      const [projectSearch, fundingSearch, evidenceSearch, anchoredCallRecord] = await Promise.all([
+      const settled = await Promise.allSettled([
         projectSearchPromise,
         recommendationSearchService.search({
           inputMode: 'research_area',
@@ -1459,11 +1459,18 @@ Do not claim novelty or funding likelihood. Facets must be specific enough to co
           ? loadAnchoredFundingCall(anchorFundingCallId, actor.access)
           : Promise.resolve(null),
       ])
+      for (const s of settled) {
+        if (s.status === 'rejected') console.warn('[IdeaIntelligence] source skipped:', s.reason?.message || s.reason)
+      }
+      const projectSearch = settled[0].status === 'fulfilled' ? settled[0].value : { results: [], totalCount: 0, facets: {} }
+      const fundingSearch = settled[1].status === 'fulfilled' ? settled[1].value : { rawResults: [] }
+      const evidenceSearch = settled[2].status === 'fulfilled' ? settled[2].value : { publications: [], patents: [], webResults: [], diagnostics: {} }
+      const anchoredCallRecord = settled[3].status === 'fulfilled' ? settled[3].value : null
       const anchoredCallChunks = anchoredCallRecord
-        ? await loadAnchoredCallGuidelineChunks(anchoredCallRecord.id, structured.semanticQuery, actor.access)
+        ? await loadAnchoredCallGuidelineChunks(anchoredCallRecord.id, structured.semanticQuery, actor.access).catch(() => [])
         : []
       const projects = projectSearch.results
-      let fundingCalls = fundingSearch.rawResults.map((call) => ({
+      let fundingCalls = (fundingSearch.rawResults || []).map((call) => ({
         id: call.id,
         agencyName: call.agencyName,
         schemeTitle: call.schemeTitle,

@@ -29,6 +29,7 @@ import {
   normalizeGrantWorkflowMode,
 } from '@/lib/grants/workflowMode'
 import { buildGrantWorkspaceUrl } from '@/lib/grants/workspaceNavigation'
+import { sanitizeGrantRuleText, splitGrantRuleTextIntoPoints } from '@/lib/grants/ruleText'
 import {
   normalizeGrantTemplateIntent,
   normalizeGrantTemplateIntentConfidence,
@@ -342,9 +343,15 @@ function compileGrantTemplateDocument(input: {
     })
       ? templateIntentToGrantSemantic(templateIntent)
       : null
-    const guidance = (item.guidanceText || item.guidance || '').trim()
+    // Extractor output can embed raw source URLs inside the prose — strip them
+    // before the text becomes prompts, purposes, or compliance requirements.
+    const guidance = sanitizeGrantRuleText(item.guidanceText || item.guidance || '')
     const requiredFacts = dedupeStringList(item.requiredFacts || [])
+      .map((fact: string) => sanitizeGrantRuleText(fact))
+      .filter(Boolean)
     const forbiddenMoves = dedupeStringList(item.forbiddenMoves || [])
+      .map((move: string) => sanitizeGrantRuleText(move))
+      .filter(Boolean)
     const templateGuidance = {
       pointer: `${forcedType === 'short_answer' ? 'questions' : 'sections'}.${rawKey}`,
       guidanceText: guidance ? [guidance] : [],
@@ -373,7 +380,10 @@ function compileGrantTemplateDocument(input: {
       templateIntent,
       templateIntentAlternates,
       templateIntentConfidence,
-      mustCover: requiredFacts.length > 0 ? requiredFacts : (guidance ? [guidance] : []),
+      // A template item without discrete requiredFacts used to dump its ENTIRE
+      // guidance paragraph as one mustCover entry — an unmatchable requirement
+      // that failed the section forever. Split it into atomic points instead.
+      mustCover: requiredFacts.length > 0 ? requiredFacts : splitGrantRuleTextIntoPoints(guidance, { maxPoints: 5 }),
       mustAvoid: forbiddenMoves,
       ...(trustedGrantSemantic ? { grantSemantic: trustedGrantSemantic } : {}),
       grantTemplateGuidance: templateGuidance,

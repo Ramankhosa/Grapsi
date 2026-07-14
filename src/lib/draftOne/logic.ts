@@ -1,4 +1,5 @@
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import { sanitizeGrantRuleText, summarizeGrantRuleText } from '@/lib/grants/ruleText'
 import type { GrantComplianceReport, ReviewerReadinessReport } from '@/types/grant'
 
 /**
@@ -48,6 +49,30 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
 }
 
+function asCleanRuleArray(value: unknown): string[] {
+  return asStringArray(value).map((entry) => sanitizeGrantRuleText(entry)).filter(Boolean)
+}
+
+/**
+ * Reports persisted before the rule-text sanitizers shipped still carry raw
+ * URLs / paragraph blobs. Clean them at read time with the SAME transform used
+ * for the rule profile, so covered-point set membership stays consistent.
+ */
+function sanitizeComplianceReport(report: GrantComplianceReport | null): GrantComplianceReport | null {
+  if (!report) return null
+  return {
+    ...report,
+    coveredRequiredPoints: asCleanRuleArray(report.coveredRequiredPoints),
+    unmetRequiredPoints: asCleanRuleArray(report.unmetRequiredPoints),
+    violatedAvoidRules: asCleanRuleArray(report.violatedAvoidRules),
+    hardFailures: (report.hardFailures || []).map((finding) => ({
+      ...finding,
+      message: sanitizeGrantRuleText(finding.message) || finding.message,
+      ruleText: finding.ruleText ? sanitizeGrantRuleText(finding.ruleText) || null : null,
+    })),
+  }
+}
+
 export function countWords(text: string): number {
   const trimmed = String(text || '').trim()
   if (!trimmed) return 0
@@ -61,7 +86,9 @@ export function normalizeDraftOneSection(raw: Record<string, unknown>): DraftOne
   const workflowMode = String(raw.workflowMode || 'team_manual')
   const content = typeof raw.content === 'string' ? raw.content : ''
   const isStale = Boolean(raw.isStale)
-  const compliance = (raw.grantComplianceReport as GrantComplianceReport | null | undefined) || null
+  const compliance = sanitizeComplianceReport(
+    (raw.grantComplianceReport as GrantComplianceReport | null | undefined) || null
+  )
   const readiness = (raw.reviewerReadinessReport as ReviewerReadinessReport | null | undefined) || null
   const autoDraftable = isGrantSectionAutoDraftable({ sectionKey, sectionType, workflowMode })
 
@@ -92,11 +119,11 @@ export function normalizeDraftOneSection(raw: Record<string, unknown>): DraftOne
     readiness,
     ruleProfile: profile
       ? {
-          requiredPoints: asStringArray(profile.requiredPoints),
-          evaluationFocus: asStringArray(profile.evaluationFocus),
-          reviewerSignals: asStringArray(profile.reviewerSignals),
-          avoidRules: asStringArray(profile.avoidRules),
-          formatConstraints: asStringArray(profile.formatConstraints),
+          requiredPoints: asCleanRuleArray(profile.requiredPoints),
+          evaluationFocus: asCleanRuleArray(profile.evaluationFocus),
+          reviewerSignals: asCleanRuleArray(profile.reviewerSignals),
+          avoidRules: asCleanRuleArray(profile.avoidRules),
+          formatConstraints: asCleanRuleArray(profile.formatConstraints),
         }
       : null,
   }
@@ -129,7 +156,7 @@ export function buildRepairInstructions(input: {
   if (compliance.unmetRequiredPoints.length) {
     lines.push(
       'REQUIRED POINTS THE DRAFT FAILED TO COVER (each must be explicitly and substantively addressed):',
-      ...compliance.unmetRequiredPoints.slice(0, 10).map((point) => `- ${point}`)
+      ...compliance.unmetRequiredPoints.slice(0, 10).map((point) => `- ${summarizeGrantRuleText(point, 220) || point}`)
     )
   }
   if (compliance.violatedAvoidRules.length) {

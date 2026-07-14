@@ -319,6 +319,7 @@ export default function SuperAdminDashboard() {
         { label: 'Funding Control', icon: '$', href: '/super-admin/funding', badge: 'NEW' },
         { label: 'Project Intelligence', icon: 'PI', href: '/super-admin/project-intelligence/crawlers', badge: 'NEW' },
         { label: 'Research Areas', icon: 'RA', href: '/super-admin/research-areas', badge: 'NEW' },
+        { label: 'Researcher Matching', icon: '🔍', href: '/super-admin/researcher-matching', badge: 'NEW' },
         { label: 'Trial Campaigns', icon: '📧', href: '/super-admin/trial-campaigns', badge: 'NEW' },
         { label: 'ATI Token Management', icon: '🎟️', href: '/ati-management' },
         { label: 'Service Control', icon: '🎛️', href: '/super-admin/service-control' }

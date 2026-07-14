@@ -17,6 +17,7 @@ import {
   getCanonicalGrantPrepStageKey,
   isVisibleGrantPrepStageKey,
 } from '@/lib/grantPrep/stageModel'
+import { sanitizeGrantRuleText } from '@/lib/grants/ruleText'
 
 const HARD_RULE_PATTERN = /\b(must|shall|required|mandatory|cannot|may not|do not|should not|at least|at most|within|before submission|not exceed|deadline|max(?:imum)?|minimum)\b/i
 const SUBMISSION_RULE_PATTERN = /\b(portal|upload|attachment|annexure|signature|submit|submission|deadline|certificate|proof|letter of intent|loi|application form|enclosure|appendix)\b/i
@@ -276,7 +277,10 @@ function dedupeAnchors(anchors: Array<Partial<FundingGuidelineSourceAnchor>>): F
 }
 
 function normalizeRule(item: any, block: FundingGuidelineBlockKey): FundingGuidelineRuleItem {
-  const text = String(item.text || '').trim()
+  // The extractor sometimes embeds raw source URLs / scroll-to-text fragments
+  // inside the prose despite being told to keep anchors separate. Normalize
+  // runs on every read, so sanitizing here also cleans packs already persisted.
+  const text = sanitizeGrantRuleText(item.text)
   const importance = item.importance || 'medium'
   return {
     key: String(item.key || '').trim(),
@@ -326,7 +330,11 @@ export function normalizeGuidelinePack(input?: unknown): GuidelinePackDocument {
   const next = createEmptyGuidelinePack();
 
   for (const block of FUNDING_GUIDELINE_BLOCK_KEYS) {
-    next[block] = parsed[block].map((item: any) => normalizeRule(item, block));
+    // A rule whose text was ONLY a source URL sanitizes to empty — drop it
+    // rather than shipping an empty requirement to prompts and panels.
+    next[block] = parsed[block]
+      .map((item: any) => normalizeRule(item, block))
+      .filter((rule: FundingGuidelineRuleItem) => rule.text.length > 0);
   }
 
   next.sourceAnchors = dedupeAnchors(parsed.sourceAnchors || []);

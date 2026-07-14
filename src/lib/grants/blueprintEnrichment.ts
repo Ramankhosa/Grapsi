@@ -29,6 +29,11 @@ import {
   type GrantPersuasionRole,
 } from '@/lib/grants/persuasionRoles'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import {
+  sanitizeGrantRuleText,
+  splitGrantRuleTextIntoPoints,
+  summarizeGrantRuleText,
+} from '@/lib/grants/ruleText'
 import type {
   GrantComplianceReport,
   GrantBlueprintDimensionType,
@@ -1081,7 +1086,9 @@ function pickTopRuleTexts(
       if (!routing.applies) return null
       const semanticScore = scoreRuleForSection(rule, section, semantic)
       return {
-        text: sentenceCase(rule.text.replace(/\s+/g, ' ').trim()),
+        // Extractor text can embed raw source URLs / scroll-to-text fragments;
+        // they poison keyword matching and read as garbage in every panel.
+        text: sentenceCase(sanitizeGrantRuleText(rule.text)),
         score: routing.score + semanticScore,
         semanticScore,
         hasSpecificRouting: routing.hasSpecificRouting,
@@ -1293,11 +1300,16 @@ function buildGrantSectionComplianceContract(
     ...(context.focusAreas || []).slice(0, 4).map((item) => `Focus area: ${item}`),
   ].filter(Boolean))
 
-  const requiredPoints = dedupeStrings([
-    ...templateGuidance.requiredFacts,
-    ...(grantRuleProfile?.requiredPoints || []),
-    ...section.mustCover,
-  ])
+  // Paragraph-sized source rules (guideline enumerations, template guidance)
+  // are split into atomic points: a 60-word blob can never be keyword-covered
+  // by any draft, which used to fail every section unconditionally.
+  const requiredPoints = dedupeStrings(
+    [
+      ...templateGuidance.requiredFacts,
+      ...(grantRuleProfile?.requiredPoints || []),
+      ...section.mustCover,
+    ].flatMap((point) => splitGrantRuleTextIntoPoints(point, { maxPoints: 5 }))
+  )
 
   const evaluationFocus = dedupeStrings([
     ...(grantRuleProfile?.evaluationFocus || []),
@@ -1349,14 +1361,17 @@ function buildGrantSectionComplianceContract(
       ...(guidelinePack?.deliverableRules || [])
         .filter((rule) => rule.enforcementLevel === 'hard' && ruleAppliesToSection(rule, section, semantic))
         .map((rule) => rule.text),
-    ]
+    ].map((text) => sanitizeGrantRuleText(text)).filter(Boolean)
   )
 
+  // Labels carry a readable snippet of the actual rule — failure messages used
+  // to print the placeholder ("Guideline hard rule 1") which told the user
+  // nothing about what was missing.
   const hardChecks: GrantSectionComplianceCheck[] = [
     ...hardGuidelineChecks.map((ruleText, index) =>
       toComplianceCheck({
         key: `hard_guideline_${index + 1}`,
-        label: `Guideline hard rule ${index + 1}`,
+        label: summarizeGrantRuleText(ruleText, 110) || `Guideline hard rule ${index + 1}`,
         ruleText,
         ruleClass: 'must_address',
         enforcementLevel: 'hard',
@@ -1367,7 +1382,7 @@ function buildGrantSectionComplianceContract(
     ...templateGuidance.requiredFacts.map((ruleText, index) =>
       toComplianceCheck({
         key: `template_required_fact_${index + 1}`,
-        label: `Template required fact ${index + 1}`,
+        label: summarizeGrantRuleText(ruleText, 110) || `Template required fact ${index + 1}`,
         ruleText,
         ruleClass: 'template_required_fact',
         enforcementLevel: 'hard',
@@ -1378,7 +1393,7 @@ function buildGrantSectionComplianceContract(
     ...templateGuidance.forbiddenMoves.map((ruleText, index) =>
       toComplianceCheck({
         key: `template_forbidden_move_${index + 1}`,
-        label: `Template forbidden move ${index + 1}`,
+        label: summarizeGrantRuleText(ruleText, 110) || `Template forbidden move ${index + 1}`,
         ruleText,
         ruleClass: 'template_forbidden_move',
         enforcementLevel: 'hard',
@@ -1420,7 +1435,7 @@ function buildGrantSectionComplianceContract(
     ...evaluationFocus.map((ruleText, index) =>
       toComplianceCheck({
         key: `evaluation_focus_${index + 1}`,
-        label: `Evaluation focus ${index + 1}`,
+        label: summarizeGrantRuleText(ruleText, 110) || `Evaluation focus ${index + 1}`,
         ruleText,
         ruleClass: 'evaluation',
         enforcementLevel: 'soft',
@@ -1431,7 +1446,7 @@ function buildGrantSectionComplianceContract(
     ...reviewerSignals.map((ruleText, index) =>
       toComplianceCheck({
         key: `reviewer_signal_${index + 1}`,
-        label: `Reviewer signal ${index + 1}`,
+        label: summarizeGrantRuleText(ruleText, 110) || `Reviewer signal ${index + 1}`,
         ruleText,
         ruleClass: 'reviewer_signal',
         enforcementLevel: 'soft',
@@ -1442,7 +1457,7 @@ function buildGrantSectionComplianceContract(
     ...narrativeConstraints.map((ruleText, index) =>
       toComplianceCheck({
         key: `narrative_constraint_${index + 1}`,
-        label: `Narrative constraint ${index + 1}`,
+        label: summarizeGrantRuleText(ruleText, 110) || `Narrative constraint ${index + 1}`,
         ruleText,
         ruleClass: 'template_guidance',
         enforcementLevel: 'soft',

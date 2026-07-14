@@ -9,6 +9,7 @@ import type {
   ReviewerReadinessReport,
 } from '@/types/grant'
 import { isGrantSectionAutoDraftable } from '@/lib/grants/workflowMode'
+import { summarizeGrantRuleText } from '@/lib/grants/ruleText'
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'their', 'must',
@@ -90,6 +91,11 @@ function isPhraseCovered(text: string, phrase: string) {
   if (score >= 0.75) return true
   const phraseTokens = tokenize(phrase)
   if (phraseTokens.length <= 2) return score >= 1
+  // Long rules are topic requirements, not verbatim phrases: demanding 60%
+  // token overlap on a paragraph-sized rule made it structurally unmatchable
+  // and failed every draft. Grade the bar down with phrase length.
+  if (phraseTokens.length > 24) return score >= 0.45
+  if (phraseTokens.length > 12) return score >= 0.5
   return score >= 0.6
 }
 
@@ -161,11 +167,15 @@ function buildCheckFailure(
     return null
   }
 
+  // Messages must show the actual rule — labels can be generated placeholders
+  // ("Guideline hard rule 1") that tell the user nothing about what to fix.
+  const ruleDetail = summarizeGrantRuleText(check.ruleText, 160) || check.label
+
   if (
     (check.ruleClass === 'avoid' || check.ruleClass === 'template_forbidden_move')
     && isAvoidRuleViolated(text, check.ruleText)
   ) {
-    return makeFinding(check.key, `Avoided move was violated: ${check.label}`, check.source, check.ruleText)
+    return makeFinding(check.key, `Avoided move was violated: ${ruleDetail}`, check.source, check.ruleText)
   }
 
   if (
@@ -178,7 +188,7 @@ function buildCheckFailure(
       || check.ruleClass === 'prep_evidence')
     && !isPhraseCovered(text, check.ruleText)
   ) {
-    return makeFinding(check.key, `Required grant constraint is missing: ${check.label}`, check.source, check.ruleText)
+    return makeFinding(check.key, `Required grant constraint is missing: ${ruleDetail}`, check.source, check.ruleText)
   }
 
   return null

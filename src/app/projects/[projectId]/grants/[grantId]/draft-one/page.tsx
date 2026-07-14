@@ -25,6 +25,8 @@ import {
   type DraftOneRunState,
   type DraftOneSection,
 } from '@/lib/draftOne/logic'
+import { summarizeGrantRuleText } from '@/lib/grants/ruleText'
+import MarkdownRenderer from '@/components/paper/MarkdownRenderer'
 
 function clsx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
@@ -39,6 +41,49 @@ const RUN_STATE_LABEL: Record<DraftOneRunState, string> = {
   failed: 'Failed',
 }
 
+/** Matches the MarkdownRenderer typography so the page reads as one document. */
+const SERIF = '"Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif'
+
+function SectionStatusChip({ section }: { section: DraftOneSection }) {
+  if (!section.autoDraftable) {
+    return <span className="text-[11px] font-medium uppercase tracking-wide text-stone-400">handled by your team</span>
+  }
+  if (section.status === 'passed') {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700">
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> meets agency rules
+      </span>
+    )
+  }
+  if (section.status === 'issues') {
+    const count =
+      (section.compliance?.unmetRequiredPoints.length || 0)
+      + (section.compliance?.violatedAvoidRules.length || 0)
+      || section.compliance?.hardFailures.length
+      || 1
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-medium text-amber-700">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> {count} point{count === 1 ? '' : 's'} to address
+      </span>
+    )
+  }
+  if (section.status === 'stale') {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-medium text-amber-600">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> stale — blueprint changed
+      </span>
+    )
+  }
+  if (section.status === 'unvalidated' && section.content) {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-medium text-stone-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-stone-300" /> not yet validated
+      </span>
+    )
+  }
+  return null
+}
+
 export default function DraftOnePage() {
   const params = useParams<{ projectId: string; grantId: string }>()
   const router = useRouter()
@@ -49,14 +94,21 @@ export default function DraftOnePage() {
   const [draftingSessionId, setDraftingSessionId] = useState<string | null>(null)
   const [callTitle, setCallTitle] = useState('')
   const [sections, setSections] = useState<DraftOneSection[]>([])
+  // Ref mirror so the sequential run loop reads the freshest sections — the
+  // `sections` binding captured by handleRun goes stale the moment the first
+  // mid-run refresh lands, which made later queue items draft against
+  // pre-run content and citation modes.
+  const sectionsRef = useRef<DraftOneSection[]>([])
   const [runStates, setRunStates] = useState<Record<string, DraftOneRunState>>({})
   const [running, setRunning] = useState(false)
   const stopRequested = useRef(false)
+  const selfHealAttempted = useRef(false)
   const [busySection, setBusySection] = useState<string | null>(null)
   const [editorDrafts, setEditorDrafts] = useState<Record<string, string>>({})
   const [editingSection, setEditingSection] = useState<string | null>(null)
   const [rewriteNotes, setRewriteNotes] = useState<Record<string, string>>({})
   const [focusedSection, setFocusedSection] = useState<string | null>(null)
+  const [expandedIssues, setExpandedIssues] = useState<Record<string, boolean>>({})
   const [exportIssues, setExportIssues] = useState<string[] | null>(null)
   const [exporting, setExporting] = useState(false)
 
@@ -83,6 +135,7 @@ export default function DraftOnePage() {
       (raw: Record<string, unknown>) => normalizeDraftOneSection(raw)
     )
     setSections(normalized)
+    sectionsRef.current = normalized
     return normalized
   }, [projectId, grantId, axiosConfig])
 
@@ -96,8 +149,26 @@ export default function DraftOnePage() {
       try {
         const blueprint = await axios.get(`/api/projects/${projectId}/grants/${grantId}/blueprint`, axiosConfig())
         if (cancelled) return
-        setDraftingSessionId(blueprint.data?.grantSession?.draftingSessionId || null)
+        let engineId: string | null = blueprint.data?.grantSession?.draftingSessionId || null
         setCallTitle(blueprint.data?.grantSession?.fundingCall?.title || blueprint.data?.grantSession?.title || '')
+        if (!engineId && !selfHealAttempted.current) {
+          // Self-heal instead of bouncing the user to the blueprint page: the
+          // 'launch' action is idempotent and LLM-free, so re-running it just
+          // (re)creates the drafting engine for this grant in a few seconds.
+          selfHealAttempted.current = true
+          try {
+            const healed = await axios.post(
+              `/api/projects/${projectId}/grants/${grantId}/blueprint`,
+              { action: 'launch' },
+              axiosConfig()
+            )
+            if (cancelled) return
+            engineId = healed.data?.grantSession?.draftingSessionId || null
+          } catch {
+            // Banner below explains the manual path.
+          }
+        }
+        setDraftingSessionId(engineId)
         await refreshSections()
       } catch (error) {
         if (!cancelled) surfaceError(error, 'Failed to load the proposal sections')
@@ -195,7 +266,9 @@ export default function DraftOnePage() {
     let completed = 0
     for (const section of queue) {
       if (stopRequested.current) break
-      const latest = sections.find((entry) => entry.sectionKey === section.sectionKey) || section
+      // Read through the ref — the `sections` closure is frozen at run start,
+      // but every drafted section refreshes state mid-run.
+      const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey) || section
       const ok = await draftSection(latest)
       if (ok) completed += 1
     }
@@ -301,6 +374,8 @@ export default function DraftOnePage() {
   }, [projectId, grantId, axiosConfig, surfaceError])
 
   const summary = useMemo(() => summarizeDraftOneSections(sections), [sections])
+  // Agency template order — sections render exactly as the call's template
+  // lists them, never re-shuffled.
   const orderedSections = useMemo(() => [...sections].sort((a, b) => a.sectionOrder - b.sectionOrder), [sections])
   const focused = useMemo(
     () => orderedSections.find((section) => section.sectionKey === focusedSection) || orderedSections.find((section) => section.autoDraftable) || null,
@@ -309,13 +384,13 @@ export default function DraftOnePage() {
 
   if (!featureEnabled) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-prep-surface p-6">
-        <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-prep-card">
-          <HiSparkles className="mx-auto mb-3 h-8 w-8 text-slate-300" />
-          <h1 className="text-lg font-semibold text-slate-900">Draft One is not enabled</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Set <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_FEATURE_ENABLE_DRAFT_ONE=true</code> and{' '}
-            <code className="rounded bg-slate-100 px-1">FEATURE_ENABLE_DRAFT_ONE=true</code> to try the drafting fast path.
+      <div className="flex min-h-screen items-center justify-center bg-[#f2efe8] p-6">
+        <div className="max-w-md rounded-lg border border-stone-200 bg-white p-8 text-center shadow-sm">
+          <HiSparkles className="mx-auto mb-3 h-8 w-8 text-stone-300" />
+          <h1 className="text-lg font-semibold text-stone-900" style={{ fontFamily: SERIF }}>Draft One is not enabled</h1>
+          <p className="mt-2 text-sm text-stone-500">
+            Set <code className="rounded bg-stone-100 px-1">NEXT_PUBLIC_FEATURE_ENABLE_DRAFT_ONE=true</code> and{' '}
+            <code className="rounded bg-stone-100 px-1">FEATURE_ENABLE_DRAFT_ONE=true</code> to try the drafting fast path.
           </p>
         </div>
       </div>
@@ -324,35 +399,44 @@ export default function DraftOnePage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-prep-surface">
-        <div className="text-sm text-slate-500">Loading Draft One…</div>
+      <div className="flex min-h-screen items-center justify-center bg-[#f2efe8]">
+        <div className="text-sm text-stone-500" style={{ fontFamily: SERIF }}>Preparing your manuscript…</div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-prep-surface pb-24">
+    <div className="min-h-screen bg-[#f2efe8] pb-24">
       <Toaster position="top-right" />
 
-      <header className="sticky top-0 z-30 border-b border-prep-border bg-white/90 backdrop-blur">
+      <header className="sticky top-0 z-30 border-b border-stone-200 bg-[#fbfaf6]/95 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-prep-accent text-white">
+          <div className="flex items-center gap-3">
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-stone-900 text-white">
               <HiPencilSquare className="h-4 w-4" />
             </span>
             <div>
-              <div className="text-sm font-semibold text-slate-900">Draft One</div>
-              <div className="text-xs text-slate-500">{callTitle || 'Proposal drafting'}</div>
+              <div className="text-sm font-semibold text-stone-900" style={{ fontFamily: SERIF }}>
+                Draft One
+              </div>
+              <div className="max-w-[46ch] truncate text-xs text-stone-500">{callTitle || 'Proposal drafting'}</div>
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <span className="rounded-full border border-prep-border bg-prep-surface px-3 py-1 text-xs font-medium text-prep-accent">
+            <span
+              className={clsx(
+                'rounded-full border px-3 py-1 text-xs font-medium',
+                summary.passed === summary.draftable && summary.draftable > 0
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-stone-200 bg-white text-stone-600'
+              )}
+            >
               {summary.passed}/{summary.draftable} sections pass agency rules
             </span>
             <button
               onClick={handleExport}
               disabled={exporting || running}
-              className="flex items-center gap-1.5 rounded-lg bg-prep-accent px-4 py-2 text-sm font-medium text-white hover:bg-prep-accentDark disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-50"
             >
               <HiArrowDownTray className="h-4 w-4" /> {exporting ? 'Checking gates…' : 'Export proposal'}
             </button>
@@ -362,23 +446,25 @@ export default function DraftOnePage() {
 
       <main className="mx-auto max-w-6xl px-4 pt-6">
         {!draftingSessionId ? (
-          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            The drafting engine hasn’t been initialized for this grant yet. Open the{' '}
-            <button className="underline" onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/workspace?stage=BLUEPRINT`)}>
-              blueprint
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            The drafting engine couldn’t be initialized automatically for this grant. Open the{' '}
+            <button className="underline" onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/workspace?stage=SECTION_DRAFTING`)}>
+              workspace
             </button>{' '}
-            once — it self-heals the engine — then return here.
+            once, then return here.
           </div>
         ) : null}
 
         {/* The Run */}
-        <div className="rounded-2xl border border-prep-border bg-white p-5 shadow-prep-card">
+        <div className="rounded-lg border border-stone-200 bg-white p-6 shadow-[0_1px_2px_rgba(64,55,38,0.05),0_10px_30px_-18px_rgba(64,55,38,0.28)]">
           <div className="flex flex-wrap items-center gap-3">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Draft the proposal</h2>
-              <p className="mt-0.5 text-sm text-slate-500">
-                {summary.drafted}/{summary.draftable} AI sections drafted · {summary.withIssues} with rule issues ·{' '}
-                {summary.manual} handled by your team outside AI drafting
+              <h2 className="text-lg font-semibold text-stone-900" style={{ fontFamily: SERIF }}>
+                Draft the proposal
+              </h2>
+              <p className="mt-0.5 text-sm text-stone-500">
+                {summary.drafted} of {summary.draftable} AI sections drafted · {summary.withIssues} with rule issues ·{' '}
+                {summary.manual} handled by your team
               </p>
             </div>
             <div className="ml-auto flex items-center gap-2">
@@ -388,7 +474,7 @@ export default function DraftOnePage() {
                     stopRequested.current = true
                     toast('Finishing the current section, then stopping.', { icon: '⏸' })
                   }}
-                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  className="rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
                 >
                   Stop after this section
                 </button>
@@ -396,7 +482,7 @@ export default function DraftOnePage() {
                 <button
                   onClick={handleRun}
                   disabled={!draftingSessionId || busySection !== null}
-                  className="flex items-center gap-1.5 rounded-lg bg-prep-accent px-4 py-2 text-sm font-medium text-white hover:bg-prep-accentDark disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-50"
                 >
                   <HiPlay className="h-4 w-4" /> {summary.drafted ? 'Draft remaining sections' : 'Draft the proposal'}
                 </button>
@@ -404,7 +490,20 @@ export default function DraftOnePage() {
             </div>
           </div>
           {Object.keys(runStates).length ? (
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-4 h-1 overflow-hidden rounded-full bg-stone-100">
+              <div
+                className="h-full rounded-full bg-stone-800 transition-all duration-500"
+                style={{
+                  width: `${Math.round(
+                    (Object.values(runStates).filter((state) => state === 'done' || state === 'failed').length /
+                      Math.max(1, Object.keys(runStates).length)) * 100
+                  )}%`,
+                }}
+              />
+            </div>
+          ) : null}
+          {Object.keys(runStates).length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
               {orderedSections
                 .filter((section) => runStates[section.sectionKey])
                 .map((section) => {
@@ -419,7 +518,7 @@ export default function DraftOnePage() {
                           : state === 'failed'
                             ? 'border-rose-200 bg-rose-50 text-rose-700'
                             : state === 'queued'
-                              ? 'border-slate-200 bg-slate-50 text-slate-500'
+                              ? 'border-stone-200 bg-stone-50 text-stone-500'
                               : 'border-amber-200 bg-amber-50 text-amber-800'
                       )}
                     >
@@ -432,71 +531,97 @@ export default function DraftOnePage() {
           ) : null}
         </div>
 
-        {/* Sections + rail */}
+        {/* Manuscript + margin notes */}
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_280px]">
-          <div className="space-y-5">
-            {orderedSections.map((section) => {
+          <div className="space-y-6">
+            {orderedSections.map((section, index) => {
               const words = countWords(section.content)
               const overBudget = section.wordBudget ? words > section.wordBudget : false
               const nearBudget = section.wordBudget ? !overBudget && words > section.wordBudget * 0.9 : false
               const isEditing = editingSection === section.sectionKey
               const busy = busySection === section.sectionKey || Boolean(runStates[section.sectionKey] && running)
+              const issueItems: Array<{ mark: string; tone: 'point' | 'avoid' | 'hard'; text: string }> = section.compliance && section.status === 'issues'
+                ? [
+                    ...section.compliance.unmetRequiredPoints.map((point) => ({ mark: '○', tone: 'point' as const, text: point })),
+                    ...section.compliance.violatedAvoidRules.map((rule) => ({ mark: '✕', tone: 'avoid' as const, text: rule })),
+                    ...section.compliance.hardFailures
+                      .filter((finding) => !finding.message.startsWith('Required point is still missing'))
+                      .map((finding) => ({ mark: '!', tone: 'hard' as const, text: finding.message })),
+                  ]
+                : []
+              const issuesExpanded = Boolean(expandedIssues[section.sectionKey])
+              const visibleIssues = issuesExpanded ? issueItems : issueItems.slice(0, 4)
               return (
                 <section
                   key={section.sectionKey}
                   onFocus={() => setFocusedSection(section.sectionKey)}
                   onClick={() => setFocusedSection(section.sectionKey)}
                   className={clsx(
-                    'rounded-2xl border bg-white shadow-prep-card',
-                    focused?.sectionKey === section.sectionKey ? 'border-prep-accent/50' : 'border-prep-border'
+                    'rounded-lg border bg-white shadow-[0_1px_2px_rgba(64,55,38,0.05),0_10px_30px_-18px_rgba(64,55,38,0.28)] transition-colors',
+                    focused?.sectionKey === section.sectionKey ? 'border-stone-400' : 'border-stone-200'
                   )}
                 >
-                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-3">
-                    <h3 className="text-sm font-semibold text-slate-900">{section.label}</h3>
-                    {section.required ? <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">required</span> : null}
-                    {!section.autoDraftable ? (
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">team handles</span>
-                    ) : section.status === 'passed' ? (
-                      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">meets agency rules ✓</span>
-                    ) : section.status === 'issues' ? (
-                      <span className="rounded bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700">
-                        {(section.compliance?.unmetRequiredPoints.length || 0) + (section.compliance?.violatedAvoidRules.length || 0) || section.compliance?.hardFailures.length || 1}{' '}
-                        rule issue(s)
-                      </span>
-                    ) : section.status === 'stale' ? (
-                      <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">stale — blueprint changed</span>
-                    ) : section.status === 'unvalidated' && section.content ? (
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">not yet validated</span>
+                  {/* Sheet header */}
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-stone-100 px-6 pb-3 pt-5 sm:px-8">
+                    <span className="text-sm tabular-nums text-stone-400" style={{ fontFamily: SERIF }}>
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    <h3 className="text-base font-semibold text-stone-900" style={{ fontFamily: SERIF }}>
+                      {section.label}
+                    </h3>
+                    {section.required ? (
+                      <span className="text-[10px] font-medium uppercase tracking-widest text-stone-400">required</span>
                     ) : null}
-                    <div className="ml-auto flex items-center gap-2">
+                    <SectionStatusChip section={section} />
+                    <div className="ml-auto">
                       {section.wordBudget ? (
                         <span
                           className={clsx(
                             'text-xs tabular-nums',
-                            overBudget ? 'font-semibold text-rose-600' : nearBudget ? 'text-amber-600' : 'text-slate-400'
+                            overBudget ? 'font-semibold text-rose-600' : nearBudget ? 'text-amber-600' : 'text-stone-400'
                           )}
                         >
                           {words} / {section.wordBudget} words
                         </span>
                       ) : section.content ? (
-                        <span className="text-xs tabular-nums text-slate-400">{words} words</span>
+                        <span className="text-xs tabular-nums text-stone-400">{words} words</span>
                       ) : null}
                     </div>
                   </div>
 
                   {section.autoDraftable ? (
-                    <div className="px-5 py-4">
-                      {section.status === 'issues' && section.compliance ? (
-                        <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-xs text-rose-900">
-                          {section.compliance.unmetRequiredPoints.slice(0, 4).map((point) => (
-                            <p key={point}>○ Missing required point: {point}</p>
-                          ))}
-                          {section.compliance.violatedAvoidRules.slice(0, 3).map((rule) => (
-                            <p key={rule}>✕ Violates avoid-rule: {rule}</p>
-                          ))}
-                          {section.compliance.hardFailures.slice(0, 3).map((finding) => (
-                            <p key={finding.key}>! {finding.message}</p>
-                          ))}
+                    <div className="px-6 py-5 sm:px-8">
+                      {issueItems.length ? (
+                        <div className="mb-4 rounded-md border border-amber-200/80 bg-[#fdf8ec] px-4 py-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                            Agency check — {issueItems.length} point{issueItems.length === 1 ? '' : 's'} to address
+                          </div>
+                          <ul className="mt-2 space-y-1.5">
+                            {visibleIssues.map((issue, issueIndex) => (
+                              <li key={issueIndex} className="flex items-start gap-2 text-xs leading-relaxed text-stone-700">
+                                <span
+                                  className={clsx(
+                                    'mt-px flex-none font-semibold',
+                                    issue.tone === 'avoid' ? 'text-rose-500' : issue.tone === 'hard' ? 'text-amber-600' : 'text-stone-400'
+                                  )}
+                                >
+                                  {issue.mark}
+                                </span>
+                                {summarizeGrantRuleText(issue.text, 180) || issue.text}
+                              </li>
+                            ))}
+                          </ul>
+                          {issueItems.length > 4 ? (
+                            <button
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setExpandedIssues((state) => ({ ...state, [section.sectionKey]: !issuesExpanded }))
+                              }}
+                              className="mt-2 text-xs font-medium text-amber-800 underline-offset-2 hover:underline"
+                            >
+                              {issuesExpanded ? 'Show fewer' : `Show all ${issueItems.length}`}
+                            </button>
+                          ) : null}
                         </div>
                       ) : null}
 
@@ -505,39 +630,42 @@ export default function DraftOnePage() {
                           <textarea
                             value={editorDrafts[section.sectionKey] ?? section.content}
                             onChange={(event) => setEditorDrafts((drafts) => ({ ...drafts, [section.sectionKey]: event.target.value }))}
-                            rows={14}
-                            className="w-full rounded-xl border border-slate-200 bg-prep-inputBg p-4 font-serif text-[15px] leading-relaxed text-slate-800 focus:border-prep-accent focus:outline-none"
+                            rows={16}
+                            className="w-full rounded-md border border-stone-200 bg-[#fdfcf9] p-5 text-[15px] leading-relaxed text-stone-800 focus:border-stone-400 focus:outline-none"
+                            style={{ fontFamily: SERIF }}
                           />
                           <div className="mt-2 flex gap-2">
                             <button
                               onClick={() => handleSaveEdit(section)}
                               disabled={busy}
-                              className="rounded-lg bg-prep-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-prep-accentDark disabled:opacity-50"
+                              className="rounded-md bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-700 disabled:opacity-50"
                             >
                               Save
                             </button>
                             <button
                               onClick={() => setEditingSection(null)}
-                              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                              className="rounded-md border border-stone-200 px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50"
                             >
                               Cancel
                             </button>
                           </div>
                         </>
                       ) : section.content ? (
-                        <div className="max-h-72 overflow-y-auto whitespace-pre-wrap font-serif text-[15px] leading-relaxed text-slate-800">
-                          {section.content}
+                        <div className="max-h-[32rem] overflow-y-auto pr-1">
+                          <MarkdownRenderer content={section.content} />
                         </div>
                       ) : (
-                        <p className="text-sm italic text-slate-400">Not drafted yet — run the queue or draft this section alone.</p>
+                        <p className="text-sm italic text-stone-400" style={{ fontFamily: SERIF }}>
+                          Not written yet — run the full draft, or draft this section alone.
+                        </p>
                       )}
 
                       {!isEditing ? (
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-stone-100 pt-4">
                           <button
                             onClick={() => handleSingle(section)}
                             disabled={busy || running || !draftingSessionId}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                            className="rounded-md border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-40"
                           >
                             {section.content ? 'Regenerate' : 'Draft this section'}
                           </button>
@@ -545,7 +673,7 @@ export default function DraftOnePage() {
                             <button
                               onClick={() => handleFixIssues(section)}
                               disabled={busy || running}
-                              className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-40"
+                              className="rounded-md border border-amber-300 bg-amber-100/70 px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-40"
                             >
                               Fix rule issues
                             </button>
@@ -557,7 +685,7 @@ export default function DraftOnePage() {
                                 setEditorDrafts((drafts) => ({ ...drafts, [section.sectionKey]: section.content }))
                               }}
                               disabled={busy}
-                              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                              className="rounded-md border border-stone-200 bg-white px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-40"
                             >
                               Edit myself
                             </button>
@@ -572,13 +700,13 @@ export default function DraftOnePage() {
                               }
                             }}
                             placeholder="Steer a rewrite — e.g. “lead with the pilot data” ⏎"
-                            className="min-w-[220px] flex-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:border-prep-accent focus:outline-none"
+                            className="min-w-[220px] flex-1 rounded-md border border-stone-200 bg-white px-3 py-1.5 text-xs text-stone-700 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none"
                           />
                         </div>
                       ) : null}
                     </div>
                   ) : (
-                    <div className="px-5 py-3 text-xs text-slate-400">
+                    <div className="px-6 py-4 text-xs text-stone-400 sm:px-8">
                       This section ({section.sectionType.replace('_', ' ')}) is completed by your team in the{' '}
                       <button
                         className="underline"
@@ -594,21 +722,24 @@ export default function DraftOnePage() {
             })}
           </div>
 
-          {/* Agency rail */}
+          {/* Margin notes: agency rules for the focused section */}
           <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
-            <div className="rounded-2xl border border-prep-border bg-white p-4 shadow-prep-card">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Agency rules — {focused?.label || 'select a section'}
+            <div className="rounded-lg border border-stone-200 bg-[#fbf9f3] p-5">
+              <h3 className="text-sm font-semibold text-stone-800" style={{ fontFamily: SERIF }}>
+                Agency rules
               </h3>
+              <p className="mt-0.5 text-[11px] uppercase tracking-wide text-stone-400">
+                {focused?.label || 'select a section'}
+              </p>
               {focused?.ruleProfile ? (
-                <div className="mt-3 space-y-3 text-xs">
+                <div className="mt-4 space-y-4 text-xs">
                   {(
                     [
                       ['requiredPoints', 'Must cover', '○'],
                       ['avoidRules', 'Avoid', '✕'],
                       ['evaluationFocus', 'Scored on', '◆'],
-                      ['reviewerSignals', 'Reviewers look for', '👁'],
-                      ['formatConstraints', 'Format', '¶'],
+                      ['reviewerSignals', 'Reviewers look for', '¶'],
+                      ['formatConstraints', 'Format', '§'],
                     ] as const
                   ).map(([field, label, mark]) => {
                     const rules = focused.ruleProfile?.[field] || []
@@ -616,14 +747,14 @@ export default function DraftOnePage() {
                     const covered = new Set(focused.compliance?.coveredRequiredPoints || [])
                     return (
                       <div key={field}>
-                        <div className="font-medium text-slate-600">{label}</div>
-                        <ul className="mt-1 space-y-1">
+                        <div className="font-semibold text-stone-600">{label}</div>
+                        <ul className="mt-1.5 space-y-1.5 border-l border-stone-200 pl-3">
                           {rules.slice(0, 4).map((rule) => (
-                            <li key={rule} className="flex items-start gap-1.5 text-slate-500">
-                              <span className={clsx('flex-none', field === 'requiredPoints' && covered.has(rule) ? 'text-emerald-500' : 'text-slate-300')}>
+                            <li key={rule} className="flex items-start gap-1.5 leading-relaxed text-stone-500">
+                              <span className={clsx('flex-none', field === 'requiredPoints' && covered.has(rule) ? 'text-emerald-500' : 'text-stone-300')}>
                                 {field === 'requiredPoints' && covered.has(rule) ? '●' : mark}
                               </span>
-                              {rule}
+                              {summarizeGrantRuleText(rule, 140) || rule}
                             </li>
                           ))}
                         </ul>
@@ -632,14 +763,19 @@ export default function DraftOnePage() {
                   })}
                 </div>
               ) : (
-                <p className="mt-2 text-xs text-slate-400">No routed rules for this section.</p>
+                <p className="mt-3 text-xs text-stone-400">No routed rules for this section.</p>
               )}
               {focused?.readiness ? (
-                <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                  <div className="text-xs text-slate-500">Reviewer readiness</div>
-                  <div className="font-serif text-2xl text-prep-accent">{focused.readiness.score}<span className="text-sm text-slate-400">/100</span></div>
+                <div className="mt-5 border-t border-stone-200 pt-4">
+                  <div className="text-[11px] uppercase tracking-wide text-stone-400">Reviewer readiness</div>
+                  <div className="mt-1 text-3xl text-stone-800" style={{ fontFamily: SERIF }}>
+                    {focused.readiness.score}
+                    <span className="text-sm text-stone-400"> / 100</span>
+                  </div>
                   {focused.readiness.recommendedActions.slice(0, 2).map((action) => (
-                    <p key={action} className="mt-1 text-[11px] text-slate-500">→ {action}</p>
+                    <p key={action} className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
+                      → {action}
+                    </p>
                   ))}
                 </div>
               ) : null}
@@ -650,28 +786,30 @@ export default function DraftOnePage() {
 
       {/* Export gate modal */}
       {exportIssues ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm" onClick={() => setExportIssues(null)}>
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-prep-float" onClick={(event) => event.stopPropagation()}>
-            <h3 className="text-base font-semibold text-slate-900">Not ready for final export</h3>
-            <p className="mt-1 text-sm text-slate-500">The agency gates found {exportIssues.length} issue{exportIssues.length === 1 ? '' : 's'}:</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 backdrop-blur-sm" onClick={() => setExportIssues(null)}>
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <h3 className="text-base font-semibold text-stone-900" style={{ fontFamily: SERIF }}>
+              Not ready for final export
+            </h3>
+            <p className="mt-1 text-sm text-stone-500">The agency gates found {exportIssues.length} issue{exportIssues.length === 1 ? '' : 's'}:</p>
             <ul className="mt-3 max-h-56 space-y-1.5 overflow-y-auto">
               {exportIssues.map((issue) => (
                 <li key={issue} className="flex items-start gap-2 text-xs text-amber-800">
                   <HiExclamationTriangle className="mt-0.5 h-3.5 w-3.5 flex-none text-amber-500" />
-                  {issue}
+                  {summarizeGrantRuleText(issue, 200) || issue}
                 </li>
               ))}
             </ul>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={handleDraftExport}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                className="rounded-md border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
               >
                 Export draft anyway
               </button>
               <button
                 onClick={() => setExportIssues(null)}
-                className="rounded-lg bg-prep-accent px-4 py-2 text-sm font-medium text-white hover:bg-prep-accentDark"
+                className="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700"
               >
                 Keep fixing
               </button>
