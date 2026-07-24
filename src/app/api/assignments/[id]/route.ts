@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantUser } from '@/lib/auth/tenantAccess'
 import { assignmentInclude, parseDate, serializeAssignment } from '@/lib/assignments/shared'
+import { notifyQuietly } from '@/lib/notifications/notificationService'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,6 +15,11 @@ const updateSchema = z.object({
   submittedAt: z.string().trim().nullable().optional(),
   deadlineAt: z.string().trim().nullable().optional(),
   message: z.string().trim().max(5000).nullable().optional(),
+  // Funding decision — admin only.
+  outcome: z.enum(['PENDING', 'AWARDED', 'REJECTED', 'WITHDRAWN']).optional(),
+  awardAmount: z.number().nonnegative().nullable().optional(),
+  awardCurrency: z.string().trim().max(10).nullable().optional(),
+  decisionAt: z.string().trim().nullable().optional(),
 })
 
 /** Accepts "example.com/apply" as well as a full URL. */
@@ -136,6 +142,42 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
   }
 
+  // --- Admin: funding decision ----------------------------------------------
+  const touchesOutcome =
+    payload.outcome !== undefined ||
+    payload.awardAmount !== undefined ||
+    payload.awardCurrency !== undefined ||
+    payload.decisionAt !== undefined
+
+  if (touchesOutcome) {
+    if (!canManage) {
+      return NextResponse.json(
+        { error: 'Only an administrator can record the funding decision.' },
+        { status: 403 }
+      )
+    }
+    if (payload.outcome !== undefined) {
+      data.outcome = payload.outcome
+      // Stamp the decision date automatically unless one was supplied.
+      if (payload.outcome !== 'PENDING' && payload.decisionAt === undefined && !record.decision_at) {
+        data.decision_at = new Date()
+      }
+      if (payload.outcome === 'PENDING') {
+        data.decision_at = null
+        data.award_amount = null
+      }
+    }
+    if (payload.awardAmount !== undefined) {
+      data.award_amount = payload.awardAmount
+    }
+    if (payload.awardCurrency !== undefined) {
+      data.award_currency = payload.awardCurrency || null
+    }
+    if (payload.decisionAt !== undefined) {
+      data.decision_at = parseDate(payload.decisionAt)
+    }
+  }
+
   if (payload.status) {
     if (payload.status === 'COMPLETED') {
       // "Mark complete by providing submission info" — require actual proof.
@@ -171,6 +213,58 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     data,
     include: assignmentInclude,
   })
+
+  const callTitle =
+    updated.funding_call?.scheme_title || updated.funding_call?.title || 'a funding call'
+
+  // Notify the other side of the change: the admin when faculty progress, the
+  // faculty member when an admin changes the assignment or records a decision.
+  if (data.status && data.status !== record.status) {
+    if (isAssignee) {
+      await notifyQuietly({
+        tenantId: context.tenantId,
+        userIds: [updated.assigned_by_user_id],
+        title:
+          data.status === 'COMPLETED'
+            ? `Submission recorded: ${callTitle}`
+            : `Assignment ${String(data.status).toLowerCase().replace('_', ' ')}: ${callTitle}`,
+        body: `${updated.assignee?.name || updated.assignee?.email || 'The assignee'} updated this assignment.`,
+        category: 'ASSIGNMENT',
+        linkUrl: '/assignments',
+        assignmentId: updated.id,
+        createdByUserId: context.user.id,
+      })
+    } else {
+      await notifyQuietly({
+        tenantId: context.tenantId,
+        userIds: [updated.assignee_user_id],
+        title: `Assignment updated: ${callTitle}`,
+        body: `Status is now ${String(data.status).toLowerCase().replace('_', ' ')}.`,
+        category: 'ASSIGNMENT',
+        linkUrl: '/assignments',
+        assignmentId: updated.id,
+        createdByUserId: context.user.id,
+        excludeUserIds: [context.user.id],
+      })
+    }
+  }
+
+  if (data.outcome && data.outcome !== record.outcome) {
+    await notifyQuietly({
+      tenantId: context.tenantId,
+      userIds: [updated.assignee_user_id],
+      title: `Funding decision: ${callTitle}`,
+      body:
+        data.outcome === 'AWARDED'
+          ? `Awarded${updated.award_amount ? ` — ${updated.award_currency || ''}${updated.award_amount}`.trim() : ''}. Congratulations!`
+          : `Outcome recorded as ${String(data.outcome).toLowerCase()}.`,
+      category: 'OUTCOME',
+      linkUrl: '/assignments',
+      assignmentId: updated.id,
+      createdByUserId: context.user.id,
+      excludeUserIds: [context.user.id],
+    })
+  }
 
   return NextResponse.json({ assignment: serializeAssignment(updated) })
 }

@@ -56,6 +56,10 @@ export function serializeAssignment(record: any) {
     submissionNotes: record.submission_notes,
     submittedAt: record.submitted_at,
     completedAt: record.completed_at,
+    outcome: record.outcome,
+    awardAmount: record.award_amount,
+    awardCurrency: record.award_currency,
+    decisionAt: record.decision_at,
     createdAt: record.created_at,
     call: record.funding_call
       ? {

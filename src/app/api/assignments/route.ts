@@ -3,6 +3,7 @@ import sgMail from '@sendgrid/mail'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantUser, TENANT_ASSIGNER_ROLES } from '@/lib/auth/tenantAccess'
+import { notifyQuietly } from '@/lib/notifications/notificationService'
 import {
   ASSIGNMENT_STATUSES,
   assignmentInclude,
@@ -146,6 +147,24 @@ export async function POST(request: NextRequest) {
       match_basis: payload.matchBasis || null,
     },
     include: assignmentInclude,
+  })
+
+  const callTitle =
+    record.funding_call?.scheme_title || record.funding_call?.title || 'a funding call'
+
+  // In-app is the primary channel (there is no other inbox); email is a
+  // best-effort courtesy. Neither may fail the assignment write.
+  await notifyQuietly({
+    tenantId: context.tenantId,
+    userIds: [assignee.id],
+    title: `New assignment: ${callTitle}`,
+    body: record.deadline_at
+      ? `Due ${new Date(record.deadline_at).toLocaleDateString('en-IN')}.${record.message ? ` ${record.message}` : ''}`
+      : record.message || 'You have been assigned a funding call.',
+    category: 'ASSIGNMENT',
+    linkUrl: '/assignments',
+    assignmentId: record.id,
+    createdByUserId: context.user.id,
   })
 
   await notifyAssignee(record, context.user).catch((error) => {

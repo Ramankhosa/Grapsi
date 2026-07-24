@@ -5,7 +5,8 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import { FileText, Bell, Library, Sparkles } from 'lucide-react'
+import { FileText, Library, Sparkles } from 'lucide-react'
+import NotificationBell from '@/components/notifications/NotificationBell'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
@@ -195,6 +196,8 @@ export default function Header() {
                   </>
                 )}
 
+                <NotificationBell />
+
                 {/* Compact User Dropdown */}
                 <button
                   onClick={handleMenuToggle}
@@ -311,6 +314,14 @@ export default function Header() {
                         >
                           <span>🎓</span>
                           <span>Faculty &amp; Organization</span>
+                        </Link>
+                        <Link
+                          href="/tenant-admin/grant-dashboard"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>📈</span>
+                          <span>Grant Dashboard</span>
                         </Link>
                         <Link
                           href="/tenant-admin/analytics"

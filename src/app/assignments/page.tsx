@@ -15,6 +15,10 @@ interface Assignment {
   submissionNotes: string | null
   submittedAt: string | null
   completedAt: string | null
+  outcome: 'PENDING' | 'AWARDED' | 'REJECTED' | 'WITHDRAWN'
+  awardAmount: number | null
+  awardCurrency: string | null
+  decisionAt: string | null
   createdAt: string
   call: {
     id: string
@@ -29,6 +33,13 @@ interface Assignment {
 }
 
 const ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN']
+
+const OUTCOME_STYLES: Record<Assignment['outcome'], { label: string; className: string }> = {
+  PENDING: { label: 'Decision pending', className: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' },
+  AWARDED: { label: 'Awarded', className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' },
+  REJECTED: { label: 'Rejected', className: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300' },
+  WITHDRAWN: { label: 'Withdrawn', className: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400' },
+}
 
 const STATUS_STYLES: Record<Assignment['status'], { label: string; className: string }> = {
   ASSIGNED: { label: 'Assigned', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
@@ -84,6 +95,15 @@ export default function AssignmentsPage() {
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [modalError, setModalError] = useState<string | null>(null)
+
+  // Outcome capture (admin)
+  const [deciding, setDeciding] = useState<Assignment | null>(null)
+  const [outcome, setOutcome] = useState<Assignment['outcome']>('PENDING')
+  const [awardAmount, setAwardAmount] = useState('')
+  const [awardCurrency, setAwardCurrency] = useState('INR')
+  const [decisionAt, setDecisionAt] = useState('')
+  const [outcomeSaving, setOutcomeSaving] = useState(false)
+  const [outcomeError, setOutcomeError] = useState<string | null>(null)
 
   const canManage = useMemo(
     () => Boolean(user?.roles?.some((role: string) => ASSIGNER_ROLES.includes(role))),
@@ -173,6 +193,41 @@ export default function AssignmentsPage() {
       setModalError(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const openDecision = (assignment: Assignment) => {
+    setDeciding(assignment)
+    setOutcome(assignment.outcome || 'PENDING')
+    setAwardAmount(assignment.awardAmount != null ? String(assignment.awardAmount) : '')
+    setAwardCurrency(assignment.awardCurrency || 'INR')
+    setDecisionAt(
+      assignment.decisionAt ? assignment.decisionAt.slice(0, 10) : new Date().toISOString().slice(0, 10)
+    )
+    setOutcomeError(null)
+  }
+
+  const submitDecision = async () => {
+    if (!deciding) return
+    setOutcomeSaving(true)
+    setOutcomeError(null)
+    try {
+      const parsedAmount = awardAmount.trim() ? Number(awardAmount) : null
+      if (parsedAmount !== null && (!Number.isFinite(parsedAmount) || parsedAmount < 0)) {
+        throw new Error('Enter a valid award amount.')
+      }
+      const updated = await patchAssignment(deciding, {
+        outcome,
+        awardAmount: outcome === 'AWARDED' ? parsedAmount : null,
+        awardCurrency: outcome === 'AWARDED' ? awardCurrency.trim() || null : null,
+        decisionAt: outcome === 'PENDING' ? null : decisionAt || null,
+      })
+      applyUpdate(updated)
+      setDeciding(null)
+    } catch (e: any) {
+      setOutcomeError(e.message)
+    } finally {
+      setOutcomeSaving(false)
     }
   }
 
@@ -284,6 +339,18 @@ export default function AssignmentsPage() {
                       <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${status.className}`}>
                         {status.label}
                       </span>
+                      {assignment.outcome && assignment.outcome !== 'PENDING' && (
+                        <span
+                          className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                            OUTCOME_STYLES[assignment.outcome]?.className || ''
+                          }`}
+                        >
+                          {OUTCOME_STYLES[assignment.outcome]?.label}
+                          {assignment.outcome === 'AWARDED' && assignment.awardAmount
+                            ? ` · ${assignment.awardCurrency || ''}${new Intl.NumberFormat('en-IN').format(assignment.awardAmount)}`
+                            : ''}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -359,6 +426,16 @@ export default function AssignmentsPage() {
                         className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400"
                       >
                         Edit submission info
+                      </button>
+                    )}
+                    {view === 'managed' && canManage && assignment.status === 'COMPLETED' && (
+                      <button
+                        onClick={() => openDecision(assignment)}
+                        className="px-3 py-1.5 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg"
+                      >
+                        {assignment.outcome && assignment.outcome !== 'PENDING'
+                          ? 'Edit decision'
+                          : 'Record decision'}
                       </button>
                     )}
                     {view === 'managed' && isOpen && canManage && (
@@ -456,6 +533,89 @@ export default function AssignmentsPage() {
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
               >
                 {saving ? 'Saving...' : 'Mark complete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Funding decision modal (admin) */}
+      {deciding && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">Record funding decision</h3>
+            <p className="mt-1 mb-4 text-sm text-gray-500 dark:text-gray-400">
+              {deciding.call?.title} · {deciding.assignee?.name || deciding.assignee?.email}
+            </p>
+
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Outcome</label>
+            <select
+              value={outcome}
+              onChange={(e) => setOutcome(e.target.value as Assignment['outcome'])}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white mb-3"
+            >
+              {(['PENDING', 'AWARDED', 'REJECTED', 'WITHDRAWN'] as const).map((value) => (
+                <option key={value} value={value}>{OUTCOME_STYLES[value].label}</option>
+              ))}
+            </select>
+
+            {outcome === 'AWARDED' && (
+              <div className="flex gap-2 mb-3">
+                <div className="w-24">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Currency</label>
+                  <input
+                    type="text"
+                    value={awardCurrency}
+                    onChange={(e) => setAwardCurrency(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Award amount</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={awardAmount}
+                    onChange={(e) => setAwardAmount(e.target.value)}
+                    placeholder="e.g. 2500000"
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                  />
+                </div>
+              </div>
+            )}
+
+            {outcome !== 'PENDING' && (
+              <div className="mb-3">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Decision date</label>
+                <input
+                  type="date"
+                  value={decisionAt}
+                  onChange={(e) => setDecisionAt(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                />
+              </div>
+            )}
+
+            {outcomeError && (
+              <div className="mt-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+                {outcomeError}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setDeciding(null)}
+                disabled={outcomeSaving}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitDecision}
+                disabled={outcomeSaving}
+                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50"
+              >
+                {outcomeSaving ? 'Saving...' : 'Save decision'}
               </button>
             </div>
           </div>

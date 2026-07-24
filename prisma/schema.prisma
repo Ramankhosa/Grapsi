@@ -549,6 +549,7 @@ model Tenant {
   orgUnits          TenantOrgUnit[]
   callAssignments   CallAssignment[]
   facultyImportJobs FacultyImportJob[]
+  notifications     Notification[]
 
   @@map("tenants")
 }
@@ -680,6 +681,8 @@ model User {
   callAssignmentsReceived CallAssignment[]   @relation("CallAssignmentAssignee")
   callAssignmentsCreated  CallAssignment[]   @relation("CallAssignmentAssignedBy")
   facultyImportJobs       FacultyImportJob[]
+  notifications           Notification[]     @relation("NotificationRecipient")
+  sentNotifications       Notification[]     @relation("NotificationSender")
 
   @@map("users")
 }
@@ -2763,6 +2766,13 @@ enum CallAssignmentStatus {
   CANCELLED
 }
 
+enum CallAssignmentOutcome {
+  PENDING
+  AWARDED
+  REJECTED
+  WITHDRAWN
+}
+
 // A funding call handed to a faculty member by a tenant admin, with an
 // internal deadline and message. The assignee closes it out by recording
 // submission info.
@@ -2788,20 +2798,57 @@ model CallAssignment {
   submitted_at         DateTime?
   completed_at         DateTime?
 
+  // Final funding decision, recorded by an admin after submission. Drives the
+  // success-rate and funding-won reporting.
+  outcome        CallAssignmentOutcome @default(PENDING)
+  award_amount   Float?
+  award_currency String?
+  decision_at    DateTime?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  tenant       Tenant      @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  funding_call FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
-  assignee     User        @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
-  assigned_by  User        @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
+  tenant        Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call  FundingCall    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  assignee      User           @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
+  assigned_by   User           @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
+  notifications Notification[]
 
   @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
   @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
   @@index([tenant_id, status], map: "idx_call_assignments_tenant_status")
+  @@index([tenant_id, outcome], map: "idx_call_assignments_tenant_outcome")
   @@index([assigned_by_user_id], map: "idx_call_assignments_assigned_by")
   @@index([deadline_at], map: "idx_call_assignments_deadline")
   @@map("call_assignments")
+}
+
+// In-app notification delivered to a single user. The app has no other inbox,
+// so this is the primary channel for admin -> faculty messages and for
+// automatic assignment events (email, where configured, is best-effort on top).
+model Notification {
+  id                 String    @id @default(cuid())
+  tenant_id          String
+  user_id            String
+  title              String
+  body               String?
+  category           String    @default("ANNOUNCEMENT")
+  link_url           String?
+  assignment_id      String?
+  created_by_user_id String?
+  read_at            DateTime?
+  created_at         DateTime  @default(now())
+
+  tenant     Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  user       User            @relation("NotificationRecipient", fields: [user_id], references: [id], onDelete: Cascade)
+  created_by User?           @relation("NotificationSender", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  assignment CallAssignment? @relation(fields: [assignment_id], references: [id], onDelete: SetNull)
+
+  // Drives the unread badge.
+  @@index([user_id, read_at], map: "idx_notifications_user_read")
+  @@index([tenant_id, created_at], map: "idx_notifications_tenant_created")
+  @@index([assignment_id], map: "idx_notifications_assignment")
+  @@map("notifications")
 }
 
 // Audit record for each faculty CSV/Excel upload.

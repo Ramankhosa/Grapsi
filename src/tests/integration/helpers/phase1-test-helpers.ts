@@ -27,10 +27,9 @@ export interface TestUser {
  * accidental wipe it refuses to run unless the run is explicitly opted in with
  * ALLOW_REAL_DB_TESTS=true — ideally against a disposable TEST_DATABASE_URL.
  *
- * Run these tests deliberately, e.g.:
- *   ALLOW_REAL_DB_TESTS=true npx vitest run src/tests/integration/*.real-db.test.ts
- * and keep them out of the default suite:
- *   npx vitest run --exclude "**/*.real-db.test.ts"
+ * Run these tests deliberately by setting ALLOW_REAL_DB_TESTS=true and pointing
+ * vitest at src/tests/integration. They are already kept out of the default
+ * suite by the `exclude` entry in vitest.config.ts.
  */
 export async function resetPhase1Data() {
   if (process.env.ALLOW_REAL_DB_TESTS !== 'true') {
