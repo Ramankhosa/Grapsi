@@ -18,6 +18,7 @@ import {
   updateBlueprintPlan,
   updateBlueprintSectionOverride,
 } from '@/lib/grants/workspace'
+import { normalizeGrantPipelinePrefs } from '@/lib/grants/workspaceNavigation'
 
 const planSectionSchema = z.object({
   sectionKey: z.string().min(1),
@@ -87,6 +88,17 @@ const updateBlueprintSchema = z.object({
   sectionOverride: sectionOverrideSchema.optional(),
 })
 
+/**
+ * The author's chosen stage route, recorded in the blueprint freeze payload at
+ * launch. Surfaced as a first-class field so the workspace does not have to dig
+ * through raw JSON; null means a grant launched before the route existed, and
+ * the workspace then shows every stage.
+ */
+function readPipelinePrefs(blueprint: { freezePayloadJson?: unknown } | null | undefined) {
+  if (!blueprint?.freezePayloadJson || typeof blueprint.freezePayloadJson !== 'object') return null
+  return normalizeGrantPipelinePrefs((blueprint.freezePayloadJson as Record<string, unknown>).pipeline)
+}
+
 const blueprintActionSchema = z.object({
   // 'launch' = idempotent initial launch / self-heal (no LLM re-run if already
   // launched and unchanged). 'regenerate' = explicit user rebuild (always runs).
@@ -120,6 +132,7 @@ export async function GET(
   return NextResponse.json({
     grantSession: workspace.grantSession,
     blueprint: workspace.blueprint,
+    pipeline: readPipelinePrefs(workspace.blueprint),
     proposalFoundation: workspace.proposalFoundation,
     proposalComplianceReport: workspace.proposalComplianceReport,
     proposalReviewerReadinessReport: workspace.proposalReviewerReadinessReport,
@@ -303,6 +316,7 @@ export async function POST(
     return NextResponse.json({
       grantSession: workspace?.grantSession || null,
       blueprint: workspace?.blueprint || null,
+      pipeline: readPipelinePrefs(workspace?.blueprint),
       proposalFoundation: workspace?.proposalFoundation || null,
       proposalComplianceReport: workspace?.proposalComplianceReport || null,
       proposalReviewerReadinessReport: workspace?.proposalReviewerReadinessReport || null,

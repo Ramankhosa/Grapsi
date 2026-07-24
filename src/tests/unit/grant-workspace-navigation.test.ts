@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  DEFAULT_GRANT_PIPELINE_PREFS,
+  buildGrantPipelineStages,
   buildGrantPrepEntryUrl,
   buildGrantProjectOpenUrl,
   buildGrantWorkspaceUrl,
+  normalizeGrantPipelinePrefs,
+  resolveGrantPipelineEntryStage,
   resolveGrantWorkspaceStage,
   resolveGrantWorkspaceStageForGrantStatus,
   resolveGrantWorkspaceStageForPrepStatus,
@@ -213,5 +217,61 @@ describe('grant workspace navigation', () => {
 
     expect(draftingFilterMatches(bibliographySection, 'all')).toBe(true)
     expect(draftingFilterMatches(bibliographySection, 'app_draft')).toBe(true)
+  })
+})
+
+describe('grant pipeline route', () => {
+  it('builds the streamlined route from the author\'s opt-ins', () => {
+    expect(buildGrantPipelineStages({ literatureSearch: true, deepAnalysis: true })).toEqual([
+      'LITERATURE_SEARCH',
+      'FULL_TEXT_EVIDENCE_EXTRACTION',
+      'SECTION_DRAFTING',
+      'REVIEWER',
+    ])
+
+    expect(buildGrantPipelineStages({ literatureSearch: true, deepAnalysis: false })).toEqual([
+      'LITERATURE_SEARCH',
+      'SECTION_DRAFTING',
+      'REVIEWER',
+    ])
+
+    expect(buildGrantPipelineStages({ literatureSearch: false, deepAnalysis: false })).toEqual([
+      'SECTION_DRAFTING',
+      'REVIEWER',
+    ])
+  })
+
+  it('never routes to deep analysis without literature search', () => {
+    // Deep analysis reads the papers literature search mapped, so it cannot
+    // stand alone even if a stored payload claims otherwise.
+    expect(normalizeGrantPipelinePrefs({ literatureSearch: false, deepAnalysis: true })).toEqual({
+      literatureSearch: false,
+      deepAnalysis: false,
+    })
+
+    expect(buildGrantPipelineStages({ literatureSearch: false, deepAnalysis: true })).toEqual([
+      'SECTION_DRAFTING',
+      'REVIEWER',
+    ])
+  })
+
+  it('lands the launch on the first stage of the chosen route', () => {
+    expect(resolveGrantPipelineEntryStage({ literatureSearch: true, deepAnalysis: false })).toBe('LITERATURE_SEARCH')
+    expect(resolveGrantPipelineEntryStage({ literatureSearch: false, deepAnalysis: false })).toBe('SECTION_DRAFTING')
+  })
+
+  it('reports no prefs for grants launched before the route existed', () => {
+    // Null keeps the workspace on the legacy full stage rail instead of hiding
+    // stages an older grant still depends on.
+    expect(normalizeGrantPipelinePrefs(undefined)).toBeNull()
+    expect(normalizeGrantPipelinePrefs(null)).toBeNull()
+    expect(normalizeGrantPipelinePrefs({})).toBeNull()
+    expect(normalizeGrantPipelinePrefs('literature')).toBeNull()
+    expect(normalizeGrantPipelinePrefs([true, false])).toBeNull()
+  })
+
+  it('defaults to searching citations before drafting', () => {
+    expect(DEFAULT_GRANT_PIPELINE_PREFS).toEqual({ literatureSearch: true, deepAnalysis: false })
+    expect(resolveGrantPipelineEntryStage(DEFAULT_GRANT_PIPELINE_PREFS)).toBe('LITERATURE_SEARCH')
   })
 })

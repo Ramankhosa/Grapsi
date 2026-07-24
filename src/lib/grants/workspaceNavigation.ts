@@ -11,6 +11,64 @@ export type GrantWorkspaceStage =
   | 'REVIEWER'
 
 /**
+ * Which optional evidence stages the author opted into at Draft Zero launch.
+ * Chosen once in the launch modal and stored in the blueprint freeze payload,
+ * so the workspace can present one linear route instead of every stage.
+ */
+export interface GrantPipelinePrefs {
+  literatureSearch: boolean
+  deepAnalysis: boolean
+}
+
+export const DEFAULT_GRANT_PIPELINE_PREFS: GrantPipelinePrefs = {
+  literatureSearch: true,
+  deepAnalysis: false,
+}
+
+/**
+ * Stages that are always part of the streamlined route, in order. Everything
+ * before drafting is opt-in; Blueprint and the GrantMentor chat are replaced by
+ * Draft Zero and stay reachable only by direct URL.
+ */
+const GRANT_PIPELINE_CORE_STAGES: GrantWorkspaceStage[] = ['SECTION_DRAFTING', 'REVIEWER']
+
+/**
+ * Returns null for sessions launched before the pipeline prefs existed, so the
+ * workspace can fall back to showing every stage instead of silently hiding
+ * ones a legacy grant still depends on.
+ */
+export function normalizeGrantPipelinePrefs(value: unknown): GrantPipelinePrefs | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Partial<GrantPipelinePrefs>
+  if (typeof record.literatureSearch !== 'boolean' && typeof record.deepAnalysis !== 'boolean') {
+    return null
+  }
+  const literatureSearch = record.literatureSearch === true
+  return {
+    literatureSearch,
+    // Deep analysis needs papers mapped by literature search; it can never
+    // stand alone even if a stale payload says otherwise.
+    deepAnalysis: literatureSearch && record.deepAnalysis === true,
+  }
+}
+
+/** The ordered stage route for a grant, given its recorded pipeline choices. */
+export function buildGrantPipelineStages(prefs: GrantPipelinePrefs): GrantWorkspaceStage[] {
+  return [
+    ...(prefs.literatureSearch ? (['LITERATURE_SEARCH'] as GrantWorkspaceStage[]) : []),
+    ...(prefs.literatureSearch && prefs.deepAnalysis
+      ? (['FULL_TEXT_EVIDENCE_EXTRACTION'] as GrantWorkspaceStage[])
+      : []),
+    ...GRANT_PIPELINE_CORE_STAGES,
+  ]
+}
+
+/** Where a launch lands: the first stage of the author's chosen route. */
+export function resolveGrantPipelineEntryStage(prefs: GrantPipelinePrefs): GrantWorkspaceStage {
+  return buildGrantPipelineStages(prefs)[0]
+}
+
+/**
  * Default entry route for grant preparation. Draft Zero (generate-first proof
  * review) is the default path when enabled; the guided Grant Prep chat stays
  * reachable from the Draft Zero UI and directly at /prep for users who prefer

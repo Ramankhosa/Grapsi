@@ -70,9 +70,15 @@ async function main() {
 
   assert(startResponse.status === 201, `Grant launch route failed: ${JSON.stringify(startBody)}`)
   assert(startBody.project?.projectType === 'GRANT', `Grant launch created the wrong project type: ${JSON.stringify(startBody)}`)
+  // Pre-launch grants open on Draft Zero when the fast path is on, and on the
+  // guided Grant Prep chat when it is off.
+  const expectedEntrySuffix = process.env.NEXT_PUBLIC_FEATURE_ENABLE_DRAFT_ZERO === 'true'
+    || process.env.FEATURE_ENABLE_DRAFT_ZERO === 'true'
+    ? '/draft-zero'
+    : '/prep'
   assert(
-    startBody.launchUrl === `/projects/${startBody.project.id}/grants/${startBody.session.id}/prep`,
-    `Grant launch returned an unexpected prep URL: ${startBody.launchUrl}`
+    typeof startBody.launchUrl === 'string' && startBody.launchUrl.endsWith(expectedEntrySuffix),
+    `Grant launch returned an unexpected entry URL (expected ${expectedEntrySuffix}): ${startBody.launchUrl}`
   )
 
   const grantDetailRequest = new NextRequest(

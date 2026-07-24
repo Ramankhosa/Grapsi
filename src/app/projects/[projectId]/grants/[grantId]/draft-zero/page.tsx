@@ -18,7 +18,12 @@ import {
 } from 'react-icons/hi2'
 
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import { withGrantWorkspaceStage } from '@/lib/grants/workspaceNavigation'
+import {
+  DEFAULT_GRANT_PIPELINE_PREFS,
+  resolveGrantPipelineEntryStage,
+  withGrantWorkspaceStage,
+  type GrantPipelinePrefs,
+} from '@/lib/grants/workspaceNavigation'
 import type { GuidelinePackDocument } from '@/lib/fundingGuidelines/types'
 import type { DraftZeroClaim, DraftZeroGap, DraftZeroState } from '@/lib/draftZero/types'
 import type { PrepContext, PrepHandoffPreview } from '@/components/grantPrep/types'
@@ -92,6 +97,9 @@ export default function DraftZeroPage() {
   const [launchPreview, setLaunchPreview] = useState<PrepHandoffPreview | null>(null)
   const [launchOpen, setLaunchOpen] = useState(false)
   const [launching, setLaunching] = useState(false)
+  // The route the author picks before launching. Deep analysis depends on
+  // literature search having mapped papers first, so it is gated on it.
+  const [pipeline, setPipeline] = useState<GrantPipelinePrefs>(DEFAULT_GRANT_PIPELINE_PREFS)
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list')
   const [aiFilling, setAiFilling] = useState(false)
   const [normsOpenStages, setNormsOpenStages] = useState<Record<string, boolean>>({})
@@ -426,16 +434,22 @@ export default function DraftZeroPage() {
     }
   }, [sessionId, pendingPoint, axiosConfig, surfaceError])
 
+  // Land on the first stage of the route the author chose. The server computes
+  // the same entry stage into launchUrl; re-applying it here keeps the redirect
+  // correct even when the launch is replayed and returns a stored URL.
   const navigateAfterLaunch = useCallback(
-    (launchUrl: string | null | undefined) => {
-      if (isFeatureEnabled('ENABLE_DRAFT_ONE')) {
-        // Phase 2 of the fast path: straight into Draft One's batch drafting.
-        toast.success('Launched — drafting the proposal next')
-        router.push(`/projects/${projectId}/grants/${grantId}/draft-one`)
-      } else {
-        toast.success('Launched — opening the drafting workspace')
-        if (launchUrl) router.push(withGrantWorkspaceStage(launchUrl, 'SECTION_DRAFTING'))
-      }
+    (launchUrl: string | null | undefined, prefs: GrantPipelinePrefs) => {
+      const entryStage = resolveGrantPipelineEntryStage(prefs)
+      toast.success(
+        entryStage === 'LITERATURE_SEARCH'
+          ? 'Launched — finding citations next'
+          : 'Launched — opening the drafting workspace'
+      )
+      router.push(
+        launchUrl
+          ? withGrantWorkspaceStage(launchUrl, entryStage)
+          : `/projects/${projectId}/grants/${grantId}/workspace?stage=${entryStage}`
+      )
     },
     [router, projectId, grantId]
   )
@@ -443,9 +457,16 @@ export default function DraftZeroPage() {
   const handleLaunch = useCallback(async () => {
     if (!sessionId || launching || readOnly) return
     setLaunching(true)
+    // Snapshot the choices so the replay below sends the same route the author
+    // confirmed, instead of silently falling back to the defaults.
+    const chosenPipeline = pipeline
     try {
-      const response = await axios.post(`/api/grant-prep/sessions/${sessionId}/handoff`, {}, axiosConfig())
-      navigateAfterLaunch(response.data?.launchUrl)
+      const response = await axios.post(
+        `/api/grant-prep/sessions/${sessionId}/handoff`,
+        { pipeline: chosenPipeline },
+        axiosConfig()
+      )
+      navigateAfterLaunch(response.data?.launchUrl, chosenPipeline)
     } catch (error) {
       // The launch can complete server-side while the response is lost (proxy
       // timeout, network blip). Check the session before reporting failure — a
@@ -454,8 +475,12 @@ export default function DraftZeroPage() {
       try {
         const check = await axios.get(`/api/grant-prep/sessions/${sessionId}/draft-zero`, axiosConfig())
         if (['launched', 'handed_off'].includes(check.data?.sessionStatus)) {
-          const replay = await axios.post(`/api/grant-prep/sessions/${sessionId}/handoff`, {}, axiosConfig())
-          navigateAfterLaunch(replay.data?.launchUrl)
+          const replay = await axios.post(
+            `/api/grant-prep/sessions/${sessionId}/handoff`,
+            { pipeline: chosenPipeline },
+            axiosConfig()
+          )
+          navigateAfterLaunch(replay.data?.launchUrl, chosenPipeline)
           return
         }
       } catch {
@@ -464,7 +489,7 @@ export default function DraftZeroPage() {
       surfaceError(error, 'Launch failed')
       setLaunching(false)
     }
-  }, [sessionId, launching, readOnly, axiosConfig, navigateAfterLaunch, surfaceError])
+  }, [sessionId, launching, readOnly, pipeline, axiosConfig, navigateAfterLaunch, surfaceError])
 
   const overallReadiness = useMemo(() => {
     if (!prepContext) return 0
@@ -591,13 +616,7 @@ export default function DraftZeroPage() {
             </span>
             {sessionStatus !== 'archived' ? (
               <button
-                onClick={() =>
-                  router.push(
-                    isFeatureEnabled('ENABLE_DRAFT_ONE')
-                      ? `/projects/${projectId}/grants/${grantId}/draft-one`
-                      : `/projects/${projectId}/grants/${grantId}/workspace?stage=SECTION_DRAFTING`
-                  )
-                }
+                onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/workspace?stage=SECTION_DRAFTING`)}
                 className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
               >
                 Continue drafting <HiArrowRight className="h-3.5 w-3.5" />
@@ -1079,6 +1098,60 @@ export default function DraftZeroPage() {
                 the drafting workspace.
               </p>
             )}
+
+            <div className="mt-4 space-y-2 rounded-xl border border-prep-border bg-prep-surface/60 p-3">
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Before drafting</div>
+              <label className="flex cursor-pointer items-start gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={pipeline.literatureSearch}
+                  onChange={(event) =>
+                    setPipeline((current) => ({
+                      literatureSearch: event.target.checked,
+                      // Deep analysis works on papers literature search mapped,
+                      // so it cannot outlive that choice.
+                      deepAnalysis: event.target.checked && current.deepAnalysis,
+                    }))
+                  }
+                  disabled={launching}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-prep-accent focus:ring-prep-accent"
+                />
+                <span>
+                  Search for citations first
+                  <span className="block text-xs text-slate-500">
+                    Finds and maps supporting papers so drafted sections can cite real evidence.
+                  </span>
+                </span>
+              </label>
+              <label
+                className={clsx(
+                  'flex items-start gap-2.5 text-sm',
+                  pipeline.literatureSearch ? 'cursor-pointer text-slate-700' : 'cursor-not-allowed text-slate-400'
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={pipeline.deepAnalysis}
+                  onChange={(event) =>
+                    setPipeline((current) => ({ ...current, deepAnalysis: event.target.checked }))
+                  }
+                  disabled={launching || !pipeline.literatureSearch}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-prep-accent focus:ring-prep-accent disabled:opacity-50"
+                />
+                <span>
+                  Deep-analyse the best papers
+                  <span className="block text-xs text-slate-500">
+                    {pipeline.literatureSearch
+                      ? 'Pulls full-text evidence from the strongest matches. Slower, but stronger claims.'
+                      : 'Needs citation search — it works on the papers that search maps.'}
+                  </span>
+                </span>
+              </label>
+              <p className="pt-1 text-xs text-slate-400">
+                You can still open either stage later from the workspace.
+              </p>
+            </div>
+
             <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={() => setLaunchOpen(false)}

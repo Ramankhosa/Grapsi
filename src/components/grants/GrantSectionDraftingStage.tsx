@@ -13,6 +13,7 @@ import {
   PanelRightOpen,
   Plus,
   RefreshCcw,
+  ShieldCheck,
   Sparkles,
 } from 'lucide-react'
 
@@ -31,6 +32,11 @@ import {
   isGrantSectionAiGenerated,
 } from '@/lib/grants/workflowMode'
 import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
+// The agency-rule review loop originally shipped in Draft One. Drafting is
+// never blocked by rule checks — this reviewer judges the result instead, and
+// its findings compose the revision prompt fed back to the engine.
+import { buildAiFixInstructions } from '@/lib/draftOne/logic'
+import type { GrantAiReviewReport } from '@/types/grant'
 
 type StructuredResponse = {
   id?: string
@@ -62,6 +68,11 @@ export type GrantSection = {
     avoidRules?: string[]
     formatConstraints?: string[]
   } | null
+  isStale?: boolean
+  /** Latest agency-rule verdict for this section, served by getGrantWorkspace. */
+  grantAiReviewReport?: GrantAiReviewReport | null
+  /** True when the content changed after that verdict was produced. */
+  grantAiReviewStale?: boolean
   structuredResponses?: StructuredResponse[]
 }
 
@@ -116,6 +127,28 @@ function structuredJson(section: GrantSection) {
 
 export function isNarrativeSection(section: GrantSection) {
   return section.sectionType === 'narrative' || section.sectionType === 'short_answer'
+}
+
+function verdictLabel(verdict: string): string {
+  if (verdict === 'ready') return 'Ready'
+  if (verdict === 'minor_revisions') return 'Minor revisions'
+  if (verdict === 'major_revisions') return 'Major revisions'
+  return 'Reviewed'
+}
+
+function verdictBadgeClass(verdict: string, stale: boolean): string {
+  const base = 'flex-none rounded-full px-2 py-0.5 text-[11px] font-semibold'
+  if (stale) return `${base} bg-amber-100 text-amber-900`
+  if (verdict === 'ready') return `${base} bg-emerald-100 text-emerald-800`
+  if (verdict === 'major_revisions') return `${base} bg-rose-100 text-rose-800`
+  return `${base} bg-violet-100 text-violet-800`
+}
+
+function severityDotClass(severity: string): string {
+  const base = 'mt-1 h-1.5 w-1.5 flex-none rounded-full'
+  if (severity === 'critical') return `${base} bg-rose-500`
+  if (severity === 'important') return `${base} bg-amber-500`
+  return `${base} bg-slate-400`
 }
 
 export function isPaperBackedSection(section: GrantSection) {
@@ -590,6 +623,15 @@ export default function GrantSectionDraftingStage({
   const [structuredValues, setStructuredValues] = useState<Record<string, string>>({})
   const [budgetInstructions, setBudgetInstructions] = useState<Record<string, string>>({})
   const [budgetUseCurrentValues, setBudgetUseCurrentValues] = useState<Record<string, boolean>>({})
+  // Agency-rule review loop state.
+  const [reviewingKey, setReviewingKey] = useState<string | null>(null)
+  const [fixingKey, setFixingKey] = useState<string | null>(null)
+  const [batchRun, setBatchRun] = useState<'draft' | 'review' | null>(null)
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({})
+  const [expandedReviewKeys, setExpandedReviewKeys] = useState<Record<string, boolean>>({})
+  const [evidenceNotes, setEvidenceNotes] = useState<Record<string, string>>({})
+  const batchStopRef = useRef(false)
   const [exportingDraft, setExportingDraft] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [copiedSectionKey, setCopiedSectionKey] = useState<string | null>(null)
@@ -611,6 +653,10 @@ export default function GrantSectionDraftingStage({
   const lastAutoBibliographySignatureRef = useRef<string | null>(null)
   const hasLoadedSectionsRef = useRef(false)
   const pendingScrollRestoreRef = useRef<{ x: number; y: number } | null>(null)
+  // Batch runs iterate over a snapshot, so they need the freshest section state
+  // (content and review verdicts change between steps) without re-subscribing.
+  const sectionsRef = useRef<GrantSection[]>([])
+  sectionsRef.current = sections
 
   const preserveScrollOnNextPaint = useCallback(() => {
     if (typeof window === 'undefined') return
@@ -1257,18 +1303,27 @@ export default function GrantSectionDraftingStage({
     }
   }, [authToken, draftingSessionId])
 
-  const generateNarrativeGrantSection = useCallback(async (section: GrantSection, forceRegenerate = false) => {
+  /**
+   * Generate (or revise) one narrative section through the drafting engine.
+   * `instructions` carries the reviewer's revision prompt on a "Fix with AI"
+   * pass. Returns whether the section was written, so batch runs can count.
+   */
+  const generateNarrativeGrantSection = useCallback(async (
+    section: GrantSection,
+    forceRegenerate = false,
+    instructions = ''
+  ): Promise<boolean> => {
     if (!authToken) {
       setError('You must be signed in to generate grant sections')
-      return
+      return false
     }
     if (!draftingSessionId) {
       setError('The linked drafting workspace is not available yet.')
-      return
+      return false
     }
     if (!isPaperBackedSection(section)) {
       setError('Only app draft narrative sections can be generated from this control.')
-      return
+      return false
     }
 
     try {
@@ -1281,33 +1336,58 @@ export default function GrantSectionDraftingStage({
         await syncPaperDraftSectionContent(section, localContent)
       }
 
-      const response = await fetch(`/api/papers/${draftingSessionId}/drafting`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          action: forceRegenerate || localContent.trim() ? 'regenerate_section' : 'generate_section',
-          sectionKey: section.sectionKey,
-          instructions: '',
-          useMappedEvidence: section.citationMode !== 'no_citations',
-          allowGrantEvidenceBypass: section.citationMode === 'no_citations',
-          autoCitationRepair: false,
-        }),
-      })
-      const payload = await response.json().catch(() => ({})) as {
-        content?: string
-        error?: string
-        message?: string
-        hint?: string
-      }
-      if (!response.ok) {
-        const hint = payload.hint ? ` ${payload.hint}` : ''
-        throw new Error(`${payload.error || payload.message || 'Failed to generate grant section'}${hint}`)
+      const runGeneration = async (useMappedEvidence: boolean) => {
+        const response = await fetch(`/api/papers/${draftingSessionId}/drafting`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            action: forceRegenerate || instructions || localContent.trim() ? 'regenerate_section' : 'generate_section',
+            sectionKey: section.sectionKey,
+            instructions: instructions || '',
+            useMappedEvidence,
+            allowGrantEvidenceBypass: !useMappedEvidence,
+            autoCitationRepair: false,
+          }),
+        })
+        const payload = await response.json().catch(() => ({})) as {
+          content?: string
+          code?: string
+          error?: string
+          message?: string
+          hint?: string
+        }
+        if (!response.ok) {
+          const hint = payload.hint ? ` ${payload.hint}` : ''
+          const failure = new Error(`${payload.error || payload.message || 'Failed to generate grant section'}${hint}`)
+          ;(failure as Error & { code?: string }).code = payload.code
+          throw failure
+        }
+        return String(payload.content || '').trim()
       }
 
-      const generatedContent = String(payload.content || '').trim()
+      let generatedContent: string
+      try {
+        generatedContent = await runGeneration(section.citationMode !== 'no_citations')
+      } catch (generationError) {
+        // Drafting must not be blocked when no evidence has been mapped — the
+        // author may have skipped literature search entirely. Fall back to an
+        // uncited draft and say so, rather than failing the section.
+        const code = (generationError as Error & { code?: string }).code
+        if (code === 'MAPPED_EVIDENCE_MISSING' || code === 'GRANT_EVIDENCE_READINESS_FAILED') {
+          generatedContent = await runGeneration(false)
+          setEvidenceNotes((notes) => ({
+            ...notes,
+            [section.sectionKey]:
+              'Drafted without mapped citations — run Literature Search to add evidence, then regenerate.',
+          }))
+        } else {
+          throw generationError
+        }
+      }
+
       if (!generatedContent) {
         throw new Error('Generation returned empty content')
       }
@@ -1318,8 +1398,10 @@ export default function GrantSectionDraftingStage({
       }))
       await saveGeneratedNarrativeGrantSection(section, generatedContent)
       await refreshShadowSession()
+      return true
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to generate grant section')
+      return false
     } finally {
       setGeneratingKey(null)
     }
@@ -1393,6 +1475,146 @@ export default function GrantSectionDraftingStage({
       await persistSection(section, false)
     }
   }, [hasLocalGrantSectionChange, persistSection, sections])
+
+  /**
+   * Run the LLM agency-rule review for one drafted section. Any unsaved local
+   * edit is persisted first so the reviewer judges what the author sees.
+   */
+  const runSectionAiReview = useCallback(async (section: GrantSection): Promise<boolean> => {
+    if (!authToken) {
+      setError('You must be signed in to run the AI review')
+      return false
+    }
+
+    try {
+      setReviewingKey(section.sectionKey)
+      setError(null)
+      if (hasLocalGrantSectionChange(section)) {
+        await persistSection(section, false)
+      }
+
+      const response = await fetch(
+        `/api/projects/${projectId}/grants/${grantId}/sections/${encodeURIComponent(section.sectionKey)}/ai-review`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({}),
+        }
+      )
+      const payload = await response.json().catch(() => ({})) as { report?: GrantAiReviewReport; message?: string }
+      if (!response.ok) {
+        throw new Error(payload.message || 'Failed to run the AI review')
+      }
+
+      // Patch the verdict in place instead of reloading every section, so the
+      // author's scroll position and unsaved edits elsewhere survive.
+      setSections((current) => current.map((entry) => (
+        entry.sectionKey === section.sectionKey
+          ? { ...entry, grantAiReviewReport: payload.report || null, grantAiReviewStale: false }
+          : entry
+      )))
+      setExpandedReviewKeys((current) => ({ ...current, [section.sectionKey]: true }))
+      return true
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to run the AI review')
+      return false
+    } finally {
+      setReviewingKey(null)
+    }
+  }, [authToken, grantId, hasLocalGrantSectionChange, persistSection, projectId])
+
+  /**
+   * One revision pass driven by the reviewer's findings, then a fresh review so
+   * the verdict on screen always matches the content on screen.
+   */
+  const fixSectionWithAiReview = useCallback(async (section: GrantSection) => {
+    const report = section.grantAiReviewReport
+    if (!report) return
+
+    const instructions = buildAiFixInstructions({
+      section: {
+        label: section.label,
+        wordBudget: section.wordBudget ?? null,
+        characterLimit: section.characterLimit ?? null,
+        content: getLocalGrantSectionText(section),
+      },
+      report,
+      userNote: reviewNotes[section.sectionKey] || null,
+    })
+
+    try {
+      setFixingKey(section.sectionKey)
+      const written = await generateNarrativeGrantSection(section, true, instructions)
+      if (!written) return
+      setReviewNotes((notes) => ({ ...notes, [section.sectionKey]: '' }))
+      const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey) || section
+      await runSectionAiReview(latest)
+    } finally {
+      setFixingKey(null)
+    }
+  }, [generateNarrativeGrantSection, getLocalGrantSectionText, reviewNotes, runSectionAiReview])
+
+  /** Sections the batch runs operate on: AI-draftable narrative sections. */
+  const aiDraftableSections = useMemo(
+    () => sections.filter((section) => isPaperBackedSection(section) && !isGrantBibliographySection(section.sectionKey)),
+    [sections]
+  )
+
+  const draftAllPendingSections = useCallback(async () => {
+    if (batchRun) return
+    const queue = aiDraftableSections.filter(
+      (section) => !getLocalGrantSectionText(section).trim() || section.isStale
+    )
+    if (!queue.length) {
+      setError('Every AI-draftable section already has content — use the per-section controls to revise.')
+      return
+    }
+
+    setBatchRun('draft')
+    batchStopRef.current = false
+    setBatchProgress({ done: 0, total: queue.length })
+    try {
+      for (const [index, section] of queue.entries()) {
+        if (batchStopRef.current) break
+        const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey) || section
+        await generateNarrativeGrantSection(latest)
+        setBatchProgress({ done: index + 1, total: queue.length })
+      }
+    } finally {
+      setBatchRun(null)
+      setBatchProgress(null)
+    }
+  }, [aiDraftableSections, batchRun, generateNarrativeGrantSection, getLocalGrantSectionText])
+
+  const reviewAllDraftedSections = useCallback(async () => {
+    if (batchRun) return
+    const queue = aiDraftableSections.filter((section) => {
+      if (!getLocalGrantSectionText(section).trim()) return false
+      return !section.grantAiReviewReport || section.grantAiReviewStale
+    })
+    if (!queue.length) {
+      setError('Every drafted section already has a current AI review.')
+      return
+    }
+
+    setBatchRun('review')
+    batchStopRef.current = false
+    setBatchProgress({ done: 0, total: queue.length })
+    try {
+      for (const [index, section] of queue.entries()) {
+        if (batchStopRef.current) break
+        const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey) || section
+        await runSectionAiReview(latest)
+        setBatchProgress({ done: index + 1, total: queue.length })
+      }
+    } finally {
+      setBatchRun(null)
+      setBatchProgress(null)
+    }
+  }, [aiDraftableSections, batchRun, getLocalGrantSectionText, runSectionAiReview])
 
   const bibliographySectionExists = useMemo(
     () => sections.some((section) => isGrantBibliographySection(section.sectionKey)),
@@ -1753,6 +1975,41 @@ export default function GrantSectionDraftingStage({
             })}
           </div>
           <div className="flex items-center gap-2">
+            {/* Whole-proposal runs: write everything still empty, then judge
+                every draft against the agency rules. */}
+            <button
+              type="button"
+              onClick={() => void draftAllPendingSections()}
+              disabled={!authToken || !draftingSessionId || savingKey !== null || generatingKey !== null || batchRun !== null}
+              title="Draft every AI-draftable section that is still empty or stale"
+              className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {batchRun === 'draft' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {batchRun === 'draft' && batchProgress
+                ? `Drafting ${batchProgress.done}/${batchProgress.total}`
+                : 'Draft all'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void reviewAllDraftedSections()}
+              disabled={!authToken || savingKey !== null || generatingKey !== null || batchRun !== null}
+              title="Run the agency-rule review on every drafted section without a current verdict"
+              className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3.5 py-2.5 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {batchRun === 'review' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              {batchRun === 'review' && batchProgress
+                ? `Reviewing ${batchProgress.done}/${batchProgress.total}`
+                : 'Review all'}
+            </button>
+            {batchRun ? (
+              <button
+                type="button"
+                onClick={() => { batchStopRef.current = true }}
+                className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Stop
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setPanelVisible((current) => !current)}
@@ -1810,7 +2067,13 @@ export default function GrantSectionDraftingStage({
             const canUseNarrativeGeneration = sectionIsNarrative && isPaperBackedSection(section)
             const sectionHasLocalContent = hasLocalGrantSectionContent(section)
             const sectionIsGenerating = generatingKey === section.sectionKey
-            const sectionActionBusy = savingKey !== null || generatingKey !== null || exportingDraft
+            const sectionActionBusy = savingKey !== null || generatingKey !== null || exportingDraft || batchRun !== null
+            const sectionIsReviewing = reviewingKey === section.sectionKey
+            const sectionIsFixing = fixingKey === section.sectionKey
+            const sectionReview = section.grantAiReviewReport || null
+            const sectionReviewStale = Boolean(sectionReview && section.grantAiReviewStale)
+            const sectionReviewOpen = expandedReviewKeys[section.sectionKey] === true
+            const sectionEvidenceNote = evidenceNotes[section.sectionKey] || null
 
             return (
               <div
@@ -1859,9 +2122,98 @@ export default function GrantSectionDraftingStage({
                         {sectionIsGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
                         Regenerate
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => void runSectionAiReview(section)}
+                        disabled={!authToken || sectionActionBusy || reviewingKey !== null || !sectionHasLocalContent}
+                        title="Check this section against the agency's rules"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {sectionIsReviewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                        {sectionIsReviewing ? 'Reviewing...' : sectionReview ? 'Re-review' : 'AI review'}
+                      </button>
                     </div>
                   ) : null}
                 </div>
+
+                {sectionEvidenceNote ? (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    {sectionEvidenceNote}
+                  </div>
+                ) : null}
+
+                {canUseNarrativeGeneration && sectionReview ? (
+                  <div
+                    className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedReviewKeys((current) => ({
+                          ...current,
+                          [section.sectionKey]: !current[section.sectionKey],
+                        }))
+                      }
+                      className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left"
+                    >
+                      <span className={verdictBadgeClass(sectionReview.verdict, sectionReviewStale)}>
+                        {sectionReviewStale ? 'Review outdated' : verdictLabel(sectionReview.verdict)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-slate-600">
+                        {sectionReview.summary || `${sectionReview.findings.length} finding${sectionReview.findings.length === 1 ? '' : 's'}`}
+                      </span>
+                      <span className="text-xs font-medium text-slate-500">{sectionReviewOpen ? 'Hide' : 'Details'}</span>
+                    </button>
+
+                    {sectionReviewOpen ? (
+                      <div className="space-y-3 border-t border-slate-200 px-3 py-3">
+                        {sectionReviewStale ? (
+                          <p className="text-xs text-amber-700">
+                            This section changed after the review — re-run it for a current verdict.
+                          </p>
+                        ) : null}
+                        {sectionReview.findings.length ? (
+                          <ul className="space-y-2">
+                            {sectionReview.findings.slice(0, 12).map((finding, findingIndex) => (
+                              <li key={`${section.sectionKey}-finding-${findingIndex}`} className="flex gap-2 text-xs">
+                                <span className={severityDotClass(finding.severity)} />
+                                <span className="min-w-0 flex-1 text-slate-700">
+                                  <span className="font-medium text-slate-900">{finding.issue}</span>
+                                  {finding.fix ? <span className="block text-slate-600">Fix: {finding.fix}</span> : null}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-xs text-slate-600">No findings — the reviewer considers this section ready.</p>
+                        )}
+
+                        {sectionReview.findings.length ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              value={reviewNotes[section.sectionKey] || ''}
+                              onChange={(event) =>
+                                setReviewNotes((notes) => ({ ...notes, [section.sectionKey]: event.target.value }))
+                              }
+                              placeholder="Optional note the rewrite must honor..."
+                              className="h-8 min-w-[220px] flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 focus:border-violet-400 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void fixSectionWithAiReview(section)}
+                              disabled={!authToken || !draftingSessionId || sectionActionBusy || reviewingKey !== null}
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-xs font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {sectionIsFixing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                              {sectionIsFixing ? 'Applying...' : 'Fix with AI'}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {sectionIsNarrative ? (
                   <div className="mt-4 text-justify font-sans text-[15px] leading-7 text-slate-950" onClick={(e) => e.stopPropagation()}>

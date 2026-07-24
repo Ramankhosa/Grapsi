@@ -39,6 +39,7 @@
     "seed:funding-finder": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/seed-funding-finder-verification.ts",
     "verify:funding-finder": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-finder.ts",
     "verify:funding-grant-launch": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-funding-grant-launch.ts",
+    "verify:grant-pipeline": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/verify-streamlined-grant-pipeline.ts",
     "worker:public-project-crawler": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-crawler-worker.ts",
     "worker:public-project-embeddings": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts",
     "worker:public-project-embeddings:low-impact": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts --limit=5 --batch-cooldown-ms=10000 --poll-ms=30000",

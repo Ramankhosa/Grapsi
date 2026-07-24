@@ -1681,23 +1681,44 @@ export function shouldBackfillProposalFoundation(input?: Partial<GeneratedGrantP
   return thesisLength < 20 || objectiveLength < 20 || contributions.length < 2
 }
 
+/**
+ * Generic, always-available contributions derived from the topic and the call.
+ * Used to top up a foundation that would otherwise carry fewer than the two
+ * key contributions a blueprint freeze requires.
+ */
+function buildTopicAnchorContributions(context: GrantBlueprintEnrichmentContext): string[] {
+  const topicAnchor = buildTopicAnchor(context)
+  const callAnchor = buildCallAnchor(context)
+  return [
+    `Build a proposal grounded in evidence for ${topicAnchor}.`,
+    `Show execution feasibility, measurable outcomes, and alignment with ${callAnchor}.`,
+  ]
+}
+
 export function buildGeneratedGrantProposalFoundation(
   sections: GrantBlueprintPlanSection[],
   context: GrantBlueprintEnrichmentContext
 ): GeneratedGrantProposalFoundation {
   if (context.ideaAnchor) {
     const anchor = context.ideaAnchor
+    // A thin anchor used to yield a single contribution, which then failed the
+    // ">= 2 key contributions" freeze check. The Draft Zero fast path commits
+    // the blueprint at launch, so top up from the anchor's own material rather
+    // than shipping a foundation that cannot freeze.
     const contributions = dedupeStrings([
       ...anchor.distinguishingFeatures,
       ...anchor.funderFit,
       ...anchor.nonNegotiables,
-    ]).slice(0, 5)
+      ...(anchor.coreApproach ? [anchor.coreApproach] : []),
+      ...(anchor.oneSentenceSummary ? [anchor.oneSentenceSummary] : []),
+      ...buildTopicAnchorContributions(context),
+    ])
+      .filter(Boolean)
+      .slice(0, 5)
     return {
       thesisStatement: sentenceCase(anchor.oneSentenceSummary),
       centralObjective: sentenceCase(anchor.coreApproach || anchor.oneSentenceSummary),
-      keyContributions: contributions.length > 0
-        ? contributions.map((item) => sentenceCase(item))
-        : [sentenceCase(anchor.oneSentenceSummary)],
+      keyContributions: contributions.map((item) => sentenceCase(item)),
     }
   }
   const draftableSections = sections.filter((section) => isGrantSectionAutoDraftable(section))
@@ -1725,10 +1746,7 @@ export function buildGeneratedGrantProposalFoundation(
 
   const safeContributions = keyContributions.length >= 2
     ? keyContributions
-    : [
-        `Build a proposal grounded in evidence for ${topicAnchor}.`,
-        `Show execution feasibility, measurable outcomes, and alignment with ${callAnchor}.`,
-      ]
+    : buildTopicAnchorContributions(context)
 
   return {
     thesisStatement: sentenceCase(

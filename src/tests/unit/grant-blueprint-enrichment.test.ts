@@ -1283,4 +1283,29 @@ describe('grant blueprint enrichment', () => {
     expect(foundation.centralObjective.length).toBeGreaterThanOrEqual(20);
     expect(foundation.keyContributions.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('tops up a thin idea anchor to a freezable foundation', () => {
+    // The Draft Zero fast path commits the blueprint at launch, so a foundation
+    // built from a bare anchor must still clear the ">= 2 key contributions"
+    // freeze rule instead of producing a blueprint that cannot freeze.
+    const foundation = buildGeneratedGrantProposalFoundation([], {
+      projectTitle: 'Point-of-care AMR surveillance',
+      fundingCallTitle: 'ICMR One Health Call',
+      globalKeywords: ['antimicrobial resistance'],
+      ideaAnchor: {
+        title: 'Poultry AMR surveillance',
+        oneSentenceSummary: 'A point-of-care assay that detects resistant strains in poultry within an hour.',
+        coreApproach: '',
+        distinguishingFeatures: [],
+        funderFit: [],
+        nonNegotiables: [],
+        scopeBoundaries: [],
+        unresolvedQuestions: [],
+      },
+    } as unknown as Parameters<typeof buildGeneratedGrantProposalFoundation>[1]);
+
+    expect(foundation.thesisStatement.length).toBeGreaterThanOrEqual(20);
+    expect(foundation.centralObjective.length).toBeGreaterThanOrEqual(20);
+    expect(foundation.keyContributions.length).toBeGreaterThanOrEqual(2);
+  });
 });

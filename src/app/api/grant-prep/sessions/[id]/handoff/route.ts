@@ -7,6 +7,14 @@ import { loadGrantPrepSession } from '@/lib/grantPrep/server'
 
 const handoffSchema = z.object({
   overrideReason: z.string().trim().max(1000).optional(),
+  // Which optional evidence stages the author picked in the launch modal.
+  // Omitted by legacy clients — the launch then applies the defaults.
+  pipeline: z
+    .object({
+      literatureSearch: z.boolean(),
+      deepAnalysis: z.boolean(),
+    })
+    .optional(),
 })
 
 export async function POST(
@@ -42,6 +50,7 @@ export async function POST(
       sessionId: id,
       actor: auth.actor,
       overrideReason: payload.overrideReason,
+      pipeline: payload.pipeline,
     })
 
     return NextResponse.json({
@@ -49,6 +58,7 @@ export async function POST(
       grantSessionId: result.grantSessionId,
       blueprintId: result.blueprintId,
       launchUrl: result.launchUrl,
+      pipeline: result.pipeline,
     })
   } catch (error) {
     console.error('[Grant Prep Sessions] local handoff error:', error)

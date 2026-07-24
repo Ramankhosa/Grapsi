@@ -28,7 +28,13 @@ import {
   normalizeGrantSectionWorkflowMode,
   normalizeGrantWorkflowMode,
 } from '@/lib/grants/workflowMode'
-import { buildGrantWorkspaceUrl } from '@/lib/grants/workspaceNavigation'
+import {
+  DEFAULT_GRANT_PIPELINE_PREFS,
+  buildGrantWorkspaceUrl,
+  normalizeGrantPipelinePrefs,
+  resolveGrantPipelineEntryStage,
+  type GrantPipelinePrefs,
+} from '@/lib/grants/workspaceNavigation'
 import { sanitizeGrantRuleText, splitGrantRuleTextIntoPoints } from '@/lib/grants/ruleText'
 import {
   normalizeGrantTemplateIntent,
@@ -1395,14 +1401,18 @@ async function ensureGrantShadowWorkspaceTx(
     }
   }
 
-  const nextStatus = input.resetStatus
-    ? 'DRAFT'
-    : currentBlueprint.status
-  const nextFrozenAt = input.resetStatus
-    ? null
-    : currentBlueprint.status === 'FROZEN'
-      ? currentBlueprint.frozenAt || new Date()
-      : null
+  // An explicitly requested FROZEN status wins over resetStatus: the Draft Zero
+  // fast path relaunches an existing blueprint and must stay frozen, otherwise
+  // every downstream stage (drafting generation, literature, reviewer) relocks.
+  // resetStatus still marks sections stale below — only the freeze is preserved.
+  const nextStatus = input.blueprintStatus === 'FROZEN'
+    ? 'FROZEN'
+    : input.resetStatus
+      ? 'DRAFT'
+      : currentBlueprint.status
+  const nextFrozenAt = nextStatus === 'FROZEN'
+    ? (input.resetStatus ? new Date() : currentBlueprint.frozenAt || new Date())
+    : null
 
   const paperBlueprintUpdate = {
     thesisStatement: foundation.thesisStatement,
@@ -1782,14 +1792,44 @@ export async function buildGrantPrepLocalLaunchPreview(sessionId: string, actor:
   }
 }
 
+/**
+ * The Draft Zero fast path commits the blueprint at launch rather than routing
+ * the author through the Blueprint review stage, so blueprintService's
+ * interactive freeze lint never runs. Mirror its foundation checks here and
+ * carry the result in the freeze payload as advice instead of a hard block —
+ * the plan is always structurally complete (it is built deterministically from
+ * the compiled template), so a thin foundation is worth a nudge, not a wall.
+ */
+function buildAutoFreezeAdvisories(foundation: {
+  thesisStatement?: string | null
+  centralObjective?: string | null
+  keyContributions?: string[] | null
+}): string[] {
+  const advisories: string[] = []
+  if (String(foundation.thesisStatement || '').trim().length < 20) {
+    advisories.push('The thesis statement is very short — sharpen it before submission.')
+  }
+  if (String(foundation.centralObjective || '').trim().length < 20) {
+    advisories.push('The central objective is very short — sharpen it before submission.')
+  }
+  if ((foundation.keyContributions || []).filter((entry) => String(entry || '').trim()).length < 2) {
+    advisories.push('Fewer than two key contributions were derived — add what makes this proposal distinct.')
+  }
+  return advisories
+}
+
 export async function launchGrantPrepToLocalWorkspace(input: {
   sessionId: string
   actor: GrantPrepActor
   overrideReason?: string | null
   /** Regeneration bypasses the already-launched short-circuit. */
   forceRelaunch?: boolean
+  /** Optional evidence stages the author picked in the Draft Zero launch modal. */
+  pipeline?: GrantPipelinePrefs | null
 }) {
   const state = await buildLaunchState(input.sessionId, input.actor)
+  const pipeline = normalizeGrantPipelinePrefs(input.pipeline) || DEFAULT_GRANT_PIPELINE_PREFS
+  const entryStage = resolveGrantPipelineEntryStage(pipeline)
 
   // Idempotent launch. Re-hitting handoff for an already-launched session whose
   // frozen payload has not changed (double-click, retry after a lost response,
@@ -1816,9 +1856,10 @@ export async function launchGrantPrepToLocalWorkspace(input: {
           || buildGrantWorkspaceUrl({
             projectId: state.prepSession.project_id,
             grantSessionId: state.prepSession.grant_session_id,
-            stage: 'SECTION_DRAFTING',
+            stage: entryStage,
           })
-          || `/projects/${state.prepSession.project_id}/grants/${state.prepSession.grant_session_id}/workspace?stage=SECTION_DRAFTING`,
+          || `/projects/${state.prepSession.project_id}/grants/${state.prepSession.grant_session_id}/workspace?stage=${entryStage}`,
+        pipeline,
         alreadyLaunched: true as const,
       }
     }
@@ -1839,6 +1880,17 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       threshold: GRANT_PREP_GENERATION_READY_THRESHOLD,
       generationReady: state.generationReady,
       message: state.generationBlockedMessage,
+    },
+    // The author's chosen route, read back by the workspace to decide which
+    // stages to show. Stored here so no schema migration is needed.
+    pipeline,
+    // The blueprint is committed (frozen) as part of the launch instead of
+    // stopping the author at the Blueprint review stage. Record what the
+    // interactive freeze would have linted so the workspace can advise rather
+    // than block — see buildAutoFreezeAdvisories.
+    autoFreeze: {
+      committedAtLaunch: true,
+      advisories: buildAutoFreezeAdvisories(state.proposalFoundation),
     },
   }
   // Launch must finish well under the reverse-proxy timeout (~60s). The inline
@@ -1877,14 +1929,18 @@ export async function launchGrantPrepToLocalWorkspace(input: {
             sourcePrepSessionId: state.prepSession.id,
             sourceTemplateRevisionId: state.templateState.templateRevisionId,
             sourceGuidelineRevisionId: state.prepSession.guideline_revision_id,
-            status: 'DRAFT',
+            // Committed at launch — see buildAutoFreezeAdvisories. Every stage
+            // after drafting (literature, deep analysis, reviewer) and section
+            // generation itself gate on FROZEN, so leaving this DRAFT stranded
+            // the author in a workspace where nothing downstream would run.
+            status: 'FROZEN',
             version: { increment: 1 },
             compiledTemplateJson: asJson(state.templateState.compiledTemplate),
             sectionPlanJson: asJson(generatedBlueprint.sectionPlan),
             freezePayloadJson: asJson(frozenPayload),
             globalKeywordsJson: asJson(state.freeze.payload.globalKeywords),
             updatedByUserId: input.actor.id,
-            frozenAt: null,
+            frozenAt: new Date(),
           },
         })
       : await tx.grantBlueprint.create({
@@ -1896,7 +1952,8 @@ export async function launchGrantPrepToLocalWorkspace(input: {
             sourcePrepSessionId: state.prepSession.id,
             sourceTemplateRevisionId: state.templateState.templateRevisionId,
             sourceGuidelineRevisionId: state.prepSession.guideline_revision_id,
-            status: 'DRAFT',
+            status: 'FROZEN',
+            frozenAt: new Date(),
             compiledTemplateJson: asJson(state.templateState.compiledTemplate),
             sectionPlanJson: asJson(generatedBlueprint.sectionPlan),
             freezePayloadJson: asJson(frozenPayload),
@@ -2018,7 +2075,9 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       userId: input.actor.id,
       sectionPlan: uniqueSectionPlan,
       globalKeywords: state.freeze.payload.globalKeywords,
-      blueprintStatus: 'DRAFT',
+      // Mirrors the grant blueprint: the shadow paper blueprint must be frozen
+      // too, since the drafting engine reads its status.
+      blueprintStatus: 'FROZEN',
       foundation: generatedBlueprint.proposalFoundation,
       resetStatus: Boolean(existingBlueprint),
       ideaAnchor: state.freeze.payload.ideaAnchor || null,
@@ -2037,14 +2096,15 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       })
     }
 
-    // Fast path bypasses the blueprint review stage: land the user straight in
-    // section drafting. The blueprint plan is still generated (as data); we just
-    // don't stop at the review/freeze UI.
+    // Bypass the blueprint review stage and land on the first stage of the
+    // route the author chose in the launch modal — literature search when they
+    // want citations, otherwise straight into section drafting. The blueprint
+    // plan is still generated (as data); we just don't stop at the review UI.
     const launchUrl = buildGrantWorkspaceUrl({
       projectId: state.prepSession.project_id,
       grantSessionId: grantSession.id,
-      stage: 'SECTION_DRAFTING',
-    }) || `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/workspace?stage=SECTION_DRAFTING`
+      stage: entryStage,
+    }) || `/projects/${state.prepSession.project_id}/grants/${grantSession.id}/workspace?stage=${entryStage}`
     await tx.grantPrepSession.update({
       where: { id: state.prepSession.id },
       data: {
@@ -2063,8 +2123,8 @@ export async function launchGrantPrepToLocalWorkspace(input: {
     await tx.grantSession.update({
       where: { id: grantSession.id },
       data: {
-        // Skip the BLUEPRINT review stage — the fast path drives Draft One,
-        // which drafts each section without requiring a frozen blueprint.
+        // Skip the BLUEPRINT review stage — the blueprint was committed above,
+        // so the author goes straight to their chosen first stage.
         status: 'DRAFTING',
         updatedByUserId: input.actor.id,
       },
@@ -2074,6 +2134,7 @@ export async function launchGrantPrepToLocalWorkspace(input: {
       grantSessionId: grantSession.id,
       blueprintId: blueprint.id,
       launchUrl,
+      pipeline,
     }
   })
 }

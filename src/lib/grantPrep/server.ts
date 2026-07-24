@@ -6,7 +6,11 @@ import { fundingGuidelineService } from '../fundingGuidelines/service';
 import { fundingTemplateService } from '../fundingTemplates/service';
 import type { GuidelinePackDocument } from '../fundingGuidelines/types';
 import { resolveProjectFundingContext } from '../fundingContext';
-import { buildGrantPrepEntryUrl, buildGrantWorkspaceUrl } from '../grants/workspaceNavigation';
+import {
+  buildGrantPrepEntryUrl,
+  buildGrantProjectOpenUrl,
+  buildGrantWorkspaceUrl,
+} from '../grants/workspaceNavigation';
 import {
   GRANT_PREP_STAGE_BY_KEY,
   getFirstEnabledPickableStageKey,
@@ -869,12 +873,23 @@ export async function createOrReuseGrantPrepSession(input: {
     })
     : null;
 
+  // A grant that has not launched yet opens on Draft Zero, not the GrantMentor
+  // chat: buildGrantProjectOpenUrl already resolves the pre-launch stage to the
+  // Draft Zero entry when the flag is on, and falls through to the workspace URL
+  // for launched grants. Callers (funder finder, project grants) push this value
+  // directly, so returning the workspace URL here is what used to strand users
+  // in the chat instead of the fast path.
   const resolveWorkspaceLaunchUrl = (
     grantSessionId: string | null,
     prepStatus?: string | null,
     grantStatus?: string | null
   ) =>
-    buildGrantWorkspaceUrl({
+    buildGrantProjectOpenUrl({
+      projectId: input.projectId,
+      prepSession: { status: prepStatus, grant_session_id: grantSessionId },
+      grantSession: grantSessionId ? { id: grantSessionId, status: grantStatus } : null,
+    })
+    || buildGrantWorkspaceUrl({
       projectId: input.projectId,
       grantSessionId,
       prepStatus,

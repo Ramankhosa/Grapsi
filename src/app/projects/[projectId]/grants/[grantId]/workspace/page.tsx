@@ -23,7 +23,12 @@ import { useAuth } from '@/lib/auth-context'
 import { isFeatureEnabled } from '@/lib/feature-flags'
 import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTemplate'
 import { isGrantBibliographySection } from '@/lib/grants/workflowMode'
-import { withGrantWorkspaceStage } from '@/lib/grants/workspaceNavigation'
+import {
+  buildGrantPipelineStages,
+  normalizeGrantPipelinePrefs,
+  withGrantWorkspaceStage,
+  type GrantPipelinePrefs,
+} from '@/lib/grants/workspaceNavigation'
 
 const STAGES = [
   { key: 'GRANTMENTOR', label: 'GrantMentor' },
@@ -39,7 +44,19 @@ const STAGES = [
 const WORKSPACE_NAV_COLLAPSED_KEY_PREFIX = 'grant-workspace-nav-collapsed'
 
 type StageKey = typeof STAGES[number]['key']
-const DEFAULT_GRANT_WORKSPACE_STAGE: StageKey = 'BLUEPRINT'
+const STAGE_LABELS: Record<StageKey, string> = STAGES.reduce(
+  (labels, stage) => ({ ...labels, [stage.key]: stage.label }),
+  {} as Record<StageKey, string>
+)
+/** Fallback for grants launched before the pipeline route existed. */
+const LEGACY_GRANT_WORKSPACE_STAGE: StageKey = 'BLUEPRINT'
+
+/** Evidence stages the author can pass through or skip on the way to drafting. */
+const OPTIONAL_PIPELINE_STAGES: StageKey[] = ['LITERATURE_SEARCH', 'FULL_TEXT_EVIDENCE_EXTRACTION']
+
+function isOptionalStage(stage: StageKey): boolean {
+  return OPTIONAL_PIPELINE_STAGES.includes(stage)
+}
 
 type GrantSection = {
   id?: string
@@ -86,6 +103,8 @@ type GrantWorkspaceResponse = {
     generationBlockedMessage?: string | null
     launchUrl?: string | null
   } | null
+  /** Route chosen at Draft Zero launch; null for grants launched before it existed. */
+  pipeline?: GrantPipelinePrefs | null
 }
 
 type PaperSession = any
@@ -200,7 +219,7 @@ export default function GrantWorkspacePage() {
   const [shadowSession, setShadowSession] = useState<PaperSession | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [currentStage, setCurrentStage] = useState<StageKey>(DEFAULT_GRANT_WORKSPACE_STAGE)
+  const [currentStage, setCurrentStage] = useState<StageKey>(LEGACY_GRANT_WORKSPACE_STAGE)
   const [hasHydratedStage, setHasHydratedStage] = useState(false)
   const [stageWarning, setStageWarning] = useState<string | null>(null)
   const [stageLockDialog, setStageLockDialog] = useState<string | null>(null)
@@ -226,11 +245,33 @@ export default function GrantWorkspacePage() {
     })
   }, [])
 
-  const visibleStageKeys = useMemo<StageKey[]>(() => STAGES.map((stage) => stage.key), [])
+  // Draft Zero records the route the author chose, so the rail shows only those
+  // stages: Grant Prep and Blueprint are replaced by Draft Zero and stay
+  // reachable by direct URL. Grants launched before the route existed have no
+  // pipeline and keep every stage.
+  const pipelinePrefs = useMemo(
+    () => normalizeGrantPipelinePrefs(workspace?.pipeline),
+    [workspace?.pipeline]
+  )
+  const visibleStageKeys = useMemo<StageKey[]>(
+    () => (pipelinePrefs ? (buildGrantPipelineStages(pipelinePrefs) as StageKey[]) : STAGES.map((stage) => stage.key)),
+    [pipelinePrefs]
+  )
+  const defaultStage: StageKey = pipelinePrefs ? visibleStageKeys[0] : LEGACY_GRANT_WORKSPACE_STAGE
   const stageFromQuery = searchParams?.get('stage') || null
   const resolvedCurrentStage = visibleStageKeys.includes(currentStage)
     ? currentStage
-    : DEFAULT_GRANT_WORKSPACE_STAGE
+    : defaultStage
+
+  // Drives the Continue / Skip footer so the route reads as one line of work
+  // rather than something the author has to find in the rail.
+  const currentStageIndex = visibleStageKeys.indexOf(resolvedCurrentStage)
+  const nextStage: StageKey | null = resolvedCurrentStage === 'GRANTMENTOR' || currentStageIndex < 0
+    ? null
+    : visibleStageKeys[currentStageIndex + 1] || null
+  const stageAfterNext: StageKey | null = nextStage
+    ? visibleStageKeys[visibleStageKeys.indexOf(nextStage) + 1] || null
+    : null
 
   const loadWorkspace = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!projectId || !grantId || !user) return
@@ -290,13 +331,13 @@ export default function GrantWorkspacePage() {
     launchUrl?: string | null
   }) => {
     const targetGrantId = payload.grantSessionId || workspace?.grantSession?.id || grantId
-    const targetUrl = withGrantWorkspaceStage(
-      payload.launchUrl || `/projects/${projectId}/grants/${targetGrantId}/workspace`,
-      DEFAULT_GRANT_WORKSPACE_STAGE
-    )
+    // The launch URL already carries the entry stage for the chosen route —
+    // only supply one when the server didn't.
+    const launchUrl = payload.launchUrl || `/projects/${projectId}/grants/${targetGrantId}/workspace`
+    const launchUrlHasStage = /[?&]stage=/.test(launchUrl)
 
     if (targetGrantId !== grantId) {
-      router.push(targetUrl)
+      router.push(launchUrlHasStage ? launchUrl : withGrantWorkspaceStage(launchUrl, LEGACY_GRANT_WORKSPACE_STAGE))
       return
     }
 
@@ -306,9 +347,14 @@ export default function GrantWorkspacePage() {
       return
     }
 
+    const refreshedPipeline = normalizeGrantPipelinePrefs(refreshed.pipeline)
+    const nextStage = (refreshedPipeline
+      ? buildGrantPipelineStages(refreshedPipeline)[0]
+      : LEGACY_GRANT_WORKSPACE_STAGE) as StageKey
+
     setStageWarning(null)
-    setCurrentStage(DEFAULT_GRANT_WORKSPACE_STAGE)
-    router.replace(targetUrl, { scroll: false })
+    setCurrentStage(nextStage)
+    router.replace(withGrantWorkspaceStage(launchUrl, nextStage), { scroll: false })
   }, [grantId, loadWorkspace, projectId, router, workspace?.grantSession?.id])
 
   useEffect(() => {
@@ -894,21 +940,6 @@ export default function GrantWorkspacePage() {
             </div>
           ) : null}
 
-          {resolvedCurrentStage === 'BLUEPRINT' && isFeatureEnabled('ENABLE_DRAFT_ONE') ? (
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50/70 px-4 py-2.5">
-              <div className="text-sm text-teal-900">
-                <span className="font-semibold">⚡ Draft One — fast path:</span> draft every section in one run, each
-                auto-repaired against the agency rules, then export through the compliance gate.
-              </div>
-              <button
-                onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/draft-one`)}
-                className="whitespace-nowrap rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-800"
-              >
-                Open Draft One
-              </button>
-            </div>
-          ) : null}
-
           <div
             className={
               resolvedCurrentStage === 'GRANTMENTOR'
@@ -998,21 +1029,6 @@ export default function GrantWorkspacePage() {
               />
             ) : null}
 
-            {resolvedCurrentStage === 'SECTION_DRAFTING' && isFeatureEnabled('ENABLE_DRAFT_ONE') ? (
-              <div className="mx-6 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-4 py-2.5">
-                <div className="text-sm text-teal-900">
-                  <span className="font-semibold">Draft One:</span> draft every section in one run — each checked and
-                  auto-repaired against the agency rules before you review it.
-                </div>
-                <button
-                  onClick={() => router.push(`/projects/${projectId}/grants/${grantId}/draft-one`)}
-                  className="rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-800"
-                >
-                  Open Draft One
-                </button>
-              </div>
-            ) : null}
-
             {resolvedCurrentStage === 'SECTION_DRAFTING' ? (
               <GrantSectionDraftingStage
                 projectId={projectId}
@@ -1038,6 +1054,33 @@ export default function GrantWorkspacePage() {
               />
             ) : null}
           </div>
+
+          {nextStage ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+              <div className="text-sm text-slate-600">
+                Next in this proposal: <span className="font-semibold text-slate-900">{STAGE_LABELS[nextStage]}</span>
+                {isOptionalStage(nextStage) ? <span className="text-slate-400"> — optional</span> : null}
+              </div>
+              <div className="flex items-center gap-2">
+                {isOptionalStage(nextStage) && stageAfterNext ? (
+                  <button
+                    type="button"
+                    onClick={() => { void handleNavigateToStage(stageAfterNext) }}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Skip to {STAGE_LABELS[stageAfterNext]}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => { void handleNavigateToStage(nextStage) }}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  Continue to {STAGE_LABELS[nextStage]}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </main>
       </div>
 
