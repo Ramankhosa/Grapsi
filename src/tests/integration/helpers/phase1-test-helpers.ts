@@ -19,7 +19,29 @@ export interface TestUser {
   tenantId: string | null
 }
 
+/**
+ * SAFETY GUARD — this function hard-deletes rows (projects, patents, funding
+ * calls, tenant plans, users, tenants, …) from whatever database DATABASE_URL
+ * points at. Running the *.real-db.test.ts suites against a real dev/prod DB
+ * (e.g. via a plain `npm run test`) will therefore WIPE that data. To prevent an
+ * accidental wipe it refuses to run unless the run is explicitly opted in with
+ * ALLOW_REAL_DB_TESTS=true — ideally against a disposable TEST_DATABASE_URL.
+ *
+ * Run these tests deliberately, e.g.:
+ *   ALLOW_REAL_DB_TESTS=true npx vitest run src/tests/integration/*.real-db.test.ts
+ * and keep them out of the default suite:
+ *   npx vitest run --exclude "**/*.real-db.test.ts"
+ */
 export async function resetPhase1Data() {
+  if (process.env.ALLOW_REAL_DB_TESTS !== 'true') {
+    throw new Error(
+      'Refusing to run real-DB reset: this deletes projects/patents/funding calls/etc. ' +
+        'from the database in DATABASE_URL. Set ALLOW_REAL_DB_TESTS=true (against a ' +
+        'disposable TEST_DATABASE_URL) to opt in. See the guard note in ' +
+        'src/tests/integration/helpers/phase1-test-helpers.ts.'
+    )
+  }
+
   await prisma.grantSession.deleteMany()
   await prisma.tenantPlan.deleteMany()
   await prisma.fundingImportAsset.deleteMany()

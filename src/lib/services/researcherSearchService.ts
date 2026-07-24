@@ -67,6 +67,15 @@ export interface ResearcherSearchFilters {
   institutionTypes?: string[];
   careerStages?: string[];
   applicationLanguages?: string[];
+  /** Department org-unit ids. A School selection expands to its departments. */
+  orgUnitIds?: string[];
+  /** Free-text discipline/topic terms matched against research areas + keywords. */
+  researchAreas?: string[];
+  /**
+   * Keep candidates that fall below the relevance gate (still tiered). Lets an
+   * admin explore weak matches when nothing strong exists.
+   */
+  includeBelowThreshold?: boolean;
   tenantOnly?: boolean;
   includeSelf?: boolean;
 }
@@ -183,6 +192,24 @@ function buildArrayOverlapCondition(columnName: string, values: string[]) {
   `;
 }
 
+/**
+ * Substring variant of the overlap check. Discipline filters are typed or
+ * picked as broad labels ("machine learning"), so they rarely equal a stored
+ * tag exactly — match on containment instead.
+ */
+function buildArrayContainsCondition(columnName: string, values: string[]) {
+  const patterns = Prisma.sql`ARRAY[${Prisma.join(
+    values.map((value) => Prisma.sql`${`%${value}%`}`)
+  )}]::text[]`;
+  return Prisma.sql`
+    EXISTS (
+      SELECT 1
+      FROM unnest(${Prisma.raw(columnName)}) AS value
+      WHERE LOWER(value) LIKE ANY(${patterns})
+    )
+  `;
+}
+
 function buildHardFilterConditions(input: ResearcherSearchRequest) {
   const filters = input.filters || {};
   const conditions: Prisma.Sql[] = [];
@@ -218,6 +245,25 @@ function buildHardFilterConditions(input: ResearcherSearchRequest) {
     normalizeApplicationLanguageList(filters.applicationLanguages || []) || normalizeFilterValues(filters.applicationLanguages);
   if (applicationLanguages.length > 0) {
     conditions.push(buildArrayOverlapCondition('rp.application_languages', applicationLanguages));
+  }
+
+  const orgUnitIds = Array.from(
+    new Set((filters.orgUnitIds || []).map((value) => normalizeWhitespace(value)).filter(Boolean))
+  );
+  if (orgUnitIds.length > 0) {
+    conditions.push(
+      Prisma.sql`rp.org_unit_id = ANY(ARRAY[${Prisma.join(
+        orgUnitIds.map((value) => Prisma.sql`${value}`)
+      )}]::text[])`
+    );
+  }
+
+  const researchAreas = normalizeFilterValues(filters.researchAreas);
+  if (researchAreas.length > 0) {
+    conditions.push(Prisma.sql`(
+      ${buildArrayContainsCondition('rp.research_areas', researchAreas)}
+      OR ${buildArrayContainsCondition('rp.keywords', researchAreas)}
+    )`);
   }
 
   return combineConditions(conditions);
@@ -466,7 +512,8 @@ function mergeCandidates(rows: ResearcherCandidateRow[], limit: number) {
  */
 function applyRelevanceGate(
   results: ResearcherSearchResult[],
-  basis: ResearcherScoreBasis
+  basis: ResearcherScoreBasis,
+  relax = false
 ): ResearcherSearchResult[] {
   if (results.length === 0) {
     return results;
@@ -475,12 +522,15 @@ function applyRelevanceGate(
   if (basis === 'rerank') {
     const gate = envNumber('RESEARCHER_MATCH_RERANK_GATE', RERANK_GATE_DEFAULT);
     return results
-      .filter((result) => result.rerankScore !== null && result.rerankScore >= gate)
+      .filter((result) => relax || (result.rerankScore !== null && result.rerankScore >= gate))
       .map((result) => {
+        // Relaxed searches can include rows past the rerank window, which have
+        // no rerank score — treat those as weak rather than crashing.
+        const rerankScore = result.rerankScore ?? 0;
         const matchTier: ResearcherMatchTier =
-          result.rerankScore! >= RERANK_STRONG_TIER
+          rerankScore >= RERANK_STRONG_TIER
             ? 'strong'
-            : result.rerankScore! >= RERANK_MODERATE_TIER
+            : rerankScore >= RERANK_MODERATE_TIER
               ? 'moderate'
               : 'weak';
         return { ...result, matchTier };
@@ -490,7 +540,7 @@ function applyRelevanceGate(
   const gap = envNumber('RESEARCHER_MATCH_VECTOR_GAP', VECTOR_GAP_DEFAULT);
   const topScore = results[0].score;
   return results
-    .filter((result) => result.score >= topScore - gap)
+    .filter((result) => relax || result.score >= topScore - gap)
     .map((result) => {
       const matchTier: ResearcherMatchTier =
         result.score >= topScore - VECTOR_GAP_STRONG_TIER
@@ -764,7 +814,7 @@ export class ResearcherSearchService {
     const textRows = await this.searchText(query, hardConditions).catch(() => []);
     const merged = mergeCandidates([...vectorRows, ...textRows], MERGED_LIMIT);
     const { ranked, basis } = await this.rerank(query, merged);
-    const gated = applyRelevanceGate(ranked, basis);
+    const gated = applyRelevanceGate(ranked, basis, Boolean(input.filters?.includeBelowThreshold));
     const results = gated.slice(0, limit).map((result) => ({
       ...result,
       sharedTerms: extractSharedTerms(query, [...result.keywords, ...result.researchAreas]),

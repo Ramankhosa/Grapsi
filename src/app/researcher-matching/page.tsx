@@ -1,8 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import MatchResults, { SearchResponse } from '@/components/researcher-matching/MatchResults'
+import MatchResults, { MatchResult, SearchResponse } from '@/components/researcher-matching/MatchResults'
 
 interface FundingCall {
   id: string
@@ -23,11 +23,35 @@ interface Stats {
   fundingCalls: number
 }
 
+interface Facets {
+  schools: Array<{ id: string; name: string; departments: Array<{ id: string; name: string }> }>
+  careerStages: string[]
+  institutionTypes: string[]
+  countries: string[]
+}
+
+const ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN']
+
+const inputStyle: React.CSSProperties = {
+  width: '100%', padding: '8px 10px', borderRadius: 6,
+  border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box',
+}
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4, color: '#374151',
+}
+
+const checkboxListStyle: React.CSSProperties = {
+  maxHeight: 116, overflowY: 'auto', border: '1px solid #e5e7eb',
+  borderRadius: 6, padding: '6px 8px', background: '#fff',
+}
+
 export default function TenantResearcherMatchingPage() {
   const { user, isLoading: authLoading, authFetch } = useAuth()
 
   const [calls, setCalls] = useState<FundingCall[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
+  const [facets, setFacets] = useState<Facets | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [callSearchQuery, setCallSearchQuery] = useState('')
   const [selectedCall, setSelectedCall] = useState<FundingCall | null>(null)
@@ -37,10 +61,41 @@ export default function TenantResearcherMatchingPage() {
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState<'call' | 'text'>('call')
 
+  // Filters
+  const [showFilters, setShowFilters] = useState(false)
+  const [schoolIds, setSchoolIds] = useState<string[]>([])
+  const [departmentIds, setDepartmentIds] = useState<string[]>([])
+  const [researchAreaText, setResearchAreaText] = useState('')
+  const [careerStage, setCareerStage] = useState('')
+  const [institutionType, setInstitutionType] = useState('')
+  const [country, setCountry] = useState('')
+  const [includeBelowThreshold, setIncludeBelowThreshold] = useState(false)
+
+  // Assignment
+  const [assignTarget, setAssignTarget] = useState<MatchResult | null>(null)
+  const [assignDeadline, setAssignDeadline] = useState('')
+  const [assignMessage, setAssignMessage] = useState('')
+  const [assignSaving, setAssignSaving] = useState(false)
+  const [assignError, setAssignError] = useState<string | null>(null)
+  const [assignNotice, setAssignNotice] = useState<string | null>(null)
+  const [assignedByCall, setAssignedByCall] = useState<Record<string, string[]>>({})
+
+  const canAssign = useMemo(
+    () => Boolean(user?.roles?.some((role: string) => ASSIGNER_ROLES.includes(role))),
+    [user]
+  )
+
   const fetchStats = useCallback(async () => {
     try {
       const res = await authFetch('/api/researcher-matching?action=stats')
       if (res.ok) setStats(await res.json())
+    } catch {}
+  }, [authFetch])
+
+  const fetchFacets = useCallback(async () => {
+    try {
+      const res = await authFetch('/api/researcher-matching?action=facets')
+      if (res.ok) setFacets(await res.json())
     } catch {}
   }, [authFetch])
 
@@ -59,12 +114,73 @@ export default function TenantResearcherMatchingPage() {
     }
   }, [authFetch])
 
+  /** Existing assignments so already-assigned faculty show as "Assigned". */
+  const fetchAssignments = useCallback(async () => {
+    if (!canAssign) return
+    try {
+      const res = await authFetch('/api/assignments?view=managed')
+      if (!res.ok) return
+      const data = await res.json()
+      const map: Record<string, string[]> = {}
+      for (const assignment of data.assignments || []) {
+        if (!assignment.call?.id || !assignment.assignee?.id || assignment.status === 'CANCELLED') continue
+        map[assignment.call.id] = [...(map[assignment.call.id] || []), assignment.assignee.id]
+      }
+      setAssignedByCall(map)
+    } catch {}
+  }, [authFetch, canAssign])
+
   useEffect(() => {
     if (user) {
       fetchStats()
       fetchCalls()
+      fetchFacets()
+      fetchAssignments()
     }
-  }, [user, fetchStats, fetchCalls])
+  }, [user, fetchStats, fetchCalls, fetchFacets, fetchAssignments])
+
+  const departmentOptions = useMemo(() => {
+    if (!facets) return []
+    const schools = schoolIds.length > 0
+      ? facets.schools.filter(school => schoolIds.includes(school.id))
+      : facets.schools
+    return schools.flatMap(school =>
+      school.departments.map(department => ({ ...department, schoolName: school.name }))
+    )
+  }, [facets, schoolIds])
+
+  /** Departments are what faculty actually belong to, so a School selection
+   *  expands into its departments before hitting the API. */
+  const effectiveOrgUnitIds = useMemo(() => {
+    if (departmentIds.length > 0) return departmentIds
+    if (schoolIds.length === 0 || !facets) return []
+    return facets.schools
+      .filter(school => schoolIds.includes(school.id))
+      .flatMap(school => school.departments.map(department => department.id))
+  }, [departmentIds, schoolIds, facets])
+
+  const activeFilterCount = useMemo(() => (
+    (schoolIds.length > 0 ? 1 : 0) +
+    (departmentIds.length > 0 ? 1 : 0) +
+    (researchAreaText.trim() ? 1 : 0) +
+    (careerStage ? 1 : 0) +
+    (institutionType ? 1 : 0) +
+    (country ? 1 : 0) +
+    (includeBelowThreshold ? 1 : 0)
+  ), [schoolIds, departmentIds, researchAreaText, careerStage, institutionType, country, includeBelowThreshold])
+
+  const toggleValue = (list: string[], value: string) =>
+    list.includes(value) ? list.filter(entry => entry !== value) : [...list, value]
+
+  const clearFilters = () => {
+    setSchoolIds([])
+    setDepartmentIds([])
+    setResearchAreaText('')
+    setCareerStage('')
+    setInstitutionType('')
+    setCountry('')
+    setIncludeBelowThreshold(false)
+  }
 
   const handleSearch = useCallback(async () => {
     if (mode === 'call' && !selectedCall) return
@@ -75,7 +191,20 @@ export default function TenantResearcherMatchingPage() {
     setResults(null)
 
     try {
-      const body: any = { limit: 20 }
+      const body: any = {
+        limit: 20,
+        filters: {
+          orgUnitIds: effectiveOrgUnitIds,
+          researchAreas: researchAreaText
+            .split(',')
+            .map(entry => entry.trim())
+            .filter(Boolean),
+          careerStages: careerStage ? [careerStage] : [],
+          institutionTypes: institutionType ? [institutionType] : [],
+          countries: country ? [country] : [],
+          includeBelowThreshold,
+        },
+      }
       if (mode === 'call' && selectedCall) {
         body.fundingCallId = selectedCall.id
       } else {
@@ -99,7 +228,51 @@ export default function TenantResearcherMatchingPage() {
     } finally {
       setLoading(false)
     }
-  }, [mode, selectedCall, searchQuery, authFetch])
+  }, [
+    mode, selectedCall, searchQuery, authFetch, effectiveOrgUnitIds,
+    researchAreaText, careerStage, institutionType, country, includeBelowThreshold,
+  ])
+
+  const openAssign = (result: MatchResult) => {
+    setAssignTarget(result)
+    setAssignDeadline('')
+    setAssignMessage('')
+    setAssignError(null)
+  }
+
+  const submitAssignment = async () => {
+    if (!assignTarget || !selectedCall) return
+    setAssignSaving(true)
+    setAssignError(null)
+    try {
+      const res = await authFetch('/api/assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fundingCallId: selectedCall.id,
+          assigneeUserId: assignTarget.userId,
+          deadlineAt: assignDeadline || null,
+          message: assignMessage || null,
+          matchScore: assignTarget.score,
+          matchTier: assignTarget.matchTier,
+          matchBasis: results?.scoreBasis || null,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not create the assignment')
+
+      setAssignedByCall(prev => ({
+        ...prev,
+        [selectedCall.id]: [...(prev[selectedCall.id] || []), assignTarget.userId],
+      }))
+      setAssignNotice(`Assigned "${selectedCall.schemeTitle}" to ${assignTarget.displayName}.`)
+      setAssignTarget(null)
+    } catch (e: any) {
+      setAssignError(e.message)
+    } finally {
+      setAssignSaving(false)
+    }
+  }
 
   if (authLoading) {
     return <div style={{ padding: 40, textAlign: 'center' }}>Loading...</div>
@@ -262,6 +435,177 @@ export default function TenantResearcherMatchingPage() {
           </div>
         )}
 
+        {/* Filters */}
+        <div style={{ marginTop: 12, borderTop: '1px solid #f3f4f6', paddingTop: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setShowFilters(v => !v)}
+              style={{
+                padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db',
+                background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#374151',
+              }}
+            >
+              {showFilters ? 'Hide filters' : 'Filters'}
+              {activeFilterCount > 0 && (
+                <span style={{
+                  marginLeft: 6, background: '#2563eb', color: '#fff', borderRadius: 10,
+                  padding: '1px 7px', fontSize: 11,
+                }}>
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+            {activeFilterCount > 0 && (
+              <button
+                onClick={clearFilters}
+                style={{
+                  background: 'none', border: 'none', color: '#2563eb',
+                  cursor: 'pointer', fontSize: 12, padding: 0,
+                }}
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+
+          {showFilters && (
+            <div style={{
+              marginTop: 12, padding: 12, background: '#f9fafb',
+              border: '1px solid #e5e7eb', borderRadius: 8,
+            }}>
+              <div style={{
+                display: 'grid', gap: 12,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+              }}>
+                {facets && facets.schools.length > 0 && (
+                  <>
+                    <div>
+                      <label style={labelStyle}>School</label>
+                      <div style={checkboxListStyle}>
+                        {facets.schools.map(school => (
+                          <label key={school.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            fontSize: 12, padding: '2px 0', cursor: 'pointer',
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={schoolIds.includes(school.id)}
+                              onChange={() => {
+                                const next = toggleValue(schoolIds, school.id)
+                                setSchoolIds(next)
+                                // Drop department picks that are no longer offered.
+                                if (next.length > 0) {
+                                  const allowed = new Set(
+                                    facets.schools
+                                      .filter(s => next.includes(s.id))
+                                      .flatMap(s => s.departments.map(d => d.id))
+                                  )
+                                  setDepartmentIds(ids => ids.filter(id => allowed.has(id)))
+                                }
+                              }}
+                            />
+                            {school.name}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={labelStyle}>Department</label>
+                      <div style={checkboxListStyle}>
+                        {departmentOptions.length === 0 ? (
+                          <div style={{ fontSize: 12, color: '#9ca3af' }}>No departments yet</div>
+                        ) : departmentOptions.map(department => (
+                          <label key={department.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            fontSize: 12, padding: '2px 0', cursor: 'pointer',
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={departmentIds.includes(department.id)}
+                              onChange={() => setDepartmentIds(toggleValue(departmentIds, department.id))}
+                            />
+                            {department.name}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div>
+                  <label style={labelStyle}>Discipline / research area</label>
+                  <input
+                    type="text"
+                    value={researchAreaText}
+                    onChange={e => setResearchAreaText(e.target.value)}
+                    placeholder="e.g. machine learning, genomics"
+                    style={inputStyle}
+                  />
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                    Comma-separated; matches research areas and keywords.
+                  </div>
+                </div>
+
+                {facets && facets.careerStages.length > 0 && (
+                  <div>
+                    <label style={labelStyle}>Career stage</label>
+                    <select value={careerStage} onChange={e => setCareerStage(e.target.value)} style={inputStyle}>
+                      <option value="">Any</option>
+                      {facets.careerStages.map(stage => (
+                        <option key={stage} value={stage}>{stage.replace(/_/g, ' ')}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {facets && facets.institutionTypes.length > 0 && (
+                  <div>
+                    <label style={labelStyle}>Institution type</label>
+                    <select value={institutionType} onChange={e => setInstitutionType(e.target.value)} style={inputStyle}>
+                      <option value="">Any</option>
+                      {facets.institutionTypes.map(type => (
+                        <option key={type} value={type}>{type.replace(/_/g, ' ')}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {facets && facets.countries.length > 0 && (
+                  <div>
+                    <label style={labelStyle}>Country</label>
+                    <select value={country} onChange={e => setCountry(e.target.value)} style={inputStyle}>
+                      <option value="">Any</option>
+                      {facets.countries.map(entry => (
+                        <option key={entry} value={entry}>{entry}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <label style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 12,
+                fontSize: 13, color: '#374151', cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={includeBelowThreshold}
+                  onChange={e => setIncludeBelowThreshold(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  <strong>Broaden — include weaker matches</strong>
+                  <div style={{ fontSize: 11, color: '#6b7280' }}>
+                    Keeps candidates that fall below the relevance threshold, so you can still explore
+                    options when no strong match exists. Results stay ranked and tiered.
+                  </div>
+                </span>
+              </label>
+            </div>
+          )}
+        </div>
+
         <button
           onClick={handleSearch}
           disabled={loading || (mode === 'call' && !selectedCall) || (mode === 'text' && !searchQuery.trim())}
@@ -286,12 +630,107 @@ export default function TenantResearcherMatchingPage() {
         </div>
       )}
 
+      {/* Assignment confirmation */}
+      {assignNotice && (
+        <div style={{
+          padding: 12, background: '#ecfdf5', border: '1px solid #a7f3d0',
+          borderRadius: 6, color: '#047857', marginBottom: 16, fontSize: 14,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+        }}>
+          <span>{assignNotice}</span>
+          <button
+            onClick={() => setAssignNotice(null)}
+            style={{ background: 'none', border: 'none', color: '#047857', cursor: 'pointer', fontSize: 18 }}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Results */}
       {results && (
         <MatchResults
           response={results}
-          emptyMessage="No researchers in your organization passed the relevance threshold. Try a different funding call or broaden the search."
+          emptyMessage="No researchers in your organization passed the relevance threshold. Try a different funding call, relax the filters, or tick “Broaden — include weaker matches”."
+          onAssign={canAssign && mode === 'call' && selectedCall ? openAssign : undefined}
+          assignedUserIds={selectedCall ? assignedByCall[selectedCall.id] || [] : []}
         />
+      )}
+
+      {/* Assign modal */}
+      {assignTarget && selectedCall && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16,
+          }}
+          onClick={() => !assignSaving && setAssignTarget(null)}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 10, padding: 20,
+              width: '100%', maxWidth: 480, boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Assign funding call</h3>
+            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px' }}>
+              Assigning <strong>{selectedCall.schemeTitle}</strong> to{' '}
+              <strong>{assignTarget.displayName}</strong>.
+            </p>
+
+            <label style={labelStyle}>Internal deadline</label>
+            <input
+              type="date"
+              value={assignDeadline}
+              onChange={e => setAssignDeadline(e.target.value)}
+              style={{ ...inputStyle, marginBottom: 12 }}
+            />
+
+            <label style={labelStyle}>Message to the faculty member</label>
+            <textarea
+              value={assignMessage}
+              onChange={e => setAssignMessage(e.target.value)}
+              rows={4}
+              placeholder="Add context — why them, what to focus on, who to coordinate with..."
+              style={{ ...inputStyle, resize: 'vertical', marginBottom: 12 }}
+            />
+
+            {assignError && (
+              <div style={{
+                padding: 10, background: '#fef2f2', border: '1px solid #fecaca',
+                borderRadius: 6, color: '#dc2626', marginBottom: 12, fontSize: 13,
+              }}>
+                {assignError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => setAssignTarget(null)}
+                disabled={assignSaving}
+                style={{
+                  padding: '8px 16px', borderRadius: 6, border: '1px solid #d1d5db',
+                  background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#374151',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitAssignment}
+                disabled={assignSaving}
+                style={{
+                  padding: '8px 16px', borderRadius: 6, border: 'none',
+                  background: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 600,
+                  cursor: assignSaving ? 'wait' : 'pointer', opacity: assignSaving ? 0.7 : 1,
+                }}
+              >
+                {assignSaving ? 'Assigning...' : 'Assign call'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

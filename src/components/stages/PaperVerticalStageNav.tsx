@@ -703,6 +703,23 @@ const STAGE_DEFINITIONS: StageDefinition[] = [
     ]
   },
   {
+    key: 'DIAGRAM_STUDIO',
+    label: 'Diagram Studio',
+    icon: Target,
+    description: 'Generate grant-native diagrams and Gantt charts',
+    weight: 8,
+    subStages: [
+      {
+        key: 'diagrams',
+        label: 'Diagrams',
+        icon: FileText,
+        description: 'Optional section-grounded visuals',
+        required: false,
+        getStatus: () => 'pending'
+      }
+    ]
+  },
+  {
     key: 'SECTION_DRAFTING',
     label: 'Section Drafting',
     icon: FileText,

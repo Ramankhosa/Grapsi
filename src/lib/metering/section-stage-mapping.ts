@@ -25,6 +25,8 @@ export const SECTION_TO_STAGE_MAP: Record<string, string> = {
   'claims': 'DRAFT_ANNEXURE_CLAIMS',
   'detailedDescription': 'DRAFT_ANNEXURE_DESCRIPTION',
   'detailed_description': 'DRAFT_ANNEXURE_DESCRIPTION', // alias
+  'description_of_embodiments': 'DRAFT_ANNEXURE_DESCRIPTION', // alias (JP)
+  'descriptionOfEmbodiments': 'DRAFT_ANNEXURE_DESCRIPTION', // alias (JP)
   
   // Field/Background sections
   'fieldOfInvention': 'DRAFT_ANNEXURE_FIELD',
@@ -81,13 +83,22 @@ export const SECTION_TO_STAGE_MAP: Record<string, string> = {
   'industrialApplicability': 'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY',
   'industrial_applicability': 'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY', // alias
   
-  // Reference Numerals
+  // Reference Numerals / Reference Signs List (JP 【符号の説明】)
   'listOfNumerals': 'DRAFT_ANNEXURE_NUMERALS',
   'list_of_numerals': 'DRAFT_ANNEXURE_NUMERALS', // alias
   'numeralList': 'DRAFT_ANNEXURE_NUMERALS', // alias
   'numeral_list': 'DRAFT_ANNEXURE_NUMERALS', // alias
   'referenceNumerals': 'DRAFT_ANNEXURE_NUMERALS', // alias
   'reference_numerals': 'DRAFT_ANNEXURE_NUMERALS', // alias
+  'referenceSignsList': 'DRAFT_ANNEXURE_NUMERALS', // alias (JP)
+  'reference_signs_list': 'DRAFT_ANNEXURE_NUMERALS', // alias (JP)
+  'reference_numerals_list': 'DRAFT_ANNEXURE_NUMERALS', // alias (JP)
+
+  // Citation List / Prior-Art Documents (JP 【先行技術文献】)
+  'citationList': 'DRAFT_ANNEXURE_CITATION_LIST',
+  'citation_list': 'DRAFT_ANNEXURE_CITATION_LIST', // alias
+  'priorArtReferences': 'DRAFT_ANNEXURE_CITATION_LIST', // alias
+  'prior_art_references': 'DRAFT_ANNEXURE_CITATION_LIST', // alias
   
   // Cross-Reference
   'crossReference': 'DRAFT_ANNEXURE_CROSS_REFERENCE',
@@ -179,6 +190,7 @@ export function getSupportedSectionKeys(): string[] {
     'detailedDescription',
     'bestMethod',
     'industrialApplicability',
+    'citationList',
     'claims',
     'abstract',
     'listOfNumerals',

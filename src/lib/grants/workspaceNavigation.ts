@@ -6,6 +6,7 @@ export type GrantWorkspaceStage =
   | 'LITERATURE_SEARCH'
   | 'FULL_TEXT_EVIDENCE_EXTRACTION'
   | 'FIGURE_PLANNER'
+  | 'DIAGRAM_STUDIO'
   | 'SECTION_DRAFTING'
   | 'REVIEWER'
 

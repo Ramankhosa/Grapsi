@@ -258,6 +258,15 @@ export default function Header() {
                       <span>Funding Intelligence</span>
                     </Link>
 
+                    <Link
+                      href="/assignments"
+                      className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                      onClick={closeMenu}
+                    >
+                      <span>📋</span>
+                      <span>Assignments</span>
+                    </Link>
+
                     {/* Shared research library links */}
                     {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && (
                       <>
@@ -294,6 +303,14 @@ export default function Header() {
                         >
                           <span>🏢</span>
                           <span>Team Management</span>
+                        </Link>
+                        <Link
+                          href="/tenant-admin/faculty"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>🎓</span>
+                          <span>Faculty &amp; Organization</span>
                         </Link>
                         <Link
                           href="/tenant-admin/analytics"

@@ -545,6 +545,11 @@ model Tenant {
   // Tenant member invites
   memberInvites TenantMemberInvite[]
 
+  // Organizational hierarchy, faculty imports and funding call assignments
+  orgUnits          TenantOrgUnit[]
+  callAssignments   CallAssignment[]
+  facultyImportJobs FacultyImportJob[]
+
   @@map("tenants")
 }
 
@@ -670,6 +675,11 @@ model User {
   // Onboarding journey and tenant member invites
   journeyState      UserJourneyState?
   sentTenantInvites TenantMemberInvite[] @relation("TenantInviteSender")
+
+  // Funding call assignments and faculty imports
+  callAssignmentsReceived CallAssignment[]   @relation("CallAssignmentAssignee")
+  callAssignmentsCreated  CallAssignment[]   @relation("CallAssignmentAssignedBy")
+  facultyImportJobs       FacultyImportJob[]
 
   @@map("users")
 }
@@ -1101,6 +1111,7 @@ model FundingCall {
   grantPrepSessions           GrantPrepSession[]
   grantBlueprints             GrantBlueprint[]
   research_area_taxonomies    FundingCallResearchAreaTaxonomy[]
+  assignments                 CallAssignment[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -2053,6 +2064,7 @@ model GrantSession {
   sectionDrafts             GrantSectionDraft[]
   structuredFieldResponses  GrantStructuredFieldResponse[]
   reviewerSectionGrantLinks ReviewerSectionGrantLink[]
+  diagrams                  GrantDiagram[]
 
   @@index([projectId, status])
   @@index([tenantId])
@@ -2238,6 +2250,54 @@ model GrantStructuredFieldResponse {
   @@index([grantSessionId, sectionKey])
   @@index([tenantId, projectId])
   @@map("grant_structured_field_responses")
+}
+
+model GrantDiagram {
+  id                String             @id @default(cuid())
+  grantSessionId    String
+  tenantId          String
+  projectId         String
+  sectionKey        String?
+  figureNo          Int
+  kind              GrantDiagramKind
+  title             String
+  caption           String?            @db.Text
+  themeKey          String             @default("classic")
+  specJson          Json?
+  status            GrantDiagramStatus @default(DRAFT)
+  errorMessage      String?            @db.Text
+  imagePath         String?
+  imageFormat       String?
+  imageVersion      Int                @default(0)
+  generationPrompt  String?            @db.Text
+  sourceFingerprint String?
+  isStale           Boolean            @default(false)
+  createdByUserId   String
+  updatedByUserId   String
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  grantSession      GrantSession       @relation(fields: [grantSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([grantSessionId, figureNo], map: "grant_diagrams_session_figure_no_unique")
+  @@index([grantSessionId, sectionKey])
+  @@index([tenantId, projectId])
+  @@map("grant_diagrams")
+}
+
+enum GrantDiagramKind {
+  GANTT
+  FLOWCHART
+  LOGIC_MODEL
+  CHART
+  PLOT
+  SKETCH
+}
+
+enum GrantDiagramStatus {
+  DRAFT
+  GENERATING
+  READY
+  FAILED
 }
 
 model ReviewerCall {
@@ -2523,10 +2583,18 @@ model ResearcherProfile {
   google_scholar_url    String?
   scopus_url            String?
   orcid_url             String?
+  // Tenant org placement (School -> Department). school/department are kept
+  // denormalized alongside org_unit_id so existing match SQL and result cards
+  // need no extra join.
+  org_unit_id           String?
+  school                String?
+  designation           String?
   created_at            DateTime               @default(now())
   updated_at            DateTime               @updatedAt
   user                  User                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  org_unit              TenantOrgUnit?         @relation(fields: [org_unit_id], references: [id], onDelete: SetNull)
 
+  @@index([org_unit_id], map: "idx_researcher_profiles_org_unit")
   @@index([country_of_residence], map: "idx_researcher_profiles_country")
   @@index([institution_type], map: "idx_researcher_profiles_institution_type")
   @@index([career_stage], map: "idx_researcher_profiles_career_stage")
@@ -2652,6 +2720,109 @@ model FundingCallResearchAreaTaxonomy {
   @@index([taxonomy_area_id], map: "idx_funding_call_research_area_taxonomies_area")
   @@index([taxonomy_level1_code, taxonomy_level2_code], map: "idx_funding_call_research_area_taxonomies_codes")
   @@map("funding_call_research_area_taxonomies")
+}
+
+// Tenant-defined organizational hierarchy. Schools are roots (parent_id null)
+// and Departments hang off them. Self-referential so deeper levels (Division,
+// Centre) can be added later without another migration.
+enum OrgUnitKind {
+  SCHOOL
+  DEPARTMENT
+}
+
+model TenantOrgUnit {
+  id         String      @id @default(cuid())
+  tenant_id  String
+  parent_id  String?
+  kind       OrgUnitKind
+  name       String
+  code       String?
+  sort_order Int?
+  is_active  Boolean     @default(true)
+  created_at DateTime    @default(now())
+  updated_at DateTime    @updatedAt
+
+  tenant              Tenant              @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  parent              TenantOrgUnit?      @relation("OrgUnitHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
+  children            TenantOrgUnit[]     @relation("OrgUnitHierarchy")
+  researcher_profiles ResearcherProfile[]
+
+  // NOTE: Postgres treats NULLs as distinct, so this constraint only enforces
+  // uniqueness for departments (non-null parent). School-name uniqueness is
+  // enforced case-insensitively in the API layer.
+  @@unique([tenant_id, parent_id, name], map: "tenant_org_units_tenant_parent_name_key")
+  @@index([tenant_id, kind], map: "idx_tenant_org_units_tenant_kind")
+  @@index([parent_id], map: "idx_tenant_org_units_parent")
+  @@map("tenant_org_units")
+}
+
+enum CallAssignmentStatus {
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+// A funding call handed to a faculty member by a tenant admin, with an
+// internal deadline and message. The assignee closes it out by recording
+// submission info.
+model CallAssignment {
+  id                  String               @id @default(cuid())
+  tenant_id           String
+  funding_call_id     String
+  assignee_user_id    String
+  assigned_by_user_id String
+  message             String?
+  deadline_at         DateTime?
+  status              CallAssignmentStatus @default(ASSIGNED)
+
+  // Snapshot of the match that motivated the assignment (provenance only).
+  match_score Float?
+  match_tier  String?
+  match_basis String?
+
+  // Submission proof recorded by the assignee on completion.
+  submission_reference String?
+  submission_url       String?
+  submission_notes     String?
+  submitted_at         DateTime?
+  completed_at         DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant       Tenant      @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  assignee     User        @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
+  assigned_by  User        @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
+
+  @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
+  @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
+  @@index([tenant_id, status], map: "idx_call_assignments_tenant_status")
+  @@index([assigned_by_user_id], map: "idx_call_assignments_assigned_by")
+  @@index([deadline_at], map: "idx_call_assignments_deadline")
+  @@map("call_assignments")
+}
+
+// Audit record for each faculty CSV/Excel upload.
+model FacultyImportJob {
+  id            String   @id @default(cuid())
+  tenant_id     String
+  uploaded_by   String
+  filename      String?
+  total_rows    Int      @default(0)
+  created_count Int      @default(0)
+  updated_count Int      @default(0)
+  error_count   Int      @default(0)
+  report_json   Json?
+  status        String   @default("COMPLETED")
+  created_at    DateTime @default(now())
+
+  tenant     Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  uploadedBy User   @relation(fields: [uploaded_by], references: [id], onDelete: Cascade)
+
+  @@index([tenant_id, created_at], map: "idx_faculty_import_jobs_tenant_created")
+  @@map("faculty_import_jobs")
 }
 
 enum ApplicantCategory {

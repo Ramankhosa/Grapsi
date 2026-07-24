@@ -495,7 +495,15 @@ function buildFigureImageRun(params: {
     }
   }
 
+  const extension = lowerName.split('.').pop() || 'png';
+  const imageType =
+    extension === 'jpg' || extension === 'jpeg' ? 'jpg'
+    : extension === 'gif' ? 'gif'
+    : extension === 'bmp' ? 'bmp'
+    : 'png';
+
   return new params.ImageRun({
+    type: imageType,
     data: params.asset.buffer,
     transformation: { width, height },
   });

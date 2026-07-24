@@ -19,6 +19,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "C:/Users/raman/Documents/spotipr", "run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "spotipr-dev-3789",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:/Users/raman/Documents/spotipr", "run", "dev", "--", "-p", "3789"],
+      "port": 3789
     }
   ]
 }

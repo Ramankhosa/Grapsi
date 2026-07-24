@@ -116,6 +116,7 @@ const SECTION_KEY_TO_PROMPT_KEY: Record<string, string> = {
   detailedDescription: 'detailed_description',
   bestMethod: 'best_mode',
   industrialApplicability: 'industrial_applicability',
+  citationList: 'citation_list',
   claims: 'claims',
   abstract: 'abstract',
   listOfNumerals: 'reference_numerals'

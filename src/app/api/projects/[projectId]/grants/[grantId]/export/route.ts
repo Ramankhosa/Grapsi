@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { promises as fs } from 'fs'
+import path from 'path'
 
 import { requireProjectGrantActor } from '@/lib/grants/access'
 import { buildGrantProposalDocxSections } from '@/lib/grants/export'
@@ -6,7 +8,14 @@ import { formatGrantProposalDocxCitations } from '@/lib/grants/exportCitationFor
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 import { validateGrantFinalExportReadiness } from '@/lib/grants/draftContextContract'
 import { getGrantIdeaAnchorFromFreezePayload } from '@/lib/grants/promptOverlay'
-import { buildPaperDocxBuffer } from '@/lib/export/paper-docx-export'
+import { buildPaperDocxBuffer, type PaperDocxFigure } from '@/lib/export/paper-docx-export'
+import { getPaperFigureImageCandidates } from '@/lib/figure-generation/paper-figure-image'
+import {
+  asPaperFigureMeta,
+  getPaperFigureCaption,
+  getPaperFigureStoredImagePath,
+  isPaperFigureUsable,
+} from '@/lib/figure-generation/paper-figure-record'
 import { prisma } from '@/lib/prisma'
 import { citationService } from '@/lib/services/citation-service'
 
@@ -20,6 +29,74 @@ function sanitizeFilenamePart(value: string) {
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'grant-proposal'
+}
+
+async function readGrantFigureAsset(rawImagePath: string, figureNo: number): Promise<{
+  fileName: string
+  buffer: Buffer
+} | null> {
+  for (const candidate of getPaperFigureImageCandidates(rawImagePath)) {
+    try {
+      const buffer = await fs.readFile(candidate)
+      const ext = (path.extname(candidate) || '.png').toLowerCase()
+      return { fileName: `figure-${String(figureNo).padStart(2, '0')}${ext}`, buffer }
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') {
+        console.warn(`[Grant Export] Failed to read figure asset ${candidate}:`, error?.message || error)
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Collects exportable figures: Diagram Studio diagrams plus legacy
+ * figure-planner figures from the shadow drafting session. The two share the
+ * [Figure N] numbering space; on a collision the studio figure wins.
+ */
+async function loadGrantExportFigures(input: {
+  grantSessionId: string
+  draftingSessionId?: string | null
+}): Promise<PaperDocxFigure[]> {
+  const byNo = new Map<number, PaperDocxFigure>()
+
+  if (input.draftingSessionId) {
+    const figurePlans = await prisma.figurePlan.findMany({
+      where: { sessionId: input.draftingSessionId },
+      orderBy: { figureNo: 'asc' },
+    })
+    for (const figure of figurePlans) {
+      const nodes = asPaperFigureMeta(figure.nodes)
+      const rawImagePath = getPaperFigureStoredImagePath(nodes)
+      if (!isPaperFigureUsable(nodes, rawImagePath)) continue
+      const asset = rawImagePath ? await readGrantFigureAsset(rawImagePath, figure.figureNo) : null
+      if (!asset) continue
+      byNo.set(figure.figureNo, {
+        figureNo: figure.figureNo,
+        title: figure.title,
+        caption: getPaperFigureCaption(nodes, figure.description || ''),
+        asset,
+      })
+    }
+  }
+
+  const diagrams = await prisma.grantDiagram.findMany({
+    where: { grantSessionId: input.grantSessionId, status: 'READY', imagePath: { not: null } },
+    orderBy: { figureNo: 'asc' },
+  })
+  for (const diagram of diagrams) {
+    if (!diagram.imagePath) continue
+    const asset = await readGrantFigureAsset(diagram.imagePath, diagram.figureNo)
+    if (!asset) continue
+    byNo.set(diagram.figureNo, {
+      figureNo: diagram.figureNo,
+      title: diagram.title,
+      caption: diagram.caption,
+      asset,
+    })
+  }
+
+  return Array.from(byNo.values()).sort((a, b) => a.figureNo - b.figureNo)
 }
 
 async function formatSectionsWithGrantCitations(input: {
@@ -131,9 +208,18 @@ export async function GET(
       sections: rawSections,
     })
 
+    const figures = await loadGrantExportFigures({
+      grantSessionId: grantId,
+      draftingSessionId: workspace.grantSession.draftingSessionId,
+    }).catch(error => {
+      console.warn('[Grant Export] skipped figures:', error)
+      return [] as PaperDocxFigure[]
+    })
+
     const buffer = await buildPaperDocxBuffer({
       title: workspace.grantSession.project.name,
       sections,
+      figures,
       formatting: {
         fontFamily: 'Times New Roman',
         fontSizePt: 11,

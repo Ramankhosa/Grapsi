@@ -91,6 +91,55 @@ export async function GET(request: NextRequest) {
     })
   }
 
+  // Filter facets: the tenant's School -> Department tree plus the distinct
+  // profile attributes actually present, so the UI never offers a dead filter.
+  if (action === 'facets') {
+    const [units, attributes] = await Promise.all([
+      prisma.tenantOrgUnit.findMany({
+        where: { tenant_id: tenantId, is_active: true },
+        orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+        select: { id: true, name: true, kind: true, parent_id: true },
+      }),
+      prisma.$queryRaw<Array<{ careerStage: string | null; institutionType: string | null; country: string | null }>>`
+        SELECT DISTINCT
+          rp.career_stage AS "careerStage",
+          rp.institution_type AS "institutionType",
+          rp.country_of_residence AS "country"
+        FROM researcher_profiles rp
+        JOIN users u ON u.id = rp.user_id
+        WHERE u."tenantId" = ${tenantId}
+      `,
+    ])
+
+    const departmentsBySchool = new Map<string, Array<{ id: string; name: string }>>()
+    for (const unit of units) {
+      if (unit.kind !== 'DEPARTMENT' || !unit.parent_id) continue
+      const list = departmentsBySchool.get(unit.parent_id) || []
+      list.push({ id: unit.id, name: unit.name })
+      departmentsBySchool.set(unit.parent_id, list)
+    }
+
+    const schools = units
+      .filter((unit) => unit.kind === 'SCHOOL')
+      .map((unit) => ({
+        id: unit.id,
+        name: unit.name,
+        departments: departmentsBySchool.get(unit.id) || [],
+      }))
+
+    const distinct = (key: 'careerStage' | 'institutionType' | 'country') =>
+      Array.from(
+        new Set(attributes.map((row) => (row[key] || '').trim()).filter(Boolean))
+      ).sort((left, right) => left.localeCompare(right))
+
+    return NextResponse.json({
+      schools,
+      careerStages: distinct('careerStage'),
+      institutionTypes: distinct('institutionType'),
+      countries: distinct('country'),
+    })
+  }
+
   // Default: list funding calls visible to this tenant for the dropdown
   const q = searchParams.get('q') || ''
   const limit = Math.min(Number(searchParams.get('limit')) || 50, 200)
@@ -149,11 +198,23 @@ export async function POST(request: NextRequest) {
   const { user, tenantId } = auth
 
   const body = await request.json()
-  const { fundingCallId, query, limit } = body
+  const { fundingCallId, query, limit, filters } = body
 
   if (!fundingCallId && !query) {
     return NextResponse.json({ error: 'Provide fundingCallId or query' }, { status: 400 })
   }
+
+  // Client-supplied facets are sanitised into plain string arrays. Passing an
+  // org unit from another tenant is harmless: the search is already constrained
+  // to this tenant, so a foreign id simply matches nothing.
+  const requested = filters && typeof filters === 'object' ? filters : {}
+  const stringList = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          .map((entry) => entry.trim())
+          .slice(0, 50)
+      : undefined
 
   // Only allow matching against a call this tenant is permitted to see.
   if (fundingCallId) {
@@ -172,7 +233,17 @@ export async function POST(request: NextRequest) {
     limit: Math.min(Number(limit) || 20, 50),
     requesterUserId: user.id,
     requesterTenantId: tenantId,
-    filters: { tenantOnly: true, includeSelf: true },
+    filters: {
+      orgUnitIds: stringList(requested.orgUnitIds),
+      researchAreas: stringList(requested.researchAreas),
+      countries: stringList(requested.countries),
+      institutionTypes: stringList(requested.institutionTypes),
+      careerStages: stringList(requested.careerStages),
+      includeBelowThreshold: requested.includeBelowThreshold === true,
+      // Tenant scope is enforced here and can never be widened by the client.
+      tenantOnly: true,
+      includeSelf: true,
+    },
   })
 
   return NextResponse.json(results)

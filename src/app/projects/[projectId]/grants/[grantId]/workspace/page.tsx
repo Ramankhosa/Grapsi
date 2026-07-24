@@ -12,6 +12,7 @@ import GrantPrepPage from '../prep/page'
 import GrantBlueprintStageWrapper from '@/components/grants/GrantBlueprintStageWrapper'
 import { GrantPrepEmbedModeProvider } from '@/components/grantPrep/GrantPrepEmbedModeContext'
 import GrantReviewerStage from '@/components/grants/GrantReviewerStage'
+import GrantDiagramStudioStage from '@/components/grants/GrantDiagramStudioStage'
 import GrantSectionDraftingStage from '@/components/grants/GrantSectionDraftingStage'
 import FullTextEvidenceExtractionStage from '@/components/stages/FullTextEvidenceExtractionStage'
 import LiteratureSearchStage from '@/components/stages/LiteratureSearchStage'
@@ -30,6 +31,7 @@ const STAGES = [
   { key: 'LITERATURE_SEARCH', label: 'Literature Search' },
   { key: 'FULL_TEXT_EVIDENCE_EXTRACTION', label: 'Deep Analysis' },
   { key: 'FIGURE_PLANNER', label: 'Figure Planning' },
+  { key: 'DIAGRAM_STUDIO', label: 'Diagram Studio' },
   { key: 'SECTION_DRAFTING', label: 'Section Drafting' },
   { key: 'REVIEWER', label: 'Reviewer' },
 ] as const
@@ -589,6 +591,9 @@ export default function GrantWorkspacePage() {
         if (!hasFrozenBlueprint) return 'Freeze the grant blueprint before planning figures.'
         if (!draftingSessionId) return 'Shadow drafting session is not available yet.'
         return null
+      case 'DIAGRAM_STUDIO':
+        if (!hasFrozenBlueprint) return 'Freeze the grant blueprint before creating diagrams.'
+        return null
       case 'LITERATURE_SEARCH':
         if (!hasFrozenBlueprint) return 'Freeze the grant blueprint before continuing.'
         if (!draftingSessionId) return 'Shadow drafting session is not available yet.'
@@ -974,6 +979,23 @@ export default function GrantWorkspacePage() {
               ) : (
                 <div className="p-6 text-sm text-slate-600">Shadow drafting session is not available yet.</div>
               )
+            ) : null}
+
+            {resolvedCurrentStage === 'DIAGRAM_STUDIO' ? (
+              <GrantDiagramStudioStage
+                projectId={projectId}
+                grantId={grantId}
+                authToken={token}
+                sections={(workspace?.blueprint?.sectionDrafts || []).map((section) => ({
+                  sectionKey: section.sectionKey,
+                  label: section.label,
+                  sectionType: section.sectionType,
+                  status: section.status,
+                  content: section.content,
+                }))}
+                draftingSessionId={draftingSessionId}
+                onSectionsUpdated={() => { void loadWorkspace({ showLoading: false }) }}
+              />
             ) : null}
 
             {resolvedCurrentStage === 'SECTION_DRAFTING' && isFeatureEnabled('ENABLE_DRAFT_ONE') ? (

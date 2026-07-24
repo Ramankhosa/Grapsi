@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 export interface MatchEvidence {
   source: 'profile' | 'research_area' | 'publication' | 'text'
@@ -42,6 +42,8 @@ export interface SearchResponse {
   degradedMode: string | null
 }
 
+type TierFilter = 'auto' | 'strong' | 'moderate' | 'weak' | 'all'
+
 const TIER_STYLES: Record<MatchResult['matchTier'], { label: string; bg: string; color: string }> = {
   strong: { label: 'Strong match', bg: '#dcfce7', color: '#166534' },
   moderate: { label: 'Moderate match', bg: '#fef3c7', color: '#92400e' },
@@ -54,6 +56,14 @@ const SOURCE_LABELS: Record<MatchEvidence['source'], string> = {
   publication: 'Publication',
   text: 'Keyword match',
 }
+
+const TIER_FILTER_OPTIONS: Array<{ value: TierFilter; label: string }> = [
+  { value: 'auto', label: 'Best available' },
+  { value: 'strong', label: 'Strong only' },
+  { value: 'moderate', label: 'Moderate & above' },
+  { value: 'weak', label: 'Weak only' },
+  { value: 'all', label: 'Show all' },
+]
 
 /** Text-branch snippets carry **term** markers around the matched query words. */
 function HighlightedSnippet({ text }: { text: string }) {
@@ -71,7 +81,19 @@ function HighlightedSnippet({ text }: { text: string }) {
   )
 }
 
-function ResultCard({ result, rank, scoreBasis }: { result: MatchResult; rank: number; scoreBasis: string }) {
+function ResultCard({
+  result,
+  rank,
+  scoreBasis,
+  onAssign,
+  isAssigned,
+}: {
+  result: MatchResult
+  rank: number
+  scoreBasis: string
+  onAssign?: (result: MatchResult) => void
+  isAssigned?: boolean
+}) {
   const tier = TIER_STYLES[result.matchTier] || TIER_STYLES.weak
   return (
     <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
@@ -108,6 +130,21 @@ function ResultCard({ result, rank, scoreBasis }: { result: MatchResult; rank: n
           <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
             {(result.score * 100).toFixed(0)}% {scoreBasis === 'rerank' ? 'relevance' : 'similarity'}
           </div>
+          {onAssign && (
+            <button
+              onClick={() => onAssign(result)}
+              disabled={isAssigned}
+              style={{
+                marginTop: 8, padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                cursor: isAssigned ? 'default' : 'pointer', whiteSpace: 'nowrap',
+                border: isAssigned ? '1px solid #d1d5db' : 'none',
+                background: isAssigned ? '#f3f4f6' : '#2563eb',
+                color: isAssigned ? '#6b7280' : '#fff',
+              }}
+            >
+              {isAssigned ? 'Assigned' : 'Assign call'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -218,18 +255,46 @@ function ResultCard({ result, rank, scoreBasis }: { result: MatchResult; rank: n
 export default function MatchResults({
   response,
   emptyMessage = 'No researchers passed the relevance threshold. Try a different funding call or broaden the search.',
+  onAssign,
+  assignedUserIds,
 }: {
   response: SearchResponse
   emptyMessage?: string
+  /** When provided, each card gets an "Assign call" button. */
+  onAssign?: (result: MatchResult) => void
+  /** Users already assigned to the selected call — shown as "Assigned". */
+  assignedUserIds?: string[]
 }) {
-  const [showWeak, setShowWeak] = useState(false)
+  const [tierFilter, setTierFilter] = useState<TierFilter>('auto')
 
-  const strongerResults = response.results.filter(r => r.matchTier !== 'weak')
-  const weakResults = response.results.filter(r => r.matchTier === 'weak')
-  // If nothing cleared the moderate bar, show the weak matches rather than an empty page.
-  const hasStronger = strongerResults.length > 0
-  const visible = !hasStronger || showWeak ? response.results : strongerResults
+  const counts = useMemo(() => ({
+    strong: response.results.filter(r => r.matchTier === 'strong').length,
+    moderate: response.results.filter(r => r.matchTier === 'moderate').length,
+    weak: response.results.filter(r => r.matchTier === 'weak').length,
+  }), [response.results])
+
+  const visible = useMemo(() => {
+    switch (tierFilter) {
+      case 'strong':
+        return response.results.filter(r => r.matchTier === 'strong')
+      case 'moderate':
+        return response.results.filter(r => r.matchTier !== 'weak')
+      case 'weak':
+        return response.results.filter(r => r.matchTier === 'weak')
+      case 'all':
+        return response.results
+      default: {
+        // "Best available": hide weak matches, unless nothing stronger exists —
+        // an empty page is less useful than a caveated one.
+        const stronger = response.results.filter(r => r.matchTier !== 'weak')
+        return stronger.length > 0 ? stronger : response.results
+      }
+    }
+  }, [response.results, tierFilter])
+
+  const assigned = useMemo(() => new Set(assignedUserIds || []), [assignedUserIds])
   const screenedOut = Math.max(0, response.totalCandidates - response.totalResults)
+  const hiddenByFilter = response.results.length - visible.length
 
   return (
     <div>
@@ -247,15 +312,39 @@ export default function MatchResults({
             {' · '}
             {response.scoreBasis === 'rerank' ? 'ranked by AI reranker' : 'ranked by embedding similarity'}
           </div>
+          {response.results.length > 0 && (
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+              {counts.strong} strong · {counts.moderate} moderate · {counts.weak} weak
+            </div>
+          )}
         </div>
-        {response.degradedMode && (
-          <span style={{
-            fontSize: 12, background: '#fef3c7', color: '#92400e',
-            padding: '4px 8px', borderRadius: 4,
-          }}>
-            Degraded mode: {response.degradedMode}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {response.degradedMode && (
+            <span style={{
+              fontSize: 12, background: '#fef3c7', color: '#92400e',
+              padding: '4px 8px', borderRadius: 4,
+            }}>
+              Degraded mode: {response.degradedMode}
+            </span>
+          )}
+          {response.results.length > 0 && (
+            <label style={{ fontSize: 12, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 6 }}>
+              Relevance
+              <select
+                value={tierFilter}
+                onChange={e => setTierFilter(e.target.value as TierFilter)}
+                style={{
+                  padding: '6px 8px', borderRadius: 6, border: '1px solid #d1d5db',
+                  fontSize: 12, background: '#fff', color: '#374151',
+                }}
+              >
+                {TIER_FILTER_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
       </div>
 
       {response.results.length === 0 ? (
@@ -265,24 +354,29 @@ export default function MatchResults({
         }}>
           {emptyMessage}
         </div>
+      ) : visible.length === 0 ? (
+        <div style={{
+          padding: 32, textAlign: 'center', color: '#9ca3af',
+          border: '1px dashed #d1d5db', borderRadius: 8,
+        }}>
+          No researchers in this relevance band. Choose a broader option above.
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {visible.map((r, idx) => (
-            <ResultCard key={r.userId} result={r} rank={idx + 1} scoreBasis={response.scoreBasis} />
+            <ResultCard
+              key={r.userId}
+              result={r}
+              rank={idx + 1}
+              scoreBasis={response.scoreBasis}
+              onAssign={onAssign}
+              isAssigned={assigned.has(r.userId)}
+            />
           ))}
-          {hasStronger && weakResults.length > 0 && (
-            <button
-              onClick={() => setShowWeak(v => !v)}
-              style={{
-                padding: '10px 16px', borderRadius: 8, cursor: 'pointer',
-                border: '1px dashed #d1d5db', background: '#f9fafb',
-                color: '#6b7280', fontSize: 13, fontWeight: 600,
-              }}
-            >
-              {showWeak
-                ? 'Hide weaker matches'
-                : `Show ${weakResults.length} weaker match${weakResults.length !== 1 ? 'es' : ''}`}
-            </button>
+          {hiddenByFilter > 0 && (
+            <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', padding: '4px 0' }}>
+              {hiddenByFilter} more match{hiddenByFilter !== 1 ? 'es' : ''} hidden by the relevance filter.
+            </div>
           )}
         </div>
       )}

@@ -1044,7 +1044,7 @@ OUTPUT RULES
   },
   {
     sectionKey: 'detailedDescription',
-    aliases: ["detailed_description","detailedDescriptionOfInvention","detailed_description_of_invention"],
+    aliases: ["detailed_description","detailedDescriptionOfInvention","detailed_description_of_invention","description_of_embodiments","descriptionOfEmbodiments"],
     displayOrder: 11,
     label: 'Detailed Description',
     description: 'Detailed Description section for patent specifications.',
@@ -1604,7 +1604,7 @@ OUTPUT RULES
   },
   {
     sectionKey: 'listOfNumerals',
-    aliases: ["list_of_numerals","numeralList","numeral_list","referenceNumerals","reference_numerals"],
+    aliases: ["list_of_numerals","numeralList","numeral_list","referenceNumerals","reference_numerals","reference_signs_list","referenceSignsList","reference_numerals_list"],
     displayOrder: 16,
     label: 'List of Reference Numerals',
     description: 'List of Reference Numerals section for patent specifications.',
@@ -1730,10 +1730,37 @@ OUTPUT RULES
   output a formal non-claim statement.`,
     constraints: ["List applications chronologically","Include application numbers and filing dates","Specify relationship type clearly","Use proper legal terminology"]
   },
+  {
+    sectionKey: 'citationList',
+    aliases: ["citation_list","priorArtReferences","prior_art_references"],
+    displayOrder: 18,
+    label: 'Citation List',
+    description: 'Citation List of prior-art documents referred to in the Background Art (used in some jurisdictions, e.g. JP 【先行技術文献】).',
+    isRequired: false,
+    requiresPriorArt: true,
+    requiresFigures: false,
+    requiresClaims: false,
+    requiresComponents: false,
+    instruction: `**Role:** Prior-Art Citation Cataloger.
+
+**Task:** List the prior-art documents referred to in the Background Art.
+
+**Format:**
+- Separate the list into Patent Literature and Non-Patent Literature.
+- Give each reference a complete, consistent citation (document number / bibliographic details).
+
+**Rules:**
+- List references only; do NOT characterise their relevance or the invention.
+- Include this section ONLY when prior-art documents are actually cited.
+- If no references are cited, output nothing for this section.`,
+    constraints: ["Separate Patent Literature and Non-Patent Literature","Cite each document fully and consistently","No commentary on relevance or the invention","Omit the section entirely if no references are cited"]
+  },
 ];
 
 // ============================================================================
-// COUNTRY SECTION MAPPINGS (hardcoded for key jurisdictions)
+// COUNTRY SECTION MAPPINGS (hardcoded fallback for jurisdictions WITHOUT a
+// JSON-derived structure; JSON-backed countries are derived from their
+// structure — see STRUCTURE_DERIVED_COUNTRIES / deriveMappingsFromProfile.)
 // ============================================================================
 const COUNTRY_MAPPINGS = {
   IN: [
@@ -1747,17 +1774,7 @@ const COUNTRY_MAPPINGS = {
     { supersetCode: '08. Claims', sectionKey: 'claims', heading: 'Claims', displayOrder: 8, isRequired: true },
     { supersetCode: '09. Abstract', sectionKey: 'abstract', heading: 'Abstract', displayOrder: 9, isRequired: true }
   ],
-  US: [
-    { supersetCode: '01. Title', sectionKey: 'title', heading: 'Title of Invention', displayOrder: 1, isRequired: true },
-    { supersetCode: '02. Cross-Reference', sectionKey: 'crossReference', heading: 'Cross-Reference to Related Applications', displayOrder: 2, isRequired: false },
-    { supersetCode: '03. Field of Invention', sectionKey: 'fieldOfInvention', heading: 'Technical Field', displayOrder: 3, isRequired: true },
-    { supersetCode: '04. Background', sectionKey: 'background', heading: 'Background of the Invention', displayOrder: 4, isRequired: true },
-    { supersetCode: '05. Summary', sectionKey: 'summary', heading: 'Summary of the Invention', displayOrder: 5, isRequired: true },
-    { supersetCode: '06. Brief Description of Drawings', sectionKey: 'briefDescriptionOfDrawings', heading: 'Brief Description of the Drawings', displayOrder: 6, isRequired: false },
-    { supersetCode: '07. Detailed Description', sectionKey: 'detailedDescription', heading: 'Detailed Description of Preferred Embodiments', displayOrder: 7, isRequired: true },
-    { supersetCode: '08. Claims', sectionKey: 'claims', heading: 'Claims', displayOrder: 8, isRequired: true },
-    { supersetCode: '09. Abstract', sectionKey: 'abstract', heading: 'Abstract of the Disclosure', displayOrder: 9, isRequired: true }
-  ],
+  // US, JP, AU are DERIVED from their JSON structure (see deriveMappingsFromProfile).
   EP: [
     { supersetCode: '01. Title', sectionKey: 'title', heading: 'Title of Invention', displayOrder: 1, isRequired: true },
     { supersetCode: '02. Field of Invention', sectionKey: 'fieldOfInvention', heading: 'Technical Field', displayOrder: 2, isRequired: true },
@@ -1792,31 +1809,13 @@ const COUNTRY_MAPPINGS = {
     { supersetCode: '07. Claims', sectionKey: 'claims', heading: 'Claims', displayOrder: 7, isRequired: true },
     { supersetCode: '08. Abstract', sectionKey: 'abstract', heading: 'Abstract', displayOrder: 8, isRequired: true }
   ],
-  AU: [
-    { supersetCode: '01. Title', sectionKey: 'title', heading: 'Title', displayOrder: 1, isRequired: true },
-    { supersetCode: '02. Field of Invention', sectionKey: 'fieldOfInvention', heading: 'Technical Field', displayOrder: 2, isRequired: true },
-    { supersetCode: '03. Background', sectionKey: 'background', heading: 'Background Art', displayOrder: 3, isRequired: true },
-    { supersetCode: '04. Summary', sectionKey: 'summary', heading: 'Summary of Invention', displayOrder: 4, isRequired: true },
-    { supersetCode: '05. Brief Description of Drawings', sectionKey: 'briefDescriptionOfDrawings', heading: 'Brief Description of Drawings', displayOrder: 5, isRequired: false },
-    // 'bestMethod' is the canonical key (matches SupersetSection and legacy DB column)
-    { supersetCode: '06. Best Method', sectionKey: 'bestMethod', heading: 'Best Method of Performing the Invention', displayOrder: 6, isRequired: true },
-    { supersetCode: '07. Claims', sectionKey: 'claims', heading: 'Claims', displayOrder: 7, isRequired: true },
-    { supersetCode: '08. Abstract', sectionKey: 'abstract', heading: 'Abstract', displayOrder: 8, isRequired: true }
-  ],
-  JP: [
-    { supersetCode: '01. Title', sectionKey: 'title', heading: 'Title of Invention', displayOrder: 1, isRequired: true },
-    { supersetCode: '02. Field of Invention', sectionKey: 'fieldOfInvention', heading: 'Technical Field', displayOrder: 2, isRequired: true },
-    { supersetCode: '03. Background', sectionKey: 'background', heading: 'Background Art', displayOrder: 3, isRequired: true },
-    { supersetCode: '04. Technical Problem', sectionKey: 'technicalProblem', heading: 'Problem to be Solved', displayOrder: 4, isRequired: true },
-    { supersetCode: '05. Technical Solution', sectionKey: 'technicalSolution', heading: 'Solution to Problem', displayOrder: 5, isRequired: true },
-    { supersetCode: '06. Advantageous Effects', sectionKey: 'advantageousEffects', heading: 'Advantageous Effects of Invention', displayOrder: 6, isRequired: true },
-    { supersetCode: '07. Brief Description of Drawings', sectionKey: 'briefDescriptionOfDrawings', heading: 'Brief Description of Drawings', displayOrder: 7, isRequired: false },
-    { supersetCode: '08. Detailed Description', sectionKey: 'detailedDescription', heading: 'Description of Embodiments', displayOrder: 8, isRequired: true },
-    { supersetCode: '09. Industrial Applicability', sectionKey: 'industrialApplicability', heading: 'Industrial Applicability', displayOrder: 9, isRequired: false },
-    { supersetCode: '10. Claims', sectionKey: 'claims', heading: 'Claims', displayOrder: 10, isRequired: true },
-    { supersetCode: '11. Abstract', sectionKey: 'abstract', heading: 'Abstract', displayOrder: 11, isRequired: true }
-  ]
+  // AU and JP are DERIVED from their JSON structure (see deriveMappingsFromProfile).
 };
+
+// Countries whose CountrySectionMapping sequence is derived from their JSON
+// `structure` (single source of truth) instead of the hardcoded map above.
+// IN is intentionally excluded — its production mapping is authoritative.
+const STRUCTURE_DERIVED_COUNTRIES = ['US', 'JP', 'AU'];
 
 // ============================================================================
 // UTILITY FUNCTIONS

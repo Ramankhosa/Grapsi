@@ -700,15 +700,22 @@ export default function GrantSectionDraftingStage({
   }, [authToken, draftingSessionId])
 
   const loadFigures = useCallback(async () => {
-    if (!authToken || !draftingSessionId) return
+    if (!authToken) return
     try {
-      const response = await fetch(`/api/papers/${draftingSessionId}/figures`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      })
-      if (!response.ok) return
-      const payload = await response.json().catch(() => ({}))
-      const nextFigures = Array.isArray(payload.figures)
-        ? payload.figures.map((figure: any): FigurePlan => ({
+      const [paperResponse, diagramResponse] = await Promise.all([
+        draftingSessionId
+          ? fetch(`/api/papers/${draftingSessionId}/figures`, {
+              headers: { Authorization: `Bearer ${authToken}` },
+            })
+          : Promise.resolve(null),
+        fetch(`/api/projects/${projectId}/grants/${grantId}/diagrams`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        }),
+      ])
+
+      const paperPayload = paperResponse?.ok ? await paperResponse.json().catch(() => ({})) : {}
+      const paperFigures = Array.isArray(paperPayload.figures)
+        ? paperPayload.figures.map((figure: any): FigurePlan => ({
             id: String(figure.id || ''),
             figureNo: Number(figure.figureNo || 0),
             title: String(figure.title || 'Figure'),
@@ -720,15 +727,42 @@ export default function GrantSectionDraftingStage({
             figureType: figure.figureType || figure.nodes?.figureType || 'auto',
           })).filter((figure: FigurePlan) => figure.id)
         : []
-      setFigures(nextFigures)
+
+      const diagramPayload = diagramResponse.ok ? await diagramResponse.json().catch(() => ({})) : {}
+      const grantDiagramFigures = Array.isArray(diagramPayload.diagrams)
+        ? diagramPayload.diagrams.map((diagram: any): FigurePlan => ({
+            id: String(diagram.id || ''),
+            figureNo: Number(diagram.figureNo || 0),
+            title: String(diagram.title || 'Diagram'),
+            caption: diagram.caption || undefined,
+            description: undefined,
+            imagePath: diagram.imageUrl || undefined,
+            status: diagram.status === 'READY' ? 'GENERATED' : diagram.status === 'FAILED' ? 'FAILED' : 'PLANNED',
+            category: 'DIAGRAM',
+            figureType: String(diagram.kind || 'diagram'),
+          })).filter((figure: FigurePlan) => figure.id)
+        : []
+
+      // Grant Diagram Studio figures share the [Figure N] numbering space with
+      // legacy figure-planner figures; on a collision the studio figure wins.
+      const byNo = new Map<number, FigurePlan>()
+      paperFigures.forEach((figure: FigurePlan) => {
+        if (figure.figureNo) byNo.set(figure.figureNo, figure)
+      })
+      grantDiagramFigures.forEach((figure: FigurePlan) => {
+        if (figure.figureNo) byNo.set(figure.figureNo, figure)
+      })
+      const merged = Array.from(byNo.values()).sort((a, b) => a.figureNo - b.figureNo)
+      setFigures(merged)
     } catch {
       // Panel data is auxiliary; the editor remains usable if this read fails.
     }
-  }, [authToken, draftingSessionId])
+  }, [authToken, draftingSessionId, grantId, projectId])
 
   useEffect(() => {
-    if (!draftingSessionId) return
-    void loadCitations()
+    if (draftingSessionId) {
+      void loadCitations()
+    }
     void loadFigures()
   }, [draftingSessionId, loadCitations, loadFigures])
 

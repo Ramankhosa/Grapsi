@@ -18,7 +18,7 @@ const nextConfig = {
   experimental: {
     webpackBuildWorker: true,
     optimizeCss: true,
-    serverComponentsExternalPackages: ['pdfjs-dist'],
+    serverComponentsExternalPackages: ['pdfjs-dist', '@resvg/resvg-js'],
   },
 
   // Webpack configuration to handle offline scenarios
