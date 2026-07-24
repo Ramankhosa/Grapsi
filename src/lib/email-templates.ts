@@ -72,6 +72,38 @@ export function tenantInviteTemplate(params: {
   return { subject: `${params.inviterName} invited you to ${params.tenantName} on ${brand.name}`, html, text }
 }
 
+/**
+ * Sent to a seeded account (created by a roster/bulk import with no password)
+ * so the person can set a password and log in. Backed by a password-reset token.
+ */
+export function activationTemplate(params: {
+  email: string
+  name?: string | null
+  tenantName: string
+  token: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/reset-password?token=${encodeURIComponent(params.token)}`
+  const html = `
+  <div style="font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 640px; margin: 0 auto; padding: 24px; background: #ffffff">
+    <div style="text-align:center; margin-bottom: 16px">
+      <div style="display:inline-block; background:${brand.primary}; color:#fff; padding:8px 12px; border-radius:12px; font-weight:600;">${brand.name}</div>
+    </div>
+    <h2 style="color:${brand.gray700}; margin: 12px 0 8px">Activate your ${params.tenantName} account</h2>
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">An account has been created for you at <strong>${params.tenantName}</strong> on ${brand.name}. Set your password below to activate <strong>${params.email}</strong> and sign in.</p>
+    <div style="margin:24px 0">
+      <a href="${url}" style="background:${brand.primary}; color:#fff; text-decoration:none; padding:12px 20px; border-radius:10px; display:inline-block; font-weight:600">Set Password</a>
+    </div>
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>
+    <p style="color:${brand.gray500}; font-size:12px">This link expires in 1 hour. You can request a fresh one any time from the sign-in page via "Forgot password".</p>
+  </div>`
+  const text = `Hi ${displayName}, an account was created for you at ${params.tenantName} on ${brand.name}. Set your password to activate ${params.email}: ${url} (expires in 1 hour)`
+  return { subject: `Activate your ${params.tenantName} account on ${brand.name}`, html, text }
+}
+
 export function resetTemplate(email: string, name: string | null | undefined, token: string) {
   const displayName = friendlyName(email, name)
   const url = `${SITE_URL}/reset-password?token=${encodeURIComponent(token)}`
