@@ -106,7 +106,12 @@ export default function FinalReviewProcess() {
       
       const response = await axios.post(`/api/reviewer/calls/${id}/generate-all-context-summaries`);
       
-      addLog(`Successfully generated ${response.data.success_count} context summaries.`);
+      const { success_count: ready = 0, derived_count: derived = 0 } = response.data;
+      addLog(
+        derived > 0
+          ? `Prepared ${ready} context summaries (${derived} derived without a model call, since no later section reads them).`
+          : `Successfully generated ${ready} context summaries.`
+      );
       
       // Refresh the page data
       await initializeProcess();

@@ -27,6 +27,7 @@ async function executeConfiguredGrantReviewerReview(input: {
   requestHeaders?: Record<string, string | string[] | undefined>;
   tenantContext?: any;
   stageCode?: string;
+  promptCacheKey?: string;
 }) {
   const request = input.tenantContext
     ? { tenantContext: input.tenantContext }
@@ -41,10 +42,20 @@ async function executeConfiguredGrantReviewerReview(input: {
     stageCode: input.stageCode || GRANT_REVIEWER_FULL_REVIEW_STAGE,
     prompt: input.prompt,
     inputTokens: Math.ceil(input.prompt.length / 4),
-    parameters: { temperature: 0.2 },
+    parameters: {
+      temperature: 0.2,
+      // Every section of one funding call shares an identical prompt prefix
+      // (persona, call context, global rules, output schema). Caching it means
+      // only the section-specific tail is billed at full rate after the first
+      // review in a workspace.
+      ...(input.promptCacheKey
+        ? { prompt_cache_key: input.promptCacheKey, prompt_cache_retention: '24h' }
+        : {}),
+    },
     metadata: {
       skipFeaturePolicy: true,
       operation: 'grant_reviewer_full_review',
+      ...(input.promptCacheKey ? { promptCacheKey: input.promptCacheKey } : {}),
     },
     idempotencyKey: `grant-reviewer-full-review-${crypto.randomUUID()}`,
   });
@@ -353,6 +364,57 @@ function formatRuleList(title: string, rules: string[], fallback: string): strin
   return `${title}:\n${rules.length > 0 ? rules.map((rule) => `- ${rule}`).join('\n') : `- ${fallback}`}`;
 }
 
+/**
+ * Stable cache key for the call-wide prompt prefix. Identical prefix bytes
+ * across sections produce the same key, so the provider can serve the persona,
+ * call context, global rules, and response schema from cache after the first
+ * section review in a workspace.
+ */
+function promptPrefixCacheKey(prefix: string): string {
+  return crypto.createHash('sha256').update(prefix).digest('hex').slice(0, 32);
+}
+
+/**
+ * A full prior review JSON is mostly prose the model does not need again.
+ * Re-sending only what the revision is judged against keeps revision reviews
+ * from costing noticeably more than first-pass reviews.
+ */
+function summarizePreviousReview(reviewJson: any): string {
+  if (!reviewJson || typeof reviewJson !== 'object') return 'No previous review is available.';
+
+  const lines = [
+    typeof reviewJson.score === 'number' ? `Score: ${reviewJson.score}` : '',
+    ...dedupeStrings(reviewJson.weaknesses || [], 8).map((item) => `Weakness: ${item}`),
+    ...dedupeStrings(reviewJson.suggestions || reviewJson.recommendations || [], 8).map(
+      (item) => `Suggestion: ${item}`
+    ),
+  ].filter(Boolean);
+
+  return lines.length > 0 ? lines.join('\n') : 'The previous review recorded no weaknesses or suggestions.';
+}
+
+/**
+ * Which sections are actually consumed as review context by some other
+ * section. Only these need a pre-generated context summary; generating one for
+ * a section nothing depends on (a Conclusion, an IP annexure) is a paid call
+ * whose output is never read.
+ */
+export function selectContextProviderTitles(sectionTitles: string[]): Set<string> {
+  const needed = new Set<string>();
+
+  for (const title of sectionTitles) {
+    const candidates = sectionTitles
+      .filter((other) => other !== title)
+      .map((other) => ({ section_title: other, context_summary: '' }));
+
+    for (const relevant of filterRelevantContextSummaries(title, candidates)) {
+      needed.add(relevant.section_title);
+    }
+  }
+
+  return needed;
+}
+
 function normalizeSectionRecommendations(reviewJson: any, scope: any): any[] {
   const validKeys = new Set((scope.linkedSectionKeys || []).map((key: string) => normalizeKey(key)));
   const raw = Array.isArray(reviewJson?.section_recommendations) ? reviewJson.section_recommendations : [];
@@ -388,6 +450,101 @@ function normalizeSectionRecommendations(reviewJson: any, scope: any): any[] {
     autoFixable: true,
     linkedRuleKeys: [],
   }));
+}
+
+const COMPLIANCE_STATUSES = new Set(['met', 'partial', 'missing', 'unverifiable']);
+const ADDRESSED_STATUSES = new Set(['addressed', 'partially', 'not_addressed']);
+
+export interface AddressedPreviousPoint {
+  point: string;
+  status: 'addressed' | 'partially' | 'not_addressed';
+  evidence: string;
+}
+
+/**
+ * The revision review's account of what happened to each earlier remark. This
+ * is what lets the UI show "4 of 6 previous points resolved" without a second
+ * comparison call.
+ */
+export function normalizeAddressedPreviousPoints(value: unknown): AddressedPreviousPoint[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const next: AddressedPreviousPoint[] = [];
+
+  for (const item of value) {
+    const point = String((item as any)?.point || (item as any)?.issue || '').trim();
+    if (!point) continue;
+    const key = point.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const status = String((item as any)?.status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    next.push({
+      point,
+      status: (ADDRESSED_STATUSES.has(status) ? status : 'partially') as AddressedPreviousPoint['status'],
+      evidence: String((item as any)?.evidence || '').trim(),
+    });
+  }
+
+  return next.slice(0, 20);
+}
+
+export function summarizeAddressedPoints(points: AddressedPreviousPoint[]) {
+  return {
+    total: points.length,
+    addressed: points.filter((point) => point.status === 'addressed').length,
+    partially: points.filter((point) => point.status === 'partially').length,
+    notAddressed: points.filter((point) => point.status === 'not_addressed').length,
+  };
+}
+
+/**
+ * Per-criterion scores let the final report show a panel-style scorecard
+ * instead of one opaque number. Anything without a criterion label or a usable
+ * score is dropped rather than guessed at.
+ */
+export function normalizeCriterionScores(value: unknown): Array<{ criterion: string; score: number; evidence: string }> {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const next: Array<{ criterion: string; score: number; evidence: string }> = [];
+
+  for (const item of value) {
+    const criterion = String((item as any)?.criterion || (item as any)?.label || '').trim();
+    if (!criterion) continue;
+    const key = criterion.toLowerCase();
+    if (seen.has(key)) continue;
+
+    const raw = (item as any)?.score;
+    const score = typeof raw === 'number' ? raw : Number.parseFloat(String(raw ?? ''));
+    if (!Number.isFinite(score)) continue;
+
+    seen.add(key);
+    next.push({
+      criterion,
+      score: Math.max(0, Math.min(10, score)),
+      evidence: String((item as any)?.evidence || '').trim(),
+    });
+  }
+
+  return next.slice(0, 12);
+}
+
+export function normalizeComplianceFlags(value: unknown): Array<{ rule: string; status: string; detail: string }> {
+  if (!Array.isArray(value)) return [];
+  const next: Array<{ rule: string; status: string; detail: string }> = [];
+
+  for (const item of value) {
+    const rule = String((item as any)?.rule || '').trim();
+    if (!rule) continue;
+    const status = String((item as any)?.status || '').trim().toLowerCase();
+    next.push({
+      rule,
+      status: COMPLIANCE_STATUSES.has(status) ? status : 'unverifiable',
+      detail: String((item as any)?.detail || '').trim(),
+    });
+  }
+
+  return next.slice(0, 20);
 }
 
 // Get section position in the logical review flow
@@ -499,7 +656,10 @@ export function filterRelevantContextSummaries(
  */
 export async function reviewSection(input: ReviewInput): Promise<ReviewResult> {
   const { section, previousSection, contextSection, priorSectionSummaries, callData, modelType } = input;
-  const isRevision = section.is_revision && previousSection;
+  // Presence of a reviewed earlier draft is what makes this a revision review.
+  // Relying on the `is_revision` flag alone silently skipped the comparison for
+  // sections that were re-submitted without the UI labelling them revisions.
+  const isRevision = Boolean(previousSection?.ai_review_json);
 
   if (!hasMeaningfulSectionContent(section.user_input)) {
     throw new Error('Section has no meaningful content to review');
@@ -510,12 +670,12 @@ export async function reviewSection(input: ReviewInput): Promise<ReviewResult> {
   const callSummary = callData.reviewer_context_text || callData.call_summary || callData.agency_name || "Funding opportunity";
   const thrustAreas = Array.isArray(callData.thrust_areas) ? callData.thrust_areas.join(', ') : callData.thrust_areas || 'Not specified';
   const promptScope = buildReviewerPromptScope(section, callData);
-  const scopedRulesText = [
-    formatRuleList('SECTION_SCORING_RULES', promptScope.sectionRules, 'No section-specific rules were mapped. Use the global scoring rules where assessable from the provided draft.'),
+  const sectionRulesText = formatRuleList('SECTION_SCORING_RULES', promptScope.sectionRules, 'No section-specific rules were mapped. Use the global scoring rules where assessable from the provided draft.');
+  const callWideRulesText = [
     formatRuleList('GLOBAL_SCORING_RULES', promptScope.globalRules, 'No global scoring rules were provided. Score using reviewer judgment and the provided funding call context.'),
     formatRuleList('NON_SCORING_SUPPLEMENTARY_REQUIREMENTS', promptScope.supplementaryRules, 'No supplementary non-scoring requirements were identified.'),
   ].join('\n\n');
-  
+
   // Prepare the prompt based on whether this is a revision or new section
   const systemPrompt = `You are a senior grant reviewer entrusted with evaluating very competitive research proposals for funding agencies in fields related to "${projectTitle}". Your mindset combines critical thinking, fairness, and a focus on real-world impact. You are not just checking language—you assess alignment, logic, feasibility, and value-for-money from the perspective of a funder deciding whether this project is worth investing in.
 
@@ -535,8 +695,6 @@ Do not be lenient for weak sections. Proposals that sound nice but lack specific
 
 You must be professional and precise. You do not guess — cite only what is provided. Return the results in structured JSON.`;
 
-  let userPrompt: string;
-  
   // Format prior section summaries if available in a more structured manner
   let priorSummariesText = '';
   if (priorSectionSummaries && priorSectionSummaries.length > 0) {
@@ -545,19 +703,21 @@ Use these summaries only to understand continuity, cross-section commitments, an
 
 ${priorSectionSummaries.map(s => `- **${s.section_title}**: ${s.context_summary}`).join('\n\n')}`;
   }
-  
+
   // Include classic context summary if available (for backward compatibility)
-  const contextSummaryText = contextSection?.context_summary && !priorSectionSummaries ? 
+  const contextSummaryText = contextSection?.context_summary && !priorSectionSummaries ?
     `### NON-SCORING CONTEXT FROM RELATED SECTION
 Use this summary only to understand continuity and consistency. It is not evidence for scoring the current section.
-    
-- **${contextSection.section_title}**: ${contextSection.context_summary}` : '';
-  
-  if (isRevision) {
-    // For revision reviews
-    userPrompt = `You are reviewing a revised version of the [${section.section_title}] section of a grant proposal titled "${projectTitle}". Below is the updated section content, and below that is the AI-generated review of the earlier version.
 
-Evaluate if the user has addressed earlier weaknesses and suggestions. Provide a new review in structured JSON format. Indicate if the revision shows meaningful improvement.
+- **${contextSection.section_title}**: ${contextSection.context_summary}` : '';
+
+  // ---------------------------------------------------------------------
+  // Prompt is split into a call-stable prefix and a section-specific tail.
+  // The prefix is byte-identical for every section of the same funding call,
+  // which is what makes provider prompt caching pay off across a workspace.
+  // Nothing section-specific may move above `stablePrefix`.
+  // ---------------------------------------------------------------------
+  const stablePrefix = `${systemPrompt}
 
 ### PROJECT TITLE
 ${projectTitle}
@@ -566,91 +726,78 @@ ${projectTitle}
 ${callSummary}
 Focus Areas: ${thrustAreas}
 
-### REVIEW SCOPE AND RULES
-${scopedRulesText}
+### CALL-WIDE REVIEW RULES
+${callWideRulesText}
 
 Scoring rule: SECTION_SCORING_RULES and GLOBAL_SCORING_RULES may affect the score only when they are assessable from the provided draft text. NON_SCORING_SUPPLEMENTARY_REQUIREMENTS must be reported as reminders only and must not reduce this section score.
+
+### RESPONSE FORMAT
+Respond with JSON in the following format:
+{
+  "score": (number between 1.0-10.0),
+  "summary": (1-2 paragraph summary of evaluation),
+  "strengths": [(array of specific strengths)],
+  "weaknesses": [(array of specific weaknesses)],
+  "suggestions": [(array of actionable suggestions for improvement)],
+  "linked_section_feedback": [{"sectionKey": "grant section key when visible in headings", "feedback": "specific feedback for that linked draft section"}],
+  "rules_used_for_scoring": [(array of section or global rules actually used to assign this score)],
+  "global_rules_considered": [(array of global rules considered when assessable from the draft)],
+  "non_scoring_reminders": [(array of reminders from NON_SCORING_SUPPLEMENTARY_REQUIREMENTS)],
+  "criterion_scores": [{"criterion": "evaluation criterion this section speaks to", "score": (1.0-10.0), "evidence": "the specific claim or sentence in the draft that justifies it"}],
+  "compliance_flags": [{"rule": "the stated rule", "status": "met|partial|missing|unverifiable", "detail": "one line of evidence"}],
+  "section_recommendations": [{"sectionKey": "one of the linked section keys", "priority": "high|medium|low", "issue": "specific issue", "recommendation": "specific fix", "suggestedRemark": "instruction that can be passed to drafting regeneration", "autoFixable": true, "linkedRuleKeys": ["rule key or label"]}],
+  "supplementary_materials": [(array of most important non-reviewed materials the user should prepare separately)],
+  "addressed_previous_points": [{"point": "the earlier weakness or suggestion, quoted or closely paraphrased", "status": "addressed|partially|not_addressed", "evidence": "what in the new draft settles it, or what is still missing"}],
+  "improvement_over_previous": (true/false boolean; include only when a previous version is supplied),
+  "context_summary": (factual non-scoring continuity summary of this section for future LLM use, explicit facts/commitments only, < 200 tokens)
+}
+
+For criterion_scores, only include criteria this section can actually evidence; do not score a criterion the section is not responsible for.
+For compliance_flags, use "unverifiable" when the rule concerns material outside the reviewed text rather than penalizing the section.
+Fill addressed_previous_points only when a PREVIOUS REVIEW block is supplied, and then cover every weakness and suggestion it lists — one entry each, no omissions. Leave it empty otherwise.
+For section_recommendations, set autoFixable=true only when the fix can be handled by regenerating the linked section text. Set autoFixable=false for recommendations that require user decisions, attachments, institutional documents, external forms, missing data the model cannot invent, or cross-section coordination outside this section.`;
+
+  const sectionTail = isRevision
+    ? `### TASK
+You are reviewing a revised version of the [${section.section_title}] section (version ${section.version ?? 2}, revised from version ${previousSection?.version ?? 1}).
+
+Score this draft on its own merits — do not carry the previous score forward, and do not award marks for effort. Then account for every point the previous review raised in addressed_previous_points, and set improvement_over_previous based on whether the substantive weaknesses are genuinely resolved, not on whether the text merely changed.
+
+### SECTION_SCORING_RULES
+${sectionRulesText}
 
 ${priorSummariesText || contextSummaryText}
 
 ### CURRENT SECTION: ${section.section_title}
 ${section.user_input}
 
-### PREVIOUS AI REVIEW
-${JSON.stringify(previousSection?.ai_review_json, null, 2)}
+### PREVIOUS REVIEW OF THIS SECTION
+${summarizePreviousReview(previousSection?.ai_review_json)}`
+    : `### TASK
+Review the [${section.section_title}] section below and return the critical evaluation as JSON.
 
-Respond with JSON in the following format:
-{
-  "score": (number between 1.0-10.0),
-  "summary": (1-2 paragraph summary of evaluation),
-  "strengths": [(array of specific strengths)],
-  "weaknesses": [(array of specific weaknesses)],
-  "suggestions": [(array of actionable suggestions for improvement)],
-  "linked_section_feedback": [{"sectionKey": "grant section key when visible in headings", "feedback": "specific feedback for that linked draft section"}],
-  "rules_used_for_scoring": [(array of section or global rules actually used to assign this score)],
-  "global_rules_considered": [(array of global rules considered when assessable from the draft)],
-  "non_scoring_reminders": [(array of reminders from NON_SCORING_SUPPLEMENTARY_REQUIREMENTS)],
-  "section_recommendations": [{"sectionKey": "one of the linked section keys", "priority": "high|medium|low", "issue": "specific issue", "recommendation": "specific fix", "suggestedRemark": "instruction that can be passed to drafting regeneration", "autoFixable": true, "linkedRuleKeys": ["rule key or label"]}],
-  "supplementary_materials": [(array of most important non-reviewed materials the user should prepare separately)],
-  "improvement_over_previous": (true/false boolean),
-  "context_summary": (factual non-scoring continuity summary of this section for future LLM use, explicit facts/commitments only, < 200 tokens)
-}
-
-For section_recommendations, set autoFixable=true only when the fix can be handled by regenerating the linked section text. Set autoFixable=false for recommendations that require user decisions, attachments, institutional documents, external forms, missing data the model cannot invent, or cross-section coordination outside this section.`;
-  } else {
-    // For new section reviews
-    userPrompt = `Review the following [${section.section_title}] section of a grant proposal titled "${projectTitle}". Provide a critical evaluation in structured JSON format.
-
-### PROJECT TITLE
-${projectTitle}
-
-### FUNDING CALL CONTEXT
-${callSummary}
-Focus Areas: ${thrustAreas}
-
-### REVIEW SCOPE AND RULES
-${scopedRulesText}
-
-Scoring rule: SECTION_SCORING_RULES and GLOBAL_SCORING_RULES may affect the score only when they are assessable from the provided draft text. NON_SCORING_SUPPLEMENTARY_REQUIREMENTS must be reported as reminders only and must not reduce this section score.
+### SECTION_SCORING_RULES
+${sectionRulesText}
 
 ${priorSummariesText || contextSummaryText}
 
 ### SECTION TO REVIEW: ${section.section_title}
-${section.user_input}
+${section.user_input}${contextSection && !priorSectionSummaries ? `
 
-${contextSection && !priorSectionSummaries ? `
-### PREVIOUS SECTION REVIEW
-For context, here's the review of the ${contextSection.section_title} section:
-${JSON.stringify(contextSection.ai_review_json, null, 2)}` : ''}
+### EARLIER REVIEW OF ${contextSection.section_title}
+${summarizePreviousReview(contextSection.ai_review_json)}` : ''}`;
 
-Respond with JSON in the following format:
-{
-  "score": (number between 1.0-10.0),
-  "summary": (1-2 paragraph summary of evaluation),
-  "strengths": [(array of specific strengths)],
-  "weaknesses": [(array of specific weaknesses)],
-  "suggestions": [(array of actionable suggestions for improvement)],
-  "linked_section_feedback": [{"sectionKey": "grant section key when visible in headings", "feedback": "specific feedback for that linked draft section"}],
-  "rules_used_for_scoring": [(array of section or global rules actually used to assign this score)],
-  "global_rules_considered": [(array of global rules considered when assessable from the draft)],
-  "non_scoring_reminders": [(array of reminders from NON_SCORING_SUPPLEMENTARY_REQUIREMENTS)],
-  "section_recommendations": [{"sectionKey": "one of the linked section keys", "priority": "high|medium|low", "issue": "specific issue", "recommendation": "specific fix", "suggestedRemark": "instruction that can be passed to drafting regeneration", "autoFixable": true, "linkedRuleKeys": ["rule key or label"]}],
-  "supplementary_materials": [(array of most important non-reviewed materials the user should prepare separately)],
-  "context_summary": (factual non-scoring continuity summary of this section for future LLM use, explicit facts/commitments only, < 200 tokens)
-}
+  const userPrompt = sectionTail;
+  const gatewayPrompt = `${stablePrefix}\n\n${sectionTail}`;
 
-For section_recommendations, set autoFixable=true only when the fix can be handled by regenerating the linked section text. Set autoFixable=false for recommendations that require user decisions, attachments, institutional documents, external forms, missing data the model cannot invent, or cross-section coordination outside this section.`;
-  }
-
-  // Choose the appropriate service based on modelType
   let responseText: string | null = null;
-  const gatewayPrompt = systemPrompt + '\n\n' + userPrompt;
 
   responseText = await executeConfiguredGrantReviewerReview({
     prompt: gatewayPrompt,
     requestHeaders: input.requestHeaders,
     tenantContext: input.tenantContext,
     stageCode: input.stageCode,
+    promptCacheKey: `reviewer:section-review:${promptPrefixCacheKey(stablePrefix)}`,
   });
 
   if (!responseText && modelType === 'O') {
@@ -705,15 +852,29 @@ For section_recommendations, set autoFixable=true only when the fix can be handl
       ? normalizeStringArray(reviewJson.supplementary_materials)
       : promptScope.nonScoringReminders;
     reviewJson.section_recommendations = normalizeSectionRecommendations(reviewJson, promptScope);
-    
+    reviewJson.criterion_scores = normalizeCriterionScores(reviewJson.criterion_scores);
+    reviewJson.compliance_flags = normalizeComplianceFlags(reviewJson.compliance_flags);
+    reviewJson.addressed_previous_points = isRevision
+      ? normalizeAddressedPreviousPoints(reviewJson.addressed_previous_points)
+      : [];
+
     // For revisions, determine improvement
-    const isImprovement = isRevision ? 
-      (reviewJson.improvement_over_previous === true || 
-       (reviewJson.score > (previousSection?.ai_review_json?.score || 0))) : 
-      false;
-    
+    const previousScore = typeof previousSection?.ai_review_json?.score === 'number'
+      ? previousSection.ai_review_json.score
+      : null;
+    const isImprovement = isRevision
+      ? (reviewJson.improvement_over_previous === true
+        || (previousScore !== null && reviewJson.score > previousScore))
+      : false;
+
     if (isRevision) {
-      reviewJson.improvement_over_previous = reviewJson.improvement_over_previous === true || isImprovement;
+      reviewJson.improvement_over_previous = isImprovement;
+      reviewJson.revision_of_version = previousSection?.version ?? null;
+      reviewJson.previous_score = previousScore;
+      reviewJson.score_delta = previousScore !== null
+        ? Number((reviewJson.score - previousScore).toFixed(2))
+        : null;
+      reviewJson.addressed_summary = summarizeAddressedPoints(reviewJson.addressed_previous_points);
     }
 
     return {

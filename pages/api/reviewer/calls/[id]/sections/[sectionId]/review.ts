@@ -5,14 +5,15 @@ import {
   requireReviewerCallAccess,
 } from '@/lib/reviewer-auth-api';
 import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService';
-import { hasMeaningfulSectionContent, parseReviewerScore } from '@/lib/reviewer/content';
+import { buildFallbackContextSummary, hasMeaningfulSectionContent, parseReviewerScore } from '@/lib/reviewer/content';
 import prisma from '../../../../../../../lib/prisma';
-import { 
-  reviewSection, 
-  getSectionPosition, 
-  SECTION_ORDER, 
+import {
+  reviewSection,
+  getSectionPosition,
+  SECTION_ORDER,
   SECTION_DEPENDENCIES,
-  filterRelevantContextSummaries
+  filterRelevantContextSummaries,
+  selectContextProviderTitles
 } from '../../../../../../../lib/reviewerService';
 import { ContextSummaryService } from '../../../../../../../lib/services/contextSummaryService';
 import { ReviewerService } from '../../../../../../../lib/services/reviewerService';
@@ -116,23 +117,45 @@ export default async function handler(
     
     console.log(`Using ${useTemplateBackedReviewer ? 'configured Grant Reviewer full-review model' : 'legacy specialized reviewer model'} for review of ${section.section_title}`);
     
-    // If this is a revision, get the previous section's review
+    // If this is a revision, get the previous section's review. The explicit
+    // previous_section_id is authoritative — it records the draft the user
+    // chose to revise, which is not always the highest earlier version.
     let previousSection = null;
-    
-    if (section.version && section.version > 1) {
+
+    if (section.previous_section_id) {
+      const linked = await prisma.$queryRaw`
+        SELECT * FROM "reviewer_sections"
+        WHERE id = ${section.previous_section_id} AND call_id = ${callId}
+      `;
+      if (Array.isArray(linked) && linked.length > 0) {
+        previousSection = linked[0];
+      }
+    }
+
+    if (!previousSection && section.version && section.version > 1) {
       const prevSections = await prisma.$queryRaw`
-        SELECT * FROM "reviewer_sections" 
-        WHERE call_id = ${callId} 
+        SELECT * FROM "reviewer_sections"
+        WHERE call_id = ${callId}
         AND section_title = ${section.section_title}
         AND version < ${section.version}
         ORDER BY version DESC
         LIMIT 1
       `;
-      
+
       if (Array.isArray(prevSections) && prevSections.length > 0) {
         previousSection = prevSections[0];
-        console.log(`Found previous version of section: ${previousSection.section_title} (version ${previousSection.version})`);
       }
+    }
+
+    // A reviewed earlier draft is what makes this a revision review; an
+    // unreviewed one carries no remarks to compare against.
+    if (previousSection && previousSection.status !== 'reviewed') {
+      console.log(`Previous version of ${section.section_title} was never reviewed; treating this as a first review.`);
+      previousSection = null;
+    }
+
+    if (previousSection) {
+      console.log(`Found previous version of section: ${previousSection.section_title} (version ${previousSection.version})`);
     }
     
     // Get relevant context from other sections
@@ -636,21 +659,35 @@ export default async function handler(
       // Extract the context summary from the review result or generate if not available
       let contextSummary = reviewResult.review.context_summary;
       if (!contextSummary || contextSummary === "Not Available") {
-        // Generate a context summary if one wasn't included in the review
-        try {
-          console.log(`Generating separate context summary for ${section.section_title} using Grant Reviewer context-summary model`);
-          const contextSummaryService = new ContextSummaryService({
-            requestHeaders: req.headers,
-            stageCode: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
-          });
-          contextSummary = await contextSummaryService.generateContextSummary(
-            section.section_title,
-            section.user_input,
-            'G'
-          );
-        } catch (error) {
-          console.error('Error generating context summary:', error);
-          contextSummary = 'Not Available';
+        // The review normally returns its own context_summary. Only pay for a
+        // separate summarisation call when another section will actually read
+        // this one as review context; otherwise fall back to the draft's own
+        // opening, which is all the reviewer would use it for.
+        const siblingTitles: any[] = await prisma.$queryRaw`
+          SELECT section_title FROM "reviewer_sections" WHERE call_id = ${callId}
+        `;
+        const isContextProvider = selectContextProviderTitles(
+          (Array.isArray(siblingTitles) ? siblingTitles : []).map((row: any) => row.section_title)
+        ).has(section.section_title);
+
+        if (isContextProvider) {
+          try {
+            console.log(`Generating separate context summary for ${section.section_title} using Grant Reviewer context-summary model`);
+            const contextSummaryService = new ContextSummaryService({
+              requestHeaders: req.headers,
+              stageCode: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
+            });
+            contextSummary = await contextSummaryService.generateContextSummary(
+              section.section_title,
+              section.user_input,
+              'G'
+            );
+          } catch (error) {
+            console.error('Error generating context summary:', error);
+            contextSummary = 'Not Available';
+          }
+        } else {
+          contextSummary = buildFallbackContextSummary(section.user_input) || 'Not Available';
         }
       }
       

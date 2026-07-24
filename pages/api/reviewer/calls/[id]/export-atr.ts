@@ -34,7 +34,34 @@ interface OverallReviewJson {
   major_strengths: string[];
   major_weaknesses: string[];
   cross_sectional_recommendations: string[];
+  funding_recommendation?: { decision: string; competitiveness: string; rationale: string } | null;
+  compliance?: {
+    requiredSections?: { covered: string[]; missing: string[]; coveragePercent: number };
+    limits?: Array<{ section: string; limit: number; unit: string; actual: number; status: string }>;
+    deadline?: { date: string | null; daysRemaining: number | null; status: string };
+  } | null;
+  priority_actions?: Array<{
+    rank: number;
+    section: string;
+    action: string;
+    impact: string;
+    effort: string;
+  }>;
 }
+
+const DECISION_LABELS: Record<string, string> = {
+  fund: 'Fund',
+  fund_with_revisions: 'Fund with revisions',
+  revise_and_resubmit: 'Revise and resubmit',
+  do_not_fund: 'Do not fund',
+};
+
+const COMPETITIVENESS_LABELS: Record<string, string> = {
+  top_tier: 'Top tier',
+  competitive: 'Competitive',
+  borderline: 'Borderline',
+  not_competitive: 'Not competitive',
+};
 
 // Global Style Configuration
 const Styles = {
@@ -160,6 +187,83 @@ async function generateATRDocument(
     })
   );
 
+  // Reviewer verdict, when the report carries one
+  const fundingRecommendation = (overallReview as any).funding_recommendation;
+  if (fundingRecommendation?.decision) {
+    children.push(
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: `Reviewer verdict: ${DECISION_LABELS[fundingRecommendation.decision] || fundingRecommendation.decision}`,
+            bold: true,
+            size: 26,
+            color: "1F4E79",
+          }),
+          new TextRun({
+            text: `   (${COMPETITIVENESS_LABELS[fundingRecommendation.competitiveness] || fundingRecommendation.competitiveness})`,
+            size: 22,
+            color: "4A5568",
+          }),
+        ],
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 120 },
+      })
+    );
+    if (fundingRecommendation.rationale) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: fundingRecommendation.rationale, size: 22, italics: true })],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 240 },
+        })
+      );
+    }
+  }
+
+  // Compliance facts, which are counted rather than judged
+  const compliance = (overallReview as any).compliance;
+  if (compliance) {
+    const complianceLines: string[] = [];
+    if (compliance.requiredSections) {
+      complianceLines.push(
+        `Required sections drafted: ${compliance.requiredSections.coveragePercent}%${
+          compliance.requiredSections.missing?.length
+            ? ` — missing: ${compliance.requiredSections.missing.join('; ')}`
+            : ''
+        }`
+      );
+    }
+    const breaches = (compliance.limits || []).filter((limit: any) => limit.status !== 'within');
+    if (breaches.length > 0) {
+      complianceLines.push(
+        `Length limits: ${breaches
+          .map((limit: any) => `${limit.section} at ${limit.actual} of ${limit.limit} ${limit.unit}`)
+          .join('; ')}`
+      );
+    }
+    if (compliance.deadline?.date) {
+      complianceLines.push(
+        `Deadline: ${String(compliance.deadline.date).slice(0, 10)}${
+          compliance.deadline.status === 'passed'
+            ? ' (passed)'
+            : ` (${compliance.deadline.daysRemaining} days remaining)`
+        }`
+      );
+    }
+
+    for (const line of complianceLines) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: line, size: 22 })],
+          spacing: { after: 80 },
+        })
+      );
+    }
+    if (complianceLines.length > 0) {
+      children.push(new Paragraph({ text: "", spacing: { after: 160 } }));
+    }
+  }
+
   // Introduction text with background
   children.push(
     new Paragraph({
@@ -176,6 +280,45 @@ async function generateATRDocument(
       },
     })
   );
+
+  // Ranked fixes, so the ATR opens with the highest-leverage work
+  const priorityActions = (overallReview as any).priority_actions;
+  if (Array.isArray(priorityActions) && priorityActions.length > 0) {
+    children.push(
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: "Priority Actions (highest impact first)",
+            bold: true,
+            size: Styles.heading2.size,
+            color: Styles.heading2.color,
+          })
+        ],
+        heading: HeadingLevel.HEADING_2,
+        spacing: Styles.heading2.spacing,
+      })
+    );
+
+    for (const action of priorityActions) {
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: `${action.rank}. ${action.section ? `[${action.section}] ` : ''}${action.action}`,
+              size: 24,
+            }),
+            new TextRun({
+              text: `  (${action.impact} impact, ${action.effort} effort)`,
+              size: 20,
+              color: "6B7280",
+            }),
+          ],
+          spacing: { after: 100 },
+        })
+      );
+    }
+    children.push(new Paragraph({ text: "", spacing: { after: 160 } }));
+  }
 
   // 1. Overall Weaknesses and Recommendations
   children.push(
@@ -677,13 +820,19 @@ export default async function handler(
         const reviewJson = call.overall_review_json as any;
         
         overallReview = {
-          overall_score: typeof reviewJson.overall_score === 'number' ? reviewJson.overall_score : 
+          overall_score: typeof reviewJson.overall_score === 'number' ? reviewJson.overall_score :
                       typeof reviewJson.overall_score === 'string' ? parseFloat(reviewJson.overall_score) : 0,
           executive_summary: typeof reviewJson.executive_summary === 'string' ? reviewJson.executive_summary : '',
           major_strengths: Array.isArray(reviewJson.major_strengths) ? reviewJson.major_strengths : [],
           major_weaknesses: Array.isArray(reviewJson.major_weaknesses) ? reviewJson.major_weaknesses : [],
-          cross_sectional_recommendations: Array.isArray(reviewJson.cross_sectional_recommendations) ? 
-                                        reviewJson.cross_sectional_recommendations : []
+          cross_sectional_recommendations: Array.isArray(reviewJson.cross_sectional_recommendations) ?
+                                        reviewJson.cross_sectional_recommendations : [],
+          // Carried through so the document can open with the verdict, the
+          // computed compliance facts, and the ranked fixes. Reports generated
+          // before these existed simply omit those blocks.
+          funding_recommendation: reviewJson.funding_recommendation || null,
+          compliance: reviewJson.compliance || null,
+          priority_actions: Array.isArray(reviewJson.priority_actions) ? reviewJson.priority_actions : [],
         };
       } catch (e) {
         console.error('Error parsing overall review JSON:', e);

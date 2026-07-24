@@ -6,7 +6,8 @@ import {
 } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../../../lib/prisma';
 import { ContextSummaryService } from '../../../../../../../lib/services/contextSummaryService';
-import { hasMeaningfulSectionContent } from '@/lib/reviewer/content';
+import { selectContextProviderTitles } from '../../../../../../../lib/reviewerService';
+import { buildFallbackContextSummary, hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 
 function isUsableContextSummary(value: unknown): boolean {
   const text = String(value || '').trim();
@@ -98,31 +99,50 @@ export default async function handler(
       });
     }
     
-    const model = call.LLM_model_used || 'G'; // Default to Gemini if not specified
-    const contextSummaryService = new ContextSummaryService({
-      requestHeaders: req.headers,
-      stageCode: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
-    });
-    
-    // Generate context summary
-    const contextSummary = await contextSummaryService.generateContextSummary(
-      section.section_title,
-      section.user_input,
-      model as 'O' | 'G'
-    );
-    
+    // A context summary only earns its cost when a *later* section reads it as
+    // review context. For a section nothing depends on (a Conclusion, an
+    // annexure), store its own opening text instead: free, and the field is
+    // still populated so the review flow does not treat it as unprepared.
+    const siblingTitles: any[] = await prisma.$queryRaw`
+      SELECT section_title FROM "reviewer_sections" WHERE call_id = ${callId}
+    `;
+    const isContextProvider = selectContextProviderTitles(
+      (Array.isArray(siblingTitles) ? siblingTitles : []).map((row: any) => row.section_title)
+    ).has(section.section_title);
+
+    let contextSummary: string;
+    let generated = false;
+
+    if (isContextProvider) {
+      const model = call.LLM_model_used || 'G'; // Default to Gemini if not specified
+      const contextSummaryService = new ContextSummaryService({
+        requestHeaders: req.headers,
+        stageCode: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
+      });
+
+      contextSummary = await contextSummaryService.generateContextSummary(
+        section.section_title,
+        section.user_input,
+        model as 'O' | 'G'
+      );
+      generated = true;
+    } else {
+      contextSummary = buildFallbackContextSummary(section.user_input);
+    }
+
     // Update the database
     await prisma.$queryRaw`
-      UPDATE "reviewer_sections" 
+      UPDATE "reviewer_sections"
       SET context_summary = ${contextSummary}
       WHERE id = ${sectionId}
     `;
-    
+
     // Return success
-    return res.status(200).json({ 
-      message: 'Context summary generated',
+    return res.status(200).json({
+      message: generated ? 'Context summary generated' : 'Context summary derived without a model call',
       section_title: section.section_title,
-      context_summary: contextSummary
+      context_summary: contextSummary,
+      generated,
     });
     
   } catch (error) {

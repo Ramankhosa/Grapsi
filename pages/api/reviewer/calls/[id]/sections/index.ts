@@ -63,40 +63,41 @@ export default async function handler(
           });
         }
         
-        // Check if there's already a section with this title to determine version
-        let version = 1;
-        
         if (is_revision && previous_section_id) {
-          // For revisions, fetch the previous version number
-          const previousSection = await prisma.reviewerSection.findUnique({
-            where: { id: previous_section_id },
-            select: { version: true }
+          const base = await prisma.reviewerSection.findFirst({
+            where: { id: previous_section_id, call_id: callId },
+            select: { id: true }
           });
-          
-          if (previousSection) {
-            version = previousSection.version + 1;
-          } else {
+
+          if (!base) {
             return res.status(400).json({
               error: 'Previous section not found',
-              details: 'The specified previous_section_id does not exist'
+              details: 'The specified previous_section_id does not exist on this call'
             });
           }
-        } else if (!is_revision) {
-          // For new sections (not revisions), check if the title exists
-          const existingSection = await prisma.reviewerSection.findFirst({
-            where: {
-              call_id: callId,
-              section_title: section_title
-            },
-            orderBy: { version: 'desc' },
-            select: { version: true }
-          });
-          
-          if (existingSection) {
-            version = existingSection.version + 1;
-          }
         }
-        
+
+        // Always number from the newest version of this title, never from the
+        // chosen base. Revising an older draft while a newer one exists would
+        // otherwise mint a second row with the same version number, and the
+        // reviewer resolves "the previous version" by version order.
+        const latestForTitle = await prisma.reviewerSection.findFirst({
+          where: {
+            call_id: callId,
+            section_title: section_title
+          },
+          orderBy: { version: 'desc' },
+          select: { id: true, version: true }
+        });
+
+        const version = latestForTitle ? latestForTitle.version + 1 : 1;
+
+        // Re-submitting a section the user already has is a revision even when
+        // the UI did not label it one. Without this the review never sees the
+        // earlier remarks and silently re-reviews from scratch.
+        const effectiveIsRevision = Boolean(is_revision) || Boolean(latestForTitle);
+        const effectivePreviousId = previous_section_id || latestForTitle?.id || null;
+
         // Insert the new section using Prisma client
         const newSection = await prisma.reviewerSection.create({
           data: {
@@ -106,9 +107,9 @@ export default async function handler(
             ai_review_json: {},
             status: 'draft',
             version,
-            previous_section_id: previous_section_id || null,
+            previous_section_id: effectivePreviousId,
             review_linked_context: true,
-            is_revision: !!is_revision
+            is_revision: effectiveIsRevision
           },
           select: {
             id: true,
@@ -118,9 +119,9 @@ export default async function handler(
         });
         
         // If this is a revision, copy linked assets from previous section (attach_in_prompt defaults to true)
-        if (is_revision && previous_section_id) {
+        if (effectiveIsRevision && effectivePreviousId) {
           try {
-            const priorLinks = await prisma.reviewAssetLink.findMany({ where: { review_version_id: previous_section_id } });
+            const priorLinks = await prisma.reviewAssetLink.findMany({ where: { review_version_id: effectivePreviousId } });
             if (priorLinks.length > 0) {
               // Enforce per-section max 3 when copying
               const byType: Record<string, number> = {};
@@ -143,9 +144,11 @@ export default async function handler(
           }
         }
         
-        return res.status(201).json({ 
+        return res.status(201).json({
           message: 'Section created successfully',
-          section: newSection
+          section: newSection,
+          is_revision: effectiveIsRevision,
+          previous_section_id: effectivePreviousId
         });
       } catch (error) {
         console.error('Error creating section:', error);

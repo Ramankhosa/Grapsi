@@ -6,51 +6,14 @@ import axios from "axios";
 import Link from "next/link";
 import Head from "next/head";
 import { FaArrowLeft, FaCheck, FaTimes } from "react-icons/fa";
+import { RULES_SOURCE_LABELS } from "@/lib/reviewer/rulesSource";
+import { ReviewerProse, ReviewerText } from "@/components/reviewer/ReviewerText";
 
-// Function to check if content is HTML
-const isHtmlContent = (content: string): boolean => {
-  if (!content || typeof content !== 'string') return false;
-  return /<\/?[a-z][\s\S]*>/i.test(content);
-};
-
-// Utility function to safely render any type of content
-const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => {
-  if (content === null || content === undefined) {
-    return defaultValue;
-  }
-  
-  if (typeof content === 'string') {
-    // Check if content is HTML, render it using dangerouslySetInnerHTML
-    if (isHtmlContent(content)) {
-      return <div dangerouslySetInnerHTML={{ __html: content }} />;
-    }
-    return content;
-  }
-  
-  if (typeof content === 'object') {
-    // Handle arrays
-    if (Array.isArray(content)) {
-      return content.map((item, i) => <span key={i}>{renderSafely(item)}</span>);
-    }
-    
-    // Handle objects with point and detail keys
-    if (content.point !== undefined) {
-      return <><strong>{content.point}</strong>: {content.detail || ''}</>;
-    } else if (content.detail !== undefined) {
-      return content.detail.toString();
-    } else {
-      // Fallback to stringify for other objects
-      try {
-        return JSON.stringify(content);
-      } catch (e) {
-        return defaultValue;
-      }
-    }
-  }
-  
-  // For other primitive types like numbers
-  return String(content);
-};
+// These rules are extracted from third-party funding-call pages, so they are
+// rendered as text/markdown and never as markup.
+const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => (
+  <ReviewerText value={content} fallback={defaultValue} />
+);
 
 export default function CallAnalysisPage() {
   const { data: session, status } = useSession();
@@ -207,9 +170,33 @@ export default function CallAnalysisPage() {
                   <tr>
                     <td className="px-4 py-3 text-sm font-medium text-gray-700 bg-gray-50">Rule source</td>
                     <td className="px-4 py-3 text-sm text-gray-900">
-                      {parsedData.rules_source === "template_manual" ? "Approved template plus manual rubric" : call.LLM_model_used}
+                      {RULES_SOURCE_LABELS[parsedData.rules_source] || call.LLM_model_used}
+                      {parsedData.extraction?.model ? (
+                        <span className="ml-2 text-xs text-gray-500">via {parsedData.extraction.model}</span>
+                      ) : null}
                     </td>
                   </tr>
+                  {Array.isArray(parsedData.source_urls) && parsedData.source_urls.length > 0 ? (
+                    <tr>
+                      <td className="px-4 py-3 text-sm font-medium text-gray-700 bg-gray-50">Source</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">
+                        <ul className="space-y-1">
+                          {parsedData.source_urls.map((url, idx) => (
+                            <li key={idx}>
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                className="break-all text-blue-600 hover:underline"
+                              >
+                                {url}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
@@ -220,7 +207,11 @@ export default function CallAnalysisPage() {
               
               <div className="bg-gray-50 rounded-md p-4 mb-4">
                 <h4 className="text-sm font-medium text-gray-700">Eligibility Criteria</h4>
-                <p className="mt-2 text-gray-800 whitespace-pre-line">{parsedData.eligibility_criteria || "Not specified"}</p>
+                <ReviewerProse
+                  value={parsedData.eligibility_criteria}
+                  fallback="Not specified"
+                  className="mt-2 text-gray-800"
+                />
               </div>
               
               {parsedData.thrust_areas && parsedData.thrust_areas.length > 0 && (
@@ -238,6 +229,35 @@ export default function CallAnalysisPage() {
               )}
             </div>
             
+            {/* Weighted scoring criteria, when the call publishes them */}
+            {Array.isArray(parsedData.scoring_criteria) && parsedData.scoring_criteria.length > 0 ? (
+              <div className="mt-8">
+                <h3 className="text-lg font-semibold mb-4">Scoring Criteria</h3>
+                <div className="overflow-x-auto rounded-md border border-gray-200">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Criterion</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Weight</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">What it covers</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {parsedData.scoring_criteria.map((criterion, idx) => (
+                        <tr key={criterion.key || idx}>
+                          <td className="px-4 py-2 text-gray-900">{criterion.label}</td>
+                          <td className="px-4 py-2 text-gray-600">
+                            {criterion.weight !== null && criterion.weight !== undefined ? criterion.weight : "—"}
+                          </td>
+                          <td className="px-4 py-2 text-gray-700">{criterion.description || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
             {/* Evaluation Criteria */}
             <div className="mt-8">
               <h3 className="text-lg font-semibold mb-4">Evaluation Criteria</h3>
@@ -249,7 +269,7 @@ export default function CallAnalysisPage() {
                     ))}
                   </ul>
                 ) : typeof parsedData.evaluation_criteria === 'string' && parsedData.evaluation_criteria.trim() ? (
-                  <p className="text-gray-800 whitespace-pre-line">{parsedData.evaluation_criteria}</p>
+                  <ReviewerProse value={parsedData.evaluation_criteria} className="text-gray-800" />
                 ) : (
                   <p className="text-gray-600 italic">Not specified</p>
                 )}
@@ -324,9 +344,25 @@ export default function CallAnalysisPage() {
               </div>
             ) : null}
 
+            {Array.isArray(parsedData.submission_rules) && parsedData.submission_rules.length > 0 ? (
+              <div className="mt-8">
+                <h3 className="text-lg font-semibold mb-1">Submission Requirements</h3>
+                <p className="mb-3 text-sm text-gray-500">
+                  Reminders only — these never affect your section scores.
+                </p>
+                <div className="bg-blue-50 rounded-md p-4">
+                  <ul className="space-y-1 list-disc list-inside">
+                    {parsedData.submission_rules.map((item, idx) => (
+                      <li key={idx} className="text-gray-800">{renderSafely(item)}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : null}
+
             {Array.isArray(parsedData.template_sections) && parsedData.template_sections.length > 0 ? (
               <div className="mt-8">
-                <h3 className="text-lg font-semibold mb-4">Template Reviewer Buckets</h3>
+                <h3 className="text-lg font-semibold mb-4">Reviewer Sections</h3>
                 <div className="space-y-3">
                   {parsedData.template_sections.map((section, idx) => (
                     <div key={`${section.key || idx}`} className="rounded-md bg-gray-50 p-4">

@@ -6,7 +6,8 @@ import {
 } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 import { ContextSummaryService } from '../../../../../lib/services/contextSummaryService';
-import { hasMeaningfulSectionContent } from '@/lib/reviewer/content';
+import { selectContextProviderTitles } from '../../../../../lib/reviewerService';
+import { buildFallbackContextSummary, hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 
 function isUsableContextSummary(value: unknown): boolean {
   const text = String(value || '').trim();
@@ -80,7 +81,17 @@ export default async function handler(
       requestHeaders: req.headers,
       stageCode: 'GRANT_REVIEWER_CONTEXT_SUMMARY',
     });
-    
+
+    // A section review already emits its own context_summary. The only reason
+    // to pre-generate one here is so that a *later* section can read it as
+    // cross-section context. Sections nothing depends on get a free derived
+    // summary instead of a model call, which cuts this step's LLM calls
+    // roughly in half on a full proposal.
+    const contextProviders = selectContextProviderTitles(
+      (sections as any[]).map((section) => section.section_title)
+    );
+    const skipUnusedProviders = req.body?.includeAllSections !== true;
+
     // Process each section
     const results = [];
     for (const section of sections as any[]) {
@@ -110,6 +121,22 @@ export default async function handler(
           title: section.section_title,
           status: 'existing',
           context_summary: section.context_summary
+        });
+        continue;
+      }
+
+      if (skipUnusedProviders && !contextProviders.has(section.section_title)) {
+        const derived = buildFallbackContextSummary(section.user_input);
+        await prisma.$queryRaw`
+          UPDATE "reviewer_sections"
+          SET context_summary = ${derived}
+          WHERE id = ${section.id}
+        `;
+        results.push({
+          id: section.id,
+          title: section.section_title,
+          status: 'derived',
+          context_summary: derived,
         });
         continue;
       }
@@ -148,10 +175,13 @@ export default async function handler(
     }
     
     // Return success with summary of results
-    return res.status(200).json({ 
+    return res.status(200).json({
       message: 'Context summaries processed',
       processed_count: results.length,
-      success_count: results.filter(r => r.status === 'success' || r.status === 'existing').length,
+      success_count: results.filter(r => ['success', 'existing', 'derived'].includes(r.status)).length,
+      generated_count: results.filter(r => r.status === 'success').length,
+      derived_count: results.filter(r => r.status === 'derived').length,
+      skipped_count: results.filter(r => r.status === 'skipped').length,
       results: results
     });
     

@@ -333,7 +333,7 @@ export default function ReviewerCallDetail() {
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
                   </svg>
-                  View Template Rules
+                  View Call Rules
                 </Link>
 
                 {/* Section List */}
@@ -598,7 +598,7 @@ export default function ReviewerCallDetail() {
                   <li>Generate context summaries for more accurate and connected reviews.</li>
                   <li>The advanced review process will check for consistency across sections.</li>
                   <li>The final review provides scores and actionable recommendations.</li>
-                  <li>Use the "View Template Rules" button to check template limits and manual rubric items.</li>
+                  <li>Use the "View Call Rules" button to check the call's limits, criteria, and rubric items.</li>
                 </ul>
               </div>
             </div>

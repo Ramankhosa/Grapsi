@@ -12,6 +12,134 @@ export interface ReviewSummary {
   context_summary?: string;
 }
 
+const FUNDING_DECISIONS = new Set(['fund', 'fund_with_revisions', 'revise_and_resubmit', 'do_not_fund']);
+const COMPETITIVENESS_BANDS = new Set(['top_tier', 'competitive', 'borderline', 'not_competitive']);
+const SECTION_VERDICTS = new Set(['strong', 'adequate', 'weak', 'critical']);
+const IMPACT_LEVELS = new Set(['high', 'medium', 'low']);
+const EFFORT_LEVELS = new Set(['quick', 'moderate', 'substantial']);
+
+function clampScore(value: unknown): number | null {
+  const raw = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  if (!Number.isFinite(raw)) return null;
+  return Math.max(0, Math.min(10, raw));
+}
+
+function text(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+/**
+ * The funding decision is the part a committee actually acts on, so an
+ * unrecognised or missing value degrades to the most cautious defensible
+ * reading rather than being dropped.
+ */
+export function normalizeFundingRecommendation(value: unknown) {
+  const record = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  const decision = text(record.decision).toLowerCase();
+  const competitiveness = text(record.competitiveness).toLowerCase();
+  return {
+    decision: FUNDING_DECISIONS.has(decision) ? decision : 'revise_and_resubmit',
+    competitiveness: COMPETITIVENESS_BANDS.has(competitiveness) ? competitiveness : 'borderline',
+    rationale: text(record.rationale),
+  };
+}
+
+export function normalizeCriterionScorecard(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const record = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+      const criterion = text(record.criterion) || text(record.label);
+      if (!criterion) return null;
+      const weight = typeof record.weight === 'number' ? record.weight : Number.parseFloat(String(record.weight ?? ''));
+      return {
+        criterion,
+        weight: Number.isFinite(weight) ? weight : null,
+        score: clampScore(record.score),
+        verdict: text(record.verdict),
+        evidence_sections: normalizeStringArray(record.evidence_sections),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 15) as Array<{
+      criterion: string;
+      weight: number | null;
+      score: number | null;
+      verdict: string;
+      evidence_sections: string[];
+    }>;
+}
+
+export function normalizeSectionScorecard(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const record = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+      const section = text(record.section) || text(record.title);
+      if (!section) return null;
+      const verdict = text(record.verdict).toLowerCase();
+      return {
+        section,
+        score: clampScore(record.score),
+        verdict: SECTION_VERDICTS.has(verdict) ? verdict : 'adequate',
+        headline: text(record.headline),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 30) as Array<{ section: string; score: number | null; verdict: string; headline: string }>;
+}
+
+export function normalizePriorityActions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      const record = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+      const action = text(record.action) || text(record.recommendation);
+      if (!action) return null;
+      const impact = text(record.impact).toLowerCase();
+      const effort = text(record.effort).toLowerCase();
+      const rank = Number.parseInt(String(record.rank ?? ''), 10);
+      return {
+        rank: Number.isFinite(rank) && rank > 0 ? rank : index + 1,
+        section: text(record.section),
+        issue: text(record.issue),
+        action,
+        impact: IMPACT_LEVELS.has(impact) ? impact : 'medium',
+        effort: EFFORT_LEVELS.has(effort) ? effort : 'moderate',
+        expected_gain: text(record.expected_gain),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => (left!.rank as number) - (right!.rank as number))
+    .slice(0, 8) as Array<{
+      rank: number;
+      section: string;
+      issue: string;
+      action: string;
+      impact: string;
+      effort: string;
+      expected_gain: string;
+    }>;
+}
+
+export function normalizeConsistencyFlags(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const record = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+      const issue = text(record.issue);
+      if (!issue) return null;
+      const severity = text(record.severity).toLowerCase();
+      return {
+        issue,
+        sections: normalizeStringArray(record.sections),
+        severity: IMPACT_LEVELS.has(severity) ? severity : 'medium',
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 12) as Array<{ issue: string; sections: string[]; severity: string }>;
+}
+
 export class ReviewerService {
   /**
    * Generate a section review using an AI model
@@ -244,13 +372,24 @@ Maintain the following personality and reviewer stance throughout your evaluatio
 - Be neutral and professional: Provide firm but respectful feedback in a structured, academic tone.
 - Be evidence-seeking: Look for specific improvements in details, justification, and clarity.`;
 
+    // Only the parts of the prior review the revision is judged against. The
+    // full JSON also carries prose, rule traces, and recommendation objects the
+    // comparison never reads.
+    const previousPoints = [
+      typeof originalReview?.score === 'number' ? `Previous score: ${originalReview.score}` : '',
+      ...normalizeStringArray(originalReview?.weaknesses).slice(0, 8).map((item) => `Weakness: ${item}`),
+      ...normalizeStringArray(originalReview?.suggestions || originalReview?.recommendations)
+        .slice(0, 8)
+        .map((item) => `Suggestion: ${item}`),
+    ].filter(Boolean).join('\n') || 'The previous review recorded no weaknesses or suggestions.';
+
     const userPrompt = `I need you to compare the original and revised versions of a grant proposal section titled "${sectionTitle}" and evaluate how well the revisions address the previous review.
 
 ORIGINAL CONTENT:
 ${originalContent}
 
-PREVIOUS REVIEW:
-${JSON.stringify(originalReview, null, 2)}
+PREVIOUS REVIEW POINTS:
+${previousPoints}
 
 REVISED CONTENT:
 ${revisedContent}
@@ -303,84 +442,128 @@ Return your analysis strictly as a JSON object with these keys. Do not include a
   }
 
   /**
-   * Generate an overall review of the proposal based on all section reviews
+   * Generate the final panel-style report from the individual section reviews.
+   *
+   * `deterministicBriefing` carries facts already computed in code (coverage,
+   * word-limit breaches, criterion rollup, weighted score). The model is told
+   * to treat those as ground truth so it spends its budget on judgement rather
+   * than on arithmetic it tends to get wrong.
    */
   async generateOverallReview(
     callTitle: string,
     callDescription: string,
     sectionSummaries: ReviewSummary[],
-    modelType: 'O' | 'G' = 'G'
+    modelType: 'O' | 'G' = 'G',
+    options?: {
+      deterministicBriefing?: string;
+      anchorScore?: number | null;
+    }
   ) {
-    const systemPrompt = `You are a senior grant reviewer entrusted with evaluating very competitive research proposals for funding agencies in fields related to "${callTitle}". Your mindset combines critical thinking, fairness, and a focus on real-world impact. You are not just checking language—you assess alignment, logic, feasibility, and value-for-money from the perspective of a funder deciding whether this project is worth investing in.
+    const systemPrompt = `You are the lead reviewer writing the panel report for a competitive research funding proposal in fields related to "${callTitle}". You are deciding whether public money should back this project, and your report is what the funding committee reads.
 
-Maintain the following personality and reviewer stance throughout your review:
+Hold this stance throughout:
 
-- Be analytical and rigorous: Dissect the proposal like a reviewer in a competitive panel. Examine claims, methods, budgets, and timelines with precision.
-- Be constructive, not just critical: Identify weaknesses but also suggest specific, actionable improvements in a supportive yet firm tone.
-- Be impact-focused: Keep asking: Why does this matter? Who benefits? Is this a valuable investment of public money?
-- Be funding-call aligned: Ensure all aspects of the proposal match the agency's priorities and thematic scope, as provided in the funding call guidelines.
-- Be neutral and professional: Avoid over-praise or emotional language. Provide firm but respectful feedback in a structured, academic tone.
-- Be integrative: Assess how the sections connect and form a coherent whole. Look for consistency in approach, terminology, and goals across sections.
-- Be evidence-seeking: Look for specific details, justification, and clarity. Vague, generic language or missing information (e.g., budget, methodology, or impact) is a significant weakness.
+- Analytical and rigorous: examine claims, methods, budgets, and timelines the way a competitive panel does.
+- Decisive: the report must end in a clear fundability judgement, not a summary that avoids one.
+- Constructive: every weakness you raise must be paired with the specific change that would fix it.
+- Impact-focused: keep asking why this matters, who benefits, and whether it is good value for public money.
+- Call-aligned: judge against the funder's published criteria and priorities, not generic proposal quality.
+- Integrative: your distinct value over the section reviews is seeing the proposal whole - contradictions between sections, promises made in one place and unfunded in another, an ambition the timeline cannot carry.
+- Evidence-seeking: name the section that supports each point. Never invent detail that is not in the material.
 
-Do not be lenient for weak proposals. Proposals that sound nice but lack specificity, alignment, or feasibility should receive critical evaluation. Your task is to provide a comprehensive evaluation of an entire grant proposal based on the reviews of its individual sections.`;
+Do not be lenient. A proposal that reads well but lacks specificity, alignment, or feasibility must be scored critically. Equally, do not manufacture weaknesses the material does not support.`;
 
-    // Start building the user prompt
-    let userPrompt = `I need you to generate a comprehensive overall review for a grant proposal titled "${callTitle}".
-${callDescription ? `Call Description: ${callDescription}` : ''}
+    let userPrompt = `Write the final panel report for the proposal "${callTitle}".
+${callDescription ? `\n### FUNDING CALL CONTEXT\n${callDescription}\n` : ''}`;
 
-The proposal consists of the following sections, each with its own review:
-`;
+    if (options?.deterministicBriefing) {
+      userPrompt += `\n${options.deterministicBriefing}\n`;
+    }
 
-    // Add each section's context summary and review data
+    userPrompt += `\n### SECTION REVIEWS\n`;
+
     sectionSummaries.forEach(section => {
-      userPrompt += `\n## ${section.title} (Version ${section.version})
-Context Summary: ${section.context_summary || 'Not available'}
-Score: ${section.review_json.score || 'N/A'}
-Key Points: ${section.review_json.summary || 'Not available'}\n`;
+      const review = section.review_json || {};
+      userPrompt += `\n## ${section.title} (v${section.version}) - score ${review.score ?? 'N/A'}\n`;
+      if (section.context_summary) {
+        userPrompt += `What it says: ${section.context_summary}\n`;
+      }
+      if (review.summary) {
+        userPrompt += `Reviewer read: ${review.summary}\n`;
+      }
+      const strengths = Array.isArray(review.strengths) ? review.strengths.slice(0, 4) : [];
+      if (strengths.length > 0) {
+        userPrompt += `Strengths: ${strengths.join('; ')}\n`;
+      }
+      const weaknesses = Array.isArray(review.weaknesses) ? review.weaknesses.slice(0, 5) : [];
+      if (weaknesses.length > 0) {
+        userPrompt += `Weaknesses: ${weaknesses.join('; ')}\n`;
+      }
+      const fixes = Array.isArray(review.suggestions || review.recommendations)
+        ? (review.suggestions || review.recommendations).slice(0, 4)
+        : [];
+      if (fixes.length > 0) {
+        userPrompt += `Suggested fixes: ${fixes.join('; ')}\n`;
+      }
       const reminders = [
-        ...(Array.isArray(section.review_json.non_scoring_reminders) ? section.review_json.non_scoring_reminders : []),
-        ...(Array.isArray(section.review_json.supplementary_materials) ? section.review_json.supplementary_materials : []),
+        ...(Array.isArray(review.non_scoring_reminders) ? review.non_scoring_reminders : []),
+        ...(Array.isArray(review.supplementary_materials) ? review.supplementary_materials : []),
       ].filter(Boolean);
       if (reminders.length > 0) {
-        userPrompt += `Non-scoring supplementary reminders: ${reminders.join('; ')}\n`;
+        userPrompt += `Non-scoring reminders: ${reminders.join('; ')}\n`;
       }
     });
 
-    userPrompt += `\nBased on these section reviews, please provide a comprehensive overall evaluation with:
-1. Overall score (between 1.0-10.0, with 10 being excellent)
-2. Executive summary (2-3 paragraphs)
-3. Major strengths across the proposal (4-6 bullet points)
-4. Major weaknesses across the proposal (4-6 bullet points)
-5. Cross-sectional recommendations with examples, model responses, etc. for improvement (4-6 bullet points but can be more if needed)
-6. Recommended supplementary materials the user should arrange outside the reviewed draft (attachments, budget forms, CVs, support letters, ethics approvals, declarations, signatures, portal uploads). These are reminders only and must not reduce the score.
+    userPrompt += `
 
-Return your response strictly in JSON format with the following structure:
+### WHAT TO PRODUCE
+
+Return strict JSON only, in this shape:
 
 {
-  "overall_score": 8.5,
-  "executive_summary": "This is a well-written proposal...",
-  "major_strengths": [
-    "Clear problem statement with strong supporting evidence",
-    "Innovative methodology that advances current approaches",
-    "Strong alignment between objectives and expected outcomes"
+  "overall_score": 7.4,
+  "funding_recommendation": {
+    "decision": "fund" | "fund_with_revisions" | "revise_and_resubmit" | "do_not_fund",
+    "competitiveness": "top_tier" | "competitive" | "borderline" | "not_competitive",
+    "rationale": "2-3 sentences a committee could read aloud, naming the decisive factors"
+  },
+  "executive_summary": "2-3 paragraphs: what is proposed, what is strong, and what stands between it and funding",
+  "criterion_scorecard": [
+    { "criterion": "the funder's published criterion", "weight": 30, "score": 7.5, "verdict": "one line", "evidence_sections": ["Methodology"] }
   ],
-  "major_weaknesses": [
-    "Budget justification lacks detail for equipment costs",
-    "Timeline appears overly optimistic for the scope of work"
+  "section_scorecard": [
+    { "section": "Methodology", "score": 7.0, "verdict": "strong" | "adequate" | "weak" | "critical", "headline": "one line on what decides this score" }
   ],
-  "cross_sectional_recommendations": [
-    "Provide more detailed budget justification for equipment",
-    "Revise timeline to be more realistic given the project complexity"
+  "major_strengths": ["4-6 items, each naming the section it comes from"],
+  "major_weaknesses": ["4-6 items, each naming the section it comes from and why it costs marks"],
+  "priority_actions": [
+    {
+      "rank": 1,
+      "section": "Budget & Justification",
+      "issue": "what is wrong",
+      "action": "the specific change to make",
+      "impact": "high" | "medium" | "low",
+      "effort": "quick" | "moderate" | "substantial",
+      "expected_gain": "what improves if this is done"
+    }
   ],
-  "supplementary_materials": [
-    "Attach the completed budget workbook required by the funder",
-    "Include CVs or biosketches for key personnel"
-  ]
-}`;
+  "consistency_flags": [
+    { "issue": "a contradiction or gap between sections", "sections": ["Objectives", "Workplan"], "severity": "high" | "medium" | "low" }
+  ],
+  "cross_sectional_recommendations": ["4-6 items that apply across the whole proposal"],
+  "supplementary_materials": ["non-reviewed material the applicant must still prepare separately"]
+}
+
+Rules for the report:
+- overall_score${options?.anchorScore != null ? ` should stay within about 0.5 of the computed anchor of ${options.anchorScore.toFixed(2)}; if you depart from it, say why in the rationale` : ' must be consistent with the section scores you were given'}.
+- criterion_scorecard must use the funder's own criteria wherever the briefing lists them. Where no section evidenced a criterion, set score to null and say so in the verdict - do not score it zero.
+- priority_actions must be ranked by how much the fix moves the funding decision, highest first. Give at most 8. Each must be specific enough to act on today.
+- consistency_flags is your distinctive contribution: report only what is visible when comparing sections, not restatements of single-section weaknesses. Return an empty array if there are none.
+- supplementary_materials are reminders only and must never lower the score.
+- Never contradict the VERIFIED FACTS block.`;
 
     let responseText: string;
-    
+
     if (modelType === 'O') {
       // Use OpenAI with explicit JSON response format
       responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
@@ -392,355 +575,31 @@ Return your response strictly in JSON format with the following structure:
     // Parse the response into JSON
     try {
       // Try to extract JSON from response (might be wrapped in markdown code blocks)
-      const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) || 
+      const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) ||
                        responseText.match(/```\n([\s\S]*?)\n```/) ||
                        [null, responseText];
-                      
+
       const reviewJson = JSON.parse(jsonMatch[1] || responseText);
-      
-      // Ensure we have all expected fields
+
       return {
         overall_score: parseReviewerScore(reviewJson.overall_score),
         executive_summary: reviewJson.executive_summary || "No executive summary provided.",
         major_strengths: normalizeStringArray(reviewJson.major_strengths),
         major_weaknesses: normalizeStringArray(reviewJson.major_weaknesses),
         cross_sectional_recommendations: normalizeStringArray(reviewJson.cross_sectional_recommendations),
-        supplementary_materials: normalizeStringArray(reviewJson.supplementary_materials)
+        supplementary_materials: normalizeStringArray(reviewJson.supplementary_materials),
+        funding_recommendation: normalizeFundingRecommendation(reviewJson.funding_recommendation),
+        criterion_scorecard: normalizeCriterionScorecard(reviewJson.criterion_scorecard),
+        section_scorecard: normalizeSectionScorecard(reviewJson.section_scorecard),
+        priority_actions: normalizePriorityActions(reviewJson.priority_actions),
+        consistency_flags: normalizeConsistencyFlags(reviewJson.consistency_flags),
       };
     } catch (error) {
       console.error('Error parsing LLM response for overall review:', error);
       throw new Error('The reviewer model returned an invalid final review. Please retry.');
     }
   }
-  
-  /**
-   * Safe JSON parsing with error handling and sanitization
-   */
-  private safeJsonParse(text: string): any | null {
-    try {
-      // Fix common issues before attempting to parse
-      const sanitized = text
-        .replace(/(\w+):"/g, '"$1":"')   // fix unquoted keys
-        .replace(/:"([^"]*?):([^"]*?)"/g, (match) => {
-          return match.replace(/:/g, ' - '); // replace : inside quoted values
-        })
-        .replace(/\n/g, "\\n")            // escape newlines
-        .replace(/"|"/g, '"')             // fix curly quotes
-        .replace(/'|'/g, "'")             // fix apostrophes
-        .replace(/\s*\\\s*"/g, '\\"');    // fix escaped quotes
 
-      return JSON.parse(sanitized);
-    } catch (e) {
-      console.error("Safe parse failed:", e);
-      return null;
-    }
-  }
-  
-  /**
-   * Pre-process JSON content to fix common issues with array formatting
-   */
-  private preprocessJsonContent(content: string): string {
-    if (!content) return "{}";
-    
-    let processed = content;
-    
-    // Fix array entries that are raw strings with brackets and quotes
-    // Example: [ "text" ] -> ["text"]
-    processed = processed.replace(/\[\s*"\s*([^"]*)\s*"\s*\]/g, '["$1"]');
-    
-    // Fix array entries that start with brackets and quotes
-    // Example: [ "**Recommendation -> ["Recommendation
-    processed = processed.replace(/\[\s*"\s*(\*\*|\[|\{)?/g, '["');
-    
-    // Fix array entries that end with brackets and quotes
-    // Example: Recommendation**" ] -> Recommendation"]
-    processed = processed.replace(/(\*\*|\]|\})?\s*"\s*\]/g, '"]');
-    
-    // Remove markdown bullet points at the beginning of array items
-    processed = processed.replace(/"(\s*[-*•]\s*)([^"]*)"/g, '"$2"');
-    
-    // Remove numbered list markers at the beginning of array items
-    processed = processed.replace(/"(\s*\d+\.\s*)([^"]*)"/g, '"$2"');
-    
-    // Fix common issue with arrays formatted as strings
-    // Example: "major_strengths": "["Clear problem statement", "Strong methodology"]"
-    processed = processed.replace(/"(major_strengths|major_weaknesses|cross_sectional_recommendations)"\s*:\s*"(\[.*?\])"/g, 
-                                 '"$1": $2');
-    
-    return processed;
-  }
-  
-  /**
-   * Process array fields to handle various formats that might be returned by the LLM
-   */
-  private processArrayField(field: any): string[] {
-    if (!field) return [];
-    
-    // If it's already an array, process each item
-    if (Array.isArray(field)) {
-      return field.map(item => {
-        if (typeof item === 'string') {
-          // Clean up the string (remove extra quotes, brackets, etc.)
-          return item.replace(/^\s*["'\[\{]+|["'\]\}]+\s*$/g, '')
-                     .replace(/^\s*[-*•]\s+/, '') // Remove bullet points
-                     .replace(/^\s*\d+\.\s+/, '') // Remove numbered list markers
-                     .trim();
-        } else if (item && typeof item === 'object') {
-          // Handle objects with point/comment structure
-          if (item.point) {
-            return item.comment ? `${item.point} - ${item.comment}` : item.point;
-          } else if (item.text) {
-            return item.text;
-          } else {
-            // Just stringify the object as fallback
-            try {
-              return JSON.stringify(item);
-            } catch (e) {
-              return "Invalid item";
-            }
-          }
-        } else {
-          return String(item);
-        }
-      }).filter(Boolean);
-    }
-    
-    // If it's a string that looks like an array representation, try to parse it
-    if (typeof field === 'string') {
-      // First check if it's a JSON array string
-      if (field.trim().startsWith('[') && field.trim().endsWith(']')) {
-        try {
-          // Try to parse it as JSON
-          const parsed = JSON.parse(field);
-          if (Array.isArray(parsed)) {
-            return this.processArrayField(parsed);
-          }
-        } catch (e) {
-          // If parsing fails, try to split by commas or line breaks
-          const cleanedString = field
-            .replace(/^\s*\[\s*|\s*\]\s*$/g, '') // Remove surrounding brackets
-            .replace(/",\s*"|',\s*'/g, '"|"');    // Replace comma separators with a unique delimiter
-          
-          return cleanedString.split('"|"')
-            .map(s => s.replace(/^\s*["']+|["']+\s*$/g, '').trim()) // Remove quotes and trim
-            .filter(Boolean);
-        }
-      }
-      
-      // If it's not a JSON array string, try to split by line breaks or bullet points
-      return field
-        .split(/\n+|•|\*|-|\d+\.\s+/)
-        .map(s => s.trim())
-        .filter(Boolean);
-    }
-    
-    // If all else fails, return an empty array
-    return [];
-  }
-  
-  /**
-   * Sanitize JSON string to fix common issues with escaped characters
-   */
-  private sanitizeJsonString(jsonStr: string): string {
-    try {
-      if (!jsonStr) return "{}";
-      
-      // Replace common problematic patterns
-      let sanitized = jsonStr;
-      
-      // Remove any markdown code block markers
-      sanitized = sanitized.replace(/```json|```/g, '');
-      
-      // Trim whitespace
-      sanitized = sanitized.trim();
-      
-      // Fix issue with line breaks at the start of the string causing JSON parse errors
-      if (sanitized.startsWith('\n')) {
-        sanitized = sanitized.replace(/^\n+/, '');
-      }
-      
-      // Ensure it starts with { and ends with }
-      if (!sanitized.startsWith('{')) sanitized = '{' + sanitized;
-      if (!sanitized.endsWith('}')) sanitized = sanitized + '}';
-      
-      // Fix issue with "overall_score":"2.2" format (convert to number if in quotes)
-      sanitized = sanitized.replace(/"overall_score"\s*:\s*"([0-9.]+)"/g, '"overall_score":$1');
-      
-      // Fix nested objects with point/comment structure that might be causing issues
-      sanitized = sanitized.replace(/{(\s*)"point"(\s*):(\s*)"([^"]*)"(\s*),(\s*)"comment"(\s*):(\s*)"([^"]*)"(\s*)}/g, 
-                                   '"$4 - $9"');
-      
-      // Fix objects with just point property
-      sanitized = sanitized.replace(/{(\s*)"point"(\s*):(\s*)"([^"]*)"(\s*)}/g, '"$4"');
-      
-      // Fix mid-sentence colons in values that break JSON syntax
-      sanitized = sanitized.replace(/: "([^"]*?)(:)([^"]*?)"/g, ': "$1 - $3"');
-      
-      // Try to detect and fix unescaped quotes within string values
-      sanitized = sanitized.replace(/: "([^"]*)(?<!\\)"([^"]*)"([^"]*)"/g, ': "$1\\"$2\\"$3"');
-      
-      // Fix newlines that aren't properly escaped
-      sanitized = sanitized.replace(/([^\\])\n/g, '$1\\n');
-      
-      // Fix tabs that aren't properly escaped
-      sanitized = sanitized.replace(/([^\\])\t/g, '$1\\t');
-      
-      // Fix trailing commas in arrays and objects
-      sanitized = sanitized.replace(/,(\s*[\}\]])/g, '$1');
-      
-      // Handle unquoted property names
-      sanitized = sanitized.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3');
-      
-      // Fix missing quotes around string values
-      sanitized = sanitized.replace(/:(\s*)([^"{}\[\],\s][^{}\[\],]*[^{}\[\],\s])(\s*[,}])/g, ':"$2"$3');
-      
-      // Additional cleanup for common formatting issues
-      // Remove any trailing commas before closing braces/brackets
-      sanitized = sanitized.replace(/,(\s*[\}\]])/g, '$1');
-      
-      // Ensure property names are quoted
-      sanitized = sanitized.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3');
-      
-      // Handle special case where there's a JSON prefix like "json" or "JSON:"
-      sanitized = sanitized.replace(/^\s*(?:json|JSON):?\s*/, '');
-      
-      // Fix array string issues
-      // Convert ["*text"] to ["text"]
-      sanitized = sanitized.replace(/"(\[.*?\*+)(.*?)("\])/g, '"[$2"]');
-      
-      // Fix issues with array brackets inside strings
-      sanitized = sanitized.replace(/"(\[|\]|{|})/g, '"\\$1');
-      
-      // Fix common issue with arrays containing bullet points or numbered lists
-      sanitized = sanitized.replace(/"([-*•]|\d+\.)\s+([^"]*)"/g, '"$2"');
-      
-      // Fix curly quotes and apostrophes
-      sanitized = sanitized.replace(/"|"/g, '"');
-      sanitized = sanitized.replace(/'|'/g, "'");
-      
-      return sanitized;
-    } catch (e) {
-      console.error('Error sanitizing JSON string:', e);
-      return jsonStr; // Return original if sanitization fails
-    }
-  }
-  
-  /**
-   * Extract structured data from text when JSON parsing fails
-   */
-  private extractStructuredDataFromText(text: string) {
-    // Default values
-    let result = {
-      overall_score: 3.0,
-      executive_summary: "",
-      major_strengths: [] as string[],
-      major_weaknesses: [] as string[],
-      cross_sectional_recommendations: [] as string[]
-    };
-    
-    try {
-      // Try to extract overall score
-      const scoreMatch = text.match(/overall[_\s]score["\s:]+([0-9.]+)/i);
-      if (scoreMatch && scoreMatch[1]) {
-        result.overall_score = parseFloat(scoreMatch[1]);
-      }
-      
-      // Try to extract executive summary
-      const summaryMatch = text.match(/executive[_\s]summary["\s:]+["']?([^"'\[\]]+)["']?/i);
-      if (summaryMatch && summaryMatch[1]) {
-        result.executive_summary = summaryMatch[1].trim();
-      }
-      
-      // Process strengths, weaknesses and recommendations by looking for patterns
-      const processArrayItems = (text: string, sectionName: string): string[] => {
-        const items: string[] = [];
-        
-        // Try to find the section with array notation
-        const sectionRegex = new RegExp(`${sectionName}["\s:]+\\[(.*?)\\]`, 'is');
-        const sectionMatch = text.match(sectionRegex);
-        
-        if (sectionMatch && sectionMatch[1]) {
-          // Split by commas, but be careful with nested objects
-          const itemsText = sectionMatch[1];
-          
-          // First try to parse as JSON array if it looks like valid JSON
-          try {
-            if (itemsText.includes('{') && itemsText.includes('}')) {
-              // Try to reconstruct as JSON array
-              const jsonArray = JSON.parse(`[${itemsText}]`);
-              
-              // Process each item
-              jsonArray.forEach((item: any) => {
-                if (typeof item === 'string') {
-                  items.push(item);
-                } else if (item && typeof item === 'object') {
-                  // Handle objects with point/comment structure
-                  if (item.point) {
-                    if (item.comment) {
-                      items.push(`${item.point} - ${item.comment}`);
-                    } else {
-                      items.push(item.point);
-                    }
-                  } else {
-                    // Just stringify the object as fallback
-                    items.push(JSON.stringify(item));
-                  }
-                }
-              });
-              
-              return items;
-            }
-          } catch (e) {
-            // If JSON parsing fails, continue with regex approach
-          }
-          
-          // Split by items that look like they're separated by commas
-          const splitItems = itemsText.split(/",\s*"|',\s*'/).map(s => s.trim().replace(/^["'\s]+|["'\s]+$/g, ''));
-          
-          // Add all non-empty items
-          splitItems.forEach(item => {
-            if (item.trim()) {
-              items.push(item.trim());
-            }
-          });
-        }
-        
-        // If no items found with array notation, try to find bullet points
-        if (items.length === 0) {
-          const bulletPointRegex = new RegExp(`${sectionName}["\s:]+\\s*([\\s\\S]*?)(?=\\w+["\s:]+|$)`, 'i');
-          const bulletMatch = text.match(bulletPointRegex);
-          
-          if (bulletMatch && bulletMatch[1]) {
-            // Look for bullet points or numbered lists
-            const bulletPoints = bulletMatch[1].split(/\n\s*[-•*]\s*|\n\s*\d+\.\s*/).filter(Boolean);
-            
-            bulletPoints.forEach(point => {
-              const trimmed = point.trim();
-              if (trimmed) {
-                items.push(trimmed);
-              }
-            });
-          }
-        }
-        
-        return items;
-      };
-      
-      // Process each section
-      result.major_strengths = processArrayItems(text, 'major[_\\s]strengths');
-      result.major_weaknesses = processArrayItems(text, 'major[_\\s]weaknesses');
-      result.cross_sectional_recommendations = processArrayItems(text, 'cross[_\\s-]?sectional[_\\s]?recommendations');
-      
-      return result;
-    } catch (e) {
-      console.error('Error extracting structured data from text:', e);
-      return result;
-    }
-  }
-
-  /**
-   * Generate an introduction section review using the special scoring criteria
-   */
   async generateIntroductionReview(
     introductionContent: string,
     projectTitle: string,

@@ -14,6 +14,7 @@ import {
   FaFileWord
 } from 'react-icons/fa';
 import { extractTextFromHTML } from '../../../lib/services/markdownParserService';
+import { ReviewerProse, ReviewerText } from '@/components/reviewer/ReviewerText';
 
 interface SectionReview {
   id: string;
@@ -40,7 +41,59 @@ interface OverallReview {
   major_weaknesses: string[];
   cross_sectional_recommendations: string[];
   supplementary_materials?: string[];
+  funding_recommendation?: { decision: string; competitiveness: string; rationale: string } | null;
+  criterion_scorecard?: Array<{
+    criterion: string;
+    weight: number | null;
+    score: number | null;
+    verdict: string;
+    evidence_sections: string[];
+  }>;
+  priority_actions?: Array<{
+    rank: number;
+    section: string;
+    issue: string;
+    action: string;
+    impact: string;
+    effort: string;
+    expected_gain: string;
+  }>;
+  consistency_flags?: Array<{ issue: string; sections: string[]; severity: string }>;
+  compliance?: {
+    requiredSections?: { covered: string[]; missing: string[]; coveragePercent: number };
+    limits?: Array<{ section: string; rule: string; limit: number; unit: string; actual: number; overBy: number; status: string }>;
+    deadline?: { date: string | null; daysRemaining: number | null; status: string };
+    emptySectionTitles?: string[];
+  } | null;
+  score_basis?: { weightedScore: number | null; meanSectionScore: number | null; anchorScore: number | null } | null;
 }
+
+const DECISION_LABELS: Record<string, string> = {
+  fund: 'Fund',
+  fund_with_revisions: 'Fund with revisions',
+  revise_and_resubmit: 'Revise and resubmit',
+  do_not_fund: 'Do not fund',
+};
+
+const DECISION_STYLES: Record<string, string> = {
+  fund: 'bg-green-100 text-green-900 border-green-300',
+  fund_with_revisions: 'bg-emerald-50 text-emerald-900 border-emerald-300',
+  revise_and_resubmit: 'bg-amber-50 text-amber-900 border-amber-300',
+  do_not_fund: 'bg-red-50 text-red-900 border-red-300',
+};
+
+const COMPETITIVENESS_LABELS: Record<string, string> = {
+  top_tier: 'Top tier',
+  competitive: 'Competitive',
+  borderline: 'Borderline',
+  not_competitive: 'Not competitive',
+};
+
+const IMPACT_STYLES: Record<string, string> = {
+  high: 'bg-red-100 text-red-800',
+  medium: 'bg-amber-100 text-amber-800',
+  low: 'bg-gray-100 text-gray-700',
+};
 
 // Group sections by title and version
 interface GroupedSections {
@@ -84,58 +137,12 @@ export default function FinalReview() {
     return /<\/?[a-z][\s\S]*>/i.test(content);
   };
 
-  // Utility function to safely render any type of content
-  const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => {
-    if (content === null || content === undefined) {
-      return defaultValue;
-    }
-    
-    // Handle strings directly
-    if (typeof content === 'string') {
-      // If raw HTML is detected in DB value, convert to plain text for safe display
-      if (isHtmlContent(content)) {
-        return extractTextFromHTML(content);
-      }
-      return content;
-    }
-    
-    // Handle objects
-    if (typeof content === 'object') {
-      // Handle arrays
-      if (Array.isArray(content)) {
-        try {
-          // Join with commas for simple display
-          return content.map(item => String(renderSafely(item))).join(', ');
-        } catch (e) {
-          return defaultValue;
-        }
-      }
-      
-      // Handle objects with point and detail keys
-      if (content.point !== undefined) {
-        const detail = content.detail ? `: ${content.detail}` : '';
-        return `${content.point}${detail}`;
-      } 
-      
-      if (content.detail !== undefined) {
-        return content.detail.toString();
-      } 
-      
-      if (content.text !== undefined) {
-        return content.text.toString();
-      }
-      
-      // Fallback to stringify for other objects
-      try {
-        return JSON.stringify(content);
-      } catch (e) {
-        return defaultValue;
-      }
-    }
-    
-    // For other primitive types like numbers
-    return String(content);
-  };
+  // Reviewer output arrives as markdown-flavoured text (and occasionally as
+  // objects). ReviewerText renders the markdown, flattens object shapes, and
+  // strips HTML instead of trusting it.
+  const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => (
+    <ReviewerText value={content} fallback={defaultValue} />
+  );
 
   const hasMeaningfulClientContent = (value: string) => {
     const text = String(value || '')
@@ -1060,13 +1067,211 @@ export default function FinalReview() {
               </div>
             </div>
 
+            {/* Funding verdict */}
+            {overallReview.funding_recommendation ? (
+              <div
+                className={`mt-2 rounded-lg border-2 p-4 ${
+                  DECISION_STYLES[overallReview.funding_recommendation.decision] || 'border-gray-300 bg-gray-50'
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-lg font-bold">
+                    {DECISION_LABELS[overallReview.funding_recommendation.decision] || 'Reviewer verdict'}
+                  </span>
+                  <span className="rounded-full bg-white/70 px-3 py-1 text-sm font-medium">
+                    {COMPETITIVENESS_LABELS[overallReview.funding_recommendation.competitiveness] ||
+                      overallReview.funding_recommendation.competitiveness}
+                  </span>
+                  {overallReview.score_basis?.weightedScore != null ? (
+                    <span className="text-sm opacity-80">
+                      Weighted score {overallReview.score_basis.weightedScore.toFixed(2)}/10
+                    </span>
+                  ) : null}
+                </div>
+                {overallReview.funding_recommendation.rationale ? (
+                  <p className="mt-2 text-sm">{overallReview.funding_recommendation.rationale}</p>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Executive Summary */}
             <div className="mt-6">
               <h3 className="text-lg font-medium text-gray-900 mb-2">Executive Summary</h3>
               <div className="bg-gray-50 p-4 rounded-md">
-                <p className="text-gray-700 whitespace-pre-line">{overallReview.executive_summary}</p>
+                <ReviewerProse
+                  value={overallReview.executive_summary}
+                  fallback="No executive summary provided."
+                  className="text-gray-700"
+                />
               </div>
             </div>
+
+            {/* Compliance check (computed, not model-generated) */}
+            {overallReview.compliance ? (
+              <div className="mt-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">Compliance Check</h3>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div className="rounded-md border border-gray-200 p-4">
+                    <div className="text-sm text-gray-500">Required sections drafted</div>
+                    <div className="mt-1 text-2xl font-semibold text-gray-900">
+                      {overallReview.compliance.requiredSections?.coveragePercent ?? 100}%
+                    </div>
+                    {overallReview.compliance.requiredSections?.missing?.length ? (
+                      <ul className="mt-2 list-inside list-disc text-sm text-red-700">
+                        {overallReview.compliance.requiredSections.missing.map((item, index) => (
+                          <li key={`missing-${index}`}>{item}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm text-green-700">All required sections are present.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-md border border-gray-200 p-4">
+                    <div className="text-sm text-gray-500">Length limits</div>
+                    {overallReview.compliance.limits?.length ? (
+                      <ul className="mt-2 space-y-1 text-sm">
+                        {overallReview.compliance.limits
+                          .filter((limit) => limit.status !== 'within')
+                          .map((limit, index) => (
+                            <li key={`limit-${index}`} className={limit.status === 'over' ? 'text-red-700' : 'text-amber-700'}>
+                              {limit.section}: {limit.actual.toLocaleString()} / {limit.limit.toLocaleString()} {limit.unit}
+                              {limit.overBy > 0 ? ` (over by ${limit.overBy.toLocaleString()})` : ' (near cap)'}
+                            </li>
+                          ))}
+                        {overallReview.compliance.limits.every((limit) => limit.status === 'within') ? (
+                          <li className="text-green-700">
+                            All {overallReview.compliance.limits.length} checked sections are within their caps.
+                          </li>
+                        ) : null}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm text-gray-500">The call did not state numeric length limits.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-md border border-gray-200 p-4">
+                    <div className="text-sm text-gray-500">Deadline</div>
+                    {overallReview.compliance.deadline?.date ? (
+                      <>
+                        <div className="mt-1 text-lg font-semibold text-gray-900">
+                          {new Date(overallReview.compliance.deadline.date).toLocaleDateString()}
+                        </div>
+                        <p
+                          className={`mt-1 text-sm ${
+                            overallReview.compliance.deadline.status === 'passed'
+                              ? 'text-red-700'
+                              : overallReview.compliance.deadline.status === 'closing'
+                                ? 'text-amber-700'
+                                : 'text-gray-600'
+                          }`}
+                        >
+                          {overallReview.compliance.deadline.status === 'passed'
+                            ? 'This deadline has passed.'
+                            : `${overallReview.compliance.deadline.daysRemaining} days remaining`}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="mt-2 text-sm text-gray-500">No deadline recorded for this call.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Criterion scorecard */}
+            {overallReview.criterion_scorecard?.length ? (
+              <div className="mt-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">Scorecard Against the Call's Criteria</h3>
+                <div className="overflow-x-auto rounded-md border border-gray-200">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Criterion</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Weight</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Score</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Verdict</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {overallReview.criterion_scorecard.map((row, index) => (
+                        <tr key={`criterion-${index}`}>
+                          <td className="px-4 py-2 text-gray-900">{row.criterion}</td>
+                          <td className="px-4 py-2 text-gray-600">{row.weight !== null ? row.weight : '—'}</td>
+                          <td className="px-4 py-2 font-medium text-gray-900">
+                            {row.score !== null ? `${row.score.toFixed(1)}/10` : 'Not evidenced'}
+                          </td>
+                          <td className="px-4 py-2 text-gray-700">
+                            {row.verdict}
+                            {row.evidence_sections?.length ? (
+                              <span className="ml-1 text-xs text-gray-500">({row.evidence_sections.join(', ')})</span>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Priority actions */}
+            {overallReview.priority_actions?.length ? (
+              <div className="mt-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">What to Fix First</h3>
+                <ol className="space-y-3">
+                  {overallReview.priority_actions.map((action, index) => (
+                    <li key={`action-${index}`} className="rounded-md border border-gray-200 p-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gray-900 text-xs font-bold text-white">
+                          {action.rank}
+                        </span>
+                        {action.section ? (
+                          <span className="font-medium text-gray-900">{action.section}</span>
+                        ) : null}
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${IMPACT_STYLES[action.impact] || 'bg-gray-100 text-gray-700'}`}>
+                          {action.impact} impact
+                        </span>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                          {action.effort} effort
+                        </span>
+                      </div>
+                      {action.issue ? <p className="mt-2 text-sm text-gray-600">{action.issue}</p> : null}
+                      <p className="mt-1 text-gray-900">{action.action}</p>
+                      {action.expected_gain ? (
+                        <p className="mt-1 text-sm text-green-700">Expected gain: {action.expected_gain}</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+
+            {/* Cross-section consistency */}
+            {overallReview.consistency_flags?.length ? (
+              <div className="mt-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">Cross-Section Consistency</h3>
+                <ul className="space-y-2">
+                  {overallReview.consistency_flags.map((flag, index) => (
+                    <li
+                      key={`consistency-${index}`}
+                      className={`rounded-md p-3 ${
+                        flag.severity === 'high'
+                          ? 'bg-red-50'
+                          : flag.severity === 'medium'
+                            ? 'bg-amber-50'
+                            : 'bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-gray-900">{flag.issue}</span>
+                      {flag.sections?.length ? (
+                        <span className="ml-2 text-xs text-gray-500">{flag.sections.join(' ↔ ')}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
 
             {/* Major Strengths */}
             <div className="mt-6">

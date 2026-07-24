@@ -6,63 +6,30 @@ import { budgetStructuredDataHasMeaningfulRows } from '@/lib/grants/budgetTempla
 import { getGrantWorkspace } from '@/lib/grants/workspace'
 import { isGrantBibliographySection, isGrantSectionAiGenerated } from '@/lib/grants/workflowMode'
 import { hasMeaningfulSectionContent } from '@/lib/reviewer/content'
-import { normalizeGrantTemplate } from '@/lib/fundingTemplates/utils'
-import type { GrantBlueprintPlanSection, GrantTemplateIntent } from '@/types/grant'
-import type { FundingTemplateItem, GrantTemplateDocument } from '@/lib/fundingTemplates/types'
+import {
+  BUCKET_LABELS,
+  bucketFromIntent,
+  bucketFromText,
+  dedupeRuleText as dedupe,
+  normalizeBucketKey,
+} from '@/lib/reviewer/buckets'
+import { normalizeManualRubric, type ReviewerManualRubric } from '@/lib/reviewer/manualRubric'
+import {
+  buildReviewerContextFromStoredCall,
+  type ReviewerCallContext,
+  type ReviewerTemplateSectionRule,
+} from '@/lib/reviewer/callContext'
+import type { GrantBlueprintPlanSection } from '@/types/grant'
 
 type JsonRecord = Record<string, unknown>
 
 export type ReviewerModeValue = 'standalone' | 'grant_integrated'
 
-export interface ReviewerManualRubric {
-  evaluationCriteria: string[]
-  reviewerSignals: string[]
-  mustAddress: string[]
-  avoid: string[]
-  formatRules: string[]
-  sectionOverrides: Record<string, Partial<Omit<ReviewerManualRubric, 'sectionOverrides' | 'mappingOverrides'>>>
-  mappingOverrides: Record<string, string>
-}
+export { normalizeManualRubric }
+export type { ReviewerManualRubric, ReviewerTemplateSectionRule }
 
-export interface ReviewerTemplateSectionRule {
-  key: string
-  label: string
-  bucketKey: string
-  bucketLabel: string
-  type: string
-  workflowMode?: string | null
-  required: boolean
-  wordLimit?: number | null
-  charLimit?: number | null
-  reviewerGoal?: string | null
-  guidanceText: string[]
-  requiredFacts: string[]
-  forbiddenMoves: string[]
-}
-
-export interface ReviewerTemplateContext {
-  title: string
-  agency_name: string
-  call_summary: string
-  description: string
-  funding_call_id: string
-  template_id: string
-  source_template_revision_id: string | null
-  rules_source: 'template_manual'
-  template_sections: ReviewerTemplateSectionRule[]
-  manual_rubric: ReviewerManualRubric
-  evaluation_criteria: string[]
-  reviewer_signals: string[]
-  dos: string[]
-  donts: string[]
-  mandatory_sections: string[]
-  format_rules: string[]
-  thrust_areas: string[]
-  budget_cap: string | null
-  project_duration_limit: string | null
-  submission_deadline: string | null
-  reviewer_context_text: string
-}
+/** @deprecated Use `ReviewerCallContext`, which also covers URL-sourced calls. */
+export type ReviewerTemplateContext = ReviewerCallContext
 
 export interface ReviewerSectionMapping {
   bucketKey: string
@@ -100,21 +67,6 @@ export interface IntegratedReviewerState {
   }
 }
 
-const BUCKET_LABELS: Record<string, string> = {
-  summary: 'Summary / Abstract',
-  problem_need: 'Problem, Need & Call Fit',
-  objectives: 'Objectives & Specific Aims',
-  methodology: 'Methodology / Approach',
-  workplan: 'Workplan & Timeline',
-  budget: 'Budget & Justification',
-  evaluation: 'Evaluation Plan',
-  impact_outcomes: 'Impact & Outcomes',
-  team: 'Team & Capability',
-  sustainability_risk: 'Sustainability, Risk & Mitigation',
-  attachments_submission: 'Attachments & Submission Requirements',
-  other: 'Other Proposal Material',
-}
-
 function asObject(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}
 }
@@ -123,359 +75,21 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function asStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((item) => asString(item)).filter(Boolean)
-  }
-  const text = asString(value)
-  return text ? [text] : []
-}
-
-function dedupe(values: string[]): string[] {
-  const seen = new Set<string>()
-  const next: string[] = []
-  for (const value of values) {
-    const normalized = value.trim().replace(/\s+/g, ' ')
-    if (!normalized) continue
-    const key = normalized.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    next.push(normalized)
-  }
-  return next
-}
-
 function sha256(value: unknown): string {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
-function formatDate(value: unknown): string | null {
-  if (!value) return null
-  if (value instanceof Date) return value.toISOString()
-  const text = asString(value)
-  return text || null
-}
-
-function moneyRange(call: JsonRecord): string | null {
-  const min = typeof call.amount_min === 'number' ? call.amount_min : null
-  const max = typeof call.amount_max === 'number' ? call.amount_max : null
-  const currency = asString(call.currency) || ''
-  if (min !== null && max !== null) return `${currency} ${min} - ${max}`.trim()
-  if (max !== null) return `${currency} ${max}`.trim()
-  if (min !== null) return `${currency} ${min}+`.trim()
-  return null
-}
-
-function durationText(call: JsonRecord): string | null {
-  const explicit = asString(call.project_duration_text)
-  if (explicit) return explicit
-  const min = typeof call.project_duration_min_months === 'number' ? call.project_duration_min_months : null
-  const max = typeof call.project_duration_max_months === 'number' ? call.project_duration_max_months : null
-  if (min !== null && max !== null) return `${min} - ${max} months`
-  if (max !== null) return `Up to ${max} months`
-  if (min !== null) return `${min}+ months`
-  return null
-}
-
-export function normalizeManualRubric(value: unknown): ReviewerManualRubric {
-  const record = asObject(value)
-  const sectionOverridesRecord = asObject(record.sectionOverrides)
-  const sectionOverrides: ReviewerManualRubric['sectionOverrides'] = {}
-
-  for (const [bucketKey, overrideValue] of Object.entries(sectionOverridesRecord)) {
-    const override = asObject(overrideValue)
-    sectionOverrides[bucketKey] = {
-      evaluationCriteria: asStringArray(override.evaluationCriteria),
-      reviewerSignals: asStringArray(override.reviewerSignals),
-      mustAddress: asStringArray(override.mustAddress),
-      avoid: asStringArray(override.avoid),
-      formatRules: asStringArray(override.formatRules),
-    }
-  }
-
-  const mappingOverridesRecord = asObject(record.mappingOverrides)
-  const mappingOverrides: Record<string, string> = {}
-  for (const [sectionKey, bucketKey] of Object.entries(mappingOverridesRecord)) {
-    const normalizedSectionKey = asString(sectionKey)
-    const normalizedBucketKey = normalizeBucketKey(asString(bucketKey))
-    if (normalizedSectionKey && normalizedBucketKey) {
-      mappingOverrides[normalizedSectionKey] = normalizedBucketKey
-    }
-  }
-
-  return {
-    evaluationCriteria: asStringArray(record.evaluationCriteria),
-    reviewerSignals: asStringArray(record.reviewerSignals),
-    mustAddress: asStringArray(record.mustAddress),
-    avoid: asStringArray(record.avoid),
-    formatRules: asStringArray(record.formatRules),
-    sectionOverrides,
-    mappingOverrides,
-  }
-}
-
-function normalizeBucketKey(value: string): string {
-  const key = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-  if (!key) return 'other'
-  if (BUCKET_LABELS[key]) return key
-  return 'other'
-}
-
-function bucketFromIntent(intent?: GrantTemplateIntent | string | null, fallbackText = ''): string {
-  const normalized = String(intent || '').trim().toLowerCase()
-  switch (normalized) {
-    case 'summary':
-      return 'summary'
-    case 'problem_need':
-    case 'alignment':
-    case 'innovation':
-      return 'problem_need'
-    case 'objectives':
-      return 'objectives'
-    case 'methodology':
-      return 'methodology'
-    case 'workplan':
-      return 'workplan'
-    case 'budget':
-      return 'budget'
-    case 'evaluation':
-      return 'evaluation'
-    case 'impact_outcomes':
-      return 'impact_outcomes'
-    case 'team':
-    case 'institutional':
-      return 'team'
-    case 'sustainability':
-    case 'risk':
-      return 'sustainability_risk'
-    case 'attachments':
-    case 'submission':
-    case 'eligibility':
-      return 'attachments_submission'
-    default:
-      return bucketFromText(fallbackText)
-  }
-}
-
-function bucketFromText(value: string): string {
-  const text = value.toLowerCase()
-  if (/\b(abstract|summary|overview|synopsis)\b/.test(text)) return 'summary'
-  if (/\b(problem|need|background|significance|alignment|fit|rationale|innovation)\b/.test(text)) return 'problem_need'
-  if (/\b(objective|aim|goal|hypothesis)\b/.test(text)) return 'objectives'
-  if (/\b(method|approach|research plan|design|experiment|implementation)\b/.test(text)) return 'methodology'
-  if (/\b(workplan|timeline|milestone|schedule|gantt|deliverable)\b/.test(text)) return 'workplan'
-  if (/\b(budget|cost|justification|finance)\b/.test(text)) return 'budget'
-  if (/\b(evaluation|monitoring|metric|assessment|measure)\b/.test(text)) return 'evaluation'
-  if (/\b(impact|outcome|benefit|result|dissemination)\b/.test(text)) return 'impact_outcomes'
-  if (/\b(team|expertise|cv|investigator|personnel|institution)\b/.test(text)) return 'team'
-  if (/\b(sustainability|risk|mitigation|contingency)\b/.test(text)) return 'sustainability_risk'
-  if (/\b(attachment|appendix|submission|eligibility|compliance|checklist)\b/.test(text)) return 'attachments_submission'
-  return 'other'
-}
-
-function templateItemToRule(item: FundingTemplateItem, fallbackBucket?: string): ReviewerTemplateSectionRule {
-  const bucketKey = fallbackBucket || bucketFromIntent(item.templateIntent, `${item.label} ${item.guidance || ''}`)
-  return {
-    key: item.key,
-    label: item.label,
-    bucketKey,
-    bucketLabel: BUCKET_LABELS[bucketKey] || BUCKET_LABELS.other,
-    type: item.type,
-    workflowMode: item.workflowMode || null,
-    required: item.required !== false,
-    wordLimit: typeof item.wordLimit === 'number' ? item.wordLimit : null,
-    charLimit: typeof item.charLimit === 'number' ? item.charLimit : null,
-    reviewerGoal: item.reviewerGoal || null,
-    guidanceText: dedupe([item.guidance || '', item.guidanceText || '']),
-    requiredFacts: asStringArray(item.requiredFacts),
-    forbiddenMoves: asStringArray(item.forbiddenMoves),
-  }
-}
-
-function collectTemplateRules(template: GrantTemplateDocument): ReviewerTemplateSectionRule[] {
-  const sectionItems = [
-    ...template.sections,
-    ...template.questions,
-    ...template.attachments,
-    ...template.evaluationCriteria,
-    ...(template.submissionRules?.items || []),
-  ]
-
-  const rules = sectionItems
-    .filter((item) => item.key && item.label)
-    .map((item) => templateItemToRule(item))
-
-  if (template.budget?.required || template.budget?.categories?.length) {
-    rules.push({
-      key: 'budget',
-      label: 'Budget',
-      bucketKey: 'budget',
-      bucketLabel: BUCKET_LABELS.budget,
-      type: 'budget',
-      workflowMode: template.budget.workflowMode || null,
-      required: template.budget.required !== false,
-      wordLimit: null,
-      charLimit: null,
-      reviewerGoal: template.budget.justificationNotes || null,
-      guidanceText: dedupe([
-        template.budget.justificationNotes || '',
-        ...template.budget.categories.map((category) => `${category.label}${category.cap ? `: ${category.cap}` : ''}${category.notes ? ` - ${category.notes}` : ''}`),
-      ]),
-      requiredFacts: [],
-      forbiddenMoves: [],
-    })
-  }
-
-  return rules
-}
-
-function buildContextText(context: Omit<ReviewerTemplateContext, 'reviewer_context_text'>): string {
-  const lines = [
-    `Funding call: ${context.title}`,
-    `Agency: ${context.agency_name}`,
-    context.description ? `Description: ${context.description}` : '',
-    context.budget_cap ? `Budget cap: ${context.budget_cap}` : '',
-    context.project_duration_limit ? `Duration: ${context.project_duration_limit}` : '',
-    context.submission_deadline ? `Deadline: ${context.submission_deadline}` : '',
-    '',
-    'Template reviewer rules:',
-    ...context.template_sections.map((section) => {
-      const constraints = [
-        section.wordLimit ? `${section.wordLimit} words` : '',
-        section.charLimit ? `${section.charLimit} characters` : '',
-        section.reviewerGoal ? `goal: ${section.reviewerGoal}` : '',
-      ].filter(Boolean).join('; ')
-      return `- ${section.label} (${section.bucketLabel})${constraints ? `: ${constraints}` : ''}`
-    }),
-    '',
-    'Manual rubric:',
-    ...context.manual_rubric.evaluationCriteria.map((item) => `- Criterion: ${item}`),
-    ...context.manual_rubric.reviewerSignals.map((item) => `- Reviewer signal: ${item}`),
-    ...context.manual_rubric.mustAddress.map((item) => `- Must address: ${item}`),
-    ...context.manual_rubric.avoid.map((item) => `- Avoid: ${item}`),
-    ...context.manual_rubric.formatRules.map((item) => `- Format rule: ${item}`),
-  ]
-
-  return lines.filter(Boolean).join('\n')
-}
-
+/**
+ * Backwards-compatible wrapper over the shared stored-call context builder.
+ * Kept flat (context fields spread alongside `templateSnapshot`) because the
+ * grant-integrated reviewer route and its tests consume it that way.
+ */
 export async function buildReviewerContextFromFundingCall(input: {
   fundingCallId: string
   manualRubric?: unknown
-}): Promise<ReviewerTemplateContext & { templateSnapshot: JsonRecord }> {
-  const call = await prisma.fundingCall.findUnique({
-    where: { id: input.fundingCallId },
-    include: {
-      active_template: true,
-      template: true,
-    },
-  })
-
-  if (!call) {
-    throw new Error('Funding call not found')
-  }
-
-  const template = call.active_template || call.template
-  if (!template || template.status !== 'approved') {
-    throw new Error('An approved funding template is required before reviewer setup.')
-  }
-
-  const revision = await prisma.fundingCallTemplateRevision.findFirst({
-    where: {
-      templateId: template.id,
-      OR: [
-        { version: template.current_revision_no },
-        { revision_no: template.current_revision_no },
-      ],
-    },
-    orderBy: [{ version: 'desc' }, { revision_no: 'desc' }],
-  })
-
-  const templateDocument = normalizeGrantTemplate(template.grant_template_json)
-  const templateSections = collectTemplateRules(templateDocument)
-  const manualRubric = normalizeManualRubric(input.manualRubric)
-  const callRecord = call as unknown as JsonRecord
-
-  const baseEvaluationCriteria = templateSections
-    .filter((item) => item.type === 'rubric')
-    .flatMap((item) => [item.label, ...item.guidanceText, item.reviewerGoal || ''])
-
-  const title =
-    asString(call.scheme_title)
-    || asString(call.title)
-    || 'Funding opportunity'
-  const agency =
-    asString(call.agency_name)
-    || asString(call.agencyName)
-    || 'Funding agency'
-  const description =
-    asString(call.description)
-    || asString(call.summary)
-    || asString(call.raw_text)
-
-  const contextWithoutText: Omit<ReviewerTemplateContext, 'reviewer_context_text'> = {
-    title,
-    agency_name: agency,
-    call_summary: description || title,
-    description,
-    funding_call_id: call.id,
-    template_id: template.id,
-    source_template_revision_id: revision?.id || null,
-    rules_source: 'template_manual',
-    template_sections: templateSections,
-    manual_rubric: manualRubric,
-    evaluation_criteria: dedupe([...baseEvaluationCriteria, ...manualRubric.evaluationCriteria]),
-    reviewer_signals: dedupe([
-      ...templateSections.flatMap((item) => item.reviewerGoal ? [item.reviewerGoal] : []),
-      ...manualRubric.reviewerSignals,
-    ]),
-    dos: dedupe([
-      ...templateSections.flatMap((item) => item.requiredFacts),
-      ...manualRubric.mustAddress,
-    ]),
-    donts: dedupe([
-      ...templateSections.flatMap((item) => item.forbiddenMoves),
-      ...manualRubric.avoid,
-    ]),
-    mandatory_sections: dedupe(
-      templateSections
-        .filter((item) => item.required)
-        .map((item) => item.label)
-    ),
-    format_rules: dedupe([
-      ...templateSections.flatMap((item) => [
-        item.wordLimit ? `${item.label}: ${item.wordLimit} words` : '',
-        item.charLimit ? `${item.label}: ${item.charLimit} characters` : '',
-      ]),
-      ...manualRubric.formatRules,
-    ]),
-    thrust_areas: dedupe([
-      ...asStringArray(call.disciplines),
-      ...asStringArray(call.funding_kinds),
-    ]),
-    budget_cap: moneyRange(callRecord),
-    project_duration_limit: durationText(callRecord),
-    submission_deadline: formatDate(call.close_date || call.deadlineAt || call.expiration_date),
-  }
-
-  const context = {
-    ...contextWithoutText,
-    reviewer_context_text: buildContextText(contextWithoutText),
-  }
-
-  return {
-    ...context,
-    templateSnapshot: {
-      templateId: template.id,
-      fundingCallId: call.id,
-      status: template.status,
-      currentRevisionNo: template.current_revision_no,
-      sourceTemplateRevisionId: revision?.id || null,
-      grantTemplateJson: templateDocument,
-      compiledGrantTemplateJson: template.compiledGrantTemplateJson ?? null,
-      capturedAt: new Date().toISOString(),
-    },
-  }
+}): Promise<ReviewerCallContext & { templateSnapshot: JsonRecord }> {
+  const { context, templateSnapshot } = await buildReviewerContextFromStoredCall(input)
+  return { ...context, templateSnapshot }
 }
 
 function serializeGrantDraft(section: any, sectionType?: string): string {
@@ -613,13 +227,21 @@ export function buildReviewerSectionMappings(input: {
   })
 }
 
-function reviewerCallInputData(context: ReviewerTemplateContext, mode: ReviewerModeValue): string {
+function reviewerCallInputData(
+  context: ReviewerCallContext,
+  mode: ReviewerModeValue,
+  extra?: JsonRecord
+): string {
   return JSON.stringify({
-    source: 'template_backed_reviewer',
+    source: context.rules_source === 'url_extracted' ? 'url_extracted_reviewer' : 'template_backed_reviewer',
     mode,
+    rulesSource: context.rules_source,
     fundingCallId: context.funding_call_id,
     templateId: context.template_id,
     sourceTemplateRevisionId: context.source_template_revision_id,
+    sourceUrls: context.source_urls,
+    sourceHash: context.extraction?.sourceHash || null,
+    ...extra,
   })
 }
 
@@ -627,43 +249,60 @@ function asInputJson(value: unknown) {
   return value as Prisma.InputJsonValue
 }
 
-export async function createStandaloneReviewerCall(input: {
+const CALL_INPUT_TYPE_BY_RULES_SOURCE: Record<ReviewerCallContext['rules_source'], 'template' | 'url'> = {
+  template_manual: 'template',
+  guideline_manual: 'template',
+  call_fields: 'template',
+  url_extracted: 'url',
+}
+
+/**
+ * Create a standalone reviewer workspace from an already-built context.
+ *
+ * Source-agnostic: the context may come from an approved template, a stored
+ * call's guideline pack or bare fields, or an LLM extraction of the call URL.
+ * Seeded sections always follow the context's own bucket structure, so the
+ * reviewer workspace mirrors what the call actually asks for.
+ */
+export async function createReviewerCallFromContext(input: {
   userId: string
   tenantId?: string | null
-  fundingCallId: string
+  context: ReviewerCallContext
+  templateSnapshot?: JsonRecord | null
   projectTitle: string
-  manualRubric?: unknown
   seedSections?: boolean
+  rawTextBackup?: string | null
 }) {
-  const context = await buildReviewerContextFromFundingCall({
-    fundingCallId: input.fundingCallId,
-    manualRubric: input.manualRubric,
-  })
+  const { context } = input
 
-  const created = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const call = await tx.reviewerCall.create({
       data: {
         user_id: input.userId,
         tenantId: input.tenantId || null,
-        fundingCallId: input.fundingCallId,
+        fundingCallId: context.funding_call_id,
         reviewerMode: 'standalone',
-        templateSnapshotJson: asInputJson(context.templateSnapshot),
+        templateSnapshotJson: asInputJson(input.templateSnapshot ?? {}),
         manualRubricJson: asInputJson(context.manual_rubric),
-        rulesSource: 'template_manual',
+        rulesSource: context.rules_source,
         sourceTemplateRevisionId: context.source_template_revision_id,
         project_title: input.projectTitle,
         agency_name: context.agency_name,
-        call_input_type: 'template',
+        call_input_type: CALL_INPUT_TYPE_BY_RULES_SOURCE[context.rules_source] || 'template',
         call_input_data: reviewerCallInputData(context, 'standalone'),
         parsed_json: asInputJson(context),
+        raw_text_backup: input.rawTextBackup || null,
         review_status: 'parsed',
-        LLM_model_used: 'template',
+        LLM_model_used: context.extraction?.model || 'template',
       } as any,
     })
 
     if (input.seedSections) {
       const buckets = new Map<string, ReviewerTemplateSectionRule[]>()
       for (const rule of context.template_sections) {
+        // Attachment/submission buckets are reminders, not scored narrative, so
+        // they are never seeded as sections the user has to paste text into.
+        if (rule.bucketKey === 'attachments_submission') continue
         const existing = buckets.get(rule.bucketKey) || []
         existing.push(rule)
         buckets.set(rule.bucketKey, existing)
@@ -679,7 +318,8 @@ export async function createStandaloneReviewerCall(input: {
             status: 'draft',
             reviewerBucketKey: bucketKey,
             mappingJson: asInputJson({
-              source: 'template_seed',
+              source: context.rules_source === 'url_extracted' ? 'url_seed' : 'template_seed',
+              bucketKey,
               templateRules: rules.map((rule) => rule.key),
             }),
           } as any,
@@ -689,8 +329,29 @@ export async function createStandaloneReviewerCall(input: {
 
     return call
   })
+}
 
-  return created
+export async function createStandaloneReviewerCall(input: {
+  userId: string
+  tenantId?: string | null
+  fundingCallId: string
+  projectTitle: string
+  manualRubric?: unknown
+  seedSections?: boolean
+}) {
+  const { context, templateSnapshot } = await buildReviewerContextFromStoredCall({
+    fundingCallId: input.fundingCallId,
+    manualRubric: input.manualRubric,
+  })
+
+  return createReviewerCallFromContext({
+    userId: input.userId,
+    tenantId: input.tenantId,
+    context,
+    templateSnapshot,
+    projectTitle: input.projectTitle,
+    seedSections: input.seedSections,
+  })
 }
 
 async function replaceGrantLinks(tx: any, input: {

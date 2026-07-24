@@ -139,10 +139,11 @@ export default function ReviewerDashboard() {
             <div className="bg-gray-50 p-4 rounded-md">
               <div className="flex items-center mb-2">
                 <div className="bg-green-500 text-white rounded-full w-6 h-6 flex items-center justify-center mr-2">1</div>
-                <h3 className="font-medium">Select Template</h3>
+                <h3 className="font-medium">Set the Call Context</h3>
               </div>
               <p className="text-sm text-gray-600">
-                Start from an approved funding-call template and optional manual reviewer rubric.
+                Pick a funding call from the library, or paste the call's own URL and we'll pull out its terms and
+                reviewer rules.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-md">
@@ -257,7 +258,7 @@ export default function ReviewerDashboard() {
             <FaFileAlt className="mx-auto h-12 w-12 text-gray-300" />
             <h3 className="mt-2 text-lg font-medium text-gray-900">No projects yet</h3>
             <p className="mt-1 text-gray-500">
-              Click "Review New Project" to start from an approved funding template.
+              Click "Review New Project" to start from a stored funding call or the call's own URL.
             </p>
           </div>
         )}

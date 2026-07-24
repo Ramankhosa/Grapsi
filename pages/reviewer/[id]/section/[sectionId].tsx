@@ -10,6 +10,7 @@ import RichTextEditor from "../../../../components/RichTextEditor";
 import BudgetJustificationEditor from "../../../../components/BudgetJustificationEditor";
 import ContextSummaryView from "../../../../components/ContextSummaryView";
 import ReviewerSectionAssetsPanel from "../../../../components/ReviewerSectionAssetsPanel";
+import { ReviewerProse, ReviewerText } from "@/components/reviewer/ReviewerText";
 
 type SectionData = {
   id: string;
@@ -31,49 +32,22 @@ type PriorSectionSummary = {
   context_summary: string;
 };
 
-// Function to check if content is HTML
-const isHtmlContent = (content: string): boolean => {
-  if (!content || typeof content !== 'string') return false;
-  return /<\/?[a-z][\s\S]*>/i.test(content);
+// Reviewer output is text, not markup: render the model's markdown and strip
+// any HTML rather than trusting it.
+const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => (
+  <ReviewerText value={content} fallback={defaultValue} />
+);
+
+const ADDRESSED_STYLES: Record<string, string> = {
+  addressed: 'bg-green-100 text-green-800',
+  partially: 'bg-amber-100 text-amber-800',
+  not_addressed: 'bg-red-100 text-red-800',
 };
 
-// Utility function to safely render any type of content
-const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => {
-  if (content === null || content === undefined) {
-    return defaultValue;
-  }
-  
-  if (typeof content === 'string') {
-    // Check if content is HTML, render it using dangerouslySetInnerHTML
-    if (isHtmlContent(content)) {
-      return <div dangerouslySetInnerHTML={{ __html: content }} />;
-    }
-    return content;
-  }
-  
-  if (typeof content === 'object') {
-    // Handle arrays
-    if (Array.isArray(content)) {
-      return content.map((item, i) => <span key={i}>{renderSafely(item)}</span>);
-    }
-    
-    // Handle objects with point and detail keys
-    if (content.point !== undefined) {
-      return <><strong>{content.point}</strong>: {content.detail || ''}</>;
-    } else if (content.detail !== undefined) {
-      return content.detail.toString();
-    } else {
-      // Fallback to stringify for other objects
-      try {
-        return JSON.stringify(content);
-      } catch (e) {
-        return defaultValue;
-      }
-    }
-  }
-  
-  // For other primitive types like numbers
-  return String(content);
+const ADDRESSED_LABELS: Record<string, string> = {
+  addressed: 'Addressed',
+  partially: 'Partly addressed',
+  not_addressed: 'Not addressed',
 };
 
 export default function SectionDetail() {
@@ -215,7 +189,7 @@ export default function SectionDetail() {
   
   // Function to load comparison data between versions
   const loadComparisonData = async () => {
-    if (!section?.is_revision || !section?.previous_section_id || !previousSection) return;
+    if (!section?.previous_section_id || !previousSection) return;
     
     try {
       setComparisonLoading(true);
@@ -406,8 +380,10 @@ export default function SectionDetail() {
           </div>
         )}
         
-        {/* Version comparison panel (for revisions) */}
-        {section.is_revision && previousSection && (
+        {/* Version comparison panel — shown whenever an earlier version exists,
+            including sections that were re-submitted without being labelled a
+            revision. */}
+        {previousSection && (
           <div className="mb-6">
             <div className="flex items-center justify-between bg-amber-50 p-4 rounded-t-lg border-b border-amber-100">
               <div className="flex items-center">
@@ -468,9 +444,61 @@ export default function SectionDetail() {
                   
                   <div className="mb-4">
                     <h4 className="text-sm font-medium text-gray-600 mb-1">Improvement Summary</h4>
-                    <p className="text-sm text-gray-800 bg-gray-50 p-3 rounded">{comparisonData.improvement_summary}</p>
+                    <ReviewerProse
+                      value={comparisonData.improvement_summary}
+                      className="text-sm text-gray-800 bg-gray-50 p-3 rounded"
+                    />
                   </div>
-                  
+
+                  {/* What happened to each point the previous review raised */}
+                  {Array.isArray(comparisonData.addressed_points) && comparisonData.addressed_points.length > 0 && (
+                    <div className="mb-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <h4 className="text-sm font-medium text-gray-600">Previous Review Points</h4>
+                        <div className="flex items-center gap-2 text-xs">
+                          {comparisonData.addressed_summary && (
+                            <span className="text-gray-600">
+                              {comparisonData.addressed_summary.addressed} of {comparisonData.addressed_summary.total} resolved
+                            </span>
+                          )}
+                          {typeof comparisonData.score_delta === 'number' && (
+                            <span
+                              className={`rounded-full px-2 py-0.5 font-medium ${
+                                comparisonData.score_delta > 0
+                                  ? 'bg-green-100 text-green-800'
+                                  : comparisonData.score_delta < 0
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-gray-100 text-gray-700'
+                              }`}
+                            >
+                              {comparisonData.score_delta > 0 ? '+' : ''}
+                              {comparisonData.score_delta.toFixed(1)} vs v{previousSection.version}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <ul className="space-y-2">
+                        {comparisonData.addressed_points.map((point: any, index: number) => (
+                          <li key={index} className="rounded border border-gray-200 p-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-sm text-gray-900">{renderSafely(point.point)}</span>
+                              <span
+                                className={`flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  ADDRESSED_STYLES[point.status] || 'bg-gray-100 text-gray-700'
+                                }`}
+                              >
+                                {ADDRESSED_LABELS[point.status] || point.status}
+                              </span>
+                            </div>
+                            {point.evidence && (
+                              <p className="mt-1 text-xs text-gray-600">{renderSafely(point.evidence)}</p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <h4 className="text-sm font-medium text-gray-600 mb-1">Key Changes</h4>

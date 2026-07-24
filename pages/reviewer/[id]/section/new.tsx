@@ -10,6 +10,7 @@ import { toast } from "react-hot-toast";
 import SectionSelector from "../../../../components/SectionSelector";
 import RichTextEditor from "../../../../components/RichTextEditor";
 import BudgetJustificationEditor from "../../../../components/BudgetJustificationEditor";
+import { ReviewerText } from "@/components/reviewer/ReviewerText";
 
 type SectionData = {
   id: string;
@@ -25,40 +26,11 @@ type SectionData = {
   improvement_flag?: boolean | null;
 };
 
-// Utility function to safely render any type of content
-const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => {
-  if (content === null || content === undefined) {
-    return defaultValue;
-  }
-  
-  if (typeof content === 'string') {
-    return content;
-  }
-  
-  if (typeof content === 'object') {
-    // Handle arrays
-    if (Array.isArray(content)) {
-      return content.map((item, i) => <span key={i}>{renderSafely(item)}</span>);
-    }
-    
-    // Handle objects with point and detail keys
-    if (content.point !== undefined) {
-      return <><strong>{content.point}</strong>: {content.detail || ''}</>;
-    } else if (content.detail !== undefined) {
-      return content.detail.toString();
-    } else {
-      // Fallback to stringify for other objects
-      try {
-        return JSON.stringify(content);
-      } catch (e) {
-        return defaultValue;
-      }
-    }
-  }
-  
-  // For other primitive types like numbers
-  return String(content);
-};
+// Reviewer output is text, not markup: render the model's markdown and strip
+// any HTML rather than trusting it.
+const renderSafely = (content: any, defaultValue: string = ""): React.ReactNode => (
+  <ReviewerText value={content} fallback={defaultValue} />
+);
 
 export default function NewSection() {
   const { data: session, status } = useSession();
