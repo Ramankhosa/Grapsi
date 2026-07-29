@@ -251,6 +251,54 @@ const PROVIDER_FILTER_SUPPORT: Record<string, {
 };
 
 // Intelligent loading messages that rotate while searching
+/**
+ * Plain-English labels for the codes the analysis pipeline returns.
+ * The raw values (IMPORT, DEEP_ANCHOR, ...) are internal — never show them to users.
+ * Each entry has a short badge label and a full sentence explaining what it means.
+ */
+const IMPORT_DECISION_LABELS: Record<string, { label: string; help: string }> = {
+  IMPORT: {
+    label: 'Strong match',
+    help: 'Supports several parts of your proposal. Worth saving.',
+  },
+  MAYBE: {
+    label: 'Possible match',
+    help: 'Touches on some of your proposal. Read the abstract before deciding.',
+  },
+  SKIP: {
+    label: 'Weak match',
+    help: 'Little overlap with your proposal. Useful as background at most.',
+  },
+};
+
+const DEEP_ANALYSIS_LABELS: Record<string, { label: string; help: string }> = {
+  DEEP_ANCHOR: {
+    label: 'Build on this',
+    help: 'A paper your argument rests on. Get the full text — you will likely quote it.',
+  },
+  DEEP_SUPPORT: {
+    label: 'Backs you up',
+    help: 'Adds supporting evidence for a claim you are making.',
+  },
+  DEEP_STRESS_TEST: {
+    label: 'Challenges you',
+    help: 'Disagrees with or complicates your approach. Worth addressing head-on.',
+  },
+  ABSTRACT_ONLY: {
+    label: 'Abstract is enough',
+    help: 'You do not need the full text of this one — the abstract covers what you need.',
+  },
+};
+
+const PDF_STATUS_LABELS: Record<string, { label: string; help: string }> = {
+  READY: { label: 'Full text ready', help: 'The full text is attached and searchable.' },
+  UPLOADED: { label: 'Reading file…', help: 'The file arrived and is being read.' },
+  PARSING: { label: 'Reading file…', help: 'Extracting the text from the file.' },
+  FAILED: { label: 'Could not read', help: 'The file could not be read. Try another PDF, or paste the text instead.' },
+  PENDING: { label: 'No full text yet', help: 'Only the abstract is available so far.' },
+  NONE: { label: 'No full text yet', help: 'Only the abstract is available so far.' },
+};
+
 const SEARCH_LOADING_MESSAGES = [
   { text: 'Querying academic databases...', icon: '🔍' },
   { text: 'Searching Semantic Scholar for relevant papers...', icon: '📚' },
@@ -353,6 +401,10 @@ export default function LiteratureSearchStage({
   
   // Expandable abstracts
   const [expandedAbstracts, setExpandedAbstracts] = useState<Set<string>>(new Set());
+  // Per-row disclosure for the secondary signals (usage, deep-analysis tier, publication type,
+  // open access, full-text status, citation count, blueprint mappings). Nothing is removed —
+  // it is collapsed so the list can be scanned, and opened on demand.
+  const [expandedRowDetails, setExpandedRowDetails] = useState<Set<string>>(new Set());
   
   // AbortController for cancelling in-flight search requests
   const searchAbortControllerRef = useRef<AbortController | null>(null);
@@ -368,6 +420,15 @@ export default function LiteratureSearchStage({
   
   // Citations panel - search and selection
   const [citationSearch, setCitationSearch] = useState('');
+  // Saved-paper rows show only title + author line + one relevance chip by default. The abstract
+  // and the analysis detail each open on their own, so a long list stays scannable.
+  const [expandedCitationDetails, setExpandedCitationDetails] = useState<Set<string>>(new Set());
+  const [expandedCitationAbstracts, setExpandedCitationAbstracts] = useState<Set<string>>(new Set());
+  const [citationListFilters, setCitationListFilters] = useState<{
+    relevance: 'ALL' | 'STRONG' | 'MEDIUM' | 'WEAK' | 'UNSCORED';
+    abstract: 'ALL' | 'HAS' | 'MISSING';
+    mapped: 'ALL' | 'MAPPED' | 'UNMAPPED';
+  }>({ relevance: 'ALL', abstract: 'ALL', mapped: 'ALL' });
   const [selectedCitations, setSelectedCitations] = useState<Set<string>>(new Set());
   const [exportingBibtex, setExportingBibtex] = useState(false);
   
@@ -841,6 +902,15 @@ export default function LiteratureSearchStage({
     }
   };
   
+  const toggleRowDetails = useCallback((id: string) => {
+    setExpandedRowDetails(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const toggleAbstract = useCallback((id: string) => {
     setExpandedAbstracts(prev => {
       const next = new Set(prev);
@@ -3404,6 +3474,78 @@ export default function LiteratureSearchStage({
   const [citationFailureCounts, setCitationFailureCounts] = useState<Map<string, number>>(new Map());
   // Papers skipped from analysis because they lack an abstract (no useful data for LLM)
   const [citationSkippedNoAbstract, setCitationSkippedNoAbstract] = useState<Set<string>>(new Set());
+
+  /**
+   * Saved papers left after the text search AND the review filters.
+   * Rows are collapsed by default, so these filters are how you find a paper without
+   * opening every row — e.g. "show me only the ones with no abstract" or "only the
+   * ones that aren't mapped to any part of my proposal yet".
+   */
+  const visibleCitations = useMemo(() => {
+    return filteredCitations.filter(citation => {
+      const analysis = citationAiAnalysis.get(citation.id);
+
+      if (citationListFilters.relevance !== 'ALL') {
+        if (!analysis) {
+          if (citationListFilters.relevance !== 'UNSCORED') return false;
+        } else {
+          const score = analysis.relevanceScore;
+          if (citationListFilters.relevance === 'UNSCORED') return false;
+          if (citationListFilters.relevance === 'STRONG' && score < 70) return false;
+          if (citationListFilters.relevance === 'MEDIUM' && (score < 40 || score >= 70)) return false;
+          if (citationListFilters.relevance === 'WEAK' && score >= 40) return false;
+        }
+      }
+
+      if (citationListFilters.abstract === 'HAS' && !citation.abstract) return false;
+      if (citationListFilters.abstract === 'MISSING' && citation.abstract) return false;
+
+      const mappingCount = (citationDimensionMappings.get(citation.id) || []).length;
+      if (citationListFilters.mapped === 'MAPPED' && mappingCount === 0) return false;
+      if (citationListFilters.mapped === 'UNMAPPED' && mappingCount > 0) return false;
+
+      return true;
+    });
+  }, [filteredCitations, citationAiAnalysis, citationDimensionMappings, citationListFilters]);
+
+  const citationFiltersActive =
+    citationListFilters.relevance !== 'ALL' ||
+    citationListFilters.abstract !== 'ALL' ||
+    citationListFilters.mapped !== 'ALL';
+
+  const allCitationRowsOpen =
+    visibleCitations.length > 0 &&
+    visibleCitations.every(c => expandedCitationDetails.has(c.id));
+
+  const toggleAllCitationRows = useCallback(() => {
+    setExpandedCitationDetails(prev => {
+      const allOpen = visibleCitations.length > 0 && visibleCitations.every(c => prev.has(c.id));
+      if (allOpen) {
+        const next = new Set(prev);
+        visibleCitations.forEach(c => next.delete(c.id));
+        return next;
+      }
+      return new Set([...prev, ...visibleCitations.map(c => c.id)]);
+    });
+  }, [visibleCitations]);
+
+  const toggleCitationDetails = useCallback((id: string) => {
+    setExpandedCitationDetails(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleCitationAbstract = useCallback((id: string) => {
+    setExpandedCitationAbstracts(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
   const [citationBlueprintCoverage, setCitationBlueprintCoverage] = useState<{
     totalDimensions: number;
     coveredDimensions: number;
@@ -4153,25 +4295,57 @@ export default function LiteratureSearchStage({
           </h2>
           <p className="text-sm text-gray-500">
             {isFullTextEvidenceMode
-              ? 'Retrieve full text, validate mappings, and review grounded evidence coverage.'
-              : 'Find papers, analyze relevance, check coverage, and manage Grant Citations'}
+              ? 'Get the full text of your saved papers, so quotes and evidence come from the paper itself — not just its abstract.'
+              : 'Find the papers that back up your proposal, then check they cover every part of it.'}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-5">
           <div className="text-right">
-            <div className="text-2xl font-bold text-indigo-600">{citations.length}</div>
+            <div className="text-2xl font-bold text-indigo-600 leading-tight">{citations.length}</div>
             <div className="text-xs text-gray-500">
-              {citationTargets.recommended ? `of ${citationTargets.recommended} recommended` : 'Grant Citations'}
+              {citationTargets.recommended
+                ? `papers saved · ${citationTargets.recommended} recommended`
+                : 'papers saved'}
             </div>
+            {citationTargets.recommended ? (
+              <div className="h-1.5 w-28 bg-gray-200 rounded-full overflow-hidden mt-1.5 ml-auto">
+                <div
+                  className="h-full bg-indigo-600 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min(100, (citations.length / Number(citationTargets.recommended)) * 100)}%` }}
+                />
+              </div>
+            ) : null}
           </div>
+
+          {/* Coverage is the thing that tells you when you're done, so it belongs in the header —
+              not hidden behind a view toggle further down the page. */}
+          {citationBlueprintCoverage && citationBlueprintCoverage.totalDimensions > 0 && (
+            <div className="text-right">
+              <div className="text-2xl font-bold text-teal-700 leading-tight">
+                {citationBlueprintCoverage.coveredDimensions}
+                <span className="text-base font-normal text-gray-400"> / {citationBlueprintCoverage.totalDimensions}</span>
+              </div>
+              <div className="text-xs text-gray-500">parts of your proposal covered</div>
+              <div className="h-1.5 w-28 bg-gray-200 rounded-full overflow-hidden mt-1.5 ml-auto">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    citationBlueprintCoverage.coveredDimensions >= citationBlueprintCoverage.totalDimensions
+                      ? 'bg-emerald-600'
+                      : 'bg-amber-500'
+                  }`}
+                  style={{ width: `${Math.min(100, (citationBlueprintCoverage.coveredDimensions / citationBlueprintCoverage.totalDimensions) * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
           {citationTargets.min && citations.length < citationTargets.min && (
             <Badge variant="outline" className="text-amber-600 border-amber-300">
-              Min: {citationTargets.min}
+              {citationTargets.min - citations.length} more to reach the minimum of {citationTargets.min}
             </Badge>
           )}
           {citations.length >= (citationTargets.min || 0) && (
             <Badge className="bg-emerald-100 text-emerald-700">
-              ✓ Met minimum
+              ✓ You have enough to move on
             </Badge>
           )}
         </div>
@@ -4183,9 +4357,11 @@ export default function LiteratureSearchStage({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m2 9H7a2 2 0 01-2-2V5a2 2 0 012-2h5l5 5v11a2 2 0 01-2 2zm-3-10v6m3-3H9" />
           </svg>
           <div>
-            <p className="font-medium mb-0.5">Focus</p>
+            <p className="font-medium mb-0.5">What to do on this screen</p>
             <p className="text-indigo-800/90 leading-relaxed">
-              Use this stage to run Analyze &amp; Map, retrieve and attach full text, and review the Evidence Table / Coverage Matrix before drafting.
+              Attach the full text of each saved paper — upload a PDF, paste a link, or let Grapsi fetch it.
+              Then use <span className="font-medium">Score &amp; match papers</span> and the Coverage view to confirm every
+              part of your proposal has real evidence behind it before you start drafting.
             </p>
           </div>
         </div>
@@ -4198,13 +4374,26 @@ export default function LiteratureSearchStage({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <div>
-            <p className="font-medium mb-0.5">Getting Started</p>
-            <p className="text-blue-700/80 leading-relaxed">
-              <span className="font-semibold">1.</span> Generate a Search Strategy to get AI-suggested queries {' '}
-              <span className="font-semibold">2.</span> Search &amp; import relevant papers {' '}
-              <span className="font-semibold">3.</span> Run Analyze &amp; Map to check blueprint coverage {' '}
-              <span className="font-semibold">4.</span> Review your Grant Citations
-            </p>
+            <p className="font-medium mb-1">New here? This screen takes four steps.</p>
+            <ol className="text-blue-700/90 leading-relaxed space-y-1 list-none">
+              <li>
+                <span className="font-semibold">1. Build a search plan.</span>{' '}
+                Grapsi reads your blueprint and writes a list of searches that together cover your whole proposal,
+                so you don&apos;t have to guess what to look for.
+              </li>
+              <li>
+                <span className="font-semibold">2. Run the searches and save what fits.</span>{' '}
+                Each search returns papers from academic databases. Save the ones worth citing.
+              </li>
+              <li>
+                <span className="font-semibold">3. Let Grapsi score and match them.</span>{' '}
+                Every paper gets a relevance score and is matched to the parts of your proposal it supports.
+              </li>
+              <li>
+                <span className="font-semibold">4. Check for gaps.</span>{' '}
+                The Coverage view shows which parts of your proposal still have no paper behind them.
+              </li>
+            </ol>
           </div>
         </div>
       )}
@@ -4212,7 +4401,8 @@ export default function LiteratureSearchStage({
       {session?.archetypeEvidenceStale && (
         <div className="flex items-center justify-between gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg">
           <div className="text-sm text-amber-800">
-            Evidence packs may be outdated after archetype changes. Refresh mappings before drafting.
+            You changed your proposal type since these papers were matched, so the matches may point at
+            sections that no longer exist. Re-score them before you start drafting.
           </div>
           <Button
             size="sm"
@@ -4220,7 +4410,7 @@ export default function LiteratureSearchStage({
             onClick={handleAnalyzeUnanalyzedCitations}
             className="border-amber-300 text-amber-800 hover:bg-amber-100"
           >
-            Refresh evidence mappings
+            Re-score saved papers
           </Button>
         </div>
       )}
@@ -4228,17 +4418,23 @@ export default function LiteratureSearchStage({
       {/* Main Tabs */}
       <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as 'find' | 'citations')} className="space-y-4">
         <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="find" className="flex items-center gap-2" title="Search online databases, browse your library, or import references to find papers for your research.">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            Find & Add
+          <TabsTrigger value="find" className="flex flex-col items-center gap-0.5 h-auto py-2">
+            <span className="flex items-center gap-2 font-medium">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              Find papers
+            </span>
+            <span className="text-[11px] font-normal text-gray-500">Search databases, your library, or a file</span>
           </TabsTrigger>
-          <TabsTrigger value="citations" className="flex items-center gap-2" title="View and manage all Grant Citations you've added. Analyze coverage and export references.">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            Grant Citations ({citations.length})
+          <TabsTrigger value="citations" className="flex flex-col items-center gap-0.5 h-auto py-2">
+            <span className="flex items-center gap-2 font-medium">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Saved papers ({citations.length})
+            </span>
+            <span className="text-[11px] font-normal text-gray-500">Review what you&apos;ve kept and check coverage</span>
           </TabsTrigger>
         </TabsList>
 
@@ -4260,7 +4456,7 @@ export default function LiteratureSearchStage({
                     >
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
-                    <CardTitle className="text-base text-indigo-900">📋 Search Strategy</CardTitle>
+                    <CardTitle className="text-base text-indigo-900">Step 1 · Your search plan</CardTitle>
                   </button>
                   {searchStrategy && (
                     <Badge 
@@ -4282,7 +4478,6 @@ export default function LiteratureSearchStage({
                     onClick={() => generateSearchStrategy(false)}
                     disabled={generatingStrategy}
                     className="bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800 text-white shadow-sm"
-                    title="Generate Strategy: Use this first to create an AI search plan before running searches. It prepares query groups for concepts, methods, and comparison literature."
                   >
                     {generatingStrategy ? (
                       <>
@@ -4297,7 +4492,7 @@ export default function LiteratureSearchStage({
                         <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
-                        <span>Generate Strategy</span>
+                        <span>Build my search plan</span>
                       </>
                     )}
                   </Button>
@@ -4308,15 +4503,17 @@ export default function LiteratureSearchStage({
                     onClick={() => generateSearchStrategy(true)}
                     disabled={generatingStrategy}
                     className="text-violet-700 border-violet-300 hover:bg-violet-50"
-                    title="Regenerate Strategy: Rebuild the search plan after changing your topic, scope, or blueprint dimensions."
+                    title="Rewrites the whole plan from your current blueprint. Use this if you've changed your topic or scope. Searches you've already run stay saved."
                   >
-                    {generatingStrategy ? 'Regenerating...' : 'Regenerate'}
+                    {generatingStrategy ? 'Rebuilding plan...' : 'Rebuild plan'}
                   </Button>
                 )}
               </div>
               {!searchStrategy && (
-                <CardDescription className="text-xs text-indigo-700/70">
-                  Generate AI-powered search queries for systematic literature coverage
+                <CardDescription className="text-xs text-indigo-700/80 leading-relaxed max-w-2xl">
+                  Grapsi reads your blueprint and writes a list of searches that together cover every part of
+                  your proposal — core ideas, methods, competing approaches, and known gaps. You run them one at
+                  a time and save the papers worth keeping. Start here so you don&apos;t miss a whole area by accident.
                 </CardDescription>
               )}
             </CardHeader>
@@ -4340,8 +4537,8 @@ export default function LiteratureSearchStage({
                     {/* Progress Bar */}
                     <div className="mb-3">
                       <div className="flex justify-between text-xs text-indigo-700 mb-1">
-                        <span>{searchStrategy.completedQueries} of {searchStrategy.totalQueries} queries completed</span>
-                        <span>~{searchStrategy.estimatedPapers} papers estimated</span>
+                        <span>{searchStrategy.completedQueries} of {searchStrategy.totalQueries} searches done</span>
+                        <span>roughly {searchStrategy.estimatedPapers} papers expected in total</span>
                       </div>
                       <div className="h-2 bg-indigo-100 rounded-full overflow-hidden">
                         <div 
@@ -4364,6 +4561,28 @@ export default function LiteratureSearchStage({
                           RECENT_ADVANCES: '🚀',
                           GAP_IDENTIFICATION: '🔍',
                           CUSTOM: '✏️'
+                        };
+
+                        // Plain-English name for each query group, shown next to the query itself so
+                        // users can tell why this search is in their plan.
+                        const categoryLabels: Record<string, string> = {
+                          CORE_CONCEPTS: 'Core ideas',
+                          DOMAIN_APPLICATION: 'Your field',
+                          METHODOLOGY: 'Methods',
+                          THEORETICAL_FOUNDATION: 'Background theory',
+                          SURVEYS_REVIEWS: 'Review articles',
+                          COMPETING_APPROACHES: 'Other approaches',
+                          RECENT_ADVANCES: 'Recent work',
+                          GAP_IDENTIFICATION: 'Known gaps',
+                          CUSTOM: 'Your own search'
+                        };
+
+                        const statusLabels: Record<string, string> = {
+                          PENDING: 'Not run yet',
+                          SEARCHING: 'Searching…',
+                          SEARCHED: 'Results ready — save what fits',
+                          COMPLETED: 'Done',
+                          SKIPPED: 'Skipped'
                         };
 
                         const statusColors: Record<string, string> = {
@@ -4394,14 +4613,19 @@ export default function LiteratureSearchStage({
                                 }`}>
                                   {strategyQuery.queryText}
                                 </span>
-                                <Badge variant="outline" className={`text-[9px] px-1 py-0 ${statusColors[strategyQuery.status]}`}>
+                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${statusColors[strategyQuery.status]}`}>
                                   {strategyQuery.status === 'COMPLETED' && strategyQuery.importedCount !== null
-                                    ? `✓ ${strategyQuery.importedCount} imported`
-                                    : strategyQuery.status.toLowerCase().replace('_', ' ')
+                                    ? `✓ ${strategyQuery.importedCount} paper${strategyQuery.importedCount === 1 ? '' : 's'} saved`
+                                    : statusLabels[strategyQuery.status] ?? strategyQuery.status.toLowerCase().replace('_', ' ')
                                   }
                                 </Badge>
                               </div>
-                              <p className="text-[10px] text-gray-500 truncate">{strategyQuery.description}</p>
+                              <p className="text-[11px] text-gray-500 truncate">
+                                <span className="font-medium text-gray-600">
+                                  {categoryLabels[strategyQuery.category] ?? 'Search'}
+                                </span>
+                                {strategyQuery.description ? ` — ${strategyQuery.description}` : ''}
+                              </p>
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               <Button
@@ -4412,8 +4636,9 @@ export default function LiteratureSearchStage({
                                   showStrategyQueryDetails(strategyQuery);
                                 }}
                                 className="h-6 text-[10px] px-2 border-indigo-200 text-indigo-700"
+                                title="See the full query, the filters it uses, and why it's in your plan — without running it."
                               >
-                                {isSelected && strategyDetailsOpen ? 'Shown' : 'Show'}
+                                {isSelected && strategyDetailsOpen ? 'Showing' : 'Details'}
                               </Button>
                               {strategyQuery.status === 'PENDING' && (
                                 <Button
@@ -4423,8 +4648,9 @@ export default function LiteratureSearchStage({
                                     executeStrategyQuery(strategyQuery);
                                   }}
                                   className="h-6 text-[10px] px-2 bg-indigo-600 hover:bg-indigo-700"
+                                  title="Run this search now and show the results below."
                                 >
-                                  Search {'→'}
+                                  Run search
                                 </Button>
                               )}
                               {strategyQuery.status === 'SEARCHING' && (
@@ -4440,8 +4666,9 @@ export default function LiteratureSearchStage({
                                       updateQueryStatus(strategyQuery.id, 'COMPLETED', strategyQuery.resultsCount || undefined, citations.length);
                                     }}
                                     className="h-6 text-[10px] px-2 text-emerald-600 border-emerald-300"
+                                    title="Mark this search as finished. Do this once you've saved the papers you want from its results."
                                   >
-                                    ✓ Done
+                                    Finished
                                   </Button>
                                   <Button
                                     size="sm"
@@ -4450,6 +4677,7 @@ export default function LiteratureSearchStage({
                                       event.stopPropagation();
                                       updateQueryStatus(strategyQuery.id, 'SKIPPED');
                                     }}
+                                    title="Drop this search from your plan. Nothing here is useful for your proposal."
                                     className="h-6 text-[10px] px-1 text-gray-400"
                                   >
                                     Skip
@@ -4464,10 +4692,10 @@ export default function LiteratureSearchStage({
                                     event.stopPropagation();
                                     executeStrategyQuery(strategyQuery);
                                   }}
-                                  className="h-6 text-[10px] px-1 text-gray-400"
-                                  title="Search again"
+                                  className="h-6 text-[10px] px-2 text-gray-500"
+                                  title="Run this search again to pick up papers published since you last ran it."
                                 >
-                                  🔄
+                                  Run again
                                 </Button>
                               )}
                             </div>
@@ -4480,8 +4708,11 @@ export default function LiteratureSearchStage({
                       <div className="mt-3 rounded-lg border border-indigo-200 bg-white/80 p-3 space-y-3">
                         <div className="flex items-center justify-between">
                           <div>
-                            <p className="text-xs font-semibold text-indigo-900">Selected strategy query</p>
-                            <p className="text-[10px] text-indigo-700/80">Edit details, then save. Changes affect future runs.</p>
+                            <p className="text-xs font-semibold text-indigo-900">Edit this search</p>
+                            <p className="text-[11px] text-indigo-700/90">
+                              Change the wording, sources, or year range, then save. Your changes apply the next time
+                              you run it — results you&apos;ve already saved are not affected.
+                            </p>
                           </div>
                           <div className="flex items-center gap-2">
                             <Badge variant="outline" className="text-[10px] border-indigo-200 text-indigo-700">
@@ -4550,7 +4781,7 @@ export default function LiteratureSearchStage({
                           <Textarea
                             value={strategyEditor.description}
                             onChange={(event) => setStrategyEditor(prev => prev ? { ...prev, description: event.target.value } : prev)}
-                            placeholder="What this query is intended to cover"
+                            placeholder="What part of your proposal is this search meant to cover?"
                             className="min-h-[64px] text-xs"
                           />
                         </div>
@@ -4576,9 +4807,9 @@ export default function LiteratureSearchStage({
                             variant="outline"
                             onClick={() => loadStrategyQueryIntoSearchForm(selectedStrategyQuery)}
                             className="h-7 text-[11px]"
-                            title="Copy this strategy query into the search bar with its suggested filters. You can then run the search or tweak the query before searching."
+                            title="Puts this search and its filters into the search box below, so you can adjust the wording before running it."
                           >
-                            Load into search form
+                            Copy to search box
                           </Button>
                           <Button
                             size="sm"
@@ -4586,8 +4817,9 @@ export default function LiteratureSearchStage({
                             onClick={resetStrategyEditor}
                             disabled={!strategyEditorDirty || savingStrategyQuery}
                             className="h-7 text-[11px] text-gray-600"
+                            title="Undo your unsaved edits to this search."
                           >
-                            Reset
+                            Undo changes
                           </Button>
                           <Button
                             size="sm"
@@ -4617,12 +4849,11 @@ export default function LiteratureSearchStage({
                       ? 'border-indigo-600 text-indigo-700 bg-white'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
-                  title="Search academic databases (Semantic Scholar, CrossRef, etc.) for papers related to your topic."
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
-                  Search Online
+                  Search databases
                 </button>
                 <button
                   onClick={() => setAddMode('library')}
@@ -4631,12 +4862,11 @@ export default function LiteratureSearchStage({
                       ? 'border-indigo-600 text-indigo-700 bg-white'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
-                  title="Browse and add papers from your personal reference library. Papers saved from previous sessions appear here."
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z" />
                   </svg>
-                  My Library
+                  Reuse from my library
                 </button>
                 <button
                   onClick={() => setAddMode('import')}
@@ -4645,12 +4875,11 @@ export default function LiteratureSearchStage({
                       ? 'border-indigo-600 text-indigo-700 bg-white'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
-                  title="Import Grant Citations from BibTeX files, DOI lists, or other reference formats."
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                   </svg>
-                  Import
+                  Add a paper I already have
                 </button>
               </div>
             </div>
@@ -4659,13 +4888,17 @@ export default function LiteratureSearchStage({
               {/* SEARCH MODE */}
               {addMode === 'search' && (
                 <div className="p-4 space-y-4">
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    Searches free academic databases — Semantic Scholar, CrossRef, OpenAlex and others.
+                    Results build up across searches, so you can run several and review them together.
+                  </p>
                   <div className="space-y-2">
                     <div className="relative">
                       <Input
                         value={query}
                         onChange={event => setQuery(event.target.value)}
                         onKeyDown={e => e.key === 'Enter' && !loading && handleSearch()}
-                        placeholder="Search papers, topics, or keywords..."
+                        placeholder="Try a topic or a few keywords, e.g. graph neural networks catalyst discovery"
                         className={loading ? "pr-32" : "pr-20"}
                       />
                       <div className="absolute right-1 top-1 flex items-center gap-1">
@@ -4924,9 +5157,9 @@ export default function LiteratureSearchStage({
                           </div>
 
                           {/* Filter Support Info */}
-                          <div className="text-[10px] text-gray-400 pt-2 border-t border-gray-200">
-                            💡 Some filters only work with specific sources. Unsupported filters are dimmed.
-                            Sources with most filter support: Semantic Scholar, OpenAlex
+                          <div className="text-[11px] text-gray-500 pt-2 border-t border-gray-200 leading-relaxed">
+                            Not every database supports every filter — the ones that don&apos;t apply to your chosen
+                            sources are dimmed. Semantic Scholar and OpenAlex support the most.
                           </div>
                         </div>
                       </motion.div>
@@ -4966,9 +5199,18 @@ export default function LiteratureSearchStage({
               {/* IMPORT MODE */}
               {addMode === 'import' && (
                 <div className="p-4 space-y-4">
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    Already know the paper you want? Add it directly — no searching needed. Use this for papers
+                    a colleague sent you, or ones you exported from Zotero, Mendeley, or EndNote.
+                  </p>
+
                   {/* DOI Import */}
                   <div>
-                    <label className="text-xs font-medium text-gray-700 block mb-1.5">Import by DOI</label>
+                    <label className="text-xs font-medium text-gray-700 block mb-1">Add one paper by DOI</label>
+                    <p className="text-[11px] text-gray-500 mb-1.5">
+                      A DOI is the paper&apos;s permanent ID — usually printed on the first page or in the URL.
+                      Grapsi looks up the title, authors, and abstract for you.
+                    </p>
                     <div className="flex gap-2">
                       <Input
                         value={doiInput}
@@ -4977,24 +5219,28 @@ export default function LiteratureSearchStage({
                         className="text-sm"
                       />
                       <Button size="sm" onClick={handleDoiImport} disabled={!doiInput.trim()}>
-                        Add
+                        Look it up
                       </Button>
                     </div>
                   </div>
 
                   {/* BibTeX Import */}
                   <div>
-                    <label className="text-xs font-medium text-gray-700 block mb-1.5">Import BibTeX / RIS</label>
+                    <label className="text-xs font-medium text-gray-700 block mb-1">Add several at once</label>
+                    <p className="text-[11px] text-gray-500 mb-1.5">
+                      Paste BibTeX or RIS entries, or upload a <code className="text-[10px]">.bib</code> /
+                      {' '}<code className="text-[10px]">.ris</code> file exported from your reference manager.
+                    </p>
                     <Textarea
                       value={bibtexInput}
                       onChange={e => setBibtexInput(e.target.value)}
-                      placeholder="Paste BibTeX or RIS entries..."
+                      placeholder="@article{smith2024, title={...}, author={...}, year={2024} }"
                       rows={4}
                       className="text-sm font-mono"
                     />
                     <div className="flex items-center gap-2 mt-2">
                       <Button size="sm" variant="secondary" onClick={handleBibtexImport} disabled={!bibtexInput.trim()}>
-                        Import
+                        Add these papers
                       </Button>
                       <label className="text-xs text-indigo-600 cursor-pointer hover:underline flex items-center gap-1">
                         <input
@@ -5046,10 +5292,10 @@ export default function LiteratureSearchStage({
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <CardTitle className="text-base">Search Results</CardTitle>
+                    <CardTitle className="text-base">Step 2 · Papers found</CardTitle>
                     {searchRunIds.length > 1 && (
-                      <Badge className="bg-indigo-100 text-indigo-700 text-[10px]">
-                        {searchRunIds.length} searches
+                      <Badge className="bg-indigo-100 text-indigo-700 text-[10px]" title="Results from all your searches are collected in this one list.">
+                        from {searchRunIds.length} searches
                       </Badge>
                     )}
                   </div>
@@ -5062,15 +5308,15 @@ export default function LiteratureSearchStage({
                           </>
                         ) : (
                           <>
-                        {filteredResults.length} of {results.length} 
+                        showing {filteredResults.length} of {results.length}
                           </>
                         )}
-                        {removedResults.size > 0 && ` (${removedResults.size} hidden)`}
+                        {removedResults.size > 0 && ` · ${removedResults.size} removed`}
                       </span>
                     )}
                     {results.some(r => !r.abstract) && results.length > 0 && !loading && (
-                      <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
-                        Some missing abstracts
+                      <Badge variant="outline" className="text-xs text-amber-600 border-amber-300" title="These databases returned no abstract for some papers, so Grapsi can't score them. You can add an abstract on each one.">
+                        Some have no abstract
                       </Badge>
                     )}
                     {/* Clear All Results Button */}
@@ -5388,7 +5634,7 @@ export default function LiteratureSearchStage({
                       <div className="mt-2 p-2 bg-indigo-50 rounded-lg border border-indigo-200 flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-indigo-700">
-                            {selectedResults.size} selected
+                            {selectedResults.size} paper{selectedResults.size === 1 ? '' : 's'} ticked
                           </span>
                           <Button
                             size="sm"
@@ -5396,7 +5642,7 @@ export default function LiteratureSearchStage({
                             onClick={clearSelection}
                             className="h-6 text-xs text-indigo-600 hover:text-indigo-700"
                           >
-                            Clear
+                            Untick all
                           </Button>
                           <Button
                             size="sm"
@@ -5404,7 +5650,7 @@ export default function LiteratureSearchStage({
                             onClick={selectAllVisible}
                             className="h-6 text-xs text-indigo-600 hover:text-indigo-700"
                           >
-                            Select Page ({paginatedResults.length})
+                            Tick this page ({paginatedResults.length})
                           </Button>
                           {totalResultPages > 1 && (
                             <Button
@@ -5413,7 +5659,7 @@ export default function LiteratureSearchStage({
                               onClick={selectAllFiltered}
                             className="h-6 text-xs text-indigo-600 hover:text-indigo-700"
                           >
-                            Select All ({filteredResults.length})
+                            Tick all {filteredResults.length}
                           </Button>
                           )}
                         </div>
@@ -5431,12 +5677,12 @@ export default function LiteratureSearchStage({
                               setSelectedResults(new Set());
                             }}
                             className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700"
-                            title="Import the selected papers into Grant Citations."
+                            title="Keeps these papers for your proposal. They move to the Saved papers tab, where you can review or remove them."
                           >
                             <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                             </svg>
-                            Add Selected
+                            Save {selectedResults.size} to my proposal
                           </Button>
                           {/* Delete Selected */}
                           <Button
@@ -5444,12 +5690,12 @@ export default function LiteratureSearchStage({
                             variant="outline"
                             onClick={removeSelected}
                             className="h-7 text-xs text-red-600 border-red-300 hover:bg-red-50"
-                            title="Remove selected papers from the search results list."
+                            title="Hides these from the results list to reduce clutter. It does not delete anything you've already saved, and you can bring them back."
                           >
                             <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
-                            Delete Selected
+                            Remove from list
                           </Button>
                         </div>
                       </div>
@@ -5460,13 +5706,15 @@ export default function LiteratureSearchStage({
                 {/* Accumulation info when multiple searches done */}
                 {searchRunIds.length > 1 && results.length > 0 && (
                   <div className="mb-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg text-xs text-indigo-700">
-                    <span className="font-medium">📚 Accumulated Results:</span> {results.length} unique papers from {searchRunIds.length} searches. 
-                    <span className="text-indigo-500 ml-1">Duplicates are automatically removed.</span>
+                    <span className="font-medium">Your searches so far:</span> {results.length} different papers from{' '}
+                    {searchRunIds.length} searches, all in one list below.
+                    <span className="text-indigo-500 ml-1">If a paper turned up in two searches, you only see it once.</span>
                   </div>
                 )}
                 
                 <CardDescription className="text-xs">
-                  💡 Tip: Add Grant Citations with abstracts for better literature analysis
+                  Tick the papers you want to keep, then save them. Papers with an abstract get scored and
+                  matched to your proposal — ones without can still be saved, but Grapsi can&apos;t judge them.
                 </CardDescription>
                 
                 {/* AI Relevance Analysis Section */}
@@ -5476,14 +5724,14 @@ export default function LiteratureSearchStage({
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       {/* Left: Analyze button + status */}
                       <div className="space-y-1">
-                        <p className="text-[10px] uppercase tracking-wide font-semibold text-violet-700">Analysis</p>
+                        <p className="text-[11px] font-semibold text-violet-800">Step 3 · Score these results</p>
                         <div className="flex items-center gap-2 flex-wrap">
                         <Button
                           onClick={handleAiRelevanceAnalysis}
                           disabled={aiAnalyzing || !searchRunId}
                           size="sm"
                           className="bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800 text-white shadow-sm"
-                          title="Use AI to score each search result for relevance and map them to your paper's blueprint sections. Run this after searching to see which papers are most useful and unlock the Coverage view."
+                          title="Reads each result's abstract, gives it a relevance score, and notes which parts of your proposal it could support. Needed before the Coverage view can work."
                         >
                           {aiAnalyzing ? (
                             <>
@@ -5491,29 +5739,33 @@ export default function LiteratureSearchStage({
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                               </svg>
-                              Analyzing...
+                              Scoring papers...
                             </>
                           ) : (
                             <>
                               <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                               </svg>
-                              Analyze & Map
+                              Score &amp; match papers
                             </>
                           )}
                         </Button>
                         {aiReviewStatus && (
                           <span className="text-[11px] text-gray-500">
-                            {aiReviewStatus.reviewed}/{aiReviewStatus.total} reviewed
+                            {aiReviewStatus.reviewed} of {aiReviewStatus.total} scored
                             {aiReviewStatus.inProcess > 0 && (
-                              <span className="text-sky-600 ml-1">- {aiReviewStatus.inProcess} in process</span>
+                              <span className="text-sky-600 ml-1">· {aiReviewStatus.inProcess} still going</span>
                             )}
                             {aiReviewStatus.retry > 0 && (
-                              <span className="text-amber-600 ml-1">· {aiReviewStatus.retry} retry</span>
+                              <span className="text-amber-600 ml-1">· {aiReviewStatus.retry} failed, will retry</span>
                             )}
                           </span>
                         )}
                         </div>
+                        <p className="text-[11px] text-gray-500 max-w-md leading-relaxed">
+                          Reads each abstract, scores how useful the paper is to you, and notes which parts of
+                          your proposal it supports. Papers without an abstract are skipped.
+                        </p>
                       </div>
 
                       <div className="hidden lg:block self-stretch w-px bg-gray-200" />
@@ -5521,10 +5773,10 @@ export default function LiteratureSearchStage({
                       {/* Right: View toggle */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-[10px] uppercase tracking-wide font-semibold text-teal-700">Coverage</p>
+                          <p className="text-[11px] font-semibold text-teal-800">Step 4 · Check for gaps</p>
                           {aiImportSuggestionCount > 0 && (
                             <Badge className="bg-violet-100 text-violet-700 border-0 text-[10px]">
-                              {aiImportSuggestionCount} AI import picks
+                              {aiImportSuggestionCount} worth saving
                             </Badge>
                           )}
                         </div>
@@ -5539,28 +5791,25 @@ export default function LiteratureSearchStage({
                                 ? 'bg-white border border-teal-200 shadow-sm text-gray-900' 
                                 : 'text-gray-700 hover:text-gray-900'
                             }`}
-                            title="Results: Browse and import individual papers."
+                            title="The list of papers this search found, so you can read and save them one by one."
                           >
                             <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
                             </svg>
-                            Results
+                            Paper list
                           </Button>
                           <Button
                             size="sm"
                             variant={searchViewMode === 'coverage' ? 'default' : 'ghost'}
                             onClick={() => setSearchViewMode('coverage')}
-                            disabled={!blueprintCoverage}
                             className={`h-7 px-3 text-xs rounded-md ${
-                              searchViewMode === 'coverage' 
-                                ? 'bg-teal-600 shadow-sm text-white border border-teal-600' 
-                                : !blueprintCoverage
-                                  ? 'bg-teal-100 text-teal-500 border border-teal-200 opacity-80 cursor-not-allowed'
-                                  : 'text-teal-700 hover:text-teal-900 hover:bg-teal-100'
+                              searchViewMode === 'coverage'
+                                ? 'bg-teal-600 shadow-sm text-white border border-teal-600'
+                                : 'text-teal-700 hover:text-teal-900 hover:bg-teal-100'
                             }`}
-                            title={blueprintCoverage 
-                              ? 'Coverage: Check mapped dimensions and identify evidence gaps before drafting.' 
-                              : "Coverage is locked until you run 'Analyze & Map'."
+                            title={blueprintCoverage
+                              ? 'Shows each part of your proposal and which papers support it, so you can spot the parts with no evidence yet.'
+                              : "Available once you've scored the papers — that's what tells Grapsi which part of your proposal each paper supports."
                             }
                           >
                             <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -5574,9 +5823,16 @@ export default function LiteratureSearchStage({
                             )}
                           </Button>
                         </div>
-                        {!blueprintCoverage && (
-                          <p className="text-[11px] text-teal-700/80">
-                            Run Analyze & Map first. Coverage view unlocks after blueprint mapping.
+                        {blueprintCoverage ? (
+                          <p className="text-[11px] text-teal-700/90 max-w-xs leading-relaxed">
+                            {blueprintCoverage.gaps.length > 0
+                              ? `${blueprintCoverage.gaps.length} part${blueprintCoverage.gaps.length === 1 ? '' : 's'} of your proposal still ${blueprintCoverage.gaps.length === 1 ? 'has' : 'have'} no paper behind ${blueprintCoverage.gaps.length === 1 ? 'it' : 'them'}.`
+                              : 'Every part of your proposal has at least one paper behind it.'}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-teal-700/90 max-w-xs leading-relaxed">
+                            Score the papers first. That&apos;s what tells Grapsi which part of your proposal
+                            each one supports.
                           </p>
                         )}
                       </div>
@@ -5585,19 +5841,19 @@ export default function LiteratureSearchStage({
                     {/* Row 2: Quick actions (only show after analysis) */}
                     {aiImportSuggestionCount > 0 && (
                       <div className="flex items-center gap-2 mt-2 pl-0.5 pt-2 border-t border-gray-100">
-                        <span className="text-[10px] text-emerald-700 uppercase tracking-wider font-semibold mr-1">Add / Import:</span>
+                        <span className="text-[11px] text-emerald-800 font-semibold mr-1">Shortcuts:</span>
                         <Button
                           onClick={handleAddAllSuggested}
                           disabled={bulkAddingSuggested}
                           size="sm"
                           variant="outline"
                           className="h-6 text-[11px] text-emerald-700 border-emerald-300 hover:bg-emerald-50"
-                          title="Add All Suggested: Import all AI papers marked with recommendation IMPORT."
+                          title="Saves every paper Grapsi scored as a strong match, in one go. You can remove any of them afterwards."
                         >
                           <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                           </svg>
-                          {bulkAddingSuggested ? 'Adding...' : `Add All Suggested (${aiImportSuggestionCount})`}
+                          {bulkAddingSuggested ? 'Saving...' : `Save all ${aiImportSuggestionCount} strong matches`}
                         </Button>
                         <Button
                           onClick={() => setHideNonRelevant(!hideNonRelevant)}
@@ -5607,9 +5863,9 @@ export default function LiteratureSearchStage({
                             ? "bg-violet-600 hover:bg-violet-700 text-white"
                             : "text-violet-700 border-violet-300 hover:bg-violet-50"
                           }`}
-                          title={hideNonRelevant 
-                            ? "Show all results again, including papers not suggested by AI." 
-                            : "Hide Others: Show only AI papers marked IMPORT."
+                          title={hideNonRelevant
+                            ? "Bring back every paper this search found, including the weaker matches."
+                            : "Narrows the list to the strong matches only, so you're not scrolling past papers you won't use."
                           }
                         >
                           {hideNonRelevant ? (
@@ -5618,14 +5874,14 @@ export default function LiteratureSearchStage({
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                               </svg>
-                              Show All ({results.length})
+                              Show all {results.length} again
                             </>
                           ) : (
                             <>
                               <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
                               </svg>
-                              Hide Others ({Math.max(0, results.length - aiImportSuggestionCount)})
+                              Show strong matches only
                             </>
                           )}
                         </Button>
@@ -5634,16 +5890,16 @@ export default function LiteratureSearchStage({
 
                     {aiSuggestions.size > 0 && (
                       <div className="flex items-center gap-2 mt-2 pl-0.5 pt-2 border-t border-gray-100 flex-wrap">
-                        <span className="text-[10px] text-indigo-700 uppercase tracking-wider font-semibold mr-1">Full Text:</span>
+                        <span className="text-[11px] text-indigo-800 font-semibold mr-1">Get full text:</span>
                         <Button
                           onClick={() => runPdfRetrieval('deep')}
                           disabled={pdfRetrievalRunning || deepRelevantCount === 0}
                           size="sm"
                           variant="outline"
                           className="h-6 text-[11px] text-indigo-700 border-indigo-300 hover:bg-indigo-50"
-                          title="Retrieve PDFs for relevant DEEP_ANCHOR / DEEP_SUPPORT / DEEP_STRESS_TEST papers."
+                          title="Tries to download the PDF for the papers your proposal leans on most — the ones you'll quote or argue against directly. Only free, openly available PDFs can be fetched."
                         >
-                          {pdfRetrievalRunning ? 'Retrieving...' : `Retrieve Deep PDFs (${deepRelevantCount})`}
+                          {pdfRetrievalRunning ? 'Fetching...' : `Fetch PDFs for ${deepRelevantCount} key papers`}
                         </Button>
                         <Button
                           onClick={() => runPdfRetrieval('relevant')}
@@ -5651,13 +5907,18 @@ export default function LiteratureSearchStage({
                           size="sm"
                           variant="outline"
                           className="h-6 text-[11px] text-sky-700 border-sky-300 hover:bg-sky-50"
-                          title="Retrieve PDFs for all papers marked relevant by AI."
+                          title="Tries to download the PDF for every paper scored as relevant. Takes longer. Only free, openly available PDFs can be fetched."
                         >
-                          {pdfRetrievalRunning ? 'Retrieving...' : `Retrieve Relevant PDFs (${relevantCount})`}
+                          {pdfRetrievalRunning ? 'Fetching...' : `Fetch PDFs for all ${relevantCount} relevant`}
                         </Button>
                         {pdfRetrievalSummary && (
                           <span className="text-[11px] text-gray-600">{pdfRetrievalSummary}</span>
                         )}
+                        <p className="w-full text-[11px] text-gray-500 leading-relaxed mt-1">
+                          Full text lets Grapsi quote and check evidence from the paper itself, not just its
+                          abstract. If a PDF can&apos;t be fetched, you can paste a link or the text yourself from
+                          each paper below.
+                        </p>
                       </div>
                     )}
                     
@@ -5774,11 +6035,16 @@ export default function LiteratureSearchStage({
                   
                   {/* Empty State - only show when not loading */}
                   {!loading && results.length === 0 && (
-                    <div className="text-center py-8 text-gray-400">
-                      <svg className="w-10 h-10 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="text-center py-10 px-4">
+                      <svg className="w-10 h-10 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                       </svg>
-                      <p className="text-sm">Search for papers above</p>
+                      <p className="text-sm font-medium text-gray-700">No papers yet</p>
+                      <p className="text-xs text-gray-500 mt-1.5 max-w-sm mx-auto leading-relaxed">
+                        {searchStrategy
+                          ? 'Run a search from your plan above, or type your own keywords in the box. Results from every search collect here.'
+                          : 'Type keywords in the box above and hit Search. Or build a search plan first and Grapsi will suggest what to look for.'}
+                      </p>
                     </div>
                   )}
                   
@@ -5788,7 +6054,11 @@ export default function LiteratureSearchStage({
                       <svg className="w-10 h-10 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                       </svg>
-                      <p className="text-sm mb-2">No results match your filters</p>
+                      <p className="text-sm font-medium text-gray-700 mb-1">Nothing matches your filters</p>
+                      <p className="text-xs text-gray-500 mb-3 max-w-sm mx-auto leading-relaxed">
+                        You have {results.length} paper{results.length === 1 ? '' : 's'} from your searches, but
+                        none of them fit the filters you&apos;ve set. Widen or clear the filters to see them again.
+                      </p>
                       <div className="flex items-center justify-center gap-2">
                         <Button
                           size="sm"
@@ -5807,7 +6077,7 @@ export default function LiteratureSearchStage({
                           })}
                           className="text-xs"
                         >
-                          Clear Filters
+                          Clear all filters
                         </Button>
                         {removedResults.size > 0 && (
                           <Button
@@ -5815,8 +6085,9 @@ export default function LiteratureSearchStage({
                             variant="outline"
                             onClick={restoreAllRemoved}
                             className="text-xs text-amber-600 border-amber-300"
+                            title="You removed these from the list earlier. This puts them back."
                           >
-                            Restore {removedResults.size} Hidden
+                            Bring back {removedResults.size} removed
                           </Button>
                         )}
                       </div>
@@ -5824,6 +6095,35 @@ export default function LiteratureSearchStage({
                   )}
                   
                   {/* Coverage View - Evidence-first table + bipartite matrix */}
+                  {/* Coverage is reachable at any time — when there's nothing to show yet it explains
+                      what to do instead of being a dead, greyed-out control. */}
+                  {!loading && searchViewMode === 'coverage' && !blueprintCoverage && (
+                    <div className="text-center py-10 px-4">
+                      <svg className="w-10 h-10 mx-auto mb-3 text-teal-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                      </svg>
+                      <p className="text-sm font-medium text-gray-700">Nothing to check yet</p>
+                      <p className="text-xs text-gray-500 mt-1.5 mb-4 max-w-sm mx-auto leading-relaxed">
+                        This view shows each part of your proposal and which papers back it up — so you can
+                        spot the parts with no evidence behind them. To fill it in, Grapsi first needs to
+                        score your search results.
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={handleAiRelevanceAnalysis}
+                        disabled={aiAnalyzing || !searchRunId || results.length === 0}
+                        className="bg-violet-600 hover:bg-violet-700 text-white"
+                      >
+                        {aiAnalyzing ? 'Scoring papers...' : 'Score & match papers'}
+                      </Button>
+                      {results.length === 0 && (
+                        <p className="text-[11px] text-gray-500 mt-2">
+                          Run a search first — there are no papers to score.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {!loading && searchViewMode === 'coverage' && blueprintCoverage && (
                     <div className="space-y-4">
                       <div className="bg-gradient-to-r from-violet-50 to-indigo-50 rounded-xl p-4 border border-violet-200">
@@ -6220,6 +6520,15 @@ export default function LiteratureSearchStage({
                         const resultPdfStatus = normalizePdfStatusValue(result.pdfStatus);
                         const resultSourceType = typeof result.documentSourceType === 'string' ? result.documentSourceType : undefined;
                         const availabilityLabel = resultSourceType === 'TEXT_PASTE' ? 'Full Text' : 'PDF';
+                        const areDetailsOpen = expandedRowDetails.has(result.id);
+                        // How many extra signals are waiting behind the disclosure, so the link can
+                        // promise something concrete rather than a vague "more".
+                        const detailSignalCount = [
+                          !!(isAiAnalyzed && aiSuggestion),
+                          !!aiSuggestion?.deepAnalysisRecommendation,
+                          !!(isAiAnalyzed && aiSuggestion?.citationMeta?.usage),
+                          paperDimensionMappings.has(result.id),
+                        ].filter(Boolean).length;
 
                         return (
                           <motion.div
@@ -6251,176 +6560,216 @@ export default function LiteratureSearchStage({
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start gap-2">
-                                <h4 
+                                <h4
                                   className="font-medium text-sm text-gray-900 leading-tight flex-1 cursor-pointer hover:text-indigo-700"
                                   onClick={() => toggleResultSelection(result.id)}
                                 >
                                   {result.title}
                                 </h4>
-                                {/* AI Suggested Badge */}
-                                {isAiSuggested && (
-                                  <Badge className="shrink-0 text-[10px] bg-gradient-to-r from-violet-500 to-indigo-500 text-white border-0 shadow-sm">
-                                    🤖 AI Import Pick
-                                  </Badge>
-                                )}
-                                {/* Usage Badges (I/L/M/C) */}
-                                {isAiAnalyzed && aiSuggestion?.citationMeta?.usage && (
-                                  <div className="flex gap-0.5 shrink-0">
-                                    {aiSuggestion.citationMeta.usage.introduction && (
-                                      <Badge variant="outline" className="text-[9px] px-1 py-0 bg-blue-50 text-blue-700 border-blue-300" title="Cite in Introduction">
-                                        I
-                                      </Badge>
-                                    )}
-                                    {aiSuggestion.citationMeta.usage.literatureReview && (
-                                      <Badge variant="outline" className="text-[9px] px-1 py-0 bg-purple-50 text-purple-700 border-purple-300" title="Cite in Literature Review">
-                                        L
-                                      </Badge>
-                                    )}
-                                    {aiSuggestion.citationMeta.usage.methodology && (
-                                      <Badge variant="outline" className="text-[9px] px-1 py-0 bg-emerald-50 text-emerald-700 border-emerald-300" title="Reference in Methodology">
-                                        M
-                                      </Badge>
-                                    )}
-                                    {aiSuggestion.citationMeta.usage.comparison && (
-                                      <Badge variant="outline" className="text-[9px] px-1 py-0 bg-amber-50 text-amber-700 border-amber-300" title="Use for Comparison">
-                                        C
-                                      </Badge>
-                                    )}
-                                  </div>
-                                )}
-                                {/* Import Recommendation Badge */}
-                                {paperRecommendations.has(result.id) && (
-                                  <Badge 
-                                    className={`shrink-0 text-[10px] ${
+                                {/*
+                                  One relevance signal on the title line. Everything else moved into the
+                                  "More about this paper" panel below so the list stays scannable.
+                                */}
+                                {paperRecommendations.has(result.id) ? (
+                                  <Badge
+                                    className={`shrink-0 text-[11px] ${
                                       paperRecommendations.get(result.id) === 'IMPORT'
-                                        ? 'bg-emerald-500 text-white'
+                                        ? 'bg-emerald-600 text-white'
                                         : paperRecommendations.get(result.id) === 'MAYBE'
                                           ? 'bg-amber-500 text-white'
                                           : 'bg-gray-400 text-white'
                                     }`}
-                                    title={paperRecommendations.get(result.id) === 'IMPORT' 
-                                      ? 'Strongly recommended for import - maps to multiple dimensions'
-                                      : paperRecommendations.get(result.id) === 'MAYBE'
-                                        ? 'Consider importing - maps to some dimensions'
-                                        : 'Low blueprint coverage - might be useful for background'}
+                                    title={IMPORT_DECISION_LABELS[paperRecommendations.get(result.id) || '']?.help
+                                      || 'How well this paper matches your proposal.'}
                                   >
-                                    {paperRecommendations.get(result.id)}
+                                    {IMPORT_DECISION_LABELS[paperRecommendations.get(result.id) || '']?.label
+                                      || paperRecommendations.get(result.id)}
                                   </Badge>
-                                )}
-                                {aiSuggestion?.deepAnalysisRecommendation && (
+                                ) : isAiSuggested ? (
                                   <Badge
-                                    className={`shrink-0 text-[10px] ${
-                                      aiSuggestion.deepAnalysisRecommendation === 'DEEP_ANCHOR'
-                                        ? 'bg-indigo-600 text-white'
-                                        : aiSuggestion.deepAnalysisRecommendation === 'DEEP_SUPPORT'
-                                          ? 'bg-sky-600 text-white'
-                                          : aiSuggestion.deepAnalysisRecommendation === 'DEEP_STRESS_TEST'
-                                            ? 'bg-rose-600 text-white'
-                                            : 'bg-gray-500 text-white'
-                                    }`}
-                                    title={aiSuggestion.deepAnalysisRationale || 'Deep analysis recommendation'}
+                                    className="shrink-0 text-[11px] bg-emerald-600 text-white border-0"
+                                    title="Grapsi scored this as a strong match for your proposal."
                                   >
-                                    {aiSuggestion.deepAnalysisRecommendation}
+                                    Strong match
                                   </Badge>
-                                )}
-                                {hasAbstract ? (
-                                  <Badge variant="secondary" className="shrink-0 text-[10px] bg-blue-50 text-blue-600">
-                                    📄 Abstract
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="outline" className={`shrink-0 text-[10px] ${
-                                    aiSuggestions.size > 0
-                                      ? 'text-amber-700 border-amber-300 bg-amber-50'
-                                      : 'text-amber-600 border-amber-300'
-                                  }`} title={aiSuggestions.size > 0 ? 'Skipped from AI analysis — add an abstract to enable review' : 'No abstract available'}>
-                                    {aiSuggestions.size > 0 ? 'No Abstract — Skipped' : 'No abstract'}
+                                ) : null}
+                                {!hasAbstract && (
+                                  <Badge variant="outline" className="shrink-0 text-[11px] text-amber-700 border-amber-300 bg-amber-50"
+                                    title={aiSuggestions.size > 0
+                                      ? 'This database returned no abstract, so Grapsi could not score this paper. Add the abstract below and it will be included.'
+                                      : 'This database returned no abstract for this paper. You can add one below.'}>
+                                    {aiSuggestions.size > 0 ? 'No abstract — not scored' : 'No abstract'}
                                   </Badge>
                                 )}
                               </div>
-                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+
+                              {/* Author line + the single control that opens everything else */}
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
                                 <p className="text-xs text-gray-500">
                                   {(result.authors || []).slice(0, 3).join(', ')}
                                   {result.authors?.length > 3 && ' et al.'}
                                   {result.year && ` • ${result.year}`}
                                   {result.venue && ` • ${result.venue}`}
                                 </p>
-                                {/* Publication Type Badge */}
-                                {result.publicationType && (
-                                  <Badge 
-                                    variant="outline" 
-                                    className={`text-[9px] px-1.5 py-0 ${
-                                      result.publicationType === 'journal-article' 
-                                        ? 'bg-blue-50 text-blue-700 border-blue-200' 
-                                        : result.publicationType === 'conference-paper'
-                                          ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                          : result.publicationType === 'preprint'
-                                            ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                            : result.publicationType === 'review'
-                                              ? 'bg-green-50 text-green-700 border-green-200'
-                                              : 'bg-gray-50 text-gray-600 border-gray-200'
-                                    }`}
-                                  >
-                                    {PUBLICATION_TYPE_OPTIONS.find(t => t.value === result.publicationType)?.icon || '📄'}{' '}
-                                    {PUBLICATION_TYPE_OPTIONS.find(t => t.value === result.publicationType)?.label || result.publicationType}
-                                  </Badge>
-                                )}
-                                {/* Open Access Badge */}
-                                {result.isOpenAccess && (
-                                  <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border-emerald-200">
-                                    🔓 Open Access
-                                  </Badge>
-                                )}
-                                <Badge
-                                  variant="outline"
-                                  className={`text-[9px] px-1.5 py-0 ${
-                                    resultPdfStatus === 'READY'
-                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                      : resultPdfStatus === 'FAILED'
-                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                        : resultPdfStatus === 'UPLOADED' || resultPdfStatus === 'PARSING'
-                                          ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                        : 'bg-gray-50 text-gray-600 border-gray-200'
-                                  }`}
+                                <button
+                                  onClick={() => toggleRowDetails(result.id)}
+                                  aria-expanded={areDetailsOpen}
+                                  className="text-[11px] text-indigo-600 hover:text-indigo-800 hover:underline focus-visible:underline"
                                 >
-                                  {availabilityLabel} {resultPdfStatus}
-                                </Badge>
-                                {result.citationCount !== undefined && result.citationCount > 0 && (
-                                  <span className="text-[10px] text-gray-400">
-                                    📊 {result.citationCount.toLocaleString()} citations
-                                  </span>
-                                )}
+                                  {areDetailsOpen
+                                    ? 'Hide details'
+                                    : `More about this paper${detailSignalCount > 0 ? ` (${detailSignalCount})` : ''}`}
+                                </button>
                               </div>
-                              
-                              {/* Dimension Mappings - Show which blueprint dimensions this paper covers */}
-                              {paperDimensionMappings.has(result.id) && (
-                                <div className="mt-1.5 flex flex-wrap gap-1">
-                                  {paperDimensionMappings.get(result.id)?.map((mapping, idx) => (
-                                    <div key={idx} className="group relative">
-                                      <Badge 
-                                        variant="outline" 
-                                        className={`text-[9px] cursor-help ${
-                                          mapping.confidence === 'HIGH'
-                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                            : mapping.confidence === 'MEDIUM'
-                                              ? 'bg-blue-50 text-blue-700 border-blue-300'
-                                              : 'bg-gray-50 text-gray-600 border-gray-300'
-                                        }`}
-                                      >
-                                        <span className="font-medium">{mapping.sectionKey}:</span>{' '}
-                                        {mapping.dimension.slice(0, 30)}{mapping.dimension.length > 30 ? '...' : ''}
-                                      </Badge>
-                                      {/* Tooltip with full remark */}
-                                      <div className="absolute left-0 bottom-full mb-1 hidden group-hover:block z-50 w-72 p-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg">
-                                        <p className="font-medium text-emerald-400 mb-1">{mapping.sectionKey}</p>
-                                        <p className="text-gray-300 mb-1">{mapping.dimension}</p>
-                                        <p className="text-gray-400 italic">"{mapping.remark}"</p>
-                                        <p className="mt-1 text-[10px] text-gray-500">Confidence: {mapping.confidence}</p>
+
+                              {/* Everything that used to crowd the row — kept, just folded away until asked for */}
+                              {areDetailsOpen && (
+                                <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50/70 p-2.5 space-y-2.5">
+                                  {aiSuggestion?.deepAnalysisRecommendation && (
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-gray-700 mb-1">How you&apos;d use it</p>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <Badge
+                                          className={`text-[11px] ${
+                                            aiSuggestion.deepAnalysisRecommendation === 'DEEP_ANCHOR'
+                                              ? 'bg-indigo-600 text-white'
+                                              : aiSuggestion.deepAnalysisRecommendation === 'DEEP_SUPPORT'
+                                                ? 'bg-sky-600 text-white'
+                                                : aiSuggestion.deepAnalysisRecommendation === 'DEEP_STRESS_TEST'
+                                                  ? 'bg-rose-600 text-white'
+                                                  : 'bg-gray-500 text-white'
+                                          }`}
+                                        >
+                                          {DEEP_ANALYSIS_LABELS[aiSuggestion.deepAnalysisRecommendation]?.label
+                                            || aiSuggestion.deepAnalysisRecommendation}
+                                        </Badge>
+                                        <span className="text-[11px] text-gray-600">
+                                          {aiSuggestion.deepAnalysisRationale
+                                            || DEEP_ANALYSIS_LABELS[aiSuggestion.deepAnalysisRecommendation]?.help}
+                                        </span>
                                       </div>
                                     </div>
-                                  ))}
+                                  )}
+
+                                  {isAiAnalyzed && aiSuggestion?.citationMeta?.usage && (
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-gray-700 mb-1">Sections it fits</p>
+                                      <div className="flex gap-1 flex-wrap">
+                                        {aiSuggestion.citationMeta.usage.introduction && (
+                                          <Badge variant="outline" className="text-[11px] px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-300">Introduction</Badge>
+                                        )}
+                                        {aiSuggestion.citationMeta.usage.literatureReview && (
+                                          <Badge variant="outline" className="text-[11px] px-1.5 py-0 bg-purple-50 text-purple-700 border-purple-300">Literature review</Badge>
+                                        )}
+                                        {aiSuggestion.citationMeta.usage.methodology && (
+                                          <Badge variant="outline" className="text-[11px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border-emerald-300">Methodology</Badge>
+                                        )}
+                                        {aiSuggestion.citationMeta.usage.comparison && (
+                                          <Badge variant="outline" className="text-[11px] px-1.5 py-0 bg-amber-50 text-amber-700 border-amber-300">Comparison</Badge>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {paperDimensionMappings.has(result.id) && (
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-gray-700 mb-1">
+                                        Parts of your proposal it supports
+                                      </p>
+                                      <div className="space-y-1">
+                                        {paperDimensionMappings.get(result.id)?.map((mapping, idx) => (
+                                          <div key={idx} className="flex gap-2 items-baseline">
+                                            <Badge
+                                              variant="outline"
+                                              className={`shrink-0 text-[10px] ${
+                                                mapping.confidence === 'HIGH'
+                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                  : mapping.confidence === 'MEDIUM'
+                                                    ? 'bg-blue-50 text-blue-700 border-blue-300'
+                                                    : 'bg-gray-50 text-gray-600 border-gray-300'
+                                              }`}
+                                            >
+                                              {mapping.sectionKey}
+                                            </Badge>
+                                            <span className="text-[11px] text-gray-700 leading-relaxed">
+                                              <span className="font-medium">{mapping.dimension}</span>
+                                              {mapping.remark ? ` — ${mapping.remark}` : ''}
+                                              <span className="text-gray-500">
+                                                {' '}
+                                                {mapping.confidence === 'HIGH'
+                                                  ? '(clear, direct support)'
+                                                  : mapping.confidence === 'MEDIUM'
+                                                    ? '(related — you may want a second source)'
+                                                    : '(loosely related — check it yourself)'}
+                                              </span>
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <div>
+                                    <p className="text-[11px] font-semibold text-gray-700 mb-1">About the paper</p>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {result.publicationType && (
+                                        <Badge
+                                          variant="outline"
+                                          className={`text-[11px] px-1.5 py-0 ${
+                                            result.publicationType === 'journal-article'
+                                              ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                              : result.publicationType === 'conference-paper'
+                                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                                : result.publicationType === 'preprint'
+                                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                                  : result.publicationType === 'review'
+                                                    ? 'bg-green-50 text-green-700 border-green-200'
+                                                    : 'bg-gray-50 text-gray-600 border-gray-200'
+                                          }`}
+                                          title={result.publicationType === 'preprint'
+                                            ? 'Not yet peer reviewed — treat its findings with more caution.'
+                                            : result.publicationType === 'review'
+                                              ? 'A survey of existing work rather than new results. Good for background.'
+                                              : 'The kind of publication this is.'}
+                                        >
+                                          {PUBLICATION_TYPE_OPTIONS.find(t => t.value === result.publicationType)?.label || result.publicationType}
+                                        </Badge>
+                                      )}
+                                      {result.isOpenAccess && (
+                                        <Badge variant="outline" className="text-[11px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border-emerald-200" title="Free to read — the full text can usually be fetched automatically.">
+                                          Free to read
+                                        </Badge>
+                                      )}
+                                      <Badge
+                                        variant="outline"
+                                        className={`text-[11px] px-1.5 py-0 ${
+                                          resultPdfStatus === 'READY'
+                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                            : resultPdfStatus === 'FAILED'
+                                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                              : resultPdfStatus === 'UPLOADED' || resultPdfStatus === 'PARSING'
+                                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                              : 'bg-gray-50 text-gray-600 border-gray-200'
+                                        }`}
+                                        title={PDF_STATUS_LABELS[resultPdfStatus]?.help || 'Whether the full text is attached yet.'}
+                                      >
+                                        {PDF_STATUS_LABELS[resultPdfStatus]?.label || availabilityLabel}
+                                      </Badge>
+                                      {hasAbstract && (
+                                        <Badge variant="outline" className="text-[11px] px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-200" title="This paper has an abstract, so Grapsi can score it.">
+                                          Has abstract
+                                        </Badge>
+                                      )}
+                                      {result.citationCount !== undefined && result.citationCount > 0 && (
+                                        <span className="text-[11px] text-gray-600" title="How many other papers have cited this one — a rough signal of how established it is.">
+                                          Cited {result.citationCount.toLocaleString()} times
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                               )}
-                              
+
                               {/* Abstract section */}
                               {hasAbstract ? (
                                 <>
@@ -6428,7 +6777,7 @@ export default function LiteratureSearchStage({
                                     onClick={() => toggleAbstract(result.id)}
                                     className="text-xs text-indigo-600 mt-1 hover:underline"
                                   >
-                                    {isExpanded ? 'Hide abstract ▲' : 'Show abstract ▼'}
+                                    {isExpanded ? 'Hide abstract' : 'Read abstract'}
                                   </button>
                                   {isExpanded && (
                                     <p className="text-xs text-gray-600 mt-2 bg-gray-50 p-2 rounded leading-relaxed">
@@ -6517,20 +6866,21 @@ export default function LiteratureSearchStage({
                                 </a>
                               )}
                               
-                              {/* AI Reasoning & Citation Metadata - Show why this paper was suggested */}
-                              {isAiAnalyzed && aiSuggestion && (
+                              {/* Why this paper was matched + the analysis metadata.
+                                  Kept behind the same "More about this paper" disclosure as the badges,
+                                  so a scored result list stays readable. */}
+                              {isAiAnalyzed && aiSuggestion && areDetailsOpen && (
                                 <motion.div
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: 'auto' }}
                                   className="mt-2 p-2.5 bg-gradient-to-r from-violet-50 to-indigo-50 rounded-lg border border-violet-200"
                                 >
                                   <div className="flex items-start gap-2">
-                                    <span className="text-violet-500 text-sm shrink-0">🤖</span>
                                     <div className="flex-1 min-w-0 space-y-2">
                                       {/* Score and relevance */}
                                       <div className="flex items-center gap-2 mb-1">
-                                        <span className="text-[10px] font-semibold text-violet-700 uppercase tracking-wide">
-                                          Why it's relevant
+                                        <span className="text-[11px] font-semibold text-violet-800">
+                                          Why Grapsi picked this
                                         </span>
                                         <div className="flex items-center gap-1 px-1.5 py-0.5 bg-violet-100 rounded text-[10px] text-violet-600">
                                           <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -6544,46 +6894,53 @@ export default function LiteratureSearchStage({
                                       </p>
                                       {aiSuggestion.deepAnalysisRecommendation && (
                                         <p className="text-[11px] text-indigo-800">
-                                          <span className="font-semibold">Deep analysis:</span>{' '}
-                                          {aiSuggestion.deepAnalysisRecommendation}
-                                          {aiSuggestion.deepAnalysisRationale ? ` — ${aiSuggestion.deepAnalysisRationale}` : ''}
+                                          <span className="font-semibold">How you&apos;d use it:</span>{' '}
+                                          {DEEP_ANALYSIS_LABELS[aiSuggestion.deepAnalysisRecommendation]?.label
+                                            || aiSuggestion.deepAnalysisRecommendation}
+                                          {aiSuggestion.deepAnalysisRationale
+                                            ? ` — ${aiSuggestion.deepAnalysisRationale}`
+                                            : DEEP_ANALYSIS_LABELS[aiSuggestion.deepAnalysisRecommendation]?.help
+                                              ? ` — ${DEEP_ANALYSIS_LABELS[aiSuggestion.deepAnalysisRecommendation].help}`
+                                              : ''}
                                         </p>
                                       )}
                                       
                                       {/* Enhanced Citation Metadata */}
                                       {aiSuggestion.citationMeta && (
                                         <div className="mt-2 pt-2 border-t border-violet-200/50 space-y-1.5">
-                                          {/* Key Contribution */}
-                                          <div className="flex items-start gap-1.5">
-                                            <span className="text-[10px] font-medium text-violet-600 shrink-0 w-20">💡 Contribution:</span>
+                                          {/* What the paper contributes */}
+                                          <div className="flex items-start gap-2">
+                                            <span className="text-[11px] font-medium text-violet-600 shrink-0 w-28">What it adds</span>
                                             <span className="text-[11px] text-violet-900">{aiSuggestion.citationMeta.keyContribution}</span>
                                           </div>
-                                          
-                                          {/* Key Findings */}
-                                          <div className="flex items-start gap-1.5">
-                                            <span className="text-[10px] font-medium text-violet-600 shrink-0 w-20">📊 Findings:</span>
+
+                                          {/* What it found */}
+                                          <div className="flex items-start gap-2">
+                                            <span className="text-[11px] font-medium text-violet-600 shrink-0 w-28">What it found</span>
                                             <span className="text-[11px] text-violet-900">{aiSuggestion.citationMeta.keyFindings}</span>
                                           </div>
-                                          
-                                          {/* Methodological Approach */}
+
+                                          {/* How they did it */}
                                           {aiSuggestion.citationMeta.methodologicalApproach && (
-                                            <div className="flex items-start gap-1.5">
-                                              <span className="text-[10px] font-medium text-violet-600 shrink-0 w-20">⚙️ Method:</span>
+                                            <div className="flex items-start gap-2">
+                                              <span className="text-[11px] font-medium text-violet-600 shrink-0 w-28">How they did it</span>
                                               <span className="text-[11px] text-violet-900">{aiSuggestion.citationMeta.methodologicalApproach}</span>
                                             </div>
                                           )}
-                                          
-                                          {/* Limitations/Gaps */}
+
+                                          {/* What it leaves open — this is where your contribution can sit */}
                                           {aiSuggestion.citationMeta.limitationsOrGaps && (
-                                            <div className="flex items-start gap-1.5">
-                                              <span className="text-[10px] font-medium text-amber-600 shrink-0 w-20">⚠️ Gap:</span>
+                                            <div className="flex items-start gap-2">
+                                              <span className="text-[11px] font-medium text-amber-600 shrink-0 w-28" title="What this paper doesn't settle — often where your own contribution fits.">
+                                                What it leaves open
+                                              </span>
                                               <span className="text-[11px] text-amber-900">{aiSuggestion.citationMeta.limitationsOrGaps}</span>
                                             </div>
                                           )}
-                                          
+
                                           {/* Usage Guidance */}
-                                          <div className="flex items-center gap-1.5 pt-1">
-                                            <span className="text-[10px] font-medium text-violet-600">📝 Cite in:</span>
+                                          <div className="flex items-center gap-2 pt-1">
+                                            <span className="text-[11px] font-medium text-violet-600 shrink-0 w-28">Cite it in</span>
                                             <div className="flex gap-1">
                                               {aiSuggestion.citationMeta.usage.introduction && (
                                                 <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">Introduction</span>
@@ -6671,9 +7028,9 @@ export default function LiteratureSearchStage({
                                           })}
                                           disabled={isRetrievingThisPdf}
                                           className="text-xs h-7 border-indigo-300 text-indigo-700 hover:bg-indigo-50"
-                                          title="Try automatic retrieval from DOI and direct PDF URL."
+                                          title="Looks for a free copy of this paper using its DOI. Works only if the publisher makes it openly available."
                                         >
-                                          Retrieve PDF
+                                          Try to fetch PDF
                                         </Button>
                                         <Button
                                           size="sm"
@@ -6681,18 +7038,18 @@ export default function LiteratureSearchStage({
                                           onClick={() => openProvideLinkModal(result)}
                                           disabled={isSubmittingLink}
                                           className="text-xs h-7 border-sky-300 text-sky-700 hover:bg-sky-50"
-                                          title="Provide a direct PDF link."
+                                          title="Already have a link to the PDF? Paste it here and Grapsi will download the text from it."
                                         >
-                                          Provide Link
+                                          Paste a PDF link
                                         </Button>
                                         <Button
                                           size="sm"
                                           variant="outline"
                                           onClick={() => openUploadPdfModal(result)}
                                           className="text-xs h-7 border-violet-300 text-violet-700 hover:bg-violet-50"
-                                          title="Upload a PDF file from your device."
+                                          title="Have the PDF saved on your computer? Upload it here — useful for papers behind a paywall you have access to."
                                         >
-                                          Upload PDF
+                                          Upload the PDF
                                         </Button>
                                         <Button
                                           size="sm"
@@ -6700,15 +7057,15 @@ export default function LiteratureSearchStage({
                                           onClick={() => openPasteTextModal(result)}
                                           disabled={isSubmittingText}
                                           className="text-xs h-7 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                          title="Paste full text when PDF is unavailable."
+                                          title="No PDF available? Copy the paper's text from the publisher's page and paste it here instead."
                                         >
-                                          Paste Text
+                                          Paste the text
                                         </Button>
                                       </>
                                     )}
                                     {actionResult && !actionResult.success && (
-                                      <span className="text-[10px] text-rose-600">
-                                        {actionResult.errorCode || 'Failed'}
+                                      <span className="text-[11px] text-rose-600">
+                                        Couldn&apos;t get the full text. Try uploading the PDF or pasting the text instead.
                                       </span>
                                     )}
                                   </>
@@ -6881,60 +7238,133 @@ export default function LiteratureSearchStage({
                   <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  Grant Citations
+                  Papers you&apos;ve saved
                 </CardTitle>
                 <Badge variant="secondary">{citations.length}</Badge>
               </div>
               <CardDescription>
-                These Grant Citations will support your proposal
+                These are the papers Grapsi will cite when it drafts your proposal. Remove anything that
+                doesn&apos;t belong before you move on.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {/* Search and Actions */}
               <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50/70 p-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Filter</span>
+                  <span className="text-[11px] text-gray-600 font-semibold shrink-0">Find</span>
                   <Input
                     value={citationSearch}
                     onChange={e => setCitationSearch(e.target.value)}
-                    placeholder="Search Grant Citations..."
+                    placeholder="Type a title, author, or citation key to jump to a paper"
                     className="h-8 text-sm bg-white"
-                    title="Filter Grant Citations by title, author, or citation key."
                   />
                 </div>
 
+                {/* Review filters — how you find things without opening every row */}
+                {citations.length > 0 && (
+                  <div className="flex items-center gap-3 flex-wrap pt-1">
+                    <span className="text-[11px] text-gray-600 font-semibold shrink-0">Show</span>
+
+                    <label className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                      <span>relevance</span>
+                      <select
+                        value={citationListFilters.relevance}
+                        onChange={e => setCitationListFilters(prev => ({
+                          ...prev,
+                          relevance: e.target.value as typeof prev.relevance,
+                        }))}
+                        className="h-7 rounded border border-gray-300 bg-white px-1.5 text-[11px] text-gray-800"
+                      >
+                        <option value="ALL">any</option>
+                        <option value="STRONG">strong (70%+)</option>
+                        <option value="MEDIUM">medium (40–69%)</option>
+                        <option value="WEAK">weak (under 40%)</option>
+                        <option value="UNSCORED">not scored yet</option>
+                      </select>
+                    </label>
+
+                    <label className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                      <span>abstract</span>
+                      <select
+                        value={citationListFilters.abstract}
+                        onChange={e => setCitationListFilters(prev => ({
+                          ...prev,
+                          abstract: e.target.value as typeof prev.abstract,
+                        }))}
+                        className="h-7 rounded border border-gray-300 bg-white px-1.5 text-[11px] text-gray-800"
+                      >
+                        <option value="ALL">any</option>
+                        <option value="HAS">has one</option>
+                        <option value="MISSING">missing</option>
+                      </select>
+                    </label>
+
+                    <label className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                      <span>matched to proposal</span>
+                      <select
+                        value={citationListFilters.mapped}
+                        onChange={e => setCitationListFilters(prev => ({
+                          ...prev,
+                          mapped: e.target.value as typeof prev.mapped,
+                        }))}
+                        className="h-7 rounded border border-gray-300 bg-white px-1.5 text-[11px] text-gray-800"
+                      >
+                        <option value="ALL">any</option>
+                        <option value="MAPPED">yes</option>
+                        <option value="UNMAPPED">not yet</option>
+                      </select>
+                    </label>
+
+                    {citationFiltersActive && (
+                      <button
+                        onClick={() => setCitationListFilters({ relevance: 'ALL', abstract: 'ALL', mapped: 'ALL' })}
+                        className="text-[11px] text-indigo-600 hover:underline"
+                      >
+                        Clear filters
+                      </button>
+                    )}
+
+                    <button
+                      onClick={toggleAllCitationRows}
+                      disabled={visibleCitations.length === 0}
+                      className="text-[11px] text-indigo-600 hover:underline disabled:text-gray-400 disabled:no-underline ml-auto"
+                      title="Open or close the details on every paper currently listed."
+                    >
+                      {allCitationRowsOpen ? 'Collapse all' : 'Expand all'}
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[10px] text-slate-700 uppercase tracking-wider font-semibold">Export</span>
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={handleExportBibtex}
                     disabled={citations.length === 0 || exportingBibtex}
                     className="shrink-0 h-7 text-xs text-slate-700 border-slate-300 hover:bg-slate-50"
-                    title={selectedCitations.size > 0
-                      ? `Export BibTeX: Download only the ${selectedCitations.size} selected Grant Citation${selectedCitations.size === 1 ? '' : 's'}.`
-                      : 'Export BibTeX: Download all Grant Citations as a .bib file for LaTeX/reference managers.'}
+                    title="Downloads a .bib file you can open in Zotero, Mendeley, EndNote, or LaTeX."
                   >
                     {exportingBibtex
-                      ? 'Exporting...'
+                      ? 'Preparing download...'
                       : selectedCitations.size > 0
-                        ? `Export BibTeX (${selectedCitations.size} selected)`
-                        : 'Export BibTeX'}
+                        ? `Download ${selectedCitations.size} ticked as BibTeX`
+                        : `Download all ${citations.length} as BibTeX`}
                   </Button>
                 </div>
 
                 <p className="text-[11px] text-gray-500">
-                  Select Grant Citation rows if you want to export only a subset; otherwise export will include all Grant Citations.
+                  Tick individual papers below to download just those. With nothing ticked, you get all of them.
                 </p>
               </div>
               {citationReviewStatus && (
                 <div className="text-[11px] text-gray-600">
-                  Reviewed: <span className="font-medium">{citationReviewStatus.reviewed}</span> / {citationReviewStatus.total}
+                  <span className="font-medium">{citationReviewStatus.reviewed}</span> of {citationReviewStatus.total} saved
+                  papers scored
                   {citationReviewStatus.inProcess > 0 && (
-                    <> · In Process: <span className="font-medium">{citationReviewStatus.inProcess}</span></>
+                    <> · <span className="font-medium">{citationReviewStatus.inProcess}</span> still going</>
                   )}
                   {citationReviewStatus.retry > 0 && (
-                    <> · Needs Retry: <span className="font-medium text-amber-700">{citationReviewStatus.retry}</span></>
+                    <> · <span className="font-medium text-amber-700">{citationReviewStatus.retry}</span> failed, will retry</>
                   )}
                 </div>
               )}
@@ -6947,11 +7377,11 @@ export default function LiteratureSearchStage({
                       <svg className="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
                       </svg>
-                      Blueprint Coverage
+                      How much of your proposal is backed up
                     </span>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-600">
-                        {citationBlueprintCoverage.coveredDimensions}/{citationBlueprintCoverage.totalDimensions} dimensions
+                        {citationBlueprintCoverage.coveredDimensions} of {citationBlueprintCoverage.totalDimensions} parts covered
                       </span>
                       <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
                         <div 
@@ -6994,18 +7424,36 @@ export default function LiteratureSearchStage({
                     <p className="text-sm font-medium">No Grant Citations yet</p>
                     <p className="text-xs mt-1">Search or import to add Grant Citations</p>
                   </div>
-                ) : filteredCitations.length === 0 ? (
-                  <div className="text-center py-4 text-gray-400 text-sm">
-                    No Grant Citations match your search
+                ) : visibleCitations.length === 0 ? (
+                  <div className="text-center py-6 px-4">
+                    <p className="text-sm font-medium text-gray-700">No papers match</p>
+                    <p className="text-xs text-gray-500 mt-1.5 max-w-sm mx-auto leading-relaxed">
+                      You have {citations.length} saved paper{citations.length === 1 ? '' : 's'}, but none of
+                      them fit what you&apos;re looking for. Try widening the filters or clearing the search box.
+                    </p>
+                    {citationFiltersActive && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs mt-3"
+                        onClick={() => setCitationListFilters({ relevance: 'ALL', abstract: 'ALL', mapped: 'ALL' })}
+                      >
+                        Clear filters
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   <AnimatePresence>
-                    {filteredCitations.map(citation => {
+                    {visibleCitations.map(citation => {
                       const mappings = citationDimensionMappings.get(citation.id) || [];
                       const aiAnalysis = citationAiAnalysis.get(citation.id);
                       const failureCount = citationFailureCounts.get(citation.id) || 0;
                       const isExhausted = !analyzedCitationIds.has(citation.id) && failureCount >= MAX_ANALYSIS_ATTEMPTS;
                       const isSkippedNoAbstract = citationSkippedNoAbstract.has(citation.id) || (analyzedCitationIds.size > 0 && !citation.abstract);
+                      const detailsOpen = expandedCitationDetails.has(citation.id);
+                      const abstractOpen = expandedCitationAbstracts.has(citation.id);
+                      // Only offer the details toggle when there is actually something behind it.
+                      const hasDetail = !!aiAnalysis || mappings.length > 0 || isExhausted || isSkippedNoAbstract;
                       return (
                         <motion.div
                           key={citation.id}
@@ -7043,7 +7491,8 @@ export default function LiteratureSearchStage({
                                 {citation.authors?.length > 2 && ' et al.'}
                                 {citation.year && ` (${citation.year})`}
                               </p>
-                              <div className="flex items-center gap-2 mt-1">
+                              {/* Summary line: the few things worth seeing on every row */}
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
                                 <code className="text-[10px] px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">
                                   {citation.citationKey || citation.preview?.inText}
                                 </code>
@@ -7052,39 +7501,14 @@ export default function LiteratureSearchStage({
                                     href={`https://doi.org/${citation.doi}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-[10px] text-indigo-600 hover:underline"
+                                    className="text-[11px] text-indigo-600 hover:underline"
                                     onClick={e => e.stopPropagation()}
                                   >
-                                    DOI ↗
+                                    Open on publisher&apos;s site ↗
                                   </a>
                                 )}
-                              </div>
-                              {/* No Abstract — skipped from AI analysis */}
-                              {isSkippedNoAbstract && !aiAnalysis && (
-                                <div className="mt-1.5 flex items-center gap-1.5">
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium">
-                                    No Abstract
-                                  </span>
-                                  <span className="text-[10px] text-gray-400">
-                                    Skipped — add abstract to enable AI analysis
-                                  </span>
-                                </div>
-                              )}
-                              {/* Analysis exhausted indicator */}
-                              {isExhausted && !aiAnalysis && !isSkippedNoAbstract && (
-                                <div className="mt-1.5 flex items-center gap-1.5">
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 border border-red-200">
-                                    Analysis failed ({failureCount}x)
-                                  </span>
-                                  <span className="text-[10px] text-gray-400">
-                                    Try adding/editing abstract
-                                  </span>
-                                </div>
-                              )}
-                              {/* AI Relevance Review */}
-                              {aiAnalysis && (
-                                <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                {aiAnalysis && (
+                                  <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${
                                     aiAnalysis.relevanceScore >= 70
                                       ? 'bg-emerald-100 text-emerald-700'
                                       : aiAnalysis.relevanceScore >= 40
@@ -7093,60 +7517,155 @@ export default function LiteratureSearchStage({
                                   }`}>
                                     {aiAnalysis.relevanceScore}% relevant
                                   </span>
-                                  {aiAnalysis.recommendation && (
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                                      aiAnalysis.recommendation === 'IMPORT'
-                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                        : aiAnalysis.recommendation === 'MAYBE'
-                                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                          : 'bg-gray-50 text-gray-500 border border-gray-200'
-                                    }`}>
-                                      {aiAnalysis.recommendation}
-                                    </span>
-                                  )}
-                                  {aiAnalysis.reasoning && (
-                                    <span className="text-[10px] text-gray-500 line-clamp-1" title={aiAnalysis.reasoning}>
-                                      {aiAnalysis.reasoning}
-                                    </span>
-                                  )}
+                                )}
+                                {isSkippedNoAbstract && !aiAnalysis && (
+                                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium">
+                                    No abstract — not scored
+                                  </span>
+                                )}
+                                {isExhausted && !aiAnalysis && !isSkippedNoAbstract && (
+                                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 border border-red-200">
+                                    Couldn&apos;t score this one
+                                  </span>
+                                )}
+                                {mappings.length > 0 && (
+                                  <span className="text-[11px] text-gray-500">
+                                    supports {mappings.length} part{mappings.length === 1 ? '' : 's'} of your proposal
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Two independent disclosures — both closed until asked for */}
+                              <div className="flex items-center gap-3 mt-1.5">
+                                {citation.abstract && (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); toggleCitationAbstract(citation.id); }}
+                                    aria-expanded={abstractOpen}
+                                    className="text-[11px] text-indigo-600 hover:text-indigo-800 hover:underline"
+                                  >
+                                    {abstractOpen ? 'Hide abstract' : 'Read abstract'}
+                                  </button>
+                                )}
+                                {hasDetail && (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); toggleCitationDetails(citation.id); }}
+                                    aria-expanded={detailsOpen}
+                                    className="text-[11px] text-indigo-600 hover:text-indigo-800 hover:underline"
+                                  >
+                                    {detailsOpen ? 'Hide analysis' : 'Why it was matched'}
+                                  </button>
+                                )}
+                              </div>
+
+                              {abstractOpen && citation.abstract && (
+                                <div
+                                  className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <p className="text-[11px] font-semibold text-gray-700 mb-1">Abstract</p>
+                                  <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-line">
+                                    {citation.abstract}
+                                  </p>
                                 </div>
                               )}
-                              {mappings.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  {mappings.slice(0, 3).map((mapping, idx) => {
-                                    const dimensionText = typeof mapping.dimension === 'string' ? mapping.dimension : '';
-                                    const displayDimension = dimensionText.length > 32
-                                      ? `${dimensionText.slice(0, 32)}...`
-                                      : dimensionText || 'Dimension';
-                                    return (
-                                      <div
-                                        key={`${citation.id}-map-${idx}`}
-                                        className="group relative"
-                                      >
-                                        <span
-                                          className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                                            mapping.confidence === 'HIGH'
-                                              ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                              : mapping.confidence === 'MEDIUM'
-                                                ? 'bg-blue-50 text-blue-700 border-blue-300'
-                                                : 'bg-gray-50 text-gray-700 border-gray-300'
-                                          }`}
-                                        >
-                                          {mapping.sectionKey}: {displayDimension}
+
+                              {detailsOpen && (
+                                <div
+                                  className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5 space-y-2.5"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  {aiAnalysis && (
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-gray-700 mb-1">
+                                        Why Grapsi matched this
+                                      </p>
+                                      <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                                        <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${
+                                          aiAnalysis.relevanceScore >= 70
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : aiAnalysis.relevanceScore >= 40
+                                              ? 'bg-blue-100 text-blue-700'
+                                              : 'bg-gray-100 text-gray-600'
+                                        }`}>
+                                          {aiAnalysis.relevanceScore}% relevant
                                         </span>
-                                        {mapping.remark && (
-                                          <div className="absolute left-0 bottom-full mb-1 hidden group-hover:block z-50 w-64 p-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg">
-                                            <p className="font-medium mb-1">{mapping.sectionKey}</p>
-                                            <p className="text-gray-300">{mapping.remark}</p>
-                                          </div>
+                                        {aiAnalysis.recommendation && (
+                                          <span
+                                            className={`text-[11px] px-1.5 py-0.5 rounded ${
+                                              aiAnalysis.recommendation === 'IMPORT'
+                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                                : aiAnalysis.recommendation === 'MAYBE'
+                                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                                  : 'bg-gray-50 text-gray-500 border border-gray-200'
+                                            }`}
+                                            title={IMPORT_DECISION_LABELS[aiAnalysis.recommendation]?.help}
+                                          >
+                                            {IMPORT_DECISION_LABELS[aiAnalysis.recommendation]?.label
+                                              || aiAnalysis.recommendation}
+                                          </span>
                                         )}
                                       </div>
-                                    );
-                                  })}
-                                  {mappings.length > 3 && (
-                                    <span className="text-[10px] text-gray-500">
-                                      +{mappings.length - 3} more
-                                    </span>
+                                      {aiAnalysis.reasoning && (
+                                        <p className="text-xs text-gray-700 leading-relaxed">
+                                          {aiAnalysis.reasoning}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {isSkippedNoAbstract && !aiAnalysis && (
+                                    <p className="text-xs text-amber-800 leading-relaxed">
+                                      This paper has no abstract, so Grapsi couldn&apos;t judge how relevant it is.
+                                      Add the abstract and it will be scored with the rest.
+                                    </p>
+                                  )}
+
+                                  {isExhausted && !aiAnalysis && !isSkippedNoAbstract && (
+                                    <p className="text-xs text-red-700 leading-relaxed">
+                                      Scoring failed {failureCount} time{failureCount === 1 ? '' : 's'} for this
+                                      paper, so Grapsi stopped retrying. Checking or re-adding the abstract
+                                      usually fixes it.
+                                    </p>
+                                  )}
+
+                                  {mappings.length > 0 && (
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-gray-700 mb-1">
+                                        Parts of your proposal it supports
+                                      </p>
+                                      <div className="space-y-1">
+                                        {mappings.map((mapping, idx) => {
+                                          const dimensionText = typeof mapping.dimension === 'string' ? mapping.dimension : '';
+                                          return (
+                                            <div key={`${citation.id}-map-${idx}`} className="flex gap-2 items-baseline">
+                                              <span
+                                                className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${
+                                                  mapping.confidence === 'HIGH'
+                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                    : mapping.confidence === 'MEDIUM'
+                                                      ? 'bg-blue-50 text-blue-700 border-blue-300'
+                                                      : 'bg-gray-50 text-gray-700 border-gray-300'
+                                                }`}
+                                              >
+                                                {mapping.sectionKey}
+                                              </span>
+                                              <span className="text-[11px] text-gray-700 leading-relaxed">
+                                                <span className="font-medium">{dimensionText || 'Unnamed part'}</span>
+                                                {mapping.remark ? ` — ${mapping.remark}` : ''}
+                                                <span className="text-gray-500">
+                                                  {' '}
+                                                  {mapping.confidence === 'HIGH'
+                                                    ? '(clear, direct support)'
+                                                    : mapping.confidence === 'MEDIUM'
+                                                      ? '(related — you may want a second source)'
+                                                      : '(loosely related — check it yourself)'}
+                                                </span>
+                                              </span>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
                                   )}
                                 </div>
                               )}
@@ -7195,9 +7714,10 @@ export default function LiteratureSearchStage({
       >
         <DialogContent className="max-w-2xl bg-white border-gray-200 shadow-2xl">
           <DialogHeader>
-            <DialogTitle>Mapping Evidence Card</DialogTitle>
+            <DialogTitle>What this paper proves</DialogTitle>
             <DialogDescription>
-              Review the same grounded evidence card used in the evidence-first table.
+              The exact passage Grapsi will lean on when it drafts this part of your proposal. Check it
+              actually says what the summary claims before you rely on it.
             </DialogDescription>
           </DialogHeader>
           {activeCoverageEvidence && (() => {
@@ -7406,9 +7926,10 @@ export default function LiteratureSearchStage({
       >
         <DialogContent className="max-w-xl bg-white border-gray-200 shadow-2xl">
           <DialogHeader>
-            <DialogTitle>Change Mapping</DialogTitle>
+            <DialogTitle>Move this paper to a different part of your proposal</DialogTitle>
             <DialogDescription>
-              Move this paper to a different blueprint dimension and update the relevance remark.
+              Grapsi matched this paper to one part of your proposal. If it fits somewhere else better,
+              pick that instead and say in a sentence how it helps.
             </DialogDescription>
           </DialogHeader>
           {coverageRemapRow && (
@@ -7496,9 +8017,10 @@ export default function LiteratureSearchStage({
       <Dialog open={gapModalOpen} onOpenChange={setGapModalOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-white border-gray-200 shadow-2xl">
           <DialogHeader>
-            <DialogTitle>Literature Gap Analysis</DialogTitle>
+            <DialogTitle>What your reading list adds up to</DialogTitle>
             <DialogDescription>
-              Analyze your {citations.length} Grant Citations for themes, gaps, and positioning opportunities
+              Reads across all {citations.length} saved papers and tells you the themes they share, the
+              questions nobody has answered yet, and where your work could sit in that picture.
             </DialogDescription>
           </DialogHeader>
           
@@ -7570,10 +8092,11 @@ export default function LiteratureSearchStage({
               <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
-              Add Abstract Manually
+              Add the abstract yourself
             </DialogTitle>
             <DialogDescription>
-              Paste the abstract content for this paper
+              This database didn&apos;t return an abstract, so Grapsi can&apos;t score this paper yet. Copy the
+              abstract from the publisher&apos;s page and paste it below — then it&apos;ll be scored like the rest.
             </DialogDescription>
           </DialogHeader>
           
@@ -7596,7 +8119,8 @@ export default function LiteratureSearchStage({
                 className="min-h-[200px] resize-y text-sm"
               />
               <p className="text-xs text-gray-500 mt-1">
-                💡 Tip: You can copy the abstract from the paper's PDF or the publisher's website
+                You&apos;ll usually find the abstract on the publisher&apos;s page for the paper, or on the first
+                page of the PDF. Paste it in and Grapsi will score this paper along with the others.
               </p>
             </div>
             
@@ -7640,11 +8164,12 @@ export default function LiteratureSearchStage({
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
               </svg>
-              Permanently Delete Results
+              Remove {pendingDeleteIds.size} paper{pendingDeleteIds.size === 1 ? '' : 's'} for good?
             </DialogTitle>
             <DialogDescription className="text-gray-600">
-              Are you sure you want to permanently delete {pendingDeleteIds.size} selected search result(s)? 
-              This action cannot be undone.
+              {pendingDeleteIds.size === 1 ? 'This paper' : 'These papers'} will be gone from your results
+              and won&apos;t come back if you run the same search again. Papers you&apos;ve already saved to your
+              proposal are not affected.
             </DialogDescription>
           </DialogHeader>
           
@@ -7687,9 +8212,10 @@ export default function LiteratureSearchStage({
       >
         <DialogContent className="max-w-lg bg-white border-gray-200 shadow-2xl">
           <DialogHeader>
-            <DialogTitle>Provide PDF Link</DialogTitle>
+            <DialogTitle>Paste a link to the PDF</DialogTitle>
             <DialogDescription>
-              Paste a direct PDF URL for: {pdfLinkModalPaper?.title || 'paper'}
+              For &ldquo;{pdfLinkModalPaper?.title || 'this paper'}&rdquo;. It must be a direct link to the PDF file
+              itself (ending in .pdf), not the publisher&apos;s landing page.
             </DialogDescription>
           </DialogHeader>
 
@@ -7738,9 +8264,11 @@ export default function LiteratureSearchStage({
       >
         <DialogContent className="max-w-2xl bg-white border-gray-200 shadow-2xl">
           <DialogHeader>
-            <DialogTitle>Paste Full Text</DialogTitle>
+            <DialogTitle>Paste the paper&apos;s text</DialogTitle>
             <DialogDescription>
-              Paste text for: {pasteTextModalPaper?.title || 'paper'}
+              For &ldquo;{pasteTextModalPaper?.title || 'this paper'}&rdquo;. Use this when there&apos;s no PDF you can
+              link to or upload. Select the text on the publisher&apos;s page and paste it below — headings and
+              all. Grapsi only needs the body of the paper, not the references.
             </DialogDescription>
           </DialogHeader>
 
@@ -8538,10 +9066,10 @@ function LibraryImportModal({
                   </svg>
                 </div>
                 <div>
-                  <p className="font-medium text-indigo-900 text-sm">Where to find your Grant Citations</p>
+                  <p className="font-medium text-indigo-900 text-sm">Where these papers went</p>
                   <p className="text-xs text-indigo-700 mt-1">
-                    Your imported references are now available in the <strong>"Grant Citations"</strong> tab above.
-                    You can also see them in the <strong>"Grant Citations"</strong> panel on the right side of the Search tab.
+                    They&apos;re in the <strong>Saved papers</strong> tab at the top, ready to be scored and
+                    matched to your proposal.
                   </p>
                 </div>
               </div>
@@ -8568,10 +9096,11 @@ function LibraryImportModal({
                 <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z" />
                 </svg>
-                Import from Personal Library
+                Reuse papers from your library
               </DialogTitle>
               <DialogDescription>
-                Select a library, then choose references to add to this paper
+                Papers you saved on other projects live here. Pick a library on the left, tick the papers you
+                want, and they&apos;ll be added to this proposal.
               </DialogDescription>
             </DialogHeader>
 
@@ -8936,8 +9465,11 @@ function ManualCitationModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl bg-white border-gray-200 shadow-2xl">
         <DialogHeader>
-          <DialogTitle>Add Grant Citation Manually</DialogTitle>
-          <DialogDescription>Enter the bibliographic details</DialogDescription>
+          <DialogTitle>Type in a paper yourself</DialogTitle>
+          <DialogDescription>
+            For papers no database has — a thesis, a report, an internal document. Only the title is
+            required, but adding the abstract lets Grapsi score it alongside the rest.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 mt-4">
