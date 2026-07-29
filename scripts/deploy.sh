@@ -1,39 +1,45 @@
 #!/usr/bin/env bash
 #
-# Zero-downtime production deploy for the Grapsi Next.js app.
+# Production deploy for the Grapsi Next.js app.
 #
-# Why this exists
-# ---------------
-# The old flow (`npm run build`) ran `clean-next.js`, which DELETES the live
-# ~1.2 GB `.next` directory the running server is serving from, then rebuilds it
-# in place. On a GCP persistent disk that burst of I/O saturated the disk and the
-# running app stopped responding. This script never touches the live build:
+# Layout this targets
+# -------------------
+# The app is a plain checkout that PM2 serves in place:
 #
-#   1. Build a fresh standalone artifact in the repo checkout (the running app is
-#      served from a SEPARATE `current/` directory, so its files are untouched).
-#      The build runs under `nice`/`ionice` so it can't starve the live server of
-#      CPU or disk I/O.
-#   2. Assemble a small, self-contained release directory under `releases/<ts>/`.
-#   3. Atomically repoint the `current` symlink at the new release and
-#      `pm2 reload` (cluster mode → workers restart one at a time, zero downtime).
-#   4. Health-check the new release. If it is unhealthy, automatically roll the
-#      symlink back to the previous release and reload — the site never stays down.
+#   /var/www/granter/Grapsi        the git checkout (built here, served from here)
+#   pm2 app "grantmentor"          runs `npm start` -> `next start -p 3010`, fork mode
 #
-# Old releases are KEPT (for instant rollback) unless you opt into pruning with
-# RELEASES_TO_KEEP.
+# There is no releases/ directory and no `current` symlink. `next start` serves
+# `.next` out of the checkout, so "deploying" means: get a new `.next` in place
+# without breaking the server that is currently reading from it, then restart.
 #
-# Layout (all configurable via env):
-#   /srv/grapsi/
-#     releases/<timestamp>/   assembled standalone runtimes  (served)
-#     current -> releases/<timestamp>   symlink PM2 runs from
-#     shared/.env.production   secrets, symlinked into each release
-#     shared/uploads/          persistent user uploads, symlinked into each release
-#     logs/                    pm2 logs (outside releases, never pruned)
+# The hazard, and how this avoids it
+# ----------------------------------
+# `next build` overwrites `.next` in place. Because `next start` serves from that
+# same directory, a naive rebuild pulls the live build out from under the running
+# server and the site errors for the whole multi-minute build.
+#
+# So the actual build/swap is delegated to scripts/safe-build.sh, which:
+#   1. builds into `.next.incoming` (live `.next` keeps serving throughout),
+#   2. rewrites the distDir baked into required-server-files.json back to `.next`
+#      (otherwise the served process hunts for assets under `.next.incoming`),
+#   3. swaps with two renames, keeping the old build as `.next.prev`,
+#   4. restarts PM2 (mandatory — `next start` caches the build manifest in memory).
+#
+# This script adds what safe-build.sh deliberately leaves out: optional git pull,
+# dependency install, prisma generate, a health gate, and automatic rollback to
+# `.next.prev` if the new build comes up unhealthy.
 #
 # Usage:
-#   bash scripts/deploy.sh                 # build current checkout & deploy
-#   GIT_PULL=1 bash scripts/deploy.sh      # git fetch+reset to $GIT_REF first
-#   RELEASES_TO_KEEP=5 bash scripts/deploy.sh   # keep only the 5 newest releases
+#   bash scripts/deploy.sh                    # build current checkout & deploy
+#   GIT_PULL=1 bash scripts/deploy.sh         # git fetch+reset to $GIT_REF first
+#   INSTALL=1 bash scripts/deploy.sh          # force npm ci (after a lockfile change)
+#   SKIP_PRISMA=1 bash scripts/deploy.sh      # skip prisma generate (no schema change)
+#   PM2_APP=other PORT=3011 bash scripts/deploy.sh    # different app on this box
+#
+# Rollback by hand (any time after a deploy):
+#   cd /var/www/granter/Grapsi
+#   rm -rf .next && mv .next.prev .next && pm2 restart grantmentor
 #
 set -euo pipefail
 
@@ -43,59 +49,45 @@ die()  { printf '\033[1;31m[deploy] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ----- configuration -------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"   # where the build runs
+REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
-APP_ROOT="${APP_ROOT:-/srv/grapsi}"
-RELEASES_DIR="${RELEASES_DIR:-$APP_ROOT/releases}"
-CURRENT_LINK="${CURRENT_LINK:-$APP_ROOT/current}"
-SHARED_DIR="${SHARED_DIR:-$APP_ROOT/shared}"
-
+PM2_APP="${PM2_APP:-grantmentor}"
 PORT="${PORT:-3010}"
 HEALTH_PATH="${HEALTH_PATH:-/api/health}"
-HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"          # seconds to wait for healthy
-RELEASES_TO_KEEP="${RELEASES_TO_KEEP:-0}"       # 0 = keep ALL old builds
-PM2_APP="${PM2_APP:-grapsi}"
-ECOSYSTEM="${ECOSYSTEM:-$REPO_DIR/ecosystem.config.js}"
-
-# node_modules that are externalized from the bundle (webpack externals /
-# serverComponentsExternalPackages) and must be copied into the standalone
-# runtime because dependency tracing may not include them.
-EXTRA_MODULES="${EXTRA_MODULES:-canvas pdf2text pdfjs-dist sharp}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"     # seconds to wait for the app to answer
 
 GIT_PULL="${GIT_PULL:-0}"
 GIT_REF="${GIT_REF:-origin/main}"
-INSTALL="${INSTALL:-auto}"                      # auto | 1 | 0
+INSTALL="${INSTALL:-auto}"                 # auto | 1 | 0
 SKIP_PRISMA="${SKIP_PRISMA:-0}"
 
-TS="$(date +%Y%m%d%H%M%S)"
-RELEASE_DIR="$RELEASES_DIR/$TS"
+LIVE="$REPO_DIR/.next"
+PREV="$REPO_DIR/.next.prev"
 
-# low-priority wrappers so the build never starves the live server
-NICE=(nice -n 10)
-IONICE=()
-if command -v ionice >/dev/null 2>&1; then IONICE=(ionice -c2 -n7); fi
-
-# ----- preflight -----------------------------------------------------------
-command -v node >/dev/null 2>&1 || die "node not found on PATH"
-command -v pm2  >/dev/null 2>&1 || die "pm2 not found. Install it: npm i -g pm2"
-[ -f "$REPO_DIR/package.json" ] || die "no package.json in REPO_DIR=$REPO_DIR"
-[ -f "$ECOSYSTEM" ] || die "ecosystem file not found: $ECOSYSTEM"
-mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$APP_ROOT/logs"
-
-log "repo:      $REPO_DIR"
-log "release:   $RELEASE_DIR"
-log "app root:  $APP_ROOT (port $PORT)"
+# Keep the build polite: on a shared box a full `next build` can otherwise
+# starve the live server (and the sibling patentnest app) of CPU and disk I/O.
+NICE=(); IONICE=()
+command -v nice   >/dev/null 2>&1 && NICE=(nice -n 10)
+command -v ionice >/dev/null 2>&1 && IONICE=(ionice -c2 -n7)
 
 cd "$REPO_DIR"
 
-# ----- 1. optional source update ------------------------------------------
+log "repo:    $REPO_DIR"
+log "pm2 app: $PM2_APP (port $PORT)"
+
+command -v pm2 >/dev/null 2>&1 || die "pm2 not found on PATH"
+pm2 describe "$PM2_APP" >/dev/null 2>&1 \
+  || die "pm2 app '$PM2_APP' not found. Run 'pm2 list' and pass the right one: PM2_APP=<name> bash scripts/deploy.sh"
+
+# ----- 1. optional source update -------------------------------------------
 if [ "$GIT_PULL" = "1" ]; then
   log "git fetch + reset to $GIT_REF"
   git fetch --prune origin
   git reset --hard "$GIT_REF"
 fi
+log "deploying commit: $(git log -1 --format='%h %s' 2>/dev/null || echo 'unknown')"
 
-# ----- 2. dependencies -----------------------------------------------------
+# ----- 2. dependencies ------------------------------------------------------
 if [ "$INSTALL" = "1" ] || { [ "$INSTALL" = "auto" ] && [ ! -d node_modules ]; }; then
   log "installing dependencies (npm ci)"
   "${IONICE[@]}" "${NICE[@]}" npm ci --no-audit --no-fund
@@ -103,75 +95,28 @@ else
   log "skipping npm ci (INSTALL=$INSTALL); using existing node_modules"
 fi
 
-# ----- 3. prisma client ----------------------------------------------------
+# ----- 3. prisma client -----------------------------------------------------
+# Note: this only regenerates the client. Schema changes still need an explicit
+# `npx prisma migrate deploy` — deliberately not automated here, so a deploy can
+# never silently alter the production database.
 if [ "$SKIP_PRISMA" != "1" ]; then
   log "generating prisma client"
   "${IONICE[@]}" "${NICE[@]}" npx prisma generate
 fi
 
-# ----- 4. build (incremental, low I/O priority, DOES NOT delete live build) -
-log "building (next build, incremental) — this does not touch $CURRENT_LINK"
-NEXT_TELEMETRY_DISABLED=1 "${IONICE[@]}" "${NICE[@]}" npm run build:cached
+# ----- 4. build + swap + restart (delegated to safe-build.sh) ---------------
+# safe-build.sh keeps the live .next serving for the whole build, fixes the
+# baked distDir, swaps atomically, saves the old build to .next.prev, and
+# restarts PM2. If the build fails it exits non-zero with .next untouched.
+[ -f "$SCRIPT_DIR/safe-build.sh" ] || die "missing $SCRIPT_DIR/safe-build.sh"
 
-[ -f "$REPO_DIR/.next/standalone/server.js" ] \
-  || die "standalone build missing (.next/standalone/server.js). Is output:'standalone' set in next.config.js?"
+log "building (live site keeps serving the old build throughout)…"
+PM2_APP="$PM2_APP" "${IONICE[@]}" "${NICE[@]}" bash "$SCRIPT_DIR/safe-build.sh"
 
-# ----- 5. assemble the release directory -----------------------------------
-log "assembling release $TS"
-mkdir -p "$RELEASE_DIR"
-# standalone bundle (server.js + traced node_modules + server .next)
-cp -a "$REPO_DIR/.next/standalone/." "$RELEASE_DIR/"
-# static assets + public are NOT part of standalone; copy them in
-mkdir -p "$RELEASE_DIR/.next"
-cp -a "$REPO_DIR/.next/static" "$RELEASE_DIR/.next/static"
-[ -d "$REPO_DIR/public" ] && cp -a "$REPO_DIR/public" "$RELEASE_DIR/public"
+[ -f "$LIVE/BUILD_ID" ] || die "no $LIVE/BUILD_ID after build — aborting"
+log "now serving build: $(cat "$LIVE/BUILD_ID")"
 
-# Prisma generated client + query-engine binary (tracing often misses the .node)
-if [ -d "$REPO_DIR/node_modules/.prisma" ]; then
-  mkdir -p "$RELEASE_DIR/node_modules"
-  cp -a "$REPO_DIR/node_modules/.prisma" "$RELEASE_DIR/node_modules/.prisma"
-fi
-[ -d "$REPO_DIR/node_modules/@prisma/client" ] && {
-  mkdir -p "$RELEASE_DIR/node_modules/@prisma"
-  cp -a "$REPO_DIR/node_modules/@prisma/client" "$RELEASE_DIR/node_modules/@prisma/client"
-}
-
-# Externalized / native modules that may not be traced into standalone.
-for mod in $EXTRA_MODULES; do
-  if [ -d "$REPO_DIR/node_modules/$mod" ] && [ ! -d "$RELEASE_DIR/node_modules/$mod" ]; then
-    log "  + copying external module: $mod"
-    mkdir -p "$RELEASE_DIR/node_modules/$(dirname "$mod")"
-    cp -a "$REPO_DIR/node_modules/$mod" "$RELEASE_DIR/node_modules/$mod"
-  fi
-done
-
-# ----- 6. link shared, persistent state ------------------------------------
-[ -f "$SHARED_DIR/.env.production" ] \
-  && ln -sfn "$SHARED_DIR/.env.production" "$RELEASE_DIR/.env.production" \
-  || warn "no $SHARED_DIR/.env.production — the app must get its env from PM2/ecosystem"
-[ -d "$SHARED_DIR/uploads" ] && ln -sfn "$SHARED_DIR/uploads" "$RELEASE_DIR/uploads"
-
-# ----- 7. record the currently-live release for rollback -------------------
-PREVIOUS_TARGET=""
-if [ -L "$CURRENT_LINK" ]; then
-  PREVIOUS_TARGET="$(readlink -f "$CURRENT_LINK" || true)"
-fi
-
-# ----- 8. atomic switch + graceful reload ----------------------------------
-log "switching current -> releases/$TS"
-ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
-
-if pm2 describe "$PM2_APP" >/dev/null 2>&1; then
-  log "pm2 reload $PM2_APP (zero-downtime)"
-  # cluster reload: if the new workers fail to bind, pm2 keeps the old workers up
-  pm2 reload "$ECOSYSTEM" --update-env
-else
-  log "first deploy — pm2 start"
-  pm2 start "$ECOSYSTEM"
-  pm2 save
-fi
-
-# ----- 9. health check (auto-rollback on failure) --------------------------
+# ----- 5. health gate (auto-rollback on failure) ----------------------------
 health_ok() {
   local deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -187,31 +132,31 @@ if health_ok; then
   log "health check passed on ${HEALTH_PATH}"
 else
   warn "health check FAILED after ${HEALTH_TIMEOUT}s"
-  if [ -n "$PREVIOUS_TARGET" ] && [ -d "$PREVIOUS_TARGET" ]; then
-    warn "rolling back to $PREVIOUS_TARGET"
-    ln -sfn "$PREVIOUS_TARGET" "$CURRENT_LINK"
-    pm2 reload "$ECOSYSTEM" --update-env
-    health_ok && warn "rolled back and healthy" || die "rollback still unhealthy — investigate immediately"
-    die "deploy failed; rolled back to previous release. New (bad) build left at $RELEASE_DIR"
+  if [ -d "$PREV" ]; then
+    warn "rolling back to the previous build ($PREV)"
+    rm -rf "$LIVE"
+    mv "$PREV" "$LIVE"
+    pm2 restart "$PM2_APP" --update-env
+    if health_ok; then
+      die "deploy failed; rolled back and the site is healthy again. Investigate the new build before retrying."
+    fi
+    die "rollback is ALSO unhealthy — investigate immediately (pm2 logs $PM2_APP)."
   fi
-  die "deploy failed and no previous release to roll back to. Bad build at $RELEASE_DIR"
+  die "deploy failed and there is no $PREV to roll back to. Check: pm2 logs $PM2_APP"
 fi
 
 pm2 save >/dev/null 2>&1 || true
 
-# ----- 10. retention (default: keep everything) ----------------------------
-if [ "$RELEASES_TO_KEEP" -gt 0 ] 2>/dev/null; then
-  CURRENT_RESOLVED="$(readlink -f "$CURRENT_LINK" || true)"
-  # newest first; skip the ones we keep; never delete the live one
-  mapfile -t OLD < <(ls -1dt "$RELEASES_DIR"/*/ 2>/dev/null | tail -n +$((RELEASES_TO_KEEP + 1)))
-  for dir in "${OLD[@]:-}"; do
-    [ -z "$dir" ] && continue
-    if [ "$(readlink -f "$dir")" = "$CURRENT_RESOLVED" ]; then continue; fi
-    log "pruning old release: $dir"
-    rm -rf "$dir"
-  done
-else
-  log "keeping all old releases (RELEASES_TO_KEEP=0). Set RELEASES_TO_KEEP=N to bound disk use."
-fi
+cat <<EOF
 
-log "done. Live release: $(readlink -f "$CURRENT_LINK")"
+$(printf '\033[1;32m[deploy] done.\033[0m')
+
+  commit    $(git log -1 --format='%h %s' 2>/dev/null || echo unknown)
+  build id  $(cat "$LIVE/BUILD_ID" 2>/dev/null || echo unknown)
+  previous  $PREV  (kept for rollback)
+
+  Verify:   pm2 logs $PM2_APP --lines 50
+  Rollback: rm -rf $LIVE && mv $PREV $LIVE && pm2 restart $PM2_APP
+
+  Hard-refresh the browser (Ctrl+Shift+R) — the old JS bundle is cached client-side.
+EOF
