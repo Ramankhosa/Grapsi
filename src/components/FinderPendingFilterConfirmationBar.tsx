@@ -1,5 +1,5 @@
 import React from 'react';
-import { FaCheck, FaTimes } from 'react-icons/fa';
+import { Check, X } from 'lucide-react';
 
 import type { RecommendationConversationPendingPatch } from '../lib/recommendations/chatTypes';
 
@@ -17,30 +17,20 @@ export default function FinderPendingFilterConfirmationBar({
   onReject,
 }: FinderPendingFilterConfirmationBarProps) {
   return (
-    <div className="mb-4 rounded-[22px] border border-amber-300 bg-amber-50 px-4 py-4 shadow-[0_10px_30px_rgba(217,119,6,0.12)]">
+    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-800">Pending Filter Confirmation</div>
-          <p className="mt-1 text-sm leading-6 text-amber-950">{pendingPatch.summary}</p>
+          <div className="text-[13px] font-medium text-amber-900">Pending Filter Confirmation</div>
+          <p className="mt-0.5 text-[13px] leading-5 text-amber-800">{pendingPatch.summary}</p>
         </div>
 
         <div className="flex shrink-0 flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={disabled}
-            className="inline-flex items-center gap-2 rounded-full bg-amber-500 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <FaCheck />
+          <button type="button" onClick={onConfirm} disabled={disabled} className="cb-btn-primary cb-btn-sm">
+            <Check className="h-3.5 w-3.5" />
             Confirm
           </button>
-          <button
-            type="button"
-            onClick={onReject}
-            disabled={disabled}
-            className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-950 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <FaTimes />
+          <button type="button" onClick={onReject} disabled={disabled} className="cb-btn-secondary cb-btn-sm">
+            <X className="h-3.5 w-3.5" />
             Reject
           </button>
         </div>

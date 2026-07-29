@@ -1,21 +1,19 @@
 import { useState } from 'react';
 import {
-  FaAngleDown,
-  FaAngleUp,
-  FaChevronRight,
-  FaExternalLinkAlt,
-  FaFlask,
-  FaGlobeAmericas,
-  FaGraduationCap,
-  FaHandHoldingUsd,
-  FaIndustry,
-  FaLayerGroup,
-  FaMapMarkerAlt,
-  FaSearch,
-  FaSlidersH,
-  FaTimes,
-  FaUniversity,
-} from 'react-icons/fa';
+  Building2,
+  ChevronDown,
+  ExternalLink,
+  Factory,
+  FlaskConical,
+  GraduationCap,
+  Globe2,
+  Layers,
+  MapPin,
+  Search,
+  SlidersHorizontal,
+  Wallet,
+  X,
+} from 'lucide-react';
 import FinderPreferencesPanel, { type FinderPreferenceValues } from './FinderPreferencesPanel';
 import type { DirectoryFacetDimension, DirectoryFacetItem, DirectoryFacetResponse, RecommendationRawResultItem, RecommendationSearchFilters } from '../lib/recommendations/types';
 
@@ -28,15 +26,15 @@ interface ActiveSelection {
 }
 
 const CATEGORY_META: Record<DirectoryFacetDimension, { label: string; icon: React.ReactNode }> = {
-  taxonomyArea: { label: 'Research Taxonomy', icon: <FaLayerGroup /> },
-  researchArea: { label: 'Research Area', icon: <FaFlask /> },
-  country: { label: 'Country', icon: <FaGlobeAmericas /> },
-  fundingKind: { label: 'Funding Type', icon: <FaHandHoldingUsd /> },
-  careerStage: { label: 'Career Stage', icon: <FaGraduationCap /> },
-  discipline: { label: 'Discipline', icon: <FaLayerGroup /> },
-  sponsorType: { label: 'Sponsor', icon: <FaIndustry /> },
-  region: { label: 'Region', icon: <FaMapMarkerAlt /> },
-  institutionType: { label: 'Institution', icon: <FaUniversity /> },
+  taxonomyArea: { label: 'Research taxonomy', icon: <Layers className="h-4 w-4" /> },
+  researchArea: { label: 'Research area', icon: <FlaskConical className="h-4 w-4" /> },
+  country: { label: 'Country', icon: <Globe2 className="h-4 w-4" /> },
+  fundingKind: { label: 'Funding type', icon: <Wallet className="h-4 w-4" /> },
+  careerStage: { label: 'Career stage', icon: <GraduationCap className="h-4 w-4" /> },
+  discipline: { label: 'Discipline', icon: <Layers className="h-4 w-4" /> },
+  sponsorType: { label: 'Sponsor', icon: <Factory className="h-4 w-4" /> },
+  region: { label: 'Region', icon: <MapPin className="h-4 w-4" /> },
+  institutionType: { label: 'Institution', icon: <Building2 className="h-4 w-4" /> },
 };
 
 const DIMENSION_ORDER: DirectoryFacetDimension[] = [
@@ -101,79 +99,69 @@ function ExpandableCard({
     result.hostCountries.slice(0, 3).join(', ');
 
   return (
-    <article className="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        className="w-full cursor-pointer text-left"
-      >
-        <div className="px-5 py-4">
+    <article className="cb-card overflow-hidden transition hover:border-cobalt-300">
+      <button type="button" onClick={() => setExpanded((prev) => !prev)} className="w-full text-left">
+        <div className="px-4 py-3.5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-600">{result.agencyName}</p>
-              <h3 className="mt-1.5 text-[15px] font-semibold leading-snug text-slate-900">{result.schemeTitle}</h3>
+              <p className="truncate text-[12px] text-muted">{result.agencyName}</p>
+              <h3 className="mt-0.5 text-[14px] font-semibold leading-snug text-ink">{result.schemeTitle}</h3>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {result.isRolling ? (
-                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-700">Rolling</span>
+                <span className="cb-badge">Rolling</span>
               ) : result.closeDate ? (
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                <span className="cb-badge">
                   {new Date(result.closeDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </span>
               ) : null}
-              {expanded ? <FaAngleUp className="text-slate-400" /> : <FaAngleDown className="text-slate-400" />}
+              <ChevronDown className={`h-4 w-4 shrink-0 text-muted-soft transition-transform ${expanded ? 'rotate-180' : ''}`} />
             </div>
           </div>
 
           {result.shortDescription ? (
-            <p className={`mt-2 text-sm leading-relaxed text-slate-600 ${expanded ? '' : 'line-clamp-2'}`}>
+            <p className={`mt-1.5 text-[13px] leading-6 text-muted ${expanded ? '' : 'line-clamp-2'}`}>
               {result.shortDescription}
             </p>
           ) : null}
 
-          <div className="mt-3 flex flex-wrap gap-1.5">
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
             {result.profileMatch?.reasons.slice(0, 1).map((reason) => (
-              <span key={reason} className="rounded-full bg-violet-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
-                {reason}
-              </span>
+              <span key={reason} className="cb-badge-cobalt">{reason}</span>
             ))}
             {result.fundingKinds.slice(0, 2).map((v) => (
-              <span key={v} className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">{v}</span>
+              <span key={v} className="cb-badge">{v}</span>
             ))}
             {result.disciplines.slice(0, 2).map((v) => (
-              <span key={v} className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700">{v}</span>
+              <span key={v} className="cb-badge">{v}</span>
             ))}
-            {geography ? (
-              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">{geography}</span>
-            ) : null}
-            {amount ? (
-              <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">{amount}</span>
-            ) : null}
+            {geography ? <span className="cb-badge">{geography}</span> : null}
+            {amount ? <span className="cb-badge">{amount}</span> : null}
           </div>
         </div>
       </button>
 
       {expanded ? (
-        <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-4">
-          <div className="grid gap-4 text-sm sm:grid-cols-2">
+        <div className="border-t border-hairline bg-inset px-4 py-4">
+          <div className="grid gap-4 text-[13px] sm:grid-cols-2">
             {result.fullDescription || result.description ? (
               <div className="sm:col-span-2">
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Description</div>
-                <p className="mt-1.5 leading-relaxed text-slate-700">{result.fullDescription || result.description}</p>
+                <div className="cb-eyebrow">Description</div>
+                <p className="mt-1 leading-6 text-muted">{result.fullDescription || result.description}</p>
               </div>
             ) : null}
 
             {result.eligibilitySummary || result.eligibilityText ? (
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Eligibility</div>
-                <p className="mt-1.5 leading-relaxed text-slate-700">{result.eligibilityText || result.eligibilitySummary}</p>
+                <div className="cb-eyebrow">Eligibility</div>
+                <p className="mt-1 leading-6 text-muted">{result.eligibilityText || result.eligibilitySummary}</p>
               </div>
             ) : null}
 
             {result.profileMatch?.reasons.length ? (
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Preference Match</div>
-                <ul className="mt-1.5 space-y-1 leading-relaxed text-slate-700">
+                <div className="cb-eyebrow">Preference match</div>
+                <ul className="mt-1 space-y-0.5 leading-6 text-muted">
                   {result.profileMatch.reasons.slice(0, 4).map((reason) => (
                     <li key={reason}>{reason}</li>
                   ))}
@@ -182,8 +170,8 @@ function ExpandableCard({
             ) : null}
 
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Details</div>
-              <div className="mt-1.5 space-y-1 text-slate-700">
+              <div className="cb-eyebrow">Details</div>
+              <div className="mt-1 space-y-0.5 leading-6 text-muted">
                 {result.careerStages.length > 0 ? <p>Career stages: {result.careerStages.join(', ')}</p> : null}
                 {result.institutionTypes.length > 0 ? <p>Institutions: {result.institutionTypes.join(', ')}</p> : null}
                 {result.sponsorType ? <p>Sponsor: {result.sponsorType}</p> : null}
@@ -194,43 +182,28 @@ function ExpandableCard({
 
             {result.contactInfo ? (
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Contact</div>
-                <p className="mt-1.5 leading-relaxed text-slate-700">{result.contactInfo}</p>
+                <div className="cb-eyebrow">Contact</div>
+                <p className="mt-1 leading-6 text-muted">{result.contactInfo}</p>
               </div>
             ) : null}
           </div>
 
-          {result.officialUrls[0] || onBeginWriting || callDetailsHref ? (
-            <div className="mt-4 flex flex-wrap gap-2">
-              {onBeginWriting ? (
-                <button
-                  type="button"
-                  onClick={() => onBeginWriting(result)}
-                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
-                >
-                  Begin writing
-                </button>
-              ) : null}
-              <a
-                href={callDetailsHref}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800"
-              >
-                Show Details
+          <div className="mt-4 flex flex-wrap gap-2">
+            {onBeginWriting ? (
+              <button type="button" onClick={() => onBeginWriting(result)} className="cb-btn-primary cb-btn-sm">
+                Begin writing
+              </button>
+            ) : null}
+            <a href={callDetailsHref} target="_blank" rel="noreferrer" className="cb-btn-secondary cb-btn-sm">
+              Show details
+            </a>
+            {result.officialUrls[0] ? (
+              <a href={result.officialUrls[0]} target="_blank" rel="noreferrer" className="cb-btn-ghost cb-btn-sm">
+                View full call
+                <ExternalLink className="h-3.5 w-3.5" />
               </a>
-              {result.officialUrls[0] ? (
-              <a
-                href={result.officialUrls[0]}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-700"
-              >
-                View Full Call <FaExternalLinkAlt className="text-[10px]" />
-              </a>
-              ) : null}
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </div>
       ) : null}
     </article>
@@ -239,7 +212,6 @@ function ExpandableCard({
 
 export default function FundingDirectoryPanel({
   query,
-  filters,
   facets,
   facetsLoading,
   loading,
@@ -265,9 +237,10 @@ export default function FundingDirectoryPanel({
   preferences,
   onChangePreferences,
 }: FundingDirectoryPanelProps) {
-  const [openCategory, setOpenCategory] = useState<BrowseCategory>(null);
+  const [openCategory, setOpenCategory] = useState<BrowseCategory>('taxonomyArea');
   const [facetSearch, setFacetSearch] = useState('');
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   const pageWindow = Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
     const start = Math.max(1, Math.min(page - 2, totalPages - 4));
@@ -295,220 +268,245 @@ export default function FundingDirectoryPanel({
   }
 
   const activePreferenceCount =
-    (preferences.useEligibilityProfile ? 1 : 0) +
-    (preferences.usePublicationContext ? 1 : 0);
+    (preferences.useEligibilityProfile ? 1 : 0) + (preferences.usePublicationContext ? 1 : 0);
+
+  /** The facet tree — rendered inline on desktop and inside a sheet on phones. */
+  const facetTree = (
+    <div>
+      {DIMENSION_ORDER.map((dim) => {
+        const meta = CATEGORY_META[dim];
+        const count = facets?.facets[dim]?.length || 0;
+        const selCount = countSelectionsForDimension(dim);
+        const isOpen = openCategory === dim;
+        const items = isOpen ? getFilteredFacetItems(dim) : [];
+
+        return (
+          <section key={dim} className="border-b border-hairline last:border-b-0">
+            <button
+              type="button"
+              onClick={() => toggleCategory(dim)}
+              aria-expanded={isOpen}
+              className="flex min-h-[44px] w-full items-center justify-between gap-2 py-2 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-ink">
+                <span className="text-muted">{meta.icon}</span>
+                <span className="truncate">{meta.label}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {selCount > 0 ? (
+                  <span className="cb-badge-cobalt">{selCount}</span>
+                ) : count > 0 ? (
+                  <span className="text-[11px] text-muted-soft">{count}</span>
+                ) : null}
+                <ChevronDown className={`h-4 w-4 text-muted-soft transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+              </span>
+            </button>
+
+            {isOpen ? (
+              <div className="pb-3">
+                {(facets?.facets[dim]?.length || 0) > 8 ? (
+                  <div className="relative mb-2">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-soft" />
+                    <input
+                      value={facetSearch}
+                      onChange={(e) => setFacetSearch(e.target.value)}
+                      placeholder={`Filter ${meta.label.toLowerCase()}…`}
+                      className="cb-input py-1.5 pl-8 text-[13px]"
+                    />
+                  </div>
+                ) : null}
+
+                {facetsLoading ? (
+                  <div className="flex h-16 items-center justify-center">
+                    <span className="h-5 w-5 animate-spin rounded-full border-2 border-cobalt-600 border-t-transparent" />
+                  </div>
+                ) : items.length === 0 ? (
+                  <p className="py-2 text-[12px] text-muted">
+                    No values found{facetSearch ? ' matching your search' : ' for current filters'}.
+                  </p>
+                ) : (
+                  <div className="max-h-60 space-y-0.5 overflow-y-auto pr-1">
+                    {items.map((item) => {
+                      const selected = isSelected(dim, item.value);
+                      const displayValue = item.label || item.value;
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          onClick={() =>
+                            selected ? onRemoveFacet(dim, item.value) : onSelectFacet(dim, item.value, displayValue)
+                          }
+                          className={`flex min-h-[34px] w-full items-center justify-between gap-2 rounded-md px-2 text-left text-[13px] transition ${
+                            selected ? 'bg-cobalt-50 text-cobalt-800' : 'text-ink-soft hover:bg-inset'
+                          }`}
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span
+                              className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border ${
+                                selected ? 'border-cobalt-600 bg-cobalt-600' : 'border-hairline bg-ground'
+                              }`}
+                            >
+                              {selected ? (
+                                <svg viewBox="0 0 10 10" className="h-2 w-2 text-white" fill="none" stroke="currentColor" strokeWidth={2}>
+                                  <path d="M1 5l2.5 2.5L9 2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              ) : null}
+                            </span>
+                            <span className="truncate">{displayValue}</span>
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-soft">{item.count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </section>
+        );
+      })}
+    </div>
+  );
 
   return (
-    <div className="space-y-5">
-      <section className="overflow-hidden rounded-[28px] border border-white/70 bg-white/92 shadow-[0_28px_70px_rgba(15,23,42,0.10)] backdrop-blur">
-        {/* Header */}
-        <div className="border-b border-slate-200/80 bg-gradient-to-r from-slate-50 to-white px-6 py-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-emerald-600">Funding Directory</p>
-              <h2 className="mt-1.5 text-2xl font-semibold tracking-tight text-slate-950">Browse Funding Opportunities</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-600">
-                Click a category to explore available values, select facets to progressively narrow results, or use the search bar for keyword matching.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+    <div className="flex-1">
+      {/* Search bar */}
+      <div className="cb-card mb-4 p-3 sm:p-4">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-soft" />
+            <input
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onRunSearch(); } }}
+              placeholder="Search by topic, agency, keyword…"
+              className="cb-input pl-9 pr-9"
+            />
+            {query ? (
               <button
                 type="button"
-                onClick={() => setPreferencesOpen((open) => !open)}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors ${
-                  activePreferenceCount > 0
-                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800'
-                }`}
+                onClick={onClearQuery}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-soft transition hover:text-ink"
               >
-                My Preferences
-                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px]">
-                  {activePreferenceCount > 0 ? `${activePreferenceCount} on` : 'off'}
-                </span>
+                <X className="h-4 w-4" />
               </button>
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-semibold text-emerald-800">
-                {loading || facetsLoading ? 'Loading...' : `${totalResults.toLocaleString()} opportunities`}
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onRunSearch} className="cb-btn-primary flex-1 sm:flex-none">
+              Search
+            </button>
+            <button type="button" onClick={onOpenAdvancedFilters} className="cb-btn-secondary flex-1 sm:flex-none">
+              <SlidersHorizontal className="h-4 w-4" />
+              Advanced
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileFiltersOpen(true)}
+              className="cb-btn-secondary flex-1 lg:hidden"
+            >
+              Browse
+              {activeSelections.length > 0 ? <span className="cb-badge-cobalt">{activeSelections.length}</span> : null}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[12px] text-muted">
+            {loading || facetsLoading ? 'Loading…' : `${totalResults.toLocaleString()} opportunities`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPreferencesOpen((open) => !open)}
+            className={`cb-btn-sm inline-flex items-center gap-1.5 rounded-lg px-2.5 text-[12px] transition ${
+              activePreferenceCount > 0 ? 'bg-cobalt-50 text-cobalt-700' : 'text-muted hover:bg-inset hover:text-ink'
+            }`}
+          >
+            My preferences
+            <span className="text-[11px]">{activePreferenceCount > 0 ? `${activePreferenceCount} on` : 'off'}</span>
+          </button>
+        </div>
+
+        {preferencesOpen ? (
+          <div className="mt-3 border-t border-hairline pt-3">
+            <FinderPreferencesPanel preferences={preferences} onChange={onChangePreferences} compact />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[264px_minmax(0,1fr)]">
+        {/* Facet rail — desktop */}
+        <aside className="hidden lg:block">
+          <div className="cb-card sticky top-32 max-h-[calc(100vh-10rem)] overflow-y-auto px-3.5 py-1">
+            {facetTree}
+          </div>
+        </aside>
+
+        {/* Facet sheet — phones and tablets */}
+        {mobileFiltersOpen ? (
+          <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Browse categories">
+            <button type="button" aria-label="Close filters" onClick={() => setMobileFiltersOpen(false)} className="absolute inset-0 bg-ink/25" />
+            <div className="absolute inset-y-0 left-0 flex w-[88%] max-w-sm flex-col bg-ground shadow-cb-sheet">
+              <div className="flex items-center justify-between gap-3 border-b border-hairline px-4 py-3">
+                <span className="text-[15px] font-semibold text-ink">Browse</span>
+                <button type="button" onClick={() => setMobileFiltersOpen(false)} aria-label="Close" className="cb-btn-ghost cb-btn-sm px-2">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4">{facetTree}</div>
+              <div className="border-t border-hairline p-3">
+                <button type="button" onClick={() => setMobileFiltersOpen(false)} className="cb-btn-primary w-full">
+                  Show {totalResults.toLocaleString()} results
+                </button>
               </div>
             </div>
           </div>
+        ) : null}
 
-          {preferencesOpen ? (
-            <div className="mt-4">
-              <FinderPreferencesPanel
-                preferences={preferences}
-                onChange={onChangePreferences}
-                compact
-              />
+        {/* Results */}
+        <div className="min-w-0">
+          {activeSelections.length > 0 ? (
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              {activeSelections.map((sel) => (
+                <span
+                  key={`${sel.dimension}-${sel.value}`}
+                  className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md border border-cobalt-200 bg-cobalt-50 py-0.5 pl-2.5 pr-1 text-[12px] text-cobalt-800"
+                >
+                  <span className="text-cobalt-600">{CATEGORY_META[sel.dimension].label}:</span>
+                  {sel.label || sel.value}
+                  <button
+                    type="button"
+                    onClick={() => onRemoveFacet(sel.dimension, sel.value)}
+                    aria-label={`Remove ${sel.label || sel.value}`}
+                    className="flex h-6 w-6 items-center justify-center rounded transition hover:bg-cobalt-100"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              <button type="button" onClick={onClearAllSelections} className="cb-btn-ghost cb-btn-sm">
+                Clear all
+              </button>
             </div>
           ) : null}
 
-          {/* Search bar */}
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-            <div className="relative flex-1">
-              <FaSearch className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                value={query}
-                onChange={(e) => onQueryChange(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onRunSearch(); } }}
-                placeholder="Search by topic, agency, keyword..."
-                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 outline-none transition-colors focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-              />
-            </div>
-            <div className="flex gap-2">
-              {query ? (
-                <button type="button" onClick={onClearQuery} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300">
-                  <FaTimes /> Clear
-                </button>
-              ) : null}
-              <button type="button" onClick={onRunSearch} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-slate-700">
-                <FaSearch /> Search
-              </button>
-              <button type="button" onClick={onOpenAdvancedFilters} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:border-emerald-400 hover:text-emerald-700">
-                <FaSlidersH /> Advanced
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Active selections breadcrumb bar */}
-        {activeSelections.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-emerald-50/50 px-6 py-3">
-            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Active:</span>
-            {activeSelections.map((sel) => (
-              <span
-                key={`${sel.dimension}-${sel.value}`}
-                className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 py-1 pl-3 pr-1.5 text-xs font-semibold text-emerald-900"
-              >
-                <span className="text-emerald-600">{CATEGORY_META[sel.dimension].label}:</span> {sel.label || sel.value}
-                <button
-                  type="button"
-                  onClick={() => onRemoveFacet(sel.dimension, sel.value)}
-                  className="flex h-4 w-4 items-center justify-center rounded-full text-emerald-700 transition-colors hover:bg-emerald-200 hover:text-emerald-900"
-                >
-                  <FaTimes className="text-[8px]" />
-                </button>
-              </span>
-            ))}
-            <button
-              type="button"
-              onClick={onClearAllSelections}
-              className="ml-auto rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 transition-colors hover:text-slate-900"
-            >
-              Clear All
-            </button>
-          </div>
-        ) : null}
-
-        {/* Category browse bar */}
-        <div className="border-b border-slate-200/80 bg-slate-50/60 px-6 py-4">
-          <div className="flex flex-wrap gap-2">
-            {DIMENSION_ORDER.map((dim) => {
-              const meta = CATEGORY_META[dim];
-              const count = facets?.facets[dim]?.length || 0;
-              const selCount = countSelectionsForDimension(dim);
-              const isOpen = openCategory === dim;
-
-              return (
-                <button
-                  key={dim}
-                  type="button"
-                  onClick={() => toggleCategory(dim)}
-                  className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all ${
-                    isOpen
-                      ? 'bg-emerald-600 text-white shadow-md'
-                      : selCount > 0
-                        ? 'border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                        : 'border border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700'
-                  }`}
-                >
-                  <span className="text-[11px]">{meta.icon}</span>
-                  {meta.label}
-                  {selCount > 0 ? (
-                    <span className={`flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold ${isOpen ? 'bg-white/25 text-white' : 'bg-emerald-600 text-white'}`}>
-                      {selCount}
-                    </span>
-                  ) : count > 0 ? (
-                    <span className={`text-[10px] font-normal ${isOpen ? 'text-emerald-100' : 'text-slate-400'}`}>({count})</span>
-                  ) : null}
-                  {isOpen ? <FaAngleUp className="text-[9px]" /> : <FaChevronRight className="text-[9px]" />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Facet value picker */}
-        {openCategory ? (
-          <div className="border-b border-slate-200/80 bg-white px-6 py-4">
-            <div className="mb-3 flex items-center gap-3">
-              <div className="relative flex-1 max-w-xs">
-                <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400" />
-                <input
-                  value={facetSearch}
-                  onChange={(e) => setFacetSearch(e.target.value)}
-                  placeholder={`Filter ${CATEGORY_META[openCategory].label.toLowerCase()} values...`}
-                  className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-3 text-xs outline-none transition-colors focus:border-emerald-400"
-                />
-              </div>
-              <span className="text-[10px] text-slate-500">
-                {getFilteredFacetItems(openCategory).length} values
-              </span>
-            </div>
-
-            {facetsLoading ? (
-              <div className="flex h-20 items-center justify-center">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-              </div>
-            ) : (
-              <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
-                {getFilteredFacetItems(openCategory).map((item) => {
-                  const selected = isSelected(openCategory, item.value);
-                  const displayValue = item.label || item.value;
-                  return (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => selected ? onRemoveFacet(openCategory, item.value) : onSelectFacet(openCategory, item.value, displayValue)}
-                      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                        selected
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : 'border border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50'
-                      }`}
-                    >
-                      {displayValue}
-                      <span className={`text-[10px] ${selected ? 'text-emerald-200' : 'text-slate-400'}`}>
-                        ({item.count})
-                      </span>
-                    </button>
-                  );
-                })}
-                {getFilteredFacetItems(openCategory).length === 0 ? (
-                  <p className="py-4 text-sm text-slate-500">No values found{facetSearch ? ' matching your search' : ' for current filters'}.</p>
-                ) : null}
-              </div>
-            )}
-          </div>
-        ) : null}
-
-        {/* Results grid */}
-        <div className="bg-[linear-gradient(180deg,rgba(248,250,252,0.5),rgba(255,255,255,0.98))] px-6 py-6">
           {loading ? (
             <div className="flex h-40 items-center justify-center">
-              <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-emerald-500 border-t-transparent" />
+              <span className="h-7 w-7 animate-spin rounded-full border-2 border-cobalt-600 border-t-transparent" />
             </div>
           ) : results.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
-              <p className="text-lg font-semibold text-slate-900">No opportunities match the current selection.</p>
-              <p className="mt-2 text-sm text-slate-600">
+            <div className="rounded-xl border border-dashed border-hairline bg-ground px-6 py-12 text-center">
+              <p className="text-[15px] font-semibold text-ink">No opportunities match the current selection.</p>
+              <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-6 text-muted">
                 Try removing some filters, broadening your search, or clearing all selections.
               </p>
             </div>
           ) : (
-            <div className="space-y-5">
-              {/* Pagination top */}
+            <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-slate-600">
-                  Page {page} of {totalPages} &middot; {totalResults.toLocaleString()} total
+                <p className="text-[12px] text-muted">
+                  Page {page} of {totalPages} · {totalResults.toLocaleString()} total
                 </p>
                 <PaginationControls
                   page={page}
@@ -522,8 +520,7 @@ export default function FundingDirectoryPanel({
                 />
               </div>
 
-              {/* Card grid */}
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-3 xl:grid-cols-2">
                 {results.map((result) => (
                   <ExpandableCard
                     key={result.id}
@@ -534,9 +531,8 @@ export default function FundingDirectoryPanel({
                 ))}
               </div>
 
-              {/* Pagination bottom */}
               {totalPages > 1 ? (
-                <div className="flex justify-center pt-2">
+                <div className="flex justify-center pt-1">
                   <PaginationControls
                     page={page}
                     totalPages={totalPages}
@@ -552,7 +548,7 @@ export default function FundingDirectoryPanel({
             </div>
           )}
         </div>
-      </section>
+      </div>
     </div>
   );
 }
@@ -577,13 +573,8 @@ function PaginationControls({
   onGoToPage: (p: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <button
-        type="button"
-        onClick={onPreviousPage}
-        disabled={!hasPreviousPage}
-        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-600 transition-colors hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
-      >
+    <div className="flex items-center gap-1">
+      <button type="button" onClick={onPreviousPage} disabled={!hasPreviousPage} className="cb-btn-secondary cb-btn-sm">
         Prev
       </button>
       {pageWindow.map((p) => (
@@ -591,21 +582,15 @@ function PaginationControls({
           key={p}
           type="button"
           onClick={() => onGoToPage(p)}
-          className={`rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${
-            p === page
-              ? 'bg-slate-900 text-white'
-              : 'border border-slate-200 bg-white text-slate-600 hover:border-emerald-300'
+          aria-current={p === page ? 'page' : undefined}
+          className={`inline-flex h-[34px] min-w-[34px] items-center justify-center rounded-lg text-[13px] font-medium transition ${
+            p === page ? 'bg-cobalt-600 text-white' : 'text-muted hover:bg-inset hover:text-ink'
           }`}
         >
           {p}
         </button>
       ))}
-      <button
-        type="button"
-        onClick={onNextPage}
-        disabled={!hasNextPage}
-        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-600 transition-colors hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
-      >
+      <button type="button" onClick={onNextPage} disabled={!hasNextPage} className="cb-btn-secondary cb-btn-sm">
         Next
       </button>
     </div>

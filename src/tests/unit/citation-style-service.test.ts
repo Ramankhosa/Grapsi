@@ -199,8 +199,10 @@ describe('CitationStyleService', () => {
         maxAuthorsBeforeEtAl: 3
       });
 
+      // MLA in-text citations are author + page ("(Smith 145)"), not author + year;
+      // the style row above declares '(Author Page)' for exactly this reason.
       const result = await service.formatInTextCitation(mockCitation, 'MLA9');
-      expect(result).toBe('(Smith 2023)');
+      expect(result).toBe('(Smith 145)');
     });
 
     it('should throw error for unknown citation style', async () => {
@@ -237,7 +239,7 @@ describe('CitationStyleService', () => {
       });
 
       const result = await service.formatBibliographyEntry(mockCitation, 'IEEE');
-      expect(result).toContain('J. A. Smith, E. R. Johnson, M. K. Brown, "Deep Learning Approaches for Natural Language Processing: A Comprehensive Survey," Journal of Artificial Intelligence Research, vol. 67, no. 2, pp. 145-189, 2023.');
+      expect(result).toContain('J. A. Smith, E. R. Johnson, M. K. Brown, "Deep Learning Approaches for Natural Language Processing: A Comprehensive Survey," Journal of Artificial Intelligence Research, vol. 67, no. 2, pp. 145-189, 2023, doi: 10.5555/12345678.');
     });
 
     it('should format Chicago bibliography entry', async () => {

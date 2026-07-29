@@ -1,5 +1,5 @@
 import React from 'react';
-import { FaHandPaper, FaMagic } from 'react-icons/fa';
+import { Hand, Wand2 } from 'lucide-react';
 
 import type { RecommendationFilterMode } from '../../lib/recommendations/chatTypes';
 
@@ -12,25 +12,21 @@ interface FinderFilterModeToggleProps {
 
 const MODE_COPY: Record<RecommendationFilterMode, { label: string; hint: string; icon: React.ReactNode }> = {
   manual: {
-    label: 'Manual filters',
+    label: 'Manual',
     hint: 'You control the filters. The assistant only suggests — every search stays within your filters.',
-    icon: <FaHandPaper aria-hidden className="text-[10px]" />,
+    icon: <Hand aria-hidden className="h-3.5 w-3.5" />,
   },
   auto: {
-    label: 'Auto filters',
+    label: 'Auto',
     hint: 'The assistant applies filters it reads from your messages and asks before applying inferred ones.',
-    icon: <FaMagic aria-hidden className="text-[10px]" />,
+    icon: <Wand2 aria-hidden className="h-3.5 w-3.5" />,
   },
 };
 
 export default function FinderFilterModeToggle({ mode, onChange, disabled = false, compact = false }: FinderFilterModeToggleProps) {
   return (
     <div className={compact ? '' : 'space-y-1.5'}>
-      <div
-        role="radiogroup"
-        aria-label="Filter mode"
-        className="inline-flex rounded-full border border-slate-200 bg-white/80 p-1 shadow-sm"
-      >
+      <div role="radiogroup" aria-label="Filter mode" className="flex gap-1 rounded-lg border border-hairline bg-inset p-1">
         {(['manual', 'auto'] as const).map((value) => {
           const active = mode === value;
           return (
@@ -44,10 +40,8 @@ export default function FinderFilterModeToggle({ mode, onChange, disabled = fals
                 if (!active) onChange(value);
               }}
               title={MODE_COPY[value].hint}
-              className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                active
-                  ? 'bg-slate-950 text-white shadow-[0_6px_16px_rgba(15,23,42,0.25)]'
-                  : 'text-slate-500 hover:text-slate-800'
+              className={`inline-flex min-h-[32px] flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                active ? 'bg-ground text-cobalt-700 shadow-sm' : 'text-muted hover:text-ink'
               }`}
             >
               {MODE_COPY[value].icon}
@@ -56,9 +50,7 @@ export default function FinderFilterModeToggle({ mode, onChange, disabled = fals
           );
         })}
       </div>
-      {!compact ? (
-        <p className="max-w-xs text-[11px] leading-4 text-slate-500">{MODE_COPY[mode].hint}</p>
-      ) : null}
+      {!compact ? <p className="text-[11px] leading-4 text-muted">{MODE_COPY[mode].hint}</p> : null}
     </div>
   );
 }

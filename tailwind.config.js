@@ -9,6 +9,33 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        // ── Cobalt design system ────────────────────────────────────────────
+        // A quiet white ground, exactly three grays, and one working blue.
+        // Used by the researcher workspace: profile, research fit, finder chat,
+        // and the funding directory.
+        ground: '#ffffff',
+        inset: '#f7f8fa',
+        hairline: '#e4e7ec',
+        ink: {
+          DEFAULT: '#101828',
+          soft: '#344054',
+        },
+        muted: {
+          DEFAULT: '#667085',
+          soft: '#98a2b3',
+        },
+        cobalt: {
+          50: '#eff4ff',
+          100: '#dce7fe',
+          200: '#c0d3fd',
+          300: '#94b4fc',
+          400: '#608df9',
+          500: '#3b68f5',
+          600: '#1d4ed8',
+          700: '#1b41b4',
+          800: '#1c3891',
+          900: '#1b3175',
+        },
         // PatentNest AI Palette
         'ai-blue': {
           50: '#f0f9ff',
@@ -79,6 +106,9 @@ module.exports = {
         'home-v2-mono': ['var(--font-home-v2-mono)', 'monospace'],
       },
       boxShadow: {
+        // Cobalt system: near-flat surfaces, one lift for overlays only.
+        'cb-pop': '0 12px 32px -8px rgba(16, 24, 40, 0.18), 0 2px 6px -2px rgba(16, 24, 40, 0.08)',
+        'cb-sheet': '0 24px 64px -12px rgba(16, 24, 40, 0.24)',
         'prep-card': '0 10px 25px rgba(15, 23, 42, 0.08)',
         'prep-card-hover': '0 16px 40px rgba(15, 23, 42, 0.12)',
         'prep-float': '0 28px 70px rgba(15, 23, 42, 0.18)',

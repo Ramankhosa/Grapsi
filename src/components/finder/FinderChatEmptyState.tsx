@@ -1,5 +1,5 @@
 import React from 'react';
-import { FaLightbulb, FaSearch } from 'react-icons/fa';
+import { Sparkles } from 'lucide-react';
 
 import type { ResearcherFinderContext } from '../../lib/researcherProfile/types';
 
@@ -27,37 +27,36 @@ export default function FinderChatEmptyState({
     '';
 
   return (
-    <div className="flex h-full flex-col items-center justify-center px-4 py-8 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-emerald-500 text-xl text-white shadow-[0_14px_34px_rgba(16,185,129,0.35)]">
-        <FaSearch />
+    <div className="flex h-full flex-col items-center justify-center px-2 py-8 text-center">
+      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cobalt-50 text-cobalt-700">
+        <Sparkles className="h-5 w-5" />
       </div>
-      <h3 className="mt-5 text-xl font-semibold text-slate-950">
+      <h3 className="mt-4 text-lg font-semibold tracking-[-0.01em] text-ink">
         {displayName ? `Hi ${displayName} — what should we fund next?` : 'What should we fund next?'}
       </h3>
-      <p className="mt-2 max-w-md text-sm leading-6 text-slate-600">
+      <p className="mt-1.5 max-w-md text-[13px] leading-6 text-muted">
         {primaryArea
           ? `Describe what you need in plain English — I can search calls for ${primaryArea}, answer questions about any call's documents, or talk through application strategy.`
           : 'Describe what you need in plain English — I can search the funding catalog, answer questions about a call’s documents, or talk through application strategy.'}
       </p>
 
-      <div className="mt-6 grid w-full max-w-2xl gap-3 md:grid-cols-2">
+      <div className="mt-6 grid w-full max-w-2xl gap-2 sm:grid-cols-2">
         {starterPrompts.map((starter) => (
           <button
             key={starter}
             type="button"
             onClick={() => onSendMessage(starter)}
             disabled={disabled}
-            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-medium text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-emerald-400 hover:text-emerald-800 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+            className="cb-card px-3.5 py-3 text-left text-[13px] leading-5 text-ink-soft transition hover:border-cobalt-300 hover:bg-cobalt-50 hover:text-cobalt-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {starter}
           </button>
         ))}
       </div>
 
-      <div className="mt-6 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">
-        <FaLightbulb className="text-amber-400" />
+      <p className="mt-5 text-[12px] text-muted-soft">
         Tip: after a search, try “what documents are required for result 1?”
-      </div>
+      </p>
     </div>
   );
 }

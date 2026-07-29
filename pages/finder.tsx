@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { FaArrowLeft, FaSignOutAlt, FaUpload } from 'react-icons/fa';
+import { LibraryBig, MessageSquare, Upload } from 'lucide-react';
+import ResearcherTopBar from '@/components/researcher/ResearcherTopBar';
 import FinderAiTab from '@/components/finder/FinderAiTab';
 import type { FinderPreferenceValues } from '@/components/FinderPreferencesPanel';
 import FundingChatFilterDrawer from '@/components/FundingChatFilterDrawer';
@@ -67,7 +67,7 @@ async function apiRequest<T>(
 type DirectorySelection = { dimension: DirectoryFacetDimension; value: string; label?: string };
 
 export default function FinderPage() {
-  const { user, isLoading, authFetch, logout } = useAuth();
+  const { user, isLoading, authFetch } = useAuth();
   const router = useRouter();
   const projectId = typeof router.query.projectId === 'string' ? router.query.projectId : null;
 
@@ -363,96 +363,58 @@ export default function FinderPage() {
 
   if (isLoading || chat.loadingList) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950">
-        <div className="h-16 w-16 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent" />
+      <div className="flex min-h-screen items-center justify-center bg-inset">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-cobalt-600 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.18),_transparent_30%),linear-gradient(180deg,_#f8fafc_0%,_#e2e8f0_100%)] text-slate-900">
+    <div className="cb-page flex min-h-screen flex-col bg-inset text-ink">
       <Head>
-        <title>Funding Chat Finder | GrantGenie</title>
+        <title>Funding Finder | GrantGenie</title>
         <meta
           name="description"
           content="Ask for funding opportunities in a conversational AI chat, apply structured filters manually, and get results from the published funding catalog."
         />
       </Head>
 
-      <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <Link href={projectId ? `/projects/${encodeURIComponent(projectId)}` : '/dashboard'} className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 transition-colors hover:text-emerald-950">
-              <FaArrowLeft />
-              {projectId ? 'Back to Project' : 'Back to Dashboard'}
-            </Link>
-            <Link href="/profile/researcher" className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 transition-colors hover:border-emerald-300">
-              Research Profile
-            </Link>
-            <Link href="/profile/research-fit" className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:border-emerald-300 hover:text-emerald-800">
-              Research Fit
-            </Link>
+      <ResearcherTopBar />
+
+      <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-4 py-4 sm:px-6 lg:px-8">
+        {/* Mode switch — the two ways into the same catalog. */}
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div role="tablist" aria-label="Finder mode" className="flex w-full gap-1 rounded-lg border border-hairline bg-ground p-1 sm:w-auto">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={finderTab === 'ai'}
+              onClick={() => setFinderTab('ai')}
+              className={`cb-tab flex-1 justify-center sm:flex-none ${finderTab === 'ai' ? 'cb-tab-active' : ''}`}
+            >
+              <MessageSquare className="h-4 w-4" />
+              AI advisor
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={finderTab === 'manual'}
+              onClick={() => setFinderTab('manual')}
+              className={`cb-tab flex-1 justify-center sm:flex-none ${finderTab === 'manual' ? 'cb-tab-active' : ''}`}
+            >
+              <LibraryBig className="h-4 w-4" />
+              Directory
+            </button>
           </div>
 
-          <button
-            onClick={() => logout()}
-            className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
-          >
-            Sign out
-            <FaSignOutAlt />
-          </button>
-        </div>
-
-        <div className="mb-6 rounded-[30px] border border-white/70 bg-white/82 px-6 py-6 shadow-[0_30px_80px_rgba(15,23,42,0.14)] backdrop-blur">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-700">Funding Finder</p>
-              <h1 className="mt-2 text-4xl font-semibold tracking-tight text-slate-950">Find Funding Opportunities</h1>
-              <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-600">
-                Browse the funding directory by research area, country, and funding type — or switch to the AI advisor to describe your needs in plain English, ask about a call&apos;s documents, and talk through strategy.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900">
-              {chat.activeRun ? `${chat.activeRun.results.length} results in the current search` : 'Start a conversation to search'}
-            </div>
-          </div>
-        </div>
-
-        <div className="mb-6 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={() => setFinderTab('ai')}
-            className={`rounded-full px-5 py-3 text-sm font-semibold transition-colors ${
-              finderTab === 'ai'
-                ? 'bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.18)]'
-                : 'border border-slate-300 bg-white text-slate-700 hover:border-emerald-400 hover:text-emerald-800'
-            }`}
-          >
-            AI Assisted Search
-          </button>
-          <button
-            type="button"
-            onClick={() => setFinderTab('manual')}
-            className={`rounded-full px-5 py-3 text-sm font-semibold transition-colors ${
-              finderTab === 'manual'
-                ? 'bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.18)]'
-                : 'border border-slate-300 bg-white text-slate-700 hover:border-emerald-400 hover:text-emerald-800'
-            }`}
-          >
-            Funding Directory
-          </button>
-          <button
-            type="button"
-            onClick={() => setImportModalOpen(true)}
-            className="inline-flex items-center gap-2 rounded-full border border-emerald-300 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-900 transition-colors hover:bg-emerald-100"
-          >
-            <FaUpload />
-            Upload New Call For Proposal
+          <button type="button" onClick={() => setImportModalOpen(true)} className="cb-btn-secondary cb-btn-sm justify-center">
+            <Upload className="h-4 w-4" />
+            Upload a call
           </button>
         </div>
 
         {error ? (
-          <div className="mb-5 rounded-[22px] border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-800">
             {error}
           </div>
         ) : null}

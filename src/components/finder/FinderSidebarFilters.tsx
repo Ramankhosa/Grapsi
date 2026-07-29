@@ -1,5 +1,5 @@
 import React from 'react';
-import { FaFilter, FaTimes, FaUndo } from 'react-icons/fa';
+import { Undo2, X } from 'lucide-react';
 
 import type { RecommendationSearchFilters } from '../../lib/recommendations/types';
 import { FILTER_LABELS } from '../../lib/recommendations/filterChips';
@@ -62,41 +62,35 @@ export default function FinderSidebarFilters({
   const totalActive = groups.reduce((sum, group) => sum + group.values.length, 0) + scalarChips.length;
 
   return (
-    <div className="rounded-[24px] border border-white/70 bg-white/85 p-4 shadow-sm">
+    <div className="cb-card p-3.5">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-          <FaFilter className="text-emerald-600" />
-          Your Filters
-          {totalActive > 0 ? (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold tracking-normal text-amber-800">
-              {totalActive}
-            </span>
-          ) : null}
+        <div className="flex items-center gap-2">
+          <span className="cb-eyebrow">Your filters</span>
+          {totalActive > 0 ? <span className="cb-badge-cobalt">{totalActive}</span> : null}
         </div>
-        <div className="flex items-center gap-1.5">
-          {onUndo ? (
-            <button
-              type="button"
-              onClick={onUndo}
-              disabled={disabled}
-              title="Undo last filter change"
-              className="rounded-full border border-slate-200 p-1.5 text-[10px] text-slate-500 transition-colors hover:border-emerald-300 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FaUndo />
-            </button>
-          ) : null}
-        </div>
+        {onUndo ? (
+          <button
+            type="button"
+            onClick={onUndo}
+            disabled={disabled}
+            title="Undo last filter change"
+            aria-label="Undo last filter change"
+            className="cb-btn-ghost cb-btn-sm px-2"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
       </div>
 
       {totalActive === 0 ? (
-        <p className="mt-3 text-xs leading-5 text-slate-500">
+        <p className="mt-2 text-[12px] leading-5 text-muted">
           No filters yet — the chat searches the whole catalog. Add filters to narrow the search space.
         </p>
       ) : (
         <div className="mt-3 space-y-3">
           {groups.map((group) => (
             <div key={String(group.key)}>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">{group.label}</div>
+              <div className="text-[11px] text-muted-soft">{group.label}</div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {group.values.map((value) => (
                   <button
@@ -105,10 +99,10 @@ export default function FinderSidebarFilters({
                     onClick={() => onRemoveArrayValue(group.key, value)}
                     disabled={disabled}
                     title={`Remove ${value}`}
-                    className="group inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-900 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="group inline-flex min-h-[32px] items-center gap-1.5 rounded-md border border-cobalt-200 bg-cobalt-50 px-2 text-[12px] text-cobalt-800 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {value}
-                    <FaTimes className="text-[9px] text-emerald-400 group-hover:text-rose-500" />
+                    <X className="h-3 w-3 opacity-60 group-hover:opacity-100" />
                   </button>
                 ))}
               </div>
@@ -117,7 +111,7 @@ export default function FinderSidebarFilters({
 
           {scalarChips.length > 0 ? (
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Timing & Budget</div>
+              <div className="text-[11px] text-muted-soft">Timing &amp; budget</div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {scalarChips.map((chip) => (
                   <button
@@ -126,10 +120,10 @@ export default function FinderSidebarFilters({
                     onClick={() => onClearScalar(chip.key)}
                     disabled={disabled}
                     title="Remove this filter"
-                    className="group inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-900 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="group inline-flex min-h-[32px] items-center gap-1.5 rounded-md border border-cobalt-200 bg-cobalt-50 px-2 text-[12px] text-cobalt-800 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {chip.label}
-                    <FaTimes className="text-[9px] text-emerald-400 group-hover:text-rose-500" />
+                    <X className="h-3 w-3 opacity-60 group-hover:opacity-100" />
                   </button>
                 ))}
               </div>
@@ -138,23 +132,13 @@ export default function FinderSidebarFilters({
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={onOpenFilterEditor}
-          disabled={disabled}
-          className="rounded-full bg-slate-950 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Edit Filters
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={onOpenFilterEditor} disabled={disabled} className="cb-btn-secondary cb-btn-sm">
+          Edit filters
         </button>
         {totalActive > 0 ? (
-          <button
-            type="button"
-            onClick={onClearAllFilters}
-            disabled={disabled}
-            className="rounded-full border border-slate-200 bg-white px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600 transition-colors hover:border-rose-300 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Clear All
+          <button type="button" onClick={onClearAllFilters} disabled={disabled} className="cb-btn-ghost cb-btn-sm">
+            Clear all
           </button>
         ) : null}
       </div>

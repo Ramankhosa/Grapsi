@@ -47,7 +47,7 @@ describe('entitlement service signup provisioning', () => {
     })
   })
 
-  it('does not overwrite an existing active entitlement', async () => {
+  it('does not touch an existing active entitlement of an equal or higher tier', async () => {
     const client = {
       tenantPlan: {
         findFirst: vi.fn().mockResolvedValue({
@@ -63,14 +63,57 @@ describe('entitlement service signup provisioning', () => {
       }
     }
 
+    // BASIC maps to FREE_PLAN, which ranks below the tenant's existing PRO_PLAN,
+    // so the signup must leave the entitlement completely alone.
+    const result = await ensureTenantEntitlementForSignup({
+      tenantId: 'tenant-1',
+      atiTokenId: 'ati-1',
+      planTier: 'BASIC'
+    }, client as any)
+
+    expect(result).toMatchObject({ created: false, planCode: 'PRO_PLAN' })
+    expect(client.plan.findUnique).not.toHaveBeenCalled()
+    expect(client.tenantPlan.create).not.toHaveBeenCalled()
+    expect(client.tenantPlan.update).not.toHaveBeenCalled()
+  })
+
+  it('upgrades an existing lower-tier entitlement in place instead of creating a second one', async () => {
+    const client = {
+      tenantPlan: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'tenant-plan-1',
+          plan: { code: 'FREE_PLAN' },
+          metadata: { reason: 'ati_signup_default_entitlement' }
+        }),
+        findUnique: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn().mockResolvedValue({ id: 'tenant-plan-1' })
+      },
+      plan: {
+        findUnique: vi.fn().mockImplementation(({ where }) =>
+          Promise.resolve(
+            where.code === 'ENTERPRISE_PLAN'
+              ? { id: 'plan-enterprise', code: 'ENTERPRISE_PLAN', status: 'ACTIVE' }
+              : null
+          )
+        )
+      }
+    }
+
     const result = await ensureTenantEntitlementForSignup({
       tenantId: 'tenant-1',
       atiTokenId: 'ati-1',
       planTier: 'ENTERPRISE'
     }, client as any)
 
-    expect(result).toMatchObject({ created: false, planCode: 'PRO_PLAN' })
-    expect(client.plan.findUnique).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ created: false, planCode: 'ENTERPRISE_PLAN' })
     expect(client.tenantPlan.create).not.toHaveBeenCalled()
+    expect(client.tenantPlan.update).toHaveBeenCalledWith({
+      where: { id: 'tenant-plan-1' },
+      data: expect.objectContaining({
+        planId: 'plan-enterprise',
+        metadata: expect.objectContaining({ upgradedFrom: 'FREE_PLAN' })
+      })
+    })
   })
 })

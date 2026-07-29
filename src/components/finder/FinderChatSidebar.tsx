@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FaChevronDown, FaChevronRight, FaCog } from 'react-icons/fa';
+import { ChevronDown, ChevronRight, Settings2 } from 'lucide-react';
 
 import FinderFilterModeToggle from './FinderFilterModeToggle';
 import FinderSidebarFilters from './FinderSidebarFilters';
@@ -26,9 +26,9 @@ export interface FinderChatSidebarProps {
 }
 
 /**
- * The persistent left rail of the AI tab: filter mode, the manual filter panel
- * (single source of truth for the search space), profile-driven shortcuts, and a
- * collapsible Settings section holding the personal-context matching opt-ins.
+ * The search-context rail: filter mode, the manual filter panel (single source of
+ * truth for the search space), profile-driven shortcuts, and a collapsible settings
+ * section holding the personal-context matching opt-ins.
  */
 export default function FinderChatSidebar({
   filterMode,
@@ -49,9 +49,9 @@ export default function FinderChatSidebar({
   const activePreferenceCount = [preferences.useEligibilityProfile, preferences.usePublicationContext].filter(Boolean).length;
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-[24px] border border-white/70 bg-white/85 p-4 shadow-sm">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Filter Mode</div>
+    <div className="space-y-3">
+      <div className="cb-card p-3.5">
+        <div className="cb-eyebrow">Filter mode</div>
         <div className="mt-2">
           <FinderFilterModeToggle mode={filterMode} onChange={onFilterModeChange} disabled={disabled} />
         </div>
@@ -75,32 +75,28 @@ export default function FinderChatSidebar({
         disabled={disabled}
       />
 
-      <div className="rounded-[24px] border border-white/70 bg-white/85 shadow-sm">
+      <div className="cb-card">
         <button
           type="button"
           onClick={() => setSettingsOpen((open) => !open)}
           aria-expanded={settingsOpen}
-          className="flex w-full items-center justify-between gap-2 rounded-[24px] p-4 text-left transition-colors hover:bg-slate-50/70"
+          className="flex w-full items-center justify-between gap-2 rounded-xl p-3.5 text-left transition hover:bg-inset"
         >
-          <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-            <FaCog className="text-emerald-600" />
-            Settings
+          <span className="flex items-center gap-2 text-[13px] font-medium text-ink">
+            <Settings2 className="h-4 w-4 text-muted" />
+            Matching settings
           </span>
           <span className="flex items-center gap-2">
-            {activePreferenceCount > 0 ? (
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-800">
-                {activePreferenceCount} active
-              </span>
-            ) : null}
+            {activePreferenceCount > 0 ? <span className="cb-badge-cobalt">{activePreferenceCount} on</span> : null}
             {settingsOpen ? (
-              <FaChevronDown className="text-xs text-slate-400" />
+              <ChevronDown className="h-4 w-4 text-muted-soft" />
             ) : (
-              <FaChevronRight className="text-xs text-slate-400" />
+              <ChevronRight className="h-4 w-4 text-muted-soft" />
             )}
           </span>
         </button>
         {settingsOpen ? (
-          <div className="border-t border-slate-100 p-4 pt-3">
+          <div className="border-t border-hairline p-3.5">
             <FinderPreferencesPanel preferences={preferences} onChange={onPreferencesChange} compact />
           </div>
         ) : null}

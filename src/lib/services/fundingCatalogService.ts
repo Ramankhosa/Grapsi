@@ -785,6 +785,18 @@ export class FundingCatalogService {
       }
     });
 
+    // Alert matched researchers in the background; a publish must never fail
+    // or wait on notification fan-out. Imported lazily so the catalog module
+    // doesn't pull in the researcher-search stack at load time.
+    import('./fundingAlertService')
+      .then(({ dispatchFundingAlertsQuietly }) => dispatchFundingAlertsQuietly(fundingCallId))
+      .catch((error) => {
+        console.warn(
+          `[FUNDING-ALERT] Could not start alert dispatch for call ${fundingCallId}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+
     return {
       ok: true,
       fundingCallId,

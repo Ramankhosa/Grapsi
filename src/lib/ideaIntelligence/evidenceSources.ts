@@ -1,6 +1,7 @@
 import { literatureSearchService, type SearchResult } from '@/lib/services/literature-search-service'
 import { serpApiProvider, type SerpApiSearchResult } from '@/lib/serpapi-provider'
 import { isPatentNestConfigured, searchIndianPatents } from '@/lib/patentnest/client'
+import { IDEA_SOURCE_FLAGS, type IdeaSourceFlags } from '@/lib/ideaIntelligence/sourceFlags'
 import { sanitizeExternalUrl } from '@/lib/urlSafety'
 
 export type PublicationEvidence = {
@@ -42,9 +43,10 @@ export type WebEvidence = {
 export type EvidenceDiagnostics = {
   publicationSources: string[]
   patentnestConfigured: boolean
-  patentnestStatus: 'not_configured' | 'ok' | 'error'
+  patentnestStatus: 'not_configured' | 'disabled' | 'ok' | 'error'
   patentnestError?: string
   serpapiError?: string
+  disabledSources?: string[]
 }
 
 export type MultiSourceEvidence = {
@@ -179,31 +181,62 @@ async function searchPatentnest(query: string, limit: number) {
   }
 }
 
-export async function retrieveIdeaEvidence(query: string, options: { publicationLimit?: number; patentLimit?: number; webLimit?: number } = {}): Promise<MultiSourceEvidence> {
+export function emptyIdeaEvidence(disabledSources: string[] = []): MultiSourceEvidence {
+  return {
+    publications: [],
+    patents: [],
+    webResults: [],
+    diagnostics: {
+      publicationSources: [],
+      patentnestConfigured: isPatentNestConfigured(),
+      patentnestStatus: 'disabled',
+      disabledSources,
+    },
+  }
+}
+
+export async function retrieveIdeaEvidence(
+  query: string,
+  options: { publicationLimit?: number; patentLimit?: number; webLimit?: number; flags?: IdeaSourceFlags } = {}
+): Promise<MultiSourceEvidence> {
   const publicationLimit = Math.min(Math.max(options.publicationLimit || 10, 1), 20)
   const patentLimit = Math.min(Math.max(options.patentLimit || 10, 1), 20)
   const webLimit = Math.min(Math.max(options.webLimit || 8, 1), 15)
+  // Each provider is gated independently so a single corpus can be brought back
+  // on its own later.
+  const flags = options.flags || IDEA_SOURCE_FLAGS
+  const disabledSources = [
+    flags.publications ? null : 'publications',
+    flags.patents ? null : 'patents',
+    flags.web ? null : 'web',
+  ].filter(Boolean) as string[]
 
   const [publicationResult, patentResult, patentnestResult, webResult] = await Promise.allSettled([
-    literatureSearchService.search(query, {
-      sources: ['semantic_scholar', 'openalex', 'crossref'],
-      includeAbstract: true,
-      hasAbstract: false,
-      limit: publicationLimit,
-    }),
-    serpApiProvider.searchPatents({ q: query, num: patentLimit }),
-    searchPatentnest(query, patentLimit),
-    serpApiProvider.searchWeb({ q: `${query} research funding India`, num: webLimit }),
+    flags.publications
+      ? literatureSearchService.search(query, {
+          sources: ['semantic_scholar', 'openalex', 'crossref'],
+          includeAbstract: true,
+          hasAbstract: false,
+          limit: publicationLimit,
+        })
+      : Promise.resolve(null),
+    flags.patents ? serpApiProvider.searchPatents({ q: query, num: patentLimit }) : Promise.resolve(null),
+    flags.patents ? searchPatentnest(query, patentLimit) : Promise.resolve(null),
+    flags.web ? serpApiProvider.searchWeb({ q: `${query} research funding India`, num: webLimit }) : Promise.resolve(null),
   ])
 
-  const publications = publicationResult.status === 'fulfilled'
+  const publications = publicationResult.status === 'fulfilled' && publicationResult.value
     ? publicationResult.value.results.map(normalizePublication).filter((item) => item.title).slice(0, publicationLimit)
     : []
-  const googlePatents = patentResult.status === 'fulfilled'
+  const googlePatents = patentResult.status === 'fulfilled' && patentResult.value
     ? (patentResult.value.organic_results || []).map(normalizeSerpPatent).filter(Boolean) as PatentEvidence[]
     : []
-  const patentnest = patentnestResult.status === 'fulfilled' ? patentnestResult.value : { results: [], status: 'error' as const, error: 'PatentNest request failed' }
-  const webResults = webResult.status === 'fulfilled'
+  const patentnest = !flags.patents
+    ? { results: [] as PatentEvidence[], status: 'disabled' as const }
+    : patentnestResult.status === 'fulfilled' && patentnestResult.value
+      ? patentnestResult.value
+      : { results: [] as PatentEvidence[], status: 'error' as const, error: 'PatentNest request failed' }
+  const webResults = webResult.status === 'fulfilled' && webResult.value
     ? (webResult.value.organic_results || []).map(normalizeWeb).filter(Boolean).slice(0, webLimit) as WebEvidence[]
     : []
 
@@ -222,11 +255,12 @@ export async function retrieveIdeaEvidence(query: string, options: { publication
     patents,
     webResults,
     diagnostics: {
-      publicationSources: publicationResult.status === 'fulfilled' ? publicationResult.value.sources : [],
+      publicationSources: publicationResult.status === 'fulfilled' && publicationResult.value ? publicationResult.value.sources : [],
       patentnestConfigured: isPatentNestConfigured(),
       patentnestStatus: patentnest.status,
       patentnestError: 'error' in patentnest ? patentnest.error : undefined,
-      serpapiError: patentResult.status === 'fulfilled' ? patentResult.value.error : patentResult.reason?.message,
+      serpapiError: patentResult.status === 'fulfilled' ? patentResult.value?.error : patentResult.reason?.message,
+      disabledSources: disabledSources.length ? disabledSources : undefined,
     },
   }
 }

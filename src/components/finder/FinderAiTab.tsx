@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { FaBolt, FaPlus, FaTrash } from 'react-icons/fa';
+import React, { useEffect, useRef, useState } from 'react';
+import { Plus, SlidersHorizontal, Trash2, X } from 'lucide-react';
 
 import FinderChatMessage from '../FinderChatMessage';
 import FinderPendingFilterConfirmationBar from '../FinderPendingFilterConfirmationBar';
@@ -23,9 +23,9 @@ interface FinderAiTabProps {
 }
 
 /**
- * The redesigned AI-assisted search tab: persistent filter/profile sidebar on desktop
- * (stacked on mobile), full-height conversation panel with markdown + streaming, and
- * strictly manual filter control by default.
+ * The AI-assisted search tab. On desktop the filter/profile rail sits beside a
+ * full-height conversation; below `lg` the rail moves into a slide-over so the
+ * chat keeps the whole screen and the composer stays pinned to the bottom.
  */
 export default function FinderAiTab({
   chat,
@@ -37,6 +37,7 @@ export default function FinderAiTab({
 }: FinderAiTabProps) {
   const { conversation } = chat;
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const [railOpen, setRailOpen] = useState(false);
 
   useEffect(() => {
     if (!chatScrollRef.current) return;
@@ -50,6 +51,20 @@ export default function FinderAiTab({
     chat.streamingTurn?.results?.length,
     chat.sending,
   ]);
+
+  useEffect(() => {
+    if (!railOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setRailOpen(false);
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [railOpen]);
 
   const hasRenderableConversationMessages = Boolean(
     (conversation?.messages.length || 0) > 0 || chat.pendingTurn || chat.streamingTurn
@@ -66,44 +81,74 @@ export default function FinderAiTab({
     chat.composerRef.current?.focus();
   }
 
-  return (
-    <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
-      <aside className="order-2 lg:order-1">
-        <FinderChatSidebar
-          filterMode={conversation?.filterMode || 'manual'}
-          onFilterModeChange={chat.handleFilterModeChange}
-          filters={conversation?.currentFilters || null}
-          onRemoveArrayValue={chat.handleRemoveArrayValue}
-          onClearScalar={chat.handleClearScalar}
-          onOpenFilterEditor={() => chat.setFilterDrawerOpen(true)}
-          onClearAllFilters={chat.handleResetFilters}
-          onUndoFilters={chat.lastUndoFilters ? chat.handleUndoFilters : undefined}
-          finderContext={finderContext}
-          preferences={preferences}
-          onPreferencesChange={onPreferencesChange}
-          onSearchResearchArea={chat.handleSearchResearchArea}
-          disabled={busy}
-        />
-      </aside>
+  const rail = (
+    <FinderChatSidebar
+      filterMode={conversation?.filterMode || 'manual'}
+      onFilterModeChange={chat.handleFilterModeChange}
+      filters={conversation?.currentFilters || null}
+      onRemoveArrayValue={chat.handleRemoveArrayValue}
+      onClearScalar={chat.handleClearScalar}
+      onOpenFilterEditor={() => {
+        setRailOpen(false);
+        chat.setFilterDrawerOpen(true);
+      }}
+      onClearAllFilters={chat.handleResetFilters}
+      onUndoFilters={chat.lastUndoFilters ? chat.handleUndoFilters : undefined}
+      finderContext={finderContext}
+      preferences={preferences}
+      onPreferencesChange={onPreferencesChange}
+      onSearchResearchArea={(label, queryText) => {
+        setRailOpen(false);
+        chat.handleSearchResearchArea(label, queryText);
+      }}
+      disabled={busy}
+    />
+  );
 
-      <section className="order-1 flex min-h-[560px] flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_28px_70px_rgba(15,23,42,0.12)] lg:order-2 lg:h-[calc(100vh-220px)]">
-        <div className="border-b border-slate-200/80 bg-gradient-to-r from-slate-50 to-white px-5 py-4 sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+  return (
+    <div className="grid flex-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className="hidden lg:block">{rail}</aside>
+
+      {/* Mobile slide-over holding the same rail. */}
+      {railOpen ? (
+        <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Filters and research profile">
+          <button type="button" aria-label="Close panel" onClick={() => setRailOpen(false)} className="absolute inset-0 bg-ink/25" />
+          <div className="absolute inset-y-0 left-0 flex w-[88%] max-w-sm flex-col bg-inset shadow-cb-sheet">
+            <div className="flex items-center justify-between gap-3 border-b border-hairline bg-ground px-4 py-3">
+              <span className="text-[15px] font-semibold text-ink">Search context</span>
+              <button type="button" onClick={() => setRailOpen(false)} aria-label="Close" className="cb-btn-ghost cb-btn-sm px-2">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">{rail}</div>
+          </div>
+        </div>
+      ) : null}
+
+      <section className="cb-card flex h-[calc(100dvh-15rem)] min-h-[520px] flex-col overflow-hidden lg:h-[calc(100vh-12.5rem)]">
+        <div className="flex items-center justify-between gap-3 border-b border-hairline px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRailOpen(true)}
+              className="cb-btn-secondary cb-btn-sm relative shrink-0 px-2.5 lg:hidden"
+              aria-label="Open filters and research profile"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              {activeFilterCount > 0 ? (
+                <span className="absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-cobalt-600 px-1 text-[10px] font-semibold text-white">
+                  {activeFilterCount}
+                </span>
+              ) : null}
+            </button>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500 text-white">
-                  <FaBolt className="text-xs" />
-                </div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700">
-                  AI Funding Advisor
-                </p>
+              <h2 className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ink">
+                {conversation?.title || 'Funding conversation'}
+              </h2>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                 {conversation ? (
                   <span
-                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                      conversation.filterMode === 'manual'
-                        ? 'bg-slate-100 text-slate-600'
-                        : 'bg-violet-100 text-violet-800'
-                    }`}
+                    className="cb-badge"
                     title={
                       conversation.filterMode === 'manual'
                         ? 'You control the filters — the assistant only suggests.'
@@ -113,53 +158,46 @@ export default function FinderAiTab({
                     {conversation.filterMode === 'manual' ? 'Manual filters' : 'Auto filters'}
                   </span>
                 ) : null}
+                {chat.loadingConversation ? <span className="cb-badge">Loading…</span> : null}
+                {chat.activeRun?.degradedMode === 'full_text_only' ? (
+                  <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                    Full-text fallback
+                  </span>
+                ) : null}
+                {chat.activeRun?.lowConfidence ? (
+                  <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                    Low confidence
+                  </span>
+                ) : null}
               </div>
-              <h2 className="mt-1.5 truncate text-xl font-semibold text-slate-950">
-                {conversation?.title || 'Funding Conversation'}
-              </h2>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {chat.loadingConversation ? (
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Loading…
-                </span>
-              ) : null}
-              {chat.activeRun?.degradedMode === 'full_text_only' ? (
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
-                  Full-text fallback
-                </span>
-              ) : null}
-              {chat.activeRun?.lowConfidence ? (
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
-                  Low confidence
-                </span>
-              ) : null}
-              <button
-                type="button"
-                onClick={chat.handleCreateConversation}
-                disabled={chat.creatingConversation || chat.sending}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-800 transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <FaPlus />
-                {chat.creatingConversation ? 'Creating…' : 'New Chat'}
-              </button>
-              <button
-                type="button"
-                onClick={chat.handleClearChat}
-                disabled={!conversation || chat.sending}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <FaTrash />
-                Clear
-              </button>
-            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={chat.handleCreateConversation}
+              disabled={chat.creatingConversation || chat.sending}
+              className="cb-btn-secondary cb-btn-sm"
+              title="Start a new conversation"
+            >
+              <Plus className="h-4 w-4" />
+              <span className="hidden sm:inline">{chat.creatingConversation ? 'Creating…' : 'New chat'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={chat.handleClearChat}
+              disabled={!conversation || chat.sending}
+              className="cb-btn-danger cb-btn-sm px-2"
+              title="Clear this conversation"
+              aria-label="Clear conversation"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        <div
-          ref={chatScrollRef}
-          className="flex-1 overflow-y-auto bg-[linear-gradient(180deg,_rgba(248,250,252,0.7),_rgba(255,255,255,0.98))] px-4 py-5 sm:px-6"
-        >
+        <div ref={chatScrollRef} className="flex-1 overflow-y-auto bg-ground px-3 py-4 sm:px-5">
           {!conversation || !hasRenderableConversationMessages ? (
             <FinderChatEmptyState
               finderContext={finderContext}
@@ -216,7 +254,7 @@ export default function FinderAiTab({
         </div>
 
         {conversation?.pendingFilterPatch && conversation.filterMode === 'auto' ? (
-          <div className="border-t border-slate-200 bg-white px-5 pt-4 sm:px-6">
+          <div className="border-t border-hairline bg-ground px-3 pt-3 sm:px-5">
             <FinderPendingFilterConfirmationBar
               pendingPatch={conversation.pendingFilterPatch}
               disabled={chat.sending}

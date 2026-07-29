@@ -998,3 +998,140 @@
   mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 30%, transparent 100%);
   -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 30%, transparent 100%);
 }
+
+/* ============================================================================
+   Cobalt design system
+   ----------------------------------------------------------------------------
+   A quiet white ground, exactly three grays (ground / inset / hairline), two
+   text tones (ink / muted), and one working blue reserved for the primary
+   action on a screen. Used by the researcher workspace: profile, research fit,
+   the funding finder chat, and the funding directory.
+
+   Rules of the system:
+     · Surfaces are separated by 1px hairlines, not shadows. Only overlays lift.
+     · Cobalt marks exactly one action per view. Everything else is neutral.
+     · Radii are 8px (controls) and 12px (cards). Nothing rounder.
+     · Every tap target is at least 40px tall on touch screens.
+   ========================================================================== */
+
+@layer components {
+  /* ── Surfaces ──────────────────────────────────────────────────────────── */
+  .cb-card {
+    @apply rounded-xl border border-hairline bg-ground;
+  }
+
+  .cb-card-inset {
+    @apply rounded-xl border border-hairline bg-inset;
+  }
+
+  .cb-divider {
+    @apply border-t border-hairline;
+  }
+
+  /* ── Typography ────────────────────────────────────────────────────────── */
+  .cb-eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-muted;
+  }
+
+  .cb-title {
+    @apply text-lg font-semibold tracking-[-0.01em] text-ink;
+  }
+
+  .cb-label {
+    @apply block text-[13px] font-medium text-ink-soft;
+  }
+
+  .cb-hint {
+    @apply text-[13px] leading-5 text-muted;
+  }
+
+  /* ── Form controls ─────────────────────────────────────────────────────── */
+  .cb-input {
+    @apply w-full rounded-lg border border-hairline bg-ground px-3 py-2.5 text-sm text-ink
+           outline-none transition placeholder:text-muted-soft
+           focus:border-cobalt-600 focus:ring-2 focus:ring-cobalt-100;
+  }
+
+  .cb-textarea {
+    @apply cb-input leading-6;
+  }
+
+  .cb-select {
+    @apply cb-input appearance-none bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 0.65rem center;
+  }
+
+  /* ── Buttons ───────────────────────────────────────────────────────────── */
+  .cb-btn {
+    @apply inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg px-4 text-sm
+           font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .cb-btn-sm {
+    @apply min-h-[34px] gap-1.5 rounded-lg px-3 text-[13px];
+  }
+
+  .cb-btn-primary {
+    @apply cb-btn bg-cobalt-600 text-white hover:bg-cobalt-700
+           focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cobalt-600
+           disabled:bg-muted-soft;
+  }
+
+  .cb-btn-secondary {
+    @apply cb-btn border border-hairline bg-ground text-ink-soft hover:border-muted-soft hover:bg-inset;
+  }
+
+  .cb-btn-ghost {
+    @apply cb-btn text-muted hover:bg-inset hover:text-ink;
+  }
+
+  .cb-btn-danger {
+    @apply cb-btn text-muted hover:bg-red-50 hover:text-red-700;
+  }
+
+  /* ── Chips & badges ────────────────────────────────────────────────────── */
+  .cb-chip {
+    @apply inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-hairline
+           bg-ground px-2.5 text-[13px] text-ink-soft transition
+           hover:border-cobalt-300 hover:bg-cobalt-50 hover:text-cobalt-700;
+  }
+
+  .cb-chip-active {
+    @apply border-cobalt-600 bg-cobalt-600 text-white hover:border-cobalt-700 hover:bg-cobalt-700 hover:text-white;
+  }
+
+  .cb-badge {
+    @apply inline-flex items-center gap-1 rounded-md bg-inset px-2 py-0.5 text-[11px] font-medium text-muted;
+  }
+
+  .cb-badge-cobalt {
+    @apply inline-flex items-center gap-1 rounded-md bg-cobalt-50 px-2 py-0.5 text-[11px] font-medium text-cobalt-700;
+  }
+
+  /* ── Tabs ──────────────────────────────────────────────────────────────── */
+  .cb-tab {
+    @apply inline-flex min-h-[38px] shrink-0 items-center gap-2 rounded-lg px-3 text-[13px]
+           font-medium text-muted transition hover:bg-inset hover:text-ink;
+  }
+
+  .cb-tab-active {
+    @apply bg-cobalt-50 text-cobalt-700 hover:bg-cobalt-50 hover:text-cobalt-700;
+  }
+}
+
+/* Horizontal rails (tab bars, facet rows) scroll instead of wrapping on phones. */
+.cb-scroll-x {
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cb-scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+/* Nothing in the workspace may push the page sideways on a phone. */
+.cb-page {
+  overflow-x: clip;
+}

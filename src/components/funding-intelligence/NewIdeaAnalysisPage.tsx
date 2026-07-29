@@ -75,14 +75,14 @@ export default function NewIdeaAnalysisPage() {
           <section className="relative overflow-hidden bg-[#0b3437] p-7 text-white sm:p-10">
             <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-teal-300/10 blur-3xl" />
             <div className="relative">
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-teal-100"><BrainCircuit className="h-4 w-4" /> Evidence-led idea analysis</div>
-              <h1 className="mt-6 text-3xl font-semibold leading-tight sm:text-4xl">Find the strongest way to position your research idea.</h1>
-              <p className="mt-4 text-sm leading-7 text-teal-50/70">We compare your idea with funded projects and active calls. You receive an evidence matrix—not an unsupported promise of funding.</p>
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-teal-100"><BrainCircuit className="h-4 w-4" /> Whitespace analysis</div>
+              <h1 className="mt-6 text-3xl font-semibold leading-tight sm:text-4xl">Find what is still unfunded in your area.</h1>
+              <p className="mt-4 text-sm leading-7 text-teal-50/70">We read the projects agencies have already sanctioned in your space, then show you the few directions nobody has been funded to do yet — with a worked example for each. No funding call is picked for you.</p>
               <div className="mt-8 space-y-4">
                 {[
-                  ['Semantic landscape search', 'Find conceptually similar awards, even when terminology differs.'],
-                  ['Facet-by-facet comparison', 'See what is already covered and what remains unassessed.'],
-                  ['Open-call matching', 'Connect the idea with currently relevant schemes.'],
+                  ['What is already done', 'The sanctioned projects nearest your idea, who funded them, and at what size.'],
+                  ['What is still open', 'At most three pursuable directions the funded record has not covered.'],
+                  ['Then, when you ask for it', 'Choose a funder from the ones whose award history fits, then pick which of their calls to check your idea against.'],
                 ].map(([title, description]) => <div key={title} className="flex gap-3"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-200/15"><Check className="h-3.5 w-3.5 text-teal-200" /></span><div><p className="text-sm font-semibold">{title}</p><p className="mt-1 text-xs leading-5 text-teal-50/60">{description}</p></div></div>)}
               </div>
             </div>
@@ -91,10 +91,10 @@ export default function NewIdeaAnalysisPage() {
           <section className="p-6 sm:p-10">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-teal-700"><Sparkles className="h-4 w-4" /> Describe your idea</div>
             <h2 className="mt-3 text-2xl font-semibold">What are you proposing?</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-500">Include the problem, proposed approach, intended users, deployment context, and expected outcome.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-500">Include the problem, proposed approach, intended users, deployment context, and expected outcome. The more specific you are, the sharper the whitespace read.</p>
 
             {anchorTitle ? <div className="mt-5 rounded-xl border border-teal-100 bg-teal-50 px-4 py-3 text-sm text-teal-900"><span className="font-semibold">Landscape anchor:</span> {anchorTitle}</div> : null}
-            {anchorCallId ? <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-900"><span className="font-semibold">Validating against call:</span> {anchorCallTitle || anchorCallId}<span className="mt-1 block text-xs text-indigo-700">Your idea will be compared facet-by-facet against this call's text, and you'll get a gap report and simulated reviewer objections for it.</span></div> : null}
+            {anchorCallId ? <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-900"><span className="font-semibold">Also checking against call:</span> {anchorCallTitle || anchorCallId}<span className="mt-1 block text-xs text-indigo-700">You still get the whitespace read first. Because you named a call, a gap report and simulated reviewer objections against its text are added.</span></div> : null}
 
             <form onSubmit={submit} className="mt-6">
               <div className="relative">
@@ -103,7 +103,7 @@ export default function NewIdeaAnalysisPage() {
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><button type="button" onClick={() => setIdeaText(EXAMPLE)} className="text-xs font-semibold text-teal-700 hover:text-teal-900">Use an example</button><span className="inline-flex items-center gap-1.5 text-xs text-slate-400"><ShieldCheck className="h-3.5 w-3.5" /> Your analysis remains private</span></div>
               {error ? <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</div> : null}
-              <button type="submit" disabled={!token || ideaText.trim().length < 50 || submitting} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-teal-800 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-teal-900/10 transition hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">{submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating analysis…</> : <>Analyze funding landscape <ArrowRight className="h-4 w-4" /></>}</button>
+              <button type="submit" disabled={!token || ideaText.trim().length < 50 || submitting} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-teal-800 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-teal-900/10 transition hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">{submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating analysis…</> : <>Find the open space <ArrowRight className="h-4 w-4" /></>}</button>
             </form>
           </section>
         </div>

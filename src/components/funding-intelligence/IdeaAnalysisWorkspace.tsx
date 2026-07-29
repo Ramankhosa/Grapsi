@@ -11,6 +11,7 @@ import {
 
 import { useAuth } from '@/lib/auth-context'
 import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
+import FundingMatchSection, { type FundingMatchState } from './FundingMatchSection'
 import type { ProjectSearchItem } from './types'
 
 type FacetStatus = 'PRESENT' | 'PARTIAL' | 'ABSENT' | 'UNASSESSED'
@@ -156,6 +157,63 @@ type WebEvidence = {
   date: string | null
 }
 
+type WhitespaceDirection = {
+  id: string
+  title: string
+  whyOpen: string
+  alreadyCovered: string
+  stillMissing: string
+  example: { projectIdea: string; whatYouWouldBuild: string; firstProof: string }
+  relatedFacets: string[]
+  evidence: Array<{ sourceType: string; evidenceId: string; quote: string | null }>
+  confidence: 'strong' | 'moderate' | 'thin'
+  bestFitAgency: string | null
+}
+
+type FundedTheme = {
+  theme: string
+  projectCount: number
+  agencies: string[]
+  exampleProjectIds: string[]
+}
+
+type AgencyRecommendation = {
+  agencyName: string
+  role: 'primary' | 'alternate'
+  matchScore: number
+  fundedNearbyCount: number
+  ongoingNearbyCount: number
+  activeYears: string | null
+  typicalBudget: number | null
+  budgetCurrency: string | null
+  schemes: string[]
+  exampleProjectIds: string[]
+  openCallIds: string[]
+  evidenceBasis: string
+  whyThisAgency: string
+}
+
+type FundedPortfolio = {
+  projectCount: number
+  completedCount: number
+  ongoingCount: number
+  firstYear: number | null
+  lastYear: number | null
+  medianBudget: number | null
+  budgetCurrency: string | null
+  agencies: Array<{ agencyName: string; projectCount: number; ongoingCount: number; schemes: string[] }>
+}
+
+type FacetCoverage = {
+  covered: string[]
+  partial: string[]
+  open: string[]
+  unknown: string[]
+  coveredCount: number
+  openCount: number
+  totalFacets: number
+}
+
 type AnalysisRun = {
   id: string
   versionNumber: number | null
@@ -175,6 +233,9 @@ type AnalysisRun = {
     patents?: PatentEvidence[]
     webResults?: WebEvidence[]
     evidenceDiagnostics?: { patentnestConfigured?: boolean; patentnestStatus?: string; patentnestError?: string; serpapiError?: string }
+    // Absent on runs made before the corpora became switchable — fall back to
+    // "a source was used if it returned anything".
+    sourcesUsed?: { projects?: boolean; publications?: boolean; patents?: boolean; web?: boolean; calls?: boolean }
     degradedMode: string | null
     query: string
   }
@@ -191,6 +252,9 @@ type AnalysisRun = {
     evidenceWeb?: number
     crossCorpusFacets?: CrossCorpusFacetSignal[]
     callAlignments?: CallAlignment[]
+    fundedPortfolio?: FundedPortfolio
+    facetCoverage?: FacetCoverage
+    agencyRecommendations?: AgencyRecommendation[]
     methodology: string
   }
   report: null | Record<string, unknown>
@@ -202,12 +266,12 @@ type AnalysisRun = {
 }
 
 const STAGES = [
-  ['Structure idea', 'Extracting specific, comparable facets'],
-  ['Search evidence', 'Finding related funded projects and calls'],
+  ['Structure idea', 'Extracting specific, comparable aspects'],
+  ['Search sanctioned work', 'Finding projects agencies have already funded'],
   ['Check relevance', 'Selecting the strongest evidence'],
-  ['Compare facets', 'Mapping overlap, differentiation, and call fit'],
-  ['Calculate signals', 'Computing transparent landscape measures'],
-  ['Build brief', 'Writing recommendations, gap report, and reviewer panel'],
+  ['Compare aspect by aspect', 'Mapping what is already done and what is not'],
+  ['Map the funders', 'Building the funded-project ledger by agency'],
+  ['Find the openings', 'Writing the directions the sanctioned record leaves open'],
   ['Ready', 'Analysis complete'],
 ]
 
@@ -239,6 +303,31 @@ const STATUS_STYLES: Record<FacetStatus, string> = {
 
 function asString(value: unknown) { return typeof value === 'string' ? value : '' }
 function asStrings(value: unknown) { return Array.isArray(value) ? value.map(asString).filter(Boolean) : [] }
+
+type ResolvedSources = { publications: boolean; patents: boolean; web: boolean; calls: boolean }
+
+/**
+ * Which corpora this run actually searched. Runs made before the corpora became
+ * switchable have no `sourcesUsed`, so fall back to "it was searched if it
+ * returned something" — otherwise their evidence tabs would vanish.
+ */
+function resolveSources(retrieval: AnalysisRun['retrievalResults']): ResolvedSources {
+  const used = retrieval?.sourcesUsed
+  if (used) {
+    return {
+      publications: Boolean(used.publications),
+      patents: Boolean(used.patents),
+      web: Boolean(used.web),
+      calls: Boolean(used.calls),
+    }
+  }
+  return {
+    publications: Boolean(retrieval?.publications?.length),
+    patents: Boolean(retrieval?.patents?.length),
+    web: Boolean(retrieval?.webResults?.length),
+    calls: Boolean(retrieval?.fundingCalls?.length),
+  }
+}
 
 function formatMoney(value: number | null, currency = 'INR') {
   if (value === null) return null
@@ -273,25 +362,29 @@ function SignalCard({ label, value, icon: Icon, tone }: { label: string; value: 
   return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-center justify-between"><span className="text-xs font-semibold text-slate-500">{label}</span><Icon className={`h-4 w-4 ${tone}`} /></div><div className="mt-2 flex items-end gap-1"><span className="text-2xl font-semibold text-slate-900">{value}</span><span className="mb-1 text-xs text-slate-400">/100</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${tone.replace('text-', 'bg-')}`} style={{ width: `${value}%` }} /></div></div>
 }
 
-function CrossCorpusTable({ rows }: { rows: CrossCorpusFacetSignal[] }) {
+function CrossCorpusTable({ rows, sources }: { rows: CrossCorpusFacetSignal[]; sources: ResolvedSources }) {
   if (!rows.length) return null
-  const sourceColumns = [
-    ['funded', 'Funded'],
-    ['published', 'Published'],
-    ['patented', 'Patented'],
-    ['web', 'Web'],
-  ] as const
+  // A column for a corpus that was never searched would read as "nothing found"
+  // when the truth is "not looked at".
+  const sourceColumns = ([
+    ['funded', 'Funded', true],
+    ['published', 'Published', sources.publications],
+    ['patented', 'Patented', sources.patents],
+    ['web', 'Web', sources.web],
+  ] as const).filter(([, , shown]) => shown)
+  const corporaLabel = ['funded projects', sources.publications && 'publications', sources.patents && 'patents', sources.web && 'web evidence']
+    .filter(Boolean).join(', ')
   return (
     <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-semibold text-slate-900">Cross-corpus triangulation</h2>
-          <p className="mt-1 text-sm text-slate-500">Facet-level signal across funded projects, publications, patents, and web evidence.</p>
+          <h2 className="font-semibold text-slate-900">{sourceColumns.length > 1 ? 'Cross-corpus triangulation' : 'Facet coverage'}</h2>
+          <p className="mt-1 text-sm text-slate-500">Facet-level signal across {corporaLabel}.</p>
         </div>
         <p className="text-xs text-slate-500">Rose = overlap, emerald = potential white space, amber = partial, slate = insufficient evidence.</p>
       </div>
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left text-sm">
+        <table className={`w-full text-left text-sm ${sourceColumns.length > 2 ? 'min-w-[760px]' : 'min-w-[520px]'}`}>
           <thead><tr className="border-b border-slate-200 text-xs text-slate-500"><th className="pb-2 pr-4 font-semibold">Facet</th>{sourceColumns.map(([, label]) => <th key={label} className="pb-2 pr-3 font-semibold">{label}</th>)}<th className="pb-2 font-semibold">Signal</th></tr></thead>
           <tbody>{rows.map((row) => <tr key={row.facet} className="border-b border-slate-100 last:border-0"><td className="py-3 pr-4 font-medium text-slate-800">{row.facet}</td>{sourceColumns.map(([key]) => <td key={key} className="py-3 pr-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-bold ${STATUS_STYLES[row[key]]}`}>{row[key]}</span></td>)}<td className="py-3"><p className="font-semibold capitalize text-slate-800">{row.signal.replace(/_/g, ' ')}</p><p className="mt-1 text-xs leading-5 text-slate-500">{row.rationale}</p></td></tr>)}</tbody>
         </table>
@@ -581,7 +674,7 @@ function CallFitSection({ run }: { run: AnalysisRun }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-semibold text-slate-900">Call fit</h2>
-          <p className="mt-1 text-sm text-slate-500">How your idea's facets line up against what each call's text actually invites.</p>
+          <p className="mt-1 text-sm text-slate-500">How your idea&apos;s facets line up against what the call you chose actually invites, judged on its own text.</p>
         </div>
         <p className="text-xs text-slate-500">Alignment = share of assessed facets the call explicitly invites. Descriptive, not a funding prediction.</p>
       </div>
@@ -713,14 +806,321 @@ function ReviewerSection({ run }: { run: AnalysisRun }) {
   )
 }
 
-function ReportView({ report }: { report: Record<string, unknown> }) {
-  const sections = [
-    ['Potential differentiators', asStrings(report.differentiators), Lightbulb, 'text-emerald-700'],
-    ['Risks and reviewer questions', asStrings(report.risks), AlertTriangle, 'text-amber-700'],
-    ['Positioning recommendations', asStrings(report.positioningRecommendations), Target, 'text-teal-700'],
-    ['Recommended next steps', asStrings(report.nextSteps), CheckCircle2, 'text-sky-700'],
-  ] as const
-  return <div className="space-y-5"><section className="rounded-2xl border border-teal-100 bg-gradient-to-br from-teal-50 to-white p-6"><p className="text-xs font-bold uppercase tracking-[0.16em] text-teal-700">Executive positioning view</p><p className="mt-3 text-lg font-medium leading-8 text-slate-800">{asString(report.executiveVerdict) || 'Review the evidence and landscape signals below.'}</p>{asString(report.landscapeSummary) ? <p className="mt-4 text-sm leading-7 text-slate-600">{asString(report.landscapeSummary)}</p> : null}</section>{sections.map(([title, items, Icon, tone]) => items.length ? <section key={title} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"><div className="flex items-center gap-2"><Icon className={`h-5 w-5 ${tone}`} /><h3 className="font-semibold text-slate-900">{title}</h3></div><ul className="mt-4 space-y-3">{items.map((item, index) => <li key={`${item}-${index}`} className="flex gap-3 text-sm leading-6 text-slate-600"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-300" />{item}</li>)}</ul></section> : null)}<div className="flex gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-500"><ShieldCheck className="h-4 w-4 shrink-0 text-slate-500" /><p>{asString(report.evidenceDisclaimer) || 'This analysis describes available evidence and does not predict funding success.'}</p></div></div>
+const CONFIDENCE_STYLES: Record<string, string> = {
+  strong: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  moderate: 'border-amber-200 bg-amber-50 text-amber-700',
+  thin: 'border-slate-200 bg-slate-50 text-slate-600',
+}
+
+const CONFIDENCE_LABELS: Record<string, string> = {
+  strong: 'Well evidenced',
+  moderate: 'Some evidence',
+  thin: 'Thin evidence',
+}
+
+function reportDirections(report: Record<string, unknown> | null): WhitespaceDirection[] {
+  return Array.isArray((report as any)?.whitespaceDirections) ? (report as any).whitespaceDirections : []
+}
+
+/** The plain-language read: one headline plus three numbers, nothing else. */
+function LandscapeHeadline({ run }: { run: AnalysisRun }) {
+  const report = run.report || {}
+  const portfolio = run.scores?.fundedPortfolio
+  const coverage = run.scores?.facetCoverage
+  const headline = asString((report as any).headline) || asString((report as any).executiveVerdict)
+  const stats: Array<[string, string, string]> = [
+    [
+      'Already sanctioned',
+      String(portfolio?.projectCount ?? run.scores?.evidenceProjects ?? 0),
+      portfolio?.firstYear && portfolio?.lastYear
+        ? `comparable projects funded ${portfolio.firstYear}-${portfolio.lastYear}`
+        : 'comparable funded projects retrieved',
+    ],
+    [
+      'Already covered',
+      coverage ? `${coverage.coveredCount}/${coverage.totalFacets}` : `${run.scores?.saturation ?? 0}%`,
+      'aspects of your idea that funded work already addresses',
+    ],
+    [
+      'Still open',
+      coverage ? String(coverage.openCount) : `${run.scores?.whiteSpace ?? 0}%`,
+      'aspects no retrieved sanctioned project covered',
+    ],
+  ]
+  return (
+    <section className="rounded-2xl border border-teal-100 bg-gradient-to-br from-teal-50 to-white p-6 sm:p-7">
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-teal-700">What the funded record shows</p>
+      <p className="mt-3 max-w-4xl text-lg font-medium leading-8 text-slate-800">
+        {headline || 'Review the funded evidence and open directions below.'}
+      </p>
+      <div className="mt-6 grid gap-3 sm:grid-cols-3">
+        {stats.map(([label, value, caption]) => (
+          <div key={label} className="rounded-2xl border border-white bg-white/80 p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+            <p className="mt-1 text-3xl font-semibold text-slate-900">{value}</p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{caption}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function AlreadyFundedSection({ run }: { run: AnalysisRun }) {
+  const report = run.report || {}
+  const portfolio = run.scores?.fundedPortfolio
+  const themes: FundedTheme[] = Array.isArray((report as any).fundedThemes) ? (report as any).fundedThemes : []
+  const summary = asString((report as any).alreadyDoneSummary)
+  const projectById = new Map((run.retrievalResults?.projects || []).map((project) => [project.id, project]))
+  if (!themes.length && !summary && !portfolio?.projectCount) return null
+  return (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+      <div className="flex items-center gap-2">
+        <Landmark className="h-5 w-5 text-slate-500" />
+        <h2 className="font-semibold text-slate-900">What agencies have already funded here</h2>
+      </div>
+      {summary ? <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-600">{summary}</p> : null}
+      {portfolio && portfolio.projectCount ? (
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
+          <span className="rounded-lg bg-slate-50 px-2.5 py-1.5">{portfolio.projectCount} sanctioned projects reviewed</span>
+          {portfolio.ongoingCount ? <span className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-amber-800">{portfolio.ongoingCount} still running</span> : null}
+          {portfolio.completedCount ? <span className="rounded-lg bg-slate-50 px-2.5 py-1.5">{portfolio.completedCount} already completed</span> : null}
+          {formatMoney(portfolio.medianBudget, portfolio.budgetCurrency || 'INR') ? <span className="rounded-lg bg-slate-50 px-2.5 py-1.5">Typical award {formatMoney(portfolio.medianBudget, portfolio.budgetCurrency || 'INR')}</span> : null}
+        </div>
+      ) : null}
+      {themes.length ? (
+        <div className="mt-5 grid gap-3 lg:grid-cols-2">
+          {themes.map((theme) => (
+            <div key={theme.theme} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-semibold leading-6 text-slate-800">{theme.theme}</p>
+                <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-slate-600">{theme.projectCount} funded</span>
+              </div>
+              {theme.agencies.length ? <p className="mt-1.5 text-xs text-slate-500">{theme.agencies.join(' · ')}</p> : null}
+              {theme.exampleProjectIds.length ? (
+                <div className="mt-3 space-y-1">
+                  {theme.exampleProjectIds.map((id) => {
+                    const project = projectById.get(id)
+                    if (!project) return null
+                    return (
+                      <Link key={id} href={`/funding/intelligence/projects/${id}`} className="block truncate text-xs font-medium text-teal-700 hover:underline">
+                        {project.title}
+                      </Link>
+                    )
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+/** The centrepiece: at most three openings, each with a worked example. */
+function WhitespaceSection({ run, onPursue, pursuingId }: { run: AnalysisRun; onPursue: (direction: WhitespaceDirection) => void; pursuingId: string | null }) {
+  const directions = reportDirections(run.report)
+  const projectById = new Map((run.retrievalResults?.projects || []).map((project) => [project.id, project]))
+  if (!directions.length) {
+    return (
+      <section className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+        <Lightbulb className="mx-auto h-7 w-7 text-slate-300" />
+        <h2 className="mt-3 font-semibold text-slate-900">No open direction could be evidenced</h2>
+        <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+          The retrieved sanctioned projects did not give enough assessable text to separate covered ground from open ground. Add more technical detail to the idea and re-run.
+        </p>
+      </section>
+    )
+  }
+  return (
+    <section className="mt-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Where the space is still open</h2>
+          <p className="mt-1 text-sm text-slate-500">Directions the sanctioned projects have not covered — each with a worked example of what a project there would look like.</p>
+        </div>
+        <span className="text-xs text-slate-500">{directions.length} direction{directions.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="mt-4 space-y-4">
+        {directions.map((direction, index) => (
+          <article key={direction.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-teal-800 text-xs font-bold text-white">{index + 1}</span>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold leading-7 text-slate-900">{direction.title}</h3>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase ${CONFIDENCE_STYLES[direction.confidence] || CONFIDENCE_STYLES.thin}`}>
+                      {CONFIDENCE_LABELS[direction.confidence] || direction.confidence}
+                    </span>
+                    {direction.bestFitAgency ? <span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800">Best fit: {direction.bestFitAgency}</span> : null}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onPursue(direction)}
+                disabled={Boolean(pursuingId)}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pursuingId === direction.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                Take my idea here
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Already done</p>
+                <p className="mt-1.5 text-sm leading-6 text-slate-600">{direction.alreadyCovered || 'The retrieved sanctioned projects cover adjacent ground; see the funded list below.'}</p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Still missing</p>
+                <p className="mt-1.5 text-sm leading-6 text-emerald-900">{direction.stillMissing}</p>
+              </div>
+            </div>
+
+            {direction.whyOpen ? <p className="mt-3 text-sm leading-6 text-slate-600"><span className="font-semibold text-slate-800">Why it reads as open:</span> {direction.whyOpen}</p> : null}
+
+            {direction.example.projectIdea || direction.example.whatYouWouldBuild || direction.example.firstProof ? (
+              <div className="mt-4 rounded-xl border border-teal-100 bg-teal-50/50 p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-teal-800">Example project in this direction</p>
+                {direction.example.projectIdea ? <p className="mt-2 text-sm leading-7 text-slate-700">{direction.example.projectIdea}</p> : null}
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {direction.example.whatYouWouldBuild ? (
+                    <div><p className="text-xs font-semibold text-slate-500">What you would build</p><p className="mt-1 text-sm leading-6 text-slate-700">{direction.example.whatYouWouldBuild}</p></div>
+                  ) : null}
+                  {direction.example.firstProof ? (
+                    <div><p className="text-xs font-semibold text-slate-500">First proof (6-12 months)</p><p className="mt-1 text-sm leading-6 text-slate-700">{direction.example.firstProof}</p></div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {direction.evidence.length ? (
+              <div className="mt-4 border-t border-slate-100 pt-3">
+                <p className="text-xs font-semibold text-slate-500">Grounded in</p>
+                <div className="mt-2 space-y-1.5">
+                  {direction.evidence.slice(0, 3).map((item, itemIndex) => {
+                    const project = projectById.get(item.evidenceId)
+                    return (
+                      <p key={`${item.evidenceId}-${itemIndex}`} className="text-xs leading-5 text-slate-500">
+                        <span className="font-semibold text-slate-600">{item.sourceType.replace(/_/g, ' ')}:</span>{' '}
+                        {project ? <Link href={`/funding/intelligence/projects/${project.id}`} className="text-teal-700 hover:underline">{project.title}</Link> : item.evidenceId}
+                        {item.quote ? <span className="text-slate-500"> — &quot;{item.quote}&quot;</span> : null}
+                      </p>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function AgencySection({ run, sources }: { run: AnalysisRun; sources: ResolvedSources }) {
+  const report = run.report || {}
+  const recommendations: AgencyRecommendation[] = Array.isArray((report as any).agencyRecommendations)
+    ? (report as any).agencyRecommendations
+    : (run.scores?.agencyRecommendations || [])
+  if (!recommendations.length) return null
+  const callById = new Map((run.retrievalResults?.fundingCalls || []).map((call) => [call.id, call]))
+  const [primary, ...alternates] = recommendations
+  const renderCalls = (ids: string[]) => ids
+    .map((id) => callById.get(id))
+    .filter((call): call is FundingCallMatch => Boolean(call))
+    .slice(0, 3)
+
+  return (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+      <div className="flex items-center gap-2">
+        <Landmark className="h-5 w-5 text-teal-700" />
+        <h2 className="font-semibold text-slate-900">Who would fund this</h2>
+      </div>
+      <p className="mt-1 text-sm text-slate-500">
+        {sources.calls
+          ? 'Ranked by who has actually sanctioned comparable projects — open calls are a tiebreaker, not the basis.'
+          : 'Ranked purely by who has actually sanctioned comparable projects. No funding call was searched for this read.'}
+      </p>
+
+      <article className="mt-4 rounded-2xl border border-teal-200 bg-teal-50/40 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="rounded-full bg-teal-800 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-white">Best match</span>
+          <span className="text-xs font-semibold text-teal-800">{primary.fundedNearbyCount} comparable project{primary.fundedNearbyCount === 1 ? '' : 's'} funded</span>
+        </div>
+        <h3 className="mt-3 text-xl font-semibold text-slate-900">{primary.agencyName}</h3>
+        {primary.whyThisAgency ? <p className="mt-2 text-sm leading-7 text-slate-700">{primary.whyThisAgency}</p> : null}
+        <p className="mt-2 text-xs leading-5 text-slate-500">{primary.evidenceBasis}</p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+          {primary.activeYears ? <span className="rounded-lg bg-white px-2.5 py-1.5">Active {primary.activeYears}</span> : null}
+          {formatMoney(primary.typicalBudget, primary.budgetCurrency || 'INR') ? <span className="rounded-lg bg-white px-2.5 py-1.5">Typical award {formatMoney(primary.typicalBudget, primary.budgetCurrency || 'INR')}</span> : null}
+          {primary.schemes.slice(0, 3).map((scheme) => <span key={scheme} className="rounded-lg bg-white px-2.5 py-1.5">{scheme}</span>)}
+        </div>
+        {!sources.calls ? (
+          <p className="mt-4 text-xs text-slate-500">Use <span className="font-semibold text-slate-700">Find funding opportunities</span> below to see what this funder currently has open.</p>
+        ) : renderCalls(primary.openCallIds).length ? (
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-slate-500">Open now</p>
+            <div className="mt-2 space-y-1.5">
+              {renderCalls(primary.openCallIds).map((call) => (
+                <Link key={call.id} href={`/funding/calls/${call.id}`} className="flex items-center gap-1.5 text-sm font-semibold text-teal-700 hover:underline">
+                  {call.schemeTitle} <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-4 text-xs text-slate-500">No open call from this funder matched in this run — check the funder&apos;s site for the next cycle.</p>
+        )}
+      </article>
+
+      {alternates.length ? (
+        <div className="mt-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Also worth approaching</p>
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            {alternates.map((agency) => (
+              <article key={agency.agencyName} className="rounded-2xl border border-slate-200 p-4">
+                <h4 className="font-semibold leading-6 text-slate-900">{agency.agencyName}</h4>
+                {agency.whyThisAgency ? <p className="mt-1.5 text-xs leading-5 text-slate-600">{agency.whyThisAgency}</p> : null}
+                <p className="mt-2 text-[11px] leading-5 text-slate-500">{agency.evidenceBasis}</p>
+                {renderCalls(agency.openCallIds).map((call) => (
+                  <Link key={call.id} href={`/funding/calls/${call.id}`} className="mt-2 block truncate text-xs font-semibold text-teal-700 hover:underline">{call.schemeTitle}</Link>
+                ))}
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function NextStepsSection({ report }: { report: Record<string, unknown> }) {
+  const steps = asStrings(report.nextSteps).slice(0, 3)
+  return (
+    <section className="mt-6 space-y-4">
+      {steps.length ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-sky-700" /><h2 className="font-semibold text-slate-900">Do these next</h2></div>
+          <ul className="mt-4 space-y-3">
+            {steps.map((item, index) => (
+              <li key={`${item}-${index}`} className="flex gap-3 text-sm leading-6 text-slate-600">
+                <span className="mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-600">{index + 1}</span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="flex gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-500">
+        <ShieldCheck className="h-4 w-4 shrink-0 text-slate-500" />
+        <p>{asString(report.evidenceDisclaimer) || 'This describes what the retrieved sanctioned-project records show and do not show. It is not a prediction of funding success.'}</p>
+      </div>
+    </section>
+  )
 }
 
 export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
@@ -729,7 +1129,7 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
   const [run, setRun] = useState<AnalysisRun | null>(null)
   const [loading, setLoading] = useState(true)
   const [requestError, setRequestError] = useState<string | null>(null)
-  const [tab, setTab] = useState<'report' | 'projects' | 'publications' | 'patents' | 'web' | 'funders'>('report')
+  const [tab, setTab] = useState<'projects' | 'publications' | 'patents' | 'web' | 'funders'>('projects')
   const [exportingIdea, setExportingIdea] = useState(false)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
   const [strengthenGap, setStrengthenGap] = useState<IdeaCallGap | null>(null)
@@ -780,13 +1180,32 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
 
   const retry = () => { executeStarted.current = false; setRequestError(null); void execute() }
   const assessmentByProject = useMemo(() => new Map((run?.analysis?.items || []).map((item) => [item.projectId, item])), [run?.analysis?.items])
-  const topFundingCall = run?.retrievalResults?.fundingCalls?.[0] || null
-  const targetCallId = (run?.report as any)?.targetFundingCallId || run?.anchorFundingCallId || topFundingCall?.id || null
+  const sources = useMemo(() => resolveSources(run?.retrievalResults || null), [run?.retrievalResults])
+  // Only a call the user actually committed to. This used to fall through to the
+  // primary funder's first open call and then to the top raw search hit, which
+  // silently pushed people into Grant Prep against a call they never chose.
+  const targetCallId: string | null = (run?.report as any)?.targetFundingCallId || run?.anchorFundingCallId || null
+  const storedFundingMatch = ((run?.report as any)?.fundingMatch as FundingMatchState | undefined) || null
 
   const handleStrengthen = (gap: IdeaCallGap) => {
     setStrengthenBusyGapId(gap.id)
     setStrengthenGap(gap)
     document.getElementById('refinement-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  // Directions reuse the gap-targeted refinement path; the server resolves the id
+  // against either list, so the shape only has to carry the id and a label.
+  const handlePursueDirection = (direction: WhitespaceDirection) => {
+    handleStrengthen({
+      id: direction.id,
+      kind: 'weak_differentiation',
+      severity: 'major',
+      title: direction.title,
+      detail: direction.stillMissing,
+      evidence: direction.evidence,
+      fixSuggestion: direction.example.projectIdea || direction.stillMissing,
+      grantPrepStageKey: null,
+    })
   }
 
   const startGrantPrep = async () => {
@@ -799,7 +1218,10 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
       return
     }
     if (!targetCallId) {
-      router.push('/finder')
+      // No call has been chosen yet — send them to the step that picks one
+      // rather than off to a different product.
+      document.getElementById('funding-match')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setHandoffError('Pick a funding call first — Grant Prep needs a call to prepare against.')
       return
     }
     setHandoffBusy(true)
@@ -827,6 +1249,7 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
     setExportMessage(null)
     try {
       const report = run.report || {}
+      const directions = reportDirections(report)
       const domainTag = run.structuredIdea?.domain || run.structuredIdea?.keywords?.[0] || 'Funding intelligence'
       const response = await fetch('/api/idea-bank', {
         method: 'POST',
@@ -834,11 +1257,11 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
         body: JSON.stringify({
           title: run.title,
           description: run.ideaText,
-          abstract: [asString(report.executiveVerdict), asString(report.landscapeSummary)].filter(Boolean).join('\n\n'),
+          abstract: [asString(report.headline) || asString(report.executiveVerdict), asString(report.alreadyDoneSummary)].filter(Boolean).join('\n\n'),
           domainTags: [domainTag],
           technicalField: run.structuredIdea?.domain || undefined,
-          keyFeatures: asStrings(report.differentiators).slice(0, 6),
-          potentialApplications: asStrings(report.positioningRecommendations).concat(asStrings(report.nextSteps)).slice(0, 6),
+          keyFeatures: directions.map((direction) => direction.stillMissing).filter(Boolean).slice(0, 6),
+          potentialApplications: directions.map((direction) => direction.example.projectIdea).filter(Boolean).concat(asStrings(report.nextSteps)).slice(0, 6),
         }),
       })
       const body = await response.json().catch(() => ({}))
@@ -868,21 +1291,23 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
         {run.status === 'FAILED' ? <div className="mx-auto max-w-2xl rounded-2xl border border-rose-200 bg-white p-7 text-center shadow-sm"><AlertTriangle className="mx-auto h-8 w-8 text-rose-500" /><h2 className="mt-4 text-xl font-semibold">Analysis paused</h2><p className="mt-2 text-sm leading-6 text-slate-500">{run.errorMessage || requestError || 'A provider failed while processing this run.'}</p><button type="button" onClick={retry} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-teal-800 px-5 py-2.5 text-sm font-semibold text-white"><RefreshCw className="h-4 w-4" /> Retry from saved progress</button></div> : null}
 
         {run.status === 'COMPLETED' && run.scores ? <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <div className="rounded-2xl bg-[#0b3437] p-5 text-white shadow-lg shadow-teal-950/10"><div className="flex items-center justify-between"><span className="text-xs font-semibold text-teal-100/70">Landscape positioning</span><Target className="h-4 w-4 text-teal-200" /></div><div className="mt-3 flex items-baseline gap-1"><span className="text-4xl font-semibold">{run.scores.landscapePositioning}</span><span className="text-sm text-teal-100/60">/100</span></div><p className="mt-3 text-[11px] leading-5 text-teal-50/60">Descriptive signal—not a funding probability.</p></div>
-            <SignalCard label="Existing overlap" value={run.scores.saturation} icon={BookOpen} tone="text-rose-600" />
-            <SignalCard label="Potential white space" value={run.scores.whiteSpace} icon={Lightbulb} tone="text-emerald-600" />
-            <SignalCard label="Landscape momentum" value={run.scores.momentum} icon={TrendingUp} tone="text-sky-600" />
-            <SignalCard label="Evidence confidence" value={run.scores.evidenceConfidence} icon={ShieldCheck} tone="text-violet-600" />
-          </div>
+          <LandscapeHeadline run={run} />
 
-          <CallFitSection run={run} />
+          <WhitespaceSection run={run} onPursue={handlePursueDirection} pursuingId={strengthenBusyGapId} />
 
-          <GapSection run={run} onStrengthen={handleStrengthen} strengthenBusyGapId={strengthenBusyGapId} />
+          <AlreadyFundedSection run={run} />
 
-          <ReviewerSection run={run} />
+          <AgencySection run={run} sources={sources} />
 
-          <CrossCorpusTable rows={run.scores.crossCorpusFacets || []} />
+          <FundingMatchSection
+            runId={run.id}
+            token={token}
+            selectedCallId={targetCallId}
+            storedMatch={storedFundingMatch}
+            onCallEvaluated={loadRun}
+          />
+
+          <NextStepsSection report={run.report || {}} />
 
           <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -892,8 +1317,8 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
                   {run.linkedGrantPrepSessionId
                     ? 'This idea has already been handed off to Grant Prep — continue where you left off.'
                     : targetCallId
-                      ? 'Start Grant Prep with this validated idea locked in: the gaps and reviewer objections carry over with it.'
-                      : 'Save the idea for later or move into call-specific grant preparation.'}
+                      ? 'Start Grant Prep with this idea locked in: the evidence and open directions carry over with it.'
+                      : 'Save the idea for later. Grant Prep needs a funding call — pick one in Find funding opportunities above first.'}
                 </p>
                 {exportMessage ? <p className="mt-2 text-xs font-semibold text-teal-700">{exportMessage}</p> : null}
                 {handoffError ? <p className="mt-2 text-xs font-semibold text-rose-700">{handoffError}</p> : null}
@@ -914,23 +1339,49 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
 
           <RefinementPanel run={run} token={token} strengthenGap={strengthenGap} onStrengthenHandled={() => { setStrengthenGap(null); setStrengthenBusyGapId(null) }} />
 
-          <div className="mt-7 border-b border-slate-200"><nav className="flex gap-1 overflow-x-auto">{([
-            ['report', 'Positioning brief', Sparkles],
-            ['projects', `Funded projects (${run.retrievalResults?.projects.length || 0})`, Landmark],
-            ['publications', `Publications (${run.retrievalResults?.publications?.length || 0})`, BookOpen],
-            ['patents', `Patents (${run.retrievalResults?.patents?.length || 0})`, FileSearch],
-            ['web', `Web (${run.retrievalResults?.webResults?.length || 0})`, ExternalLink],
-            ['funders', `Open calls (${run.retrievalResults?.fundingCalls.length || 0})`, Target],
-          ] as const).map(([value, label, Icon]) => <button type="button" key={value} onClick={() => setTab(value)} className={`inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold ${tab === value ? 'border-teal-700 text-teal-800' : 'border-transparent text-slate-500 hover:text-slate-800'}`}><Icon className="h-4 w-4" />{label}</button>)}</nav></div>
+          <details className="group mt-7 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5">
+              <div>
+                <h2 className="font-semibold text-slate-900">Full evidence and detailed analysis</h2>
+                <p className="mt-1 text-sm text-slate-500">Aspect-by-aspect matrix, every retrieved source{targetCallId ? ', and the gap report for your chosen call' : ''}. Open only if you want the working.</p>
+              </div>
+              <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition group-open:rotate-180" />
+            </summary>
+            <div className="border-t border-slate-100 p-5">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <SignalCard label="Existing overlap" value={run.scores.saturation} icon={BookOpen} tone="text-rose-600" />
+                <SignalCard label="Potential white space" value={run.scores.whiteSpace} icon={Lightbulb} tone="text-emerald-600" />
+                <SignalCard label="Landscape momentum" value={run.scores.momentum} icon={TrendingUp} tone="text-sky-600" />
+                <SignalCard label="Evidence confidence" value={run.scores.evidenceConfidence} icon={ShieldCheck} tone="text-violet-600" />
+              </div>
 
-          <div className="mt-6">
-            {tab === 'report' && run.report ? <ReportView report={run.report} /> : null}
-            {tab === 'projects' ? <div className="space-y-4"><FacetLegend />{run.retrievalResults?.degradedMode ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Semantic retrieval was unavailable for this run; project evidence came from keyword matching.</div> : null}{run.retrievalResults?.projects.map((project) => <EvidenceRow key={project.id} project={project} assessment={assessmentByProject.get(project.id)} />)}</div> : null}
-            {tab === 'publications' ? <div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.publications?.length ? run.retrievalResults.publications.map((item) => <SourceEvidenceCard key={item.id} eyebrow={item.source} title={item.title} meta={[item.venue, item.year, item.citationCount !== null ? `${item.citationCount} citations` : null, item.doi].filter(Boolean).join(' · ')} body={item.abstract} href={item.url} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><BookOpen className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No publication evidence retrieved</h3><p className="mt-2 text-sm text-slate-500">Try refining the query or adding more technical detail to the idea.</p></div>}</div> : null}
-            {tab === 'patents' ? <div className="space-y-4">{run.retrievalResults?.evidenceDiagnostics?.patentnestConfigured === false ? <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">PatentNest is not configured. Add the server-only <span className="font-mono text-xs">PATENTNEST_API_KEY</span> to enable the Indian patent corpus; Google Patents fallback results remain available.</div> : null}<div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.patents?.length ? run.retrievalResults.patents.map((item) => <SourceEvidenceCard key={`${item.source}-${item.id}`} eyebrow={item.source === 'patentnest' ? 'PatentNest' : 'Google Patents'} title={item.title} meta={[item.publicationNumber, item.assignee, item.publicationDate || item.filingDate].filter(Boolean).join(' · ')} body={item.abstract} href={item.url} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><FileSearch className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No patent evidence retrieved</h3></div>}</div></div> : null}
-            {tab === 'web' ? <div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.webResults?.length ? run.retrievalResults.webResults.map((item) => <SourceEvidenceCard key={item.id} eyebrow={item.source} title={item.title} meta={item.date || undefined} body={item.snippet} href={item.url} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><ExternalLink className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No web evidence retrieved</h3></div>}</div> : null}
-            {tab === 'funders' ? <div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.fundingCalls.length ? run.retrievalResults.fundingCalls.map((call) => <FundingCallCard key={call.id} call={call} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><Clock3 className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No open calls matched strongly</h3><Link href="/finder" className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-teal-700">Broaden the funding search <ArrowRight className="h-4 w-4" /></Link></div>}</div> : null}
-          </div>
+              <CrossCorpusTable rows={run.scores.crossCorpusFacets || []} sources={sources} />
+
+              <CallFitSection run={run} />
+
+              <GapSection run={run} onStrengthen={handleStrengthen} strengthenBusyGapId={strengthenBusyGapId} />
+
+              <ReviewerSection run={run} />
+
+              {/* Only tabs for corpora this run actually searched. An empty tab for a
+                  source that was never consulted reads as "nothing out there". */}
+              <div className="mt-7 border-b border-slate-200"><nav className="flex gap-1 overflow-x-auto">{([
+                ['projects', `Funded projects (${run.retrievalResults?.projects.length || 0})`, Landmark, true],
+                ['publications', `Publications (${run.retrievalResults?.publications?.length || 0})`, BookOpen, sources.publications],
+                ['patents', `Patents (${run.retrievalResults?.patents?.length || 0})`, FileSearch, sources.patents],
+                ['web', `Web (${run.retrievalResults?.webResults?.length || 0})`, ExternalLink, sources.web],
+                ['funders', `Open calls (${run.retrievalResults?.fundingCalls.length || 0})`, Target, sources.calls],
+              ] as const).filter(([, , , shown]) => shown).map(([value, label, Icon]) => <button type="button" key={value} onClick={() => setTab(value)} className={`inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold ${tab === value ? 'border-teal-700 text-teal-800' : 'border-transparent text-slate-500 hover:text-slate-800'}`}><Icon className="h-4 w-4" />{label}</button>)}</nav></div>
+
+              <div className="mt-6">
+                {tab === 'projects' ? <div className="space-y-4"><FacetLegend />{run.retrievalResults?.degradedMode ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Semantic retrieval was unavailable for this run; project evidence came from keyword matching.</div> : null}{run.retrievalResults?.projects.map((project) => <EvidenceRow key={project.id} project={project} assessment={assessmentByProject.get(project.id)} />)}</div> : null}
+                {tab === 'publications' ? <div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.publications?.length ? run.retrievalResults.publications.map((item) => <SourceEvidenceCard key={item.id} eyebrow={item.source} title={item.title} meta={[item.venue, item.year, item.citationCount !== null ? `${item.citationCount} citations` : null, item.doi].filter(Boolean).join(' · ')} body={item.abstract} href={item.url} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><BookOpen className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No publication evidence retrieved</h3><p className="mt-2 text-sm text-slate-500">Try refining the query or adding more technical detail to the idea.</p></div>}</div> : null}
+                {tab === 'patents' ? <div className="space-y-4">{run.retrievalResults?.evidenceDiagnostics?.patentnestConfigured === false ? <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">PatentNest is not configured. Add the server-only <span className="font-mono text-xs">PATENTNEST_API_KEY</span> to enable the Indian patent corpus; Google Patents fallback results remain available.</div> : null}<div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.patents?.length ? run.retrievalResults.patents.map((item) => <SourceEvidenceCard key={`${item.source}-${item.id}`} eyebrow={item.source === 'patentnest' ? 'PatentNest' : 'Google Patents'} title={item.title} meta={[item.publicationNumber, item.assignee, item.publicationDate || item.filingDate].filter(Boolean).join(' · ')} body={item.abstract} href={item.url} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><FileSearch className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No patent evidence retrieved</h3></div>}</div></div> : null}
+                {tab === 'web' ? <div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.webResults?.length ? run.retrievalResults.webResults.map((item) => <SourceEvidenceCard key={item.id} eyebrow={item.source} title={item.title} meta={item.date || undefined} body={item.snippet} href={item.url} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><ExternalLink className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No web evidence retrieved</h3></div>}</div> : null}
+                {tab === 'funders' ? <div className="grid gap-4 lg:grid-cols-2">{run.retrievalResults?.fundingCalls.length ? run.retrievalResults.fundingCalls.map((call) => <FundingCallCard key={call.id} call={call} />) : <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center"><Clock3 className="mx-auto h-7 w-7 text-slate-300" /><h3 className="mt-3 font-semibold">No open calls matched strongly</h3><Link href="/finder" className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-teal-700">Broaden the funding search <ArrowRight className="h-4 w-4" /></Link></div>}</div> : null}
+              </div>
+            </div>
+          </details>
         </> : null}
       </div>
     </main>

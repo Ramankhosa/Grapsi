@@ -10,10 +10,16 @@ import {
 
 const SERVICE_TYPE = 'FUNDING_DISCOVERY' as const
 
+export type IdeaIntelligenceOperationType =
+  | 'idea_intelligence_execute'
+  | 'idea_intelligence_refine'
+  // Reading the idea against one user-chosen funding call.
+  | 'idea_intelligence_call_fit'
+
 export async function reserveIdeaIntelligenceUsage(
   actor: FundingActor,
   operationId: string,
-  operationType: 'idea_intelligence_execute' | 'idea_intelligence_refine'
+  operationType: IdeaIntelligenceOperationType
 ): Promise<{ reserved: false } | { reserved: true; tenantId: string; operationId: string } | { response: NextResponse }> {
   if (actor.isSuperAdmin || !actor.tenantId) {
     return { reserved: false }
@@ -51,7 +57,7 @@ export async function reserveIdeaIntelligenceUsage(
 export async function completeIdeaIntelligenceUsage(
   reservation: Awaited<ReturnType<typeof reserveIdeaIntelligenceUsage>>,
   actor: FundingActor,
-  operationType: 'idea_intelligence_execute' | 'idea_intelligence_refine',
+  operationType: IdeaIntelligenceOperationType,
   metadata?: Record<string, unknown>
 ) {
   if (!('reserved' in reservation) || !reservation.reserved) return

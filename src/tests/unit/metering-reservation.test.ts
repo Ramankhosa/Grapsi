@@ -36,7 +36,10 @@ describe('metering reservation entitlement features', () => {
     reservationCreateMock.mockResolvedValue({ id: 'reservation-1' })
   })
 
-  it('rejects a Grant Prep reservation without a Feature row', async () => {
+  // GRANT_PREP is in PLAN_AGNOSTIC_FEATURES, so it is reservable without a
+  // Feature row on purpose — prep must keep working for tenants whose plan does
+  // not enumerate it. Only non-agnostic features still hard-fail (next test).
+  it('allows a plan-agnostic Grant Prep reservation without a Feature row', async () => {
     featureFindUniqueMock.mockResolvedValue(null)
 
     const service = createReservationService(defaultConfig)
@@ -49,10 +52,9 @@ describe('metering reservation entitlement features', () => {
         },
         1000
       )
-    ).rejects.toMatchObject({
-      code: 'FEATURE_NOT_FOUND',
-      message: "Feature 'GRANT_PREP' not found",
-    } satisfies Partial<MeteringError>)
+    ).resolves.toBe('reservation-1')
+
+    expect(reservationCreateMock).toHaveBeenCalledTimes(1)
   })
 
   it('still errors when another feature is missing from the Feature table', async () => {

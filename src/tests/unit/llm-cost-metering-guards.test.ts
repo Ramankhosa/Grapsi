@@ -137,7 +137,10 @@ describe('LLM cost metering guards', () => {
   it('routes grant budget generation through the section drafting model policy', () => {
     const source = readRepoFile('src/lib/grants/drafting.ts')
 
-    expect(source).toContain("taskCode: 'LLM2_DRAFT'")
+    // Grant-backed drafting meters as GRANT_SECTION_GENERATE (LLM2_DRAFT is the
+    // paper-drafting task), but it must still reuse the section drafting model
+    // policy rather than a bespoke GRANT_BUDGET_DRAFT stage.
+    expect(source).toContain("taskCode: 'GRANT_SECTION_GENERATE'")
     expect(source).toContain("stageCode: 'PAPER_SECTION_DRAFT'")
     expect(source).not.toContain("stageCode: 'GRANT_BUDGET_DRAFT'")
   })

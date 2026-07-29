@@ -1,5 +1,5 @@
 import React from 'react';
-import { FaCheck, FaFilter, FaPaperclip, FaPaperPlane, FaTimes } from 'react-icons/fa';
+import { ArrowUp, Check, Paperclip, SlidersHorizontal, X } from 'lucide-react';
 
 import { CHAT_MESSAGE_MAX_LENGTH } from '../../lib/recommendations/constants';
 import type { ResearcherFinderContext, ResearcherFinderPublication } from '../../lib/researcherProfile/types';
@@ -68,18 +68,12 @@ export default function FinderChatComposer({
   const composerOverLimit = composerLength > CHAT_MESSAGE_MAX_LENGTH;
 
   return (
-    <div className="border-t border-slate-200 bg-white px-4 py-4 sm:px-6 sm:py-5">
+    <div className="border-t border-hairline bg-ground px-3 py-3 sm:px-5 sm:py-4">
       {attachedContextLabel ? (
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-900">
-            Attached: {attachedContextLabel}
-          </span>
-          <button
-            type="button"
-            onClick={onRemoveAttachedContext}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600 transition-colors hover:text-slate-900"
-          >
-            <FaTimes />
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="cb-badge-cobalt">Attached: {attachedContextLabel}</span>
+          <button type="button" onClick={onRemoveAttachedContext} className="cb-btn-ghost cb-btn-sm">
+            <X className="h-3.5 w-3.5" />
             Remove
           </button>
         </div>
@@ -93,82 +87,73 @@ export default function FinderChatComposer({
         className="relative"
       >
         {attachMenuOpen ? (
-          <div className="absolute bottom-full left-0 z-10 mb-3 w-full max-w-xl rounded-[26px] border border-slate-200 bg-white p-4 shadow-[0_24px_60px_rgba(15,23,42,0.18)]">
+          <div className="absolute bottom-full left-0 z-10 mb-2 w-full max-w-xl rounded-xl border border-hairline bg-ground p-4 shadow-cb-pop">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Attach Research Context</div>
-                <div className="mt-2 text-sm leading-6 text-slate-600">
+                <div className="text-[13px] font-medium text-ink">Attach research context</div>
+                <p className="mt-1 text-[12px] leading-5 text-muted">
                   Pick a research area or one of your publications. The selected topic guides the funding search.
-                </div>
+                </p>
               </div>
-              <button
-                type="button"
-                onClick={onCloseAttachMenu}
-                className="rounded-full border border-slate-200 p-2 text-slate-500 transition-colors hover:text-slate-900"
-              >
-                <FaTimes />
+              <button type="button" onClick={onCloseAttachMenu} aria-label="Close" className="cb-btn-ghost cb-btn-sm px-2">
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="mt-4 grid max-h-80 gap-4 overflow-y-auto md:grid-cols-2">
-              <div className="space-y-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Saved Research Areas</div>
+            <div className="mt-3 grid max-h-80 gap-4 overflow-y-auto md:grid-cols-2">
+              <div className="space-y-2">
+                <div className="cb-eyebrow">Saved research areas</div>
                 {savedResearchAreas.length > 0 ? (
                   savedResearchAreas.map((area) => (
                     <button
                       key={area.id}
                       type="button"
                       onClick={() => onAttachResearchContext(area.label, buildSavedResearchAreaQueryText(area), 'Saved Research Area')}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50"
+                      className="w-full rounded-lg border border-hairline bg-ground px-3 py-2.5 text-left text-[13px] transition hover:border-cobalt-300 hover:bg-cobalt-50"
                     >
-                      <div className="font-semibold text-slate-900">{area.label}</div>
+                      <div className="font-medium text-ink">{area.label}</div>
                       {formatSavedResearchAreaTaxonomy(area) ? (
-                        <div className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-800">
-                          {formatSavedResearchAreaTaxonomy(area)}
-                        </div>
+                        <div className="mt-0.5 text-[12px] text-muted">{formatSavedResearchAreaTaxonomy(area)}</div>
                       ) : null}
-                      <div className="mt-1 line-clamp-2 text-slate-600">{area.researchArea}</div>
+                      <div className="mt-0.5 line-clamp-2 text-[12px] text-muted">{area.researchArea}</div>
                     </button>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500">
+                  <div className="rounded-lg border border-dashed border-hairline px-3 py-3 text-[13px] text-muted">
                     No saved research areas yet.
                   </div>
                 )}
               </div>
 
-              <div className="space-y-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Profile Research Areas</div>
+              <div className="space-y-2">
+                <div className="cb-eyebrow">Profile research areas</div>
                 {profileResearchAreas.length > 0 ? (
                   profileResearchAreas.map((area) => (
                     <button
                       key={area}
                       type="button"
                       onClick={() => onAttachResearchContext(area, area, 'Profile Research Area')}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50"
+                      className="w-full rounded-lg border border-hairline bg-ground px-3 py-2.5 text-left text-[13px] font-medium text-ink transition hover:border-cobalt-300 hover:bg-cobalt-50"
                     >
-                      <div className="font-semibold text-slate-900">{area}</div>
+                      {area}
                     </button>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500">
+                  <div className="rounded-lg border border-dashed border-hairline px-3 py-3 text-[13px] text-muted">
                     Add research areas in your profile to attach them here.
                   </div>
                 )}
               </div>
 
               {onAttachPublicationContext ? (
-                <div className="space-y-3 md:col-span-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">My Publications</div>
+                <div className="space-y-2 md:col-span-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="cb-eyebrow">My publications</div>
                     {selectedPublicationTitles.length > 0 && onConfirmPublications ? (
-                      <button
-                        type="button"
-                        onClick={onConfirmPublications}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white shadow transition-colors hover:bg-emerald-700"
-                      >
-                        <FaCheck className="text-[10px]" />
-                        Use {selectedPublicationTitles.length} {selectedPublicationTitles.length === 1 ? 'publication' : 'publications'}
+                      <button type="button" onClick={onConfirmPublications} className="cb-btn-primary cb-btn-sm">
+                        <Check className="h-3.5 w-3.5" />
+                        Use {selectedPublicationTitles.length}{' '}
+                        {selectedPublicationTitles.length === 1 ? 'publication' : 'publications'}
                       </button>
                     ) : null}
                   </div>
@@ -180,29 +165,29 @@ export default function FinderChatComposer({
                           key={publication.id}
                           type="button"
                           onClick={() => onAttachPublicationContext(publication)}
-                          className={`w-full rounded-2xl border px-4 py-3 text-left text-sm transition-colors ${
+                          className={`w-full rounded-lg border px-3 py-2.5 text-left text-[13px] transition ${
                             isSelected
-                              ? 'border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200'
-                              : 'border-slate-200 bg-slate-50 hover:border-emerald-300 hover:bg-emerald-50'
+                              ? 'border-cobalt-600 bg-cobalt-50'
+                              : 'border-hairline bg-ground hover:border-cobalt-300 hover:bg-cobalt-50'
                           }`}
                         >
-                          <div className="flex items-start gap-3">
-                            <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-colors ${
-                              isSelected
-                                ? 'border-emerald-500 bg-emerald-500 text-white'
-                                : 'border-slate-300 bg-white'
-                            }`}>
-                              {isSelected ? <FaCheck className="text-[10px]" /> : null}
-                            </div>
+                          <div className="flex items-start gap-2.5">
+                            <span
+                              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition ${
+                                isSelected ? 'border-cobalt-600 bg-cobalt-600 text-white' : 'border-hairline bg-ground'
+                              }`}
+                            >
+                              {isSelected ? <Check className="h-2.5 w-2.5" /> : null}
+                            </span>
                             <div className="min-w-0 flex-1">
-                              <div className="font-semibold text-slate-900">{publication.title}</div>
+                              <div className="font-medium text-ink">{publication.title}</div>
                               {publication.venue || publication.year ? (
-                                <div className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-800">
+                                <div className="mt-0.5 text-[12px] text-muted">
                                   {[publication.venue, publication.year].filter(Boolean).join(' · ')}
                                 </div>
                               ) : null}
                               {publication.abstract ? (
-                                <div className="mt-1 line-clamp-2 text-slate-600">{publication.abstract}</div>
+                                <div className="mt-0.5 line-clamp-2 text-[12px] text-muted">{publication.abstract}</div>
                               ) : null}
                             </div>
                           </div>
@@ -210,8 +195,9 @@ export default function FinderChatComposer({
                       );
                     })
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500">
-                      Tag library items as <span className="font-semibold">my-publication</span> in Research Fit to attach them here.
+                    <div className="rounded-lg border border-dashed border-hairline px-3 py-3 text-[13px] text-muted">
+                      Tag library items as <span className="font-medium text-ink-soft">my-publication</span> in Research Fit
+                      to attach them here.
                     </div>
                   )}
                 </div>
@@ -220,21 +206,18 @@ export default function FinderChatComposer({
           </div>
         ) : null}
 
-        <div className="flex items-end gap-2 rounded-[28px] border border-slate-200 bg-white p-3 shadow-[0_2px_12px_rgba(15,23,42,0.06)] sm:gap-3">
+        <div className="flex items-end gap-2 rounded-xl border border-hairline bg-ground p-1.5 focus-within:border-cobalt-600 focus-within:ring-2 focus-within:ring-cobalt-100">
           {showFilterButton && onOpenFilters ? (
             <button
               type="button"
               onClick={onOpenFilters}
-              className={`relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border-2 transition-colors lg:hidden ${
-                activeFilterCount > 0
-                  ? 'border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                  : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700'
-              }`}
+              className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-inset hover:text-ink lg:hidden"
               title={activeFilterCount > 0 ? `${activeFilterCount} filters active — tap to edit` : 'Open filters'}
+              aria-label="Open filters"
             >
-              <FaFilter />
+              <SlidersHorizontal className="h-4 w-4" />
               {activeFilterCount > 0 ? (
-                <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white shadow">
+                <span className="absolute right-0.5 top-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-cobalt-600 px-1 text-[10px] font-semibold text-white">
                   {activeFilterCount}
                 </span>
               ) : null}
@@ -244,15 +227,16 @@ export default function FinderChatComposer({
           <button
             type="button"
             onClick={onToggleAttachMenu}
-            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border-2 border-slate-200 bg-slate-50 text-slate-500 transition-colors hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-inset hover:text-ink"
             title="Attach saved research context"
+            aria-label="Attach research context"
           >
-            <FaPaperclip />
+            <Paperclip className="h-4 w-4" />
           </button>
 
           <textarea
             ref={composerRef}
-            rows={2}
+            rows={1}
             value={composer}
             maxLength={CHAT_MESSAGE_MAX_LENGTH}
             onChange={(event) => onComposerChange(event.target.value)}
@@ -262,22 +246,30 @@ export default function FinderChatComposer({
                 onSubmit();
               }
             }}
-            placeholder='Ask anything — "Find fellowships in AI for healthcare", "What documents does result 1 need?", or "How do I strengthen my application?"'
-            className="min-h-[52px] flex-1 resize-none rounded-[22px] border-2 border-slate-200 bg-slate-50/50 px-4 py-3 text-sm leading-6 outline-none transition-colors placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+            placeholder="Ask anything — find calls, check eligibility, plan a submission…"
+            className="max-h-40 min-h-[40px] flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-sm leading-6 text-ink outline-none placeholder:text-muted-soft focus:ring-0"
           />
-
-          <div className={`hidden shrink-0 text-right text-[11px] font-semibold uppercase tracking-[0.12em] sm:block ${composerOverLimit ? 'text-rose-600' : 'text-slate-400'}`}>
-            {composerLength.toLocaleString()} / {CHAT_MESSAGE_MAX_LENGTH.toLocaleString()}
-          </div>
 
           <button
             type="submit"
             disabled={disabled || !composer.trim() || composerOverLimit}
-            className="inline-flex h-12 shrink-0 items-center gap-2 rounded-2xl bg-emerald-600 px-5 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_4px_20px_rgba(16,185,129,0.4)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cobalt-600 text-white transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:bg-hairline disabled:text-muted-soft"
+            title={sending ? 'Thinking…' : 'Send'}
+            aria-label="Send message"
           >
-            <FaPaperPlane />
-            {sending ? 'Thinking…' : 'Send'}
+            {sending ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            ) : (
+              <ArrowUp className="h-4 w-4" />
+            )}
           </button>
+        </div>
+
+        <div className="mt-1.5 flex items-center justify-between gap-3 px-1">
+          <span className="text-[11px] text-muted-soft">Enter to send · Shift + Enter for a new line</span>
+          <span className={`text-[11px] ${composerOverLimit ? 'text-red-600' : 'text-muted-soft'}`}>
+            {composerLength.toLocaleString()} / {CHAT_MESSAGE_MAX_LENGTH.toLocaleString()}
+          </span>
         </div>
       </form>
     </div>

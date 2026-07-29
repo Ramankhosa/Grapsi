@@ -15,10 +15,10 @@ interface FinderMarkdownProps {
  */
 export default function FinderMarkdown({ content, inverted = false }: FinderMarkdownProps) {
   const prepared = content.replace(/\n/g, '  \n');
-  const strongClass = inverted ? 'font-semibold text-white' : 'font-semibold text-slate-950';
+  const strongClass = inverted ? 'font-semibold text-white' : 'font-semibold text-ink';
   const linkClass = inverted
-    ? 'font-medium text-emerald-200 underline underline-offset-2 hover:text-emerald-100'
-    : 'font-medium text-emerald-700 underline underline-offset-2 hover:text-emerald-900';
+    ? 'font-medium text-white underline underline-offset-2 hover:text-cobalt-100'
+    : 'font-medium text-cobalt-700 underline underline-offset-2 hover:text-cobalt-800';
 
   return (
     <ReactMarkdown
@@ -36,7 +36,7 @@ export default function FinderMarkdown({ content, inverted = false }: FinderMark
           </a>
         ),
         code: ({ children }) => (
-          <code className={`rounded px-1.5 py-0.5 text-[0.85em] ${inverted ? 'bg-white/15 text-emerald-100' : 'bg-slate-100 text-slate-800'}`}>
+          <code className={`rounded px-1.5 py-0.5 text-[0.85em] ${inverted ? 'bg-white/15 text-white' : 'bg-inset text-ink-soft'}`}>
             {children}
           </code>
         ),
@@ -46,7 +46,7 @@ export default function FinderMarkdown({ content, inverted = false }: FinderMark
         h2: ({ children }) => <p className={`my-2 text-sm ${strongClass}`}>{children}</p>,
         h3: ({ children }) => <p className={`my-2 text-sm ${strongClass}`}>{children}</p>,
         blockquote: ({ children }) => (
-          <blockquote className={`my-2 border-l-2 pl-3 ${inverted ? 'border-white/30' : 'border-emerald-200'}`}>{children}</blockquote>
+          <blockquote className={`my-2 border-l-2 pl-3 ${inverted ? 'border-white/30' : 'border-cobalt-200'}`}>{children}</blockquote>
         ),
       }}
     >

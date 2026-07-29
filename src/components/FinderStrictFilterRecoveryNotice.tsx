@@ -20,30 +20,21 @@ export default function FinderStrictFilterRecoveryNotice({
   const summary = describeStrictRecoverySentence(filters, recovery);
 
   return (
-    <div className="mb-5 rounded-[24px] border border-amber-300 bg-amber-50 p-5">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">No Matches With Current Filters</div>
-      <p className="mt-2 text-sm leading-6 text-amber-950">{summary}</p>
+    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+      <div className="text-[13px] font-medium text-amber-900">No matches with current filters</div>
+      <p className="mt-1 text-[13px] leading-5 text-amber-800">{summary}</p>
       {restrictiveFilters.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
           {restrictiveFilters.map((item) => (
-            <span
-              key={item}
-              className="rounded-full border border-amber-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-900"
-            >
+            <span key={item} className="inline-flex items-center rounded-md bg-white px-2 py-0.5 text-[12px] text-amber-900">
               {item}
             </span>
           ))}
         </div>
       ) : null}
-      <div className="mt-4 flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={onRetry}
-          className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400"
-        >
-          Retry without these filters
-        </button>
-      </div>
+      <button type="button" onClick={onRetry} className="cb-btn-secondary cb-btn-sm mt-3">
+        Retry without these filters
+      </button>
     </div>
   );
 }

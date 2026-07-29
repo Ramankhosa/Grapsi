@@ -2,13 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
-import {
-  FaArrowLeft,
-  FaCalendarAlt,
-  FaExternalLinkAlt,
-  FaGlobe,
-  FaMapMarkerAlt,
-} from 'react-icons/fa'
+import { ArrowLeft, CalendarDays, ExternalLink, Globe2, MapPin } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
 
@@ -83,7 +77,7 @@ function chips(values?: string[] | null) {
   return (
     <div className="flex flex-wrap gap-2">
       {values.map((value) => (
-        <span key={value} className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-900">
+        <span key={value} className="cb-badge">
           {value}
         </span>
       ))}
@@ -99,24 +93,24 @@ function labelize(value?: string | null) {
 function DefinitionItem({ label, value }: { label: string; value?: ReactNode }) {
   return (
     <div>
-      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</div>
-      <div className="text-sm leading-7 text-slate-700">{value || <p>Not specified.</p>}</div>
+      <div className="mb-2 cb-eyebrow">{label}</div>
+      <div className="text-[13px] leading-6 text-muted">{value || <p>Not specified.</p>}</div>
     </div>
   )
 }
 
 function RulePreviewList({ items, emptyText = 'Not available.' }: { items?: FundingRulePreview[] | null; emptyText?: string }) {
   if (!Array.isArray(items) || items.length === 0) {
-    return <p className="text-sm text-slate-600">{emptyText}</p>
+    return <p className="text-[13px] text-muted">{emptyText}</p>
   }
 
   return (
     <div className="space-y-3">
       {items.map((item, index) => (
-        <div key={`${item.key || 'rule'}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <div className="text-sm font-medium text-slate-900">{item.text}</div>
+        <div key={`${item.key || 'rule'}-${index}`} className="cb-card-inset px-4 py-3">
+          <div className="text-[13px] font-medium text-ink">{item.text}</div>
           {item.importance ? (
-            <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">
+            <div className="mt-0.5 text-[12px] text-muted">
               Importance: {labelize(item.importance)}
             </div>
           ) : null}
@@ -132,9 +126,9 @@ function JsonPanel({ title, value }: { title: string; value: unknown }) {
   }
 
   return (
-    <details className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <summary className="cursor-pointer text-sm font-semibold text-slate-900">{title}</summary>
-      <pre className="mt-4 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
+    <details className="cb-card-inset p-4">
+      <summary className="cursor-pointer text-[13px] font-medium text-ink">{title}</summary>
+      <pre className="mt-3 overflow-auto rounded-lg bg-ink p-4 text-[12px] leading-6 text-white">
         {JSON.stringify(value, null, 2)}
       </pre>
     </details>
@@ -235,16 +229,20 @@ export default function FundingCallDetailsPage() {
   }
 
   if (isLoading || loading) {
-    return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white">Loading funding call...</div>
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-inset">
+        <span className="h-8 w-8 animate-spin rounded-full border-2 border-cobalt-600 border-t-transparent" />
+      </div>
+    )
   }
 
   if (error || !call) {
     return (
-      <div className="min-h-screen bg-slate-50 px-6 py-12">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-8 shadow-sm">
-          <div className="text-lg font-semibold text-slate-900">Funding call unavailable</div>
-          <p className="mt-3 text-sm text-slate-600">{error || 'The funding call could not be loaded.'}</p>
-          <Link href={finderBackHref} className="mt-6 inline-flex rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
+      <div className="min-h-screen bg-inset px-4 py-12 sm:px-6">
+        <div className="mx-auto max-w-2xl rounded-xl border border-red-200 bg-ground p-6">
+          <div className="cb-title">Funding call unavailable</div>
+          <p className="mt-2 text-[13px] text-muted">{error || 'The funding call could not be loaded.'}</p>
+          <Link href={finderBackHref} className="cb-btn-primary mt-5">
             Back to Finder
           </Link>
         </div>
@@ -258,83 +256,76 @@ export default function FundingCallDetailsPage() {
   const guidelineReadyText = call.guidelineStatus || call.guideline_status || 'none'
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.14),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#e2e8f0_100%)] px-4 py-6 text-slate-900 sm:px-6 lg:px-8">
+    <div className="cb-page min-h-screen bg-inset px-4 py-6 text-ink sm:px-6 lg:px-8">
       <Head>
         <title>{call.title || 'Funding Call'} | Grapsi</title>
       </Head>
 
       <div className="mx-auto max-w-6xl">
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <Link href={finderBackHref} className="inline-flex items-center gap-2 text-sm font-medium text-emerald-800 hover:text-emerald-950">
-            <FaArrowLeft />
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <Link href={finderBackHref} className="cb-btn-ghost cb-btn-sm -ml-2">
+            <ArrowLeft className="h-4 w-4" />
             Back to Finder
           </Link>
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href={`/funding/intelligence/idea/new?callId=${encodeURIComponent(call.id)}`}
-              className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-800"
-            >
-              Validate an idea against this call
-            </Link>
+          <div className="flex flex-wrap items-center gap-2">
             {(call.catalogStatus === 'PUBLISHED' || call.status === 'PUBLISHED') ? (
               <button
                 type="button"
                 onClick={() => void handleStartGrantPrep()}
                 disabled={startingGrantPrep}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
+                className="cb-btn-primary cb-btn-sm"
               >
-                {startingGrantPrep ? 'Opening Grant Prep...' : 'Write Grant'}
+                {startingGrantPrep ? 'Opening Grant Prep…' : 'Write grant'}
               </button>
             ) : null}
+            <Link
+              href={`/funding/intelligence/idea/new?callId=${encodeURIComponent(call.id)}`}
+              className="cb-btn-secondary cb-btn-sm"
+            >
+              Validate an idea
+            </Link>
             {officialSourceUrl ? (
-              <a
-                href={officialSourceUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
-              >
-                Official Source
-                <FaExternalLinkAlt className="text-xs" />
+              <a href={officialSourceUrl} target="_blank" rel="noreferrer" className="cb-btn-ghost cb-btn-sm">
+                Official source
+                <ExternalLink className="h-3.5 w-3.5" />
               </a>
             ) : null}
           </div>
         </div>
 
-        <section className="rounded-[32px] border border-white/80 bg-white/85 p-8 shadow-[0_28px_80px_rgba(15,23,42,0.10)]">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-700">
-            {call.agencyName || 'Funding Call'}
-          </div>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+        <section className="cb-card p-5 sm:p-6">
+          <div className="cb-eyebrow">{call.agencyName || 'Funding call'}</div>
+          <h1 className="mt-1.5 text-2xl font-semibold tracking-[-0.02em] text-ink sm:text-3xl">
             {call.title}
           </h1>
-          <p className="mt-4 max-w-4xl text-base leading-8 text-slate-600">
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-muted">
             {call.description || call.summary || 'No description available.'}
           </p>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-4">
-            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500"><FaCalendarAlt /> Deadline</div>
-              <div className="mt-2 text-sm font-semibold text-slate-950">{call.isRolling ? 'Rolling' : formatDate(call.deadlineAt) || 'Not specified'}</div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="cb-card-inset p-4">
+              <div className="cb-eyebrow flex items-center gap-1.5"><CalendarDays className="h-3.5 w-3.5" /> Deadline</div>
+              <div className="mt-1.5 text-[13px] font-medium text-ink">{call.isRolling ? 'Rolling' : formatDate(call.deadlineAt) || 'Not specified'}</div>
             </div>
-            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500"><FaGlobe /> Geography</div>
-              <div className="mt-2 text-sm font-semibold text-slate-950">{geography || 'Not specified'}</div>
+            <div className="cb-card-inset p-4">
+              <div className="cb-eyebrow flex items-center gap-1.5"><Globe2 className="h-3.5 w-3.5" /> Geography</div>
+              <div className="mt-1.5 text-[13px] font-medium text-ink">{geography || 'Not specified'}</div>
             </div>
-            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500"><FaMapMarkerAlt /> Sponsor</div>
-              <div className="mt-2 text-sm font-semibold text-slate-950">{call.agencyName || labelize(call.sponsorTypeLabel || call.sponsorType) || 'Not specified'}</div>
+            <div className="cb-card-inset p-4">
+              <div className="cb-eyebrow flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" /> Sponsor</div>
+              <div className="mt-1.5 text-[13px] font-medium text-ink">{call.agencyName || labelize(call.sponsorTypeLabel || call.sponsorType) || 'Not specified'}</div>
             </div>
-            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Funding</div>
-              <div className="mt-2 text-sm font-semibold text-slate-950">{formatAmount(call) || 'Not specified'}</div>
+            <div className="cb-card-inset p-4">
+              <div className="cb-eyebrow">Funding</div>
+              <div className="mt-1.5 text-[13px] font-medium text-ink">{formatAmount(call) || 'Not specified'}</div>
             </div>
           </div>
         </section>
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-2">
-          <section className="rounded-[28px] border border-white/80 bg-white/85 p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-950">Basic Information</h2>
-            <div className="mt-5 grid gap-5 text-sm leading-7 text-slate-700 md:grid-cols-2">
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <section className="cb-card p-4 sm:p-5">
+            <h2 className="cb-title">Basic Information</h2>
+            <div className="mt-5 grid gap-5 text-[13px] leading-6 text-muted md:grid-cols-2">
               <DefinitionItem label="Call ID" value={call.id} />
               <DefinitionItem label="Agency" value={call.agencyName} />
               <DefinitionItem label="Visibility" value={labelize(call.visibility)} />
@@ -347,9 +338,9 @@ export default function FundingCallDetailsPage() {
             </div>
           </section>
 
-          <section className="rounded-[28px] border border-white/80 bg-white/85 p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-950">Eligibility and Fit</h2>
-            <div className="mt-5 space-y-5 text-sm leading-7 text-slate-700">
+          <section className="cb-card p-4 sm:p-5">
+            <h2 className="cb-title">Eligibility and Fit</h2>
+            <div className="mt-5 space-y-5 text-[13px] leading-6 text-muted">
               <DefinitionItem label="Eligible Countries" value={chips(call.eligibleCountries) || null} />
               <DefinitionItem label="Host Countries" value={chips(call.hostCountries) || null} />
               <DefinitionItem label="Institution Types" value={chips(call.institutionTypes) || null} />
@@ -361,24 +352,24 @@ export default function FundingCallDetailsPage() {
             </div>
           </section>
 
-          <section className="rounded-[28px] border border-white/80 bg-white/85 p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-950">Focus and Deliverables</h2>
-            <div className="mt-5 space-y-5 text-sm leading-7 text-slate-700">
+          <section className="cb-card p-4 sm:p-5">
+            <h2 className="cb-title">Focus and Deliverables</h2>
+            <div className="mt-5 space-y-5 text-[13px] leading-6 text-muted">
               <DefinitionItem label="Funding Kinds" value={chips(call.fundingKinds) || null} />
               <DefinitionItem label="Disciplines" value={chips(call.disciplines) || null} />
               <DefinitionItem label="Expected Deliverables" value={call.expectedDeliverablesText ? <p>{call.expectedDeliverablesText}</p> : null} />
             </div>
           </section>
 
-          <section className="rounded-[28px] border border-white/80 bg-white/85 p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-950">Links and Source Data</h2>
-            <div className="mt-5 space-y-5 text-sm leading-7 text-slate-700">
+          <section className="cb-card p-4 sm:p-5">
+            <h2 className="cb-title">Links and Source Data</h2>
+            <div className="mt-5 space-y-5 text-[13px] leading-6 text-muted">
               <DefinitionItem
                 label="Official URLs"
                 value={(call.officialUrls || []).length ? (
                   <div className="space-y-2">
                     {(call.officialUrls || []).map((url: string) => (
-                      <a key={url} href={url} target="_blank" rel="noreferrer" className="block break-all text-emerald-700 hover:text-emerald-900">
+                      <a key={url} href={url} target="_blank" rel="noreferrer" className="block break-all text-cobalt-700 hover:text-cobalt-800 hover:underline">
                         {url}
                       </a>
                     ))}
@@ -395,29 +386,29 @@ export default function FundingCallDetailsPage() {
             </div>
           </section>
 
-          <section className="rounded-[28px] border border-white/80 bg-white/85 p-6 shadow-sm lg:col-span-2">
-            <h2 className="text-lg font-semibold text-slate-950">Template Workspace</h2>
+          <section className="cb-card p-4 sm:p-5 lg:col-span-2">
+            <h2 className="cb-title">Template Workspace</h2>
             {templateWorkspace ? (
               <div className="mt-5 space-y-6">
-                <div className="text-sm text-slate-600">Workspace ID: <span className="font-medium text-slate-900">{templateWorkspace.id}</span></div>
+                <div className="text-[13px] text-muted">Workspace ID: <span className="font-medium text-ink">{templateWorkspace.id}</span></div>
                 <div className="grid gap-4 md:grid-cols-4">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Status</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">{labelize(templateWorkspace.status) || 'none'}</div>
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Status</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">{labelize(templateWorkspace.status) || 'none'}</div>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Revision</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">{templateWorkspace.currentRevisionNo ?? 'Not specified'}</div>
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Revision</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">{templateWorkspace.currentRevisionNo ?? 'Not specified'}</div>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Sections / Questions</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Sections / Questions</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">
                       {templateWorkspace.topLevelSectionCount ?? 0} sections · {templateWorkspace.questionCount ?? 0} questions
                     </div>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Assets / Revisions</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Assets / Revisions</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">
                       {templateWorkspace.assetCount ?? 0} assets · {templateWorkspace.revisionCount ?? 0} revisions
                     </div>
                   </div>
@@ -425,68 +416,68 @@ export default function FundingCallDetailsPage() {
 
                 <div className="grid gap-6 lg:grid-cols-2">
                   <div>
-                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Top-level Template Sections</div>
+                    <div className="mb-3 cb-eyebrow">Top-level Template Sections</div>
                     {(templateWorkspace.sectionOutline || []).length ? (
                       <div className="grid gap-3">
                         {(templateWorkspace.sectionOutline || []).map((section) => (
-                          <div key={section.key} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                            <div className="text-sm font-semibold text-slate-900">{section.label}</div>
-                            <div className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">{section.key}</div>
+                          <div key={section.key} className="cb-card-inset px-4 py-3">
+                            <div className="text-[13px] font-medium text-ink">{section.label}</div>
+                            <div className="mt-0.5 text-[12px] text-muted">{section.key}</div>
                           </div>
                         ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-slate-600">No template sections stored.</p>
+                      <p className="text-[13px] text-muted">No template sections stored.</p>
                     )}
                   </div>
                   <div className="grid gap-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Attachments</div>
-                      <div className="mt-2 text-sm font-semibold text-slate-950">{templateWorkspace.attachmentCount ?? 0}</div>
+                    <div className="cb-card-inset p-4">
+                      <div className="cb-eyebrow">Attachments</div>
+                      <div className="mt-1.5 text-[13px] font-medium text-ink">{templateWorkspace.attachmentCount ?? 0}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Submission Rules</div>
-                      <div className="mt-2 text-sm font-semibold text-slate-950">{templateWorkspace.submissionRuleCount ?? 0}</div>
+                    <div className="cb-card-inset p-4">
+                      <div className="cb-eyebrow">Submission Rules</div>
+                      <div className="mt-1.5 text-[13px] font-medium text-ink">{templateWorkspace.submissionRuleCount ?? 0}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Evaluation Criteria</div>
-                      <div className="mt-2 text-sm font-semibold text-slate-950">{templateWorkspace.evaluationCriteriaCount ?? 0}</div>
+                    <div className="cb-card-inset p-4">
+                      <div className="cb-eyebrow">Evaluation Criteria</div>
+                      <div className="mt-1.5 text-[13px] font-medium text-ink">{templateWorkspace.evaluationCriteriaCount ?? 0}</div>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Compiled Template</div>
-                      <div className="mt-2 text-sm font-semibold text-slate-950">{templateWorkspace.hasCompiledTemplate ? 'Available' : 'Not generated'}</div>
+                    <div className="cb-card-inset p-4">
+                      <div className="cb-eyebrow">Compiled Template</div>
+                      <div className="mt-1.5 text-[13px] font-medium text-ink">{templateWorkspace.hasCompiledTemplate ? 'Available' : 'Not generated'}</div>
                     </div>
                   </div>
                 </div>
               </div>
             ) : (
-              <p className="mt-5 text-sm text-slate-600">No template workspace is stored for this call yet.</p>
+              <p className="mt-5 text-[13px] text-muted">No template workspace is stored for this call yet.</p>
             )}
           </section>
 
-          <section className="rounded-[28px] border border-white/80 bg-white/85 p-6 shadow-sm lg:col-span-2">
-            <h2 className="text-lg font-semibold text-slate-950">Guideline Workspace</h2>
+          <section className="cb-card p-4 sm:p-5 lg:col-span-2">
+            <h2 className="cb-title">Guideline Workspace</h2>
             {guidelineWorkspace ? (
               <div className="mt-5 space-y-6">
-                <div className="text-sm text-slate-600">Workspace ID: <span className="font-medium text-slate-900">{guidelineWorkspace.id}</span></div>
+                <div className="text-[13px] text-muted">Workspace ID: <span className="font-medium text-ink">{guidelineWorkspace.id}</span></div>
                 <div className="grid gap-4 md:grid-cols-4">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Status</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">{labelize(guidelineWorkspace.status) || 'none'}</div>
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Status</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">{labelize(guidelineWorkspace.status) || 'none'}</div>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Revision</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">{guidelineWorkspace.currentRevisionNo ?? 'Not specified'}</div>
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Revision</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">{guidelineWorkspace.currentRevisionNo ?? 'Not specified'}</div>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Priorities / Must Address</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Priorities / Must Address</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">
                       {guidelineWorkspace.priorityCount ?? 0} priorities · {guidelineWorkspace.mustAddressCount ?? 0} must address
                     </div>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Signals / Criteria</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4">
+                    <div className="cb-eyebrow">Signals / Criteria</div>
+                    <div className="mt-1.5 text-[13px] font-medium text-ink">
                       {guidelineWorkspace.reviewerSignalCount ?? 0} reviewer signals · {guidelineWorkspace.evaluationCriteriaCount ?? 0} criteria
                     </div>
                   </div>
@@ -494,49 +485,49 @@ export default function FundingCallDetailsPage() {
 
                 <div className="grid gap-6 lg:grid-cols-2">
                   <div>
-                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Priorities</div>
+                    <div className="mb-3 cb-eyebrow">Priorities</div>
                     <RulePreviewList items={guidelineWorkspace.prioritiesPreview} />
                   </div>
                   <div>
-                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Must Address</div>
+                    <div className="mb-3 cb-eyebrow">Must Address</div>
                     <RulePreviewList items={guidelineWorkspace.mustAddressPreview} />
                   </div>
                   <div>
-                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Evaluation Criteria</div>
+                    <div className="mb-3 cb-eyebrow">Evaluation Criteria</div>
                     <RulePreviewList items={guidelineWorkspace.evaluationCriteriaPreview} />
                   </div>
                   <div>
-                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Reviewer Signals</div>
+                    <div className="mb-3 cb-eyebrow">Reviewer Signals</div>
                     <RulePreviewList items={guidelineWorkspace.reviewerSignalsPreview} />
                   </div>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-5">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4 text-[13px] font-medium text-ink">
                     Budget Rules: {guidelineWorkspace.budgetRuleCount ?? 0}
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4 text-[13px] font-medium text-ink">
                     Duration Rules: {guidelineWorkspace.durationRuleCount ?? 0}
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4 text-[13px] font-medium text-ink">
                     Deliverables: {guidelineWorkspace.deliverableRuleCount ?? 0}
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4 text-[13px] font-medium text-ink">
                     Submission: {guidelineWorkspace.submissionRuleCount ?? 0}
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-950">
+                  <div className="cb-card-inset p-4 text-[13px] font-medium text-ink">
                     Avoid / Format: {(guidelineWorkspace.avoidCount ?? 0) + (guidelineWorkspace.formatRuleCount ?? 0)}
                   </div>
                 </div>
               </div>
             ) : (
-              <p className="mt-5 text-sm text-slate-600">No guideline workspace is stored for this call yet.</p>
+              <p className="mt-5 text-[13px] text-muted">No guideline workspace is stored for this call yet.</p>
             )}
           </section>
 
-          <section className="rounded-[28px] border border-white/80 bg-white/85 p-6 shadow-sm lg:col-span-2">
-            <h2 className="text-lg font-semibold text-slate-950">Stored Data</h2>
-            <p className="mt-2 text-sm text-slate-600">
+          <section className="cb-card p-4 sm:p-5 lg:col-span-2">
+            <h2 className="cb-title">Stored Data</h2>
+            <p className="mt-2 text-[13px] text-muted">
               These panels show the stored funding-call record and any attached guideline/template JSON so you can verify what exists in the database.
             </p>
             <div className="mt-5 space-y-4">

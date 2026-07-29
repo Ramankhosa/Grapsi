@@ -1057,6 +1057,17 @@ export async function publishGlobalFundingCall(callId: string, actor: FundingAct
     },
   })
 
+  // Alert matched researchers in the background; publishing must never wait
+  // on notification fan-out.
+  import('../services/fundingAlertService')
+    .then(({ dispatchFundingAlertsQuietly }) => dispatchFundingAlertsQuietly(callId))
+    .catch((error) => {
+      console.warn(
+        `[FUNDING-ALERT] Could not start alert dispatch for call ${callId}:`,
+        error instanceof Error ? error.message : String(error)
+      )
+    })
+
   return serializeCallSummary(updated)
 }
 

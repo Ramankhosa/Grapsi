@@ -9,8 +9,8 @@ export default function ResearchAreasRedirectPage() {
   }, [router]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6 text-sm text-slate-600">
-      Opening Research Fit...
+    <div className="flex min-h-screen items-center justify-center bg-inset px-6 text-[13px] text-muted">
+      Opening Research Fit…
     </div>
   );
 }

@@ -16,6 +16,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // `server-only` is a Next.js build-time marker that throws on import
+      // outside a Server Component. Under vitest everything is "server", so it
+      // is resolved to the package's own empty build to keep server modules
+      // (and the pure helpers they re-export) importable from tests.
+      'server-only': path.resolve(__dirname, './node_modules/server-only/empty.js'),
     },
   },
 })

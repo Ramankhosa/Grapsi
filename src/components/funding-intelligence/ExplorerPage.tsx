@@ -310,12 +310,12 @@ export default function ExplorerPage() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-teal-200"><Sparkles className="h-4 w-4" /> Funding intelligence</div>
-              <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight sm:text-5xl">See what gets funded. Position what comes next.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-teal-50/75 sm:text-base">Search awarded research by meaning, not just keywords. Compare ideas with real funding evidence and discover the strongest positioning angle.</p>
+              <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight sm:text-5xl">See what is already funded. Find what is not.</h1>
+              <p className="mt-4 max-w-2xl text-sm leading-6 text-teal-50/75 sm:text-base">Search sanctioned research by meaning, not just keywords. Then hand us your idea and we will show you the few directions the funded record has left open.</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <Link href="/researcher-matching" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Users className="h-4 w-4" /> Find researchers</Link>
-              <Link href="/funding/intelligence/idea/new" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Sparkles className="h-4 w-4" /> Analyze an idea</Link>
+              <Link href="/funding/intelligence/idea/new" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Sparkles className="h-4 w-4" /> Find whitespace for my idea</Link>
             </div>
           </div>
 

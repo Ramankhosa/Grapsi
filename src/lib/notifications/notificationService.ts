@@ -9,7 +9,12 @@ import prisma from '../prisma';
  * users or org units, but never reaches a user outside their own tenant.
  */
 
-export type NotificationCategory = 'ASSIGNMENT' | 'DEADLINE' | 'OUTCOME' | 'ANNOUNCEMENT';
+export type NotificationCategory =
+  | 'ASSIGNMENT'
+  | 'DEADLINE'
+  | 'OUTCOME'
+  | 'ANNOUNCEMENT'
+  | 'FUNDING_MATCH';
 
 export interface CreateNotificationsInput {
   tenantId: string;

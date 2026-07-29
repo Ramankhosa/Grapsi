@@ -17,13 +17,18 @@ function normalizePositiveWordBudget(value: unknown): number | undefined {
 }
 
 export function getLengthControlPercent(): number {
-  const raw = process.env.Length_Control ?? process.env.LENGTH_CONTROL ?? String(DEFAULT_LENGTH_CONTROL_PERCENT);
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_LENGTH_CONTROL_PERCENT;
+  // Both spellings are accepted. A present-but-malformed value must not mask a
+  // valid one further down the list, so each candidate is validated in turn
+  // rather than taking the first that is merely defined.
+  // (On Windows process.env is case-insensitive, so these can be one variable.)
+  for (const raw of [process.env.Length_Control, process.env.LENGTH_CONTROL]) {
+    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) continue;
+    return Math.max(1, Math.min(100, Math.floor(parsed)));
   }
 
-  return Math.max(1, Math.min(100, Math.floor(parsed)));
+  return DEFAULT_LENGTH_CONTROL_PERCENT;
 }
 
 export function shouldApplyLengthControl(sectionKey: string): boolean {

@@ -24,8 +24,10 @@ afterEach(() => {
 
 describe('paper-length-control', () => {
   it('scales non-abstract and non-conclusion section budgets using Length_Control', () => {
-    process.env.Length_Control = '70';
+    // Clear first, then set: on Windows process.env is case-insensitive, so
+    // deleting LENGTH_CONTROL after setting Length_Control removes both.
     delete process.env.LENGTH_CONTROL;
+    process.env.Length_Control = '70';
 
     expect(getLengthControlPercent()).toBe(70);
     expect(applyLengthControlToWordBudget('introduction', 1000)).toBe(700);

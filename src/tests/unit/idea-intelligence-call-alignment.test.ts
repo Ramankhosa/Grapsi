@@ -46,6 +46,13 @@ describe('calculateCallAlignments', () => {
     expect(alignment.unassessedFacets).toHaveLength(2)
   })
 
+  // A review with no call chosen produces no callItems, so this empty result is
+  // what makes the Call fit section disappear instead of grading the idea
+  // against a call the user never picked.
+  it('produces nothing when no call was compared', () => {
+    expect(calculateCallAlignments([])).toEqual([])
+  })
+
   it('keeps one entry per call and preserves ids', () => {
     const alignments = calculateCallAlignments([
       callItem({ fundingCallId: 'call-1', role: 'anchored' }),

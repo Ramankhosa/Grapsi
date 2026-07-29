@@ -25,6 +25,21 @@ function buildSuccessResponse(text: string) {
   );
 }
 
+function buildServerErrorResponse() {
+  return new Response(
+    JSON.stringify({
+      error: {
+        message: 'Service temporarily unavailable',
+      },
+    }),
+    {
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: { 'Content-Type': 'application/json' },
+    }
+  );
+}
+
 function buildRateLimitResponse() {
   return new Response(
     JSON.stringify({
@@ -83,7 +98,10 @@ afterEach(() => {
 });
 
 describe('generateFromGemini', () => {
-  it('retries a rate-limited primary model before succeeding', async () => {
+  // A 429 means the API key's quota is exhausted, so retrying or switching model
+  // just spends more of the same quota. The service deliberately fails fast and
+  // starts a global cooldown instead (GEMINI_RATE_LIMIT_COOLDOWN_MS).
+  it('fails fast on a rate-limited model instead of retrying it', async () => {
     const { generateFromGemini, calls } = await loadGeminiService(async ({ model, attempt }) => {
       if (model === 'gemini-2.0-flash' && attempt === 1) {
         return buildRateLimitResponse();
@@ -92,17 +110,34 @@ describe('generateFromGemini', () => {
       return buildSuccessResponse(`ok:${model}:${attempt}`);
     });
 
-    await expect(generateFromGemini('test prompt', 'gemini-2.0-flash')).resolves.toBe('ok:gemini-2.0-flash:2');
-    expect(calls.map((call) => `${call.model}:${call.attempt}`)).toEqual([
-      'gemini-2.0-flash:1',
-      'gemini-2.0-flash:2',
-    ]);
+    await expect(generateFromGemini('test prompt', 'gemini-2.0-flash')).rejects.toMatchObject({
+      name: 'GeminiRateLimitError',
+      code: 'GEMINI_RATE_LIMITED',
+    });
+    expect(calls.map((call) => `${call.model}:${call.attempt}`)).toEqual(['gemini-2.0-flash:1']);
   });
 
-  it('falls back to the secondary model after exhausting primary retries', async () => {
+  it('does not try the fallback model when the primary is rate limited', async () => {
     const { generateFromGemini, calls } = await loadGeminiService(async ({ model }) => {
       if (model === 'gemini-2.5-pro') {
         return buildRateLimitResponse();
+      }
+
+      return buildSuccessResponse('fallback-ok');
+    });
+
+    await expect(generateFromGemini('test prompt', 'gemini-2.5-pro')).rejects.toMatchObject({
+      name: 'GeminiRateLimitError',
+    });
+    expect(calls.map((call) => `${call.model}:${call.attempt}`)).toEqual(['gemini-2.5-pro:1']);
+  });
+
+  // Transient server errors are a different case: they are retried up to
+  // GEMINI_RETRY_MAX_ATTEMPTS and then handed to the fallback model.
+  it('retries a transient server error and then falls back to the secondary model', async () => {
+    const { generateFromGemini, calls } = await loadGeminiService(async ({ model }) => {
+      if (model === 'gemini-2.5-pro') {
+        return buildServerErrorResponse();
       }
 
       return buildSuccessResponse('fallback-ok');

@@ -26,7 +26,7 @@ import { resolveMutableGrantPrepStatus } from '@/lib/grantPrep/status'
 import type { GrantPrepEngagementMode, GrantPrepIdeationDecision } from '@/lib/grantPrep/types'
 import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
 import { loadAnchoredFundingCall } from '@/lib/ideaIntelligence/service'
-import type { IdeaCallGap, IdeaReviewerPersona } from '@/lib/ideaIntelligence/service'
+import type { IdeaCallGap, IdeaReviewerPersona, WhitespaceDirection } from '@/lib/ideaIntelligence/service'
 
 type HandoffActor = {
   id: string
@@ -52,19 +52,26 @@ function buildGrantProjectName(call: { scheme_title?: string | null; title?: str
 }
 
 function buildValidationBriefing(ideaText: string, report: Record<string, any>) {
-  const differentiators = toStringList(report?.differentiators).slice(0, 5)
+  // The whitespace directions are what the researcher actually chose to pursue,
+  // so they replace the old "differentiators" list as the carried-over positioning.
+  const directions: WhitespaceDirection[] = Array.isArray(report?.whitespaceDirections) ? report.whitespaceDirections : []
+  const differentiators = directions.length
+    ? directions.map((direction) => `${direction.title}: ${direction.stillMissing}`.slice(0, 300))
+    : toStringList(report?.differentiators).slice(0, 5)
   const risks = toStringList(report?.risks).slice(0, 5)
   const gaps: IdeaCallGap[] = Array.isArray(report?.callGaps) ? report.callGaps : []
   const reviewerPanel: IdeaReviewerPersona[] = Array.isArray(report?.reviewerPanel) ? report.reviewerPanel : []
   const callFit = Array.isArray(report?.callFit) ? report.callFit : []
   const targetFit = callFit.find((item: any) => item?.fundingCallId === report?.targetFundingCallId) || callFit[0] || null
+  const headline = report?.headline || report?.executiveVerdict
 
   const conversation: Array<{ role: string; content: string }> = [
     { role: 'user', content: `My validated research idea: ${ideaText.slice(0, 1000)}` },
   ]
   const findingsLines = [
-    report?.executiveVerdict ? `Validation verdict: ${String(report.executiveVerdict).slice(0, 500)}` : null,
-    differentiators.length ? `Evidence-backed differentiators: ${differentiators.join(' | ')}` : null,
+    headline ? `Landscape read: ${String(headline).slice(0, 500)}` : null,
+    report?.alreadyDoneSummary ? `Already funded in this space: ${String(report.alreadyDoneSummary).slice(0, 500)}` : null,
+    differentiators.length ? `Open directions this idea is positioned against: ${differentiators.join(' | ')}` : null,
     targetFit?.fitSummary ? `Call fit: ${String(targetFit.fitSummary).slice(0, 500)}` : null,
     risks.length ? `Known risks: ${risks.join(' | ')}` : null,
   ].filter(Boolean)
@@ -91,8 +98,8 @@ function buildValidationBriefing(ideaText: string, report: Record<string, any>) 
     .slice(0, 6)
   const welcomeMessage = [
     'Your validated idea has been carried over from Idea Intelligence and locked in as the finalized idea for this proposal.',
-    report?.executiveVerdict ? `\n**Validation verdict:** ${String(report.executiveVerdict).slice(0, 600)}` : null,
-    differentiators.length ? `\n**Differentiators to build on:**\n${differentiators.map((item) => `- ${item}`).join('\n')}` : null,
+    headline ? `\n**Landscape read:** ${String(headline).slice(0, 600)}` : null,
+    differentiators.length ? `\n**Open directions to build on:**\n${differentiators.map((item) => `- ${item}`).join('\n')}` : null,
     gapBullets.length ? `\n**Gaps the validation flagged (we will work through these in the relevant stages):**\n${gapBullets.join('\n')}` : null,
     objectionBullets.length ? `\n**Reviewer objections to pre-empt:**\n${objectionBullets.join('\n')}` : null,
     '\nLet\'s continue from here - the stages ahead will turn this into a submission-ready blueprint.',

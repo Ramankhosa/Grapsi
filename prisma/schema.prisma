@@ -683,6 +683,7 @@ model User {
   facultyImportJobs       FacultyImportJob[]
   notifications           Notification[]     @relation("NotificationRecipient")
   sentNotifications       Notification[]     @relation("NotificationSender")
+  fundingCallAlerts       FundingCallAlert[]
 
   @@map("users")
 }
@@ -1115,6 +1116,7 @@ model FundingCall {
   grantBlueprints             GrantBlueprint[]
   research_area_taxonomies    FundingCallResearchAreaTaxonomy[]
   assignments                 CallAssignment[]
+  alerts                      FundingCallAlert[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -2849,6 +2851,41 @@ model Notification {
   @@index([tenant_id, created_at], map: "idx_notifications_tenant_created")
   @@index([assignment_id], map: "idx_notifications_assignment")
   @@map("notifications")
+}
+
+// One row per (funding call, user) that the alert dispatcher matched via
+// embedding similarity against the researcher's profile / saved research
+// areas / publications. The unique key is what makes dispatch idempotent:
+// publish hooks and the healing sweep can both run without double-alerting.
+model FundingCallAlert {
+  id              String  @id @default(cuid())
+  funding_call_id String
+  user_id         String
+  tenant_id       String?
+
+  // Match snapshot (provenance for "why did I get this?").
+  match_score     Float?
+  match_tier      String?
+  score_basis     String?
+  matched_sources String[] @default([])
+  match_reason    String?
+
+  // Delivery outcomes. email_status "queued" means the user prefers a
+  // daily/weekly digest; the digest job flips it to "sent".
+  in_app_status String    @default("skipped") // created | skipped | failed
+  email_status  String    @default("skipped") // sent | queued | skipped | failed
+  email_error   String?
+  emailed_at    DateTime?
+
+  created_at DateTime @default(now())
+
+  funding_call FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  user         User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([funding_call_id, user_id], map: "funding_call_alerts_call_user_key")
+  @@index([user_id, created_at], map: "idx_funding_call_alerts_user_created")
+  @@index([email_status, created_at], map: "idx_funding_call_alerts_email_status")
+  @@map("funding_call_alerts")
 }
 
 // Audit record for each faculty CSV/Excel upload.
