@@ -43,6 +43,8 @@ describe('bulk CSV zip ingestion', () => {
     const job = result.jobs[0]
     expect(job.autoCreateDraft).toBe(true)
     expect(job.extractAll).toBe(true)
+    // Publishing stays opt-in: without the flag the queue only creates drafts.
+    expect(job.autoPublish).toBe(false)
     expect(job.operatorNotes).toBe('June batch')
     expect(job.sources).toHaveLength(1)
     expect(job.sources[0].inputType).toBe('json')
@@ -50,6 +52,18 @@ describe('bulk CSV zip ingestion', () => {
     const intake = JSON.parse(job.sources[0].sourceJsonText || '{}')
     expect(intake.call.fields.agency_name).toBe('NIH')
     expect(intake.document_urls).toContain('https://agency.example.org/call.pdf')
+  })
+
+  it('marks every job for auto-publish when the bulk upload requests it', () => {
+    const buffer = zipWith({
+      'one.csv': csvFor('NSF', 'AI for Health'),
+      'two.csv': csvFor('NIH', 'Quantum Materials'),
+    })
+
+    const result = extractCsvIntakesFromZip(buffer, { autoPublish: true })
+
+    expect(result.parsedCount).toBe(2)
+    expect(result.jobs.every((job) => job.autoPublish === true)).toBe(true)
   })
 
   it('records a per-file error for an unparseable CSV without dropping the good ones', () => {

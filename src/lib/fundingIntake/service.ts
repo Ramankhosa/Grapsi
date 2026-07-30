@@ -300,7 +300,7 @@ function assertAllowedSourceKey(sourceKey: string) {
   }
 }
 
-function readBatchFlags(value: Prisma.JsonValue | null | undefined): { autoCreateDraft: boolean; extractAll: boolean } {
+function readBatchFlags(value: Prisma.JsonValue | null | undefined): { autoCreateDraft: boolean; extractAll: boolean; autoPublish: boolean } {
   const metadata = readFetchMetadata(value);
   const batch = metadata.batch_intake && typeof metadata.batch_intake === 'object' && !Array.isArray(metadata.batch_intake)
     ? metadata.batch_intake as Record<string, unknown>
@@ -308,6 +308,8 @@ function readBatchFlags(value: Prisma.JsonValue | null | undefined): { autoCreat
   return {
     autoCreateDraft: batch.auto_create_draft !== false,
     extractAll: batch.extract_all !== false,
+    // Publishing is opt-in, unlike draft creation: older batches never carry it.
+    autoPublish: batch.auto_publish === true,
   };
 }
 
@@ -1362,6 +1364,7 @@ class FundingIntakeService {
             batch_id: createdBatch.id,
             auto_create_draft: preparedJob.input.autoCreateDraft !== false,
             extract_all: preparedJob.input.extractAll !== false,
+            auto_publish: preparedJob.input.autoPublish === true,
           },
         };
 
@@ -2628,6 +2631,39 @@ class FundingIntakeService {
     });
   }
 
+  /**
+   * Publish a batch job's freshly created draft when the batch was queued with
+   * auto_publish (bulk bootstrap uploads). Publish failures never fail the
+   * intake job — the call simply stays DRAFT for the manual "Publish Ready"
+   * path, with the outcome recorded on the job's event trail.
+   */
+  private async maybeAutoPublishBatchDraft(jobId: string, fundingCallId: string, operator: IntakeOperator) {
+    try {
+      const publishResult = await fundingCatalogService.publishFundingCall(fundingCallId, operator);
+      if (publishResult.ok) {
+        await recordJobEvent(jobId, 'draft_created', 'auto_publish_completed', {
+          actorUserId: operator.userId,
+          previousStatus: 'draft_created',
+          message: `Funding call ${fundingCallId} published automatically`,
+        });
+      } else {
+        await recordJobEvent(jobId, 'draft_created', 'auto_publish_skipped', {
+          actorUserId: operator.userId,
+          previousStatus: 'draft_created',
+          message: `Draft kept unpublished; missing required fields: ${(publishResult.requiredFieldsRemaining || []).join(', ') || 'unknown'}`,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[Funding Intake] Auto-publish failed for job ${jobId} (call ${fundingCallId}):`, message);
+      await recordJobEvent(jobId, 'draft_created', 'auto_publish_failed', {
+        actorUserId: operator.userId,
+        previousStatus: 'draft_created',
+        message,
+      }).catch(() => undefined);
+    }
+  }
+
   async processJob(jobId: string) {
     const job = await getJobForProcessing(jobId);
     if (!job || job.status === 'canceled' || !allowedTransitionTarget(job.status)) {
@@ -2707,6 +2743,9 @@ class FundingIntakeService {
           message: 'Batch funding intake job completed',
           expectedStatuses: ['queued', 'fetching', 'extracting'],
         });
+        if (batchFlagsForResume.autoPublish) {
+          await this.maybeAutoPublishBatchDraft(jobId, job.linked_funding_call_id, operator);
+        }
         await this.maybeUpdateBatchStatus(job.batch_id);
         return;
       }
@@ -2812,6 +2851,9 @@ class FundingIntakeService {
             message: 'Batch funding intake job completed',
             expectedStatuses: ['queued', 'fetching', 'extracting'],
           });
+          if (batchFlags.autoPublish) {
+            await this.maybeAutoPublishBatchDraft(jobId, fundingCall.id, operator);
+          }
           await this.maybeUpdateBatchStatus(latestJob.batch_id);
           return;
         }

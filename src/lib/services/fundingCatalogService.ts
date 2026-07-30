@@ -1,3 +1,6 @@
+import { promises as fs } from 'fs';
+import path from 'path';
+
 import type { FundingCall as PrismaFundingCall, FundingCallStatus, Prisma } from '@prisma/client';
 import { Prisma as PrismaNamespace } from '@prisma/client';
 import prisma from '../prisma';
@@ -45,6 +48,59 @@ export interface FundingEmbeddingBackfillResult {
   succeeded: number;
   failed: number;
   errors: Array<{ id: string; error: string }>;
+}
+
+export interface CatalogWipeImpact {
+  totalCalls: number;
+  publishedCalls: number;
+  draftCalls: number;
+  archivedCalls: number;
+  otherCalls: number;
+  grantSessions: number;
+  grantPrepSessionsDetached: number;
+  intakeJobs: number;
+  intakeBatches: number;
+  callDocuments: number;
+}
+
+export interface CatalogWipeResult {
+  deletedCalls: number;
+  deletedGrantSessions: number;
+  detachedGrantPrepSessions: number;
+  deletedIntakeJobs: number;
+  deletedIntakeBatches: number;
+  removedFiles: number;
+  wipedBy: string;
+  wipedAt: string;
+}
+
+// Uploads that belong exclusively to funding calls / intake jobs. Files outside
+// these roots are never touched by the wipe.
+function managedFundingUploadRoots(): string[] {
+  const documentsRoot = process.env.FUNDING_DOCUMENTS_UPLOAD_PATH
+    ? path.resolve(process.env.FUNDING_DOCUMENTS_UPLOAD_PATH)
+    : path.join(process.cwd(), 'public', 'uploads', 'funding-documents');
+  return [
+    path.resolve(path.join(process.cwd(), 'public', 'uploads', 'funding-intake')),
+    path.resolve(path.join(process.cwd(), 'public', 'uploads', 'funding-templates')),
+    path.resolve(documentsRoot),
+  ];
+}
+
+async function deleteManagedFundingUpload(storagePathValue: string, allowedRoots: string[]): Promise<boolean> {
+  const resolved = path.resolve(
+    path.isAbsolute(storagePathValue) ? storagePathValue : path.join(process.cwd(), storagePathValue)
+  );
+  if (!allowedRoots.some((root) => resolved.startsWith(root + path.sep) || resolved === root)) {
+    return false;
+  }
+  try {
+    await fs.unlink(resolved);
+    return true;
+  } catch {
+    // Best-effort cleanup only; the DB rows are already gone.
+    return false;
+  }
 }
 
 const embeddingService = new EmbeddingService();
@@ -925,6 +981,122 @@ export class FundingCatalogService {
   // continue to work and simply archive nothing.
   async archiveExpiredPublishedCalls(): Promise<number> {
     return 0;
+  }
+
+  /**
+   * What a full catalog wipe would remove, so the confirmation UI can show real
+   * numbers before the operator types the arming phrase.
+   */
+  async getCatalogWipeImpact(): Promise<CatalogWipeImpact> {
+    const [totalCalls, publishedCalls, draftCalls, archivedCalls, grantSessions, grantPrepSessionsDetached, intakeJobs, intakeBatches, callDocuments] =
+      await Promise.all([
+        prisma.fundingCall.count(),
+        prisma.fundingCall.count({ where: { catalog_status: 'PUBLISHED' } }),
+        prisma.fundingCall.count({ where: { catalog_status: 'DRAFT' } }),
+        prisma.fundingCall.count({ where: { catalog_status: 'ARCHIVED' } }),
+        prisma.grantSession.count(),
+        prisma.grantPrepSession.count({ where: { funding_call_id: { not: null } } }),
+        prisma.fundingIntakeJob.count(),
+        prisma.fundingIntakeBatch.count(),
+        prisma.fundingCallDocument.count(),
+      ]);
+
+    return {
+      totalCalls,
+      publishedCalls,
+      draftCalls,
+      archivedCalls,
+      otherCalls: Math.max(0, totalCalls - publishedCalls - draftCalls - archivedCalls),
+      grantSessions,
+      grantPrepSessionsDetached,
+      intakeJobs,
+      intakeBatches,
+      callDocuments,
+    };
+  }
+
+  /**
+   * Deletes EVERY funding call regardless of status, plus the whole intake
+   * history (jobs, batches, extractions, duplicates, events). DB cascades take
+   * documents, chunks, templates, guidelines, alerts, assignments, taxonomy
+   * links, and any grant sessions built on the deleted calls. Grant prep
+   * sessions survive with their call link set to null. Callers must validate
+   * the typed confirmation phrase BEFORE invoking this.
+   */
+  async deleteAllFundingCalls(operator: IntakeOperator): Promise<CatalogWipeResult> {
+    // Collect storage paths before the rows disappear; unlinking happens after
+    // the transaction so a failed wipe never half-deletes files.
+    const [jobFiles, jobSourceFiles, templateAssetFiles, documentFiles] = await Promise.all([
+      prisma.fundingIntakeJob.findMany({
+        where: { source_file_path: { not: null } },
+        select: { source_file_path: true },
+      }),
+      prisma.fundingIntakeJobSource.findMany({
+        where: { source_file_path: { not: null } },
+        select: { source_file_path: true },
+      }),
+      prisma.fundingCallTemplateAsset.findMany({
+        where: { storage_path: { not: null } },
+        select: { storage_path: true },
+      }),
+      prisma.fundingCallDocument.findMany({ select: { storage_path: true } }),
+    ]);
+
+    const filePaths = new Set<string>();
+    for (const row of jobFiles) if (row.source_file_path) filePaths.add(row.source_file_path);
+    for (const row of jobSourceFiles) if (row.source_file_path) filePaths.add(row.source_file_path);
+    for (const row of templateAssetFiles) if (row.storage_path) filePaths.add(row.storage_path);
+    for (const row of documentFiles) if (row.storage_path) filePaths.add(row.storage_path);
+
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const detachedGrantPrepSessions = await tx.grantPrepSession.count({
+          where: { funding_call_id: { not: null } },
+        });
+        const deletedGrantSessions = await tx.grantSession.count();
+
+        // Intake side tables have no FK onto the job rows, so they are cleared
+        // explicitly before the jobs themselves.
+        await tx.fundingIntakeDuplicate.deleteMany({});
+        await tx.fundingIntakeExtraction.deleteMany({});
+        await tx.fundingIntakeJobEvent.deleteMany({});
+        const deletedJobs = await tx.fundingIntakeJob.deleteMany({});
+        const deletedBatches = await tx.fundingIntakeBatch.deleteMany({});
+
+        const deletedCalls = await tx.fundingCall.deleteMany({});
+
+        return {
+          deletedCalls: deletedCalls.count,
+          deletedGrantSessions,
+          detachedGrantPrepSessions,
+          deletedIntakeJobs: deletedJobs.count,
+          deletedIntakeBatches: deletedBatches.count,
+        };
+      },
+      // Cascades sweep document chunks with vector embeddings; the default 5s
+      // interactive-transaction timeout is not enough for a full catalog.
+      { timeout: 120_000, maxWait: 15_000 }
+    );
+
+    const allowedRoots = managedFundingUploadRoots();
+    let removedFiles = 0;
+    for (const filePath of filePaths) {
+      if (await deleteManagedFundingUpload(filePath, allowedRoots)) {
+        removedFiles += 1;
+      }
+    }
+
+    console.warn(
+      `[FUNDING-CATALOG] Full catalog wipe by ${operator.email}: ${result.deletedCalls} calls, ` +
+        `${result.deletedGrantSessions} grant sessions, ${result.deletedIntakeJobs} intake jobs, ${removedFiles} files`
+    );
+
+    return {
+      ...result,
+      removedFiles,
+      wipedBy: operator.email,
+      wipedAt: new Date().toISOString(),
+    };
   }
 }
 

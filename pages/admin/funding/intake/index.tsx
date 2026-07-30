@@ -7,6 +7,10 @@ import toast from 'react-hot-toast';
 import Header from '@/components/Header';
 import { FUNDING_JSON_UPLOAD_CHATGPT_PROMPT } from '@/lib/fundingIntake/jsonPrompt';
 import { FUNDING_CSV_UPLOAD_CHATGPT_PROMPT, buildFundingCsvTemplate } from '@/lib/fundingIntake/csvPrompt';
+import {
+  DELETE_ALL_CALLS_CONFIRMATION_PHRASE as DELETE_ALL_CALLS_PHRASE,
+  isDeleteAllCallsConfirmation,
+} from '@/lib/funding/catalogWipeConfirmation';
 
 type JobSummary = {
   id: string;
@@ -62,6 +66,19 @@ type BatchJobForm = {
 };
 
 const SOURCE_KEYS: Array<BatchSourceForm['sourceKey']> = ['source_1', 'source_2', 'source_3'];
+
+type WipeImpact = {
+  totalCalls: number;
+  publishedCalls: number;
+  draftCalls: number;
+  archivedCalls: number;
+  otherCalls: number;
+  grantSessions: number;
+  grantPrepSessionsDetached: number;
+  intakeJobs: number;
+  intakeBatches: number;
+  callDocuments: number;
+};
 
 function createBatchSource(index = 0): BatchSourceForm {
   return {
@@ -144,9 +161,11 @@ export default function FundingIntakeAdminPage() {
     totalCsvFiles: number;
     queued: number;
     failed: number;
+    autoPublish?: boolean;
     batches: Array<{ id: string; label: string; totalJobs: number }>;
     results: Array<{ name: string; ok: boolean; error?: string; agencyName?: string | null; schemeTitle?: string | null }>;
   } | null>(null);
+  const [autoPublishZip, setAutoPublishZip] = useState(true);
   const [showJsonPrompt, setShowJsonPrompt] = useState(false);
   const [showCsvPrompt, setShowCsvPrompt] = useState(false);
   const [operatorNotes, setOperatorNotes] = useState('');
@@ -160,6 +179,10 @@ export default function FundingIntakeAdminPage() {
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [actioningJobId, setActioningJobId] = useState<string | null>(null);
   const [publishingBatchId, setPublishingBatchId] = useState<string | null>(null);
+  const [wipeImpact, setWipeImpact] = useState<WipeImpact | null>(null);
+  const [loadingWipeImpact, setLoadingWipeImpact] = useState(false);
+  const [wipePhrase, setWipePhrase] = useState('');
+  const [wiping, setWiping] = useState(false);
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
@@ -197,6 +220,12 @@ export default function FundingIntakeAdminPage() {
       void loadBatches();
     }
   }, [user, canReadFundingIntake]);
+
+  useEffect(() => {
+    if (user && canPublishFunding) {
+      void loadWipeImpact();
+    }
+  }, [user, canPublishFunding]);
 
   useEffect(() => {
     if (!activeJobs.length && !activeBatches.length) {
@@ -250,6 +279,61 @@ export default function FundingIntakeAdminPage() {
       if (showSpinner) {
         setLoadingBatches(false);
       }
+    }
+  }
+
+  async function loadWipeImpact(showSpinner = true) {
+    if (showSpinner) {
+      setLoadingWipeImpact(true);
+    }
+
+    try {
+      const response = await fetch('/api/admin/funding/calls/delete-all');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(readApiErrorMessage(data, 'Failed to load catalog counts'));
+      }
+      setWipeImpact(data.impact || null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to load catalog counts');
+    } finally {
+      if (showSpinner) {
+        setLoadingWipeImpact(false);
+      }
+    }
+  }
+
+  const wipeArmed = isDeleteAllCallsConfirmation(wipePhrase);
+
+  async function handleDeleteAllCalls() {
+    if (!canPublishFunding) {
+      toast.error('Funding publishing access required.');
+      return;
+    }
+    if (!wipeArmed || wiping) {
+      return;
+    }
+
+    try {
+      setWiping(true);
+      const response = await fetch('/api/admin/funding/calls/delete-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: wipePhrase }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(readApiErrorMessage(data, 'Failed to delete funding calls'));
+      }
+
+      const grantNote = data.deletedGrantSessions ? `, ${data.deletedGrantSessions} grant session${data.deletedGrantSessions === 1 ? '' : 's'}` : '';
+      toast.success(`Deleted ${data.deletedCalls} call${data.deletedCalls === 1 ? '' : 's'}${grantNote} and cleared the intake history.`);
+      setWipePhrase('');
+      await Promise.all([loadJobs(false), loadBatches(false), loadWipeImpact(false)]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete funding calls');
+    } finally {
+      setWiping(false);
     }
   }
 
@@ -430,6 +514,7 @@ export default function FundingIntakeAdminPage() {
       const formData = new FormData();
       formData.append('file', sourceZip);
       formData.append('operatorNotes', operatorNotes);
+      formData.append('autoPublish', String(canPublishFunding && autoPublishZip));
       const response = await fetch('/api/admin/funding/intake/bulk-csv', {
         method: 'POST',
         body: formData,
@@ -450,7 +535,9 @@ export default function FundingIntakeAdminPage() {
       }
 
       setBulkResult(data);
-      toast.success(`Queued ${data.queued} call${data.queued === 1 ? '' : 's'} from ${data.totalCsvFiles} CSV file${data.totalCsvFiles === 1 ? '' : 's'}`);
+      toast.success(
+        `Queued ${data.queued} call${data.queued === 1 ? '' : 's'} from ${data.totalCsvFiles} CSV file${data.totalCsvFiles === 1 ? '' : 's'}${data.autoPublish ? ' — each call publishes automatically once its draft is ready' : ''}`
+      );
       setSourceZip(null);
       setOperatorNotes('');
       await Promise.all([loadJobs(false), loadBatches(false)]);
@@ -901,11 +988,32 @@ export default function FundingIntakeAdminPage() {
                     </p>
                   </label>
 
+                  <label className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={canPublishFunding && autoPublishZip}
+                      onChange={(event) => setAutoPublishZip(event.target.checked)}
+                      disabled={!canWriteFundingIntake || !canPublishFunding}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className="text-sm">
+                      <span className="font-medium text-emerald-900">Publish each call automatically</span>
+                      <span className="mt-1 block text-xs leading-5 text-emerald-800">
+                        Every imported call goes live as soon as its draft is complete — no separate &quot;Publish Ready&quot; step.
+                        Drafts still missing required fields stay unpublished for manual review.
+                        {!canPublishFunding && ' Funding publishing access is required for this option.'}
+                      </span>
+                    </span>
+                  </label>
+
                   {bulkResult && (
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                       <div className="flex flex-wrap gap-4 text-sm">
                         <span className="font-medium text-slate-900">{bulkResult.totalCsvFiles} CSV file{bulkResult.totalCsvFiles === 1 ? '' : 's'} found</span>
                         <span className="text-emerald-700">{bulkResult.queued} queued</span>
+                        {bulkResult.autoPublish && (
+                          <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">auto-publish on</span>
+                        )}
                         {bulkResult.failed > 0 && <span className="text-rose-700">{bulkResult.failed} failed</span>}
                         {bulkResult.batches.length > 0 && (
                           <span className="text-slate-600">{bulkResult.batches.length} batch{bulkResult.batches.length === 1 ? '' : 'es'} created</span>
@@ -1369,6 +1477,91 @@ export default function FundingIntakeAdminPage() {
             )}
           </div>
         </section>
+
+        {canPublishFunding && (
+          <section id="danger-zone" className="mt-8 scroll-mt-8 rounded-2xl border-2 border-rose-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-sm font-medium uppercase tracking-[0.18em] text-rose-700">Danger zone</p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">Delete every funding call</h2>
+                <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                  Permanently removes <strong>all</strong> funding calls — published, draft, and archived — together with
+                  their documents, templates, guidelines, and alerts, deletes any grant sessions built on those calls,
+                  and clears the entire intake history (jobs and batches). Use this to reset the catalog before a fresh
+                  bulk load. This cannot be undone.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => loadWipeImpact()}
+                disabled={loadingWipeImpact}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loadingWipeImpact ? 'Loading...' : 'Refresh Counts'}
+              </button>
+            </div>
+
+            {wipeImpact && (
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl bg-rose-50 p-4">
+                  <div className="text-xs uppercase tracking-[0.18em] text-rose-700">Funding calls</div>
+                  <div className="mt-1 text-2xl font-semibold text-rose-900">{wipeImpact.totalCalls}</div>
+                  <div className="mt-1 text-xs text-rose-800">
+                    {wipeImpact.publishedCalls} published · {wipeImpact.draftCalls} draft · {wipeImpact.archivedCalls} archived
+                    {wipeImpact.otherCalls > 0 ? ` · ${wipeImpact.otherCalls} other` : ''}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-rose-50 p-4">
+                  <div className="text-xs uppercase tracking-[0.18em] text-rose-700">Grant sessions deleted</div>
+                  <div className="mt-1 text-2xl font-semibold text-rose-900">{wipeImpact.grantSessions}</div>
+                  <div className="mt-1 text-xs text-rose-800">{wipeImpact.grantPrepSessionsDetached} prep sessions lose their call link</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Intake history cleared</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{wipeImpact.intakeJobs}</div>
+                  <div className="mt-1 text-xs text-slate-600">jobs · {wipeImpact.intakeBatches} batches</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Call documents</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{wipeImpact.callDocuments}</div>
+                  <div className="mt-1 text-xs text-slate-600">stored files removed with their calls</div>
+                </div>
+              </div>
+            )}
+
+            {wipeImpact && wipeImpact.grantSessions > 0 && (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                {wipeImpact.grantSessions} grant workspace{wipeImpact.grantSessions === 1 ? ' is' : 's are'} built on these
+                calls and will be deleted with them, including their drafts and blueprints.
+              </div>
+            )}
+
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <label className="flex-1">
+                <span className="mb-2 block text-sm font-medium text-slate-700">
+                  Type <span className="rounded bg-rose-50 px-1.5 py-0.5 font-mono text-rose-800">{DELETE_ALL_CALLS_PHRASE}</span> to enable deletion
+                </span>
+                <input
+                  value={wipePhrase}
+                  onChange={(event) => setWipePhrase(event.target.value)}
+                  disabled={wiping}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-full rounded-xl border border-rose-200 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-rose-500 focus:ring-2 focus:ring-rose-100"
+                  placeholder={DELETE_ALL_CALLS_PHRASE}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={handleDeleteAllCalls}
+                disabled={!wipeArmed || wiping}
+                className="inline-flex items-center self-start rounded-xl bg-rose-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:self-end"
+              >
+                {wiping ? 'Deleting All Calls...' : 'Delete All Calls'}
+              </button>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

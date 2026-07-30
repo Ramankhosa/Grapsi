@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+import { actorHasPlatformPermission } from '@/lib/funding/access'
 import { extractCsvIntakesFromZip } from '@/lib/fundingIntake/bulkCsvIngestion'
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
@@ -53,12 +54,20 @@ export async function POST(request: NextRequest) {
 
     const operatorNotes = String(formData.get('operatorNotes') || '').trim() || undefined
     const label = String(formData.get('label') || '').trim() || file.name || 'Bulk CSV import'
+    const autoPublish = String(formData.get('autoPublish') || '').trim().toLowerCase() === 'true'
+
+    if (autoPublish && !actorHasPlatformPermission(auth.actor, 'funding.publisher.write')) {
+      return NextResponse.json(
+        { message: 'Funding publishing access is required to auto-publish imported calls.' },
+        { status: 403 }
+      )
+    }
 
     const buffer = Buffer.from(await file.arrayBuffer())
 
     let extraction
     try {
-      extraction = extractCsvIntakesFromZip(buffer, { operatorNotes })
+      extraction = extractCsvIntakesFromZip(buffer, { operatorNotes, autoPublish })
     } catch (error) {
       return NextResponse.json(
         { message: error instanceof Error ? error.message : 'Could not read the archive' },
@@ -99,6 +108,7 @@ export async function POST(request: NextRequest) {
         totalCsvFiles: extraction.totalCsvFiles,
         queued: extraction.parsedCount,
         failed: extraction.failedCount,
+        autoPublish,
         batches,
         results: extraction.results,
       },

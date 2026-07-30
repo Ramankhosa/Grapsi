@@ -47,7 +47,7 @@ function isCallCsvEntry(entryName: string): boolean {
  */
 export function extractCsvIntakesFromZip(
   buffer: Buffer,
-  options?: { operatorNotes?: string }
+  options?: { operatorNotes?: string; autoPublish?: boolean }
 ): BulkCsvExtractionResult {
   let zip: AdmZip;
   try {
@@ -87,6 +87,7 @@ export function extractCsvIntakesFromZip(
         templateSourceKey: 'source_1',
         autoCreateDraft: true,
         extractAll: true,
+        autoPublish: options?.autoPublish === true,
         sources: [
           {
             sourceKey: 'source_1',
