@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import EnhancedRichTextEditor from './EnhancedRichTextEditor';
 
 interface BudgetJustificationEditorProps {
@@ -9,68 +9,27 @@ interface BudgetJustificationEditorProps {
   readOnly?: boolean;
 }
 
+/**
+ * The budget editor is the section editor with more room.
+ *
+ * It used to carry a "Use plain text" toggle, which existed because the old
+ * TinyMCE build could fail to load from its CDN — and switching to it turned a
+ * pasted budget table into unusable run-together text. The editor is local now
+ * and handles tables properly, so the escape hatch is gone.
+ */
 const BudgetJustificationEditor: React.FC<BudgetJustificationEditorProps> = ({
   value,
   onChange,
-  placeholder = 'Enter your budget justification details here...',
-  readOnly = false
-}) => {
-  const [editorContent, setEditorContent] = useState(value || '');
-
-  // This is crucial to update when value changes from props
-  useEffect(() => {
-    if (value !== undefined) {
-      setEditorContent(value);
-    }
-  }, [value]);
-
-  const handleContentChange = (content: string) => {
-    setEditorContent(content);
-    onChange(content);
-  };
-
-  // Additional features and optimizations specific to budget data
-  const [useFallbackMode, setUseFallbackMode] = useState(false);
-  
-  // Option to force plain text mode specifically for budget data
-  const toggleFallbackMode = () => {
-    setUseFallbackMode(!useFallbackMode);
-  };
-
-  return (
-    <div className="budget-justification-editor">
-      <div className="flex justify-end mb-1">
-        <button 
-          onClick={toggleFallbackMode}
-          className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded hover:bg-gray-200"
-          type="button"
-        >
-          {useFallbackMode ? "Use rich editor" : "Use plain text"}
-        </button>
-      </div>
-      
-      {useFallbackMode ? (
-        <div className="border border-gray-300 rounded-md">
-          <textarea 
-            className="w-full h-full min-h-[450px] p-3 resize-y focus:outline-none focus:ring-1 focus:ring-blue-500"
-            value={editorContent}
-            onChange={(e) => handleContentChange(e.target.value)}
-            placeholder=""
-            readOnly={readOnly}
-          />
-        </div>
-      ) : (
-        <EnhancedRichTextEditor
-          value={editorContent}
-          onChange={handleContentChange}
-          placeholder=""
-          readOnly={readOnly}
-          minHeight={450}
-          autoExpand={true}
-        />
-      )}
-    </div>
-  );
-};
+  placeholder = 'Set out each cost, what it buys, and why the project needs it.',
+  readOnly = false,
+}) => (
+  <EnhancedRichTextEditor
+    value={value}
+    onChange={onChange}
+    placeholder={placeholder}
+    readOnly={readOnly}
+    minHeight={readOnly ? 0 : 420}
+  />
+);
 
 export default BudgetJustificationEditor;

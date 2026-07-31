@@ -630,6 +630,12 @@ export default function GrantSectionDraftingStage({
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({})
   const [expandedReviewKeys, setExpandedReviewKeys] = useState<Record<string, boolean>>({})
+  // Remarks from the standalone grant reviewer, mapped onto grant sections by
+  // ReviewerSectionGrantLink. The endpoint that serves these has existed all
+  // along with nothing calling it, so the author never saw the review that the
+  // reviewer module had already written about their draft.
+  const [reviewerRemarks, setReviewerRemarks] = useState<Record<string, any[]>>({})
+  const [reviewerCallId, setReviewerCallId] = useState<string | null>(null)
   const [evidenceNotes, setEvidenceNotes] = useState<Record<string, string>>({})
   const batchStopRef = useRef(false)
   const [exportingDraft, setExportingDraft] = useState(false)
@@ -1526,13 +1532,46 @@ export default function GrantSectionDraftingStage({
     }
   }, [authToken, grantId, hasLocalGrantSectionChange, persistSection, projectId])
 
+  /** Pull the grant reviewer's remarks for this proposal, grouped by section. */
+  const loadReviewerRemarks = useCallback(async () => {
+    if (!authToken) return
+    try {
+      const response = await fetch(
+        `/api/projects/${projectId}/grants/${grantId}/reviewer/recommendations`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!response.ok) return
+      const payload = await response.json().catch(() => ({}))
+      setReviewerCallId(payload.callId || null)
+      setReviewerRemarks(payload.recommendationsBySection || {})
+    } catch (remarkError) {
+      // Remarks are supplementary — drafting still works without them.
+      console.warn('Could not load reviewer remarks', remarkError)
+    }
+  }, [authToken, grantId, projectId])
+
+  useEffect(() => {
+    void loadReviewerRemarks()
+  }, [loadReviewerRemarks])
+
   /**
-   * One revision pass driven by the reviewer's findings, then a fresh review so
-   * the verdict on screen always matches the content on screen.
+   * One revision pass, then a fresh review so the verdict on screen always
+   * matches the content on screen.
+   *
+   * `options.includeReviewerRemarks` folds in the grant reviewer's findings for
+   * this section as well as the drafting review's own — they are independent
+   * assessments and the rewrite should answer both.
    */
-  const fixSectionWithAiReview = useCallback(async (section: GrantSection) => {
+  const fixSectionWithAiReview = useCallback(async (
+    section: GrantSection,
+    options?: { includeReviewerRemarks?: boolean }
+  ) => {
     const report = section.grantAiReviewReport
-    if (!report) return
+    const remarks = options?.includeReviewerRemarks
+      ? (reviewerRemarks[section.sectionKey] || []).filter((item: any) => item.status !== 'resolved')
+      : []
+
+    if (!report && remarks.length === 0) return
 
     const instructions = buildAiFixInstructions({
       section: {
@@ -1542,20 +1581,58 @@ export default function GrantSectionDraftingStage({
         content: getLocalGrantSectionText(section),
       },
       report,
+      reviewerRecommendations: remarks,
       userNote: reviewNotes[section.sectionKey] || null,
     })
+    if (!instructions) return
 
     try {
       setFixingKey(section.sectionKey)
       const written = await generateNarrativeGrantSection(section, true, instructions)
       if (!written) return
       setReviewNotes((notes) => ({ ...notes, [section.sectionKey]: '' }))
+
+      // Mark the remarks answered so the panel does not keep asking for a fix
+      // that has already been applied. The reviewer still has the final say on
+      // the next run — this only records that the rewrite addressed them.
+      if (remarks.length > 0) {
+        try {
+          await fetch(`/api/projects/${projectId}/grants/${grantId}/reviewer/recommendations`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              updates: remarks.map((item: any) => ({
+                id: item.id,
+                reviewerSectionId: item.reviewerSectionId,
+                status: 'resolved',
+              })),
+            }),
+          })
+          await loadReviewerRemarks()
+        } catch (patchError) {
+          console.warn('Could not record remark status', patchError)
+        }
+      }
+
       const latest = sectionsRef.current.find((entry) => entry.sectionKey === section.sectionKey) || section
       await runSectionAiReview(latest)
     } finally {
       setFixingKey(null)
     }
-  }, [generateNarrativeGrantSection, getLocalGrantSectionText, reviewNotes, runSectionAiReview])
+  }, [
+    authToken,
+    generateNarrativeGrantSection,
+    getLocalGrantSectionText,
+    grantId,
+    loadReviewerRemarks,
+    projectId,
+    reviewNotes,
+    reviewerRemarks,
+    runSectionAiReview,
+  ])
 
   /** Sections the batch runs operate on: AI-draftable narrative sections. */
   const aiDraftableSections = useMemo(
@@ -2072,6 +2149,8 @@ export default function GrantSectionDraftingStage({
             const sectionIsFixing = fixingKey === section.sectionKey
             const sectionReview = section.grantAiReviewReport || null
             const sectionReviewStale = Boolean(sectionReview && section.grantAiReviewStale)
+            const sectionRemarks = (reviewerRemarks[section.sectionKey] || []) as any[]
+            const openRemarks = sectionRemarks.filter((remark) => remark.status !== 'resolved')
             const sectionReviewOpen = expandedReviewKeys[section.sectionKey] === true
             const sectionEvidenceNote = evidenceNotes[section.sectionKey] || null
 
@@ -2201,7 +2280,7 @@ export default function GrantSectionDraftingStage({
                             />
                             <button
                               type="button"
-                              onClick={() => void fixSectionWithAiReview(section)}
+                              onClick={() => void fixSectionWithAiReview(section, { includeReviewerRemarks: true })}
                               disabled={!authToken || !draftingSessionId || sectionActionBusy || reviewingKey !== null}
                               className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-xs font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -2212,6 +2291,97 @@ export default function GrantSectionDraftingStage({
                         ) : null}
                       </div>
                     ) : null}
+                  </div>
+                ) : null}
+
+                {/* What the grant reviewer said about this section. A separate
+                    assessment from the drafting review above: it scores against
+                    the funder's published criteria rather than the section
+                    brief, so it is shown on its own rather than merged. */}
+                {sectionRemarks.length ? (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/60">
+                    <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+                      <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                        Grant reviewer
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-slate-600">
+                        {openRemarks.length
+                          ? `${openRemarks.length} remark${openRemarks.length === 1 ? '' : 's'} to address`
+                          : 'All remarks addressed'}
+                      </span>
+                      {reviewerCallId ? (
+                        <a
+                          href={`/reviewer/${reviewerCallId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs font-medium text-violet-700 hover:underline"
+                        >
+                          Open the review
+                        </a>
+                      ) : null}
+                    </div>
+
+                    <div className="space-y-3 border-t border-amber-200 px-3 py-3">
+                      <ul className="space-y-2">
+                        {sectionRemarks.slice(0, 12).map((remark) => (
+                          <li
+                            key={remark.id}
+                            className={`flex gap-2 text-xs ${remark.status === 'resolved' ? 'opacity-55' : ''}`}
+                          >
+                            <span
+                              className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                remark.priority === 'high'
+                                  ? 'bg-red-500'
+                                  : remark.priority === 'low'
+                                    ? 'bg-slate-400'
+                                    : 'bg-amber-500'
+                              }`}
+                            />
+                            <span className="min-w-0 flex-1 text-slate-700">
+                              <span
+                                className={`font-medium text-slate-900 ${
+                                  remark.status === 'resolved' ? 'line-through' : ''
+                                }`}
+                              >
+                                {remark.issue}
+                              </span>
+                              {remark.recommendation && remark.recommendation !== remark.issue ? (
+                                <span className="block text-slate-600">Fix: {remark.recommendation}</span>
+                              ) : null}
+                              {remark.reviewerSectionTitle ? (
+                                <span className="mt-0.5 block text-[11px] text-slate-500">
+                                  From “{remark.reviewerSectionTitle}”
+                                </span>
+                              ) : null}
+                            </span>
+                            {remark.status === 'resolved' ? (
+                              <span className="shrink-0 text-[11px] font-medium text-emerald-700">Addressed</span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+
+                      {openRemarks.length ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void fixSectionWithAiReview(section, { includeReviewerRemarks: true })}
+                            disabled={!authToken || !draftingSessionId || sectionActionBusy || reviewingKey !== null}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-amber-600 px-3 text-xs font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {sectionIsFixing ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5" />
+                            )}
+                            {sectionIsFixing ? 'Rewriting...' : 'Rewrite from these remarks'}
+                          </button>
+                          <span className="text-[11px] text-slate-500">
+                            Rewrites this section answering the remarks, then re-runs the review.
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
 

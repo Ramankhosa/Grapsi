@@ -1389,3 +1389,179 @@
   .nk-lamp::after { animation: none; opacity: 0.4; }
   .nk-meter-fill { transition: none; }
 }
+
+/* ============================================================================
+   Proposal editor (TipTap / ProseMirror)
+   ----------------------------------------------------------------------------
+   Used by the reviewer's section, budget and revision editors. Scoped under
+   .rte-content so it cannot leak into the patent-drafting editor in
+   src/components/ui/rich-text-editor.tsx, which styles itself with `prose`.
+
+   Tables get real chrome here because grant budgets, workplans and Gantt
+   summaries arrive as tables and have to stay legible while being edited.
+   ========================================================================== */
+
+.rte-content .ProseMirror {
+  padding: 0.875rem 1rem;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #252b34;
+  outline: none;
+}
+
+.rte-content .ProseMirror > * + * {
+  margin-top: 0.7em;
+}
+
+.rte-content .ProseMirror h2 {
+  font-size: 1.2em;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #171b21;
+}
+
+.rte-content .ProseMirror h3 {
+  font-size: 1.08em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #171b21;
+}
+
+.rte-content .ProseMirror h4 {
+  font-size: 1em;
+  font-weight: 600;
+  color: #171b21;
+}
+
+.rte-content .ProseMirror ul,
+.rte-content .ProseMirror ol {
+  padding-left: 1.4rem;
+}
+
+.rte-content .ProseMirror ul { list-style: disc; }
+.rte-content .ProseMirror ol { list-style: decimal; }
+.rte-content .ProseMirror li { margin: 0.2em 0; }
+.rte-content .ProseMirror li > p { margin: 0; }
+
+.rte-content .ProseMirror blockquote {
+  border-left: 3px solid #dfe3e9;
+  padding-left: 0.9rem;
+  color: #4d5764;
+}
+
+.rte-content .ProseMirror a {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.rte-content .ProseMirror code {
+  background: #eceff3;
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+  font-size: 0.9em;
+}
+
+.rte-content .ProseMirror hr {
+  border: none;
+  border-top: 1px solid #dfe3e9;
+  margin: 1.2em 0;
+}
+
+/* Placeholder — only on a genuinely empty document. */
+.rte-content .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: #8b95a3;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+
+/* A wide budget table scrolls inside the editor rather than pushing the page
+   sideways. */
+.rte-content .ProseMirror {
+  overflow-x: auto;
+}
+
+.rte-content .ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 1em 0;
+  overflow: hidden;
+}
+
+.rte-content .ProseMirror td,
+.rte-content .ProseMirror th {
+  border: 1px solid #dfe3e9;
+  padding: 0.45rem 0.6rem;
+  vertical-align: top;
+  box-sizing: border-box;
+  position: relative;
+  min-width: 4rem;
+}
+
+.rte-content .ProseMirror th {
+  background: #f5f7f9;
+  font-weight: 600;
+  text-align: left;
+  color: #171b21;
+}
+
+.rte-content .ProseMirror td > p,
+.rte-content .ProseMirror th > p {
+  margin: 0;
+}
+
+/* The cells in a multi-cell selection. */
+.rte-content .ProseMirror .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(59, 104, 245, 0.12);
+  pointer-events: none;
+}
+
+/* Column resize handle. */
+.rte-content .ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: -2px;
+  width: 4px;
+  background: #1d4ed8;
+  pointer-events: none;
+}
+
+.rte-content .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+.rte-content .tableWrapper {
+  overflow-x: auto;
+}
+
+/* ── Read-only rendering ────────────────────────────────────────────────── */
+/* Same typography, none of the editing affordances. */
+.rte-content.rte-readonly .ProseMirror {
+  padding: 0;
+  min-height: 0 !important;
+  cursor: default;
+}
+
+.rte-content.rte-readonly .ProseMirror table {
+  margin-top: 0.5em;
+}
+
+@media print {
+  .rte-content .ProseMirror {
+    overflow: visible;
+  }
+  .rte-content .ProseMirror table {
+    page-break-inside: auto;
+  }
+  .rte-content .ProseMirror tr {
+    page-break-inside: avoid;
+  }
+}

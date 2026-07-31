@@ -144,18 +144,41 @@ export function buildAiReviewQueue(sections: DraftOneSection[], options?: { incl
  * 5000 chars) from the AI reviewer's findings — the LLM-driven repair loop
  * that replaced the deterministic keyword one.
  */
+export interface ReviewerRemarkForFix {
+  priority?: 'high' | 'medium' | 'low'
+  issue?: string
+  recommendation?: string
+  suggestedRemark?: string
+  reviewerSectionTitle?: string
+}
+
 export function buildAiFixInstructions(input: {
   section: Pick<DraftOneSection, 'label' | 'wordBudget' | 'characterLimit' | 'content'>
-  report: GrantAiReviewReport
+  report?: GrantAiReviewReport | null
+  /**
+   * Remarks from the standalone grant reviewer, mapped onto this grant section
+   * by `ReviewerSectionGrantLink`. They are a second, independent source of
+   * findings — the reviewer scores against the funder's published criteria,
+   * where the drafting review checks the section against its own brief — so
+   * both are passed through when both exist.
+   */
+  reviewerRecommendations?: ReviewerRemarkForFix[] | null
   userNote?: string | null
 }): string {
   const { report, section } = input
-  const bySeverity = (severity: string) => report.findings.filter((finding) => finding.severity === severity)
+  const reviewerRemarks = (input.reviewerRecommendations || []).filter(
+    (remark) => String(remark?.recommendation || remark?.suggestedRemark || remark?.issue || '').trim()
+  )
+
+  if (!report && reviewerRemarks.length === 0) return ''
+
+  const bySeverity = (severity: string) =>
+    (report?.findings || []).filter((finding) => finding.severity === severity)
   const lines: string[] = [
-    'REVISION PASS — the agency\'s AI reviewer assessed the previous draft of this section.',
-    'Rewrite the section resolving EVERY finding below while preserving all accurate facts, valid markdown tables, and any [CITE:key] anchors.',
+    'REVISION PASS — the previous draft of this section was assessed.',
+    'Rewrite the section resolving EVERY point below while preserving all accurate facts, valid markdown tables, and any [CITE:key] anchors.',
   ]
-  if (report.summary) {
+  if (report?.summary) {
     lines.push(`Reviewer summary: ${report.summary}`)
   }
   const addFindings = (title: string, severity: string) => {
@@ -172,6 +195,25 @@ export function buildAiFixInstructions(input: {
   addFindings('CRITICAL FINDINGS (must be fully resolved):', 'critical')
   addFindings('IMPORTANT FINDINGS (resolve unless factually impossible):', 'important')
   addFindings('POLISH (apply where it does not conflict with the above):', 'polish')
+
+  if (reviewerRemarks.length > 0) {
+    const rank = { high: 0, medium: 1, low: 2 }
+    const ordered = [...reviewerRemarks].sort(
+      (a, b) => (rank[a.priority || 'medium'] ?? 1) - (rank[b.priority || 'medium'] ?? 1)
+    )
+    lines.push(
+      'GRANT REVIEWER REMARKS (scored against the funding call\'s own criteria — treat high priority as mandatory):',
+      ...ordered.slice(0, 10).map((remark) => {
+        const priority = (remark.priority || 'medium').toUpperCase()
+        const issue = String(remark.issue || '').trim()
+        const fix = String(remark.recommendation || remark.suggestedRemark || '').trim()
+        const source = remark.reviewerSectionTitle ? ` [from: ${remark.reviewerSectionTitle}]` : ''
+        return issue && fix && issue !== fix
+          ? `- (${priority}) ${issue}${source} → FIX: ${fix}`
+          : `- (${priority}) ${fix || issue}${source}`
+      })
+    )
+  }
 
   const words = countWords(section.content)
   if (section.wordBudget && words > section.wordBudget) {

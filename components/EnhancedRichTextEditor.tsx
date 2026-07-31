@@ -1,6 +1,51 @@
 // @ts-nocheck
-import React, { useState, useEffect, useRef } from 'react';
-import { Editor } from '@tinymce/tinymce-react';
+import React, { useEffect } from 'react';
+import { useEditor, EditorContent } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import { TableKit } from '@tiptap/extension-table';
+import TextAlign from '@tiptap/extension-text-align';
+import Superscript from '@tiptap/extension-superscript';
+import Subscript from '@tiptap/extension-subscript';
+import { Placeholder } from '@tiptap/extensions';
+import {
+  FaBold,
+  FaItalic,
+  FaUnderline,
+  FaListUl,
+  FaListOl,
+  FaTable,
+  FaUndo,
+  FaRedo,
+  FaSuperscript,
+  FaSubscript,
+  FaEraser,
+  FaPlus,
+  FaMinus,
+  FaObjectGroup,
+  FaObjectUngroup,
+  FaTrash,
+  FaHeading,
+} from 'react-icons/fa';
+
+/**
+ * The proposal editor.
+ *
+ * Replaces TinyMCE, which was a cloud-hosted script keyed off
+ * NEXT_PUBLIC_TINYMCE_API_KEY — if the key was missing or the CDN was slow the
+ * editor silently degraded to a plain <textarea>, which is why this file used
+ * to carry a whole "editor failed, switch to plain text" fallback path. Budgets
+ * and workplans pasted as tables came out as unusable text in that mode.
+ *
+ * TipTap (MIT, ProseMirror underneath) is already a dependency of this repo, so
+ * this adds nothing to the bundle manifest and runs entirely locally. Tables
+ * are first-class: real row/column/header/merge editing, column resizing, and
+ * ProseMirror's HTML paste parser keeps table structure when content comes in
+ * from Word or Excel.
+ *
+ * The props contract is unchanged — `value` in and `onChange` out are both HTML
+ * strings — so everything downstream (the DOCX export, proposalSplit, and
+ * ReviewerText's HTML-to-text pass) keeps working.
+ */
 
 interface EnhancedRichTextEditorProps {
   value: string;
@@ -11,191 +56,272 @@ interface EnhancedRichTextEditorProps {
   autoExpand?: boolean;
 }
 
+const Btn = ({ onClick, active, disabled, title, children }) => (
+  <button
+    type="button"
+    onMouseDown={e => e.preventDefault()} // keep the selection while clicking
+    onClick={onClick}
+    disabled={disabled}
+    title={title}
+    aria-label={title}
+    aria-pressed={active ? true : undefined}
+    className={`inline-flex h-7 min-w-[28px] items-center justify-center gap-1 rounded px-1.5 text-[12px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cobalt-600 disabled:cursor-not-allowed disabled:opacity-40 ${
+      active
+        ? 'bg-cobalt-50 text-cobalt-700'
+        : 'text-nickel-600 hover:bg-nickel-100 hover:text-nickel-900'
+    }`}
+  >
+    {children}
+  </button>
+);
+
+const Divider = () => <span className="mx-1 h-4 w-px shrink-0 bg-nickel-200" aria-hidden="true" />;
+
+function Toolbar({ editor }) {
+  if (!editor) return null;
+
+  const inTable = editor.isActive('table');
+
+  return (
+    <div className="border-b border-nickel-200 bg-nickel-25">
+      <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5">
+        <Btn
+          onClick={() => editor.chain().focus().toggleBold().run()}
+          active={editor.isActive('bold')}
+          title="Bold"
+        >
+          <FaBold />
+        </Btn>
+        <Btn
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+          active={editor.isActive('italic')}
+          title="Italic"
+        >
+          <FaItalic />
+        </Btn>
+        <Btn
+          onClick={() => editor.chain().focus().toggleUnderline().run()}
+          active={editor.isActive('underline')}
+          title="Underline"
+        >
+          <FaUnderline />
+        </Btn>
+
+        <Divider />
+
+        <Btn
+          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+          active={editor.isActive('heading', { level: 3 })}
+          title="Sub-heading"
+        >
+          <FaHeading />
+        </Btn>
+        <Btn
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+          active={editor.isActive('bulletList')}
+          title="Bulleted list"
+        >
+          <FaListUl />
+        </Btn>
+        <Btn
+          onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          active={editor.isActive('orderedList')}
+          title="Numbered list"
+        >
+          <FaListOl />
+        </Btn>
+
+        <Divider />
+
+        {/* Units, isotopes and formulae turn up constantly in method sections. */}
+        <Btn
+          onClick={() => editor.chain().focus().toggleSuperscript().run()}
+          active={editor.isActive('superscript')}
+          title="Superscript"
+        >
+          <FaSuperscript />
+        </Btn>
+        <Btn
+          onClick={() => editor.chain().focus().toggleSubscript().run()}
+          active={editor.isActive('subscript')}
+          title="Subscript"
+        >
+          <FaSubscript />
+        </Btn>
+
+        <Divider />
+
+        <Btn
+          onClick={() =>
+            editor
+              .chain()
+              .focus()
+              .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+              .run()
+          }
+          active={inTable}
+          title="Insert a table"
+        >
+          <FaTable />
+          <span className="hidden sm:inline">Table</span>
+        </Btn>
+
+        <Divider />
+
+        <Btn
+          onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}
+          title="Clear formatting"
+        >
+          <FaEraser />
+        </Btn>
+
+        <div className="ml-auto flex items-center gap-0.5">
+          <Btn
+            onClick={() => editor.chain().focus().undo().run()}
+            disabled={!editor.can().undo()}
+            title="Undo"
+          >
+            <FaUndo />
+          </Btn>
+          <Btn
+            onClick={() => editor.chain().focus().redo().run()}
+            disabled={!editor.can().redo()}
+            title="Redo"
+          >
+            <FaRedo />
+          </Btn>
+        </div>
+      </div>
+
+      {/* Table controls appear only with the cursor inside a table. Showing
+          nine permanently-disabled buttons taught users nothing. */}
+      {inTable && (
+        <div className="flex flex-wrap items-center gap-0.5 border-t border-nickel-200 bg-cobalt-50/60 px-2 py-1.5">
+          <span className="nk-eyebrow mr-1.5 text-cobalt-700">Table</span>
+
+          <Btn onClick={() => editor.chain().focus().addColumnAfter().run()} title="Add column">
+            <FaPlus />
+            <span className="hidden sm:inline">Col</span>
+          </Btn>
+          <Btn onClick={() => editor.chain().focus().deleteColumn().run()} title="Delete column">
+            <FaMinus />
+            <span className="hidden sm:inline">Col</span>
+          </Btn>
+
+          <Divider />
+
+          <Btn onClick={() => editor.chain().focus().addRowAfter().run()} title="Add row">
+            <FaPlus />
+            <span className="hidden sm:inline">Row</span>
+          </Btn>
+          <Btn onClick={() => editor.chain().focus().deleteRow().run()} title="Delete row">
+            <FaMinus />
+            <span className="hidden sm:inline">Row</span>
+          </Btn>
+
+          <Divider />
+
+          <Btn
+            onClick={() => editor.chain().focus().toggleHeaderRow().run()}
+            title="Toggle header row"
+          >
+            Header
+          </Btn>
+          <Btn
+            onClick={() => editor.chain().focus().mergeCells().run()}
+            disabled={!editor.can().mergeCells()}
+            title="Merge selected cells"
+          >
+            <FaObjectGroup />
+          </Btn>
+          <Btn
+            onClick={() => editor.chain().focus().splitCell().run()}
+            disabled={!editor.can().splitCell()}
+            title="Split cell"
+          >
+            <FaObjectUngroup />
+          </Btn>
+
+          <Btn
+            onClick={() => editor.chain().focus().deleteTable().run()}
+            title="Delete the whole table"
+          >
+            <span className="text-red-600">
+              <FaTrash />
+            </span>
+          </Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const EnhancedRichTextEditor: React.FC<EnhancedRichTextEditorProps> = ({
   value,
   onChange,
-  placeholder = 'Enter text here...',
+  placeholder = 'Enter text here…',
   readOnly = false,
-  minHeight = 400, // ~4 inches at 96dpi
-  autoExpand = true
+  minHeight = 400,
 }) => {
-  const editorRef = useRef<any>(null);
-  const [editorContent, setEditorContent] = useState(value);
-  const [editorFailed, setEditorFailed] = useState(false);
-  const [editorLoading, setEditorLoading] = useState(true);
-  const [plainTextFallback, setPlainTextFallback] = useState(false);
+  const editor = useEditor({
+    // StarterKit v3 already bundles Underline, Link and undo/redo — adding them
+    // again registers duplicate extensions.
+    extensions: [
+      StarterKit.configure({
+        heading: { levels: [2, 3, 4] },
+        bulletList: { keepMarks: true },
+        orderedList: { keepMarks: true },
+      }),
+      TableKit.configure({
+        table: { resizable: true, allowTableNodeSelection: true },
+      }),
+      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+      Superscript,
+      Subscript,
+      Placeholder.configure({ placeholder }),
+    ],
+    content: value || '',
+    editable: !readOnly,
+    immediatelyRender: false, // pages router renders on the server first
+    editorProps: {
+      attributes: {
+        class: 'rte-surface focus:outline-none',
+        style: `min-height:${minHeight}px`,
+      },
+    },
+    onUpdate: ({ editor }) => onChange(editor.getHTML()),
+  });
 
-  // Update editor content when value prop changes
+  // Take in external changes (loading a draft, switching version) without
+  // stamping on the cursor while someone is typing.
   useEffect(() => {
-    setEditorContent(value);
-  }, [value]);
+    if (!editor) return;
+    const incoming = value || '';
+    if (incoming !== editor.getHTML()) {
+      editor.commands.setContent(incoming, { emitUpdate: false });
+    }
+  }, [value, editor]);
 
-  const handleEditorChange = (content: string) => {
-    setEditorContent(content);
-    onChange(content);
-  };
-  
-  // Toggle to plain text mode
-  const switchToPlainText = () => {
-    setPlainTextFallback(true);
-  };
-  
-  // Handle initialization errors
-  const handleEditorFailure = (err: any) => {
-    console.error("Rich text editor failed to initialize:", err);
-    setEditorFailed(true);
-    setPlainTextFallback(true);
-  };
+  useEffect(() => {
+    editor?.setEditable(!readOnly);
+  }, [readOnly, editor]);
+
+  if (readOnly) {
+    return (
+      <div className="rte-content rte-readonly">
+        <EditorContent editor={editor} />
+      </div>
+    );
+  }
 
   return (
-    <div className="relative border border-gray-300 rounded-md overflow-hidden">
-      {plainTextFallback ? (
-        // Plain text fallback mode
-        <div className="fallback-editor">
-          <div className="bg-yellow-50 p-2 border-b border-yellow-100 flex justify-between items-center">
-            <span className="text-yellow-700 text-sm">
-              Using plain text editor as fallback
-            </span>
-            <button 
-              onClick={() => setPlainTextFallback(false)}
-              className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded hover:bg-yellow-200"
-            >
-              Try rich editor
-            </button>
-          </div>
-          <textarea
-            className="w-full h-full min-h-[450px] p-3 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={editorContent}
-            onChange={(e) => handleEditorChange(e.target.value)}
-            placeholder={placeholder}
-            readOnly={readOnly}
-            style={{ minHeight: `${minHeight}px` }}
-          />
-        </div>
-      ) : (
-        // TinyMCE rich editor (primary mode)
-        <>
-          <Editor
-            apiKey={process.env.NEXT_PUBLIC_TINYMCE_API_KEY}
-            onInit={(evt, editor) => {
-              editorRef.current = editor;
-              setEditorLoading(false);
-            }}
-            value={editorContent}
-            onEditorChange={handleEditorChange}
-            disabled={readOnly}
-            init={{
-              height: minHeight,
-              menubar: false, // Hide menubar entirely
-              statusbar: false, // Hide status bar
-              plugins: [
-                'paste', 'table', 'lists' // Minimal set to support toolbar actions
-              ],
-              toolbar: readOnly
-                ? false
-                : 'undo redo | bold italic underline | bullist numlist | table | removeformat',
-              toolbar_sticky: false,
-              toolbar_mode: 'sliding', // Use sliding mode for toolbar if it's ever shown
-              content_style: `
-                body { 
-                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; 
-                  font-size: 14px; 
-                  line-height: 1.6;
-                  padding: 10px;
-                }
-                table {
-                  border-collapse: collapse;
-                  width: 100%;
-                  margin-bottom: 1rem;
-                }
-                table td, table th {
-                  border: 1px solid #ddd;
-                  padding: 8px;
-                }
-                table tr:nth-child(even) {
-                  background-color: #f9f9f9;
-                }
-                table tr:hover {
-                  background-color: #f5f5f5;
-                }
-                table th {
-                  padding-top: 10px;
-                  padding-bottom: 10px;
-                  text-align: left;
-                  background-color: #f2f2f2;
-                  color: #333;
-                }
-              `,
-              placeholder: placeholder,
-              readonly: readOnly,
-              paste_data_images: true,
-              paste_as_text: false,
-              paste_enable_default_filters: true,
-              paste_word_valid_elements: 'table,tr,td,th,tbody,thead,tfoot',
-              paste_retain_style_properties: 'all',
-              table_default_attributes: {
-                border: '1'
-              },
-              table_default_styles: {
-                'border-collapse': 'collapse',
-                'width': '100%'
-              },
-              table_responsive_width: true,
-              resize: autoExpand,
-              autoresize_bottom_margin: 20,
-              autoresize_overflow_padding: 20,
-              setup: function(editor) {
-                editor.on('init', function() {
-                  // Make sure we're showing the existing content, not clearing it
-                  if (editorContent && editorContent.length > 0) {
-                    editor.setContent(editorContent);
-                  }
-                });
-                
-                // Handle editor errors
-                editor.on('LoadError', function(e) {
-                  console.error('TinyMCE Load Error:', e);
-                  handleEditorFailure(e);
-                });
-                
-                // Add plain text paste option in the context menu
-                editor.ui.registry.addMenuItem('pastetextonly', {
-                  text: 'Paste as plain text',
-                  icon: 'paste-text',
-                  onAction: function() {
-                    editor.execCommand('mceTogglePlainTextPaste');
-                  }
-                });
-                
-                editor.ui.registry.addContextMenu('plaintext', {
-                  update: function(element) {
-                    return !editor.readonly ? 'pastetextonly' : '';
-                  }
-                });
-              }
-            }}
-            onLoadError={handleEditorFailure}
-          />
-          
-          {!editorFailed && !readOnly && !editorLoading && (
-            <div className="p-1 bg-gray-50 border-t border-gray-200 flex justify-end">
-              <button
-                onClick={switchToPlainText}
-                className="text-xs text-gray-500 hover:text-gray-700 flex items-center"
-              >
-                Switch to plain text editor
-              </button>
-            </div>
-          )}
-          
-          {readOnly && (
-            <div 
-              className="absolute inset-0 z-10 bg-transparent cursor-not-allowed" 
-              aria-hidden="true"
-            ></div>
-          )}
-        </>
-      )}
+    <div className="rte-content overflow-hidden rounded-lg border border-nickel-200 bg-white focus-within:border-cobalt-600 focus-within:ring-2 focus-within:ring-cobalt-100">
+      <Toolbar editor={editor} />
+      <EditorContent editor={editor} />
+      <p className="border-t border-nickel-200 bg-nickel-25 px-3 py-1.5 text-[11.5px] leading-4 text-nickel-500">
+        Tables paste in from Word and Excel with their rows and columns intact.
+        Drag a column edge to resize.
+      </p>
     </div>
   );
 };

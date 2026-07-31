@@ -8,6 +8,8 @@ import { toast } from "react-hot-toast";
 import ReviewerShell from "@/components/reviewer/ReviewerShell";
 import ReviewerProgressSpine from "@/components/reviewer/ReviewerProgressSpine";
 import ScoreBar from "@/components/reviewer/ScoreBar";
+import AutoReviewPanel from "@/components/reviewer/AutoReviewPanel";
+import useAutoReview from "@/components/reviewer/useAutoReview";
 import { ReviewerProse } from "@/components/reviewer/ReviewerText";
 import {
   countReviewerSections,
@@ -44,6 +46,23 @@ export default function ReviewerCallDetail() {
     setSections(next);
     return next;
   }, [id]);
+
+  const refreshCall = useCallback(async () => {
+    if (!id) return;
+    const response = await axios.get(`/api/reviewer/calls/${id}`);
+    setCall(response.data.call);
+  }, [id]);
+
+  // Context summaries, then every section in order, then the panel report — one
+  // action instead of four pages visited in the right sequence.
+  const autoRun = useAutoReview({
+    callId: id,
+    onSectionsChanged: fetchSections,
+    onFinished: async () => {
+      await fetchSections();
+      await refreshCall();
+    },
+  });
 
   useEffect(() => {
     const load = async () => {
@@ -141,19 +160,80 @@ export default function ReviewerCallDetail() {
       sections={sections}
       title="Overview"
       actions={
-        <Link href={`/reviewer/${id}/edit`} className="nk-btn-ghost nk-btn-sm">
-          Settings
-        </Link>
+        <>
+          {counts.total > 0 && !autoRun.running && (
+            <button
+              type="button"
+              onClick={() => autoRun.start({ rerunAll: false })}
+              className="nk-btn-primary nk-btn-sm"
+            >
+              {counts.reviewed === 0 ? "Run full review" : "Continue review"}
+            </button>
+          )}
+          <Link href={`/reviewer/${id}/edit`} className="nk-btn-ghost nk-btn-sm">
+            Settings
+          </Link>
+        </>
       }
     >
       <div className="space-y-6">
-        <ReviewerProgressSpine
-          callId={id}
-          sections={sections}
-          overallReviewJson={report}
-          onGenerateReport={handleGenerateReport}
-          reportBusy={reportBusy}
+        <AutoReviewPanel
+          run={autoRun}
+          onOpenReport={() => router.push(`/reviewer/${id}/final-review`)}
         />
+
+        {autoRun.phase === "idle" && (
+          <ReviewerProgressSpine
+            callId={id}
+            sections={sections}
+            overallReviewJson={report}
+            onGenerateReport={handleGenerateReport}
+            reportBusy={reportBusy}
+          />
+        )}
+
+        {/* The one-action path. Everything below stays available for working on
+            a single section, but nobody has to assemble the run by hand. */}
+        {counts.total > 0 && autoRun.phase === "idle" && (
+          <section className="nk-panel flex flex-wrap items-center justify-between gap-4 p-5">
+            <div className="min-w-0">
+              <h2 className="nk-title">
+                {counts.reviewed === 0
+                  ? "Review the whole proposal"
+                  : counts.reviewed < counts.total
+                    ? `Review the remaining ${counts.total - counts.reviewed} section${counts.total - counts.reviewed === 1 ? "" : "s"}`
+                    : "Everything is reviewed"}
+              </h2>
+              <p className="nk-sub mt-1 max-w-prose">
+                Writes the context summaries, reviews every section in proposal order
+                against this call's rules, then compiles the panel report with the
+                cross-section checks. Takes a few minutes.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {counts.reviewed > 0 && (
+                <button
+                  type="button"
+                  onClick={() => autoRun.start({ rerunAll: true })}
+                  className="nk-btn-secondary nk-btn-sm"
+                >
+                  Redo from scratch
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => autoRun.start({ rerunAll: false })}
+                className="nk-btn-primary nk-btn-sm"
+              >
+                {counts.reviewed === 0
+                  ? "Run full review"
+                  : counts.reviewed < counts.total
+                    ? "Continue review"
+                    : "Rebuild the report"}
+              </button>
+            </div>
+          </section>
+        )}
 
         {counts.total === 0 ? (
           <section className="nk-panel p-10 text-center">

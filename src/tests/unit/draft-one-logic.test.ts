@@ -147,6 +147,52 @@ describe('AI fix instructions', () => {
     expect(instructions).toContain('Keep the One Health framing.')
     expect(instructions.length).toBeLessThanOrEqual(4900)
   })
+
+  it('carries the grant reviewer remarks, highest priority first', () => {
+    const instructions = buildAiFixInstructions({
+      section: { label: 'Methodology', wordBudget: null, characterLimit: null, content: 'draft' },
+      report: null,
+      reviewerRecommendations: [
+        {
+          priority: 'low',
+          issue: 'Sampling interval is not stated.',
+          recommendation: 'State the sampling interval in weeks.',
+          reviewerSectionTitle: 'Methodology',
+        },
+        {
+          priority: 'high',
+          issue: 'No control arm is described.',
+          recommendation: 'Describe the control arm and how participants are allocated.',
+          reviewerSectionTitle: 'Methodology',
+        },
+      ],
+    })
+
+    expect(instructions).toContain('GRANT REVIEWER REMARKS')
+    const high = instructions.indexOf('No control arm')
+    const low = instructions.indexOf('Sampling interval')
+    expect(high).toBeGreaterThan(-1)
+    expect(low).toBeGreaterThan(high)
+    expect(instructions).toContain('(HIGH)')
+    expect(instructions).toContain('[from: Methodology]')
+  })
+
+  it('works from reviewer remarks alone when the drafting review has not run', () => {
+    const instructions = buildAiFixInstructions({
+      section: { label: 'Budget', wordBudget: null, characterLimit: null, content: 'draft' },
+      reviewerRecommendations: [{ priority: 'high', recommendation: 'Justify the equipment line.' }],
+    })
+    expect(instructions).toContain('Justify the equipment line.')
+  })
+
+  it('returns nothing to act on when there is neither a report nor a remark', () => {
+    expect(
+      buildAiFixInstructions({
+        section: { label: 'Budget', wordBudget: null, characterLimit: null, content: 'draft' },
+        reviewerRecommendations: [],
+      })
+    ).toBe('')
+  })
 })
 
 describe('summary + words', () => {
