@@ -4,6 +4,45 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { isFeatureEnabled } from '@/lib/feature-flags'
+import {
+  AlertTriangle,
+  BarChart3,
+  Bell,
+  BookMarked,
+  Bot,
+  BrainCircuit,
+  Building2,
+  ChevronDown,
+  ChevronsLeft,
+  CircleDollarSign,
+  Clock,
+  Coins,
+  Copy,
+  FileText,
+  Files,
+  Gauge,
+  Home,
+  KeyRound,
+  Landmark,
+  Loader2,
+  LogOut,
+  Mail,
+  Network,
+  PenLine,
+  Plus,
+  Puzzle,
+  Radar,
+  SearchCheck,
+  ShieldCheck,
+  SlidersHorizontal,
+  Ticket,
+  TrendingUp,
+  UserCog,
+  Users,
+  X
+} from 'lucide-react'
+
+type LucideIcon = typeof Users
 
 interface Tenant {
   id: string
@@ -17,15 +56,16 @@ interface Tenant {
 
 interface NavItem {
   label: string
-  icon: string
+  icon: LucideIcon
   href?: string
   action?: () => void
   badge?: string
 }
 
 interface NavGroup {
+  key: string
   title: string
-  icon: string
+  icon: LucideIcon
   items: NavItem[]
 }
 
@@ -39,6 +79,40 @@ interface PlatformPaperAnalytics {
     apiUsage: Record<string, number>
   }
   averageCitationsByType: Array<{ type: string; averageCitations: number }>
+}
+
+/* ── One cell of a readout strip ──────────────────────────────────────────── */
+function Metric({
+  icon: Icon,
+  label,
+  value,
+  caption,
+  loading
+}: {
+  icon: LucideIcon
+  label: string
+  value: string | number
+  caption: string
+  loading?: boolean
+}) {
+  return (
+    // Negative offsets collapse each cell's border into its neighbour's, so the
+    // strip reads as one ruled grid rather than a row of floating boxes.
+    <div className="-ml-px -mt-px flex min-w-0 flex-col gap-3 border-l border-t border-nickel-200 p-5">
+      <div className="flex items-center gap-2.5">
+        <span className="nk-tile h-8 w-8">
+          <Icon className="h-4 w-4" aria-hidden />
+        </span>
+        <span className="nk-eyebrow truncate">{label}</span>
+      </div>
+      {loading ? (
+        <span className="h-7 w-20 animate-pulse rounded bg-nickel-100" aria-hidden />
+      ) : (
+        <span className="nk-readout">{value}</span>
+      )}
+      <span className="text-[12.5px] text-nickel-500">{caption}</span>
+    </div>
+  )
 }
 
 export default function SuperAdminDashboard() {
@@ -284,187 +358,231 @@ export default function SuperAdminDashboard() {
   // Navigation structure
   const navGroups: NavGroup[] = [
     {
+      key: 'analytics',
       title: 'Analytics & Monitoring',
-      icon: '📊',
+      icon: BarChart3,
       items: [
-        { label: 'Platform Analytics', icon: '📈', href: '/super-admin/analytics' },
-        { label: 'User Service Usage', icon: '👥', href: '/super-admin/user-service-usage' },
-        { label: 'Quota Controller', icon: '⚡', href: '/super-admin/quota-controller' }
+        { label: 'Platform Analytics', icon: TrendingUp, href: '/super-admin/analytics' },
+        { label: 'User Service Usage', icon: Users, href: '/super-admin/user-service-usage' },
+        { label: 'Quota Controller', icon: Gauge, href: '/super-admin/quota-controller' }
       ]
     },
     {
+      key: 'ai',
       title: 'AI & LLM Settings',
-      icon: '🤖',
+      icon: Bot,
       items: [
-        { label: 'LLM Model Control', icon: '🧠', href: '/super-admin/llm-config', badge: 'NEW' },
-        { label: 'Model Costs', icon: '💰', href: '/super-admin/model-costs' }
+        { label: 'LLM Model Control', icon: BrainCircuit, href: '/super-admin/llm-config', badge: 'NEW' },
+        { label: 'Model Costs', icon: Coins, href: '/super-admin/model-costs' }
       ]
     },
     {
+      key: 'paper',
       title: 'Paper Writing',
-      icon: '📄',
+      icon: FileText,
       items: [
-        { label: 'Section Prompts', icon: '📝', href: '/super-admin/paper-prompts', badge: 'NEW' },
-        { label: 'Paper Types', icon: '📑', href: '/admin/paper-types' },
-        { label: 'Citation Styles', icon: '📚', href: '/admin/citation-styles' },
-        { label: 'Publication Venues', icon: '🏛️', href: '/admin/publication-venues' }
+        { label: 'Section Prompts', icon: PenLine, href: '/super-admin/paper-prompts', badge: 'NEW' },
+        { label: 'Paper Types', icon: Files, href: '/admin/paper-types' },
+        { label: 'Citation Styles', icon: BookMarked, href: '/admin/citation-styles' },
+        { label: 'Publication Venues', icon: Landmark, href: '/admin/publication-venues' }
       ]
     },
     {
+      key: 'access',
       title: 'Access Management',
-      icon: '🔐',
+      icon: ShieldCheck,
       items: [
-        { label: 'Plans & Feature Access', icon: '🧩', href: '/super-admin/plans', badge: 'NEW' },
-        { label: 'Team Roles', icon: 'Roles', href: '/super-admin/team-roles', badge: 'NEW' },
-        { label: 'Funding Control', icon: '$', href: '/super-admin/funding', badge: 'NEW' },
-        { label: 'Project Intelligence', icon: 'PI', href: '/super-admin/project-intelligence/crawlers', badge: 'NEW' },
-        { label: 'Research Areas', icon: 'RA', href: '/super-admin/research-areas', badge: 'NEW' },
-        { label: 'Researcher Matching', icon: '🔍', href: '/super-admin/researcher-matching', badge: 'NEW' },
-        { label: 'Trial Campaigns', icon: '📧', href: '/super-admin/trial-campaigns', badge: 'NEW' },
-        { label: 'ATI Token Management', icon: '🎟️', href: '/ati-management' },
-        { label: 'Service Control', icon: '🎛️', href: '/super-admin/service-control' }
+        { label: 'Plans & Feature Access', icon: Puzzle, href: '/super-admin/plans', badge: 'NEW' },
+        { label: 'Team Roles', icon: UserCog, href: '/super-admin/team-roles', badge: 'NEW' },
+        { label: 'Funding Control', icon: CircleDollarSign, href: '/super-admin/funding', badge: 'NEW' },
+        { label: 'Project Intelligence', icon: Radar, href: '/super-admin/project-intelligence/crawlers', badge: 'NEW' },
+        { label: 'Research Areas', icon: Network, href: '/super-admin/research-areas', badge: 'NEW' },
+        { label: 'Researcher Matching', icon: SearchCheck, href: '/super-admin/researcher-matching', badge: 'NEW' },
+        { label: 'Trial Campaigns', icon: Mail, href: '/super-admin/trial-campaigns', badge: 'NEW' },
+        { label: 'ATI Token Management', icon: Ticket, href: '/ati-management' },
+        { label: 'Service Control', icon: SlidersHorizontal, href: '/super-admin/service-control' }
       ]
     }
     // Patent-specific settings hidden - use direct URLs if needed:
-    // /super-admin/jurisdiction-config, /super-admin/countries, 
+    // /super-admin/jurisdiction-config, /super-admin/countries,
     // /super-admin/section-prompts, /super-admin/jurisdiction-styles,
     // /super-admin/superset-sections
   ]
 
+  const activeTenants = tenants.filter(t => t.status === 'ACTIVE').length
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-slate-900/95 backdrop-blur-xl border-r border-slate-700/50 transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
-        {/* Logo Area */}
-        <div className="flex items-center justify-between h-16 px-4 border-b border-slate-700/50">
+    <div className="nk-ground">
+      {/* ── Rail ─────────────────────────────────────────────────────────── */}
+      <aside
+        className={`nk-rail fixed inset-y-0 left-0 z-50 flex flex-col border-r border-nickel-800 transition-[width] duration-200 ${
+          sidebarCollapsed ? 'w-16' : 'w-64'
+        }`}
+      >
+        <div className="flex h-16 items-center justify-between gap-2 border-b border-nickel-800 px-3">
           {!sidebarCollapsed && (
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
-                <span className="text-white font-bold text-sm">SA</span>
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="nk-tile nk-tile-live h-8 w-8 text-[12px] font-semibold">SA</span>
+              <div className="min-w-0">
+                <div className="truncate text-[13px] font-semibold text-white">Platform Console</div>
+                <div className="nk-eyebrow text-nickel-400">Super Admin</div>
               </div>
-              <span className="font-semibold text-white">Super Admin</span>
             </div>
           )}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            aria-label={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-nickel-400 transition
+                       hover:bg-nickel-800 hover:text-white
+                       focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
+                       focus-visible:outline-cobalt-500"
           >
-            <svg className={`w-5 h-5 transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-            </svg>
+            <ChevronsLeft
+              className={`h-4 w-4 transition-transform duration-200 ${sidebarCollapsed ? 'rotate-180' : ''}`}
+              aria-hidden
+            />
           </button>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
-          {/* Quick Actions */}
+        <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
           <button
             onClick={() => setShowCreateTenant(true)}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-medium hover:from-emerald-600 hover:to-teal-600 transition-all shadow-lg shadow-emerald-500/20 ${sidebarCollapsed ? 'justify-center' : ''}`}
+            className={`nk-btn-primary w-full ${sidebarCollapsed ? 'px-0' : ''}`}
+            title={sidebarCollapsed ? 'Create tenant' : undefined}
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            {!sidebarCollapsed && <span>Create Tenant</span>}
+            <Plus className="h-4 w-4" aria-hidden />
+            {!sidebarCollapsed && <span>Create tenant</span>}
           </button>
 
-          <div className="pt-4 space-y-1">
-            {navGroups.map((group, groupIndex) => (
-              <div key={group.title} className="mb-2">
-                {!sidebarCollapsed ? (
-                  <>
-                    <button
-                      onClick={() => toggleGroup(['analytics', 'ai', 'paper', 'access'][groupIndex])}
-                      className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wider hover:text-slate-300 transition-colors"
-                    >
-                      <span className="flex items-center gap-2">
-                        <span>{group.icon}</span>
-                        <span>{group.title}</span>
-                      </span>
-                      <svg className={`w-4 h-4 transition-transform ${expandedGroups[['analytics', 'ai', 'paper', 'access'][groupIndex]] ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-                    {expandedGroups[['analytics', 'ai', 'paper', 'access'][groupIndex]] && (
-                      <div className="mt-1 space-y-0.5">
-                        {group.items.map((item) => (
+          <div className="space-y-1 pt-3">
+            {navGroups.map(group => {
+              const GroupIcon = group.icon
+              const expanded = expandedGroups[group.key]
+
+              if (sidebarCollapsed) {
+                return (
+                  <div key={group.key} className="space-y-1 border-t border-nickel-800 pt-1 first:border-0">
+                    {group.items.map(item => {
+                      const ItemIcon = item.icon
+                      return (
+                        <button
+                          key={item.label}
+                          onClick={() => (item.href ? router.push(item.href) : item.action?.())}
+                          title={item.label}
+                          className="flex w-full items-center justify-center rounded-md p-2.5 text-nickel-400 transition
+                                     hover:bg-nickel-800 hover:text-white
+                                     focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2
+                                     focus-visible:outline-cobalt-500"
+                        >
+                          <ItemIcon className="h-[18px] w-[18px]" aria-hidden />
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              }
+
+              return (
+                <div key={group.key} className="pb-1">
+                  <button
+                    onClick={() => toggleGroup(group.key)}
+                    aria-expanded={expanded}
+                    className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-nickel-400 transition
+                               hover:text-nickel-300
+                               focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2
+                               focus-visible:outline-cobalt-500"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <GroupIcon className="h-[15px] w-[15px] shrink-0" aria-hidden />
+                      <span className="nk-eyebrow truncate">{group.title}</span>
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${expanded ? '' : '-rotate-90'}`}
+                      aria-hidden
+                    />
+                  </button>
+
+                  {expanded && (
+                    <div className="mt-0.5 space-y-0.5 border-l border-nickel-800 pl-2.5">
+                      {group.items.map(item => {
+                        const ItemIcon = item.icon
+                        return (
                           <button
                             key={item.label}
-                            onClick={() => item.href ? router.push(item.href) : item.action?.()}
-                            className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all group"
+                            onClick={() => (item.href ? router.push(item.href) : item.action?.())}
+                            className="group flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left
+                                       text-nickel-300 transition hover:bg-nickel-800 hover:text-white
+                                       focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2
+                                       focus-visible:outline-cobalt-500"
                           >
-                            <span className="flex items-center gap-3">
-                              <span className="text-base">{item.icon}</span>
-                              <span className="text-sm">{item.label}</span>
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <ItemIcon
+                                className="h-[15px] w-[15px] shrink-0 text-nickel-400 transition group-hover:text-cobalt-400"
+                                aria-hidden
+                              />
+                              <span className="truncate text-[13px]">{item.label}</span>
                             </span>
                             {item.badge && (
-                              <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white">
+                              <span className="shrink-0 rounded border border-cobalt-700 bg-cobalt-900/60 px-1 py-px text-[9.5px] font-semibold uppercase tracking-[0.08em] text-cobalt-300">
                                 {item.badge}
                               </span>
                             )}
                           </button>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="space-y-1">
-                    {group.items.map((item) => (
-                      <button
-                        key={item.label}
-                        onClick={() => item.href ? router.push(item.href) : item.action?.()}
-                        className="w-full flex items-center justify-center p-2.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
-                        title={item.label}
-                      >
-                        <span className="text-lg">{item.icon}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </nav>
 
-        {/* User Profile */}
-        <div className="border-t border-slate-700/50 p-3" ref={userMenuRef}>
+        <div className="border-t border-nickel-800 p-2" ref={userMenuRef}>
           <div className="relative">
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
-              className={`w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-800 transition-colors ${sidebarCollapsed ? 'justify-center' : ''}`}
+              aria-expanded={showUserMenu}
+              className={`flex w-full items-center gap-2.5 rounded-md px-2 py-2 transition hover:bg-nickel-800
+                          focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2
+                          focus-visible:outline-cobalt-500 ${sidebarCollapsed ? 'justify-center' : ''}`}
             >
-              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white font-semibold">
+              <span className="nk-tile nk-tile-dark h-8 w-8 text-[12px] font-semibold text-white">
                 {user?.email?.charAt(0)?.toUpperCase() || 'S'}
-              </div>
+              </span>
               {!sidebarCollapsed && (
-                <div className="flex-1 text-left">
-                  <div className="text-sm font-medium text-white truncate max-w-[140px]">{user?.email}</div>
-                  <div className="text-xs text-slate-400">Super Admin</div>
-                </div>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block truncate text-[12.5px] font-medium text-nickel-200">
+                    {user?.email}
+                  </span>
+                  <span className="nk-eyebrow text-nickel-400">Platform admin</span>
+                </span>
               )}
             </button>
 
-            {/* User Dropdown */}
             {showUserMenu && (
-              <div className={`absolute bottom-full mb-2 ${sidebarCollapsed ? 'left-full ml-2' : 'left-0 right-0'} bg-slate-800 border border-slate-700 rounded-xl shadow-2xl overflow-hidden min-w-[200px]`}>
-                <div className="px-4 py-3 border-b border-slate-700 bg-slate-800/50">
-                  <div className="text-sm font-medium text-white truncate">{user?.email}</div>
-                  <div className="text-xs text-slate-400 mt-0.5">Platform Administrator</div>
+              <div
+                className={`absolute bottom-full mb-2 min-w-[210px] overflow-hidden rounded-lg border border-nickel-200
+                            bg-white shadow-nk-sheet ${sidebarCollapsed ? 'left-full ml-2' : 'left-0 right-0'}`}
+              >
+                <div className="border-b border-nickel-200 bg-nickel-50 px-4 py-3">
+                  <div className="truncate text-[13px] font-medium text-nickel-900">{user?.email}</div>
+                  <div className="nk-eyebrow mt-1">Platform administrator</div>
                 </div>
-                <div className="py-1">
+                <div className="p-1">
                   <button
-                    onClick={() => { router.push('/dashboard'); setShowUserMenu(false); }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700/50 transition-colors"
+                    onClick={() => { router.push('/dashboard'); setShowUserMenu(false) }}
+                    className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] text-nickel-700 transition hover:bg-nickel-100"
                   >
-                    <span>🏠</span>
-                    <span>Main Dashboard</span>
+                    <Home className="h-4 w-4 text-nickel-400" aria-hidden />
+                    Main dashboard
                   </button>
                   <button
-                    onClick={() => { logout(); setShowUserMenu(false); }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
+                    onClick={() => { logout(); setShowUserMenu(false) }}
+                    className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] text-red-700 transition hover:bg-red-50"
                   >
-                    <span>🚪</span>
-                    <span>Sign Out</span>
+                    <LogOut className="h-4 w-4" aria-hidden />
+                    Sign out
                   </button>
                 </div>
               </div>
@@ -473,485 +591,444 @@ export default function SuperAdminDashboard() {
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className={`transition-all duration-300 ${sidebarCollapsed ? 'ml-16' : 'ml-64'}`}>
-        {/* Top Bar */}
-        <header className="sticky top-0 z-40 bg-slate-900/80 backdrop-blur-xl border-b border-slate-700/50">
-          <div className="flex items-center justify-between h-16 px-6">
-            <div>
-              <h1 className="text-xl font-bold text-white">Platform Overview</h1>
-              <p className="text-sm text-slate-400">Monitor and manage your entire platform</p>
+      {/* ── Workspace ────────────────────────────────────────────────────── */}
+      <main className={`transition-[margin] duration-200 ${sidebarCollapsed ? 'ml-16' : 'ml-64'}`}>
+        <header className="sticky top-0 z-40 border-b border-nickel-200 bg-nickel-25/85 backdrop-blur-md">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3.5">
+            <div className="min-w-0">
+              <p className="nk-eyebrow">Platform</p>
+              <h1 className="mt-1 text-[19px] font-semibold leading-tight tracking-[-0.02em] text-nickel-900">
+                Overview
+              </h1>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => router.push('/super-admin/project-intelligence/crawlers')}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-500 border border-violet-500 transition-colors"
+                className="nk-btn-secondary nk-btn-sm"
               >
-                <span>PI</span>
-                <span className="text-sm">Project Intelligence</span>
+                <Radar className="h-4 w-4 text-nickel-400" aria-hidden />
+                Project Intelligence
               </button>
-              <button
-                onClick={checkExpiryNotifications}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition-colors"
-              >
-                <span>🔔</span>
-                <span className="text-sm">Check Notifications</span>
+              <button onClick={checkExpiryNotifications} className="nk-btn-secondary nk-btn-sm">
+                <Bell className="h-4 w-4 text-nickel-400" aria-hidden />
+                Check notifications
               </button>
             </div>
           </div>
         </header>
 
-        <div className="p-6 space-y-6">
-          {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Total Tenants */}
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-500/10 to-blue-600/5 border border-blue-500/20 p-5">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-              <div className="relative">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
-                    <span className="text-xl">🏢</span>
-                  </div>
-                  <span className="text-sm font-medium text-blue-300">Total Tenants</span>
-                </div>
-                <div className="text-3xl font-bold text-white">{tenants.length}</div>
-                <div className="text-sm text-slate-400 mt-1">Organizations registered</div>
-              </div>
-            </div>
+        <div className="space-y-6 p-6">
+          {/* Readouts */}
+          <section className="nk-panel grid grid-cols-1 overflow-hidden sm:grid-cols-2 lg:grid-cols-4">
+            <Metric
+              icon={Building2}
+              label="Total tenants"
+              value={tenants.length}
+              caption="Organizations registered"
+              loading={isLoading}
+            />
+            <Metric
+              icon={Users}
+              label="Total users"
+              value={totalUsers}
+              caption="Across every tenant"
+              loading={isLoading}
+            />
+            <Metric
+              icon={KeyRound}
+              label="ATI tokens"
+              value={totalTokens}
+              caption="Access tokens issued"
+              loading={isLoading}
+            />
+            <Metric
+              icon={ShieldCheck}
+              label="Active tenants"
+              value={activeTenants}
+              caption={
+                tenants.length ? `${Math.round((activeTenants / tenants.length) * 100)}% of the estate` : 'Currently active'
+              }
+              loading={isLoading}
+            />
+          </section>
 
-            {/* Total Users */}
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border border-emerald-500/20 p-5">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-              <div className="relative">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
-                    <span className="text-xl">👥</span>
-                  </div>
-                  <span className="text-sm font-medium text-emerald-300">Total Users</span>
-                </div>
-                <div className="text-3xl font-bold text-white">{totalUsers}</div>
-                <div className="text-sm text-slate-400 mt-1">Active platform users</div>
-              </div>
-            </div>
-
-            {/* ATI Tokens */}
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500/10 to-violet-600/5 border border-violet-500/20 p-5">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-              <div className="relative">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-violet-500/20 flex items-center justify-center">
-                    <span className="text-xl">🎟️</span>
-                  </div>
-                  <span className="text-sm font-medium text-violet-300">ATI Tokens</span>
-                </div>
-                <div className="text-3xl font-bold text-white">{totalTokens}</div>
-                <div className="text-sm text-slate-400 mt-1">Access tokens issued</div>
-              </div>
-            </div>
-
-            {/* Active Tenants */}
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500/10 to-amber-600/5 border border-amber-500/20 p-5">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-              <div className="relative">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
-                    <span className="text-xl">✅</span>
-                  </div>
-                  <span className="text-sm font-medium text-amber-300">Active Tenants</span>
-                </div>
-                <div className="text-3xl font-bold text-white">{tenants.filter(t => t.status === 'ACTIVE').length}</div>
-                <div className="text-sm text-slate-400 mt-1">Currently active</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Paper Analytics (when feature enabled) */}
+          {/* Paper analytics readouts (when feature enabled) */}
           {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && (
-            <>
-              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-purple-500/10 to-purple-600/5 border border-purple-500/20 p-5">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-                <div className="relative">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                      <span className="text-xl">📄</span>
-                    </div>
-                    <span className="text-sm font-medium text-purple-300">Total Papers</span>
-                  </div>
-                  <div className="text-3xl font-bold text-white">
-                    {isLoadingPapers ? '...' : (paperAnalytics?.totalPapers || 0)}
-                  </div>
-                  <div className="text-sm text-slate-400 mt-1">Across all tenants</div>
-                </div>
-              </div>
-
-              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-cyan-500/10 to-cyan-600/5 border border-cyan-500/20 p-5">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-                <div className="relative">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-cyan-500/20 flex items-center justify-center">
-                      <span className="text-xl">🔍</span>
-                    </div>
-                    <span className="text-sm font-medium text-cyan-300">Literature Searches</span>
-                  </div>
-                  <div className="text-3xl font-bold text-white">
-                    {isLoadingPapers ? '...' : (paperAnalytics?.literatureSearchUsage?.totalSearches || 0)}
-                  </div>
-                  <div className="text-sm text-slate-400 mt-1">Academic database queries</div>
-                </div>
-              </div>
-
-              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-pink-500/10 to-pink-600/5 border border-pink-500/20 p-5">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-pink-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-                <div className="relative">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-pink-500/20 flex items-center justify-center">
-                      <span className="text-xl">📊</span>
-                    </div>
-                    <span className="text-sm font-medium text-pink-300">Citation Styles</span>
-                  </div>
-                  <div className="text-3xl font-bold text-white">
-                    {isLoadingPapers ? '...' : (paperAnalytics?.citationStylesUsage?.length || 0)}
-                  </div>
-                  <div className="text-sm text-slate-400 mt-1">Styles in use</div>
-                </div>
-              </div>
-
-              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 border border-indigo-500/20 p-5">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-                <div className="relative">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center">
-                      <span className="text-xl">📈</span>
-                    </div>
-                    <span className="text-sm font-medium text-indigo-300">Avg Citations/Paper</span>
-                  </div>
-                  <div className="text-3xl font-bold text-white">
-                    {isLoadingPapers ? '...' : (
-                      paperAnalytics?.averageCitationsByType?.length
-                        ? (paperAnalytics.averageCitationsByType.reduce((sum, item) => sum + item.averageCitations, 0) / paperAnalytics.averageCitationsByType.length).toFixed(1)
-                        : '0.0'
-                    )}
-                  </div>
-                  <div className="text-sm text-slate-400 mt-1">Platform average</div>
-                </div>
-              </div>
-            </>
+            <section className="nk-panel grid grid-cols-1 overflow-hidden sm:grid-cols-2 lg:grid-cols-4">
+              <Metric
+                icon={FileText}
+                label="Total papers"
+                value={paperAnalytics?.totalPapers || 0}
+                caption="Across all tenants"
+                loading={isLoadingPapers}
+              />
+              <Metric
+                icon={SearchCheck}
+                label="Literature searches"
+                value={paperAnalytics?.literatureSearchUsage?.totalSearches || 0}
+                caption="Academic database queries"
+                loading={isLoadingPapers}
+              />
+              <Metric
+                icon={BookMarked}
+                label="Citation styles"
+                value={paperAnalytics?.citationStylesUsage?.length || 0}
+                caption="Styles in use"
+                loading={isLoadingPapers}
+              />
+              <Metric
+                icon={TrendingUp}
+                label="Avg citations / paper"
+                value={
+                  paperAnalytics?.averageCitationsByType?.length
+                    ? (
+                        paperAnalytics.averageCitationsByType.reduce((sum, item) => sum + item.averageCitations, 0) /
+                        paperAnalytics.averageCitationsByType.length
+                      ).toFixed(1)
+                    : '0.0'
+                }
+                caption="Platform average"
+                loading={isLoadingPapers}
+              />
+            </section>
           )}
 
-          {/* Expiry Notifications */}
+          {/* Expiring tokens */}
           {notificationStatus && (
-            <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 overflow-hidden">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/50">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-orange-500/20 flex items-center justify-center">
-                    <span className="text-xl">⏰</span>
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-white">Expiring Tokens</h3>
-                    <p className="text-sm text-slate-400">
-                      {notificationStatus.expiringTokensCount} token{notificationStatus.expiringTokensCount !== 1 ? 's' : ''} expiring within 7 days
+            <section className="nk-panel overflow-hidden">
+              <div className="nk-panel-head">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="nk-tile h-9 w-9 border-amber-200 text-amber-600">
+                    <Clock className="h-4 w-4" aria-hidden />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="nk-title text-[14px]">Expiring tokens</h2>
+                    <p className="nk-sub text-[12.5px]">
+                      {notificationStatus.expiringTokensCount} token
+                      {notificationStatus.expiringTokensCount !== 1 ? 's' : ''} expiring within 7 days
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={triggerExpiryNotifications}
                   disabled={isCheckingNotifications}
-                  className="px-4 py-2 rounded-lg bg-orange-500 text-white font-medium hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                  className="nk-btn-primary nk-btn-sm"
                 >
-                  {isCheckingNotifications ? 'Sending...' : 'Send Notifications'}
+                  {isCheckingNotifications && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+                  {isCheckingNotifications ? 'Sending…' : 'Send notifications'}
                 </button>
               </div>
 
               {notificationStatus.tokens.length > 0 && (
-                <div className="p-4 space-y-2">
+                <ul className="divide-y divide-nickel-100">
                   {notificationStatus.tokens.slice(0, 5).map((token: any) => (
-                    <div key={token.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-900/50 border border-slate-700/50">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-2.5 h-2.5 rounded-full ${
-                          token.daysUntilExpiry <= 3 ? 'bg-red-500' :
-                          token.daysUntilExpiry <= 7 ? 'bg-amber-500' : 'bg-slate-500'
-                        }`} />
-                        <div>
-                          <div className="text-sm font-medium text-white">{token.fingerprint}</div>
-                          <div className="text-xs text-slate-400">{token.tenantName} • Expires in {token.daysUntilExpiry} days</div>
+                    <li key={token.id} className="flex items-center justify-between gap-4 px-5 py-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span
+                          className={`h-2 w-2 shrink-0 rounded-full ${
+                            token.daysUntilExpiry <= 3
+                              ? 'bg-red-500'
+                              : token.daysUntilExpiry <= 7
+                              ? 'bg-amber-500'
+                              : 'bg-nickel-300'
+                          }`}
+                          aria-hidden
+                        />
+                        <div className="min-w-0">
+                          <div className="nk-mono truncate text-nickel-900">{token.fingerprint}</div>
+                          <div className="truncate text-[12.5px] text-nickel-500">
+                            {token.tenantName} · expires in {token.daysUntilExpiry} days
+                          </div>
                         </div>
                       </div>
-                      <div className="text-sm text-slate-400">
+                      <span className="nk-mono shrink-0 text-nickel-500">
                         {new Date(token.expiresAt).toLocaleDateString()}
-                      </div>
-                    </div>
+                      </span>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
-            </div>
+            </section>
           )}
 
-          {/* Paper Analytics Details (when feature enabled) */}
+          {/* Paper analytics detail (when feature enabled) */}
           {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && paperAnalytics && (
             <>
-              {/* Paper Types and Citation Styles */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-slate-700/50">
-                    <h3 className="font-semibold text-white flex items-center gap-2">
-                      <span className="text-xl">📄</span>
-                      Paper Types Popularity
-                    </h3>
-                    <p className="text-sm text-slate-400">Most used paper types across the platform</p>
-                  </div>
-                  <div className="p-6">
-                    <div className="space-y-3">
-                      {paperAnalytics.paperTypesPopularity?.slice(0, 5).map((type, index) => (
-                        <div key={type.type} className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                              index === 0 ? 'bg-yellow-500/20 text-yellow-400' :
-                              index === 1 ? 'bg-slate-500/20 text-slate-400' :
-                              index === 2 ? 'bg-orange-500/20 text-orange-400' :
-                              'bg-slate-600/20 text-slate-500'
-                            }`}>
-                              {index + 1}
-                            </div>
-                            <span className="text-sm text-slate-300">{type.type}</span>
-                          </div>
-                          <span className="text-sm font-medium text-white">{type.count}</span>
-                        </div>
-                      )) || <p className="text-sm text-slate-500">No data available</p>}
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <section className="nk-panel overflow-hidden">
+                  <div className="nk-panel-head">
+                    <div>
+                      <h2 className="nk-title text-[14px]">Paper types</h2>
+                      <p className="nk-sub text-[12.5px]">Most used across the platform</p>
                     </div>
                   </div>
-                </div>
-
-                <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-slate-700/50">
-                    <h3 className="font-semibold text-white flex items-center gap-2">
-                      <span className="text-xl">📝</span>
-                      Citation Styles Usage
-                    </h3>
-                    <p className="text-sm text-slate-400">Citation formatting preferences</p>
-                  </div>
-                  <div className="p-6">
-                    <div className="space-y-3">
-                      {paperAnalytics.citationStylesUsage?.slice(0, 5).map((style, index) => (
-                        <div key={style.style} className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                              index === 0 ? 'bg-blue-500/20 text-blue-400' :
-                              index === 1 ? 'bg-green-500/20 text-green-400' :
-                              index === 2 ? 'bg-purple-500/20 text-purple-400' :
-                              'bg-slate-600/20 text-slate-500'
-                            }`}>
-                              {index + 1}
-                            </div>
-                            <span className="text-sm text-slate-300">{style.style}</span>
-                          </div>
-                          <span className="text-sm font-medium text-white">{style.count}</span>
-                        </div>
-                      )) || <p className="text-sm text-slate-500">No data available</p>}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Literature Search API Usage */}
-              <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 overflow-hidden">
-                <div className="px-6 py-4 border-b border-slate-700/50">
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <span className="text-xl">🔍</span>
-                    Literature Search API Usage
-                  </h3>
-                  <p className="text-sm text-slate-400">Academic database API consumption</p>
-                </div>
-                <div className="p-6">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {paperAnalytics.literatureSearchUsage?.apiUsage && Object.entries(paperAnalytics.literatureSearchUsage.apiUsage).map(([api, count]) => (
-                      <div key={api} className="text-center p-4 rounded-xl bg-slate-900/50 border border-slate-700/50">
-                        <div className="text-2xl font-bold text-white">{count.toLocaleString()}</div>
-                        <div className="text-sm text-slate-400 capitalize">{api.replace('_', ' ')}</div>
-                      </div>
-                    )) || (
-                      <div className="col-span-full text-center text-slate-500 py-8">
-                        No API usage data available
-                      </div>
+                  <div className="p-5">
+                    {paperAnalytics.paperTypesPopularity?.length ? (
+                      <ul className="space-y-2.5">
+                        {paperAnalytics.paperTypesPopularity.slice(0, 5).map((type, index) => (
+                          <li key={type.type} className="flex items-center justify-between gap-3">
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="nk-mono w-4 shrink-0 text-nickel-500">{index + 1}</span>
+                              <span className="truncate text-[13px] text-nickel-700">{type.type}</span>
+                            </span>
+                            <span className="nk-readout-sm shrink-0 text-[14px]">{type.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[13px] text-nickel-500">No data available</p>
                     )}
                   </div>
-                </div>
+                </section>
+
+                <section className="nk-panel overflow-hidden">
+                  <div className="nk-panel-head">
+                    <div>
+                      <h2 className="nk-title text-[14px]">Citation styles</h2>
+                      <p className="nk-sub text-[12.5px]">Formatting preferences in use</p>
+                    </div>
+                  </div>
+                  <div className="p-5">
+                    {paperAnalytics.citationStylesUsage?.length ? (
+                      <ul className="space-y-2.5">
+                        {paperAnalytics.citationStylesUsage.slice(0, 5).map((style, index) => (
+                          <li key={style.style} className="flex items-center justify-between gap-3">
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="nk-mono w-4 shrink-0 text-nickel-500">{index + 1}</span>
+                              <span className="truncate text-[13px] text-nickel-700">{style.style}</span>
+                            </span>
+                            <span className="nk-readout-sm shrink-0 text-[14px]">{style.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[13px] text-nickel-500">No data available</p>
+                    )}
+                  </div>
+                </section>
               </div>
+
+              <section className="nk-panel overflow-hidden">
+                <div className="nk-panel-head">
+                  <div>
+                    <h2 className="nk-title text-[14px]">Literature search API usage</h2>
+                    <p className="nk-sub text-[12.5px]">Academic database consumption</p>
+                  </div>
+                </div>
+                {paperAnalytics.literatureSearchUsage?.apiUsage &&
+                Object.keys(paperAnalytics.literatureSearchUsage.apiUsage).length ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4">
+                    {Object.entries(paperAnalytics.literatureSearchUsage.apiUsage).map(([api, count]) => (
+                      <div
+                        key={api}
+                        className="-ml-px -mt-px flex flex-col gap-2 border-l border-t border-nickel-200 p-5"
+                      >
+                        <span className="nk-eyebrow capitalize">{api.replace('_', ' ')}</span>
+                        <span className="nk-readout">{count.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="px-5 py-8 text-center text-[13px] text-nickel-500">
+                    No API usage data available
+                  </p>
+                )}
+              </section>
             </>
           )}
 
-          {/* Tenants List */}
-          <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/50">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
-                  <span className="text-xl">🏢</span>
-                </div>
-                <div>
-                  <h3 className="font-semibold text-white">Tenant Management</h3>
-                  <p className="text-sm text-slate-400">Overview of all tenants and their activity</p>
+          {/* Tenants */}
+          <section className="nk-panel overflow-hidden">
+            <div className="nk-panel-head">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="nk-tile h-9 w-9">
+                  <Building2 className="h-4 w-4" aria-hidden />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="nk-title text-[14px]">Tenant management</h2>
+                  <p className="nk-sub text-[12.5px]">Every tenant on the platform and its activity</p>
                 </div>
               </div>
-              <button
-                onClick={() => setShowCreateTenant(true)}
-                className="px-4 py-2 rounded-lg bg-emerald-500 text-white font-medium hover:bg-emerald-600 transition-colors flex items-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-                Add Tenant
+              <button onClick={() => setShowCreateTenant(true)} className="nk-btn-primary nk-btn-sm">
+                <Plus className="h-4 w-4" aria-hidden />
+                Add tenant
               </button>
             </div>
 
             {isLoading ? (
-              <div className="flex items-center justify-center py-16">
-                <div className="animate-spin rounded-full h-10 w-10 border-2 border-violet-500 border-t-transparent"></div>
-              </div>
+              // Skeletons match the row layout so nothing shifts when data lands.
+              <ul className="divide-y divide-nickel-100" aria-label="Loading tenants">
+                {[0, 1, 2].map(i => (
+                  <li key={i} className="flex items-center gap-4 px-5 py-4">
+                    <span className="h-10 w-10 shrink-0 animate-pulse rounded-[10px] bg-nickel-100" />
+                    <span className="flex-1 space-y-2">
+                      <span className="block h-3.5 w-40 animate-pulse rounded bg-nickel-100" />
+                      <span className="block h-3 w-56 animate-pulse rounded bg-nickel-100" />
+                    </span>
+                    <span className="h-5 w-16 shrink-0 animate-pulse rounded bg-nickel-100" />
+                  </li>
+                ))}
+              </ul>
             ) : tenants.length === 0 ? (
-              <div className="text-center py-16">
-                <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-slate-700/50 flex items-center justify-center">
-                  <span className="text-3xl">🏢</span>
-                </div>
-                <h4 className="text-lg font-medium text-white mb-2">No tenants yet</h4>
-                <p className="text-slate-400 mb-4">Create your first tenant to get started</p>
-                <button
-                  onClick={() => setShowCreateTenant(true)}
-                  className="px-6 py-2.5 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-medium hover:from-violet-600 hover:to-fuchsia-600 transition-all"
-                >
-                  Create First Tenant
+              <div className="px-6 py-14 text-center">
+                <span className="nk-tile mx-auto h-12 w-12">
+                  <Building2 className="h-5 w-5" aria-hidden />
+                </span>
+                <h3 className="mt-4 nk-title text-[14px]">No tenants yet</h3>
+                <p className="mx-auto mt-1.5 max-w-sm text-[13px] leading-5 text-nickel-500">
+                  A tenant is an organization with its own users, ATI tokens, and plan. Create the
+                  first one to start onboarding.
+                </p>
+                <button onClick={() => setShowCreateTenant(true)} className="nk-btn-primary mt-5">
+                  <Plus className="h-4 w-4" aria-hidden />
+                  Create first tenant
                 </button>
               </div>
             ) : (
-              <div className="divide-y divide-slate-700/50">
-                {tenants.map((tenant) => (
-                  <div key={tenant.id} className="flex items-center justify-between px-6 py-4 hover:bg-slate-800/30 transition-colors">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-slate-700 flex items-center justify-center">
-                        <span className="text-lg font-bold text-white">{tenant.name.charAt(0).toUpperCase()}</span>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-white">{tenant.name}</h4>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className="text-xs text-slate-400">ATI: {tenant.ati_id}</span>
-                          <span className="text-xs text-slate-500">•</span>
-                          <span className="text-xs text-slate-400">{tenant.user_count} users</span>
-                          <span className="text-xs text-slate-500">•</span>
-                          <span className="text-xs text-slate-400">{tenant.ati_token_count} tokens</span>
+              <ul className="divide-y divide-nickel-100">
+                {tenants.map(tenant => (
+                  <li
+                    key={tenant.id}
+                    className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition-colors hover:bg-nickel-50"
+                  >
+                    <div className="flex min-w-0 items-center gap-3.5">
+                      <span className="nk-tile h-10 w-10 text-[14px] font-semibold text-nickel-700">
+                        {tenant.name.charAt(0).toUpperCase()}
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-[13.5px] font-medium text-nickel-900">{tenant.name}</h3>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-nickel-500">
+                          <span className="nk-mono text-nickel-600">{tenant.ati_id}</span>
+                          <span className="text-nickel-300" aria-hidden>·</span>
+                          <span>
+                            <span className="nk-mono text-nickel-700">{tenant.user_count}</span> users
+                          </span>
+                          <span className="text-nickel-300" aria-hidden>·</span>
+                          <span>
+                            <span className="nk-mono text-nickel-700">{tenant.ati_token_count}</span> tokens
+                          </span>
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                        tenant.status === 'ACTIVE'
-                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                          : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                      }`}>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <span
+                        className={`nk-badge ${tenant.status === 'ACTIVE' ? 'nk-badge-ok' : 'nk-badge-danger'}`}
+                      >
                         {tenant.status}
                       </span>
-                      <span className="text-xs text-slate-500">
+                      <span className="nk-mono text-nickel-500">
                         {new Date(tenant.created_at).toLocaleDateString()}
                       </span>
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
-          </div>
+          </section>
         </div>
       </main>
 
-      {/* Create Tenant Modal */}
+      {/* ── Create tenant ────────────────────────────────────────────────── */}
       {showCreateTenant && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start justify-center z-50 overflow-y-auto py-8">
-          <div className="relative w-full max-w-2xl mx-4 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-              <div>
-                <h2 className="text-xl font-semibold text-white">Create New Tenant</h2>
-                <p className="text-sm text-slate-400 mt-1">Set up a new organization with optional ATI token</p>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create new tenant"
+          className="fixed inset-0 z-50 overflow-y-auto bg-nickel-900/45 px-4 py-8 backdrop-blur-sm"
+        >
+          <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-xl border border-nickel-200 bg-white shadow-nk-sheet">
+            <div className="nk-panel-head flex-nowrap">
+              <div className="min-w-0">
+                <h2 className="nk-title">Create new tenant</h2>
+                <p className="nk-sub mt-0.5">Set up an organization and its first ATI token</p>
               </div>
               <button
                 onClick={() => setShowCreateTenant(false)}
-                className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                aria-label="Close"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-nickel-500 transition hover:bg-nickel-100 hover:text-nickel-700"
               >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X className="h-4 w-4" aria-hidden />
               </button>
             </div>
 
-            <form onSubmit={handleCreateTenant} className="p-6 space-y-6">
-              {/* Basic Information */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wider">Basic Information</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="sm:col-span-2">
-                    <label className="block text-sm font-medium text-slate-300 mb-2">Tenant Name</label>
-                    <input
-                      type="text"
-                      value={newTenant.name}
-                      onChange={(e) => setNewTenant(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
-                      placeholder="e.g., Acme Corporation"
-                      required
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-sm font-medium text-slate-300 mb-2">ATI ID</label>
-                    <input
-                      type="text"
-                      value={newTenant.atiId}
-                      onChange={(e) => setNewTenant(prev => ({ ...prev, atiId: e.target.value.toUpperCase() }))}
-                      className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors uppercase"
-                      placeholder="e.g., ACME"
-                      required
-                    />
-                    <p className="text-xs text-slate-500 mt-1">Unique identifier for ATI tokens and routing</p>
-                  </div>
+            <form onSubmit={handleCreateTenant} className="space-y-6 p-5">
+              <fieldset className="space-y-3.5">
+                <legend className="nk-eyebrow mb-3">Basic information</legend>
+                <div>
+                  <label htmlFor="tenant_name" className="nk-label mb-1.5">Tenant name</label>
+                  <input
+                    id="tenant_name"
+                    type="text"
+                    value={newTenant.name}
+                    onChange={e => setNewTenant(prev => ({ ...prev, name: e.target.value }))}
+                    className="nk-input"
+                    placeholder="e.g. Acme Corporation"
+                    required
+                  />
                 </div>
-              </div>
+                <div>
+                  <label htmlFor="tenant_ati" className="nk-label mb-1.5">ATI ID</label>
+                  <input
+                    id="tenant_ati"
+                    type="text"
+                    value={newTenant.atiId}
+                    onChange={e => setNewTenant(prev => ({ ...prev, atiId: e.target.value.toUpperCase() }))}
+                    className="nk-input font-mono uppercase"
+                    placeholder="e.g. ACME"
+                    required
+                  />
+                  <p className="mt-1.5 text-[12px] text-nickel-500">
+                    Unique identifier used for ATI tokens and routing
+                  </p>
+                </div>
+              </fieldset>
 
-              {/* Token Configuration */}
-              <div className="space-y-4 pt-4 border-t border-slate-700">
-                <div className="flex items-center gap-3">
+              <fieldset className="nk-rule space-y-4 pt-5">
+                <div className="flex items-center gap-2.5">
                   <input
                     id="generate_token"
                     type="checkbox"
                     checked={newTenant.generateInitialToken}
-                    onChange={(e) => setNewTenant(prev => ({ ...prev, generateInitialToken: e.target.checked }))}
-                    className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-800"
+                    onChange={e => setNewTenant(prev => ({ ...prev, generateInitialToken: e.target.checked }))}
+                    className="h-4 w-4 rounded border-nickel-300 text-cobalt-600 focus:ring-cobalt-500"
                   />
-                  <label htmlFor="generate_token" className="text-sm font-medium text-white">Generate Initial ATI Token</label>
+                  <label htmlFor="generate_token" className="text-[13.5px] font-medium text-nickel-800">
+                    Generate an initial ATI token
+                  </label>
                 </div>
 
                 {newTenant.generateInitialToken && (
-                  <div className="ml-7 pl-4 border-l-2 border-violet-500/30 space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="ml-1.5 space-y-4 border-l-2 border-cobalt-100 pl-4">
+                    <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                       <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">Expiration Date</label>
+                        <label htmlFor="token_expires" className="nk-label mb-1.5">Expiration date</label>
                         <input
+                          id="token_expires"
                           type="datetime-local"
                           value={newTenant.expires_at}
-                          onChange={(e) => setNewTenant(prev => ({ ...prev, expires_at: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                          onChange={e => setNewTenant(prev => ({ ...prev, expires_at: e.target.value }))}
+                          className="nk-input"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">Max Uses</label>
+                        <label htmlFor="token_max_uses" className="nk-label mb-1.5">Max uses</label>
                         <input
+                          id="token_max_uses"
                           type="number"
                           value={newTenant.max_uses}
-                          onChange={(e) => setNewTenant(prev => ({ ...prev, max_uses: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                          onChange={e => setNewTenant(prev => ({ ...prev, max_uses: e.target.value }))}
+                          className="nk-input"
                           placeholder="Unlimited"
                           min="1"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">Plan Tier</label>
+                        <label htmlFor="token_tier" className="nk-label mb-1.5">Plan tier</label>
                         <select
+                          id="token_tier"
                           value={newTenant.plan_tier}
-                          onChange={(e) => setNewTenant(prev => ({ ...prev, plan_tier: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
+                          onChange={e => setNewTenant(prev => ({ ...prev, plan_tier: e.target.value }))}
+                          className="nk-select"
                         >
                           <option value="BASIC">Basic</option>
                           <option value="PRO">Pro</option>
@@ -959,56 +1036,43 @@ export default function SuperAdminDashboard() {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">Notes</label>
+                        <label htmlFor="token_notes" className="nk-label mb-1.5">Notes</label>
                         <input
+                          id="token_notes"
                           type="text"
                           value={newTenant.notes}
-                          onChange={(e) => setNewTenant(prev => ({ ...prev, notes: e.target.value }))}
-                          className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors"
-                          placeholder="Optional notes"
+                          onChange={e => setNewTenant(prev => ({ ...prev, notes: e.target.value }))}
+                          className="nk-input"
+                          placeholder="Optional"
                         />
                       </div>
                     </div>
 
-                    {/* Security Warning */}
-                    <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
-                      <span className="text-xl">⚠️</span>
-                      <div>
-                        <h4 className="font-medium text-amber-400">Security Notice</h4>
-                        <p className="text-sm text-amber-300/80 mt-1">
-                          The generated token will only be displayed once. Copy and share it securely.
-                        </p>
-                      </div>
+                    <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3.5">
+                      <AlertTriangle className="mt-px h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                      <p className="text-[12.5px] leading-5 text-amber-900">
+                        <span className="font-semibold">Shown once.</span> The generated token is
+                        displayed a single time — copy it and share it securely.
+                      </p>
                     </div>
                   </div>
                 )}
-              </div>
+              </fieldset>
 
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-700">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateTenant(false)}
-                  className="px-5 py-2.5 rounded-xl border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
-                >
+              <div className="nk-rule flex items-center justify-end gap-2.5 pt-5">
+                <button type="button" onClick={() => setShowCreateTenant(false)} className="nk-btn-secondary">
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={isCreating}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-medium hover:from-violet-600 hover:to-fuchsia-600 disabled:opacity-50 transition-all flex items-center gap-2"
-                >
+                <button type="submit" disabled={isCreating} className="nk-btn-primary">
                   {isCreating ? (
                     <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      Creating...
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      Creating…
                     </>
                   ) : (
                     <>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                      </svg>
-                      Create Tenant
+                      <Plus className="h-4 w-4" aria-hidden />
+                      Create tenant
                     </>
                   )}
                 </button>
@@ -1018,58 +1082,56 @@ export default function SuperAdminDashboard() {
         </div>
       )}
 
-      {/* Success Modal */}
+      {/* ── Token handoff ────────────────────────────────────────────────── */}
       {showSuccessModal && createdTokenInfo && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="w-full max-w-md mx-4 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <span className="text-emerald-400">✅</span>
-                Tenant Created
-              </h3>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Tenant created"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-nickel-900/45 p-4 backdrop-blur-sm"
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-xl border border-nickel-200 bg-white shadow-nk-sheet">
+            <div className="nk-panel-head flex-nowrap">
+              <div className="min-w-0">
+                <h2 className="nk-title">Tenant created</h2>
+                <p className="nk-sub mt-0.5 truncate">{createdTokenInfo.tenantName}</p>
+              </div>
               <button
-                onClick={() => { setShowSuccessModal(false); setCreatedTokenInfo(null); }}
-                className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                onClick={() => { setShowSuccessModal(false); setCreatedTokenInfo(null) }}
+                aria-label="Close"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-nickel-500 transition hover:bg-nickel-100 hover:text-nickel-700"
               >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X className="h-4 w-4" aria-hidden />
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
-              <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-                <p className="text-sm text-emerald-300">
-                  Tenant "{createdTokenInfo.tenantName}" has been created successfully!
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 space-y-3">
-                <div className="flex items-start gap-2">
-                  <span className="text-amber-400">⚠️</span>
-                  <h4 className="font-medium text-amber-400">Initial ATI Token</h4>
+            <div className="space-y-4 p-5">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3.5">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                  <span className="nk-eyebrow text-amber-800">Copy it now — shown once</span>
                 </div>
-                <div className="font-mono text-sm bg-slate-900 p-3 rounded-lg text-amber-300 break-all">
+                <p className="mt-3 break-all rounded-md border border-amber-200 bg-white p-3 font-mono text-[12.5px] leading-5 text-nickel-900">
                   {createdTokenInfo.token}
-                </div>
-                <p className="text-xs text-slate-400">
-                  <strong>Fingerprint:</strong> <code className="bg-slate-900 px-1.5 py-0.5 rounded text-amber-300">{createdTokenInfo.fingerprint}</code>
                 </p>
-                <p className="text-sm text-amber-300/80">
-                  Copy this token now! It will not be shown again.
+                <p className="mt-2.5 text-[12px] text-amber-900">
+                  Fingerprint{' '}
+                  <code className="nk-mono rounded bg-white px-1.5 py-0.5 text-nickel-700">
+                    {createdTokenInfo.fingerprint}
+                  </code>
                 </p>
                 <button
                   onClick={() => copyToClipboard(createdTokenInfo.token)}
-                  className="w-full px-4 py-2.5 rounded-xl bg-amber-500/20 border border-amber-500/30 text-amber-300 hover:bg-amber-500/30 transition-colors flex items-center justify-center gap-2"
+                  className="nk-btn-secondary mt-3 w-full"
                 >
-                  <span>📋</span>
-                  Copy Token to Clipboard
+                  <Copy className="h-4 w-4 text-nickel-400" aria-hidden />
+                  Copy token to clipboard
                 </button>
               </div>
 
               <button
-                onClick={() => { setShowSuccessModal(false); setCreatedTokenInfo(null); }}
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-700 text-white hover:bg-slate-600 transition-colors"
+                onClick={() => { setShowSuccessModal(false); setCreatedTokenInfo(null) }}
+                className="nk-btn-primary w-full"
               >
                 Done
               </button>

@@ -5,9 +5,9 @@ import Link from 'next/link'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import type { ProductModuleKey } from '@/lib/access/modules'
-import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowRight,
+  ArrowUpRight,
   Compass,
   FileText,
   LayoutDashboard,
@@ -27,419 +27,363 @@ interface ProductOption {
   description: string
   href: string
   icon: typeof Search
-  gradient: string
-  glowColor: string
-  iconBg: string
-  iconColor: string
-  borderHover: string
   tag: string
-  orbColor: string
   /** Product module this card maps to (for plan gating). Undefined = always available. */
   moduleKey?: ProductModuleKey
   /** Lowest tier that unlocks it, shown on the locked overlay. */
   minTier?: string
 }
 
-const productOptions: ProductOption[] = [
+interface ProductGroup {
+  /** Section eyebrow. */
+  title: string
+  /** One line explaining what this band of the workspace is for. */
+  caption: string
+  options: ProductOption[]
+}
+
+const productGroups: ProductGroup[] = [
   {
-    title: 'Fund Finder',
-    description: 'Discover funding opportunities with AI-powered search and intelligent matching.',
-    href: '/finder',
-    icon: Search,
-    gradient: 'from-cyan-500 to-teal-500',
-    glowColor: 'rgba(6, 182, 212, 0.08)',
-    iconBg: 'bg-cyan-50',
-    iconColor: 'text-cyan-600',
-    borderHover: 'hover:border-cyan-200',
-    tag: 'Discovery',
-    orbColor: 'bg-cyan-200/40',
-    moduleKey: 'FUNDING_DIRECTORY',
-    minTier: 'Starter'
+    title: 'Discover',
+    caption: 'Find the calls worth your time',
+    options: [
+      {
+        title: 'Fund Finder',
+        description:
+          'Search the funding directory with AI ranking and eligibility-aware matching.',
+        href: '/finder',
+        icon: Search,
+        tag: 'Discovery',
+        moduleKey: 'FUNDING_DIRECTORY',
+        minTier: 'Starter'
+      },
+      {
+        title: 'AI Funding Chatbot',
+        description:
+          'Ask for calls in plain language and get grounded answers with citations.',
+        href: '/finder?tab=ai',
+        icon: MessageSquare,
+        tag: 'Assistant',
+        moduleKey: 'FUNDING_CHAT',
+        minTier: 'Pro'
+      },
+      {
+        title: 'Funding Intelligence',
+        description:
+          'Deep call intelligence, document Q&A, and idea analysis over the funding corpus.',
+        href: '/funding/intelligence',
+        icon: Sparkles,
+        tag: 'Intelligence',
+        moduleKey: 'FUNDING_INTELLIGENCE',
+        minTier: 'Pro'
+      }
+    ]
   },
   {
-    title: 'AI Funding Chatbot',
-    description: 'Chat with an AI assistant that recommends calls and answers funding questions.',
-    href: '/finder?tab=ai',
-    icon: MessageSquare,
-    gradient: 'from-teal-500 to-emerald-500',
-    glowColor: 'rgba(20, 184, 166, 0.08)',
-    iconBg: 'bg-teal-50',
-    iconColor: 'text-teal-600',
-    borderHover: 'hover:border-teal-200',
-    tag: 'Assistant',
-    orbColor: 'bg-teal-200/40',
-    moduleKey: 'FUNDING_CHAT',
-    minTier: 'Pro'
+    title: 'Build',
+    caption: 'Draft, review, and get the proposal out',
+    options: [
+      {
+        title: 'Grant Writer',
+        description:
+          'Build and manage grant applications with structured, AI-assisted drafting.',
+        href: '/projects',
+        icon: FileText,
+        tag: 'Writing',
+        moduleKey: 'GRANT_STUDIO',
+        minTier: 'Pro'
+      },
+      {
+        title: 'Grant Reviewer',
+        description:
+          'Run structured reviews, context summaries, and generate final review reports.',
+        href: '/reviewer',
+        icon: ShieldCheck,
+        tag: 'Analysis',
+        moduleKey: 'GRANT_REVIEW',
+        minTier: 'Pro'
+      }
+    ]
   },
   {
-    title: 'Funding Intelligence',
-    description: 'Deep call intelligence, document Q&A, and idea intelligence over the funding corpus.',
-    href: '/funding/intelligence',
-    icon: Sparkles,
-    gradient: 'from-fuchsia-500 to-purple-500',
-    glowColor: 'rgba(217, 70, 239, 0.08)',
-    iconBg: 'bg-fuchsia-50',
-    iconColor: 'text-fuchsia-600',
-    borderHover: 'hover:border-fuchsia-200',
-    tag: 'Intelligence',
-    orbColor: 'bg-fuchsia-200/40',
-    moduleKey: 'FUNDING_INTELLIGENCE',
-    minTier: 'Pro'
-  },
-  {
-    title: 'Grant Writer',
-    description: 'Build and manage grant applications with structured AI-assisted drafting.',
-    href: '/projects',
-    icon: FileText,
-    gradient: 'from-blue-500 to-indigo-500',
-    glowColor: 'rgba(59, 130, 246, 0.08)',
-    iconBg: 'bg-blue-50',
-    iconColor: 'text-blue-600',
-    borderHover: 'hover:border-blue-200',
-    tag: 'Writing',
-    orbColor: 'bg-blue-200/40',
-    moduleKey: 'GRANT_STUDIO',
-    minTier: 'Pro'
-  },
-  {
-    title: 'Researcher Profile',
-    description: 'Define your profile and eligibility for personalized funding discovery.',
-    href: '/profile/researcher',
-    icon: UserCircle,
-    gradient: 'from-amber-500 to-orange-500',
-    glowColor: 'rgba(245, 158, 11, 0.08)',
-    iconBg: 'bg-amber-50',
-    iconColor: 'text-amber-600',
-    borderHover: 'hover:border-amber-200',
-    tag: 'Identity',
-    orbColor: 'bg-amber-200/40'
-  },
-  {
-    title: 'Research Fit',
-    description: 'Manage research areas and key publications for better funding matches.',
-    href: '/profile/research-fit',
-    icon: Compass,
-    gradient: 'from-emerald-500 to-green-500',
-    glowColor: 'rgba(16, 185, 129, 0.08)',
-    iconBg: 'bg-emerald-50',
-    iconColor: 'text-emerald-600',
-    borderHover: 'hover:border-emerald-200',
-    tag: 'Focus',
-    orbColor: 'bg-emerald-200/40'
-  },
-  {
-    title: 'Grant Reviewer',
-    description: 'Run structured reviews, context summaries, and generate final review reports.',
-    href: '/reviewer',
-    icon: ShieldCheck,
-    gradient: 'from-violet-500 to-purple-500',
-    glowColor: 'rgba(139, 92, 246, 0.08)',
-    iconBg: 'bg-violet-50',
-    iconColor: 'text-violet-600',
-    borderHover: 'hover:border-violet-200',
-    tag: 'Analysis',
-    orbColor: 'bg-violet-200/40',
-    moduleKey: 'GRANT_REVIEW',
-    minTier: 'Pro'
+    title: 'Calibrate',
+    caption: 'What the system knows about your research',
+    options: [
+      {
+        title: 'Researcher Profile',
+        description:
+          'Define your profile and eligibility so discovery is filtered to what you can actually win.',
+        href: '/profile/researcher',
+        icon: UserCircle,
+        tag: 'Identity'
+      },
+      {
+        title: 'Research Fit',
+        description:
+          'Manage research areas and key publications that drive match quality.',
+        href: '/profile/research-fit',
+        icon: Compass,
+        tag: 'Focus'
+      }
+    ]
   }
 ]
 
-const adminOption: ProductOption = {
-  title: 'Team & Workspace Admin',
-  description: 'Invite members, manage access codes, and oversee workspace usage.',
-  href: '/admin',
-  icon: Users,
-  gradient: 'from-slate-500 to-slate-700',
-  glowColor: 'rgba(100, 116, 139, 0.08)',
-  iconBg: 'bg-slate-100',
-  iconColor: 'text-slate-600',
-  borderHover: 'hover:border-slate-300',
-  tag: 'Admin',
-  orbColor: 'bg-slate-200/40'
+const adminGroup: ProductGroup = {
+  title: 'Administer',
+  caption: 'Your workspace and the people in it',
+  options: [
+    {
+      title: 'Team & Workspace Admin',
+      description: 'Invite members, manage access codes, and oversee workspace usage.',
+      href: '/admin',
+      icon: Users,
+      tag: 'Admin'
+    }
+  ]
 }
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: { staggerChildren: 0.08, delayChildren: 0.3 }
-  }
-}
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 24, scale: 0.96 },
-  show: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    transition: { type: 'spring', stiffness: 260, damping: 24 }
-  }
-}
-
-function FloatingOrb({ className, delay = 0 }: { className: string; delay?: number }) {
+/* ── A single readout in the status strip ─────────────────────────────────── */
+function Readout({
+  label,
+  value,
+  pending,
+  live
+}: {
+  label: string
+  value: string
+  pending?: boolean
+  live?: boolean
+}) {
   return (
-    <motion.div
-      className={`absolute rounded-full blur-3xl pointer-events-none ${className}`}
-      animate={{
-        y: [0, -20, 0],
-        x: [0, 10, 0],
-        scale: [1, 1.08, 1]
-      }}
-      transition={{
-        duration: 10,
-        repeat: Infinity,
-        ease: 'easeInOut',
-        delay
-      }}
-    />
+    // Negative offsets collapse each cell's border into its neighbour's (and
+    // into the panel edge), so the strip reads as one ruled grid at any
+    // column count.
+    <div className="-ml-px -mt-px flex min-w-0 flex-col gap-1.5 border-l border-t border-nickel-200 px-5 py-3.5">
+      <span className="nk-eyebrow">{label}</span>
+      {pending ? (
+        <span className="h-[19px] w-16 animate-pulse rounded bg-nickel-100" aria-hidden />
+      ) : (
+        <span className="flex items-center gap-2">
+          {live && <span className="nk-lamp" aria-hidden />}
+          <span className="nk-readout-sm truncate">{value}</span>
+        </span>
+      )}
+    </div>
   )
 }
 
+/* ── Product card ─────────────────────────────────────────────────────────── */
 function ProductCard({
   option,
   index,
-  totalCount,
   locked
 }: {
   option: ProductOption
   index: number
-  totalCount: number
   locked?: boolean
 }) {
   const Icon = option.icon
-  // Only stretch the last card across the grid when the count is odd
-  const isWide = index === totalCount - 1 && totalCount % 2 === 1
+  const tier = option.minTier || 'Pro'
 
   if (locked) {
     return (
-      <motion.div variants={itemVariants} className={isWide ? 'md:col-span-2 lg:col-span-2' : ''}>
-        <div
-          className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-slate-50/60 p-6 shadow-sm"
-          title={`Included in the ${option.minTier || 'Pro'} plan`}
-        >
-          <div className="relative z-10 flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100">
-                <Icon className="h-5 w-5 text-slate-400" />
-              </div>
-              <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium tracking-wider text-amber-600 uppercase">
-                {option.minTier || 'Pro'}
-              </span>
-            </div>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
-              <Lock className="h-4 w-4 text-slate-400" />
-            </div>
-          </div>
-          <div className="relative z-10 mt-5 flex-1">
-            <h3 className="text-lg font-semibold tracking-tight text-slate-500">{option.title}</h3>
-            <p className="mt-2 text-sm leading-relaxed text-slate-400">{option.description}</p>
-          </div>
-          <div className="relative z-10 mt-5 text-xs font-medium text-amber-600">
-            🔒 Upgrade to {option.minTier || 'Pro'} to unlock
-          </div>
+      <div
+        className="nk-panel nk-hatch nk-enter flex h-full flex-col p-5"
+        style={{ '--nk-i': index } as React.CSSProperties}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <span className="nk-tile h-10 w-10 opacity-60">
+            <Icon className="h-[18px] w-[18px]" aria-hidden />
+          </span>
+          <span className="nk-badge nk-badge-warn">
+            <Lock className="h-3 w-3" aria-hidden />
+            {tier}
+          </span>
         </div>
-      </motion.div>
+
+        <div className="mt-4 flex-1">
+          <h3 className="nk-title text-nickel-600">{option.title}</h3>
+          <p className="mt-1.5 text-[13px] leading-5 text-nickel-500">{option.description}</p>
+        </div>
+
+        <div className="nk-rule mt-4 flex items-center justify-between gap-3 pt-3">
+          <span className="nk-eyebrow">{option.tag}</span>
+          <span className="text-[12.5px] font-medium text-nickel-500">
+            Requires {tier}
+          </span>
+        </div>
+      </div>
     )
   }
 
   return (
-    <motion.div variants={itemVariants} className={isWide ? 'md:col-span-2 lg:col-span-2' : ''}>
-      <Link
-        href={option.href}
-        className={`
-          group relative flex h-full flex-col overflow-hidden rounded-2xl
-          border border-slate-200/70 bg-white/80 backdrop-blur-sm
-          p-6 shadow-sm
-          transition-all duration-500 ease-out
-          hover:bg-white hover:shadow-lg hover:-translate-y-1
-          ${option.borderHover}
-        `}
-      >
-        <div
-          className="absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-500 group-hover:opacity-100"
-          style={{
-            background: `radial-gradient(600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), ${option.glowColor}, transparent 40%)`
-          }}
-        />
+    <Link
+      href={option.href}
+      style={{ '--nk-i': index } as React.CSSProperties}
+      className="nk-panel nk-enter group flex h-full flex-col p-5 transition duration-150
+                 hover:-translate-y-px hover:border-nickel-300 hover:shadow-nk-lift
+                 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
+                 focus-visible:outline-cobalt-600 motion-reduce:hover:translate-y-0"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <span className="nk-tile h-10 w-10 transition duration-150 group-hover:nk-tile-live">
+          <Icon className="h-[18px] w-[18px]" aria-hidden />
+        </span>
+        <span
+          className="flex h-7 w-7 items-center justify-center rounded-md text-nickel-300
+                     transition duration-150 group-hover:bg-cobalt-50 group-hover:text-cobalt-600"
+          aria-hidden
+        >
+          <ArrowRight className="h-4 w-4 transition-transform duration-150 group-hover:translate-x-0.5" />
+        </span>
+      </div>
 
-        <div className="absolute top-0 left-0 right-0 h-[2px]">
-          <div
-            className={`h-full w-0 bg-gradient-to-r ${option.gradient} transition-all duration-700 group-hover:w-full opacity-80`}
-          />
-        </div>
+      <div className="mt-4 flex-1">
+        <h3 className="nk-title">{option.title}</h3>
+        <p className="mt-1.5 text-[13px] leading-5 text-nickel-500">{option.description}</p>
+      </div>
 
-        <div className="relative z-10 flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <div
-              className={`flex h-11 w-11 items-center justify-center rounded-xl ${option.iconBg} transition-all duration-300 group-hover:scale-110`}
-            >
-              <Icon className={`h-5 w-5 ${option.iconColor}`} />
-            </div>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium tracking-wider text-slate-400 uppercase">
-              {option.tag}
-            </span>
-          </div>
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-50 transition-all duration-300 group-hover:bg-slate-100">
-            <ArrowRight className="h-4 w-4 text-slate-300 transition-all duration-300 group-hover:text-slate-500 group-hover:translate-x-0.5" />
-          </div>
-        </div>
-
-        <div className="relative z-10 mt-5 flex-1">
-          <h3 className="text-lg font-semibold tracking-tight text-slate-900 transition-colors duration-300">
-            {option.title}
-          </h3>
-          <p className="mt-2 text-sm leading-relaxed text-slate-400 transition-colors duration-300 group-hover:text-slate-500">
-            {option.description}
-          </p>
-        </div>
-
-        <div className="relative z-10 mt-5 flex items-center gap-2">
-          <span
-            className={`text-xs font-medium bg-gradient-to-r ${option.gradient} bg-clip-text text-transparent opacity-0 transition-all duration-300 group-hover:opacity-100`}
-          >
-            Open {option.title}
-          </span>
-          <div
-            className={`h-px flex-1 bg-gradient-to-r ${option.gradient} opacity-0 transition-all duration-500 group-hover:opacity-15`}
-          />
-        </div>
-      </Link>
-    </motion.div>
+      <div className="nk-rule mt-4 flex items-center justify-between gap-3 pt-3">
+        <span className="nk-eyebrow">{option.tag}</span>
+        <span className="text-[12.5px] font-medium text-nickel-500 transition-colors duration-150 group-hover:text-cobalt-700">
+          Open
+        </span>
+      </div>
+    </Link>
   )
 }
 
 export default function UserProductChooser() {
   const { user } = useAuth()
   const { isTenantAdmin } = useRoleAccess()
-  const { hasModule, isLoading: entitlementsLoading, isPlatform } = useEntitlements()
-  const options = isTenantAdmin ? [...productOptions, adminOption] : productOptions
-  const [mounted, setMounted] = useState(false)
+  const { hasModule, plan, isLoading: entitlementsLoading, isPlatform } = useEntitlements()
+  const groups = isTenantAdmin ? [...productGroups, adminGroup] : productGroups
 
   // A card is locked when its module is not in the tenant's plan. While
   // entitlements load (or for platform/super-admin users) nothing is locked.
   const isOptionLocked = (option: ProductOption) =>
     Boolean(option.moduleKey) && !entitlementsLoading && !isPlatform && !hasModule(option.moduleKey!)
+
   const firstName =
     user?.email?.split('@')[0]?.split('.')[0]?.replace(/^\w/, (c: string) => c.toUpperCase()) ?? ''
 
+  // Local time is only correct on the client — render it after hydration so the
+  // server and the browser never disagree.
+  const [clock, setClock] = useState<string | null>(null)
   useEffect(() => {
-    setMounted(true)
+    const tick = () =>
+      setClock(
+        new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      )
+    tick()
+    const timer = setInterval(tick, 30_000)
+    return () => clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    function handleMouseMove(e: MouseEvent) {
-      const cards = document.querySelectorAll<HTMLElement>('.group')
-      cards.forEach((card) => {
-        const rect = card.getBoundingClientRect()
-        card.style.setProperty('--mouse-x', `${e.clientX - rect.left}px`)
-        card.style.setProperty('--mouse-y', `${e.clientY - rect.top}px`)
-      })
-    }
-    window.addEventListener('mousemove', handleMouseMove)
-    return () => window.removeEventListener('mousemove', handleMouseMove)
-  }, [])
+  const gatedOptions = productGroups.flatMap(g => g.options).filter(o => o.moduleKey)
+  const unlockedCount = isPlatform
+    ? gatedOptions.length
+    : gatedOptions.filter(o => hasModule(o.moduleKey!)).length
 
-  const currentHour = new Date().getHours()
-  const greeting =
-    currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening'
+  const planLabel = isPlatform ? 'Platform' : plan?.name || 'Trial'
+
+  // Cards animate in document order across every group, so the stagger reads as
+  // one sweep down the page rather than restarting per section.
+  let cardIndex = 0
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-50 via-white to-slate-50/80">
-      <FloatingOrb className="h-[500px] w-[500px] bg-cyan-100/50 -top-48 -left-48" delay={0} />
-      <FloatingOrb className="h-[400px] w-[400px] bg-violet-100/40 top-1/3 -right-40" delay={2} />
-      <FloatingOrb className="h-[350px] w-[350px] bg-blue-100/40 bottom-20 left-1/4" delay={4} />
-      <FloatingOrb className="h-[300px] w-[300px] bg-emerald-100/30 -bottom-24 right-1/3" delay={6} />
+    <div className="nk-ground nk-wash">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[520px] nk-grid" aria-hidden />
 
-      <div className="dash-grid-light absolute inset-0 pointer-events-none" />
+      <div className="relative z-10 mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
+        {/* ── Masthead ───────────────────────────────────────────────────── */}
+        <header className="mb-8">
+          <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+            <div className="min-w-0">
+              <p className="nk-eyebrow">Grapsi · Research Funding Workspace</p>
+              <h1 className="mt-2.5 text-[30px] font-semibold leading-tight tracking-[-0.025em] text-nickel-900 sm:text-[34px]">
+                Welcome back{firstName ? <>, <span className="text-cobalt-700">{firstName}</span></> : ''}
+              </h1>
+              <p className="mt-2 max-w-xl text-[14px] leading-6 text-nickel-500">
+                Every module below reads from the same profile and the same funding corpus.
+                Sharpen one and the rest get better.
+              </p>
+            </div>
 
-      <div className="relative z-10 mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
-        <AnimatePresence>
-          {mounted && (
-            <>
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-                className="mb-16 text-center"
-              >
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.1, duration: 0.5 }}
-                  className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-4 py-1.5 shadow-sm backdrop-blur-sm"
-                >
-                  <Sparkles className="h-3.5 w-3.5 text-violet-500" />
-                  <span className="text-xs font-medium tracking-wide text-slate-500">
-                    AI-Powered Research Platform
-                  </span>
-                </motion.div>
+            <div className="nk-mono flex items-center gap-2 text-nickel-500" suppressHydrationWarning>
+              <span className="nk-lamp" aria-hidden />
+              <span>{clock ?? '--:--'} local</span>
+            </div>
+          </div>
 
-                <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-                  <span className="text-slate-900">
-                    {greeting}
-                    {firstName ? ', ' : ''}
-                  </span>
-                  {firstName && (
-                    <span className="dash-gradient-text-light">{firstName}</span>
-                  )}
-                </h1>
+          <div className="nk-ticks mt-6" aria-hidden />
+        </header>
 
-                <p className="mx-auto mt-4 max-w-lg text-base leading-relaxed text-slate-400">
-                  Choose a workspace to get started. Each tool is designed to
-                  accelerate a different part of your research workflow.
-                </p>
-              </motion.div>
+        {/* ── Status strip ───────────────────────────────────────────────── */}
+        <div className="nk-panel mb-8 grid grid-cols-2 overflow-hidden sm:grid-cols-4">
+          <Readout label="Plan" value={planLabel} pending={entitlementsLoading} live />
+          <Readout
+            label="Modules unlocked"
+            value={`${unlockedCount} / ${gatedOptions.length}`}
+            pending={entitlementsLoading}
+          />
+          <Readout label="Workspace" value={user?.ati_id || '—'} />
+          <Readout label="Signed in as" value={user?.email || '—'} />
+        </div>
 
-              <WorkshopAccessBanner />
+        <WorkshopAccessBanner />
 
-              <GettingStartedCard />
+        <GettingStartedCard />
 
-              <motion.div
-                variants={containerVariants}
-                initial="hidden"
-                animate="show"
-                className="grid gap-4 md:grid-cols-2 lg:grid-cols-2"
-              >
-                {options.map((option, i) => (
+        {/* ── Module bands ───────────────────────────────────────────────── */}
+        <div className="space-y-10">
+          {groups.map(group => (
+            <section key={group.title}>
+              <div className="mb-4 flex items-baseline gap-3">
+                <h2 className="nk-eyebrow text-nickel-700">{group.title}</h2>
+                <span className="h-px flex-1 bg-nickel-200" aria-hidden />
+                <p className="text-[12.5px] text-nickel-500">{group.caption}</p>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {group.options.map(option => (
                   <ProductCard
                     key={option.title}
                     option={option}
-                    index={i}
-                    totalCount={options.length}
+                    index={cardIndex++}
                     locked={isOptionLocked(option)}
                   />
                 ))}
-              </motion.div>
+              </div>
+            </section>
+          ))}
+        </div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.9, duration: 0.5 }}
-                className="mt-8"
-              >
-                <Link
-                  href="/dashboard/workspace"
-                  className="group relative flex items-center justify-between overflow-hidden rounded-2xl border border-slate-200/70 bg-white/60 p-5 backdrop-blur-sm transition-all duration-500 hover:bg-white hover:border-slate-300 hover:shadow-md"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-50">
-                      <LayoutDashboard className="h-[18px] w-[18px] text-slate-400" />
-                    </div>
-                    <div>
-                      <span className="text-sm font-medium text-slate-600 transition-colors group-hover:text-slate-800">
-                        Classic Workspace
-                      </span>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        Access the original dashboard with all your existing tools
-                      </p>
-                    </div>
-                  </div>
-                  <ArrowRight className="h-4 w-4 text-slate-300 transition-all duration-300 group-hover:text-slate-500 group-hover:translate-x-1" />
-                </Link>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
+        {/* ── Escape hatch ───────────────────────────────────────────────── */}
+        <Link
+          href="/dashboard/workspace"
+          className="nk-panel-quiet group mt-10 flex items-center justify-between gap-4 p-4 transition duration-150
+                     hover:border-nickel-300 hover:bg-white
+                     focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
+                     focus-visible:outline-cobalt-600"
+        >
+          <div className="flex min-w-0 items-center gap-3.5">
+            <span className="nk-tile h-9 w-9">
+              <LayoutDashboard className="h-4 w-4" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-medium text-nickel-700">Classic workspace</p>
+              <p className="truncate text-[12.5px] text-nickel-500">
+                The original dashboard, with uploaded calls and quick actions
+              </p>
+            </div>
+          </div>
+          <ArrowUpRight
+            className="h-4 w-4 shrink-0 text-nickel-300 transition duration-150 group-hover:text-cobalt-600"
+            aria-hidden
+          />
+        </Link>
       </div>
     </div>
   )

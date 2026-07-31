@@ -4,6 +4,24 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { isFeatureEnabled } from '@/lib/feature-flags'
 import InviteMembersPanel from '@/components/admin/InviteMembersPanel'
+import {
+  AlertTriangle,
+  BarChart3,
+  Ban,
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  KeyRound,
+  Loader2,
+  LogOut,
+  PauseCircle,
+  Plus,
+  Ticket,
+  Users,
+  X
+} from 'lucide-react'
+
+type LucideIcon = typeof Users
 
 interface ATIToken {
   id: string
@@ -48,6 +66,51 @@ interface PaperAnalytics {
 interface PaperUserMetrics extends SignupUser {
   papersCount: number
   lastPaperActivity?: string
+}
+
+/** Status → badge modifier. Anything unmapped falls back to neutral nickel. */
+const TOKEN_STATUS_BADGE: Record<string, string> = {
+  ACTIVE: 'nk-badge-ok',
+  ISSUED: 'nk-badge-live',
+  INACTIVE: '',
+  SUSPENDED: 'nk-badge-warn',
+  EXPIRED: 'nk-badge-warn',
+  USED_UP: 'nk-badge-warn',
+  REVOKED: 'nk-badge-danger'
+}
+
+/* ── One cell of a readout strip ──────────────────────────────────────────── */
+function Metric({
+  icon: Icon,
+  label,
+  value,
+  caption,
+  loading
+}: {
+  icon: LucideIcon
+  label: string
+  value: string | number
+  caption?: string
+  loading?: boolean
+}) {
+  return (
+    // Negative offsets collapse each cell's border into its neighbour's, so the
+    // strip reads as one ruled grid rather than a row of floating boxes.
+    <div className="-ml-px -mt-px flex min-w-0 flex-col gap-3 border-l border-t border-nickel-200 p-5">
+      <div className="flex items-center gap-2.5">
+        <span className="nk-tile h-8 w-8">
+          <Icon className="h-4 w-4" aria-hidden />
+        </span>
+        <span className="nk-eyebrow truncate">{label}</span>
+      </div>
+      {loading ? (
+        <span className="h-7 w-16 animate-pulse rounded bg-nickel-100" aria-hidden />
+      ) : (
+        <span className="nk-readout">{value}</span>
+      )}
+      {caption && <span className="text-[12.5px] text-nickel-500">{caption}</span>}
+    </div>
+  )
 }
 
 export default function TenantAdminDashboard() {
@@ -262,697 +325,599 @@ export default function TenantAdminDashboard() {
     }
   }
 
+  const activeCount = tokens.filter(t => t.status === 'ACTIVE' || t.status === 'ISSUED').length
+  const totalUsage = tokens.reduce((sum, t) => sum + t.usage_count, 0)
+  const revokedCount = tokens.filter(t => t.status === 'REVOKED').length
+  const suspendedCount = tokens.filter(t => t.status === 'SUSPENDED').length
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Tenant Admin Dashboard</h1>
-              <p className="text-gray-600">Manage ATI tokens and team access for {user?.ati_id}</p>
-            </div>
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => window.location.href = '/tenant-admin/analytics'}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-              >
-                📊 Analytics
-              </button>
-              <span className="text-sm text-gray-500">Role: {user?.roles?.join(', ') || 'None'}</span>
-              <button
-                onClick={() => logout()}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                Logout
-              </button>
-            </div>
+    <div className="nk-ground nk-wash">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] nk-grid" aria-hidden />
+
+      <header className="relative z-10 border-b border-nickel-200 bg-white/80 backdrop-blur-md">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
+          <div className="min-w-0">
+            <p className="nk-eyebrow">Workspace administration</p>
+            <h1 className="mt-2 flex flex-wrap items-center gap-3 text-[26px] font-semibold leading-tight tracking-[-0.025em] text-nickel-900">
+              Access control
+              {user?.ati_id && (
+                <span className="nk-badge nk-badge-live translate-y-px">{user.ati_id}</span>
+              )}
+            </h1>
+            <p className="mt-1.5 text-[13.5px] text-nickel-500">
+              Invite members, issue access tokens, and see who is using them
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => (window.location.href = '/tenant-admin/analytics')}
+              className="nk-btn-secondary nk-btn-sm"
+            >
+              <BarChart3 className="h-4 w-4 text-nickel-400" aria-hidden />
+              Analytics
+            </button>
+            <button onClick={() => logout()} className="nk-btn-ghost nk-btn-sm">
+              <LogOut className="h-4 w-4" aria-hidden />
+              Sign out
+            </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        {/* Error Display */}
+      <main className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        {/* Load failure */}
         {error && (
-          <div className="mb-8 bg-red-50 border border-red-200 rounded-md p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <div className="ml-3 flex-1">
-                <h3 className="text-sm font-medium text-red-800">
-                  Error Loading ATI Tokens
-                </h3>
-                <div className="mt-2 text-sm text-red-700">
-                  <p>{error}</p>
-                  <button
-                    onClick={fetchTokens}
-                    className="mt-2 inline-flex items-center px-3 py-1 border border-red-300 text-sm font-medium rounded-md text-red-800 bg-red-100 hover:bg-red-200"
-                  >
-                    Try Again
-                  </button>
-                </div>
-              </div>
-              <div className="ml-auto pl-3">
-                <button
-                  onClick={() => setError(null)}
-                  className="inline-flex rounded-md p-1.5 text-red-400 hover:bg-red-100"
-                >
-                  <span className="sr-only">Dismiss</span>
-                  <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                </button>
-              </div>
+          <div className="flex flex-wrap items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <h2 className="text-[13.5px] font-semibold text-red-900">Could not load access tokens</h2>
+              <p className="mt-1 text-[13px] leading-5 text-red-800">{error}</p>
+              <button onClick={fetchTokens} className="nk-btn-secondary nk-btn-sm mt-3">
+                Try again
+              </button>
             </div>
+            <button
+              onClick={() => setError(null)}
+              aria-label="Dismiss error"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-red-400 transition hover:bg-red-100 hover:text-red-700"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
           </div>
         )}
 
-        {/* Token Display Warning */}
+        {/* One-time token handoff */}
         {createdToken && (
-          <div className="mb-8 bg-yellow-50 border border-yellow-200 rounded-md p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <div className="ml-3 flex-1">
-                <h3 className="text-sm font-medium text-yellow-800">
-                  ATI Token Created Successfully
-                </h3>
-                <div className="mt-2 text-sm text-yellow-700">
-                  <p className="font-mono bg-yellow-100 p-2 rounded break-all">{createdToken}</p>
-                  <p className="mt-2">
-                    <strong>⚠️ Security Warning:</strong> Copy this token now and share it securely with your team members.
-                    This token will never be shown again for security reasons.
-                  </p>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(createdToken)}
-                    className="mt-2 inline-flex items-center px-3 py-1 border border-yellow-300 text-sm font-medium rounded-md text-yellow-800 bg-yellow-100 hover:bg-yellow-200"
-                  >
-                    Copy to Clipboard
-                  </button>
-                </div>
-              </div>
-              <div className="ml-auto pl-3">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <h2 className="nk-eyebrow text-amber-800">Token created — shown once</h2>
+                <p className="mt-2.5 break-all rounded-md border border-amber-200 bg-white p-3 font-mono text-[12.5px] leading-5 text-nickel-900">
+                  {createdToken}
+                </p>
+                <p className="mt-2 text-[12.5px] leading-5 text-amber-900">
+                  Copy it now and share it securely with your team. It will never be displayed again.
+                </p>
                 <button
-                  onClick={() => setCreatedToken(null)}
-                  className="inline-flex rounded-md p-1.5 text-yellow-400 hover:bg-yellow-100"
+                  onClick={() => navigator.clipboard.writeText(createdToken)}
+                  className="nk-btn-secondary nk-btn-sm mt-3"
                 >
-                  <span className="sr-only">Dismiss</span>
-                  <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
+                  <Copy className="h-3.5 w-3.5 text-nickel-400" aria-hidden />
+                  Copy to clipboard
                 </button>
               </div>
+              <button
+                onClick={() => setCreatedToken(null)}
+                aria-label="Dismiss token"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-amber-500 transition hover:bg-amber-100 hover:text-amber-800"
+              >
+                <X className="h-4 w-4" aria-hidden />
+              </button>
             </div>
           </div>
         )}
 
-        {/* Stats Overview */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5 mb-8">
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-sm font-bold">A</span>
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Active Tokens</dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {tokens.filter(t => t.status === 'ACTIVE' || t.status === 'ISSUED').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
+        {/* Readouts */}
+        <section className="nk-panel grid grid-cols-2 overflow-hidden sm:grid-cols-3 lg:grid-cols-5">
+          <Metric
+            icon={CheckCircle2}
+            label="Active tokens"
+            value={activeCount}
+            caption="Usable right now"
+            loading={isLoading}
+          />
+          <Metric
+            icon={Users}
+            label="Total usage"
+            value={totalUsage}
+            caption="Redemptions to date"
+            loading={isLoading}
+          />
+          <Metric
+            icon={Ban}
+            label="Revoked"
+            value={revokedCount}
+            caption="Manually withdrawn"
+            loading={isLoading}
+          />
+          <Metric
+            icon={PauseCircle}
+            label="Suspended"
+            value={suspendedCount}
+            caption="Temporarily paused"
+            loading={isLoading}
+          />
+          <Metric
+            icon={Ticket}
+            label="Total issued"
+            value={tokens.length}
+            caption="All time"
+            loading={isLoading}
+          />
+        </section>
 
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-sm font-bold">U</span>
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Total Usage</dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {tokens.reduce((sum, t) => sum + t.usage_count, 0)}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-sm font-bold">R</span>
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Revoked Tokens</dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {tokens.filter(t => t.status === 'REVOKED').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-sm font-bold">S</span>
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Suspended Tokens</dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {tokens.filter(t => t.status === 'SUSPENDED').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-sm font-bold">T</span>
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Total Tokens</dt>
-                    <dd className="text-lg font-medium text-gray-900">{tokens.length}</dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Paper Analytics (when feature enabled) */}
+        {/* Paper analytics (when feature enabled) */}
         {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && (
           <>
-            <div className="mb-8">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Paper Writing Analytics</h2>
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
-                <div className="bg-white overflow-hidden shadow rounded-lg">
-                  <div className="p-5">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center">
-                          <span className="text-white text-sm font-bold">P</span>
-                        </div>
-                      </div>
-                      <div className="ml-5 w-0 flex-1">
-                        <dl>
-                          <dt className="text-sm font-medium text-gray-500 truncate">Total Papers</dt>
-                          <dd className="text-lg font-medium text-gray-900">
-                            {isLoadingPapers ? '...' : (paperAnalytics?.totalPapers || 0)}
-                          </dd>
-                        </dl>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            <section className="nk-panel grid grid-cols-2 overflow-hidden sm:grid-cols-3 lg:grid-cols-5">
+              <Metric
+                icon={BarChart3}
+                label="Total papers"
+                value={paperAnalytics?.totalPapers || 0}
+                loading={isLoadingPapers}
+              />
+              <Metric
+                icon={BarChart3}
+                label="This month"
+                value={paperAnalytics?.papersThisMonth || 0}
+                loading={isLoadingPapers}
+              />
+              <Metric
+                icon={BarChart3}
+                label="This week"
+                value={paperAnalytics?.papersThisWeek || 0}
+                loading={isLoadingPapers}
+              />
+              <Metric
+                icon={BarChart3}
+                label="Avg per user"
+                value={(paperAnalytics?.averagePapersPerUser || 0).toFixed(1)}
+                loading={isLoadingPapers}
+              />
+              <Metric
+                icon={BarChart3}
+                label="Paper types"
+                value={paperAnalytics?.paperTypes?.length || 0}
+                loading={isLoadingPapers}
+              />
+            </section>
 
-                <div className="bg-white overflow-hidden shadow rounded-lg">
-                  <div className="p-5">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                          <span className="text-white text-sm font-bold">M</span>
-                        </div>
-                      </div>
-                      <div className="ml-5 w-0 flex-1">
-                        <dl>
-                          <dt className="text-sm font-medium text-gray-500 truncate">Papers This Month</dt>
-                          <dd className="text-lg font-medium text-gray-900">
-                            {isLoadingPapers ? '...' : (paperAnalytics?.papersThisMonth || 0)}
-                          </dd>
-                        </dl>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-white overflow-hidden shadow rounded-lg">
-                  <div className="p-5">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
-                          <span className="text-white text-sm font-bold">W</span>
-                        </div>
-                      </div>
-                      <div className="ml-5 w-0 flex-1">
-                        <dl>
-                          <dt className="text-sm font-medium text-gray-500 truncate">Papers This Week</dt>
-                          <dd className="text-lg font-medium text-gray-900">
-                            {isLoadingPapers ? '...' : (paperAnalytics?.papersThisWeek || 0)}
-                          </dd>
-                        </dl>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-white overflow-hidden shadow rounded-lg">
-                  <div className="p-5">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center">
-                          <span className="text-white text-sm font-bold">A</span>
-                        </div>
-                      </div>
-                      <div className="ml-5 w-0 flex-1">
-                        <dl>
-                          <dt className="text-sm font-medium text-gray-500 truncate">Avg Papers/User</dt>
-                          <dd className="text-lg font-medium text-gray-900">
-                            {isLoadingPapers ? '...' : (paperAnalytics?.averagePapersPerUser || 0).toFixed(1)}
-                          </dd>
-                        </dl>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-white overflow-hidden shadow rounded-lg">
-                  <div className="p-5">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 bg-indigo-500 rounded-full flex items-center justify-center">
-                          <span className="text-white text-sm font-bold">T</span>
-                        </div>
-                      </div>
-                      <div className="ml-5 w-0 flex-1">
-                        <dl>
-                          <dt className="text-sm font-medium text-gray-500 truncate">Paper Types</dt>
-                          <dd className="text-lg font-medium text-gray-900">
-                            {isLoadingPapers ? '...' : (paperAnalytics?.paperTypes?.length || 0)}
-                          </dd>
-                        </dl>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Paper Types and Citation Styles */}
             {paperAnalytics && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-                <div className="bg-white shadow rounded-lg">
-                  <div className="px-4 py-5 sm:p-6">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Paper Types Distribution</h3>
-                    <div className="space-y-3">
-                      {paperAnalytics.paperTypes?.slice(0, 5).map((type) => (
-                        <div key={type.type} className="flex items-center justify-between">
-                          <span className="text-sm text-gray-600">{type.type}</span>
-                          <span className="text-sm font-medium text-gray-900">{type.count}</span>
-                        </div>
-                      )) || <p className="text-sm text-gray-500">No paper types data available</p>}
-                    </div>
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <section className="nk-panel overflow-hidden">
+                  <div className="nk-panel-head">
+                    <h2 className="nk-title text-[14px]">Paper types distribution</h2>
                   </div>
-                </div>
+                  <div className="p-5">
+                    {paperAnalytics.paperTypes?.length ? (
+                      <ul className="space-y-2.5">
+                        {paperAnalytics.paperTypes.slice(0, 5).map(type => (
+                          <li key={type.type} className="flex items-center justify-between gap-3">
+                            <span className="truncate text-[13px] text-nickel-700">{type.type}</span>
+                            <span className="nk-mono shrink-0 text-nickel-900">{type.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[13px] text-nickel-500">No paper types data available</p>
+                    )}
+                  </div>
+                </section>
 
-                <div className="bg-white shadow rounded-lg">
-                  <div className="px-4 py-5 sm:p-6">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Citation Styles Usage</h3>
-                    <div className="space-y-3">
-                      {paperAnalytics.citationStyles?.slice(0, 5).map((style) => (
-                        <div key={style.style} className="flex items-center justify-between">
-                          <span className="text-sm text-gray-600">{style.style}</span>
-                          <span className="text-sm font-medium text-gray-900">{style.count}</span>
-                        </div>
-                      )) || <p className="text-sm text-gray-500">No citation styles data available</p>}
-                    </div>
+                <section className="nk-panel overflow-hidden">
+                  <div className="nk-panel-head">
+                    <h2 className="nk-title text-[14px]">Citation styles usage</h2>
                   </div>
-                </div>
+                  <div className="p-5">
+                    {paperAnalytics.citationStyles?.length ? (
+                      <ul className="space-y-2.5">
+                        {paperAnalytics.citationStyles.slice(0, 5).map(style => (
+                          <li key={style.style} className="flex items-center justify-between gap-3">
+                            <span className="truncate text-[13px] text-nickel-700">{style.style}</span>
+                            <span className="nk-mono shrink-0 text-nickel-900">{style.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[13px] text-nickel-500">No citation styles data available</p>
+                    )}
+                  </div>
+                </section>
               </div>
             )}
           </>
         )}
 
-        {/* Invite Members (email invites — the default way to add people) */}
+        {/* Invite members (email invites — the default way to add people) */}
         <InviteMembersPanel />
 
-        {/* Create Token Section */}
-        <div className="bg-white shadow rounded-lg mb-8">
-          <div className="px-4 py-5 sm:p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg leading-6 font-medium text-gray-900">Create ATI Token</h3>
-              <button
-                onClick={() => setShowCreateForm(!showCreateForm)}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
-              >
-                {showCreateForm ? 'Cancel' : '+ Generate Token'}
-              </button>
+        {/* Issue a token */}
+        <section className="nk-panel overflow-hidden">
+          <div className="nk-panel-head">
+            <div className="min-w-0">
+              <h2 className="nk-title text-[14px]">Access codes</h2>
+              <p className="nk-sub text-[12.5px]">
+                For bulk onboarding — a shared code people redeem at signup
+              </p>
             </div>
-
-            {showCreateForm && (
-              <form onSubmit={handleCreateToken} className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="expires_at" className="block text-sm font-medium text-gray-700">
-                      Expiration Date (Optional)
-                    </label>
-                    <input
-                      type="datetime-local"
-                      id="expires_at"
-                      value={newToken.expires_at}
-                      onChange={(e) => setNewToken(prev => ({ ...prev, expires_at: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="max_uses" className="block text-sm font-medium text-gray-700">
-                      Max Uses (Optional)
-                    </label>
-                    <input
-                      type="number"
-                      id="max_uses"
-                      value={newToken.max_uses}
-                      onChange={(e) => setNewToken(prev => ({ ...prev, max_uses: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                      placeholder="Unlimited if empty"
-                      min="1"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
-                      Notes (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      id="notes"
-                      value={newToken.notes}
-                      onChange={(e) => setNewToken(prev => ({ ...prev, notes: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                      placeholder="Purpose or recipient"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end space-x-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCreateForm(false)
-                      setNewToken({ expires_at: '', max_uses: '', notes: '' })
-                    }}
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isCreating}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
-                  >
-                    {isCreating ? 'Generating...' : 'Generate Token'}
-                  </button>
-                </div>
-              </form>
-            )}
+            <button
+              onClick={() => setShowCreateForm(!showCreateForm)}
+              aria-expanded={showCreateForm}
+              className={showCreateForm ? 'nk-btn-secondary nk-btn-sm' : 'nk-btn-primary nk-btn-sm'}
+            >
+              {showCreateForm ? (
+                <>
+                  <X className="h-4 w-4" aria-hidden />
+                  Cancel
+                </>
+              ) : (
+                <>
+                  <Plus className="h-4 w-4" aria-hidden />
+                  Generate code
+                </>
+              )}
+            </button>
           </div>
-        </div>
 
-        {/* Edit Token Section */}
-        {editingToken && (
-          <div className="bg-white shadow rounded-lg mb-8">
-            <div className="px-4 py-5 sm:p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg leading-6 font-medium text-gray-900">
-                  Edit ATI Token: {editingToken.fingerprint}
-                </h3>
+          {showCreateForm && (
+            <form onSubmit={handleCreateToken} className="space-y-4 p-5">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <label htmlFor="expires_at" className="nk-label mb-1.5">
+                    Expires <span className="font-normal text-nickel-500">(optional)</span>
+                  </label>
+                  <input
+                    type="datetime-local"
+                    id="expires_at"
+                    value={newToken.expires_at}
+                    onChange={e => setNewToken(prev => ({ ...prev, expires_at: e.target.value }))}
+                    className="nk-input"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="max_uses" className="nk-label mb-1.5">
+                    Max uses <span className="font-normal text-nickel-500">(optional)</span>
+                  </label>
+                  <input
+                    type="number"
+                    id="max_uses"
+                    value={newToken.max_uses}
+                    onChange={e => setNewToken(prev => ({ ...prev, max_uses: e.target.value }))}
+                    className="nk-input"
+                    placeholder="Unlimited"
+                    min="1"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="notes" className="nk-label mb-1.5">
+                    Notes <span className="font-normal text-nickel-500">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="notes"
+                    value={newToken.notes}
+                    onChange={e => setNewToken(prev => ({ ...prev, notes: e.target.value }))}
+                    className="nk-input"
+                    placeholder="Purpose or recipient"
+                  />
+                </div>
+              </div>
+              <div className="nk-rule flex justify-end gap-2.5 pt-4">
                 <button
-                  onClick={() => setEditingToken(null)}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  type="button"
+                  onClick={() => {
+                    setShowCreateForm(false)
+                    setNewToken({ expires_at: '', max_uses: '', notes: '' })
+                  }}
+                  className="nk-btn-secondary nk-btn-sm"
                 >
                   Cancel
                 </button>
+                <button type="submit" disabled={isCreating} className="nk-btn-primary nk-btn-sm">
+                  {isCreating && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+                  {isCreating ? 'Generating…' : 'Generate code'}
+                </button>
               </div>
+            </form>
+          )}
+        </section>
 
-              <form onSubmit={handleUpdateToken} className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="edit_status" className="block text-sm font-medium text-gray-700">
-                      Status
-                    </label>
-                    <select
-                      id="edit_status"
-                      value={editForm.status}
-                      onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    >
-                      <option value="ACTIVE">Active</option>
-                      <option value="INACTIVE">Inactive</option>
-                      <option value="SUSPENDED">Suspended</option>
-                      <option value="ISSUED">Issued</option>
-                      <option value="REVOKED">Revoked</option>
-                      <option value="EXPIRED">Expired</option>
-                      <option value="USED_UP">Used Up</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="edit_expires_at" className="block text-sm font-medium text-gray-700">
-                      Expiration Date (Optional)
-                    </label>
-                    <input
-                      type="datetime-local"
-                      id="edit_expires_at"
-                      value={editForm.expires_at}
-                      onChange={(e) => setEditForm(prev => ({ ...prev, expires_at: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    />
-                  </div>
+        {/* Edit a token */}
+        {editingToken && (
+          <section className="nk-panel overflow-hidden">
+            <div className="nk-panel-head">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="nk-tile nk-tile-live h-9 w-9">
+                  <KeyRound className="h-4 w-4" aria-hidden />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="nk-title text-[14px]">Edit access code</h2>
+                  <p className="nk-mono truncate text-nickel-500">{editingToken.fingerprint}</p>
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="edit_max_uses" className="block text-sm font-medium text-gray-700">
-                      Max Uses (Optional)
-                    </label>
-                    <input
-                      type="number"
-                      id="edit_max_uses"
-                      value={editForm.max_uses}
-                      onChange={(e) => setEditForm(prev => ({ ...prev, max_uses: e.target.value }))}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                      placeholder="Unlimited if empty"
-                      min="1"
-                    />
-                  </div>
+              </div>
+              <button onClick={() => setEditingToken(null)} className="nk-btn-ghost nk-btn-sm">
+                <X className="h-4 w-4" aria-hidden />
+                Cancel
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateToken} className="space-y-4 p-5">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="edit_status" className="nk-label mb-1.5">Status</label>
+                  <select
+                    id="edit_status"
+                    value={editForm.status}
+                    onChange={e => setEditForm(prev => ({ ...prev, status: e.target.value }))}
+                    className="nk-select"
+                  >
+                    <option value="ACTIVE">Active</option>
+                    <option value="INACTIVE">Inactive</option>
+                    <option value="SUSPENDED">Suspended</option>
+                    <option value="ISSUED">Issued</option>
+                    <option value="REVOKED">Revoked</option>
+                    <option value="EXPIRED">Expired</option>
+                    <option value="USED_UP">Used Up</option>
+                  </select>
                 </div>
                 <div>
-                  <label htmlFor="edit_notes" className="block text-sm font-medium text-gray-700">
-                    Notes (Optional)
+                  <label htmlFor="edit_expires_at" className="nk-label mb-1.5">
+                    Expires <span className="font-normal text-nickel-500">(optional)</span>
+                  </label>
+                  <input
+                    type="datetime-local"
+                    id="edit_expires_at"
+                    value={editForm.expires_at}
+                    onChange={e => setEditForm(prev => ({ ...prev, expires_at: e.target.value }))}
+                    className="nk-input"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit_max_uses" className="nk-label mb-1.5">
+                    Max uses <span className="font-normal text-nickel-500">(optional)</span>
+                  </label>
+                  <input
+                    type="number"
+                    id="edit_max_uses"
+                    value={editForm.max_uses}
+                    onChange={e => setEditForm(prev => ({ ...prev, max_uses: e.target.value }))}
+                    className="nk-input"
+                    placeholder="Unlimited"
+                    min="1"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit_notes" className="nk-label mb-1.5">
+                    Notes <span className="font-normal text-nickel-500">(optional)</span>
                   </label>
                   <input
                     type="text"
                     id="edit_notes"
                     value={editForm.notes}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    onChange={e => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
+                    className="nk-input"
                     placeholder="Purpose or recipient"
                   />
                 </div>
-                <div className="flex justify-end space-x-3">
-                  <button
-                    type="button"
-                    onClick={() => setEditingToken(null)}
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isUpdating}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
-                  >
-                    {isUpdating ? 'Updating...' : 'Update Token'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
+              </div>
+              <div className="nk-rule flex justify-end gap-2.5 pt-4">
+                <button type="button" onClick={() => setEditingToken(null)} className="nk-btn-secondary nk-btn-sm">
+                  Cancel
+                </button>
+                <button type="submit" disabled={isUpdating} className="nk-btn-primary nk-btn-sm">
+                  {isUpdating && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+                  {isUpdating ? 'Updating…' : 'Save changes'}
+                </button>
+              </div>
+            </form>
+          </section>
         )}
 
-        {/* Tokens List */}
-        <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">ATI Token Management</h3>
-            <p className="mt-1 max-w-2xl text-sm text-gray-500">
-              Manage access tokens for your organization
-            </p>
+        {/* Token list */}
+        <section className="nk-panel overflow-hidden">
+          <div className="nk-panel-head">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="nk-tile h-9 w-9">
+                <Ticket className="h-4 w-4" aria-hidden />
+              </span>
+              <div className="min-w-0">
+                <h2 className="nk-title text-[14px]">Issued access codes</h2>
+                <p className="nk-sub text-[12.5px]">Every code created for this workspace</p>
+              </div>
+            </div>
           </div>
 
           {isLoading ? (
-            <div className="text-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
-              <p className="mt-2 text-sm text-gray-500">Loading tokens...</p>
-            </div>
-          ) : tokens.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="text-gray-500">
-                <svg className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                </svg>
-              </div>
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No tokens yet</h3>
-              <p className="mt-1 text-sm text-gray-500">Create your first ATI token to onboard team members.</p>
-            </div>
-          ) : (
-            <ul className="divide-y divide-gray-200">
-              {tokens.map((token) => (
-                <li key={token.id} className="px-4 py-4 sm:px-6 hover:bg-gray-50">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center">
-                        <div className="flex-1">
-                          <h4 className="text-sm font-medium text-gray-900 font-mono">
-                            {token.fingerprint}
-                          </h4>
-                          <div className="mt-1 flex items-center space-x-4 text-xs text-gray-500">
-                            <span>Status: {token.status}</span>
-                            {token.max_uses && (
-                              <span>Usage: {token.usage_count}/{token.max_uses}</span>
-                            )}
-                            {token.plan_tier && (
-                              <span>Tier: {token.plan_tier}</span>
-                            )}
-                          </div>
-                          {token.expires_at && (
-                            <div className="mt-1 text-xs text-gray-500">
-                              Expires: {new Date(token.expires_at).toLocaleString()}
-                            </div>
-                          )}
-                          {token.notes && (
-                            <div className="mt-1 text-xs text-gray-500">
-                              Notes: {token.notes}
-                            </div>
-                          )}
-                        </div>
-                        <div className="ml-4">
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            token.status === 'ACTIVE'
-                              ? 'bg-green-100 text-green-800'
-                              : token.status === 'INACTIVE'
-                              ? 'bg-gray-100 text-gray-800'
-                              : token.status === 'SUSPENDED'
-                              ? 'bg-orange-100 text-orange-800'
-                              : token.status === 'ISSUED'
-                              ? 'bg-blue-100 text-blue-800'
-                              : token.status === 'REVOKED'
-                              ? 'bg-red-100 text-red-800'
-                              : token.status === 'EXPIRED'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-gray-100 text-gray-800'
-                          }`}>
-                            {token.status}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="mt-2 text-xs text-gray-500">
-                        Created {new Date(token.created_at).toLocaleDateString()}
-                      </div>
-                    </div>
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleEditToken(token)}
-                        className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleViewUsers(token)}
-                        className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                      >
-                        Users
-                      </button>
-                      {(token.status === 'ISSUED' || token.status === 'ACTIVE') && (
-                        <button
-                          onClick={() => handleRevokeToken(token.id)}
-                          className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-red-600 hover:bg-red-700"
-                        >
-                          Revoke
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {selectedTokenId === token.id && (
-                    <div className="mt-3 border-t border-gray-200 pt-3">
-                      <h5 className="text-xs font-semibold text-gray-700 mb-2">Users joined using this token</h5>
-                      {isLoadingUsers ? (
-                        <p className="text-xs text-gray-500">Loading users...</p>
-                      ) : usersError ? (
-                        <p className="text-xs text-red-600">{usersError}</p>
-                      ) : selectedTokenUsers.length === 0 ? (
-                        <p className="text-xs text-gray-500">No users have joined using this token yet.</p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {selectedTokenUsers.map(user => {
-                            const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim()
-                            const m = user.usage_metrics
-                            return (
-                              <li key={user.id} className="text-xs text-gray-700 flex justify-between">
-                                <div>
-                                  <div>
-                                    {name || user.email} ({user.email})
-                                  </div>
-                                  {m && (
-                                    <div className="text-[10px] text-gray-500 mt-0.5">
-                                      Patents: {m.patentsDrafted} · Novelty: {m.noveltySearches} · Tokens (in/out): {m.totalInputTokens}/{m.totalOutputTokens}
-                                    </div>
-                                  )}
-                                  {/* Paper metrics */}
-                                  {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && 'papersCount' in user && (
-                                    <div className="text-[10px] text-purple-600 mt-0.5">
-                                      Papers: {(user as PaperUserMetrics).papersCount}
-                                      {(user as PaperUserMetrics).lastPaperActivity && (
-                                        <span> · Last: {new Date((user as PaperUserMetrics).lastPaperActivity!).toLocaleDateString()}</span>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="text-right text-gray-500">
-                                  <div>{new Date(user.created_at).toLocaleDateString()}</div>
-                                </div>
-                              </li>
-                            )
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                  )}
+            // Skeletons match the row layout so nothing shifts when data lands.
+            <ul className="divide-y divide-nickel-100" aria-label="Loading access codes">
+              {[0, 1, 2].map(i => (
+                <li key={i} className="space-y-2 px-5 py-4">
+                  <span className="block h-3.5 w-32 animate-pulse rounded bg-nickel-100" />
+                  <span className="block h-3 w-64 animate-pulse rounded bg-nickel-100" />
                 </li>
               ))}
             </ul>
+          ) : tokens.length === 0 ? (
+            <div className="px-6 py-14 text-center">
+              <span className="nk-tile mx-auto h-12 w-12">
+                <Ticket className="h-5 w-5" aria-hidden />
+              </span>
+              <h3 className="nk-title mt-4 text-[14px]">No access codes yet</h3>
+              <p className="mx-auto mt-1.5 max-w-sm text-[13px] leading-5 text-nickel-500">
+                Email invites above are the easier path for most teams. Generate a code when you need
+                to onboard a whole cohort at once.
+              </p>
+              <button onClick={() => setShowCreateForm(true)} className="nk-btn-primary mt-5">
+                <Plus className="h-4 w-4" aria-hidden />
+                Generate code
+              </button>
+            </div>
+          ) : (
+            <ul className="divide-y divide-nickel-100">
+              {tokens.map(token => {
+                const isOpen = selectedTokenId === token.id
+                const usagePct =
+                  token.max_uses && token.max_uses > 0
+                    ? Math.min(100, Math.round((token.usage_count / token.max_uses) * 100))
+                    : null
+
+                return (
+                  <li key={token.id} className="px-5 py-4 transition-colors hover:bg-nickel-50">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <span className="nk-mono font-semibold text-nickel-900">{token.fingerprint}</span>
+                          <span className={`nk-badge ${TOKEN_STATUS_BADGE[token.status] ?? ''}`}>
+                            {token.status.replace(/_/g, ' ')}
+                          </span>
+                          {token.plan_tier && <span className="nk-badge">{token.plan_tier}</span>}
+                        </div>
+
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] text-nickel-500">
+                          <span>
+                            <span className="nk-mono text-nickel-700">{token.usage_count}</span>
+                            {token.max_uses ? (
+                              <>
+                                /<span className="nk-mono text-nickel-700">{token.max_uses}</span> uses
+                              </>
+                            ) : (
+                              ' uses'
+                            )}
+                          </span>
+                          <span className="text-nickel-300" aria-hidden>·</span>
+                          <span>created {new Date(token.created_at).toLocaleDateString()}</span>
+                          {token.expires_at && (
+                            <>
+                              <span className="text-nickel-300" aria-hidden>·</span>
+                              <span>expires {new Date(token.expires_at).toLocaleDateString()}</span>
+                            </>
+                          )}
+                        </div>
+
+                        {usagePct !== null && (
+                          <div className="nk-meter mt-2.5 max-w-[220px]">
+                            <div className="nk-meter-fill" style={{ width: `${usagePct}%` }} />
+                          </div>
+                        )}
+
+                        {token.notes && (
+                          <p className="mt-2 truncate text-[12.5px] text-nickel-500">{token.notes}</p>
+                        )}
+                      </div>
+
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        <button onClick={() => handleEditToken(token)} className="nk-btn-secondary nk-btn-xs">
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleViewUsers(token)}
+                          aria-expanded={isOpen}
+                          className="nk-btn-secondary nk-btn-xs"
+                        >
+                          Users
+                          <ChevronDown
+                            className={`h-3 w-3 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`}
+                            aria-hidden
+                          />
+                        </button>
+                        {(token.status === 'ISSUED' || token.status === 'ACTIVE') && (
+                          <button onClick={() => handleRevokeToken(token.id)} className="nk-btn-danger nk-btn-xs">
+                            Revoke
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {isOpen && (
+                      <div className="nk-panel-quiet mt-3 p-4">
+                        <h3 className="nk-eyebrow mb-2.5">Joined with this code</h3>
+                        {isLoadingUsers ? (
+                          <p className="text-[12.5px] text-nickel-500">Loading members…</p>
+                        ) : usersError ? (
+                          <p className="text-[12.5px] text-red-700">{usersError}</p>
+                        ) : selectedTokenUsers.length === 0 ? (
+                          <p className="text-[12.5px] text-nickel-500">
+                            Nobody has redeemed this code yet.
+                          </p>
+                        ) : (
+                          <ul className="divide-y divide-nickel-200">
+                            {selectedTokenUsers.map(member => {
+                              const name = [member.first_name, member.last_name]
+                                .filter(Boolean)
+                                .join(' ')
+                                .trim()
+                              const m = member.usage_metrics
+                              return (
+                                <li
+                                  key={member.id}
+                                  className="flex flex-wrap items-start justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="truncate text-[13px] font-medium text-nickel-800">
+                                      {name || member.email}
+                                    </div>
+                                    <div className="truncate text-[12px] text-nickel-500">{member.email}</div>
+                                    {m && (
+                                      <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11.5px] text-nickel-500">
+                                        <span>
+                                          Patents <span className="nk-mono text-nickel-600">{m.patentsDrafted}</span>
+                                        </span>
+                                        <span>
+                                          Novelty <span className="nk-mono text-nickel-600">{m.noveltySearches}</span>
+                                        </span>
+                                        <span>
+                                          Tokens in/out{' '}
+                                          <span className="nk-mono text-nickel-600">
+                                            {m.totalInputTokens}/{m.totalOutputTokens}
+                                          </span>
+                                        </span>
+                                      </div>
+                                    )}
+                                    {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && 'papersCount' in member && (
+                                      <div className="mt-1 text-[11.5px] text-nickel-500">
+                                        Papers{' '}
+                                        <span className="nk-mono text-nickel-600">
+                                          {(member as PaperUserMetrics).papersCount}
+                                        </span>
+                                        {(member as PaperUserMetrics).lastPaperActivity && (
+                                          <>
+                                            {' · last '}
+                                            {new Date(
+                                              (member as PaperUserMetrics).lastPaperActivity!
+                                            ).toLocaleDateString()}
+                                          </>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <span className="nk-mono shrink-0 text-nickel-500">
+                                    {new Date(member.created_at).toLocaleDateString()}
+                                  </span>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
           )}
-        </div>
+        </section>
       </main>
     </div>
   )

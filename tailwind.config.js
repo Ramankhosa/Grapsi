@@ -24,6 +24,28 @@ module.exports = {
           DEFAULT: '#667085',
           soft: '#98a2b3',
         },
+        // ── Nickel ──────────────────────────────────────────────────────────
+        // The machined chassis the dashboards are built from: a cool, faintly
+        // metallic neutral ramp. Nickel carries the whole surface; cobalt is
+        // the only colour that means "live" or "act here".
+        nickel: {
+          25: '#fbfcfd',
+          50: '#f5f7f9',
+          100: '#eceff3',
+          200: '#dfe3e9',
+          300: '#c8ced7',
+          // 400 is a decorative tone — icons, borders, placeholders. It does not
+          // clear AA on the ground, so it must never carry body text.
+          400: '#8b95a3',
+          // 500 is the lowest tone allowed for text: 5.0:1 on the ground,
+          // 4.8:1 on inset surfaces.
+          500: '#666e7c',
+          600: '#4d5764',
+          700: '#3a424e',
+          800: '#252b34',
+          900: '#171b21',
+          950: '#0f1216',
+        },
         cobalt: {
           50: '#eff4ff',
           100: '#dce7fe',
@@ -109,6 +131,11 @@ module.exports = {
         // Cobalt system: near-flat surfaces, one lift for overlays only.
         'cb-pop': '0 12px 32px -8px rgba(16, 24, 40, 0.18), 0 2px 6px -2px rgba(16, 24, 40, 0.08)',
         'cb-sheet': '0 24px 64px -12px rgba(16, 24, 40, 0.24)',
+        // Nickel: machined edges, not drop shadows. Light falls from above.
+        'nk-plate': 'inset 0 1px 0 rgba(255,255,255,0.9), 0 1px 1.5px rgba(23,27,33,0.05)',
+        'nk-live': 'inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 2px rgba(29,78,216,0.28)',
+        'nk-lift': '0 1px 2px rgba(23,27,33,0.04), 0 8px 24px -12px rgba(23,27,33,0.16)',
+        'nk-sheet': '0 24px 64px -16px rgba(23,27,33,0.28), 0 2px 8px rgba(23,27,33,0.08)',
         'prep-card': '0 10px 25px rgba(15, 23, 42, 0.08)',
         'prep-card-hover': '0 16px 40px rgba(15, 23, 42, 0.12)',
         'prep-float': '0 28px 70px rgba(15, 23, 42, 0.18)',

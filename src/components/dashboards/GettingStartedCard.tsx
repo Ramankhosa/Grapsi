@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { motion } from 'framer-motion'
-import { ArrowRight, CheckCircle2, Circle, Sparkles, X } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Circle, ListChecks, X } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 
 interface JourneyMilestone {
@@ -60,82 +59,96 @@ export default function GettingStartedCard() {
   const progressPct = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100)
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, delay: 0.2 }}
-      className="mb-10 overflow-hidden rounded-2xl border border-slate-200/70 bg-white/80 shadow-sm backdrop-blur-sm"
-    >
-      <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-50">
-            <Sparkles className="h-4 w-4 text-violet-500" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-slate-800">
-              {allDone ? 'You are all set!' : 'Getting started'}
+    <section className="nk-panel nk-enter mb-10 overflow-hidden">
+      <div className="nk-panel-head">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className={`nk-tile h-9 w-9 ${allDone ? '' : 'nk-tile-live'}`}>
+            <ListChecks className="h-4 w-4" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <h2 className="nk-title text-[14px]">
+              {allDone ? 'Setup complete' : 'Finish setting up'}
             </h2>
-            <p className="text-xs text-slate-400">
-              {completedCount} of {totalCount} steps complete
+            <p className="nk-sub text-[12.5px]">
+              Each step sharpens how well the system matches you
             </p>
           </div>
         </div>
+
         <div className="flex items-center gap-4">
-          <div className="hidden h-1.5 w-32 overflow-hidden rounded-full bg-slate-100 sm:block">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-violet-500 to-blue-500 transition-all duration-700"
-              style={{ width: `${progressPct}%` }}
-            />
+          <div className="hidden items-center gap-2.5 sm:flex">
+            <span className="nk-mono text-nickel-500">
+              {completedCount}/{totalCount}
+            </span>
+            <div className="nk-meter w-28">
+              <div className="nk-meter-fill" style={{ width: `${progressPct}%` }} />
+            </div>
           </div>
           <button
             onClick={dismiss}
-            aria-label="Dismiss getting started checklist"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-slate-50 hover:text-slate-500"
+            aria-label="Dismiss the setup checklist"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-nickel-500 transition
+                       hover:bg-nickel-100 hover:text-nickel-700
+                       focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
+                       focus-visible:outline-cobalt-600"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4" aria-hidden />
           </button>
         </div>
       </div>
 
-      <ul className="divide-y divide-slate-50">
+      <ul className="divide-y divide-nickel-100">
         {milestones.map(milestone => {
-          const isNext = nextBestAction?.key === milestone.key
+          const isNext = nextBestAction?.key === milestone.key && !milestone.completed
           return (
             <li key={milestone.key}>
               <Link
                 href={milestone.href}
-                className={`group flex items-center gap-3 px-6 py-3 transition-colors hover:bg-slate-50/80 ${
-                  isNext ? 'bg-violet-50/40' : ''
-                }`}
+                className={`group flex items-center gap-3 px-5 py-3 transition duration-150 hover:bg-nickel-50
+                            focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-2
+                            focus-visible:outline-cobalt-600 ${isNext ? 'bg-cobalt-50/50' : ''}`}
               >
                 {milestone.completed ? (
-                  <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
+                  <CheckCircle2 className="h-[18px] w-[18px] shrink-0 text-nickel-400" aria-hidden />
                 ) : (
-                  <Circle className="h-5 w-5 shrink-0 text-slate-200" />
+                  <Circle
+                    className={`h-[18px] w-[18px] shrink-0 ${isNext ? 'text-cobalt-600' : 'text-nickel-300'}`}
+                    aria-hidden
+                  />
                 )}
+
                 <div className="min-w-0 flex-1">
                   <span
-                    className={`text-sm font-medium ${
-                      milestone.completed ? 'text-slate-400 line-through decoration-slate-200' : 'text-slate-700'
+                    className={`text-[13.5px] ${
+                      milestone.completed
+                        ? 'text-nickel-500 line-through decoration-nickel-300'
+                        : 'font-medium text-nickel-800'
                     }`}
                   >
                     {milestone.title}
                   </span>
-                  {isNext && !milestone.completed && (
-                    <p className="mt-0.5 truncate text-xs text-slate-400">{milestone.description}</p>
+                  {isNext && (
+                    <p className="mt-0.5 truncate text-[12.5px] text-nickel-500">
+                      {milestone.description}
+                    </p>
                   )}
                 </div>
-                {isNext && !milestone.completed && (
-                  <span className="hidden shrink-0 rounded-full bg-violet-100 px-2.5 py-0.5 text-[11px] font-medium text-violet-600 sm:inline">
+
+                {isNext && (
+                  <span className="nk-badge nk-badge-live hidden shrink-0 sm:inline-flex">
                     Up next
                   </span>
                 )}
-                <ArrowRight className="h-4 w-4 shrink-0 text-slate-200 transition-all group-hover:translate-x-0.5 group-hover:text-slate-400" />
+                <ArrowRight
+                  className="h-4 w-4 shrink-0 text-nickel-300 transition duration-150
+                             group-hover:translate-x-0.5 group-hover:text-nickel-500"
+                  aria-hidden
+                />
               </Link>
             </li>
           )
         })}
       </ul>
-    </motion.div>
+    </section>
   )
 }

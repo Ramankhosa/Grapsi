@@ -973,33 +973,6 @@
 }
 
 /* ============================================================================
-   Dashboard – Futuristic Redesign
-   ============================================================================ */
-
-.dash-gradient-text-light {
-  background: linear-gradient(135deg, #0891b2, #6366f1, #8b5cf6, #0891b2);
-  background-size: 300% 300%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: dashGradientShift 6s ease infinite;
-}
-
-@keyframes dashGradientShift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
-
-.dash-grid-light {
-  background-image:
-    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
-  background-size: 64px 64px;
-  mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 30%, transparent 100%);
-  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 30%, transparent 100%);
-}
-
-/* ============================================================================
    Cobalt design system
    ----------------------------------------------------------------------------
    A quiet white ground, exactly three grays (ground / inset / hairline), two
@@ -1140,4 +1113,279 @@
 /* Nothing in the workspace may push the page sideways on a phone. */
 .cb-page {
   overflow-x: clip;
+}
+
+/* ============================================================================
+   Nickel & Cobalt — the dashboard chassis
+   ----------------------------------------------------------------------------
+   An extension of the cobalt system for the three dashboards (product chooser,
+   super admin console, tenant admin console).
+
+   The idea: the interface is a precision instrument. Nickel is the machined
+   chassis — a cool neutral ramp with edges that read as bevels because light
+   falls from above (light top border, weighted bottom border, inset white
+   highlight on raised tiles). Cobalt is the only colour that means anything:
+   it marks the live action and nothing else.
+
+   Rules:
+     · Surfaces separate with hairlines and bevels, never drop shadows.
+       Only overlays lift (`shadow-nk-sheet`).
+     · One cobalt element per region. Everything else is nickel.
+     · Numbers are tabular and tight — readouts, not prose.
+     · Radii: 8px controls, 10px tiles, 12px panels. Nothing rounder.
+     · Motion is 160–220ms, transform/opacity only, and opt-out aware.
+   ========================================================================== */
+
+@layer components {
+  /* ── Ground ────────────────────────────────────────────────────────────── */
+  .nk-ground {
+    @apply relative min-h-screen bg-nickel-25 text-nickel-800;
+    overflow-x: clip;
+  }
+
+  /* ── Panels ────────────────────────────────────────────────────────────── */
+  /* A machined plate: light catches the top edge, the bottom edge carries the
+     weight. This is what replaces the shadow. */
+  .nk-panel {
+    @apply relative rounded-xl border border-nickel-200 bg-white;
+    border-top-color: #eceff3;
+    border-bottom-color: #d3d9e1;
+  }
+
+  .nk-panel-quiet {
+    @apply relative rounded-xl border border-nickel-200 bg-nickel-50;
+    border-top-color: #f0f2f6;
+    border-bottom-color: #d6dbe3;
+  }
+
+  .nk-panel-head {
+    @apply flex flex-wrap items-center justify-between gap-3 border-b border-nickel-200 px-5 py-4;
+  }
+
+  .nk-rule {
+    @apply border-t border-nickel-200;
+  }
+
+  /* ── Tiles ─────────────────────────────────────────────────────────────── */
+  /* The nickel tile that carries an icon. Brushed, slightly domed. */
+  .nk-tile {
+    @apply inline-flex shrink-0 items-center justify-center rounded-[10px] border border-nickel-200 text-nickel-600;
+    background-image: linear-gradient(180deg, #ffffff 0%, #eceff3 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 1.5px rgba(23, 27, 33, 0.05);
+  }
+
+  /* The same tile, energised. Reserved for the one live thing in a region. */
+  .nk-tile-live {
+    @apply border-cobalt-700 text-white;
+    background-image: linear-gradient(180deg, #3b68f5 0%, #1d4ed8 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 1px 2px rgba(29, 78, 216, 0.28);
+  }
+
+  /* Dark chassis tile, for the admin rail. */
+  .nk-tile-dark {
+    @apply border-nickel-700 text-nickel-300;
+    background-image: linear-gradient(180deg, #2b323c 0%, #1d222a 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* ── Typography ────────────────────────────────────────────────────────── */
+  .nk-eyebrow {
+    @apply text-[10.5px] font-semibold uppercase leading-none tracking-[0.14em] text-nickel-500;
+  }
+
+  .nk-title {
+    @apply text-[15px] font-semibold tracking-[-0.01em] text-nickel-900;
+  }
+
+  .nk-sub {
+    @apply text-[13px] leading-5 text-nickel-500;
+  }
+
+  .nk-label {
+    @apply block text-[12.5px] font-medium text-nickel-700;
+  }
+
+  /* Readouts: tabular so digits never dance as values update. */
+  .nk-readout {
+    @apply text-[28px] font-semibold leading-none tracking-[-0.03em] text-nickel-900;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .nk-readout-sm {
+    @apply text-[19px] font-semibold leading-none tracking-[-0.02em] text-nickel-900;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .nk-mono {
+    @apply font-mono text-[12px] tracking-[-0.01em];
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Controls ──────────────────────────────────────────────────────────── */
+  .nk-btn {
+    @apply inline-flex min-h-[38px] items-center justify-center gap-2 rounded-lg px-3.5 text-[13px]
+           font-medium transition duration-150 focus-visible:outline focus-visible:outline-2
+           focus-visible:outline-offset-2 focus-visible:outline-cobalt-600
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .nk-btn-primary {
+    @apply nk-btn border border-cobalt-700 text-white hover:brightness-[1.07] active:brightness-95;
+    background-image: linear-gradient(180deg, #3b68f5 0%, #1d4ed8 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 1px 2px rgba(29, 78, 216, 0.24);
+  }
+
+  .nk-btn-secondary {
+    @apply nk-btn border border-nickel-200 text-nickel-700 hover:border-nickel-300 hover:text-nickel-900;
+    background-image: linear-gradient(180deg, #ffffff 0%, #f2f4f7 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 1.5px rgba(23, 27, 33, 0.04);
+  }
+
+  .nk-btn-ghost {
+    @apply nk-btn text-nickel-500 hover:bg-nickel-100 hover:text-nickel-900;
+  }
+
+  .nk-btn-danger {
+    @apply nk-btn border border-red-200 bg-white text-red-700 hover:border-red-300 hover:bg-red-50;
+  }
+
+  /* Sizes sit below the variants so they win the cascade over `nk-btn`. */
+  .nk-btn-sm {
+    @apply min-h-[32px] gap-1.5 rounded-md px-2.5 text-[12.5px];
+  }
+
+  .nk-btn-xs {
+    @apply min-h-[26px] gap-1 rounded-md px-2 text-[11.5px];
+  }
+
+  .nk-input {
+    @apply w-full rounded-lg border border-nickel-200 bg-white px-3 py-2 text-[13.5px] text-nickel-900
+           outline-none transition duration-150 placeholder:text-nickel-400
+           focus:border-cobalt-600 focus:ring-2 focus:ring-cobalt-100;
+    border-top-color: #d6dbe3;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .nk-select {
+    @apply nk-input appearance-none bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7684' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 0.65rem center;
+  }
+
+  /* ── Badges & status ───────────────────────────────────────────────────── */
+  .nk-badge {
+    @apply inline-flex items-center gap-1 rounded-md border border-nickel-200 bg-nickel-50 px-1.5 py-0.5
+           text-[10.5px] font-semibold uppercase tracking-[0.06em] text-nickel-500;
+  }
+
+  .nk-badge-live {
+    @apply border-cobalt-200 bg-cobalt-50 text-cobalt-700;
+  }
+
+  .nk-badge-ok {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+
+  .nk-badge-warn {
+    @apply border-amber-200 bg-amber-50 text-amber-700;
+  }
+
+  .nk-badge-danger {
+    @apply border-red-200 bg-red-50 text-red-700;
+  }
+
+  /* ── Meter ─────────────────────────────────────────────────────────────── */
+  .nk-meter {
+    @apply relative h-1.5 w-full overflow-hidden rounded-full bg-nickel-100;
+    box-shadow: inset 0 1px 1px rgba(23, 27, 33, 0.06);
+  }
+
+  .nk-meter-fill {
+    @apply h-full rounded-full transition-[width] duration-500 ease-out;
+    background-image: linear-gradient(90deg, #3b68f5 0%, #1d4ed8 100%);
+  }
+}
+
+/* ── Backdrop: an engineering grid, faint enough to read as paper texture ── */
+.nk-grid {
+  background-image:
+    linear-gradient(rgba(107, 118, 132, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(107, 118, 132, 0.055) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.35) 42%, transparent 72%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.35) 42%, transparent 72%);
+}
+
+/* A single cool wash at the top of the page, so the ground isn't dead flat. */
+.nk-wash {
+  background-image: radial-gradient(120% 60% at 50% -10%, rgba(59, 104, 245, 0.07) 0%, transparent 62%);
+}
+
+/* Measurement ticks — a hairline ruler used to close a header block. */
+.nk-ticks {
+  height: 5px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(107, 118, 132, 0.34) 0 1px,
+    transparent 1px 8px
+  );
+  mask-image: linear-gradient(90deg, black 0%, black 40%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, black 0%, black 40%, transparent 100%);
+}
+
+/* Fine diagonal hatch — marks a surface as inert (locked / unavailable). */
+.nk-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(107, 118, 132, 0.05) 0 1px,
+    transparent 1px 7px
+  );
+}
+
+/* The dark chassis of the admin rail. */
+.nk-rail {
+  background-color: #171b21;
+  background-image: linear-gradient(180deg, #1b2028 0%, #14181e 100%);
+}
+
+/* Status lamp. Cobalt = live, and it breathes rather than blinks. */
+.nk-lamp {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #1d4ed8;
+  box-shadow: 0 0 0 3px rgba(59, 104, 245, 0.14);
+}
+
+.nk-lamp::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 1px solid rgba(59, 104, 245, 0.4);
+  animation: nkLampBreathe 2.8s ease-in-out infinite;
+}
+
+@keyframes nkLampBreathe {
+  0%, 100% { transform: scale(1); opacity: 0.55; }
+  50% { transform: scale(1.5); opacity: 0; }
+}
+
+/* Card entrance: one short rise, staggered by an inline --nk-i index. */
+.nk-enter {
+  animation: nkEnter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--nk-i, 0) * 40ms);
+}
+
+@keyframes nkEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nk-enter { animation: none; }
+  .nk-lamp::after { animation: none; opacity: 0.4; }
+  .nk-meter-fill { transition: none; }
 }

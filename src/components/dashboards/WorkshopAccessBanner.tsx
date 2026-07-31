@@ -36,19 +36,25 @@ export default function WorkshopAccessBanner() {
 
   return (
     <div
-      className={`mb-8 flex items-center gap-3 rounded-2xl border px-5 py-3 backdrop-blur-sm ${
-        urgent
-          ? 'border-amber-300 bg-amber-50/90'
-          : 'border-violet-200 bg-violet-50/70'
+      className={`mb-8 flex items-center gap-3 rounded-xl border px-4 py-3 ${
+        urgent ? 'border-amber-200 bg-amber-50' : 'border-nickel-200 bg-nickel-50'
       }`}
     >
-      <Clock className={`h-4 w-4 shrink-0 ${urgent ? 'text-amber-500' : 'text-violet-500'}`} />
-      <p className={`text-sm ${urgent ? 'text-amber-800' : 'text-violet-800'}`}>
-        <span className="font-semibold">Workshop access</span>
+      <span
+        className={`nk-tile h-8 w-8 ${urgent ? 'border-amber-200 text-amber-600' : ''}`}
+        aria-hidden
+      >
+        <Clock className="h-4 w-4" />
+      </span>
+      <p className={`text-[13px] leading-5 ${urgent ? 'text-amber-900' : 'text-nickel-600'}`}>
+        <span className="nk-eyebrow mr-2 align-middle">Workshop access</span>
         {remaining > 0 ? (
-          <> — {formatRemaining(remaining)} remaining. Explore freely; your work is saved while access lasts.</>
+          <>
+            <span className="nk-mono font-semibold">{formatRemaining(remaining)}</span> remaining —
+            explore freely; your work is saved while access lasts.
+          </>
         ) : (
-          <> — your access window has ended.</>
+          <>your access window has ended.</>
         )}
       </p>
     </div>
