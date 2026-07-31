@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Prisma } from '@prisma/client'
+import { Prisma } from '@/lib/prisma-generated'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantUser } from '@/lib/auth/tenantAccess'
 

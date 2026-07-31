@@ -55,7 +55,7 @@ interface ImportSummary {
   results: ImportRowResult[]
 }
 
-const ADMIN_ROLES = ['OWNER', 'ADMIN', 'SUPER_ADMIN']
+const ADMIN_ROLES = ['OWNER', 'ADMIN', 'SUPER_ADMIN', 'CALL_ADMIN']
 const PAGE_SIZE = 50
 
 export default function TenantFacultyPage() {
@@ -68,6 +68,7 @@ export default function TenantFacultyPage() {
   const [embedded, setEmbedded] = useState(0)
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
+  const [orgUnitFilter, setOrgUnitFilter] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -80,6 +81,11 @@ export default function TenantFacultyPage() {
   const [importing, setImporting] = useState(false)
   const [summary, setSummary] = useState<ImportSummary | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+
+  // Inline rename/delete dialogs (replaces window.prompt / confirm).
+  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
 
   const isAdmin = Boolean(user?.roles?.some((role: string) => ADMIN_ROLES.includes(role)))
 
@@ -94,10 +100,11 @@ export default function TenantFacultyPage() {
     }
   }, [authFetch])
 
-  const loadFaculty = useCallback(async (nextOffset: number, query: string) => {
+  const loadFaculty = useCallback(async (nextOffset: number, query: string, unitId: string) => {
     try {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(nextOffset) })
       if (query) params.set('q', query)
+      if (unitId) params.set('orgUnitId', unitId)
       const res = await authFetch(`/api/tenant-admin/faculty?${params}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not load faculty')
@@ -113,8 +120,24 @@ export default function TenantFacultyPage() {
   useEffect(() => {
     if (!user) return
     setLoading(true)
-    Promise.all([loadSchools(), loadFaculty(0, '')]).finally(() => setLoading(false))
+    Promise.all([loadSchools(), loadFaculty(0, '', '')]).finally(() => setLoading(false))
   }, [user, loadSchools, loadFaculty])
+
+  // Poll the faculty endpoint while embeddings are catching up — the async
+  // worker after an import writes to researcher_profiles and this is the
+  // authoritative source for progress.
+  useEffect(() => {
+    if (total === 0 || embedded >= total) return
+    const interval = setInterval(() => {
+      loadFaculty(offset, search, orgUnitFilter)
+    }, 5000)
+    // Stop after ~5 minutes even if something got stuck.
+    const stop = setTimeout(() => clearInterval(interval), 5 * 60 * 1000)
+    return () => {
+      clearInterval(interval)
+      clearTimeout(stop)
+    }
+  }, [total, embedded, offset, search, orgUnitFilter, loadFaculty])
 
   const createUnit = async (kind: 'SCHOOL' | 'DEPARTMENT', name: string, parentId?: string) => {
     if (!name.trim()) return
@@ -135,32 +158,47 @@ export default function TenantFacultyPage() {
     }
   }
 
-  const renameUnit = async (id: string, currentName: string) => {
-    const name = window.prompt('New name', currentName)
-    if (!name || name.trim() === currentName) return
+  const openRename = (id: string, currentName: string) => {
+    setRenameTarget({ id, name: currentName })
+    setRenameValue(currentName)
+  }
+
+  const confirmRename = async () => {
+    if (!renameTarget) return
+    const nextName = renameValue.trim()
+    if (!nextName || nextName === renameTarget.name) {
+      setRenameTarget(null)
+      return
+    }
     setError(null)
     try {
-      const res = await authFetch(`/api/tenant-admin/org-units/${id}`, {
+      const res = await authFetch(`/api/tenant-admin/org-units/${renameTarget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({ name: nextName }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Rename failed')
       await loadSchools()
+      setRenameTarget(null)
     } catch (e: any) {
       setError(e.message)
     }
   }
 
-  const deleteUnit = async (id: string, name: string) => {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return
+  const openDelete = (id: string, name: string) => {
+    setDeleteTarget({ id, name })
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
     setError(null)
     try {
-      const res = await authFetch(`/api/tenant-admin/org-units/${id}`, { method: 'DELETE' })
+      const res = await authFetch(`/api/tenant-admin/org-units/${deleteTarget.id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Delete failed')
       await loadSchools()
+      setDeleteTarget(null)
     } catch (e: any) {
       setError(e.message)
     }
@@ -199,7 +237,7 @@ export default function TenantFacultyPage() {
 
       setSummary(data)
       if (!dryRun) {
-        await Promise.all([loadSchools(), loadFaculty(0, search)])
+        await Promise.all([loadSchools(), loadFaculty(0, search, orgUnitFilter)])
       }
     } catch (e: any) {
       setImportError(e.message)
@@ -321,13 +359,13 @@ export default function TenantFacultyPage() {
                     </div>
                     <div className="flex gap-3 text-sm">
                       <button
-                        onClick={() => renameUnit(school.id, school.name)}
+                        onClick={() => openRename(school.id, school.name)}
                         className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
                       >
                         Rename
                       </button>
                       <button
-                        onClick={() => deleteUnit(school.id, school.name)}
+                        onClick={() => openDelete(school.id, school.name)}
                         className="text-red-600 hover:text-red-800 dark:text-red-400"
                       >
                         Delete
@@ -346,13 +384,13 @@ export default function TenantFacultyPage() {
                         </span>
                         <span className="flex gap-3 text-sm">
                           <button
-                            onClick={() => renameUnit(department.id, department.name)}
+                            onClick={() => openRename(department.id, department.name)}
                             className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
                           >
                             Rename
                           </button>
                           <button
-                            onClick={() => deleteUnit(department.id, department.name)}
+                            onClick={() => openDelete(department.id, department.name)}
                             className="text-red-600 hover:text-red-800 dark:text-red-400"
                           >
                             Delete
@@ -392,12 +430,32 @@ export default function TenantFacultyPage() {
                   type="text"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && loadFaculty(0, search)}
+                  onKeyDown={e => e.key === 'Enter' && loadFaculty(0, search, orgUnitFilter)}
                   placeholder="Search by name, email, school or department..."
                   className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
                 />
+                <select
+                  value={orgUnitFilter}
+                  onChange={e => {
+                    setOrgUnitFilter(e.target.value)
+                    loadFaculty(0, search, e.target.value)
+                  }}
+                  className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white min-w-[220px]"
+                >
+                  <option value="">All schools &amp; departments</option>
+                  {schools.map(school => (
+                    <optgroup key={school.id} label={school.name}>
+                      <option value={school.id}>{school.name} (school only)</option>
+                      {school.departments.map(department => (
+                        <option key={department.id} value={department.id}>
+                          {department.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
                 <button
-                  onClick={() => loadFaculty(0, search)}
+                  onClick={() => loadFaculty(0, search, orgUnitFilter)}
                   className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
                   Search
@@ -492,7 +550,7 @@ export default function TenantFacultyPage() {
             {total > PAGE_SIZE && (
               <div className="flex items-center justify-between text-sm">
                 <button
-                  onClick={() => loadFaculty(Math.max(0, offset - PAGE_SIZE), search)}
+                  onClick={() => loadFaculty(Math.max(0, offset - PAGE_SIZE), search, orgUnitFilter)}
                   disabled={offset === 0}
                   className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-40 text-gray-700 dark:text-gray-200"
                 >
@@ -502,7 +560,7 @@ export default function TenantFacultyPage() {
                   {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
                 </span>
                 <button
-                  onClick={() => loadFaculty(offset + PAGE_SIZE, search)}
+                  onClick={() => loadFaculty(offset + PAGE_SIZE, search, orgUnitFilter)}
                   disabled={offset + PAGE_SIZE >= total}
                   className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-40 text-gray-700 dark:text-gray-200"
                 >
@@ -513,6 +571,68 @@ export default function TenantFacultyPage() {
           </div>
         )}
       </div>
+
+      {/* Rename dialog */}
+      {renameTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">Rename</h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              Enter a new name for &ldquo;{renameTarget.name}&rdquo;.
+            </p>
+            <input
+              type="text"
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && confirmRename()}
+              autoFocus
+              className="mt-4 block w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+            />
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setRenameTarget(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRename}
+                disabled={!renameValue.trim() || renameValue.trim() === renameTarget.name}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">Delete this unit?</h3>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+              This will remove &ldquo;{deleteTarget.name}&rdquo;. This cannot be undone. Units with
+              faculty still attached or child departments will be refused by the server.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Import modal */}
       {showImport && (
@@ -582,8 +702,8 @@ export default function TenantFacultyPage() {
                 )}
                 {!summary.dryRun && summary.embeddingsPending > 0 && (
                   <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    {summary.embeddingsPending} profile(s) still need embedding — run the embedding
-                    backfill to make them searchable.
+                    {summary.embeddingsPending} profile(s) still embedding in the background — the
+                    Faculty tab updates automatically as they finish.
                   </p>
                 )}
 

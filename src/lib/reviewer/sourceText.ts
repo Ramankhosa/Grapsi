@@ -33,6 +33,13 @@ function looksLikePdf(bytes: Buffer): boolean {
   return bytes.subarray(0, 1024).toString('latin1').includes('%PDF-')
 }
 
+const OLE2_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
+
+/** Legacy binary Office format (.doc/.xls/.ppt), as opposed to the zip-based .docx. */
+function looksLikeLegacyOfficeBinary(bytes: Buffer): boolean {
+  return bytes.subarray(0, 8).equals(OLE2_MAGIC)
+}
+
 async function parsePdf(bytes: Buffer): Promise<string> {
   const pdfParse = (await import('pdf-parse-fork')).default
   const parsed = await pdfParse(bytes)
@@ -42,6 +49,37 @@ async function parsePdf(bytes: Buffer): Promise<string> {
 async function parseDocx(bytes: Buffer): Promise<string> {
   const parsed = await mammoth.extractRawText({ buffer: bytes })
   return normalizeMultilineText(parsed.value || '')
+}
+
+/**
+ * Read an uploaded proposal file into plain text. PDF and DOCX go through the
+ * same parsers the URL fetchers use; anything else is treated as UTF-8 text.
+ */
+export async function extractTextFromDocumentBytes(
+  bytes: Buffer,
+  filename?: string | null
+): Promise<{ text: string; kind: ReviewerSourceKind | 'text' }> {
+  const name = String(filename || '').toLowerCase()
+
+  if (looksLikePdf(bytes) || name.endsWith('.pdf')) {
+    return { text: await parsePdf(bytes), kind: 'pdf' }
+  }
+
+  // Word 97-2003 (.doc) is an OLE2 compound file, which mammoth cannot read.
+  // Without this it would fall through to the UTF-8 branch and import a page of
+  // binary garbage as if it were the proposal.
+  if (looksLikeLegacyOfficeBinary(bytes) || name.endsWith('.doc')) {
+    throw new Error(
+      'This looks like an old Word .doc file, which cannot be read. Open it in Word and use Save As to create a .docx (or export a PDF), then upload that.'
+    )
+  }
+
+  // DOCX is a zip; the PK magic plus the extension is enough to route it.
+  if (name.endsWith('.docx') || bytes.subarray(0, 2).toString('latin1') === 'PK') {
+    return { text: await parseDocx(bytes), kind: 'docx' }
+  }
+
+  return { text: normalizeMultilineText(bytes.toString('utf8')), kind: 'text' }
 }
 
 async function fetchBinarySource(url: string): Promise<ReviewerSourceDocument> {

@@ -70,6 +70,22 @@ export async function POST(request: NextRequest) {
     return auth.response
   }
 
+  // Tenant users must additionally hold CALL_ADMIN (or a hierarchy admin
+  // role) to create tenant-private funding calls. Platform ADMIN/CURATOR
+  // (super admins) bypass this gate.
+  if (auth.operator.role === 'USER') {
+    const actorRoles: string[] = auth.actor.roles || []
+    const isCallAdmin = actorRoles.some((role) =>
+      ['OWNER', 'ADMIN', 'CALL_ADMIN'].includes(role)
+    )
+    if (!isCallAdmin) {
+      return NextResponse.json(
+        { message: 'You need the CALL_ADMIN role (or tenant admin) to import funding calls.' },
+        { status: 403 }
+      )
+    }
+  }
+
   try {
     const parsed = await parseImportRequest(request)
 

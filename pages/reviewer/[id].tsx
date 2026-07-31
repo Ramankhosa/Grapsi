@@ -5,7 +5,7 @@ import { useRouter } from "next/router";
 import axios from "axios";
 import Link from "next/link";
 import Head from "next/head";
-import { FaArrowLeft, FaSpinner, FaCheck, FaTimes, FaEdit, FaPlus, FaFileExport, FaClipboardCheck, FaFileAlt, FaRobot, FaCheckCircle, FaInfoCircle, FaCircle, FaChevronDown, FaChevronUp } from "react-icons/fa";
+import { FaArrowLeft, FaSpinner, FaCheck, FaTimes, FaEdit, FaPlus, FaFileExport, FaFileUpload, FaClipboardCheck, FaFileAlt, FaRobot, FaCheckCircle, FaInfoCircle, FaCircle, FaChevronDown, FaChevronUp } from "react-icons/fa";
 import ReviewRevisionButton from "../../components/ReviewRevisionButton";
 import ReviewerSectionsNav from '../../components/ReviewerSectionsNav';
 
@@ -421,8 +421,11 @@ export default function ReviewerCallDetail() {
                     <h3 className="text-lg font-semibold">Add Project Sections</h3>
                   </div>
                   
-                  <p className="text-gray-600 mb-4">Upload all required sections of your grant proposal.</p>
-                  
+                  <p className="text-gray-600 mb-4">
+                    Import your whole proposal at once and let it split into the sections this call
+                    requires, or add sections one at a time.
+                  </p>
+
                   <div className="mt-2 text-sm text-gray-500">
                     {sections.length > 0 ? (
                       <p className="text-green-600 font-medium">{sections.length} section(s) added</p>
@@ -430,13 +433,19 @@ export default function ReviewerCallDetail() {
                       <p>No sections added yet</p>
                     )}
                   </div>
-                  
-                  <div className="mt-4">
+
+                  <div className="mt-4 flex flex-wrap gap-2">
                     <Link
-                      href={`/reviewer/${id}/section/new`}
+                      href={`/reviewer/${id}/import-proposal`}
                       className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
                     >
-                      <FaPlus className="mr-2" /> Upload New Section
+                      <FaFileUpload className="mr-2" /> Import Full Proposal
+                    </Link>
+                    <Link
+                      href={`/reviewer/${id}/section/new`}
+                      className="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded hover:bg-green-100 transition-colors"
+                    >
+                      <FaPlus className="mr-2" /> Add One Section
                     </Link>
                   </div>
                 </div>
@@ -594,11 +603,17 @@ export default function ReviewerCallDetail() {
               
               <div className="text-gray-600">
                 <ul className="space-y-2 pl-6 list-disc">
-                  <li>Start by uploading all required sections of your grant proposal.</li>
+                  <li>
+                    Fastest start: "Import Full Proposal" splits one document into the sections this
+                    call requires, and you can correct any block it places wrongly before it saves.
+                  </li>
                   <li>Generate context summaries for more accurate and connected reviews.</li>
                   <li>The advanced review process will check for consistency across sections.</li>
                   <li>The final review provides scores and actionable recommendations.</li>
-                  <li>Use the "View Call Rules" button to check the call's limits, criteria, and rubric items.</li>
+                  <li>
+                    Use "View Call Rules" for the full guidelines — limits, criteria, per-section
+                    requirements — and each section page lists the exact rules it is scored against.
+                  </li>
                 </ul>
               </div>
             </div>

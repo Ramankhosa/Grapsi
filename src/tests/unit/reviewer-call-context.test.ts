@@ -6,6 +6,8 @@ vi.mock('@/lib/prisma', () => ({
 }))
 
 import {
+  DEFAULT_REVIEWER_BUCKETS,
+  mapRulesOntoDefaultSections,
   normalizeReviewerCallContext,
   normalizeScoringCriteria,
   normalizeTemplateSectionRule,
@@ -91,6 +93,86 @@ describe('reviewer call context normalization', () => {
 
   it('falls back to url_extracted for an unrecognised rules source', () => {
     expect(normalizeReviewerCallContext({ rules_source: 'nonsense' }).rules_source).toBe('url_extracted')
+  })
+})
+
+describe('default section fallback when a call has no template', () => {
+  const packSection = (
+    bucketKey: string,
+    parts: { guidanceText?: string[]; requiredFacts?: string[]; forbiddenMoves?: string[] }
+  ) => ({
+    key: bucketKey,
+    label: bucketKey,
+    bucketKey,
+    bucketLabel: bucketKey,
+    type: 'narrative',
+    workflowMode: 'app_draft',
+    required: true,
+    wordLimit: null,
+    charLimit: null,
+    reviewerGoal: null,
+    guidanceText: parts.guidanceText || [],
+    requiredFacts: parts.requiredFacts || [],
+    forbiddenMoves: parts.forbiddenMoves || [],
+  })
+
+  it('always produces the standard proposal sections, even with no rules at all', () => {
+    const mapped = mapRulesOntoDefaultSections([])
+
+    expect(mapped.sections.map((section) => section.bucketKey)).toEqual(DEFAULT_REVIEWER_BUCKETS)
+    expect(mapped.matchedSectionCount).toBe(0)
+    // Nothing may be claimed as a call requirement when the call said nothing.
+    expect(mapped.sections.every((section) => section.required === false)).toBe(true)
+  })
+
+  it('attaches the call rules to the matching default section', () => {
+    const mapped = mapRulesOntoDefaultSections([
+      packSection('methodology', { guidanceText: ['Describe the sampling strategy'] }),
+    ])
+
+    const methodology = mapped.sections.find((section) => section.bucketKey === 'methodology')
+    expect(methodology?.guidanceText).toContain('Describe the sampling strategy')
+    // An evidenced section is a real call requirement.
+    expect(methodology?.required).toBe(true)
+    expect(mapped.matchedSectionCount).toBe(1)
+
+    // Untouched defaults are still present so the user has somewhere to paste.
+    expect(mapped.sections.map((section) => section.bucketKey)).toEqual(
+      expect.arrayContaining(DEFAULT_REVIEWER_BUCKETS)
+    )
+  })
+
+  it('adds a non-default section when the call actually asks for one', () => {
+    const mapped = mapRulesOntoDefaultSections([
+      packSection('evaluation', { guidanceText: ['State the M&E indicators'] }),
+    ])
+
+    const keys = mapped.sections.map((section) => section.bucketKey)
+    expect(keys).toContain('evaluation')
+    // Order still follows the canonical bucket order.
+    expect(keys.indexOf('evaluation')).toBeGreaterThan(keys.indexOf('budget'))
+  })
+
+  it('turns unplaceable rules into call-wide obligations instead of a junk section', () => {
+    const mapped = mapRulesOntoDefaultSections([
+      packSection('other', {
+        requiredFacts: ['Objectives must be measurable and time-bound'],
+        forbiddenMoves: ['Do not reuse text from an earlier application'],
+      }),
+    ])
+
+    expect(mapped.sections.map((section) => section.bucketKey)).not.toContain('other')
+    expect(mapped.unplaceable.mustAddress).toContain('Objectives must be measurable and time-bound')
+    expect(mapped.unplaceable.avoid).toContain('Do not reuse text from an earlier application')
+  })
+
+  it('keeps attachment rules as non-scoring reminders rather than a section', () => {
+    const mapped = mapRulesOntoDefaultSections([
+      packSection('attachments_submission', { guidanceText: ['Upload the signed endorsement form'] }),
+    ])
+
+    expect(mapped.sections.map((section) => section.bucketKey)).not.toContain('attachments_submission')
+    expect(mapped.submissionReminders).toContain('Upload the signed endorsement form')
   })
 })
 

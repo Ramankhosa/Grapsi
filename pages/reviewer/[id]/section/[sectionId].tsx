@@ -11,6 +11,7 @@ import BudgetJustificationEditor from "../../../../components/BudgetJustificatio
 import ContextSummaryView from "../../../../components/ContextSummaryView";
 import ReviewerSectionAssetsPanel from "../../../../components/ReviewerSectionAssetsPanel";
 import { ReviewerProse, ReviewerText } from "@/components/reviewer/ReviewerText";
+import ReviewerRulesPanel from "@/components/reviewer/ReviewerRulesPanel";
 
 type SectionData = {
   id: string;
@@ -56,6 +57,7 @@ export default function SectionDetail() {
   const { id: callId, sectionId } = router.query;
   
   const [section, setSection] = useState<SectionData | null>(null);
+  const [promptScope, setPromptScope] = useState<any>(null);
   const [previousSection, setPreviousSection] = useState<SectionData | null>(null);
   const [priorSectionSummaries, setPriorSectionSummaries] = useState<PriorSectionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,7 +101,8 @@ export default function SectionDetail() {
         };
         
         setSection(sectionData);
-        
+        setPromptScope(response.data.prompt_scope || null);
+
         // Initialize edited content with the current content
         setEditedContent(sectionData.user_input);
         
@@ -546,6 +549,14 @@ export default function SectionDetail() {
           </div>
         )}
         
+        {/* The rules this section is actually scored against */}
+        <ReviewerRulesPanel
+          scope={promptScope}
+          sectionTitle={section.section_title}
+          callRulesHref={`/reviewer/${callId}/call-analysis`}
+          defaultOpen={section.status === 'draft'}
+        />
+
         {/* Context Summaries Panel (conditionally displayed) */}
         {priorSectionSummaries.length > 0 && (
           <div className="mb-6">

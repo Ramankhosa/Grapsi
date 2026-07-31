@@ -12,6 +12,14 @@ export default defineConfig({
     //   ALLOW_REAL_DB_TESTS=true npx vitest run src/tests/integration --config vitest.realdb.config.ts
     // or by pointing --exclude at nothing and setting the env var yourself.
     exclude: [...configDefaults.exclude, '**/*.real-db.test.ts'],
+    server: {
+      deps: {
+        // pdf-parse-fork ships a prebuilt webpack bundle of pdf.js that Vite's
+        // transform cannot parse ("Illegal character"), so it must be loaded by
+        // Node directly. It works fine at runtime; only the transform breaks.
+        external: ['pdf-parse-fork'],
+      },
+    },
   },
   resolve: {
     alias: {

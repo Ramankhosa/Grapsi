@@ -20,6 +20,12 @@ enum UserRole {
   MANAGER
   ANALYST
   VIEWER
+  // Additive tenant-scoped tags. Users can hold any combination alongside
+  // one hierarchy role (OWNER/ADMIN/…). ANALYST kept for back-compat; MEMBER
+  // is the preferred "basic" tag going forward.
+  MEMBER
+  CALL_ASSIGNER
+  CALL_ADMIN
 }
 
 enum UserStatus {

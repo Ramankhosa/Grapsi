@@ -362,17 +362,101 @@ export default function CallAnalysisPage() {
 
             {Array.isArray(parsedData.template_sections) && parsedData.template_sections.length > 0 ? (
               <div className="mt-8">
-                <h3 className="text-lg font-semibold mb-4">Reviewer Sections</h3>
+                <h3 className="text-lg font-semibold mb-1">Per-Section Rules</h3>
+                <p className="mb-4 text-sm text-gray-500">
+                  What a reviewer looks for in each section, and the limits that apply. Sections marked
+                  as submission material are reported as reminders and never scored.
+                </p>
                 <div className="space-y-3">
-                  {parsedData.template_sections.map((section, idx) => (
-                    <div key={`${section.key || idx}`} className="rounded-md bg-gray-50 p-4">
-                      <div className="font-medium text-gray-900">{section.label}</div>
-                      <div className="mt-1 text-sm text-gray-600">{section.bucketLabel || section.bucketKey}</div>
-                      {section.reviewerGoal ? (
-                        <p className="mt-2 text-sm text-gray-800">{section.reviewerGoal}</p>
-                      ) : null}
-                    </div>
-                  ))}
+                  {parsedData.template_sections.map((section, idx) => {
+                    const isSubmission = section.bucketKey === 'attachments_submission'
+                      || (section.workflowMode && section.workflowMode !== 'app_draft');
+
+                    return (
+                      <div
+                        key={`${section.key || idx}`}
+                        className={`rounded-md border p-4 ${
+                          isSubmission ? 'border-gray-200 bg-gray-50' : 'border-green-100 bg-green-50/40'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <div className="font-medium text-gray-900">{section.label}</div>
+                            <div className="mt-0.5 text-xs text-gray-600">
+                              {section.bucketLabel || section.bucketKey}
+                              {section.required === false ? ' · optional' : ''}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {isSubmission ? (
+                              <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-700">
+                                Not scored
+                              </span>
+                            ) : (
+                              <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">
+                                Scored
+                              </span>
+                            )}
+                            {section.wordLimit ? (
+                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
+                                {section.wordLimit} words
+                              </span>
+                            ) : null}
+                            {section.charLimit ? (
+                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
+                                {section.charLimit} characters
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        {section.reviewerGoal ? (
+                          <p className="mt-2 text-sm text-gray-800">
+                            {renderSafely(section.reviewerGoal)}
+                          </p>
+                        ) : null}
+
+                        {Array.isArray(section.guidanceText) && section.guidanceText.length > 0 ? (
+                          <div className="mt-3">
+                            <h5 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                              Guidance
+                            </h5>
+                            <ul className="mt-1 space-y-1 list-disc list-inside text-sm text-gray-800">
+                              {section.guidanceText.map((item, itemIdx) => (
+                                <li key={itemIdx}>{renderSafely(item)}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        {Array.isArray(section.requiredFacts) && section.requiredFacts.length > 0 ? (
+                          <div className="mt-3">
+                            <h5 className="text-xs font-semibold uppercase tracking-wide text-green-700">
+                              Must state
+                            </h5>
+                            <ul className="mt-1 space-y-1 list-disc list-inside text-sm text-gray-800">
+                              {section.requiredFacts.map((item, itemIdx) => (
+                                <li key={itemIdx}>{renderSafely(item)}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        {Array.isArray(section.forbiddenMoves) && section.forbiddenMoves.length > 0 ? (
+                          <div className="mt-3">
+                            <h5 className="text-xs font-semibold uppercase tracking-wide text-red-700">
+                              Avoid
+                            </h5>
+                            <ul className="mt-1 space-y-1 list-disc list-inside text-sm text-gray-800">
+                              {section.forbiddenMoves.map((item, itemIdx) => (
+                                <li key={itemIdx}>{renderSafely(item)}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}

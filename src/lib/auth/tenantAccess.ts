@@ -10,16 +10,23 @@ import { authenticateUser } from '@/lib/auth-middleware'
  * than anything supplied by the client.
  */
 
-/** Roles allowed to manage org structure and import faculty. */
+/** Full tenant admin — the only tier allowed to grant/revoke user roles. */
 export const TENANT_ADMIN_ROLES = ['OWNER', 'ADMIN']
+/**
+ * Scoped tenant admin: OWNER/ADMIN plus the additive CALL_ADMIN tag.
+ * CALL_ADMIN can touch the org tree, faculty roster and invite flow but
+ * cannot elevate roles (that stays TENANT_ADMIN_ROLES).
+ */
+export const TENANT_SCOPED_ADMIN_ROLES = ['OWNER', 'ADMIN', 'CALL_ADMIN']
 /** Roles allowed to assign a funding call to a faculty member. */
-export const TENANT_ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER']
+export const TENANT_ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'CALL_ASSIGNER', 'CALL_ADMIN']
 
 export interface TenantContext {
   user: any
   tenantId: string
   isAdmin: boolean
   isAssigner: boolean
+  isCallAdmin: boolean
 }
 
 export interface TenantAccessError {
@@ -51,6 +58,7 @@ export async function requireTenantUser(
     tenantId: user.tenantId,
     isAdmin: isSuperAdmin || hasAnyRole(roles, TENANT_ADMIN_ROLES),
     isAssigner: isSuperAdmin || hasAnyRole(roles, TENANT_ASSIGNER_ROLES),
+    isCallAdmin: isSuperAdmin || hasAnyRole(roles, TENANT_SCOPED_ADMIN_ROLES),
   }
 }
 

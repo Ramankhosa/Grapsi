@@ -91,9 +91,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .map((call) => {
       const hasApprovedTemplate =
         call.active_template?.status === 'approved' || call.template?.status === 'approved'
+      // A guideline row exists as soon as anyone opens the guidelines editor, so
+      // its mere presence does not mean there are rules. `approved` means a
+      // non-empty pack was saved; `needs_review` means an extraction run was
+      // applied (the apply path refuses empty results) and is awaiting review —
+      // the reviewer context builder uses the pack in both states. Bare `draft`
+      // rows are the ones that may hold nothing.
+      const guidelineHasRules =
+        call.guideline_status === 'approved' || call.guideline_status === 'needs_review'
       const readiness: ReadinessTier = hasApprovedTemplate
         ? 'template_manual'
-        : call.active_guideline_id
+        : call.active_guideline_id && guidelineHasRules
           ? 'guideline_manual'
           : 'call_fields'
 

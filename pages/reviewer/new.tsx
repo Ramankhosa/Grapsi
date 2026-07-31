@@ -51,7 +51,7 @@ const READINESS_HELP: Record<string, string> = {
   guideline_manual:
     'This call has an extracted guideline pack. The reviewer will score against those rules mapped onto the standard proposal sections.',
   call_fields:
-    'This call has no template or guideline pack yet. The reviewer will use the stored call record (scope, budget, duration, eligibility) plus anything you add in the manual rubric.',
+    'This call has no template or guideline pack yet. The reviewer will set up the standard proposal sections and score against the stored call record (scope, budget, duration, eligibility) plus anything you add in the manual rubric.',
 }
 
 function RuleList({ title, items, tone = 'gray' }: { title: string; items: string[]; tone?: string }) {

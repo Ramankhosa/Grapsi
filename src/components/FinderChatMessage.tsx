@@ -9,6 +9,7 @@ import type {
 import FinderFilterSuggestionChips from './finder/FinderFilterSuggestionChips';
 import FinderMarkdown from './finder/FinderMarkdown';
 import FinderResultCard from './finder/FinderResultCard';
+import FinderResultsHeader from './finder/FinderResultsHeader';
 
 interface FinderChatMessageProps {
   message: RecommendationConversationMessageRecord;
@@ -38,6 +39,8 @@ function formatTime(value: string) {
  * One turn in the conversation. The researcher's own message is a compact cobalt
  * bubble on the right; the assistant answers as plain text on the page ground so
  * long explanations and result cards read like a document, not a chat toy.
+ * Cited result cards render ABOVE the narrative to mirror FinderStreamingMessage —
+ * keep the two in the same order or the layout jumps when a stream finalizes.
  */
 export default function FinderChatMessage({
   message,
@@ -83,7 +86,35 @@ export default function FinderChatMessage({
           <span className="text-[11px] text-muted-soft">{formatTime(message.createdAt)}</span>
         </div>
 
-        <div className="mt-1 text-sm leading-6 text-ink-soft">
+        {citedResults.length > 0 ? <FinderResultsHeader shown={citedResults.length} /> : null}
+
+        {citedResults.length > 0 ? (
+          // grid-cols-1 (minmax(0,1fr)) not bare `grid`: an auto track sizes to the
+          // cards' min-content and would overflow the chat column on phones.
+          <div className="mt-2 grid grid-cols-1 gap-2.5">
+            {citedResults.map((result, index) => {
+              const ordinal = (citedRun?.results.findIndex((item) => item.id === result.id) ?? index) + 1;
+              const runId = citedRun?.id || message.citations?.runId || '';
+              return (
+                <FinderResultCard
+                  key={result.id}
+                  result={result}
+                  ordinal={ordinal}
+                  onBeginWriting={onBeginWriting}
+                  onExplainResult={
+                    onExplainResult ? () => onExplainResult({ runId, resultId: result.id, ordinal }) : undefined
+                  }
+                  onAskAboutCall={
+                    onAskAboutCall ? () => onAskAboutCall({ runId, resultId: result.id, ordinal }) : undefined
+                  }
+                  getCallDetailsHref={getCallDetailsHref}
+                />
+              );
+            })}
+          </div>
+        ) : null}
+
+        <div className="mt-2 text-sm leading-6 text-ink-soft">
           <FinderMarkdown content={message.content} />
         </div>
 
@@ -133,30 +164,6 @@ export default function FinderChatMessage({
             <button type="button" onClick={strictRecoveryAction.onRetry} className="cb-btn-secondary cb-btn-sm mt-2.5">
               Retry without these filters
             </button>
-          </div>
-        ) : null}
-
-        {citedResults.length > 0 ? (
-          <div className="mt-3 grid gap-2.5">
-            {citedResults.map((result, index) => {
-              const ordinal = (citedRun?.results.findIndex((item) => item.id === result.id) ?? index) + 1;
-              const runId = citedRun?.id || message.citations?.runId || '';
-              return (
-                <FinderResultCard
-                  key={result.id}
-                  result={result}
-                  ordinal={ordinal}
-                  onBeginWriting={onBeginWriting}
-                  onExplainResult={
-                    onExplainResult ? () => onExplainResult({ runId, resultId: result.id, ordinal }) : undefined
-                  }
-                  onAskAboutCall={
-                    onAskAboutCall ? () => onAskAboutCall({ runId, resultId: result.id, ordinal }) : undefined
-                  }
-                  getCallDetailsHref={getCallDetailsHref}
-                />
-              );
-            })}
           </div>
         ) : null}
       </div>

@@ -519,6 +519,117 @@ function sectionRulesFromGuidelinePack(pack: GuidelinePackDocument): ReviewerTem
 }
 
 // ---------------------------------------------------------------------------
+// Default section skeleton (used when a call has no approved template)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sections a research proposal is expected to contain regardless of what the
+ * call spells out. Without an approved template the reviewer starts from this
+ * skeleton, so the workspace always has a sensible structure instead of one
+ * assembled from whichever buckets the call's rules happened to land in.
+ */
+export const DEFAULT_REVIEWER_BUCKETS: string[] = [
+  'summary',
+  'problem_need',
+  'objectives',
+  'methodology',
+  'workplan',
+  'budget',
+  'impact_outcomes',
+  'team',
+]
+
+function emptySectionRule(bucketKey: string, required: boolean): ReviewerTemplateSectionRule {
+  return {
+    key: bucketKey,
+    label: bucketLabel(bucketKey),
+    bucketKey,
+    bucketLabel: bucketLabel(bucketKey),
+    type: 'narrative',
+    workflowMode: bucketKey === 'attachments_submission' ? 'external' : 'app_draft',
+    required,
+    wordLimit: null,
+    charLimit: null,
+    reviewerGoal: null,
+    guidanceText: [],
+    requiredFacts: [],
+    forbiddenMoves: [],
+  }
+}
+
+export interface DefaultSectionMapping {
+  sections: ReviewerTemplateSectionRule[]
+  /** Rules that belong to no single section, so they apply call-wide. */
+  unplaceable: { mustAddress: string[]; avoid: string[] }
+  /** Rules about attachments/portal steps: reminders, never scored. */
+  submissionReminders: string[]
+  /** How many real sections the call's own rules actually reached. */
+  matchedSectionCount: number
+}
+
+/**
+ * Map the rules a call did provide onto the default section skeleton.
+ *
+ * Sections the call evidenced are marked required; skeleton-only sections are
+ * seeded for the user to fill but are not claimed as call requirements, so the
+ * final report never reports a "missing required section" the call never asked
+ * for. Rules that reached no section become call-wide obligations rather than a
+ * catch-all pseudo-section, which is what previously produced a single merged
+ * "Other Proposal Material" section holding unrelated rules.
+ */
+export function mapRulesOntoDefaultSections(
+  packSections: ReviewerTemplateSectionRule[]
+): DefaultSectionMapping {
+  const byBucket = new Map<string, ReviewerTemplateSectionRule>()
+  for (const section of packSections) {
+    byBucket.set(normalizeBucketKey(section.bucketKey), section)
+  }
+
+  const defaults = new Set(DEFAULT_REVIEWER_BUCKETS)
+  const sections: ReviewerTemplateSectionRule[] = []
+  let matchedSectionCount = 0
+
+  for (const bucketKey of BUCKET_ORDER) {
+    // `other` and `attachments_submission` are not proposal sections the user
+    // writes: their rules are redirected below.
+    if (bucketKey === 'other' || bucketKey === 'attachments_submission') continue
+
+    const provided = byBucket.get(bucketKey)
+    if (!provided && !defaults.has(bucketKey)) continue
+
+    if (provided) {
+      matchedSectionCount += 1
+      sections.push({ ...provided, required: true })
+    } else {
+      sections.push(emptySectionRule(bucketKey, false))
+    }
+  }
+
+  const unplaceableSection = byBucket.get('other')
+  const attachmentsSection = byBucket.get('attachments_submission')
+
+  return {
+    sections,
+    unplaceable: {
+      mustAddress: dedupeRuleText(
+        [...(unplaceableSection?.requiredFacts || []), ...(unplaceableSection?.guidanceText || [])],
+        20
+      ),
+      avoid: dedupeRuleText(unplaceableSection?.forbiddenMoves || [], 20),
+    },
+    submissionReminders: dedupeRuleText(
+      [
+        ...(attachmentsSection?.requiredFacts || []),
+        ...(attachmentsSection?.guidanceText || []),
+        ...(attachmentsSection?.forbiddenMoves || []),
+      ],
+      20
+    ),
+    matchedSectionCount,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Stored funding-call context
 // ---------------------------------------------------------------------------
 
@@ -570,6 +681,7 @@ export async function buildReviewerContextFromStoredCall(input: {
   let templateDocument: GrantTemplateDocument | null = null
   let revisionId: string | null = null
   let guidelinePack: GuidelinePackDocument | null = null
+  let defaultMapping: DefaultSectionMapping | null = null
 
   if (template) {
     const revision = await prisma.fundingCallTemplateRevision.findFirst({
@@ -587,32 +699,19 @@ export async function buildReviewerContextFromStoredCall(input: {
 
   if (guideline?.guideline_pack_json) {
     guidelinePack = guideline.guideline_pack_json as unknown as GuidelinePackDocument
-    if (templateSections.length === 0) {
-      templateSections = sectionRulesFromGuidelinePack(guidelinePack)
-      if (templateSections.length > 0) readiness = 'guideline_manual'
-    }
   }
 
-  // Last resort: the call's own narrative fields still define what a reviewer
-  // has to look for, so synthesize the standard proposal buckets.
+  // No approved template: fall back to the default proposal sections and map
+  // whatever the call does provide onto them. A guideline pack contributes its
+  // rules section by section; a bare catalogue record still yields the standard
+  // structure. Either way the user gets a complete, predictable section set,
+  // and no rule is stranded in a section that only exists because the keyword
+  // router could not place it.
   if (templateSections.length === 0) {
-    templateSections = ['summary', 'problem_need', 'objectives', 'methodology', 'workplan', 'budget', 'impact_outcomes', 'team'].map(
-      (bucketKey) => ({
-        key: bucketKey,
-        label: bucketLabel(bucketKey),
-        bucketKey,
-        bucketLabel: bucketLabel(bucketKey),
-        type: 'narrative',
-        workflowMode: 'app_draft',
-        required: true,
-        wordLimit: null,
-        charLimit: null,
-        reviewerGoal: null,
-        guidanceText: [],
-        requiredFacts: [],
-        forbiddenMoves: [],
-      })
-    )
+    const packSections = guidelinePack ? sectionRulesFromGuidelinePack(guidelinePack) : []
+    defaultMapping = mapRulesOntoDefaultSections(packSections)
+    templateSections = defaultMapping.sections
+    readiness = packSections.length > 0 ? 'guideline_manual' : 'call_fields'
   }
 
   const baseEvaluationCriteria = templateSections
@@ -660,18 +759,27 @@ export async function buildReviewerContextFromStoredCall(input: {
       ],
       25
     ),
+    // budget/duration/deliverable rules are merged here too: when the call has
+    // an approved template, `sectionRulesFromGuidelinePack` never runs, and
+    // without this these three pack blocks reached the reviewer nowhere at all.
     dos: dedupeRuleText(
       [
         ...templateSections.flatMap((item) => item.requiredFacts),
+        // Rules the router could not tie to any one section apply call-wide.
+        ...(defaultMapping?.unplaceable.mustAddress || []),
         ...guidelineRuleTexts(guidelinePack?.mustAddress),
         ...guidelineRuleTexts(guidelinePack?.priorities, 6),
+        ...guidelineRuleTexts(guidelinePack?.budgetRules, 8),
+        ...guidelineRuleTexts(guidelinePack?.durationRules, 4),
+        ...guidelineRuleTexts(guidelinePack?.deliverableRules, 8),
         ...manualRubric.mustAddress,
       ],
-      30
+      40
     ),
     donts: dedupeRuleText(
       [
         ...templateSections.flatMap((item) => item.forbiddenMoves),
+        ...(defaultMapping?.unplaceable.avoid || []),
         ...guidelineRuleTexts(guidelinePack?.avoid),
         ...manualRubric.avoid,
       ],
@@ -692,7 +800,13 @@ export async function buildReviewerContextFromStoredCall(input: {
       ],
       30
     ),
-    submission_rules: guidelineRuleTexts(guidelinePack?.submissionRules, 20),
+    submission_rules: dedupeRuleText(
+      [
+        ...guidelineRuleTexts(guidelinePack?.submissionRules, 20),
+        ...(defaultMapping?.submissionReminders || []),
+      ],
+      30
+    ),
     eligibility_criteria: asString(call.eligibility_text),
     thrust_areas: dedupeRuleText(
       [...asStringArray(call.disciplines), ...asStringArray(call.funding_kinds)],

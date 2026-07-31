@@ -4,6 +4,7 @@ import {
   getReviewerSession as getServerSession,
   requireReviewerCallAccess,
 } from '@/lib/reviewer-auth-api';
+import { buildReviewerPromptScope } from '@/lib/reviewer/promptScope';
 import prisma from '../../../../../../../lib/prisma';
 
 export default async function handler(
@@ -46,8 +47,23 @@ export default async function handler(
       if (!sections || Array.isArray(sections) && sections.length === 0) {
         return res.status(404).json({ error: 'Section not found' });
       }
-      
-      return res.status(200).json({ section: sections[0] });
+
+      // The exact rule scope reviewSection() will build for this section, so
+      // the UI can show the user what the model scores against before running.
+      let promptScope = null;
+      try {
+        const calls = await prisma.$queryRaw`
+          SELECT parsed_json FROM "reviewer_calls" WHERE id = ${callId}
+        `;
+        const parsedJson = Array.isArray(calls) && calls[0]?.parsed_json ? calls[0].parsed_json : null;
+        if (parsedJson && typeof parsedJson === 'object') {
+          promptScope = buildReviewerPromptScope(sections[0], parsedJson);
+        }
+      } catch (scopeError) {
+        console.warn('Failed to compute prompt scope for section', sectionId, scopeError);
+      }
+
+      return res.status(200).json({ section: sections[0], prompt_scope: promptScope });
     } catch (error) {
       console.error('Error fetching section:', error);
       return res.status(500).json({ error: 'Failed to fetch section' });

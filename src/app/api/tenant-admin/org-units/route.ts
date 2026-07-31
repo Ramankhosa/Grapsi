@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { isAccessError, requireTenantRoles, requireTenantUser } from '@/lib/auth/tenantAccess'
+import {
+  TENANT_SCOPED_ADMIN_ROLES,
+  isAccessError,
+  requireTenantRoles,
+  requireTenantUser,
+} from '@/lib/auth/tenantAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,13 +62,17 @@ export async function GET(request: NextRequest) {
     .filter((unit) => unit.kind === 'SCHOOL')
     .map((unit) => {
       const departments = departmentsBySchool.get(unit.id) || []
+      // School-scoped faculty (org_unit_id points at the school itself, not a
+      // department) need to be counted too, otherwise school-only rows vanish
+      // from the totals.
+      const directCount = countByUnit.get(unit.id) || 0
       return {
         id: unit.id,
         name: unit.name,
         code: unit.code,
         isActive: unit.is_active,
         departments,
-        facultyCount: departments.reduce((sum, dept) => sum + dept.facultyCount, 0),
+        facultyCount: directCount + departments.reduce((sum, dept) => sum + dept.facultyCount, 0),
       }
     })
 
@@ -71,7 +80,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const context = await requireTenantRoles(request)
+  const context = await requireTenantRoles(request, TENANT_SCOPED_ADMIN_ROLES)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
@@ -125,6 +134,20 @@ export async function POST(request: NextRequest) {
     data: { tenant_id: context.tenantId, kind, name, code: code || null, parent_id: parentId },
     select: { id: true, name: true, code: true, kind: true, parent_id: true, is_active: true },
   })
+
+  try {
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: context.user.id,
+        tenantId: context.tenantId,
+        action: 'ORG_UNIT_CREATE',
+        resource: `tenant_org_unit:${unit.id}`,
+        meta: { kind, name, code: code || null, parentId },
+      },
+    })
+  } catch (err) {
+    console.warn('Org unit create: audit log failed', err)
+  }
 
   return NextResponse.json({ unit }, { status: 201 })
 }

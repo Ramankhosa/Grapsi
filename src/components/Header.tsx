@@ -284,29 +284,33 @@ export default function Header() {
                       </>
                     )}
 
-                    {/* Tenant Admin Links - for OWNER and ADMIN */}
-                    {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN')) && (
+                    {/* Tenant Admin Links — OWNER/ADMIN see everything; CALL_ADMIN sees the scoped surfaces (faculty/org tree/calls). */}
+                    {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN') || user.roles?.includes('CALL_ADMIN' as any)) && (
                       <>
                         <div className="border-t border-gpt-gray-200 my-1"></div>
                         <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
                           Organization Admin
                         </div>
-                        <Link
-                          href="/tenant-admin/users"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                          onClick={closeMenu}
-                        >
-                          <span>👥</span>
-                          <span>User Management</span>
-                        </Link>
-                        <Link
-                          href="/tenant-admin/teams"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                          onClick={closeMenu}
-                        >
-                          <span>🏢</span>
-                          <span>Team Management</span>
-                        </Link>
+                        {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN')) && (
+                          <>
+                            <Link
+                              href="/tenant-admin/users"
+                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              onClick={closeMenu}
+                            >
+                              <span>👥</span>
+                              <span>User Management</span>
+                            </Link>
+                            <Link
+                              href="/tenant-admin/teams"
+                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              onClick={closeMenu}
+                            >
+                              <span>🏢</span>
+                              <span>Team Management</span>
+                            </Link>
+                          </>
+                        )}
                         <Link
                           href="/tenant-admin/faculty"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"

@@ -27,7 +27,10 @@ const ROLE_LABELS: Record<string, string> = {
   ADMIN: 'Admin',
   MANAGER: 'Manager',
   ANALYST: 'Analyst',
-  VIEWER: 'Viewer'
+  VIEWER: 'Viewer',
+  MEMBER: 'Member',
+  CALL_ASSIGNER: 'Call Assigner',
+  CALL_ADMIN: 'Call Admin',
 }
 
 const ROLE_COLORS: Record<string, string> = {
@@ -35,7 +38,20 @@ const ROLE_COLORS: Record<string, string> = {
   ADMIN: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
   MANAGER: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
   ANALYST: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
-  VIEWER: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+  VIEWER: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
+  MEMBER: 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200',
+  CALL_ASSIGNER: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+  CALL_ADMIN: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300',
+}
+
+/** Hierarchy slot (replaces the array); one at a time. */
+const HIERARCHY_ROLES = ['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER'] as const
+/** Additive tags that can be mixed freely with a hierarchy role. */
+const ADDITIVE_ROLES = ['CALL_ADMIN', 'CALL_ASSIGNER', 'MEMBER'] as const
+const ADDITIVE_ROLE_HINTS: Record<string, string> = {
+  CALL_ADMIN: 'Scoped tenant admin — imports and manages funding calls, faculty roster, and org tree. Cannot change user roles.',
+  CALL_ASSIGNER: 'Can assign funding calls to faculty and view assignment dashboards.',
+  MEMBER: 'Basic tenant member — sees published calls, gets no admin surfaces.',
 }
 
 export default function TenantAdminUsersPage() {
@@ -46,8 +62,10 @@ export default function TenantAdminUsersPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [showRoleModal, setShowRoleModal] = useState(false)
-  const [newRole, setNewRole] = useState<string>('')
+  const [hierarchyRole, setHierarchyRole] = useState<string>('')
+  const [additiveRoles, setAdditiveRoles] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const fetchUsers = useCallback(async () => {
     if (!token) return
@@ -76,34 +94,77 @@ export default function TenantAdminUsersPage() {
     fetchUsers()
   }, [fetchUsers])
 
+  const patchUser = async (body: any) => {
+    const res = await fetch(`/api/tenant-admin/users/${selectedUser!.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || 'Request failed')
+    }
+    return res.json()
+  }
+
   const handleRoleChange = async () => {
-    if (!selectedUser || !newRole || !token) return
-    
+    if (!selectedUser || !token) return
     setSaving(true)
+    setSaveError(null)
     try {
-      const res = await fetch(`/api/tenant-admin/users/${selectedUser.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ action: 'change_role', newRole })
-      })
-      
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error || 'Failed to change role')
+      const currentHierarchy = selectedUser.roles.find(r =>
+        (HIERARCHY_ROLES as readonly string[]).includes(r)
+      ) || ''
+      const currentAdditive = new Set(
+        selectedUser.roles.filter(r => (ADDITIVE_ROLES as readonly string[]).includes(r))
+      )
+      const nextAdditive = new Set(additiveRoles)
+
+      // Hierarchy slot: only fire change_role if it actually changed.
+      if (hierarchyRole && hierarchyRole !== currentHierarchy) {
+        await patchUser({ action: 'change_role', newRole: hierarchyRole })
       }
-      
+
+      // Additive tags: diff and issue add/remove for each delta.
+      for (const role of ADDITIVE_ROLES) {
+        const had = currentAdditive.has(role)
+        const wants = nextAdditive.has(role)
+        if (had === wants) continue
+        await patchUser({ action: wants ? 'add_role' : 'remove_role', role })
+      }
+
       setShowRoleModal(false)
       setSelectedUser(null)
-      setNewRole('')
+      setHierarchyRole('')
+      setAdditiveRoles([])
       fetchUsers()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to change role')
+      setSaveError(err instanceof Error ? err.message : 'Failed to update roles')
     } finally {
       setSaving(false)
     }
+  }
+
+  const openRoleModal = (targetUser: User) => {
+    setSelectedUser(targetUser)
+    const currentHierarchy = targetUser.roles.find(r =>
+      (HIERARCHY_ROLES as readonly string[]).includes(r)
+    ) || ''
+    setHierarchyRole(currentHierarchy)
+    setAdditiveRoles(
+      targetUser.roles.filter(r => (ADDITIVE_ROLES as readonly string[]).includes(r))
+    )
+    setSaveError(null)
+    setShowRoleModal(true)
+  }
+
+  const toggleAdditive = (role: string) => {
+    setAdditiveRoles(prev =>
+      prev.includes(role) ? prev.filter(r => r !== role) : [...prev, role]
+    )
   }
 
   const handleStatusChange = async (userId: string, newStatus: string) => {
@@ -223,10 +284,17 @@ export default function TenantAdminUsersPage() {
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${ROLE_COLORS[user.roles[0]] || ROLE_COLORS.VIEWER}`}>
-                      {ROLE_LABELS[user.roles[0]] || user.roles[0]}
-                    </span>
+                  <td className="px-6 py-4">
+                    <div className="flex flex-wrap gap-1">
+                      {(user.roles.length === 0 ? ['MEMBER'] : user.roles).map(role => (
+                        <span
+                          key={role}
+                          className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${ROLE_COLORS[role] || ROLE_COLORS.VIEWER}`}
+                        >
+                          {ROLE_LABELS[role] || role}
+                        </span>
+                      ))}
+                    </div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-wrap gap-1">
@@ -263,14 +331,10 @@ export default function TenantAdminUsersPage() {
                     {canModifyUser(user) && (
                       <div className="flex justify-end gap-2">
                         <button
-                          onClick={() => {
-                            setSelectedUser(user)
-                            setNewRole(user.roles[0])
-                            setShowRoleModal(true)
-                          }}
+                          onClick={() => openRoleModal(user)}
                           className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
                         >
-                          Change Role
+                          Edit Roles
                         </button>
                         <button
                           onClick={() => handleStatusChange(
@@ -293,47 +357,95 @@ export default function TenantAdminUsersPage() {
           </table>
         </div>
 
-        {/* Role Change Modal */}
+        {/* Role Editor Modal — hierarchy slot + additive tags */}
         {showRoleModal && selectedUser && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
-                Change Role for {selectedUser.name || selectedUser.email}
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+                Edit roles for {selectedUser.name || selectedUser.email}
               </h3>
-              
-              <div className="space-y-2 mb-6">
-                {['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER'].map((role) => (
-                  <label 
-                    key={role}
-                    className={`flex items-center p-3 rounded-lg border cursor-pointer transition-colors ${
-                      newRole === role 
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' 
-                        : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="role"
-                      value={role}
-                      checked={newRole === role}
-                      onChange={(e) => setNewRole(e.target.value)}
-                      className="h-4 w-4 text-blue-600"
-                    />
-                    <span className="ml-3">
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                Pick one hierarchy role. Add any number of tags on top — a user can be a Member and a
+                Call Assigner at the same time.
+              </p>
+
+              <div className="mt-5">
+                <p className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-2">
+                  Hierarchy role
+                </p>
+                <div className="space-y-2">
+                  {HIERARCHY_ROLES.map(role => (
+                    <label
+                      key={role}
+                      className={`flex items-center p-3 rounded-lg border cursor-pointer transition-colors ${
+                        hierarchyRole === role
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                          : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="hierarchyRole"
+                        value={role}
+                        checked={hierarchyRole === role}
+                        onChange={e => setHierarchyRole(e.target.value)}
+                        className="h-4 w-4 text-blue-600"
+                      />
+                      <span className="ml-3 text-sm font-medium text-gray-900 dark:text-white">
                         {ROLE_LABELS[role]}
                       </span>
-                    </span>
-                  </label>
-                ))}
+                    </label>
+                  ))}
+                </div>
               </div>
-              
-              <div className="flex justify-end gap-3">
+
+              <div className="mt-6">
+                <p className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-2">
+                  Additive tags
+                </p>
+                <div className="space-y-2">
+                  {ADDITIVE_ROLES.map(role => (
+                    <label
+                      key={role}
+                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                        additiveRoles.includes(role)
+                          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                          : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={additiveRoles.includes(role)}
+                        onChange={() => toggleAdditive(role)}
+                        className="mt-1 h-4 w-4 text-indigo-600"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900 dark:text-white">
+                          {ROLE_LABELS[role]}
+                        </span>
+                        <span className="block text-xs text-gray-500 dark:text-gray-400">
+                          {ADDITIVE_ROLE_HINTS[role]}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {saveError && (
+                <div className="mt-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+                  {saveError}
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3">
                 <button
                   onClick={() => {
                     setShowRoleModal(false)
                     setSelectedUser(null)
-                    setNewRole('')
+                    setHierarchyRole('')
+                    setAdditiveRoles([])
+                    setSaveError(null)
                   }}
                   className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
                 >
@@ -341,10 +453,10 @@ export default function TenantAdminUsersPage() {
                 </button>
                 <button
                   onClick={handleRoleChange}
-                  disabled={saving || newRole === selectedUser.roles[0]}
+                  disabled={saving}
                   className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : 'Save Changes'}
+                  {saving ? 'Saving...' : 'Save changes'}
                 </button>
               </div>
             </div>

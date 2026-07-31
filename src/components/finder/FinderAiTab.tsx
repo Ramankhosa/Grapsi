@@ -37,10 +37,24 @@ export default function FinderAiTab({
 }: FinderAiTabProps) {
   const { conversation } = chat;
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  // Whether the reader is at (or near) the bottom of the chat. Streaming updates
+  // only auto-scroll while this holds, so scrolling up to read a result card
+  // doesn't get yanked back down on every token.
+  const pinnedToBottomRef = useRef(true);
   const [railOpen, setRailOpen] = useState(false);
 
+  // Hard anchor: switching/loading a conversation or sending a new message
+  // always jumps to the bottom and re-pins.
   useEffect(() => {
+    pinnedToBottomRef.current = true;
     if (!chatScrollRef.current) return;
+    chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+  }, [conversation?.id, chat.loadingConversation, chat.pendingTurn?.createdAt]);
+
+  // Soft anchor: follow growing content (stream tokens, cards, finalized turns)
+  // only while the reader is pinned to the bottom.
+  useEffect(() => {
+    if (!pinnedToBottomRef.current || !chatScrollRef.current) return;
     chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [
     conversation?.messages.length,
@@ -197,7 +211,15 @@ export default function FinderAiTab({
           </div>
         </div>
 
-        <div ref={chatScrollRef} className="flex-1 overflow-y-auto bg-ground px-3 py-4 sm:px-5">
+        <div
+          ref={chatScrollRef}
+          onScroll={() => {
+            const el = chatScrollRef.current;
+            if (!el) return;
+            pinnedToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+          }}
+          className="flex-1 overflow-y-auto bg-ground px-3 py-4 sm:px-5"
+        >
           {!conversation || !hasRenderableConversationMessages ? (
             <FinderChatEmptyState
               finderContext={finderContext}

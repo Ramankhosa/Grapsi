@@ -11,8 +11,13 @@ import { researcherProfileService } from './researcherProfileService';
  * exceeds the inline cap is left to the existing embedding backfill.
  */
 
-/** Inline embedding is a paid, rate-limited call — beyond this, defer to backfill. */
-const MAX_INLINE_EMBEDDINGS = 200;
+/** Inline embedding is a paid, rate-limited call — beyond this, defer to the async worker. */
+const MAX_INLINE_EMBEDDINGS = 25;
+/** Hard cap so the sync loop never runs unbounded. Larger rosters must be split. */
+const MAX_ROWS_PER_IMPORT = 5000;
+/** Async worker batch size + per-item spacing to stay well under upstream rate limits. */
+const EMBEDDING_WORKER_BATCH = 10;
+const EMBEDDING_WORKER_DELAY_MS = 250;
 const MULTI_VALUE_SEPARATOR = /[;,|]/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -110,6 +115,13 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
     );
   }
 
+  if (sheet.rows.length > MAX_ROWS_PER_IMPORT) {
+    throw new Error(
+      `That file has ${sheet.rows.length} rows. Split it into batches of ${MAX_ROWS_PER_IMPORT} or fewer.`
+    );
+  }
+
+  const rawRowCount = sheet.rows.length;
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
 
   // Case-insensitive lookup of the tenant's existing hierarchy.
@@ -133,12 +145,15 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
   const results: FacultyImportRowResult[] = [];
   const unitsCreated: string[] = [];
   const touchedUserIds: string[] = [];
+  const seenEmails = new Set<string>();
   let created = 0;
   let updated = 0;
   let errors = 0;
 
   const read = (row: Record<string, string>, field: string) =>
     columns[field] ? (row[columns[field]] || '').trim() : '';
+  /** True if the CSV/XLSX actually contained a column for this field. */
+  const hasColumn = (field: string) => Boolean(columns[field]);
 
   for (let index = 0; index < sheet.rows.length; index += 1) {
     const row = sheet.rows[index];
@@ -169,6 +184,14 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       continue;
     }
 
+    // Guard: the same email appearing twice in one file would otherwise
+    // count as 1 created + 1 updated and mask an obvious duplicate.
+    if (seenEmails.has(email)) {
+      fail('This email appears more than once in the file.');
+      continue;
+    }
+    seenEmails.add(email);
+
     try {
       // --- Resolve School -> Department ------------------------------------
       let schoolId: string | null = null;
@@ -187,14 +210,30 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
           if (dryRun) {
             schoolId = `pending:${key}`;
           } else {
-            const unit = await prisma.tenantOrgUnit.create({
-              data: { tenant_id: tenantId, kind: 'SCHOOL', name: schoolName, parent_id: null },
+            // Defensive re-check: another concurrent import may have created
+            // this school after we snapshotted `schoolsByName` at the top.
+            // The partial unique index on lower(name) covers the DB, this
+            // avoids racing into a unique-violation on the hot path.
+            const existingRow = await prisma.tenantOrgUnit.findFirst({
+              where: {
+                tenant_id: tenantId,
+                parent_id: null,
+                kind: 'SCHOOL',
+                name: { equals: schoolName, mode: 'insensitive' },
+              },
               select: { id: true, name: true },
             });
+            const unit = existingRow
+              ? existingRow
+              : await prisma.tenantOrgUnit.create({
+                  data: { tenant_id: tenantId, kind: 'SCHOOL', name: schoolName, parent_id: null },
+                  select: { id: true, name: true },
+                });
             schoolId = unit.id;
             schoolsByName.set(key, unit);
+            if (!existingRow) unitsCreated.push(`School: ${schoolName}`);
           }
-          unitsCreated.push(`School: ${schoolName}`);
+          if (dryRun) unitsCreated.push(`School: ${schoolName}`);
         }
       }
 
@@ -218,14 +257,26 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
           if (dryRun) {
             departmentId = `pending:${key}`;
           } else {
-            const unit = await prisma.tenantOrgUnit.create({
-              data: { tenant_id: tenantId, kind: 'DEPARTMENT', name: departmentName, parent_id: schoolId },
+            const existingRow = await prisma.tenantOrgUnit.findFirst({
+              where: {
+                tenant_id: tenantId,
+                parent_id: schoolId,
+                kind: 'DEPARTMENT',
+                name: { equals: departmentName, mode: 'insensitive' },
+              },
               select: { id: true, name: true },
             });
+            const unit = existingRow
+              ? existingRow
+              : await prisma.tenantOrgUnit.create({
+                  data: { tenant_id: tenantId, kind: 'DEPARTMENT', name: departmentName, parent_id: schoolId },
+                  select: { id: true, name: true },
+                });
             departmentId = unit.id;
             departmentsByKey.set(key, unit);
+            if (!existingRow) unitsCreated.push(`Department: ${schoolName} / ${departmentName}`);
           }
-          unitsCreated.push(`Department: ${schoolName} / ${departmentName}`);
+          if (dryRun) unitsCreated.push(`Department: ${schoolName} / ${departmentName}`);
         }
       }
 
@@ -237,6 +288,14 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
 
       if (existingUser && existingUser.tenantId && existingUser.tenantId !== tenantId) {
         fail('This email already belongs to a different organization.');
+        continue;
+      }
+
+      // Do NOT silently pull an unclaimed (untenanted) user into this tenant —
+      // that would attach a real person to an org without consent. Bulk
+      // invites are the right path to bring an existing account in.
+      if (existingUser && !existingUser.tenantId) {
+        fail('This email exists as an unclaimed account. Invite the user through /tenant-admin/invites so they can accept before importing them here.');
         continue;
       }
 
@@ -257,43 +316,76 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       const institutionName = read(row, 'institutionName') || tenant?.name || null;
       const institutionType = read(row, 'institutionType');
 
+      // School-only rows attach to the school unit itself so they still show
+      // up in org-tree counts and orgUnitId filters. Two-level assumption is
+      // implicit elsewhere, but attaching to the school beats attaching to
+      // nothing.
+      const effectiveOrgUnitId = departmentId || schoolId || null;
+
+      // Build the profile-update payload from ONLY the columns actually
+      // present in this file. A re-import with a narrower schema (e.g.
+      // Name+Email+Keywords) would otherwise blank out school/department/
+      // research_areas/... on every existing row.
+      const fullUpdate: Record<string, any> = {};
+      if (hasColumn('name')) fullUpdate.display_name = name;
+      if (hasColumn('department') || hasColumn('school')) {
+        fullUpdate.department = resolvedDepartmentName || null;
+        fullUpdate.school = resolvedSchoolName || null;
+        fullUpdate.org_unit_id = effectiveOrgUnitId;
+      }
+      if (hasColumn('designation')) fullUpdate.designation = designation || null;
+      if (hasColumn('researchAreas')) fullUpdate.research_areas = researchAreas;
+      if (hasColumn('keywords')) fullUpdate.keywords = keywords;
+      if (hasColumn('researchSummary')) fullUpdate.research_summary = researchSummary || null;
+      if (hasColumn('institutionName')) fullUpdate.institution_name = institutionName;
+      if (hasColumn('institutionType')) fullUpdate.institution_type = institutionType || null;
+      if (hasColumn('careerStage')) fullUpdate.career_stage = careerStage || null;
+      if (hasColumn('country')) fullUpdate.country_of_residence = country || null;
+
+      // Create-side always writes the full shape (fresh rows have no prior
+      // state to preserve), pulling defaults where the column was absent.
+      const createPayload = {
+        display_name: name,
+        department: resolvedDepartmentName || null,
+        school: resolvedSchoolName || null,
+        designation: designation || null,
+        org_unit_id: effectiveOrgUnitId,
+        research_areas: researchAreas,
+        keywords,
+        research_summary: researchSummary || null,
+        institution_name: institutionName,
+        institution_type: institutionType || null,
+        career_stage: careerStage || null,
+        country_of_residence: country || null,
+      };
+
       const userId = await prisma.$transaction(async (tx) => {
-        const user = existingUser
-          ? await tx.user.update({
+        let user: { id: string };
+        if (existingUser) {
+          // tenantId is intentionally NOT touched here — the guard above
+          // already rejected mismatches and untenanted accounts.
+          if (hasColumn('name') && name && name !== existingUser.name) {
+            user = await tx.user.update({
               where: { id: existingUser.id },
-              data: {
-                name: name || existingUser.name,
-                // Adopt an untenanted account into this tenant.
-                tenantId: existingUser.tenantId || tenantId,
-              },
-              select: { id: true },
-            })
-          : await tx.user.create({
-              // No passwordHash: imported faculty are seeded accounts that
-              // activate through the existing invite / password-reset flow.
-              data: { email, name, tenantId, roles: ['ANALYST'], status: 'ACTIVE' },
+              data: { name },
               select: { id: true },
             });
-
-        const profileData = {
-          display_name: name,
-          department: resolvedDepartmentName || null,
-          school: resolvedSchoolName || null,
-          designation: designation || null,
-          org_unit_id: departmentId,
-          research_areas: researchAreas,
-          keywords,
-          research_summary: researchSummary || null,
-          institution_name: institutionName,
-          institution_type: institutionType || null,
-          career_stage: careerStage || null,
-          country_of_residence: country || null,
-        };
+          } else {
+            user = { id: existingUser.id };
+          }
+        } else {
+          user = await tx.user.create({
+            // No passwordHash: imported faculty are seeded accounts that
+            // activate through the existing invite / password-reset flow.
+            data: { email, name, tenantId, roles: ['ANALYST'], status: 'ACTIVE' },
+            select: { id: true },
+          });
+        }
 
         await tx.researcherProfile.upsert({
           where: { user_id: user.id },
-          create: { user_id: user.id, ...profileData },
-          update: profileData,
+          create: { user_id: user.id, ...createPayload },
+          update: fullUpdate,
         });
 
         return user.id;
@@ -308,9 +400,10 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
     }
   }
 
-  // --- Embeddings (best effort, outside the row transactions) ---------------
+  // --- Inline embeddings (small, keeps the response quick) -------------------
   let embeddingsIndexed = 0;
   const inlineTargets = touchedUserIds.slice(0, MAX_INLINE_EMBEDDINGS);
+  const remainingTargets = touchedUserIds.slice(MAX_INLINE_EMBEDDINGS);
   for (const userId of inlineTargets) {
     try {
       const indexed = await researcherProfileService.indexResearcherProfileEmbedding(userId);
@@ -328,32 +421,135 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
 
   let jobId: string | null = null;
   if (!dryRun) {
+    const finalStatus = remainingTargets.length > 0 ? 'EMBEDDING_RUNNING' : 'COMPLETED';
     const job = await prisma.facultyImportJob.create({
       data: {
         tenant_id: tenantId,
         uploaded_by: uploadedByUserId,
         filename: filename || null,
-        total_rows: results.length,
+        // total_rows reflects the raw spreadsheet, not the post-filter row set.
+        total_rows: rawRowCount,
         created_count: created,
         updated_count: updated,
         error_count: errors,
-        report_json: { unitsCreated, results: results.slice(0, 500) } as any,
+        status: finalStatus,
+        report_json: {
+          unitsCreated,
+          results: results.slice(0, 500),
+          embeddingsIndexed,
+          pendingUserIds: remainingTargets,
+        } as any,
       },
       select: { id: true },
     });
     jobId = job.id;
+
+    // Audit trail for the commit.
+    try {
+      await prisma.auditLog.create({
+        data: {
+          actorUserId: uploadedByUserId,
+          tenantId,
+          action: 'FACULTY_IMPORT',
+          resource: `faculty_import_job:${job.id}`,
+          meta: {
+            filename: filename || null,
+            totalRows: rawRowCount,
+            created,
+            updated,
+            errors,
+            unitsCreated: Array.from(new Set(unitsCreated)),
+            embeddingsIndexed,
+            pending: remainingTargets.length,
+          },
+        },
+      });
+    } catch (auditErr) {
+      console.warn('Faculty import: audit log failed', auditErr);
+    }
+
+    // Fire-and-forget: sweep the remaining embeddings after the HTTP response.
+    // Any unhandled rejection here would crash the Node worker — the .catch
+    // is load-bearing.
+    if (remainingTargets.length > 0) {
+      void indexPendingFacultyEmbeddings(job.id, tenantId, remainingTargets).catch((err) => {
+        console.error('Faculty import: embedding worker crashed', err);
+      });
+    }
   }
 
   return {
     dryRun,
-    totalRows: results.length,
+    totalRows: rawRowCount,
     created,
     updated,
     errors,
     unitsCreated: Array.from(new Set(unitsCreated)),
     embeddingsIndexed,
-    embeddingsPending: Math.max(0, touchedUserIds.length - embeddingsIndexed),
+    embeddingsPending: remainingTargets.length,
     results,
     jobId,
   };
+}
+
+/**
+ * Detached embedding worker. Runs after the import route has already
+ * responded, in chunks, and keeps the `FacultyImportJob` row updated so the
+ * UI can poll for progress via `GET /api/tenant-admin/faculty`.
+ *
+ * This is the first "fire-and-forget after HTTP response" pattern in the
+ * repo — every awaited call is wrapped so an unhandled rejection can't take
+ * the Node process down.
+ */
+export async function indexPendingFacultyEmbeddings(
+  jobId: string,
+  tenantId: string,
+  userIds: string[]
+): Promise<void> {
+  if (userIds.length === 0) {
+    try {
+      await prisma.facultyImportJob.update({
+        where: { id: jobId },
+        data: { status: 'COMPLETED' },
+      });
+    } catch (err) {
+      console.warn('Faculty embedding worker: could not mark job complete', err);
+    }
+    return;
+  }
+
+  let embedded = 0;
+  let failed = 0;
+
+  for (let index = 0; index < userIds.length; index += EMBEDDING_WORKER_BATCH) {
+    const chunk = userIds.slice(index, index + EMBEDDING_WORKER_BATCH);
+    for (const userId of chunk) {
+      try {
+        const ok = await researcherProfileService.indexResearcherProfileEmbedding(userId);
+        if (ok) embedded += 1;
+        else failed += 1;
+      } catch (err) {
+        failed += 1;
+        console.warn('Faculty embedding worker: user', userId, err);
+      }
+      if (EMBEDDING_WORKER_DELAY_MS > 0) {
+        await new Promise((resolve) => setTimeout(resolve, EMBEDDING_WORKER_DELAY_MS));
+      }
+    }
+    // No per-chunk write — the UI polls the researcher_profiles embedding
+    // count directly (that count is authoritative and updates live).
+    // Overwriting import-time totals here would corrupt the audit trail.
+  }
+
+  try {
+    await prisma.facultyImportJob.update({
+      where: { id: jobId },
+      data: { status: failed === userIds.length ? 'FAILED' : 'COMPLETED' },
+    });
+  } catch (err) {
+    console.warn('Faculty embedding worker: final status update failed', err);
+  }
+
+  // tenantId is accepted for future scoping/telemetry hooks — deliberately unused today.
+  void tenantId;
 }

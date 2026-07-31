@@ -8,9 +8,13 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateRequest, requireTenantRole } from '@/lib/middleware'
-import { 
-  changeUserRole, 
+import {
+  changeUserRole,
   canChangeRole,
+  canAddRole,
+  canRemoveRole,
+  addUserRole,
+  removeUserRole,
   getHighestRole,
   getUserTeams
 } from '@/lib/org-access-service'
@@ -77,6 +81,11 @@ export async function GET(
     const userHighestRole = getHighestRole(user.roles)
     const availableRoles: UserRole[] = ['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER']
       .filter(role => canChangeRole(actorRoles as UserRole[], userHighestRole, role as UserRole).allowed) as UserRole[]
+    // Additive tags — separate from the hierarchy slot; grantable independently.
+    // Cast note: schema/DB have these; the generated Prisma client may be stale.
+    const additiveTags = ['CALL_ADMIN', 'CALL_ASSIGNER', 'MEMBER'] as unknown as UserRole[]
+    const grantableAdditiveRoles: UserRole[] = additiveTags
+      .filter(role => canAddRole(actorRoles as UserRole[], role as UserRole).allowed) as UserRole[]
     
     return NextResponse.json({
       user: {
@@ -106,6 +115,7 @@ export async function GET(
       permissions: {
         canChangeRole: availableRoles.length > 0,
         availableRoles,
+        grantableAdditiveRoles,
         canDeactivate: canChangeRole(actorRoles as UserRole[], userHighestRole, 'VIEWER').allowed
       }
     })
@@ -139,29 +149,45 @@ export async function PATCH(
     
     const { userId } = params
     const body = await request.json()
-    const { action, newRole, status } = body
-    
+    const { action, newRole, role, status } = body
+
     if (!actor.tenant_id) {
       return NextResponse.json({ error: 'No tenant context' }, { status: 400 })
     }
-    
-    // Handle role change
+
+    const actorContext = {
+      userId: actor.sub,
+      tenantId: actor.tenant_id,
+      roles: (actor.roles || []) as UserRole[],
+      email: actor.email
+    }
+
+    // Add an additive tag (CALL_ADMIN / CALL_ASSIGNER / MEMBER)
+    if (action === 'add_role' && role) {
+      const result = await addUserRole(actorContext, userId, role as UserRole)
+      if (!result.success) {
+        return NextResponse.json({ error: result.error }, { status: 403 })
+      }
+      return NextResponse.json({ success: true, roles: result.roles })
+    }
+
+    // Remove any role from the user's array
+    if (action === 'remove_role' && role) {
+      const result = await removeUserRole(actorContext, userId, role as UserRole)
+      if (!result.success) {
+        return NextResponse.json({ error: result.error }, { status: 403 })
+      }
+      return NextResponse.json({ success: true, roles: result.roles })
+    }
+
+    // Handle role change (hierarchy slot — replaces the array)
     if (action === 'change_role' && newRole) {
-      const result = await changeUserRole(
-        {
-          userId: actor.sub,
-          tenantId: actor.tenant_id,
-          roles: (actor.roles || []) as UserRole[],
-          email: actor.email
-        },
-        userId,
-        newRole as UserRole
-      )
-      
+      const result = await changeUserRole(actorContext, userId, newRole as UserRole)
+
       if (!result.success) {
         return NextResponse.json({ error: result.error }, { status: 400 })
       }
-      
+
       return NextResponse.json({ success: true, message: 'Role updated successfully' })
     }
     

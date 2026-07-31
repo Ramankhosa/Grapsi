@@ -5,6 +5,7 @@ import type { FinderTurnStreamStage } from '../../lib/recommendations/chatTypes'
 import type { RecommendationRawResultItem } from '../../lib/recommendations/types';
 import FinderMarkdown from './FinderMarkdown';
 import FinderResultCard from './FinderResultCard';
+import FinderResultsHeader from './FinderResultsHeader';
 
 export interface StreamingStageEntry {
   stage: FinderTurnStreamStage;
@@ -26,10 +27,17 @@ interface FinderStreamingMessageProps {
 }
 
 /**
- * The in-flight assistant turn while an SSE response streams in: a live stage checklist,
- * result cards the moment the search lands, then the narrative typing out token by token.
+ * The in-flight assistant turn while an SSE response streams in.
+ *
+ * Layout contract with FinderChatMessage, which replaces this component the
+ * instant the turn is saved: once results land, the multi-line stage checklist is
+ * replaced by the same one-line FinderResultsHeader the saved turn renders, so
+ * from that point on the turn only grows downward as tokens arrive. Nothing above
+ * the narrative may change height after results are in.
  */
 export default function FinderStreamingMessage({ turn, getCallDetailsHref }: FinderStreamingMessageProps) {
+  const results = turn.results && turn.results.length > 0 ? turn.results : null;
+
   return (
     <div className="flex gap-3">
       <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-cobalt-50 text-cobalt-700">
@@ -37,9 +45,16 @@ export default function FinderStreamingMessage({ turn, getCallDetailsHref }: Fin
       </span>
 
       <div className="min-w-0 flex-1">
-        <span className="text-[13px] font-medium text-ink">Finder</span>
+        {/* Same shape as the saved turn's name row (name + 11px meta) so the
+            rows measure identically and the swap doesn't nudge the cards. */}
+        <div className="flex items-baseline gap-2">
+          <span className="text-[13px] font-medium text-ink">Finder</span>
+          <span className="text-[11px] text-muted-soft">working…</span>
+        </div>
 
-        {turn.stages.length > 0 ? (
+        {results ? (
+          <FinderResultsHeader shown={results.length} extra={Math.max(0, turn.totalResults - results.length)} />
+        ) : turn.stages.length > 0 ? (
           <div className="mt-1.5 space-y-1">
             {turn.stages.map((entry, index) => (
               <div key={`${entry.stage}-${index}`} className="flex items-center gap-2 text-[12px]">
@@ -59,20 +74,19 @@ export default function FinderStreamingMessage({ turn, getCallDetailsHref }: Fin
           </div>
         ) : null}
 
-        {turn.results && turn.results.length > 0 ? (
-          <div className="mt-3 grid gap-2.5">
-            {turn.results.map((result, index) => (
+        {results ? (
+          // grid-cols-1 (minmax(0,1fr)) not bare `grid`: an auto track sizes to the
+          // cards' min-content and would overflow the chat column on phones.
+          <div className="mt-2 grid grid-cols-1 gap-2.5">
+            {results.map((result, index) => (
               <FinderResultCard
                 key={result.id}
                 result={result}
                 ordinal={index + 1}
                 getCallDetailsHref={getCallDetailsHref}
-                compact
+                pendingActions
               />
             ))}
-            {turn.totalResults > turn.results.length ? (
-              <div className="text-[12px] text-muted">+{turn.totalResults - turn.results.length} more matches</div>
-            ) : null}
           </div>
         ) : null}
 

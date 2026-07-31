@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isAccessError, requireTenantRoles } from '@/lib/auth/tenantAccess'
+import {
+  TENANT_SCOPED_ADMIN_ROLES,
+  isAccessError,
+  requireTenantRoles,
+} from '@/lib/auth/tenantAccess'
 import {
   BULK_INVITE_TEMPLATE_HEADERS,
   importBulkInvites,
@@ -11,7 +15,7 @@ const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 /** Downloadable CSV template so the column headings always match the parser. */
 export async function GET(request: NextRequest) {
-  const context = await requireTenantRoles(request)
+  const context = await requireTenantRoles(request, TENANT_SCOPED_ADMIN_ROLES)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
@@ -37,7 +41,7 @@ export async function GET(request: NextRequest) {
  * own password on signup; already-seeded accounts get an activation link.
  */
 export async function POST(request: NextRequest) {
-  const context = await requireTenantRoles(request)
+  const context = await requireTenantRoles(request, TENANT_SCOPED_ADMIN_ROLES)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }

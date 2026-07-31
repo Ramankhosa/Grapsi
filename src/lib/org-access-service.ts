@@ -75,7 +75,9 @@ export interface UserWithTeams {
   createdAt: Date
 }
 
-// Role hierarchy for permission checks
+// Role hierarchy for permission checks. Additive tags don't participate in
+// the hierarchy (a CALL_ASSIGNER is not "above" a VIEWER); they resolve to 0
+// so getHighestRole falls through to whichever hierarchy role the user has.
 const ROLE_HIERARCHY: Record<UserRole, number> = {
   SUPER_ADMIN: 100,
   SUPER_ADMIN_VIEWER: 90,
@@ -83,11 +85,31 @@ const ROLE_HIERARCHY: Record<UserRole, number> = {
   ADMIN: 70,
   MANAGER: 50,
   ANALYST: 30,
-  VIEWER: 10
+  VIEWER: 10,
+  MEMBER: 5,
+  CALL_ASSIGNER: 0,
+  CALL_ADMIN: 0,
 }
 
 // Roles that can manage users
 const USER_MANAGEMENT_ROLES: UserRole[] = ['OWNER', 'ADMIN']
+
+/**
+ * Additive tenant-scoped tags. These live outside ROLE_HIERARCHY; a user can
+ * hold any subset alongside one hierarchy role. Granting them is a plain
+ * add/remove operation, not a promote/demote.
+ *
+ * Cast: the generated Prisma client may still be one generate cycle behind
+ * the schema on shared dev boxes; the underlying Postgres enum has these
+ * values via migration, so the string cast is safe.
+ */
+const ADDITIVE_ROLES: UserRole[] = ['MEMBER', 'CALL_ASSIGNER', 'CALL_ADMIN'] as UserRole[]
+/**
+ * Roles anyone below OWNER must not grant. Prevents a CALL_ADMIN (which
+ * gates the scoped admin surface) from minting more admins or another
+ * CALL_ADMIN.
+ */
+const OWNER_ONLY_GRANTABLE_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'CALL_ADMIN'] as UserRole[]
 
 // Roles that can manage teams
 const TEAM_MANAGEMENT_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER']
@@ -177,6 +199,153 @@ export function getHighestRole(roles: UserRole[]): UserRole {
   return roles.reduce((highest, current) => 
     ROLE_HIERARCHY[current] > ROLE_HIERARCHY[highest] ? current : highest
   , 'VIEWER' as UserRole)
+}
+
+/**
+ * Whether an actor can grant `role` to any target in their tenant.
+ * Used for the additive role tags (CALL_ADMIN/CALL_ASSIGNER/MEMBER),
+ * where semantics are "add to the array" rather than replace-in-hierarchy.
+ */
+export function canAddRole(
+  actorRoles: UserRole[],
+  role: UserRole
+): { allowed: boolean; reason?: string } {
+  if (role === 'SUPER_ADMIN' || role === 'SUPER_ADMIN_VIEWER') {
+    return { allowed: false, reason: 'Cannot assign super admin roles through tenant management' }
+  }
+  // Only OWNER/ADMIN can touch roles at all.
+  if (!actorRoles.some(r => USER_MANAGEMENT_ROLES.includes(r))) {
+    return { allowed: false, reason: 'Only OWNER or ADMIN can change user roles' }
+  }
+  // OWNER-only escalations (grant ADMIN or CALL_ADMIN) require OWNER.
+  if (OWNER_ONLY_GRANTABLE_ROLES.includes(role) && !actorRoles.includes('OWNER')) {
+    return { allowed: false, reason: `Only OWNER can grant ${role}` }
+  }
+  // OWNER is the ceiling — nobody grants OWNER via this path.
+  if (role === 'OWNER' && !actorRoles.includes('OWNER')) {
+    return { allowed: false, reason: 'Only OWNER can grant OWNER' }
+  }
+  return { allowed: true }
+}
+
+export function canRemoveRole(
+  actorRoles: UserRole[],
+  role: UserRole
+): { allowed: boolean; reason?: string } {
+  if (!actorRoles.some(r => USER_MANAGEMENT_ROLES.includes(r))) {
+    return { allowed: false, reason: 'Only OWNER or ADMIN can change user roles' }
+  }
+  if (role === 'OWNER' && !actorRoles.includes('OWNER')) {
+    return { allowed: false, reason: 'Only OWNER can remove OWNER' }
+  }
+  return { allowed: true }
+}
+
+async function assertSameTenant(
+  actorContext: UserContext,
+  targetUserId: string
+): Promise<{ ok: true; targetUser: { id: string; roles: UserRole[]; email: string } } | { ok: false; error: string }> {
+  const targetUser = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    select: { id: true, tenantId: true, roles: true, email: true }
+  })
+  if (!targetUser) {
+    return { ok: false, error: 'User not found' }
+  }
+  if (targetUser.tenantId !== actorContext.tenantId) {
+    return { ok: false, error: 'Cannot modify users from different tenant' }
+  }
+  return { ok: true, targetUser: { id: targetUser.id, roles: targetUser.roles, email: targetUser.email } }
+}
+
+/**
+ * Add an additive/tag role to a user's role array. Idempotent — no-op if the
+ * user already holds `role`. Never touches roles the caller isn't allowed to
+ * grant (guarded by `canAddRole`).
+ */
+export async function addUserRole(
+  actorContext: UserContext,
+  targetUserId: string,
+  role: UserRole
+): Promise<{ success: boolean; roles?: UserRole[]; error?: string }> {
+  const check = canAddRole(actorContext.roles, role)
+  if (!check.allowed) return { success: false, error: check.reason }
+
+  const target = await assertSameTenant(actorContext, targetUserId)
+  if (!target.ok) return { success: false, error: target.error }
+
+  const current = target.targetUser.roles
+  if (current.includes(role)) {
+    return { success: true, roles: current }
+  }
+  const nextRoles = Array.from(new Set([...current, role])) as UserRole[]
+
+  await prisma.user.update({
+    where: { id: targetUserId },
+    data: { roles: nextRoles }
+  })
+
+  await prisma.auditLog.create({
+    data: {
+      actorUserId: actorContext.userId,
+      tenantId: actorContext.tenantId,
+      action: 'USER_ROLE_ADD',
+      resource: `user:${targetUserId}`,
+      meta: { role, previousRoles: current, newRoles: nextRoles, targetEmail: target.targetUser.email }
+    }
+  })
+
+  return { success: true, roles: nextRoles }
+}
+
+/**
+ * Remove a role from a user. If the resulting array would be empty the user
+ * falls back to `['MEMBER']` — a role-less user would silently lose every
+ * gate that keys on `user.roles`.
+ */
+export async function removeUserRole(
+  actorContext: UserContext,
+  targetUserId: string,
+  role: UserRole
+): Promise<{ success: boolean; roles?: UserRole[]; error?: string }> {
+  const check = canRemoveRole(actorContext.roles, role)
+  if (!check.allowed) return { success: false, error: check.reason }
+
+  const target = await assertSameTenant(actorContext, targetUserId)
+  if (!target.ok) return { success: false, error: target.error }
+
+  const current = target.targetUser.roles
+  if (!current.includes(role)) {
+    return { success: true, roles: current }
+  }
+
+  // Guard: never let a non-OWNER remove OWNER from anyone.
+  if (role === 'OWNER' && !actorContext.roles.includes('OWNER')) {
+    return { success: false, error: 'Only OWNER can remove OWNER' }
+  }
+
+  let nextRoles = current.filter(r => r !== role)
+  if (nextRoles.length === 0) {
+    // See ADDITIVE_ROLES note: string cast covers stale generated client.
+    nextRoles = ['MEMBER'] as UserRole[]
+  }
+
+  await prisma.user.update({
+    where: { id: targetUserId },
+    data: { roles: nextRoles }
+  })
+
+  await prisma.auditLog.create({
+    data: {
+      actorUserId: actorContext.userId,
+      tenantId: actorContext.tenantId,
+      action: 'USER_ROLE_REMOVE',
+      resource: `user:${targetUserId}`,
+      meta: { role, previousRoles: current, newRoles: nextRoles, targetEmail: target.targetUser.email }
+    }
+  })
+
+  return { success: true, roles: nextRoles }
 }
 
 /**
