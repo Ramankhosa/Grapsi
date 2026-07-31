@@ -99,6 +99,8 @@ export default function FinderResultCard({
   const matchPercent = Math.round(Math.max(0, Math.min(1, result.score)) * 100);
   const hasDocumentEvidence = Boolean(result.evidence && result.evidence.chunks.length > 0);
   const profileReasons = result.profileMatch?.reasons.slice(0, 3) || [];
+  // Only populated on multi-area searches — shows which of the user's areas found this call.
+  const matchedAreas = result.matchedAreas || [];
   const detailsHref = getCallDetailsHref?.(result.id) || `/finder/calls/${encodeURIComponent(result.id)}`;
 
   return (
@@ -161,6 +163,18 @@ export default function FinderResultCard({
       {showEligibility && eligibilityCopy ? (
         <p className="mt-1 line-clamp-1 text-[12px] leading-5 text-muted" title={eligibilityCopy}>
           <span className="font-medium text-ink-soft">Eligibility:</span> {eligibilityCopy}
+        </p>
+      ) : null}
+
+      {matchedAreas.length ? (
+        <p
+          className="mt-1.5 flex flex-wrap items-center gap-1 text-[12px] leading-5 text-muted"
+          title={`Found by searching: ${matchedAreas.map((area) => area.label).join(', ')}`}
+        >
+          <span className="font-medium text-ink-soft">Matches:</span>
+          {matchedAreas.map((area) => (
+            <span key={area.areaId} className="cb-badge-cobalt">{area.label}</span>
+          ))}
         </p>
       ) : null}
 

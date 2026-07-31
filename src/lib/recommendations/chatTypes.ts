@@ -139,6 +139,11 @@ export interface RecommendationConversationMessageRequest {
   useProfileContext?: boolean;
   useEligibilityProfile?: boolean;
   usePublicationContext?: boolean;
+  /**
+   * Saved research areas the user has ticked in the finder rail. Re-sent on every turn
+   * (like the profile opt-ins) so filter refinements keep searching the same area set.
+   */
+  selectedResearchAreaIds?: string[];
 }
 
 export interface RecommendationConversationMutationResponse {

@@ -22,16 +22,25 @@ import type {
   InternalRecommendationSearchResponse,
   NormalizedRecommendationSearchRequest,
   RecommendationAccessScope,
+  RecommendationAreaBreakdownItem,
+  RecommendationAreaMatch,
   RecommendationCandidate,
   RecommendationProfileMatch,
   RecommendationProfileSnapshot,
   RecommendationPublicationSnapshot,
+  RecommendationRawResultItem,
   RecommendationSearchFilters,
   RecommendationSearchRequest,
   RecommendationSearchResponse,
   RecommendationSearchResultItem,
+  RecommendationSelectedResearchArea,
   RecommendationStrictFilterRecovery,
 } from '../recommendations/types';
+import {
+  MAX_SELECTED_RESEARCH_AREAS,
+  MULTI_AREA_MATCH_BONUS,
+  MULTI_AREA_MIN_SLOTS_PER_AREA,
+} from '../recommendations/constants';
 import {
   buildCountryMatchKeys,
   createRequestHash,
@@ -304,7 +313,15 @@ function selectCandidateColumns() {
     funder_country AS "funderCountry",
     COALESCE(citizenship_requirements, ARRAY[]::text[]) AS "citizenshipRequirements",
     COALESCE(residency_requirements, ARRAY[]::text[]) AS "residencyRequirements",
-    COALESCE(application_languages, ARRAY[]::text[]) AS "applicationLanguages"
+    COALESCE(application_languages, ARRAY[]::text[]) AS "applicationLanguages",
+    COALESCE(
+      ARRAY(
+        SELECT taxonomy_tag.taxonomy_area_id
+        FROM funding_call_research_area_taxonomies taxonomy_tag
+        WHERE taxonomy_tag.funding_call_id = funding_calls.id
+      ),
+      ARRAY[]::text[]
+    ) AS "taxonomyAreaIds"
   `;
 }
 
@@ -847,6 +864,7 @@ function toPublicResult(
     citizenshipRequirements: candidate.citizenshipRequirements,
     residencyRequirements: candidate.residencyRequirements,
     applicationLanguages: candidate.applicationLanguages,
+    taxonomyAreaIds: candidate.taxonomyAreaIds || [],
     semanticSimilarity: candidate.semanticSimilarity,
     textRank: candidate.textRank,
   };
@@ -1127,6 +1145,224 @@ function vectorLiteralFromEmbedding(embedding: number[]) {
     return null;
   }
   return `[${embedding.join(',')}]`;
+}
+
+/** The typed-topic branch of a fan-out, when the message carries a topic of its own. */
+const MESSAGE_BRANCH_ID = '__message__';
+/** Score bonus when a call carries the same two-level taxonomy tag as the searched area. */
+const TAXONOMY_TAG_BONUS = 0.06;
+
+type SearchAreaBranch = {
+  areaId: string;
+  label: string;
+  queryText: string;
+  taxonomyAreaId: string | null;
+  taxonomyPath: string | null;
+  request: RecommendationSearchRequest;
+};
+
+function normalizeSelectedResearchAreas(
+  selected: RecommendationSelectedResearchArea[] | undefined
+): RecommendationSelectedResearchArea[] {
+  if (!Array.isArray(selected)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const cleaned: RecommendationSelectedResearchArea[] = [];
+
+  selected.forEach((area) => {
+    const queryText = normalizeWhitespace(String(area?.queryText || ''));
+    const id = normalizeWhitespace(String(area?.id || ''));
+    if (!queryText || !id) {
+      return;
+    }
+    const key = normalizeKey(queryText);
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    cleaned.push({
+      id,
+      label: normalizeWhitespace(String(area?.label || '')) || queryText,
+      queryText,
+      taxonomyAreaId: normalizeWhitespace(String(area?.taxonomyAreaId || '')) || null,
+      taxonomyPath: normalizeWhitespace(String(area?.taxonomyPath || '')) || null,
+    });
+  });
+
+  return cleaned.slice(0, MAX_SELECTED_RESEARCH_AREAS);
+}
+
+/**
+ * Turns one request into the independent topic branches it should be searched as.
+ * Returns fewer than two branches when there is nothing to fan out over, in which case
+ * the caller keeps the ordinary single-query path.
+ *
+ * The message's own topic stays a branch of its own rather than being folded into the
+ * selection, so picking saved areas never silently swallows what the user just typed.
+ */
+function buildSearchAreaBranches(request: RecommendationSearchRequest): SearchAreaBranch[] {
+  const selected = normalizeSelectedResearchAreas(request.selectedResearchAreas);
+  if (selected.length === 0) {
+    return [];
+  }
+
+  const selectedKeys = new Set(selected.map((area) => normalizeKey(area.queryText)));
+  const branches: SearchAreaBranch[] = [];
+
+  const messageTopic =
+    request.inputMode === 'research_area'
+      ? normalizeWhitespace((request.query as { researchArea?: string })?.researchArea || '')
+      : normalizeWhitespace((request.query as { title?: string })?.title || '');
+
+  // A paper-metadata query is already a rich, self-contained topic; keep it as its own
+  // branch rather than flattening it into the research-area branches.
+  const messageIsDistinct =
+    Boolean(messageTopic) &&
+    (request.inputMode === 'paper_metadata' || !selectedKeys.has(normalizeKey(messageTopic)));
+
+  if (messageIsDistinct) {
+    branches.push({
+      areaId: MESSAGE_BRANCH_ID,
+      label: request.inputMode === 'paper_metadata' ? 'Attached paper' : 'Your message',
+      queryText: messageTopic,
+      taxonomyAreaId: null,
+      taxonomyPath: null,
+      request: { ...request, selectedResearchAreas: undefined },
+    });
+  }
+
+  selected.forEach((area) => {
+    branches.push({
+      areaId: area.id,
+      label: area.label,
+      queryText: area.queryText,
+      taxonomyAreaId: area.taxonomyAreaId || null,
+      taxonomyPath: area.taxonomyPath || null,
+      request: {
+        ...request,
+        inputMode: 'research_area',
+        query: { researchArea: area.queryText },
+        selectedResearchAreas: undefined,
+      },
+    });
+  });
+
+  return branches.length >= 2 ? branches : [];
+}
+
+type MergedAreaResult = {
+  result: RecommendationRawResultItem;
+  matchedAreas: RecommendationAreaMatch[];
+  bestBranchIndex: number;
+  bestBranchRank: number;
+  combinedScore: number;
+};
+
+/**
+ * Merges per-area result lists into one ranked list.
+ *
+ * Score is the best score the call earned on any single area — never an average — plus a
+ * deliberate bonus per additional area it matched, so cross-cutting calls rise without
+ * specialists being punished for matching only the area they belong to.
+ */
+function mergeAreaSearchResults(
+  branches: SearchAreaBranch[],
+  responses: InternalRecommendationSearchResponse[],
+  limit: number
+): MergedAreaResult[] {
+  const merged = new Map<string, MergedAreaResult>();
+
+  responses.forEach((response, branchIndex) => {
+    const branch = branches[branchIndex];
+    if (!branch) {
+      return;
+    }
+
+    response.rawResults.forEach((result, rank) => {
+      const taxonomyHit = Boolean(
+        branch.taxonomyAreaId && (result.taxonomyAreaIds || []).includes(branch.taxonomyAreaId)
+      );
+      const areaScore = Math.min(1, result.score + (taxonomyHit ? TAXONOMY_TAG_BONUS : 0));
+      const match: RecommendationAreaMatch = {
+        areaId: branch.areaId,
+        label: branch.label,
+        score: Number(areaScore.toFixed(4)),
+      };
+
+      const existing = merged.get(result.id);
+      if (!existing) {
+        merged.set(result.id, {
+          result: taxonomyHit && branch.taxonomyPath
+            ? { ...result, matchReasons: [...result.matchReasons, `Tagged ${branch.taxonomyPath}`] }
+            : result,
+          matchedAreas: [match],
+          bestBranchIndex: branchIndex,
+          bestBranchRank: rank,
+          combinedScore: areaScore,
+        });
+        return;
+      }
+
+      existing.matchedAreas.push(match);
+      if (areaScore > existing.combinedScore) {
+        existing.combinedScore = areaScore;
+        existing.bestBranchIndex = branchIndex;
+        existing.bestBranchRank = rank;
+      }
+    });
+  });
+
+  const entries = Array.from(merged.values()).map((entry) => {
+    const matchedAreas = [...entry.matchedAreas].sort((left, right) => right.score - left.score);
+    return {
+      ...entry,
+      matchedAreas,
+      combinedScore: Math.min(1, entry.combinedScore + MULTI_AREA_MATCH_BONUS * (matchedAreas.length - 1)),
+    };
+  });
+
+  if (entries.length <= limit) {
+    return entries.sort((left, right) => right.combinedScore - left.combinedScore);
+  }
+
+  // Membership first: guarantee every area a few slots so a strong area cannot starve the
+  // others out of the list entirely. Ordering afterwards is still purely by score.
+  const byBranch = new Map<number, MergedAreaResult[]>();
+  entries.forEach((entry) => {
+    const bucket = byBranch.get(entry.bestBranchIndex) || [];
+    bucket.push(entry);
+    byBranch.set(entry.bestBranchIndex, bucket);
+  });
+  byBranch.forEach((bucket) => bucket.sort((left, right) => left.bestBranchRank - right.bestBranchRank));
+
+  const selectedIds = new Set<string>();
+  const selectedEntries: MergedAreaResult[] = [];
+  const takeEntry = (entry: MergedAreaResult) => {
+    if (selectedIds.has(entry.result.id) || selectedEntries.length >= limit) {
+      return;
+    }
+    selectedIds.add(entry.result.id);
+    selectedEntries.push(entry);
+  };
+
+  for (let round = 0; round < MULTI_AREA_MIN_SLOTS_PER_AREA; round += 1) {
+    branches.forEach((_branch, branchIndex) => {
+      const bucket = byBranch.get(branchIndex) || [];
+      const next = bucket.find((entry) => !selectedIds.has(entry.result.id));
+      if (next) {
+        takeEntry(next);
+      }
+    });
+  }
+
+  entries
+    .slice()
+    .sort((left, right) => right.combinedScore - left.combinedScore)
+    .forEach(takeEntry);
+
+  return selectedEntries.sort((left, right) => right.combinedScore - left.combinedScore);
 }
 
 export class RecommendationSearchService {
@@ -1557,9 +1793,10 @@ Rules:
         relaxationSuggestions,
         strictFilterRecovery,
         searchDiagnostics,
-        results: rawResults.map(({ fullDescription, description, amountMin, amountMax, currency, eligibilityText, contactInfo, geographyScope, funderCountry, citizenshipRequirements, residencyRequirements, applicationLanguages, semanticSimilarity, textRank, ...publicFields }) => publicFields),
+        results: rawResults.map(({ fullDescription, description, amountMin, amountMax, currency, eligibilityText, contactInfo, geographyScope, funderCountry, citizenshipRequirements, residencyRequirements, applicationLanguages, taxonomyAreaIds, semanticSimilarity, textRank, ...publicFields }) => publicFields),
         rawResults,
         totalResults: rawResults.length,
+        areaBreakdown: null,
       },
     };
   }
@@ -1878,6 +2115,72 @@ Rules:
   }
 
   async search(request: RecommendationSearchRequest): Promise<InternalRecommendationSearchResponse> {
+    const branches = buildSearchAreaBranches(request);
+    if (branches.length >= 2) {
+      return this.searchAcrossAreas(request, branches);
+    }
+    return this.searchSingleTopic(request);
+  }
+
+  /**
+   * Runs one independent search per selected area and merges the results with per-area
+   * attribution. Each branch keeps its own embedding, lexical query, relevance gate and
+   * reranker query — the point of the fan-out is that no branch is ever judged against
+   * another branch's topic.
+   */
+  private async searchAcrossAreas(
+    request: RecommendationSearchRequest,
+    branches: SearchAreaBranch[]
+  ): Promise<InternalRecommendationSearchResponse> {
+    const responses = await Promise.all(branches.map((branch) => this.searchSingleTopic(branch.request)));
+    const primary = responses[0];
+    const limit = primary.appliedFilters.limit;
+    const merged = mergeAreaSearchResults(branches, responses, limit);
+
+    const rawResults = merged.map((entry) => ({
+      ...entry.result,
+      score: Number(entry.combinedScore.toFixed(4)),
+      matchedAreas: entry.matchedAreas,
+    }));
+
+    const areaBreakdown: RecommendationAreaBreakdownItem[] = branches.map((branch, index) => ({
+      areaId: branch.areaId,
+      label: branch.label,
+      queryText: branch.queryText,
+      taxonomyPath: branch.taxonomyPath,
+      totalResults: responses[index]?.totalResults || 0,
+      topScore: Number((responses[index]?.rawResults[0]?.score || 0).toFixed(4)),
+    }));
+
+    const withResults = responses.filter((response) => response.totalResults > 0);
+    const fallback = responses.find((response) => response.noResultsReason) || primary;
+
+    return {
+      normalizedQuery: {
+        ...primary.normalizedQuery,
+        researchArea: branches.map((branch) => branch.label).join(' | '),
+        canonicalQueryText: branches.map((branch) => branch.queryText).join(' | '),
+      },
+      appliedFilters: primary.appliedFilters,
+      degradedMode: responses.some((response) => response.degradedMode === 'full_text_only')
+        ? 'full_text_only'
+        : null,
+      lowConfidence: withResults.length > 0
+        ? withResults.every((response) => response.lowConfidence)
+        : primary.lowConfidence,
+      noResultsReason: rawResults.length === 0 ? fallback.noResultsReason : null,
+      relaxationSuggestions: rawResults.length === 0 ? fallback.relaxationSuggestions : [],
+      strictFilterRecovery:
+        responses.find((response) => response.strictFilterRecovery)?.strictFilterRecovery || null,
+      searchDiagnostics: primary.searchDiagnostics,
+      results: rawResults.map(({ fullDescription, description, amountMin, amountMax, currency, eligibilityText, contactInfo, geographyScope, funderCountry, citizenshipRequirements, residencyRequirements, applicationLanguages, taxonomyAreaIds, semanticSimilarity, textRank, ...publicFields }) => publicFields),
+      rawResults,
+      totalResults: rawResults.length,
+      areaBreakdown,
+    };
+  }
+
+  private async searchSingleTopic(request: RecommendationSearchRequest): Promise<InternalRecommendationSearchResponse> {
     const usePersonalContext =
       request.useProfileContext === true ||
       request.useEligibilityProfile === true ||

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { CHAT_MESSAGE_MAX_LENGTH } from './constants'
+import { CHAT_MESSAGE_MAX_LENGTH, MAX_SELECTED_RESEARCH_AREAS } from './constants'
 import type { RecommendationSearchFilters } from './types'
 
 export const conversationMessageFilterSchema: z.ZodType<RecommendationSearchFilters> = z.object({
@@ -39,6 +39,7 @@ export const conversationMessageRequestSchema = z.object({
   useProfileContext: z.boolean().optional(),
   useEligibilityProfile: z.boolean().optional(),
   usePublicationContext: z.boolean().optional(),
+  selectedResearchAreaIds: z.array(z.string().max(120)).max(MAX_SELECTED_RESEARCH_AREAS).optional(),
 })
 
 export type ConversationMessageRequestInput = z.infer<typeof conversationMessageRequestSchema>

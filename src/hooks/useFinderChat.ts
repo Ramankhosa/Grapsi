@@ -9,7 +9,7 @@ import type {
   RecommendationConversationSummary,
   RecommendationFilterMode,
 } from '@/lib/recommendations/chatTypes';
-import { CHAT_MESSAGE_MAX_LENGTH } from '@/lib/recommendations/constants';
+import { CHAT_MESSAGE_MAX_LENGTH, MAX_SELECTED_RESEARCH_AREAS } from '@/lib/recommendations/constants';
 import { applyFilterSuggestionChip } from '@/lib/recommendations/filterChips';
 import { streamConversationMessage } from '@/lib/recommendations/finderStream';
 import {
@@ -63,6 +63,16 @@ function buildSummary(detail: RecommendationConversationDetail): RecommendationC
   };
 }
 
+/**
+ * The text a saved area is searched with. Mirrors what the server rebuilds from the
+ * stored area, so the seeded conversation query and the fan-out branch agree.
+ */
+export function savedAreaQueryText(area: ResearcherFinderContext['researchAreas'][number]): string {
+  if (area.normalizedText?.trim()) return area.normalizedText;
+  const taxonomyPath = [area.taxonomy?.level1Name, area.taxonomy?.level2Name].filter(Boolean).join(' / ');
+  return [taxonomyPath, area.researchArea].filter(Boolean).join(' | ');
+}
+
 export function countActiveFilters(filters: RecommendationSearchFilters): number {
   let count = 0;
   const arrayKeys: (keyof RecommendationSearchFilters)[] = [
@@ -112,9 +122,23 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
   const [lastUndoFilters, setLastUndoFilters] = useState<Required<RecommendationSearchFilters> | null>(null);
   const [pendingTurn, setPendingTurn] = useState<PendingTurnState | null>(null);
   const [streamingTurn, setStreamingTurn] = useState<StreamingTurnView | null>(null);
+  // Ticked saved research areas. Re-sent on every turn (not stored in conversation state)
+  // so a follow-up like "only India" still searches the same set of areas.
+  const [selectedResearchAreaIds, setSelectedResearchAreaIds] = useState<string[]>([]);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const preferencesRef = useRef(preferences);
   preferencesRef.current = preferences;
+  const selectedResearchAreaIdsRef = useRef(selectedResearchAreaIds);
+  selectedResearchAreaIdsRef.current = selectedResearchAreaIds;
+
+  const savedResearchAreas = finderContext?.researchAreas || [];
+  const selectedResearchAreas = useMemo(
+    () => selectedResearchAreaIds
+      .map((id) => savedResearchAreas.find((area) => area.id === id))
+      .filter((area): area is ResearcherFinderContext['researchAreas'][number] => Boolean(area)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedResearchAreaIds, finderContext]
+  );
 
   useEffect(() => {
     if (!conversation) return;
@@ -281,6 +305,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
       ...payload,
       useEligibilityProfile: preferencesRef.current.useEligibilityProfile,
       usePublicationContext: preferencesRef.current.usePublicationContext,
+      selectedResearchAreaIds: selectedResearchAreaIdsRef.current,
       clientTurnId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     };
 
@@ -424,6 +449,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
           body: JSON.stringify({
             useEligibilityProfile: preferencesRef.current.useEligibilityProfile,
             usePublicationContext: preferencesRef.current.usePublicationContext,
+            selectedResearchAreaIds: selectedResearchAreaIdsRef.current,
           }),
         }
       );
@@ -451,6 +477,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
             confirm,
             useEligibilityProfile: preferencesRef.current.useEligibilityProfile,
             usePublicationContext: preferencesRef.current.usePublicationContext,
+            selectedResearchAreaIds: selectedResearchAreaIdsRef.current,
           }),
         }
       );
@@ -607,6 +634,50 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     );
   }
 
+  function handleToggleResearchAreaSelection(areaId: string) {
+    setSelectedResearchAreaIds((current) => {
+      if (current.includes(areaId)) {
+        return current.filter((id) => id !== areaId);
+      }
+      if (current.length >= MAX_SELECTED_RESEARCH_AREAS) {
+        onError(`You can search up to ${MAX_SELECTED_RESEARCH_AREAS} research areas at once.`);
+        return current;
+      }
+      onError(null);
+      return [...current, areaId];
+    });
+  }
+
+  function handleClearResearchAreaSelection() {
+    setSelectedResearchAreaIds([]);
+  }
+
+  /**
+   * Searches every ticked area at once. The first area seeds the conversation's own query
+   * state so later filter-only turns stay searchable; the full set rides along on the
+   * request and is what the server actually fans out over.
+   */
+  async function handleSearchSelectedAreas() {
+    if (selectedResearchAreas.length === 0) return;
+    const labels = selectedResearchAreas.map((area) => area.label || area.researchArea);
+    const message =
+      labels.length === 1
+        ? `Find funding opportunities for ${labels[0]}.`
+        : `Find funding opportunities across my research areas: ${labels.join(', ')}.`;
+
+    await postConversationMessage(
+      {
+        message,
+        inputMode: 'research_area',
+        manualQueryPatch: { researchArea: savedAreaQueryText(selectedResearchAreas[0]) },
+      },
+      {
+        optimisticMessage: message,
+        onSuccess: () => setAttachMenuOpen(false),
+      }
+    );
+  }
+
   async function handleDeleteConversation(conversationId: string) {
     if (!window.confirm('Delete this funding conversation?')) return;
     try {
@@ -676,6 +747,8 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     activeRun,
     starterPrompts,
     latestAssistantMessageId,
+    selectedResearchAreaIds,
+    selectedResearchAreas,
     // actions
     refreshConversations,
     loadConversation,
@@ -701,6 +774,9 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     handleAttachPublicationContext,
     handleConfirmPublications,
     handleSearchResearchArea,
+    handleToggleResearchAreaSelection,
+    handleClearResearchAreaSelection,
+    handleSearchSelectedAreas,
   };
 }
 

@@ -64,6 +64,7 @@ import type {
   RecommendationRawResultItem,
   RecommendationSearchDiagnostics,
   RecommendationSearchFilters,
+  RecommendationSelectedResearchArea,
 } from '../recommendations/types';
 import {
   buildCountryMatchKeys,
@@ -101,7 +102,23 @@ import {
   resolvePhraseFilterOperation,
 } from '../recommendations/researchPhraseLexicon';
 import { recommendationSearchService } from './recommendationSearchService';
-import { buildRecommendationPreferenceSnapshot } from './researcherProfileService';
+import { buildRecommendationPreferenceSnapshot, loadSelectedResearchAreas } from './researcherProfileService';
+
+/**
+ * A stale or deleted saved-area id must never break a chat turn — the turn just falls
+ * back to the ordinary single-topic search.
+ */
+async function loadSelectedResearchAreasSafely(userId: string, selectedIds?: string[]) {
+  if (!selectedIds || selectedIds.length === 0) {
+    return [];
+  }
+  try {
+    return await loadSelectedResearchAreas(userId, selectedIds);
+  } catch {
+    console.warn('Failed to load selected research areas for the finder turn; searching the message topic only.');
+    return [];
+  }
+}
 
 type ConversationPayload = Prisma.RecommendationConversationGetPayload<{
   include: {
@@ -1123,7 +1140,26 @@ function resolveOrdinalResults(run: RecommendationConversationRunRecord | undefi
   return ordinals.map((ordinal) => run.results[ordinal - 1]).filter((result): result is RecommendationRawResultItem => Boolean(result));
 }
 
+/**
+ * Per-area coverage line for a multi-area search. Stating what each area returned is the
+ * point of the fan-out: a merged list alone hides an area that came back empty.
+ */
+function buildAreaCoverageText(response: InternalRecommendationSearchResponse) {
+  const breakdown = response.areaBreakdown || [];
+  if (breakdown.length < 2) {
+    return '';
+  }
+
+  const lines = breakdown.map((area) => {
+    const count = area.totalResults;
+    return `- ${area.label}: ${count === 0 ? 'no matches' : `${count} match${count === 1 ? '' : 'es'}`}`;
+  });
+
+  return `\n\nSearched each area on its own:\n${lines.join('\n')}`;
+}
+
 function buildDeterministicSearchSummary(response: InternalRecommendationSearchResponse, preface: string) {
+  const areaCoverageText = buildAreaCoverageText(response);
   if (response.rawResults.length === 0) {
     const activeFilters = describeActiveFilters(response.appliedFilters);
     const activeFilterText = activeFilters.length > 0 ? `\n\nI searched with:\n- ${activeFilters.join('\n- ')}` : '';
@@ -1141,18 +1177,21 @@ function buildDeterministicSearchSummary(response: InternalRecommendationSearchR
         : response.noResultsReason === 'query_too_weak'
           ? 'I need a more specific topic to search reliably.'
           : 'I could not find published calls for that search.';
-    return `${preface}\n\n${noResultsText}${activeFilterText}${retryText}${suggestionText}`;
+    return `${preface}\n\n${noResultsText}${areaCoverageText}${activeFilterText}${retryText}${suggestionText}`;
   }
 
   const lines = response.rawResults.slice(0, CHAT_INLINE_RESULT_LIMIT).map((result, index) => {
     const profileHighlight = result.profileMatch?.reasons.slice(0, 1).join('; ') || '';
-    const highlights = [profileHighlight, result.matchReasons.slice(0, 2).join('; ') || result.eligibilitySummary]
+    const areaHighlight = (result.matchedAreas || []).length > 0
+      ? `Matches: ${(result.matchedAreas || []).map((area) => area.label).join(', ')}`
+      : '';
+    const highlights = [areaHighlight, profileHighlight, result.matchReasons.slice(0, 2).join('; ') || result.eligibilitySummary]
       .filter(Boolean)
       .join('; ');
     return `${index + 1}. ${result.schemeTitle} (${result.agencyName})${result.isRolling ? ' [Rolling]' : result.closeDate ? ` [Deadline ${new Date(result.closeDate).toLocaleDateString()}]` : ''}\n   ${highlights}`;
   });
 
-  return `${preface}\n\nHere are the strongest matches I found:\n\n${lines.join('\n\n')}${response.lowConfidence ? '\n\nThese matches are lower confidence, so broadening the topic or relaxing filters may improve the list.' : ''}`;
+  return `${preface}\n\nHere are the strongest matches I found:\n\n${lines.join('\n\n')}${areaCoverageText}${response.lowConfidence ? '\n\nThese matches are lower confidence, so broadening the topic or relaxing filters may improve the list.' : ''}`;
 }
 
 function buildDeterministicExplainSummary(result: RecommendationRawResultItem, ordinal: number) {
@@ -1273,6 +1312,9 @@ function sanitizeResultForPrompt(result: RecommendationRawResultItem): Record<st
         }
       : null,
     eligibilitySummary: sanitizeForPrompt(result.eligibilitySummary),
+    ...(result.matchedAreas && result.matchedAreas.length > 0
+      ? { matchedResearchAreas: result.matchedAreas.map((area) => sanitizeForPrompt(area.label)) }
+      : {}),
   };
 }
 
@@ -2487,15 +2529,19 @@ RULES:
     inputMode: RecommendationInputMode;
     query: RecommendationConversationQueryState['query'];
     filters: Required<RecommendationSearchFilters>;
-  }, access?: RecommendationAccessScope, profileSnapshot?: RecommendationProfileSnapshot | null, llmContext?: FundingLlmRoutingContext | null, events?: FinderTurnStreamEmitter) {
+  }, access?: RecommendationAccessScope, profileSnapshot?: RecommendationProfileSnapshot | null, llmContext?: FundingLlmRoutingContext | null, events?: FinderTurnStreamEmitter, selectedResearchAreas: RecommendationSelectedResearchArea[] = []) {
     if (events) {
-      const topic = state.inputMode === 'research_area'
-        ? normalizeWhitespace((state.query as { researchArea?: string }).researchArea || '')
-        : normalizeWhitespace((state.query as { title?: string }).title || '');
+      const topic = selectedResearchAreas.length > 0
+        ? selectedResearchAreas.map((area) => area.label).join(' · ')
+        : state.inputMode === 'research_area'
+          ? normalizeWhitespace((state.query as { researchArea?: string }).researchArea || '')
+          : normalizeWhitespace((state.query as { title?: string }).title || '');
       events({
         type: 'stage',
         stage: 'searching',
-        label: 'Searching funding calls',
+        label: selectedResearchAreas.length > 1
+          ? `Searching ${selectedResearchAreas.length} research areas`
+          : 'Searching funding calls',
         ...(topic ? { detail: topic } : {}),
       });
     }
@@ -2508,6 +2554,7 @@ RULES:
       useProfileContext: Boolean(profileSnapshot),
       useEligibilityProfile: profileSnapshot?.preferences?.useEligibilityProfile === true,
       usePublicationContext: profileSnapshot?.preferences?.usePublicationContext === true,
+      selectedResearchAreas,
     });
 
     if (events) {
@@ -2547,6 +2594,7 @@ RULES:
     conversationDetail: RecommendationConversationDetail;
     profileSnapshot?: RecommendationProfileSnapshot | null;
     preferences: RecommendationPreferenceFlags;
+    selectedResearchAreas?: RecommendationSelectedResearchArea[];
     access?: RecommendationAccessScope;
     llmContext?: FundingLlmRoutingContext | null;
     events?: FinderTurnStreamEmitter;
@@ -2581,7 +2629,7 @@ RULES:
         };
       }
 
-      const searchResult = await this.runGroundedSearch(nextState, params.access, params.profileSnapshot, params.llmContext, events);
+      const searchResult = await this.runGroundedSearch(nextState, params.access, params.profileSnapshot, params.llmContext, events, params.selectedResearchAreas);
       emitComposing();
       return {
         intent: 'refine_filters',
@@ -2634,7 +2682,7 @@ RULES:
           pendingPatch.nextFilters
         );
         const run = isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)
-          ? await this.runGroundedSearch(nextState, params.access, params.profileSnapshot, params.llmContext, events)
+          ? await this.runGroundedSearch(nextState, params.access, params.profileSnapshot, params.llmContext, events, params.selectedResearchAreas)
           : undefined;
         if (run) emitComposing();
         return {
@@ -2956,7 +3004,7 @@ RULES:
         );
 
         if (isConversationStateSearchable(fallbackState.inputMode, fallbackState.query, fallbackState.filters)) {
-          const searchResult = await this.runGroundedSearch(fallbackState, params.access, params.profileSnapshot, params.llmContext, events);
+          const searchResult = await this.runGroundedSearch(fallbackState, params.access, params.profileSnapshot, params.llmContext, events, params.selectedResearchAreas);
           emitComposing();
           return {
             intent: parsed.intent,
@@ -2995,7 +3043,7 @@ RULES:
       };
     }
 
-    const searchResult = await this.runGroundedSearch(parsed.nextState, params.access, params.profileSnapshot, params.llmContext, events);
+    const searchResult = await this.runGroundedSearch(parsed.nextState, params.access, params.profileSnapshot, params.llmContext, events, params.selectedResearchAreas);
     emitComposing();
     return {
       intent: parsed.intent,
@@ -3179,6 +3227,8 @@ RULES:
       }
     }
 
+    const selectedResearchAreas = await loadSelectedResearchAreasSafely(userId, input.selectedResearchAreaIds);
+
     const outcome = await this.createTurnOutcome({
       input,
       state,
@@ -3187,6 +3237,7 @@ RULES:
       conversationDetail: conversation,
       profileSnapshot,
       preferences,
+      selectedResearchAreas,
       access,
       llmContext,
       events,
@@ -3229,6 +3280,7 @@ RULES:
       useProfileContext?: boolean;
       useEligibilityProfile?: boolean;
       usePublicationContext?: boolean;
+      selectedResearchAreaIds?: string[];
     },
     access?: RecommendationAccessScope
   ): Promise<RecommendationConversationMutationResponse> {
@@ -3267,10 +3319,11 @@ RULES:
         profileSnapshot = null;
       }
     }
+    const selectedResearchAreas = await loadSelectedResearchAreasSafely(userId, options.selectedResearchAreaIds);
 
     const run = options.confirm === false || !isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)
       ? undefined
-      : await this.runGroundedSearch(nextState, access, profileSnapshot, llmContext);
+      : await this.runGroundedSearch(nextState, access, profileSnapshot, llmContext, undefined, selectedResearchAreas);
 
     return this.persistOutcome({
       userId,
@@ -3298,7 +3351,12 @@ RULES:
     userId: string,
     tenantId: string,
     conversationId: string,
-    options: { useProfileContext?: boolean; useEligibilityProfile?: boolean; usePublicationContext?: boolean } = {},
+    options: {
+      useProfileContext?: boolean;
+      useEligibilityProfile?: boolean;
+      usePublicationContext?: boolean;
+      selectedResearchAreaIds?: string[];
+    } = {},
     access?: RecommendationAccessScope
   ): Promise<RecommendationConversationMutationResponse> {
     const conversation = await this.getConversationRecord(userId, tenantId, conversationId);
@@ -3316,10 +3374,11 @@ RULES:
         profileSnapshot = null;
       }
     }
+    const selectedResearchAreas = await loadSelectedResearchAreasSafely(userId, options.selectedResearchAreaIds);
 
     const nextState = applyStateNormalization(state.inputMode, state.query, createDefaultFilters());
     const run = isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)
-      ? await this.runGroundedSearch(nextState, access, profileSnapshot, llmContext)
+      ? await this.runGroundedSearch(nextState, access, profileSnapshot, llmContext, undefined, selectedResearchAreas)
       : undefined;
 
     return this.persistOutcome({

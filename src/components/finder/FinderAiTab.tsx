@@ -304,6 +304,9 @@ export default function FinderAiTab({
           savedResearchAreas={finderContext?.researchAreas || []}
           profileResearchAreas={finderContext?.profile.researchAreas || []}
           publications={finderContext?.publications || []}
+          selectedResearchAreaIds={chat.selectedResearchAreaIds}
+          onToggleResearchAreaSelection={chat.handleToggleResearchAreaSelection}
+          onSearchSelectedAreas={chat.handleSearchSelectedAreas}
           onAttachResearchContext={chat.handleAttachResearchContext}
           onAttachPublicationContext={chat.handleAttachPublicationContext}
           onConfirmPublications={chat.handleConfirmPublications}

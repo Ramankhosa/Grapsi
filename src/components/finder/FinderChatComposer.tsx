@@ -21,6 +21,9 @@ export interface FinderChatComposerProps {
   savedResearchAreas: SavedResearchArea[];
   profileResearchAreas: string[];
   publications?: ResearcherFinderPublication[];
+  selectedResearchAreaIds?: string[];
+  onToggleResearchAreaSelection?: (areaId: string) => void;
+  onSearchSelectedAreas?: () => void;
   onAttachResearchContext: (label: string, queryText: string, sourceLabel: string) => void;
   onAttachPublicationContext?: (publication: ResearcherFinderPublication) => void;
   onConfirmPublications?: () => void;
@@ -56,6 +59,9 @@ export default function FinderChatComposer({
   savedResearchAreas,
   profileResearchAreas,
   publications = [],
+  selectedResearchAreaIds = [],
+  onToggleResearchAreaSelection,
+  onSearchSelectedAreas,
   onAttachResearchContext,
   onAttachPublicationContext,
   onConfirmPublications,
@@ -66,6 +72,7 @@ export default function FinderChatComposer({
 }: FinderChatComposerProps) {
   const composerLength = composer.length;
   const composerOverLimit = composerLength > CHAT_MESSAGE_MAX_LENGTH;
+  const selectedAreas = savedResearchAreas.filter((area) => selectedResearchAreaIds.includes(area.id));
 
   return (
     <div className="border-t border-hairline bg-ground px-3 py-3 sm:px-5 sm:py-4">
@@ -76,6 +83,26 @@ export default function FinderChatComposer({
             <X className="h-3.5 w-3.5" />
             Remove
           </button>
+        </div>
+      ) : null}
+
+      {/* Selection is sticky across turns, so it stays visible outside the attach menu —
+          otherwise a later "only India" would silently keep searching areas the user forgot about. */}
+      {selectedAreas.length > 0 && onToggleResearchAreaSelection ? (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11.5px] text-muted">Searching {selectedAreas.length === 1 ? 'area' : `${selectedAreas.length} areas`}:</span>
+          {selectedAreas.map((area) => (
+            <button
+              key={area.id}
+              type="button"
+              onClick={() => onToggleResearchAreaSelection(area.id)}
+              title={`Stop searching ${area.label}`}
+              className="cb-chip"
+            >
+              <span className="truncate">{area.label}</span>
+              <X className="h-3 w-3 shrink-0" />
+            </button>
+          ))}
         </div>
       ) : null}
 
@@ -102,22 +129,63 @@ export default function FinderChatComposer({
 
             <div className="mt-3 grid max-h-80 gap-4 overflow-y-auto md:grid-cols-2">
               <div className="space-y-2">
-                <div className="cb-eyebrow">Saved research areas</div>
-                {savedResearchAreas.length > 0 ? (
-                  savedResearchAreas.map((area) => (
-                    <button
-                      key={area.id}
-                      type="button"
-                      onClick={() => onAttachResearchContext(area.label, buildSavedResearchAreaQueryText(area), 'Saved Research Area')}
-                      className="w-full rounded-lg border border-hairline bg-ground px-3 py-2.5 text-left text-[13px] transition hover:border-cobalt-300 hover:bg-cobalt-50"
-                    >
-                      <div className="font-medium text-ink">{area.label}</div>
-                      {formatSavedResearchAreaTaxonomy(area) ? (
-                        <div className="mt-0.5 text-[12px] text-muted">{formatSavedResearchAreaTaxonomy(area)}</div>
-                      ) : null}
-                      <div className="mt-0.5 line-clamp-2 text-[12px] text-muted">{area.researchArea}</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="cb-eyebrow">Saved research areas</div>
+                  {selectedResearchAreaIds.length > 0 && onSearchSelectedAreas ? (
+                    <button type="button" onClick={onSearchSelectedAreas} className="cb-btn-primary cb-btn-sm">
+                      <Check className="h-3.5 w-3.5" />
+                      Search {selectedResearchAreaIds.length}{' '}
+                      {selectedResearchAreaIds.length === 1 ? 'area' : 'areas'}
                     </button>
-                  ))
+                  ) : null}
+                </div>
+                {savedResearchAreas.length > 0 ? (
+                  <>
+                    {savedResearchAreas.map((area) => {
+                      const isSelected = selectedResearchAreaIds.includes(area.id);
+                      return (
+                        <button
+                          key={area.id}
+                          type="button"
+                          onClick={() =>
+                            onToggleResearchAreaSelection
+                              ? onToggleResearchAreaSelection(area.id)
+                              : onAttachResearchContext(area.label, buildSavedResearchAreaQueryText(area), 'Saved Research Area')
+                          }
+                          className={`w-full rounded-lg border px-3 py-2.5 text-left text-[13px] transition ${
+                            isSelected
+                              ? 'border-cobalt-600 bg-cobalt-50'
+                              : 'border-hairline bg-ground hover:border-cobalt-300 hover:bg-cobalt-50'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            {onToggleResearchAreaSelection ? (
+                              <span
+                                className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition ${
+                                  isSelected ? 'border-cobalt-600 bg-cobalt-600 text-white' : 'border-hairline bg-ground'
+                                }`}
+                              >
+                                {isSelected ? <Check className="h-2.5 w-2.5" /> : null}
+                              </span>
+                            ) : null}
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-ink">{area.label}</div>
+                              {formatSavedResearchAreaTaxonomy(area) ? (
+                                <div className="mt-0.5 text-[12px] text-muted">{formatSavedResearchAreaTaxonomy(area)}</div>
+                              ) : null}
+                              <div className="mt-0.5 line-clamp-2 text-[12px] text-muted">{area.researchArea}</div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                    {onToggleResearchAreaSelection ? (
+                      <p className="text-[11.5px] leading-5 text-muted-soft">
+                        Pick more than one and each area is searched separately, then merged — so a strong area
+                        can&apos;t crowd the others out.
+                      </p>
+                    ) : null}
+                  </>
                 ) : (
                   <div className="rounded-lg border border-dashed border-hairline px-3 py-3 text-[13px] text-muted">
                     No saved research areas yet.

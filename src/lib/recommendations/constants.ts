@@ -190,6 +190,17 @@ export const SPONSOR_TYPE_ALIASES: Record<string, string> = {
   philanthropy: 'Philanthropic',
 };
 
+/**
+ * Multi-area search. Each selected area costs one extra retrieval round-trip, so the
+ * selection is capped; saved areas carry their own stored embedding, so the extra cost
+ * is SQL only, not embedding calls.
+ */
+export const MAX_SELECTED_RESEARCH_AREAS = 5;
+/** Score bonus per *additional* area a call matches, so cross-cutting calls rank up deliberately. */
+export const MULTI_AREA_MATCH_BONUS = 0.04;
+/** Minimum slots each selected area is guaranteed in the merged list before best-score fill. */
+export const MULTI_AREA_MIN_SLOTS_PER_AREA = 2;
+
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 export const RATE_LIMIT_MAX_REQUESTS = 20;
 export const CHAT_RATE_LIMIT_WINDOW_MS = 60_000;

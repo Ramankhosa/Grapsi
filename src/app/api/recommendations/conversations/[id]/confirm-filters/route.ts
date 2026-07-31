@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
+import { MAX_SELECTED_RESEARCH_AREAS } from '@/lib/recommendations/constants'
 import { requireRecommendationTenantUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
@@ -13,6 +14,7 @@ const requestSchema = z.object({
   useProfileContext: z.boolean().optional(),
   useEligibilityProfile: z.boolean().optional(),
   usePublicationContext: z.boolean().optional(),
+  selectedResearchAreaIds: z.array(z.string().max(120)).max(MAX_SELECTED_RESEARCH_AREAS).optional(),
 })
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {

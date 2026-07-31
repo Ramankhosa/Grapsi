@@ -22,7 +22,9 @@ import type {
   RecommendationProfileSnapshot,
   RecommendationPublicationSnapshot,
   RecommendationSearchFilters,
+  RecommendationSelectedResearchArea,
 } from '../recommendations/types';
+import { MAX_SELECTED_RESEARCH_AREAS } from '../recommendations/constants';
 import { EmbeddingService, areStoredEmbeddingJobsEnabled } from './embeddingService';
 import { researchAreaTaxonomyService } from './researchAreaTaxonomyService';
 import { fundingPublicationService } from '../researcherProfile/funding-publications';
@@ -485,6 +487,55 @@ async function listFundingPublicationSignals(userId: string, limit = 5): Promise
     tags: normalizeTextArray(row.tags).filter((tag) => tag.toLowerCase() !== FUNDING_PUBLICATION_TAG),
     abstractSnippet: truncateText(row.abstract, 360),
   })).filter((publication) => Boolean(publication.title));
+}
+
+function buildSavedAreaTaxonomyPath(area: ResearcherSavedResearchAreaRecord) {
+  if (!area.taxonomy) {
+    return null;
+  }
+  return [area.taxonomy.level1Name, area.taxonomy.level2Name].filter(Boolean).join(' / ') || null;
+}
+
+/**
+ * Resolves the saved areas a user picked for one search into searchable branches.
+ *
+ * Each returned area is searched on its own, so its `queryText` must stand alone: the
+ * two-level taxonomy path is prefixed to the free-text area exactly as it was embedded
+ * when the area was saved.
+ */
+export async function loadSelectedResearchAreas(
+  userId: string,
+  selectedIds: string[]
+): Promise<RecommendationSelectedResearchArea[]> {
+  const requestedIds = Array.from(
+    new Set((selectedIds || []).map((value) => normalizeWhitespace(String(value || ''))).filter(Boolean))
+  ).slice(0, MAX_SELECTED_RESEARCH_AREAS);
+
+  if (requestedIds.length === 0) {
+    return [];
+  }
+
+  const savedAreas = await researcherProfileService.listResearchAreas(userId);
+  const byId = new Map(savedAreas.map((area) => [area.id, area]));
+
+  return requestedIds
+    .map((id) => byId.get(id))
+    .filter((area): area is ResearcherSavedResearchAreaRecord => Boolean(area))
+    .map((area) => {
+      const taxonomyPath = buildSavedAreaTaxonomyPath(area);
+      const queryText =
+        normalizeWhitespace(area.normalizedText || '') ||
+        [taxonomyPath, area.researchArea].filter(Boolean).join(' | ');
+
+      return {
+        id: area.id,
+        label: area.label || area.researchArea,
+        queryText,
+        taxonomyAreaId: area.taxonomy?.areaId || null,
+        taxonomyPath,
+      };
+    })
+    .filter((area) => Boolean(area.queryText));
 }
 
 export async function buildRecommendationPreferenceSnapshot(

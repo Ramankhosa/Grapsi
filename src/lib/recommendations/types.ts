@@ -52,6 +52,36 @@ export interface RecommendationPreferenceFlags {
   usePublicationContext: boolean;
 }
 
+/**
+ * One topic branch of a multi-area search. Selected areas are searched independently
+ * (own embedding, own lexical query, own relevance gate) and merged with attribution,
+ * instead of being concatenated into a single blended query.
+ */
+export interface RecommendationSelectedResearchArea {
+  id: string;
+  label: string;
+  queryText: string;
+  /** Level-1/level-2 taxonomy the user filed this area under, when they picked one. */
+  taxonomyAreaId?: string | null;
+  taxonomyPath?: string | null;
+}
+
+/** Which selected area a result matched, and how strongly, on that area's own branch. */
+export interface RecommendationAreaMatch {
+  areaId: string;
+  label: string;
+  score: number;
+}
+
+export interface RecommendationAreaBreakdownItem {
+  areaId: string;
+  label: string;
+  queryText: string;
+  taxonomyPath?: string | null;
+  totalResults: number;
+  topScore: number;
+}
+
 export interface RecommendationProfileSavedAreaSnapshot {
   id: string;
   label: string;
@@ -118,6 +148,11 @@ export interface RecommendationSearchRequest {
   useProfileContext?: boolean;
   useEligibilityProfile?: boolean;
   usePublicationContext?: boolean;
+  /**
+   * Saved research areas the user picked for this search. Two or more (or one plus a
+   * distinct typed topic) trigger the fan-out path in `recommendationSearchService`.
+   */
+  selectedResearchAreas?: RecommendationSelectedResearchArea[];
 }
 
 export interface RecommendationDirectoryRequest {
@@ -177,6 +212,8 @@ export interface RecommendationCandidate {
   citizenshipRequirements: string[];
   residencyRequirements: string[];
   applicationLanguages: string[];
+  /** Two-level research-area tags on the call, shared with saved researcher areas. */
+  taxonomyAreaIds?: string[];
   semanticSimilarity: number;
   textRank: number;
 }
@@ -202,6 +239,8 @@ export interface RecommendationSearchResultItem {
   profileMatch: RecommendationProfileMatch | null;
   eligibilitySummary: string;
   evidence?: RecommendationDocumentEvidence | null;
+  /** Populated only on multi-area searches: which selected areas this call matched. */
+  matchedAreas?: RecommendationAreaMatch[];
 }
 
 export interface RecommendationDocumentEvidenceChunk {
@@ -233,9 +272,12 @@ export interface RecommendationSearchResponse {
   searchDiagnostics?: RecommendationSearchDiagnostics | null;
   results: RecommendationSearchResultItem[];
   totalResults: number;
+  /** Per-area coverage of a multi-area search; null for ordinary single-topic searches. */
+  areaBreakdown?: RecommendationAreaBreakdownItem[] | null;
 }
 
 export interface RecommendationRawResultItem extends RecommendationSearchResultItem {
+  taxonomyAreaIds?: string[];
   fullDescription: string | null;
   description: string;
   amountMin: number | null;
