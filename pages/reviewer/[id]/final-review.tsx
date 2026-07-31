@@ -15,6 +15,8 @@ import {
 } from 'react-icons/fa';
 import { extractTextFromHTML } from '../../../lib/services/markdownParserService';
 import { ReviewerProse, ReviewerText } from '@/components/reviewer/ReviewerText';
+import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
+import ReviewerShell from '@/components/reviewer/ReviewerShell';
 
 interface SectionReview {
   id: string;
@@ -92,7 +94,7 @@ const COMPETITIVENESS_LABELS: Record<string, string> = {
 const IMPACT_STYLES: Record<string, string> = {
   high: 'bg-red-100 text-red-800',
   medium: 'bg-amber-100 text-amber-800',
-  low: 'bg-gray-100 text-gray-700',
+  low: 'bg-nickel-100 text-nickel-700',
 };
 
 // Group sections by title and version
@@ -433,24 +435,6 @@ export default function FinalReview() {
     setShowVersionSelector(!showVersionSelector);
   };
 
-  // Define the section order based on the specified hierarchy
-  const SECTION_ORDER = [
-    'Abstract',
-    'Introduction',
-    'Objectives',
-    'Literature Review',
-    'Methodology',
-    'Timeline',
-    'Budget Justification',
-    'Team Expertise',
-    'Expected Outcomes',
-    'Societal Impact',
-    'Sustainability',
-    'Risk & Mitigation',
-    'IP & Commercialization',
-    'Conclusion'
-  ];
-
   // Sort sections according to the predefined order
   const getSortedSections = (sectionsList: SectionReview[]) => {
     return [...sectionsList].sort((a, b) => {
@@ -526,7 +510,7 @@ export default function FinalReview() {
   const getScoreColor = (score: number, maxScore: number = 10) => {
     const percentage = (score / maxScore) * 100;
     if (percentage >= 80) return 'text-green-600';
-    if (percentage >= 60) return 'text-blue-600';
+    if (percentage >= 60) return 'text-cobalt-700';
     if (percentage >= 40) return 'text-yellow-600';
     return 'text-red-600';
   };
@@ -629,12 +613,12 @@ export default function FinalReview() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-lg shadow-md max-w-md w-full">
+      <div className="min-h-screen bg-nickel-50 flex flex-col items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-lg  max-w-md w-full">
           <h2 className="text-xl font-semibold text-red-600 mb-4">Error</h2>
-          <p className="mb-6 text-gray-600">{error}</p>
+          <p className="mb-6 text-nickel-600">{error}</p>
           <div className="flex justify-between">
-            <Link href={`/reviewer/${id}`} className="text-blue-600 hover:underline">
+            <Link href={`/reviewer/${id}`} className="text-cobalt-700 hover:underline">
               Back to Project
             </Link>
             <button 
@@ -649,7 +633,7 @@ export default function FinalReview() {
                   setLoading(false);
                 }
               }}
-              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+              className="px-4 py-2 bg-cobalt-600 text-white rounded-md hover:bg-cobalt-700"
             >
               Generate Final Review
             </button>
@@ -660,101 +644,52 @@ export default function FinalReview() {
   }
 
   return (
-    <div id="top" className="min-h-screen bg-gray-50">
-      <Head>
-        <title>Final Review | GrantGenie</title>
-        <meta name="description" content="Comprehensive final review of the grant proposal" />
-      </Head>
-
-      {/* Header */}
-      <header className="bg-gradient-to-r from-purple-800 to-purple-600 shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-white">Final Review Report</h1>
-              <p className="mt-1 text-purple-100">
-                {callData?.project_title}
-              </p>
-            </div>
-            <div className="flex space-x-4">
-              {/* View toggle buttons */}
-              <div className="flex bg-white/10 rounded-md overflow-hidden">
-                <button
-                  onClick={() => handleDisplayModeChange('single')}
-                  className={`flex items-center px-3 py-2 ${
-                    displayMode === 'single'
-                      ? 'bg-white text-purple-800'
-                      : 'text-white hover:bg-white/20'
-                  }`}
-                  title="Single version view"
-                >
-                  <FaList className="mr-2" />
-                  Single View
-                </button>
-                
-                <button
-                  onClick={() => handleDisplayModeChange('parallel')}
-                  className={`flex items-center px-3 py-2 ${
-                    displayMode === 'parallel'
-                      ? 'bg-white text-purple-800'
-                      : 'text-white hover:bg-white/20'
-                  }`}
-                  title="Split view to compare versions"
-                >
-                  <FaColumns className="mr-2" />
-                  Split View
-                </button>
-              </div>
-              
-              {/* Version selector toggle button */}
-              {Object.values(groupedSections).some(group => group.versions.length > 1) && (
-                <button
-                  onClick={toggleVersionSelector}
-                  className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-                >
-                  <FaFilter className="mr-2" />
-                  {showVersionSelector ? 'Hide Version Options' : 'Version Options'}
-                </button>
-              )}
-              
-              <button 
-                onClick={() => window.print()}
-                className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-              >
-                <FaPrint className="mr-2" />
-                Print Report
-              </button>
-              
-              <button 
-                onClick={generateATR}
-                disabled={isGeneratingATR}
-                className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-                title="Generate Action Taken Report (ATR) Word document"
-              >
-                <FaFileWord className="mr-2" />
-                Generate ATR
-              </button>
-              
-              <button 
-                onClick={generateShareLink}
-                disabled={isGeneratingShareLink}
-                className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-              >
-                <FaShare className="mr-2" />
-                {isGeneratingShareLink ? 'Generating...' : 'Share Report'}
-              </button>
-              
-              <Link 
-                href={`/reviewer/${id}`}
-                className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-              >
-                <FaArrowLeft className="mr-2" />
-                Back to Project
-              </Link>
-            </div>
-          </div>
-          
-          {/* Version selection panel */}
+    <ReviewerShell
+      call={callData || { id }}
+      sections={allSections}
+      title="Panel report"
+      actions={
+        <div className="flex items-center gap-1.5">
+          {Object.values(groupedSections).some(group => group.versions.length > 1) && (
+            <button
+              onClick={toggleVersionSelector}
+              className="nk-btn-ghost nk-btn-sm"
+              aria-expanded={showVersionSelector}
+            >
+              <FaFilter aria-hidden="true" /> Versions
+            </button>
+          )}
+          <button onClick={() => window.print()} className="nk-btn-ghost nk-btn-sm">
+            <FaPrint aria-hidden="true" /> Print
+          </button>
+          <button
+            onClick={generateATR}
+            disabled={isGeneratingATR}
+            className="nk-btn-ghost nk-btn-sm"
+            title="Generate an Action Taken Report as a Word document"
+          >
+            <FaFileWord aria-hidden="true" /> {isGeneratingATR ? 'Building…' : 'ATR'}
+          </button>
+          <button
+            onClick={generateShareLink}
+            disabled={isGeneratingShareLink}
+            className="nk-btn-secondary nk-btn-sm"
+          >
+            <FaShare aria-hidden="true" /> {isGeneratingShareLink ? 'Generating…' : 'Share'}
+          </button>
+          <button
+            onClick={regenerateFinalReview}
+            disabled={isRegenerating}
+            className="nk-btn-primary nk-btn-sm"
+          >
+            {isRegenerating ? 'Regenerating…' : 'Regenerate'}
+          </button>
+        </div>
+      }
+    >
+      <div id="top" className="space-y-6">
+      {/* Version selection, lifted out of the old header — it was styled for a
+          dark purple band and is a body-level control, not page chrome. */}
           {showVersionSelector && (
             <div className="mt-4 bg-white/10 p-4 rounded-md">
               <div className="mb-4">
@@ -951,7 +886,7 @@ export default function FinalReview() {
                         setLoading(false);
                       }
                     }}
-                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                    className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700 transition-colors"
                   >
                     Generate Report with Selected Versions
                   </button>
@@ -959,17 +894,16 @@ export default function FinalReview() {
               </div>
             </div>
           )}
-        </div>
-      </header>
+
 
       {/* Share link dialog */}
       {shareLink && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
-          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h3 className="flex items-center text-lg font-medium text-blue-800 mb-2">
+          <div className="p-4 bg-cobalt-50 border border-cobalt-200 rounded-lg">
+            <h3 className="flex items-center text-lg font-medium text-cobalt-800 mb-2">
               <FaLink className="mr-2" /> Public Share Link
             </h3>
-            <p className="text-sm text-blue-600 mb-2">
+            <p className="text-sm text-cobalt-700 mb-2">
               Anyone with this link can view your report without requiring login:
             </p>
             <div className="flex">
@@ -984,7 +918,7 @@ export default function FinalReview() {
                   navigator.clipboard.writeText(shareLink);
                   toast.success('Link copied to clipboard!');
                 }}
-                className="bg-blue-600 text-white px-4 py-2 rounded-r-md hover:bg-blue-700"
+                className="bg-cobalt-600 text-white px-4 py-2 rounded-r-md hover:bg-cobalt-700"
               >
                 Copy
               </button>
@@ -1005,15 +939,15 @@ export default function FinalReview() {
       )}
 
       {/* Main content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 print:py-2">
+      <div className="print:py-2">
         {/* Overall Score Card */}
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden mb-8 print:shadow-none">
-          <div className="bg-gradient-to-r from-purple-700 to-indigo-600 px-6 py-4 print:bg-purple-700 flex justify-between items-center">
+        <div className="nk-panel overflow-hidden mb-8 print:shadow-none">
+          <div className="bg-nickel-800 px-6 py-4 print:bg-nickel-800 flex justify-between items-center">
             <h2 className="text-xl font-bold text-white">Overall Assessment</h2>
             <button
               onClick={regenerateFinalReview}
               disabled={isRegenerating}
-              className="inline-flex items-center px-3 py-2 border border-white shadow-sm text-sm leading-4 font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:opacity-50"
+              className="inline-flex items-center px-3 py-2 border border-white shadow-sm text-sm leading-4 font-medium rounded-md text-white bg-cobalt-600 hover:bg-cobalt-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:opacity-50"
             >
               {isRegenerating ? (
                 <>
@@ -1036,7 +970,7 @@ export default function FinalReview() {
                   <span className="text-4xl font-bold text-purple-700">
                     {scores.overallPercentage.toFixed(1)}%
                   </span>
-                  <span className="text-lg text-gray-500 ml-2">
+                  <span className="text-lg text-nickel-500 ml-2">
                     ({scores.totalScore.toFixed(1)} / {scores.maxPossibleScore})
                   </span>
                 </div>
@@ -1046,20 +980,20 @@ export default function FinalReview() {
               </div>
               
               <div className="flex flex-wrap gap-4 mt-4 print:mt-2">
-                <div className="bg-blue-50 px-4 py-2 rounded-md">
-                  <span className="text-sm text-gray-500">Sections</span>
-                  <p className="text-xl font-semibold text-blue-700">{sections.length}</p>
+                <div className="bg-cobalt-50 px-4 py-2 rounded-md">
+                  <span className="text-sm text-nickel-500">Sections</span>
+                  <p className="text-xl font-semibold text-cobalt-700">{sections.length}</p>
                 </div>
                 <div className="bg-green-50 px-4 py-2 rounded-md">
-                  <span className="text-sm text-gray-500">Strengths</span>
+                  <span className="text-sm text-nickel-500">Strengths</span>
                   <p className="text-xl font-semibold text-green-700">{overallReview.major_strengths.length}</p>
                 </div>
                 <div className="bg-red-50 px-4 py-2 rounded-md">
-                  <span className="text-sm text-gray-500">Weaknesses</span>
+                  <span className="text-sm text-nickel-500">Weaknesses</span>
                   <p className="text-xl font-semibold text-red-700">{overallReview.major_weaknesses.length}</p>
                 </div>
                 <div className="bg-amber-50 px-4 py-2 rounded-md">
-                  <span className="text-sm text-gray-500">Recommendations</span>
+                  <span className="text-sm text-nickel-500">Recommendations</span>
                   <p className="text-xl font-semibold text-amber-700">
                     {overallReview.cross_sectional_recommendations.length}
                   </p>
@@ -1071,7 +1005,7 @@ export default function FinalReview() {
             {overallReview.funding_recommendation ? (
               <div
                 className={`mt-2 rounded-lg border-2 p-4 ${
-                  DECISION_STYLES[overallReview.funding_recommendation.decision] || 'border-gray-300 bg-gray-50'
+                  DECISION_STYLES[overallReview.funding_recommendation.decision] || 'border-nickel-300 bg-nickel-50'
                 }`}
               >
                 <div className="flex flex-wrap items-center gap-3">
@@ -1096,12 +1030,12 @@ export default function FinalReview() {
 
             {/* Executive Summary */}
             <div className="mt-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-2">Executive Summary</h3>
-              <div className="bg-gray-50 p-4 rounded-md">
+              <h3 className="text-lg font-medium text-nickel-900 mb-2">Executive Summary</h3>
+              <div className="bg-nickel-50 p-4 rounded-md">
                 <ReviewerProse
                   value={overallReview.executive_summary}
                   fallback="No executive summary provided."
-                  className="text-gray-700"
+                  className="text-nickel-700"
                 />
               </div>
             </div>
@@ -1109,11 +1043,11 @@ export default function FinalReview() {
             {/* Compliance check (computed, not model-generated) */}
             {overallReview.compliance ? (
               <div className="mt-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-2">Compliance Check</h3>
+                <h3 className="text-lg font-medium text-nickel-900 mb-2">Compliance Check</h3>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <div className="rounded-md border border-gray-200 p-4">
-                    <div className="text-sm text-gray-500">Required sections drafted</div>
-                    <div className="mt-1 text-2xl font-semibold text-gray-900">
+                  <div className="rounded-md border border-nickel-200 p-4">
+                    <div className="text-sm text-nickel-500">Required sections drafted</div>
+                    <div className="mt-1 text-2xl font-semibold text-nickel-900">
                       {overallReview.compliance.requiredSections?.coveragePercent ?? 100}%
                     </div>
                     {overallReview.compliance.requiredSections?.missing?.length ? (
@@ -1127,8 +1061,8 @@ export default function FinalReview() {
                     )}
                   </div>
 
-                  <div className="rounded-md border border-gray-200 p-4">
-                    <div className="text-sm text-gray-500">Length limits</div>
+                  <div className="rounded-md border border-nickel-200 p-4">
+                    <div className="text-sm text-nickel-500">Length limits</div>
                     {overallReview.compliance.limits?.length ? (
                       <ul className="mt-2 space-y-1 text-sm">
                         {overallReview.compliance.limits
@@ -1146,15 +1080,15 @@ export default function FinalReview() {
                         ) : null}
                       </ul>
                     ) : (
-                      <p className="mt-2 text-sm text-gray-500">The call did not state numeric length limits.</p>
+                      <p className="mt-2 text-sm text-nickel-500">The call did not state numeric length limits.</p>
                     )}
                   </div>
 
-                  <div className="rounded-md border border-gray-200 p-4">
-                    <div className="text-sm text-gray-500">Deadline</div>
+                  <div className="rounded-md border border-nickel-200 p-4">
+                    <div className="text-sm text-nickel-500">Deadline</div>
                     {overallReview.compliance.deadline?.date ? (
                       <>
-                        <div className="mt-1 text-lg font-semibold text-gray-900">
+                        <div className="mt-1 text-lg font-semibold text-nickel-900">
                           {new Date(overallReview.compliance.deadline.date).toLocaleDateString()}
                         </div>
                         <p
@@ -1163,7 +1097,7 @@ export default function FinalReview() {
                               ? 'text-red-700'
                               : overallReview.compliance.deadline.status === 'closing'
                                 ? 'text-amber-700'
-                                : 'text-gray-600'
+                                : 'text-nickel-600'
                           }`}
                         >
                           {overallReview.compliance.deadline.status === 'passed'
@@ -1172,7 +1106,7 @@ export default function FinalReview() {
                         </p>
                       </>
                     ) : (
-                      <p className="mt-2 text-sm text-gray-500">No deadline recorded for this call.</p>
+                      <p className="mt-2 text-sm text-nickel-500">No deadline recorded for this call.</p>
                     )}
                   </div>
                 </div>
@@ -1182,29 +1116,29 @@ export default function FinalReview() {
             {/* Criterion scorecard */}
             {overallReview.criterion_scorecard?.length ? (
               <div className="mt-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-2">Scorecard Against the Call's Criteria</h3>
-                <div className="overflow-x-auto rounded-md border border-gray-200">
-                  <table className="min-w-full divide-y divide-gray-200 text-sm">
-                    <thead className="bg-gray-50">
+                <h3 className="text-lg font-medium text-nickel-900 mb-2">Scorecard Against the Call's Criteria</h3>
+                <div className="overflow-x-auto rounded-md border border-nickel-200">
+                  <table className="min-w-full divide-y divide-nickel-200 text-sm">
+                    <thead className="bg-nickel-50">
                       <tr>
-                        <th className="px-4 py-2 text-left font-medium text-gray-700">Criterion</th>
-                        <th className="px-4 py-2 text-left font-medium text-gray-700">Weight</th>
-                        <th className="px-4 py-2 text-left font-medium text-gray-700">Score</th>
-                        <th className="px-4 py-2 text-left font-medium text-gray-700">Verdict</th>
+                        <th className="px-4 py-2 text-left font-medium text-nickel-700">Criterion</th>
+                        <th className="px-4 py-2 text-left font-medium text-nickel-700">Weight</th>
+                        <th className="px-4 py-2 text-left font-medium text-nickel-700">Score</th>
+                        <th className="px-4 py-2 text-left font-medium text-nickel-700">Verdict</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-200">
+                    <tbody className="divide-y divide-nickel-200">
                       {overallReview.criterion_scorecard.map((row, index) => (
                         <tr key={`criterion-${index}`}>
-                          <td className="px-4 py-2 text-gray-900">{row.criterion}</td>
-                          <td className="px-4 py-2 text-gray-600">{row.weight !== null ? row.weight : '—'}</td>
-                          <td className="px-4 py-2 font-medium text-gray-900">
+                          <td className="px-4 py-2 text-nickel-900">{row.criterion}</td>
+                          <td className="px-4 py-2 text-nickel-600">{row.weight !== null ? row.weight : '—'}</td>
+                          <td className="px-4 py-2 font-medium text-nickel-900">
                             {row.score !== null ? `${row.score.toFixed(1)}/10` : 'Not evidenced'}
                           </td>
-                          <td className="px-4 py-2 text-gray-700">
+                          <td className="px-4 py-2 text-nickel-700">
                             {row.verdict}
                             {row.evidence_sections?.length ? (
-                              <span className="ml-1 text-xs text-gray-500">({row.evidence_sections.join(', ')})</span>
+                              <span className="ml-1 text-xs text-nickel-500">({row.evidence_sections.join(', ')})</span>
                             ) : null}
                           </td>
                         </tr>
@@ -1218,26 +1152,26 @@ export default function FinalReview() {
             {/* Priority actions */}
             {overallReview.priority_actions?.length ? (
               <div className="mt-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-2">What to Fix First</h3>
+                <h3 className="text-lg font-medium text-nickel-900 mb-2">What to Fix First</h3>
                 <ol className="space-y-3">
                   {overallReview.priority_actions.map((action, index) => (
-                    <li key={`action-${index}`} className="rounded-md border border-gray-200 p-4">
+                    <li key={`action-${index}`} className="rounded-md border border-nickel-200 p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gray-900 text-xs font-bold text-white">
                           {action.rank}
                         </span>
                         {action.section ? (
-                          <span className="font-medium text-gray-900">{action.section}</span>
+                          <span className="font-medium text-nickel-900">{action.section}</span>
                         ) : null}
-                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${IMPACT_STYLES[action.impact] || 'bg-gray-100 text-gray-700'}`}>
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${IMPACT_STYLES[action.impact] || 'bg-nickel-100 text-nickel-700'}`}>
                           {action.impact} impact
                         </span>
-                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                        <span className="rounded-full bg-nickel-100 px-2 py-0.5 text-xs text-nickel-700">
                           {action.effort} effort
                         </span>
                       </div>
-                      {action.issue ? <p className="mt-2 text-sm text-gray-600">{action.issue}</p> : null}
-                      <p className="mt-1 text-gray-900">{action.action}</p>
+                      {action.issue ? <p className="mt-2 text-sm text-nickel-600">{action.issue}</p> : null}
+                      <p className="mt-1 text-nickel-900">{action.action}</p>
                       {action.expected_gain ? (
                         <p className="mt-1 text-sm text-green-700">Expected gain: {action.expected_gain}</p>
                       ) : null}
@@ -1250,7 +1184,7 @@ export default function FinalReview() {
             {/* Cross-section consistency */}
             {overallReview.consistency_flags?.length ? (
               <div className="mt-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-2">Cross-Section Consistency</h3>
+                <h3 className="text-lg font-medium text-nickel-900 mb-2">Cross-Section Consistency</h3>
                 <ul className="space-y-2">
                   {overallReview.consistency_flags.map((flag, index) => (
                     <li
@@ -1260,12 +1194,12 @@ export default function FinalReview() {
                           ? 'bg-red-50'
                           : flag.severity === 'medium'
                             ? 'bg-amber-50'
-                            : 'bg-gray-50'
+                            : 'bg-nickel-50'
                       }`}
                     >
-                      <span className="text-gray-900">{flag.issue}</span>
+                      <span className="text-nickel-900">{flag.issue}</span>
                       {flag.sections?.length ? (
-                        <span className="ml-2 text-xs text-gray-500">{flag.sections.join(' ↔ ')}</span>
+                        <span className="ml-2 text-xs text-nickel-500">{flag.sections.join(' ↔ ')}</span>
                       ) : null}
                     </li>
                   ))}
@@ -1275,7 +1209,7 @@ export default function FinalReview() {
 
             {/* Major Strengths */}
             <div className="mt-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+              <h3 className="text-lg font-medium text-nickel-900 mb-2 flex items-center">
                 <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center mr-2">
                   <FaThumbsUp className="text-white text-xs" />
                 </div>
@@ -1286,7 +1220,7 @@ export default function FinalReview() {
                   {overallReview.major_strengths.map((strength, index) => (
                     <li key={`strength-${index}`} className="flex">
                       <FaCheck className="text-green-500 mt-1 mr-2 flex-shrink-0" />
-                      <span className="text-gray-800">
+                      <span className="text-nickel-800">
                         {renderSafely(strength)}
                       </span>
                     </li>
@@ -1297,7 +1231,7 @@ export default function FinalReview() {
 
             {/* Major Weaknesses */}
             <div className="mt-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+              <h3 className="text-lg font-medium text-nickel-900 mb-2 flex items-center">
                 <div className="w-6 h-6 bg-red-500 rounded-full flex items-center justify-center mr-2">
                   <FaThumbsDown className="text-white text-xs" />
                 </div>
@@ -1308,7 +1242,7 @@ export default function FinalReview() {
                   {overallReview.major_weaknesses.map((weakness, index) => (
                     <li key={`weakness-${index}`} className="flex">
                       <FaTimes className="text-red-500 mt-1 mr-2 flex-shrink-0" />
-                      <span className="text-gray-800">
+                      <span className="text-nickel-800">
                         {renderSafely(weakness)}
                       </span>
                     </li>
@@ -1319,7 +1253,7 @@ export default function FinalReview() {
 
             {/* Cross-Sectional Recommendations */}
             <div className="mt-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+              <h3 className="text-lg font-medium text-nickel-900 mb-2 flex items-center">
                 <div className="w-6 h-6 bg-amber-500 rounded-full flex items-center justify-center mr-2">
                   <FaExclamationTriangle className="text-white text-xs" />
                 </div>
@@ -1330,7 +1264,7 @@ export default function FinalReview() {
                   {overallReview.cross_sectional_recommendations.map((recommendation, index) => (
                     <li key={`recommendation-${index}`} className="flex">
                       <span className="text-amber-500 font-bold mr-2">→</span>
-                      <span className="text-gray-800">
+                      <span className="text-nickel-800">
                         {renderSafely(recommendation)}
                       </span>
                     </li>
@@ -1342,18 +1276,18 @@ export default function FinalReview() {
             {/* Recommended Supplementary Materials */}
             {supplementaryMaterials.length > 0 && (
               <div className="mt-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+                <h3 className="text-lg font-medium text-nickel-900 mb-2 flex items-center">
                   <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center mr-2">
                     <FaFileExport className="text-white text-xs" />
                   </div>
                   Recommended Supplementary Materials
                 </h3>
-                <div className="bg-blue-50 rounded-md p-4">
+                <div className="bg-cobalt-50 rounded-md p-4">
                   <ul className="space-y-2">
                     {supplementaryMaterials.map((material, index) => (
                       <li key={`supplementary-${index}`} className="flex">
                         <FaCheck className="text-blue-500 mt-1 mr-2 flex-shrink-0" />
-                        <span className="text-gray-800">
+                        <span className="text-nickel-800">
                           {renderSafely(material)}
                         </span>
                       </li>
@@ -1366,31 +1300,31 @@ export default function FinalReview() {
         </div>
 
         {/* Section Index */}
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden mb-8 print:shadow-none">
-          <div className="bg-gradient-to-r from-indigo-700 to-indigo-500 px-6 py-4 print:bg-indigo-700">
+        <div className="nk-panel overflow-hidden mb-8 print:shadow-none">
+          <div className="bg-nickel-800 px-6 py-4 print:bg-nickel-800">
             <h2 className="text-xl font-bold text-white">Table of Contents</h2>
           </div>
           
           <div className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <h3 className="font-medium text-gray-700 mb-2">Jump to Section:</h3>
+                <h3 className="font-medium text-nickel-700 mb-2">Jump to Section:</h3>
                 {displayMode === 'single' ? (
                   // Single mode - show selected versions
                   sections && sections.length > 0 ? (
                     getSortedSections(sections).map((section, index) => (
-                      <li key={section.id} className="text-blue-600 hover:text-blue-800">
+                      <li key={section.id} className="text-cobalt-700 hover:text-cobalt-800">
                         <a href={`#section-${section.id}`} className="hover:underline">
                           {renderSafely(section.section_title, "Untitled Section")}
-                          <span className="text-gray-500 text-sm ml-2">
+                          <span className="text-nickel-500 text-sm ml-2">
                             (v{section.version || 1}: {section.ai_review_json?.score?.toFixed(1) || "0.0"}/10)
                           </span>
                         </a>
                       </li>
                     ))
                   ) : (
-                    <div className="bg-white rounded-lg shadow-lg p-6 mb-8">
-                      <p className="text-center text-gray-500">No reviewed sections are available. Please review at least one section.</p>
+                    <div className="nk-panel p-6 mb-8">
+                      <p className="text-center text-nickel-500">No reviewed sections are available. Please review at least one section.</p>
                     </div>
                   )
                 ) : (
@@ -1423,10 +1357,10 @@ export default function FinalReview() {
                           .join(', ');
                         
                         return (
-                          <li key={title} className="text-blue-600 hover:text-blue-800">
+                          <li key={title} className="text-cobalt-700 hover:text-cobalt-800">
                             <a href={`#section-${title}`} className="hover:underline">
                               {renderSafely(title, "Untitled Section")}
-                              <span className="text-gray-500 text-sm ml-2">
+                              <span className="text-nickel-500 text-sm ml-2">
                                 ({versionStr})
                               </span>
                             </a>
@@ -1438,8 +1372,8 @@ export default function FinalReview() {
                 )}
               </div>
               
-              <div className="bg-gray-50 p-4 rounded-md">
-                <h3 className="font-medium text-gray-700 mb-2">Section Score Legend:</h3>
+              <div className="bg-nickel-50 p-4 rounded-md">
+                <h3 className="font-medium text-nickel-700 mb-2">Section Score Legend:</h3>
                 <div className="space-y-2">
                   <div className="flex items-center">
                     <div className="w-4 h-4 bg-green-500 rounded-full mr-2"></div>
@@ -1464,8 +1398,8 @@ export default function FinalReview() {
         </div>
         
         {/* Section Scores Overview */}
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden mb-8 print:shadow-none print:break-before-page">
-          <div className="bg-gradient-to-r from-blue-700 to-blue-500 px-6 py-4 print:bg-blue-700">
+        <div className="nk-panel overflow-hidden mb-8 print:shadow-none print:break-before-page">
+          <div className="bg-nickel-800 px-6 py-4 print:bg-cobalt-700">
             <h2 className="text-xl font-bold text-white">Section Scores</h2>
           </div>
           
@@ -1473,22 +1407,22 @@ export default function FinalReview() {
             <div className="overflow-x-auto">
               <table className="min-w-full">
                 <thead>
-                  <tr className="bg-gray-50">
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <tr className="bg-nickel-50">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-nickel-500 uppercase tracking-wider">
                       Section
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-nickel-500 uppercase tracking-wider">
                       Score
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-nickel-500 uppercase tracking-wider">
                       Rating
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-nickel-500 uppercase tracking-wider">
                       Version
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-200">
+                <tbody className="divide-y divide-nickel-200">
                   {displayMode === 'single' ? (
                     // Single mode - show selected versions
                     sections && sections.length > 0 ? (
@@ -1502,11 +1436,11 @@ export default function FinalReview() {
                         return (
                           <tr 
                             key={section.id}
-                            className={`cursor-pointer hover:bg-gray-50 ${borderColor}`}
+                            className={`cursor-pointer hover:bg-nickel-50 ${borderColor}`}
                           >
                             <td className="px-4 py-3">
                               <div className="flex items-center">
-                                <a href={`#section-${section.id}`} className="font-medium text-blue-600 hover:text-blue-800 hover:underline">
+                                <a href={`#section-${section.id}`} className="font-medium text-cobalt-700 hover:text-cobalt-800 hover:underline">
                                   {renderSafely(section.section_title, "Untitled Section")}
                                 </a>
                               </div>
@@ -1519,7 +1453,7 @@ export default function FinalReview() {
                             <td className="px-4 py-3">
                               {getStarRating(score, maxScore)}
                             </td>
-                            <td className="px-4 py-3 text-gray-500">
+                            <td className="px-4 py-3 text-nickel-500">
                               v{section.version || 1}
                             </td>
                           </tr>
@@ -1527,7 +1461,7 @@ export default function FinalReview() {
                       })
                     ) : (
                       <tr>
-                        <td colSpan={4} className="px-4 py-3 text-center text-gray-500">No reviewed sections are available. Please review at least one section.</td>
+                        <td colSpan={4} className="px-4 py-3 text-center text-nickel-500">No reviewed sections are available. Please review at least one section.</td>
                       </tr>
                     )
                   ) : (
@@ -1558,11 +1492,11 @@ export default function FinalReview() {
                           return (
                             <tr 
                               key={section.id}
-                              className={`cursor-pointer hover:bg-gray-50 ${borderColor}`}
+                              className={`cursor-pointer hover:bg-nickel-50 ${borderColor}`}
                             >
                               <td className="px-4 py-3">
                                 <div className="flex items-center">
-                                  <a href={`#section-${title}`} className="font-medium text-blue-600 hover:text-blue-800 hover:underline">
+                                  <a href={`#section-${title}`} className="font-medium text-cobalt-700 hover:text-cobalt-800 hover:underline">
                                     {renderSafely(title, "Untitled Section")}
                                   </a>
                                 </div>
@@ -1575,7 +1509,7 @@ export default function FinalReview() {
                               <td className="px-4 py-3">
                                 {getStarRating(score, maxScore)}
                               </td>
-                              <td className="px-4 py-3 text-gray-500">
+                              <td className="px-4 py-3 text-nickel-500">
                                 v{section.version || 1}
                               </td>
                             </tr>
@@ -1584,7 +1518,7 @@ export default function FinalReview() {
                     })
                   )}
                 </tbody>
-                <tfoot className="bg-gray-50">
+                <tfoot className="bg-nickel-50">
                   <tr>
                     <td className="px-4 py-3 font-medium">Overall</td>
                     <td className="px-4 py-3 font-medium text-purple-700">
@@ -1617,9 +1551,9 @@ export default function FinalReview() {
                 <div 
                   id={`section-${section.id}`}
                   key={section.id}
-                  className={`bg-white rounded-lg shadow-lg overflow-hidden mb-8 print:shadow-none border-l-4 ${borderColor} print:break-before-page`}
+                  className={`nk-panel overflow-hidden mb-8 print:shadow-none border-l-4 ${borderColor} print:break-before-page`}
                 >
-                  <div className="bg-gradient-to-r from-gray-700 to-gray-600 px-6 py-4 print:bg-gray-700">
+                  <div className="bg-nickel-800 px-6 py-4 print:bg-nickel-800">
                     <div className="flex items-center justify-between">
                       <h2 className="text-xl font-bold text-white">{renderSafely(section.section_title, "Untitled Section")}</h2>
                       <div className="flex items-center">
@@ -1634,8 +1568,8 @@ export default function FinalReview() {
                     {/* Section content */}
                     <div className="mb-6">
                       <div className="flex justify-between items-center mb-3">
-                        <h3 className="text-lg font-medium text-gray-900">Section Content</h3>
-                        <span className="text-sm text-gray-500">Version {section.version || 1}</span>
+                        <h3 className="text-lg font-medium text-nickel-900">Section Content</h3>
+                        <span className="text-sm text-nickel-500">Version {section.version || 1}</span>
                       </div>
                       
                       <div 
@@ -1645,7 +1579,7 @@ export default function FinalReview() {
                         {!expandedSections[section.id] && (
                           <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white to-transparent"></div>
                         )}
-                        <div className="text-gray-800 whitespace-pre-line">{renderSafely(section.user_input)}</div>
+                        <div className="text-nickel-800 whitespace-pre-line">{renderSafely(section.user_input)}</div>
                       </div>
                       
                       <button
@@ -1653,7 +1587,7 @@ export default function FinalReview() {
                           e.stopPropagation();
                           toggleSectionExpand(section.id);
                         }}
-                        className="text-sm text-blue-600 hover:text-blue-800 mt-2"
+                        className="text-sm text-cobalt-700 hover:text-cobalt-800 mt-2"
                       >
                         {expandedSections[section.id] ? 'Show Less' : 'Show More'}
                       </button>
@@ -1661,15 +1595,15 @@ export default function FinalReview() {
                     
                     {/* Summary */}
                     <div className="mb-6">
-                      <h3 className="text-lg font-medium text-gray-900 mb-2">Summary</h3>
-                      <div className="bg-gray-50 p-4 rounded-md">
-                        <p className="text-gray-700">{section.ai_review_json?.summary}</p>
+                      <h3 className="text-lg font-medium text-nickel-900 mb-2">Summary</h3>
+                      <div className="bg-nickel-50 p-4 rounded-md">
+                        <p className="text-nickel-700">{section.ai_review_json?.summary}</p>
                       </div>
                     </div>
                     
                     {/* Strengths */}
                     <div className="mb-6">
-                      <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+                      <h3 className="text-lg font-medium text-nickel-900 mb-2 flex items-center">
                         <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center mr-2">
                           <FaCheck className="text-white text-xs" />
                         </div>
@@ -1680,7 +1614,7 @@ export default function FinalReview() {
                           {section.ai_review_json?.strengths.map((strength, idx) => (
                             <li key={idx} className="flex">
                               <span className="text-green-500 mr-2">•</span>
-                              <span className="text-gray-700">
+                              <span className="text-nickel-700">
                                 {renderSafely(strength)}
                               </span>
                             </li>
@@ -1691,7 +1625,7 @@ export default function FinalReview() {
                     
                     {/* Weaknesses */}
                     <div className="mb-6">
-                      <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+                      <h3 className="text-lg font-medium text-nickel-900 mb-2 flex items-center">
                         <div className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center mr-2">
                           <FaTimes className="text-white text-xs" />
                         </div>
@@ -1702,7 +1636,7 @@ export default function FinalReview() {
                           {section.ai_review_json?.weaknesses.map((weakness, idx) => (
                             <li key={idx} className="flex">
                               <span className="text-red-500 mr-2">•</span>
-                              <span className="text-gray-700">
+                              <span className="text-nickel-700">
                                 {renderSafely(weakness)}
                               </span>
                             </li>
@@ -1713,7 +1647,7 @@ export default function FinalReview() {
                     
                     {/* Recommendations or Suggestions */}
                     <div>
-                      <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center">
+                      <h3 className="text-lg font-medium text-nickel-900 mb-2 flex items-center">
                         <div className="w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center mr-2">
                           <span className="text-white text-xs font-bold">!</span>
                         </div>
@@ -1724,7 +1658,7 @@ export default function FinalReview() {
                           {(section.ai_review_json?.suggestions || section.ai_review_json?.recommendations || []).map((rec, idx) => (
                             <li key={idx} className="flex">
                               <span className="text-amber-500 mr-2">→</span>
-                              <span className="text-gray-700">
+                              <span className="text-nickel-700">
                                 {renderSafely(rec)}
                               </span>
                             </li>
@@ -1737,7 +1671,7 @@ export default function FinalReview() {
                     <div className="mt-6 text-right">
                       <a 
                         href="#top" 
-                        className="inline-flex items-center text-blue-600 hover:text-blue-800"
+                        className="inline-flex items-center text-cobalt-700 hover:text-cobalt-800"
                       >
                         <span className="mr-1">Back to Top</span>
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1751,18 +1685,18 @@ export default function FinalReview() {
             })
           ) : (
             // Fallback when no sections are available
-            <div className="bg-white rounded-lg shadow-lg overflow-hidden mb-8">
+            <div className="nk-panel overflow-hidden mb-8">
               <div className="p-8 text-center">
                 <div className="text-amber-500 mb-4">
                   <FaExclamationTriangle className="inline-block h-12 w-12" />
                 </div>
-                <h3 className="text-xl font-medium text-gray-900 mb-2">No Reviewed Sections Available</h3>
-                <p className="text-gray-600 mb-4">
+                <h3 className="text-xl font-medium text-nickel-900 mb-2">No Reviewed Sections Available</h3>
+                <p className="text-nickel-600 mb-4">
                   Please review at least one section before viewing the final review details.
                 </p>
                 <Link
                   href={`/reviewer/${id}`}
-                  className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  className="inline-flex items-center px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700 transition-colors"
                 >
                   <FaArrowLeft className="mr-2" /> Go Back to Reviewer Dashboard
                 </Link>
@@ -1803,9 +1737,9 @@ export default function FinalReview() {
                   <div 
                     key={title}
                     id={`section-${title}`}
-                    className="bg-white rounded-lg shadow-lg overflow-hidden mb-8 print:shadow-none print:break-before-page"
+                    className="nk-panel overflow-hidden mb-8 print:shadow-none print:break-before-page"
                   >
-                    <div className="bg-gradient-to-r from-gray-700 to-gray-600 px-6 py-4 print:bg-gray-700">
+                    <div className="bg-nickel-800 px-6 py-4 print:bg-nickel-800">
                       <h2 className="text-xl font-bold text-white">{renderSafely(title, "Untitled Section")}</h2>
                     </div>
                     
@@ -1822,7 +1756,7 @@ export default function FinalReview() {
                               key={section.id}
                               className={`border-l-4 ${borderColor} rounded-md overflow-hidden`}
                             >
-                              <div className="bg-gray-100 px-4 py-2 flex justify-between items-center">
+                              <div className="bg-nickel-100 px-4 py-2 flex justify-between items-center">
                                 <h3 className="font-medium">Version {section.version}</h3>
                                 <div className={`font-semibold ${getScoreColor(score, maxScore)}`}>
                                   Score: {score.toFixed(1)}/{maxScore}
@@ -1831,21 +1765,21 @@ export default function FinalReview() {
                               
                               {/* Section content */}
                               <div className="p-4 border-b">
-                                <h4 className="font-medium text-gray-700 mb-2">Content</h4>
+                                <h4 className="font-medium text-nickel-700 mb-2">Content</h4>
                                 <div 
-                                  className={`border border-gray-200 p-3 rounded-md overflow-hidden relative ${
+                                  className={`border border-nickel-200 p-3 rounded-md overflow-hidden relative ${
                                     expandedSections[section.id] ? '' : 'max-h-32'
                                   }`}
                                 >
                                   {!expandedSections[section.id] && (
                                     <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white to-transparent"></div>
                                   )}
-                                  <p className="text-gray-800 whitespace-pre-line text-sm">{section.user_input}</p>
+                                  <p className="text-nickel-800 whitespace-pre-line text-sm">{section.user_input}</p>
                                 </div>
                                 
                                 <button
                                   onClick={() => toggleSectionExpand(section.id)}
-                                  className="text-xs text-blue-600 hover:text-blue-800 mt-2"
+                                  className="text-xs text-cobalt-700 hover:text-cobalt-800 mt-2"
                                 >
                                   {expandedSections[section.id] ? 'Show Less' : 'Show More'}
                                 </button>
@@ -1853,13 +1787,13 @@ export default function FinalReview() {
                               
                               {/* Review summary */}
                               <div className="p-4 border-b">
-                                <h4 className="font-medium text-gray-700 mb-2">Summary</h4>
-                                <p className="text-sm text-gray-600">{section.ai_review_json?.summary}</p>
+                                <h4 className="font-medium text-nickel-700 mb-2">Summary</h4>
+                                <p className="text-sm text-nickel-600">{section.ai_review_json?.summary}</p>
                               </div>
                               
                               {/* Strengths */}
                               <div className="p-4 border-b">
-                                <h4 className="font-medium text-gray-700 mb-2 flex items-center">
+                                <h4 className="font-medium text-nickel-700 mb-2 flex items-center">
                                   <div className="w-4 h-4 bg-green-500 rounded-full flex items-center justify-center mr-2">
                                     <FaCheck className="text-white text-xs" />
                                   </div>
@@ -1869,7 +1803,7 @@ export default function FinalReview() {
                                   {section.ai_review_json?.strengths.map((strength, idx) => (
                                     <li key={idx} className="flex">
                                       <span className="text-green-500 mr-2">•</span>
-                                      <span className="text-gray-700">
+                                      <span className="text-nickel-700">
                                         {renderSafely(strength)}
                                       </span>
                                     </li>
@@ -1879,7 +1813,7 @@ export default function FinalReview() {
                               
                               {/* Weaknesses */}
                               <div className="p-4 border-b">
-                                <h4 className="font-medium text-gray-700 mb-2 flex items-center">
+                                <h4 className="font-medium text-nickel-700 mb-2 flex items-center">
                                   <div className="w-4 h-4 bg-red-500 rounded-full flex items-center justify-center mr-2">
                                     <FaTimes className="text-white text-xs" />
                                   </div>
@@ -1889,7 +1823,7 @@ export default function FinalReview() {
                                   {section.ai_review_json?.weaknesses.map((weakness, idx) => (
                                     <li key={idx} className="flex">
                                       <span className="text-red-500 mr-2">•</span>
-                                      <span className="text-gray-700">
+                                      <span className="text-nickel-700">
                                         {renderSafely(weakness)}
                                       </span>
                                     </li>
@@ -1899,7 +1833,7 @@ export default function FinalReview() {
                               
                               {/* Recommendations */}
                               <div className="p-4">
-                                <h4 className="font-medium text-gray-700 mb-2 flex items-center">
+                                <h4 className="font-medium text-nickel-700 mb-2 flex items-center">
                                   <div className="w-4 h-4 bg-amber-500 rounded-full flex items-center justify-center mr-2">
                                     <span className="text-white text-xs font-bold">!</span>
                                   </div>
@@ -1909,7 +1843,7 @@ export default function FinalReview() {
                                   {(section.ai_review_json?.suggestions || section.ai_review_json?.recommendations || []).map((rec, idx) => (
                                     <li key={idx} className="flex">
                                       <span className="text-amber-500 mr-2">→</span>
-                                      <span className="text-gray-700">
+                                      <span className="text-nickel-700">
                                         {renderSafely(rec)}
                                       </span>
                                     </li>
@@ -1925,7 +1859,7 @@ export default function FinalReview() {
                       <div className="mt-6 text-right">
                         <a 
                           href="#top" 
-                          className="inline-flex items-center text-blue-600 hover:text-blue-800"
+                          className="inline-flex items-center text-cobalt-700 hover:text-cobalt-800"
                         >
                           <span className="mr-1">Back to Top</span>
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1938,12 +1872,13 @@ export default function FinalReview() {
                 );
               })
         )}
-      </main>
-      
+      </div>
+
       {/* Print-only footer */}
-      <div className="hidden print:block p-4 text-center text-gray-500 text-sm">
+      <div className="hidden p-4 text-center text-[12px] text-nickel-500 print:block">
         <p>Generated by GrantGenie AI | {new Date().toLocaleDateString()}</p>
       </div>
-    </div>
+      </div>
+    </ReviewerShell>
   );
 }

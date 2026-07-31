@@ -7,24 +7,8 @@ import { FaSpinner, FaCheckCircle, FaExclamationTriangle, FaCircle, FaArrowLeft 
 import Head from 'next/head';
 import Link from 'next/link';
 import ContextSummaryView from '../../../components/ContextSummaryView';
-
-// Define the section order based on the specified review flow - same as the review process
-const SECTION_ORDER = [
-  'Abstract',
-  'Introduction',
-  'Objectives',
-  'Literature Review',
-  'Methodology',
-  'Project Timeline',
-  'Budget Justification',
-  'Team Expertise',
-  'Expected Outcomes',
-  'Societal Impact',
-  'Sustainability',
-  'Risk & Mitigation',
-  'IP & Commercialization',
-  'Conclusion'
-];
+import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
+import ReviewerShell from '@/components/reviewer/ReviewerShell';
 
 type SectionStatus = {
   id: string;
@@ -369,9 +353,9 @@ export default function ContextSummaryGeneration() {
       case ProcessStage.ERROR:
         return 'bg-red-600';
       case ProcessStage.COMPLETED:
-        return 'bg-green-600';
+        return 'bg-cobalt-600';
       default:
-        return 'bg-purple-600';
+        return 'bg-cobalt-600';
     }
   };
 
@@ -379,7 +363,7 @@ export default function ContextSummaryGeneration() {
   const StatusBadge = ({ status }: { status: string }) => {
     switch (status) {
       case 'pending':
-        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Pending</span>;
+        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-nickel-100 text-nickel-800">Pending</span>;
       case 'processing':
         return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">Processing</span>;
       case 'completed':
@@ -400,28 +384,30 @@ export default function ContextSummaryGeneration() {
     );
   }
 
+  // This page reshapes sections for its own progress list; the shared nav wants
+  // the API's own field names back.
+  const railSections = sections.map(s => ({ ...s, section_title: s.title }));
+
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      <Head>
-        <title>Context Summary Generation | GrantGenie</title>
-      </Head>
-      
-      <h1 className="text-2xl font-bold mb-6">Context Summary Generation</h1>
-      
+    <ReviewerShell
+      call={callData?.call || { id }}
+      sections={railSections}
+      title="Context summaries"
+    >
       {/* Progress indicator */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-2">
-          <span className="font-semibold text-gray-700">Current stage: {currentStage}</span>
-          <span className="text-sm text-gray-600">{Math.round(progress)}% complete</span>
+          <span className="nk-eyebrow">Current stage: {currentStage}</span>
+          <span className="nk-mono text-nickel-500">{Math.round(progress)}% complete</span>
         </div>
-        <div className="w-full bg-gray-200 rounded-full h-2.5">
-          <div 
-            className={`h-2.5 rounded-full ${getProgressColor()} transition-all duration-500 ease-in-out`} 
+        <div className="nk-meter">
+          <div
+            className={`h-full rounded-full ${getProgressColor()} transition-all duration-500 ease-in-out`}
             style={{ width: `${progress}%` }}
           />
         </div>
       </div>
-      
+
       {/* Error message */}
       {error && currentStage === ProcessStage.ERROR && (
         <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6">
@@ -445,7 +431,7 @@ export default function ContextSummaryGeneration() {
             <h2 className="text-xl font-semibold">Context Summaries</h2>
             <button
               onClick={() => setShowContextSummaries(!showContextSummaries)}
-              className="ml-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="ml-4 px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700"
             >
               {showContextSummaries ? 'Hide Context Summaries' : 'Show Context Summaries'}
             </button>
@@ -463,20 +449,20 @@ export default function ContextSummaryGeneration() {
                       <div className="flex items-center">
                         <h3 className="font-medium text-lg">{section.title}</h3>
                         {section.version && section.version > 1 && (
-                          <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                          <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-cobalt-100 text-cobalt-800">
                             v{section.version}
                           </span>
                         )}
                       </div>
-                      <div className="bg-gray-50 p-3 rounded text-sm mt-2">
-                        <h4 className="font-medium mb-1 text-gray-700">Context Summary:</h4>
+                      <div className="bg-nickel-50 p-3 rounded text-sm mt-2">
+                        <h4 className="font-medium mb-1 text-nickel-700">Context Summary:</h4>
                         <p className="whitespace-pre-wrap">{section.context_summary}</p>
                       </div>
                     </div>
                   ))}
               </div>
             ) : (
-              <p className="text-gray-500 text-center py-4">
+              <p className="text-nickel-500 text-center py-4">
                 No context summaries have been generated yet.
               </p>
             )}
@@ -488,21 +474,21 @@ export default function ContextSummaryGeneration() {
       <div className="mb-8">
         <h2 className="text-xl font-semibold mb-4">Section Status</h2>
         <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <ul className="divide-y divide-gray-200">
+          <ul className="divide-y divide-nickel-200">
             {sections.map((section) => (
               <li key={section.id} className="px-4 py-4 sm:px-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center">
                     <span className="mr-3">
-                      {section.status === 'pending' && <FaCircle className="text-gray-400 h-4 w-4" />}
+                      {section.status === 'pending' && <FaCircle className="text-nickel-400 h-4 w-4" />}
                       {section.status === 'processing' && <FaSpinner className="text-purple-500 h-4 w-4 animate-spin" />}
                       {section.status === 'completed' && <FaCheckCircle className="text-green-500 h-4 w-4" />}
                       {section.status === 'error' && <FaExclamationTriangle className="text-red-500 h-4 w-4" />}
                     </span>
                     <div className="flex items-center">
-                      <p className="text-gray-800 font-medium">{section.title}</p>
+                      <p className="text-nickel-800 font-medium">{section.title}</p>
                       {section.version && section.version > 1 && (
-                        <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                        <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-cobalt-100 text-cobalt-800">
                           v{section.version}
                         </span>
                       )}
@@ -547,7 +533,7 @@ export default function ContextSummaryGeneration() {
         {(currentStage === ProcessStage.ERROR || currentStage === ProcessStage.INITIALIZING) && (
           <button 
             onClick={initializeProcess}
-            className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+            className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700"
           >
             {currentStage === ProcessStage.ERROR ? 'Retry Generation' : 'Start Generation'}
           </button>
@@ -557,7 +543,7 @@ export default function ContextSummaryGeneration() {
           <div className="flex space-x-3">
             <button
               onClick={regenerateAllSummaries}
-              className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+              className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700"
             >
               Regenerate All Summaries
             </button>
@@ -565,7 +551,7 @@ export default function ContextSummaryGeneration() {
             <button
               onClick={resetAndRerunAllReviews}
               disabled={isResettingReviews}
-              className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+              className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700 disabled:opacity-50"
             >
               {isResettingReviews ? (
                 <>
@@ -577,12 +563,12 @@ export default function ContextSummaryGeneration() {
               )}
             </button>
             
-            <Link href={`/reviewer/${id}/final-review-process`} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+            <Link href={`/reviewer/${id}/final-review-process`} className="nk-btn-primary nk-btn-sm">
               Continue to Advanced Review
             </Link>
           </div>
         )}
       </div>
-    </div>
+    </ReviewerShell>
   );
 }

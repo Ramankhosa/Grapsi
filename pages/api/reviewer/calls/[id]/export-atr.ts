@@ -2,6 +2,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getReviewerSession as getSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
+import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
 import { 
   Document, 
   Packer, 
@@ -98,24 +99,6 @@ async function generateATRDocument(
     ai_review_json: ReviewJson
   }>
 ): Promise<Buffer> {
-  // Define the preferred section order
-  const SECTION_ORDER = [
-    'Abstract',
-    'Introduction',
-    'Objectives',
-    'Literature Review',
-    'Methodology',
-    'Project Timeline',
-    'Budget Justification',
-    'Team Expertise',
-    'Expected Outcomes',
-    'Societal Impact',
-    'Sustainability',
-    'Risk & Mitigation',
-    'IP & Commercialization',
-    'Conclusion'
-  ];
-  
   // Sort sections according to the preferred order
   const sortedSections = [...sections].sort((a, b) => {
     const titleA = a.section_title;

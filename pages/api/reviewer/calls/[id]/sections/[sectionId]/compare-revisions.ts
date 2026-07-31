@@ -37,14 +37,40 @@ function comparisonFromReview(section: any, previousSection: any) {
   const resolved = points.filter((point: any) => point.status === 'addressed');
   const outstanding = points.filter((point: any) => point.status !== 'addressed');
 
+  const scoreDelta =
+    review.score_delta
+    ?? (previousScore !== null ? Number((review.score - previousScore).toFixed(2)) : null);
+
+  // Describe the revision, not the section. This used to hand back
+  // `review.summary` — the section's own summary, which never mentions the
+  // earlier draft — under a heading that promised an account of what changed.
+  const movement =
+    typeof scoreDelta === 'number' && scoreDelta !== 0
+      ? ` The score moved ${scoreDelta > 0 ? 'up' : 'down'} ${Math.abs(scoreDelta).toFixed(1)}, to ${review.score}.`
+      : typeof review.score === 'number'
+        ? ` The score is unchanged at ${review.score}.`
+        : '';
+
+  const partly = points.filter((point: any) => point.status === 'partially').length;
+  const untouched = points.filter((point: any) => point.status === 'not_addressed').length;
+  const leftover = [
+    partly ? `${partly} only partly` : '',
+    untouched ? `${untouched} not at all` : '',
+  ].filter(Boolean).join(', ');
+
+  const improvementSummary =
+    `This revision fully addresses ${tally.addressed} of the ${tally.total} points the previous review raised`
+    + (leftover ? ` — ${leftover}.` : '.')
+    + movement;
+
   return {
     source: 'revision_review',
     score: review.score,
     previous_score: previousScore,
-    score_delta: review.score_delta ?? (previousScore !== null ? Number((review.score - previousScore).toFixed(2)) : null),
-    improvement_summary:
-      review.summary
-      || `${tally.addressed} of ${tally.total} points from the previous review are fully addressed.`,
+    score_delta: scoreDelta,
+    improvement_summary: improvementSummary,
+    /** The section's own summary, kept but never passed off as a change log. */
+    section_summary: review.summary || null,
     addressed_points: points.map((point: any) => ({
       ...point,
       label: ADDRESSED_LABEL[point.status] || point.status,

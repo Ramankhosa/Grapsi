@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import axios from 'axios';
 import Head from 'next/head';
+import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
 import { 
   FaCheck, 
   FaTimes, 
@@ -50,20 +51,6 @@ interface ReportPreferences {
 interface GroupedSections {
   [title: string]: SectionReview[];
 }
-
-// Predefined order of sections
-const SECTION_ORDER = [
-  "Abstract", 
-  "Introduction", 
-  "Literature Review", 
-  "Objectives", 
-  "Methodology", 
-  "Project Timeline", 
-  "Budget Justification", 
-  "Expected Outcomes",
-  "Risk Assessment",
-  "Conclusion"
-];
 
 // Helper function to safely access nested properties
 const safeAccess = (obj: any, path: string, fallback: any = undefined) => {

@@ -26,21 +26,23 @@ function RuleList({
 }) {
   if (rules.length === 0) return null
 
-  const toneStyles = {
-    scoring: 'border-green-200 bg-green-50',
-    global: 'border-blue-200 bg-blue-50',
-    reminder: 'border-gray-200 bg-gray-50',
+  // Scoring weight is what distinguishes these lists, so the accent marks that
+  // rather than giving each list a decorative colour of its own.
+  const accent = {
+    scoring: 'border-l-cobalt-600',
+    global: 'border-l-cobalt-300',
+    reminder: 'border-l-nickel-300',
   }[tone]
 
   return (
-    <div className={`rounded-md border p-4 ${toneStyles}`}>
-      <h4 className="text-sm font-semibold text-gray-900">
-        {title} <span className="font-normal text-gray-500">({rules.length})</span>
+    <div className={`rounded-lg border border-nickel-200 border-l-[3px] bg-nickel-25 p-4 ${accent}`}>
+      <h4 className="text-[13px] font-semibold text-nickel-900">
+        {title} <span className="nk-mono font-normal text-nickel-500">{rules.length}</span>
       </h4>
-      <p className="mt-1 text-xs text-gray-600">{hint}</p>
+      <p className="mt-1 text-[12px] leading-4 text-nickel-500">{hint}</p>
       <ul className="mt-3 space-y-2">
         {rules.map((rule, index) => (
-          <li key={index} className="text-sm text-gray-800">
+          <li key={index} className="text-[13px] leading-5 text-nickel-700">
             <ReviewerText value={rule} />
           </li>
         ))}
@@ -71,16 +73,16 @@ export default function ReviewerRulesPanel({
 
   if (total === 0) {
     return (
-      <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <div className="flex items-start">
-          <FaInfoCircle className="mr-2 mt-0.5 flex-shrink-0" />
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-[13px] leading-5 text-amber-900">
+        <div className="flex items-start gap-2">
+          <FaInfoCircle className="mt-0.5 shrink-0" />
           <span>
             No call rules were mapped to this section, so it will be scored on reviewer judgment and
             the general funding call context.
             {callRulesHref ? (
               <>
                 {' '}
-                <Link href={callRulesHref} className="underline hover:no-underline">
+                <Link href={callRulesHref} className="font-medium underline hover:no-underline">
                   See what this call provided
                 </Link>
                 .
@@ -93,27 +95,32 @@ export default function ReviewerRulesPanel({
   }
 
   return (
-    <div className="mb-6 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+    <div className="nk-panel overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen((previous) => !previous)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-nickel-25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cobalt-600"
       >
-        <span className="flex items-center text-sm font-semibold text-gray-900">
-          <FaBalanceScale className="mr-2 text-blue-600" />
-          Rules applied to {sectionTitle}
-          <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-normal text-blue-800">
+        <span className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-nickel-900">
+          <FaBalanceScale className="shrink-0 text-cobalt-600" />
+          <span className="truncate">Rules applied to {sectionTitle}</span>
+          <span className="nk-badge nk-badge-live shrink-0">
             {scope.sectionRules.length + scope.globalRules.length} scoring
             {scope.supplementaryRules.length > 0
               ? ` · ${scope.supplementaryRules.length} reminders`
               : ''}
           </span>
         </span>
-        {open ? <FaChevronUp className="text-gray-400" /> : <FaChevronDown className="text-gray-400" />}
+        {open ? (
+          <FaChevronUp className="shrink-0 text-nickel-400" />
+        ) : (
+          <FaChevronDown className="shrink-0 text-nickel-400" />
+        )}
       </button>
 
       {open ? (
-        <div className="space-y-4 border-t border-gray-100 p-4">
+        <div className="space-y-3 border-t border-nickel-200 p-4">
           <RuleList
             title="Section rules"
             hint="Taken from this call's requirements for this section. These drive the section score."
@@ -136,9 +143,9 @@ export default function ReviewerRulesPanel({
           {callRulesHref ? (
             <Link
               href={callRulesHref}
-              className="inline-flex items-center text-sm text-blue-600 hover:text-blue-800"
+              className="inline-flex items-center gap-1.5 text-[13px] font-medium text-cobalt-700 hover:text-cobalt-800"
             >
-              View all call rules and guidelines <FaExternalLinkAlt className="ml-1.5 h-3 w-3" />
+              View all call rules and guidelines <FaExternalLinkAlt className="h-3 w-3" />
             </Link>
           ) : null}
         </div>

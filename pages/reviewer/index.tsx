@@ -86,180 +86,138 @@ export default function ReviewerDashboard() {
 
   if (status === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      <div className="nk-ground flex min-h-screen items-center justify-center">
+        <div className="h-64 w-full max-w-[900px] animate-pulse rounded-xl bg-nickel-100" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="nk-ground">
       <Head>
-        <title>AI Grant Reviewer - GrantGenie</title>
-        <meta
-          name="description"
-          content="AI-driven grant proposal review and optimization"
-        />
+        <title>AI Grant Reviewer — GrantMentor</title>
+        <meta name="description" content="AI-driven grant proposal review and optimization" />
       </Head>
 
-      {/* Header */}
-      <header className="bg-gradient-to-r from-green-800 to-green-600 shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-white">AI Grant Reviewer</h1>
-              <p className="mt-1 text-green-100">
-                AI-powered grant application analysis and feedback
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Link 
-                href="/dashboard"
-                className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-              >
-                GrantMentor Dashboard
-              </Link>
-              <Link 
-                href="/"
-                className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-              >
-                <FaArrowLeft className="mr-2" />
-                Back to Home
-              </Link>
-            </div>
+      <header className="border-b border-nickel-200 bg-white">
+        <div className="mx-auto flex max-w-[1100px] items-center justify-between gap-4 px-4 py-4 sm:px-6">
+          <div className="min-w-0">
+            <span className="nk-eyebrow">GrantMentor</span>
+            <h1 className="mt-0.5 text-[17px] font-semibold tracking-[-0.01em] text-nickel-900">
+              Grant Reviewer
+            </h1>
           </div>
+          <Link href="/dashboard" className="nk-btn-ghost nk-btn-sm shrink-0">
+            Dashboard
+          </Link>
         </div>
       </header>
 
-      {/* Main content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="bg-white shadow-md rounded-lg p-6 mb-8">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">How It Works</h2>
-          <div className="grid md:grid-cols-3 gap-6">
-            <div className="bg-gray-50 p-4 rounded-md">
-              <div className="flex items-center mb-2">
-                <div className="bg-green-500 text-white rounded-full w-6 h-6 flex items-center justify-center mr-2">1</div>
-                <h3 className="font-medium">Set the Call Context</h3>
-              </div>
-              <p className="text-sm text-gray-600">
-                Pick a funding call from the library, or paste the call's own URL and we'll pull out its terms and
-                reviewer rules.
-              </p>
-            </div>
-            <div className="bg-gray-50 p-4 rounded-md">
-              <div className="flex items-center mb-2">
-                <div className="bg-green-500 text-white rounded-full w-6 h-6 flex items-center justify-center mr-2">2</div>
-                <h3 className="font-medium">Review Sections</h3>
-              </div>
-              <p className="text-sm text-gray-600">
-                Submit individual proposal sections for AI feedback on alignment with funding requirements.
-              </p>
-            </div>
-            <div className="bg-gray-50 p-4 rounded-md">
-              <div className="flex items-center mb-2">
-                <div className="bg-green-500 text-white rounded-full w-6 h-6 flex items-center justify-center mr-2">3</div>
-                <h3 className="font-medium">Optimize & Improve</h3>
-              </div>
-              <p className="text-sm text-gray-600">
-                Get actionable suggestions to strengthen your application and increase funding chances.
-              </p>
-            </div>
+      <main className="mx-auto max-w-[1100px] px-4 py-8 sm:px-6">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-[20px] font-semibold tracking-[-0.01em] text-nickel-900">
+              Your review workspaces
+            </h2>
+            <p className="nk-sub mt-1 max-w-prose">
+              Each workspace holds one proposal, reviewed against one call's rules.
+            </p>
           </div>
-        </div>
-
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-semibold text-gray-800">Your Projects</h2>
-          <Link
-            href="/reviewer/new"
-            className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 flex items-center"
-          >
-            <FaPlus className="mr-2" /> Review New Project
+          <Link href="/reviewer/new" className="nk-btn-primary nk-btn-sm">
+            <FaPlus aria-hidden="true" /> New workspace
           </Link>
         </div>
 
         {error && (
-          <div className="bg-red-50 text-red-600 p-4 rounded-md mb-6">
+          <div
+            role="alert"
+            className="mb-6 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-[13px] text-red-700"
+          >
             {error}
           </div>
         )}
 
         {loading ? (
-          <div className="flex justify-center items-center p-8">
-            <FaSpinner className="animate-spin h-8 w-8 text-green-500" />
+          <div className="space-y-2">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="h-[72px] animate-pulse rounded-xl bg-nickel-100" />
+            ))}
           </div>
         ) : reviewerCalls.length > 0 ? (
-          <div className="bg-white shadow overflow-hidden rounded-md">
-            <ul className="divide-y divide-gray-200">
-              {reviewerCalls.map((call) => (
-                <li key={call.id} className="relative">
-                  <Link
-                    href={`/reviewer/${call.id}`}
-                    className="block hover:bg-gray-50"
+          <ul className="nk-panel divide-y divide-nickel-200 overflow-hidden">
+            {reviewerCalls.map(call => (
+              <li key={call.id} className="group relative transition-colors hover:bg-nickel-25">
+                <div className="flex flex-wrap items-center gap-3 px-5 py-4">
+                  <div className="min-w-0 flex-1">
+                    <Link
+                      href={`/reviewer/${call.id}`}
+                      className="block truncate text-[14px] font-medium text-nickel-900 hover:text-cobalt-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cobalt-600"
+                    >
+                      {call.project_title}
+                    </Link>
+                    <p className="mt-0.5 truncate text-[12.5px] text-nickel-500">
+                      {call.agency_name}
+                    </p>
+                  </div>
+
+                  <span
+                    className={
+                      call.review_status === "parsed"
+                        ? "nk-badge nk-badge-ok"
+                        : call.review_status === "pending"
+                          ? "nk-badge nk-badge-warn"
+                          : "nk-badge nk-badge-danger"
+                    }
                   >
-                    <div className="px-6 py-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center">
-                          <FaFileAlt className="text-green-500 mr-3" />
-                          <div>
-                            <p className="text-lg font-medium text-gray-900">
-                              {call.project_title}
-                            </p>
-                            <p className="text-sm text-gray-500">
-                              {call.agency_name}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center">
-                          <span 
-                            className={`px-2 py-1 text-xs rounded-full ${
-                              call.review_status === "parsed" 
-                                ? "bg-green-100 text-green-800" 
-                                : call.review_status === "pending" 
-                                ? "bg-yellow-100 text-yellow-800" 
-                                : "bg-red-100 text-red-800"
-                            }`}
-                          >
-                            {call.review_status === "parsed" ? "Template ready" : 
-                             call.review_status === "pending" ? "Pending" : "Failed"}
-                          </span>
-                          <span className="ml-4 text-sm text-gray-500">
-                            {new Date(call.created_at).toLocaleDateString()}
-                          </span>
-                          <div className="ml-4 flex border border-gray-300 rounded">
-                            <button
-                              onClick={(e) => handleDelete(call.id, e)}
-                              disabled={isDeleting === call.id}
-                              className="px-2 py-1 text-red-600 hover:bg-red-50 border-r border-gray-300"
-                              title="Delete"
-                            >
-                              {isDeleting === call.id ? 
-                                <FaSpinner className="animate-spin" /> : 
-                                <FaTrash />
-                              }
-                            </button>
-                            <button
-                              onClick={(e) => handleEdit(call.id, e)}
-                              className="px-2 py-1 text-blue-600 hover:bg-blue-50"
-                              title="Edit"
-                            >
-                              <FaEdit />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
+                    {call.review_status === "parsed"
+                      ? "Ready"
+                      : call.review_status === "pending"
+                        ? "Pending"
+                        : "Failed"}
+                  </span>
+
+                  <span className="nk-mono hidden shrink-0 text-nickel-500 sm:inline">
+                    {new Date(call.created_at).toLocaleDateString()}
+                  </span>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      onClick={e => handleEdit(call.id, e)}
+                      className="nk-btn-ghost nk-btn-xs"
+                      aria-label={`Open ${call.project_title}`}
+                    >
+                      <FaEdit aria-hidden="true" />
+                    </button>
+                    <button
+                      onClick={e => handleDelete(call.id, e)}
+                      disabled={isDeleting === call.id}
+                      className="nk-btn-ghost nk-btn-xs text-red-600 hover:bg-red-50 hover:text-red-700"
+                      aria-label={`Delete ${call.project_title}`}
+                    >
+                      {isDeleting === call.id ? (
+                        <FaSpinner className="animate-spin" aria-hidden="true" />
+                      ) : (
+                        <FaTrash aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
         ) : (
-          <div className="bg-white shadow-md rounded-lg p-8 text-center">
-            <FaFileAlt className="mx-auto h-12 w-12 text-gray-300" />
-            <h3 className="mt-2 text-lg font-medium text-gray-900">No projects yet</h3>
-            <p className="mt-1 text-gray-500">
-              Click "Review New Project" to start from a stored funding call or the call's own URL.
+          <div className="nk-panel p-12 text-center">
+            <span className="nk-tile mx-auto mb-4 h-12 w-12">
+              <FaFileAlt aria-hidden="true" />
+            </span>
+            <h3 className="nk-title">No workspaces yet</h3>
+            <p className="nk-sub mx-auto mt-2 max-w-prose">
+              Start from a funding call in the library, or paste the call's own URL and
+              its terms and reviewer rules will be pulled out for you.
             </p>
+            <Link href="/reviewer/new" className="nk-btn-primary nk-btn-sm mt-6">
+              <FaPlus aria-hidden="true" /> New workspace
+            </Link>
           </div>
         )}
       </main>

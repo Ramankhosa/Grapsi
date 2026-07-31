@@ -91,31 +91,34 @@ export default async function handler(
       }
       
       const section = sections[0];
-      
-      // Only draft sections can be edited directly
-      if (section.status !== 'draft') {
-        return res.status(400).json({
-          error: 'Cannot edit this section',
-          details: 'Only draft sections can be edited directly. For reviewed sections, please create a revision.'
-        });
-      }
-      
-      // Update the section
+
+      // A reviewed section can be corrected in place. Editing the text
+      // invalidates the review that scored it, so the section returns to draft
+      // and is flagged stale — the stored review is kept so the UI can still
+      // show what the last review said while making clear it is out of date.
+      // Refusing the edit outright meant a typo cost a whole new version.
+      const wasReviewed = section.status === 'reviewed';
+      const contentChanged = user_input !== section.user_input;
+      const returnsToDraft = wasReviewed && contentChanged;
+
       const updatedSection = await prisma.$queryRaw`
         UPDATE "reviewer_sections"
-        SET 
+        SET
           user_input = ${user_input},
           section_title = ${section_title || section.section_title},
+          status = ${returnsToDraft ? 'draft' : section.status}::"SectionStatus",
+          "sourceStale" = ${returnsToDraft ? true : section.sourceStale},
           last_reviewed_at = NOW()
         WHERE id = ${sectionId}
         RETURNING *
       `;
-      
-      return res.status(200).json({ 
+
+      return res.status(200).json({
         success: true,
-        section: updatedSection[0]
+        section: updatedSection[0],
+        returned_to_draft: returnsToDraft,
       });
-      
+
     } catch (error) {
       console.error('Error updating section:', error);
       return res.status(500).json({ error: 'Failed to update section' });

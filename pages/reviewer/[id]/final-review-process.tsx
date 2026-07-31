@@ -7,24 +7,8 @@ import { FaSpinner, FaCheckCircle, FaExclamationTriangle, FaCircle, FaArrowLeft 
 import Head from 'next/head';
 import Link from 'next/link';
 import ContextSummaryView from '../../../components/ContextSummaryView';
-
-// Define the section order based on the specified review flow
-const SECTION_ORDER = [
-  'Abstract',
-  'Introduction',
-  'Objectives',
-  'Literature Review',
-  'Methodology',
-  'Project Timeline',
-  'Budget Justification',
-  'Team Expertise',
-  'Expected Outcomes',
-  'Societal Impact',
-  'Sustainability',
-  'Risk & Mitigation',
-  'IP & Commercialization',
-  'Conclusion'
-];
+import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
+import ReviewerShell from '@/components/reviewer/ReviewerShell';
 
 const SECTION_REVIEW_BATCH_SIZE = 1;
 const SECTION_REVIEW_BATCH_DELAY_MS = 4000;
@@ -522,9 +506,9 @@ export default function FinalReviewProcess() {
       case ProcessStage.ERROR:
         return 'bg-red-600';
       case ProcessStage.COMPLETED:
-        return 'bg-green-600';
+        return 'bg-cobalt-600';
       default:
-        return 'bg-blue-600';
+        return 'bg-cobalt-600';
     }
   };
 
@@ -532,9 +516,9 @@ export default function FinalReviewProcess() {
   const StatusBadge = ({ status }: { status: string }) => {
     switch (status) {
       case 'pending':
-        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Pending</span>;
+        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-nickel-100 text-nickel-800">Pending</span>;
       case 'processing':
-        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">Processing</span>;
+        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-cobalt-100 text-cobalt-800">Processing</span>;
       case 'completed':
         return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Completed</span>;
       case 'error':
@@ -553,28 +537,30 @@ export default function FinalReviewProcess() {
     );
   }
 
+  // This page reshapes sections for its own progress list; the shared nav wants
+  // the API's own field names back.
+  const railSections = sections.map(s => ({ ...s, section_title: s.title }));
+
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      <Head>
-        <title>Review Process | GrantGenie</title>
-      </Head>
-      
-      <h1 className="text-2xl font-bold mb-6">Advanced Grant Review Process</h1>
-      
+    <ReviewerShell
+      call={callData?.call || { id }}
+      sections={railSections}
+      title="Review all sections"
+    >
       {/* Progress indicator */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-2">
-          <span className="font-semibold text-gray-700">Current stage: {currentStage}</span>
-          <span className="text-sm text-gray-600">{Math.round(progress)}% complete</span>
+          <span className="nk-eyebrow">Current stage: {currentStage}</span>
+          <span className="nk-mono text-nickel-500">{Math.round(progress)}% complete</span>
         </div>
-        <div className="w-full bg-gray-200 rounded-full h-2.5">
-          <div 
-            className={`h-2.5 rounded-full ${getProgressColor()} transition-all duration-500 ease-in-out`} 
+        <div className="nk-meter">
+          <div
+            className={`h-full rounded-full ${getProgressColor()} transition-all duration-500 ease-in-out`}
             style={{ width: `${progress}%` }}
           />
         </div>
       </div>
-      
+
       {/* Missing context summaries warning */}
       {missingSummaries.length > 0 && (
         <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6">
@@ -626,7 +612,7 @@ export default function FinalReviewProcess() {
             <h2 className="text-xl font-semibold">Context Summaries</h2>
             <button
               onClick={() => setShowContextSummaries(!showContextSummaries)}
-              className="ml-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="ml-4 px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700"
             >
               {showContextSummaries ? 'Hide Context Summaries' : 'Show Context Summaries'}
             </button>
@@ -656,15 +642,15 @@ export default function FinalReviewProcess() {
                   .map(section => (
                     <div key={section.id} className="border rounded p-3">
                       <h3 className="font-medium text-lg">{section.title}</h3>
-                      <div className="bg-gray-50 p-3 rounded text-sm mt-2">
-                        <h4 className="font-medium mb-1 text-gray-700">Context Summary:</h4>
+                      <div className="bg-nickel-50 p-3 rounded text-sm mt-2">
+                        <h4 className="font-medium mb-1 text-nickel-700">Context Summary:</h4>
                         <p className="whitespace-pre-wrap">{section.context_summary}</p>
                       </div>
                     </div>
                   ))}
               </div>
             ) : (
-              <p className="text-gray-500 text-center py-4">
+              <p className="text-nickel-500 text-center py-4">
                 No context summaries have been generated yet.
               </p>
             )}
@@ -676,18 +662,18 @@ export default function FinalReviewProcess() {
       <div className="mb-8">
         <h2 className="text-xl font-semibold mb-4">Section Status</h2>
         <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <ul className="divide-y divide-gray-200">
+          <ul className="divide-y divide-nickel-200">
             {sections.map((section) => (
               <li key={section.id} className="px-4 py-4 sm:px-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center">
                     <span className="mr-3">
-                      {section.status === 'pending' && <FaCircle className="text-gray-400 h-4 w-4" />}
+                      {section.status === 'pending' && <FaCircle className="text-nickel-400 h-4 w-4" />}
                       {section.status === 'processing' && <FaSpinner className="text-blue-500 h-4 w-4 animate-spin" />}
                       {section.status === 'completed' && <FaCheckCircle className="text-green-500 h-4 w-4" />}
                       {section.status === 'error' && <FaExclamationTriangle className="text-red-500 h-4 w-4" />}
                     </span>
-                    <p className="text-gray-800 font-medium">{section.title}</p>
+                    <p className="text-nickel-800 font-medium">{section.title}</p>
                   </div>
                   <div className="flex items-center">
                     <StatusBadge status={section.status} />
@@ -730,7 +716,7 @@ export default function FinalReviewProcess() {
             <button
               onClick={resetAndRerunAllReviews}
               disabled={isResettingReviews}
-              className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+              className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700 disabled:opacity-50"
             >
               {isResettingReviews ? (
                 <>
@@ -742,7 +728,7 @@ export default function FinalReviewProcess() {
               )}
             </button>
             
-            <Link href={`/reviewer/${id}/final-review`} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+            <Link href={`/reviewer/${id}/final-review`} className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700">
               View Final Review
             </Link>
           </div>
@@ -751,7 +737,7 @@ export default function FinalReviewProcess() {
         {(currentStage === ProcessStage.CHECKING_PREREQUISITES || currentStage === ProcessStage.INITIALIZING) && missingSummaries.length === 0 && (
           <button 
             onClick={() => initializeProcess()}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700"
           >
             Start Review Process
           </button>
@@ -769,12 +755,12 @@ export default function FinalReviewProcess() {
               setProgress(50);
               addLog('Context summaries updated. Stopped after summary generation.');
             }}
-            className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+            className="px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700"
           >
             Update Context Summaries Only
           </button>
         )}
       </div>
-    </div>
+    </ReviewerShell>
   );
-} 
+}

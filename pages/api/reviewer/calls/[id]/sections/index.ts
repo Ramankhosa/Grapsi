@@ -37,10 +37,18 @@ export default async function handler(
     // Handle different HTTP methods
     if (req.method === 'GET') {
       try {
-        // Fetch all sections for this call using Prisma client
+        // Group every version of a title together, newest first. Ordering by
+        // last_reviewed_at put unreviewed drafts ahead of everything (Postgres
+        // sorts NULLS FIRST on DESC) and scattered a title's versions through
+        // the list in review-recency order, so the nav showed three unordered
+        // rows all called "Objectives". Proposal order is applied client-side
+        // by src/lib/reviewer/sectionGrouping.ts.
         const sections = await prisma.reviewerSection.findMany({
           where: { call_id: callId },
-          orderBy: { last_reviewed_at: 'desc' }
+          orderBy: [
+            { section_title: 'asc' },
+            { version: 'desc' },
+          ],
         });
         
         return res.status(200).json({ sections });

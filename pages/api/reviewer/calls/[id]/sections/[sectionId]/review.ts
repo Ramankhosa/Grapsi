@@ -5,20 +5,14 @@ import {
   requireReviewerCallAccess,
 } from '@/lib/reviewer-auth-api';
 import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService';
-import { buildFallbackContextSummary, hasMeaningfulSectionContent, parseReviewerScore } from '@/lib/reviewer/content';
+import { buildFallbackContextSummary, hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 import prisma from '../../../../../../../lib/prisma';
 import {
   reviewSection,
-  getSectionPosition,
-  SECTION_ORDER,
-  SECTION_DEPENDENCIES,
   filterRelevantContextSummaries,
   selectContextProviderTitles
 } from '../../../../../../../lib/reviewerService';
 import { ContextSummaryService } from '../../../../../../../lib/services/contextSummaryService';
-import { ReviewerService } from '../../../../../../../lib/services/reviewerService';
-
-// Export SECTION_ORDER and getSectionPosition from reviewerService.ts
 
 function hasAppDraftReviewerLink(section: any): boolean {
   const mappingJson = section?.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
@@ -68,8 +62,6 @@ export default async function handler(
     }
     
     const section = sections[0];
-    const normalizedSectionTitle = String(section.section_title || '').trim().toLowerCase();
-    
     console.log(`Processing review for section: ${section.section_title} (ID: ${sectionId})`);
     
     // Only allow review of draft sections
@@ -91,32 +83,23 @@ export default async function handler(
       WHERE id = ${callId}
     `;
     
-    // Always use Gemini 2.0 Flash regardless of what's stored in the database
-    const model = 'G'; // Force Gemini for all reviews
     const callData = callsWithModel[0].parsed_json || {};
-    const useTemplateBackedReviewer =
-      callsWithModel[0].rulesSource === 'template_manual'
-      || callData.rules_source === 'template_manual'
-      || Array.isArray(callData.template_sections);
-    const reviewerContextText = callData.reviewer_context_text || callData.call_summary || callData.agency_name || "Funding opportunity";
     const projectTitle = callsWithModel[0].project_title;
 
-    if (useTemplateBackedReviewer) {
-      const mappingJson = section.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
-      const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
-      const linksDeclareWorkflow = linkedSections.some((link: any) => typeof link.workflowMode === 'string');
-      const hasAppDraftLink = linkedSections.some((link: any) => String(link.workflowMode || 'app_draft') === 'app_draft');
-      if (linksDeclareWorkflow && !hasAppDraftLink) {
-        return res.status(400).json({
-          error: 'This reviewer section is not linked to app-draft content and will not be reviewed.',
-          code: 'NO_APP_DRAFT_CONTENT',
-          section: section.section_title,
-        });
-      }
+    // A section mapped only to non-app-draft workflow content has nothing for
+    // the reviewer to score.
+    const mappingJson = section.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
+    const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
+    const linksDeclareWorkflow = linkedSections.some((link: any) => typeof link.workflowMode === 'string');
+    const hasAppDraftLink = linkedSections.some((link: any) => String(link.workflowMode || 'app_draft') === 'app_draft');
+    if (linksDeclareWorkflow && !hasAppDraftLink) {
+      return res.status(400).json({
+        error: 'This reviewer section is not linked to app-draft content and will not be reviewed.',
+        code: 'NO_APP_DRAFT_CONTENT',
+        section: section.section_title,
+      });
     }
-    
-    console.log(`Using ${useTemplateBackedReviewer ? 'configured Grant Reviewer full-review model' : 'legacy specialized reviewer model'} for review of ${section.section_title}`);
-    
+
     // If this is a revision, get the previous section's review. The explicit
     // previous_section_id is authoritative — it records the draft the user
     // chose to revise, which is not always the highest earlier version.
@@ -267,36 +250,36 @@ export default async function handler(
     
     console.log(`Starting AI review for ${section.section_title}`);
 
-    // Load assets linked to this section (only for Methodology, Project Timeline, Budget Justification)
+    // Figures, charts or workbooks the user attached to this section. Any
+    // section may carry them — the title whitelist this used to apply meant an
+    // uploaded figure on, say, "Expected Outcomes" was accepted by the UI and
+    // then silently ignored by the review.
     let linkedAssets: { google_file_id: string }[] = [];
     try {
-      const isTargetSection = ['method', 'timeline', 'budget'].some(k => normalizedSectionTitle.includes(k));
-      if (isTargetSection) {
-        const links: any[] = await prisma.reviewAssetLink.findMany({ where: { review_version_id: sectionId, attach_in_prompt: true }, orderBy: { order: 'asc' } });
-        const assetIds = links.map(l => l.asset_id);
-        if (assetIds.length > 0) {
-          const assets: any[] = await prisma.reviewAsset.findMany({ where: { id: { in: assetIds } } });
-          // Ensure google file id for each asset
-          for (const asset of assets) {
-            let googleId = asset.google_file_id;
-            if (!googleId) {
-              // Call API to ensure google file id
-              try {
-                const resp = await fetch(`${process.env.NEXTAUTH_URL || ''}/api/reviewer/assets/ensure-google-file`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ asset_id: asset.id }),
-                });
-                if (resp.ok) {
-                  const data = await resp.json();
-                  googleId = data.google_file_id;
-                }
-              } catch (e) {
-                console.warn('Failed to ensure google file id for asset', asset.id, e);
+      const links: any[] = await prisma.reviewAssetLink.findMany({ where: { review_version_id: sectionId, attach_in_prompt: true }, orderBy: { order: 'asc' } });
+      const assetIds = links.map(l => l.asset_id);
+      if (assetIds.length > 0) {
+        const assets: any[] = await prisma.reviewAsset.findMany({ where: { id: { in: assetIds } } });
+        // Ensure google file id for each asset
+        for (const asset of assets) {
+          let googleId = asset.google_file_id;
+          if (!googleId) {
+            // Call API to ensure google file id
+            try {
+              const resp = await fetch(`${process.env.NEXTAUTH_URL || ''}/api/reviewer/assets/ensure-google-file`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ asset_id: asset.id }),
+              });
+              if (resp.ok) {
+                const data = await resp.json();
+                googleId = data.google_file_id;
               }
+            } catch (e) {
+              console.warn('Failed to ensure google file id for asset', asset.id, e);
             }
-            if (googleId) linkedAssets.push({ google_file_id: googleId });
           }
+          if (googleId) linkedAssets.push({ google_file_id: googleId });
         }
       }
     } catch (e) {
@@ -304,355 +287,33 @@ export default async function handler(
     }
     
     try {
-      // Initialize the reviewer service
-      const reviewerService = new ReviewerService();
-      
-      // Determine which review function to use based on section title
-      let reviewResult;
-      // normalizedSectionTitle declared earlier
-      
-      if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('abstract')) {
-        console.log('Using specialized Abstract review function with Gemini 2.0 Flash');
-        
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const abstractReview = await reviewerService.generateAbstractReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          previousVersion
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(abstractReview.section_score),
-            summary: abstractReview.section_summary || "No summary provided.",
-            strengths: abstractReview.section_strengths || [],
-            weaknesses: abstractReview.section_weaknesses || [],
-            suggestions: abstractReview.suggestions_for_improvement || [],
-            improvement_over_previous: abstractReview.improvement_over_previous || false,
-            context_summary: abstractReview.context_summary || "Not available"
-          },
-          isImprovement: abstractReview.improvement_over_previous || false
-        };
-      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('introduction')) {
-        console.log('Using specialized Introduction review function with Gemini 2.0 Flash');
-        
-        const abstractSummary = relevantSummaries.find(s => 
-          s.section_title.toLowerCase().includes('abstract'))?.context_summary;
-          
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const introReview = await reviewerService.generateIntroductionReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          abstractSummary,
-          previousVersion
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(introReview.score),
-            summary: introReview.summary || "No summary provided.",
-            strengths: introReview.strengths || [],
-            weaknesses: introReview.weaknesses || [],
-            suggestions: introReview.suggestions || [],
-            improvement_over_previous: introReview.improvement_over_previous || false,
-            context_summary: introReview.context_summary || "Not available"
-          },
-          isImprovement: introReview.improvement_over_previous || false
-        };
-      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('objective')) {
-        console.log('Using specialized Objectives review function with Gemini 2.0 Flash');
-        try {
-          // Check if this is a revision and get previous version data
-          let previousVersion = null;
-          if (previousSection) {
-            previousVersion = {
-              content: previousSection.user_input,
-              review: previousSection.ai_review_json
-            };
-          }
-          
-          const objectivesReview = await reviewerService.generateObjectivesReview(
-            section.user_input,
-            projectTitle,
-            reviewerContextText,
-            'G', // Force Gemini for all reviews
-            relevantSummaries,
-            previousVersion
-          );
-          
-          console.log('Objectives review generated successfully');
-          console.log('Objectives review score:', objectivesReview.score);
-          
-          if (!objectivesReview || !objectivesReview.score) {
-            console.error('Invalid objectives review generated:', objectivesReview);
-            throw new Error('Generated objectives review is invalid');
-          }
-          
-          // Convert to standard review format
-          reviewResult = {
-            review: {
-              score: parseReviewerScore(objectivesReview.score),
-              summary: objectivesReview.summary || "No summary provided.",
-              strengths: objectivesReview.strengths || [],
-              weaknesses: objectivesReview.weaknesses || [],
-              suggestions: objectivesReview.suggestions || [],
-              improvement_over_previous: objectivesReview.improvement_over_previous || false,
-              context_summary: objectivesReview.context_summary || "Not available"
-            },
-            isImprovement: objectivesReview.improvement_over_previous || false
-          };
-        } catch (objectivesError) {
-          console.error('Error generating objectives review:', objectivesError);
-          throw objectivesError;
-        }
-      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('literature')) {
-        console.log('Using specialized Literature Review review function with Gemini 2.0 Flash');
-        
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const litReview = await reviewerService.generateLiteratureReviewReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          relevantSummaries,
-          previousVersion
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(litReview.score),
-            summary: litReview.summary || "No summary provided.",
-            strengths: litReview.strengths || [],
-            weaknesses: litReview.weaknesses || [],
-            suggestions: litReview.suggestions || [],
-            improvement_over_previous: litReview.improvement_over_previous || false,
-            context_summary: litReview.context_summary || "Not available"
-          },
-          isImprovement: litReview.improvement_over_previous || false
-        };
-      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('method')) {
-        console.log('Using specialized Methodology review function with Gemini 2.0 Flash');
-        
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const methodReview = await reviewerService.generateMethodologyReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          relevantSummaries,
-          previousVersion,
-          linkedAssets.map(a => a.google_file_id)
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(methodReview.score),
-            summary: methodReview.summary || "No summary provided.",
-            strengths: methodReview.strengths || [],
-            weaknesses: methodReview.weaknesses || [],
-            suggestions: methodReview.suggestions || [],
-            improvement_over_previous: methodReview.improvement_over_previous || false,
-            context_summary: methodReview.context_summary || "Not available"
-          },
-          isImprovement: methodReview.improvement_over_previous || false
-        };
-      } else if (!useTemplateBackedReviewer && (normalizedSectionTitle.includes('timeline') || normalizedSectionTitle.includes('schedule'))) {
-        console.log('Using specialized Project Timeline review function with Gemini 2.0 Flash');
-        
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const timelineReview = await reviewerService.generateProjectTimelineReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          relevantSummaries,
-          previousVersion,
-          linkedAssets.map(a => a.google_file_id)
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(timelineReview.score),
-            summary: timelineReview.summary || "No summary provided.",
-            strengths: timelineReview.strengths || [],
-            weaknesses: timelineReview.weaknesses || [],
-            suggestions: timelineReview.suggestions || [],
-            improvement_over_previous: timelineReview.improvement_over_previous || false,
-            context_summary: timelineReview.context_summary || "Not available"
-          },
-          isImprovement: timelineReview.improvement_over_previous || false
-        };
-      } else if (!useTemplateBackedReviewer && normalizedSectionTitle.includes('budget')) {
-        console.log('Using specialized Budget Justification review function with Gemini 2.0 Flash');
-        
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const budgetReview = await reviewerService.generateBudgetJustificationReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          relevantSummaries,
-          previousVersion,
-          linkedAssets.map(a => a.google_file_id)
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(budgetReview.score),
-            summary: budgetReview.summary || "No summary provided.",
-            strengths: budgetReview.strengths || [],
-            weaknesses: budgetReview.weaknesses || [],
-            suggestions: budgetReview.suggestions || [],
-            non_scoring_reminders: budgetReview.non_scoring_reminders || [],
-            supplementary_materials: budgetReview.supplementary_materials || [],
-            improvement_over_previous: budgetReview.improvement_over_previous || false,
-            context_summary: budgetReview.context_summary || "Not available"
-          },
-          isImprovement: budgetReview.improvement_over_previous || false
-        };
-      } else if (!useTemplateBackedReviewer && (normalizedSectionTitle.includes('outcome') || normalizedSectionTitle.includes('result'))) {
-        console.log('Using specialized Expected Outcomes review function with Gemini 2.0 Flash');
-        
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const outcomesReview = await reviewerService.generateExpectedOutcomesReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          relevantSummaries,
-          previousVersion
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(outcomesReview.score),
-            summary: outcomesReview.summary || "No summary provided.",
-            strengths: outcomesReview.strengths || [],
-            weaknesses: outcomesReview.weaknesses || [],
-            suggestions: outcomesReview.suggestions || [],
-            improvement_over_previous: outcomesReview.improvement_over_previous || false,
-            context_summary: outcomesReview.context_summary || "Not available"
-          },
-          isImprovement: outcomesReview.improvement_over_previous || false
-        };
-      } else if (!useTemplateBackedReviewer && (normalizedSectionTitle.includes('conclusion') || normalizedSectionTitle.includes('summary'))) {
-        console.log('Using specialized Conclusion review function with Gemini 2.0 Flash');
-        
-        // Check if this is a revision and get previous version data
-        let previousVersion = null;
-        if (previousSection) {
-          previousVersion = {
-            content: previousSection.user_input,
-            review: previousSection.ai_review_json
-          };
-        }
-        
-        const conclusionReview = await reviewerService.generateConclusionReview(
-          section.user_input,
-          projectTitle,
-          reviewerContextText,
-          'G', // Force Gemini for all reviews
-          relevantSummaries,
-          previousVersion
-        );
-        
-        // Convert to standard review format
-        reviewResult = {
-          review: {
-            score: parseReviewerScore(conclusionReview.score),
-            summary: conclusionReview.summary || "No summary provided.",
-            strengths: conclusionReview.strengths || [],
-            weaknesses: conclusionReview.weaknesses || [],
-            suggestions: conclusionReview.suggestions || [],
-            improvement_over_previous: conclusionReview.improvement_over_previous || false,
-            context_summary: conclusionReview.context_summary || "Not available"
-          },
-          isImprovement: conclusionReview.improvement_over_previous || false
-        };
-      } else {
-        // Use the generic review function for other sections
-        console.log('Using configured Grant Reviewer full-review function');
-        reviewResult = await reviewSection({
-          section,
-          previousSection,
-          contextSection,
-          priorSectionSummaries: relevantSummaries.length > 0 ? relevantSummaries : undefined,
-          callData: {
-            ...callData,
-            project_title: projectTitle
-          },
-          modelType: 'G',
-          requestHeaders: req.headers,
-          stageCode: 'GRANT_REVIEWER_FULL_REVIEW',
-        });
-      }
+      // Every section goes through the configured Grant Reviewer, whatever the
+      // call's rules source.
+      //
+      // This replaced nine hardcoded per-title reviewers (abstract,
+      // introduction, objectives, literature, methodology, timeline, budget,
+      // outcomes, conclusion) that ran whenever the call was not
+      // template-backed — which is three of the four rules sources, including
+      // every URL-ingested call. They received only a context blurb, never the
+      // prompt scope, so the section page displayed rules the model was never
+      // given. They also dropped `addressed_previous_points`, which is what the
+      // revision comparison is derived from, forcing a second paid model call
+      // on every revision.
+      const reviewResult = await reviewSection({
+        section,
+        previousSection,
+        contextSection,
+        priorSectionSummaries: relevantSummaries.length > 0 ? relevantSummaries : undefined,
+        callData: {
+          ...callData,
+          project_title: projectTitle
+        },
+        modelType: 'G',
+        requestHeaders: req.headers,
+        stageCode: 'GRANT_REVIEWER_FULL_REVIEW',
+        attachments: linkedAssets,
+      });
+
 
       console.log(`AI review completed for ${section.section_title}`);
 
@@ -693,68 +354,36 @@ export default async function handler(
       
       console.log(`Context summary for ${section.section_title}: ${contextSummary.substring(0, 50)}...`);
       
+      // Carry forward anything the review itself does not produce. A
+      // `revision_comparison` computed (and paid for) before this review ran
+      // lives in the same column and was being wiped by a blind overwrite.
+      const priorReviewJson = section.ai_review_json && typeof section.ai_review_json === 'object'
+        ? section.ai_review_json
+        : {};
+      const mergedReviewJson = { ...reviewResult.review };
+      if (priorReviewJson.revision_comparison && !mergedReviewJson.revision_comparison) {
+        mergedReviewJson.revision_comparison = priorReviewJson.revision_comparison;
+      }
+
       // Update the section with the review result and context summary
       await prisma.$queryRaw`
-        UPDATE "reviewer_sections" 
-        SET 
-          ai_review_json = ${reviewResult.review},
+        UPDATE "reviewer_sections"
+        SET
+          ai_review_json = ${mergedReviewJson},
           status = 'reviewed',
           "sourceStale" = false,
           last_reviewed_at = CURRENT_TIMESTAMP,
-          improvement_flag = ${reviewResult.isImprovement || null},
+          improvement_flag = ${previousSection ? Boolean(reviewResult.isImprovement) : null},
           context_summary = ${contextSummary}
         WHERE id = ${sectionId}
       `;
-      
+
       console.log(`Database updated for ${section.section_title}`);
-      
-      // Update review progress state to mark this section as reviewed
-      try {
-        const callData = await prisma.$queryRaw`
-          SELECT review_progress_state FROM "reviewer_calls" WHERE id = ${callId}
-        `;
-        
-        if (callData && Array.isArray(callData) && callData.length > 0) {
-          let progressState = callData[0].review_progress_state || {};
-          
-          // Update the progress state based on section title
-          if (normalizedSectionTitle.includes('abstract')) {
-            progressState.abstract_reviewed = true;
-          } else if (normalizedSectionTitle.includes('introduction')) {
-            progressState.introduction_reviewed = true;
-          } else if (normalizedSectionTitle.includes('objective')) {
-            progressState.objectives_reviewed = true;
-          } else if (normalizedSectionTitle.includes('literature')) {
-            progressState.literature_reviewed = true;
-          } else if (normalizedSectionTitle.includes('method')) {
-            progressState.methodology_reviewed = true;
-          } else if (normalizedSectionTitle.includes('budget')) {
-            progressState.budget_reviewed = true;
-          } else if (normalizedSectionTitle.includes('outcome')) {
-            progressState.outcomes_reviewed = true;
-          }
-          
-          // Always update the last section reviewed
-          progressState.last_section_reviewed = section.section_title;
-          progressState.last_review_timestamp = new Date().toISOString();
-          
-          await prisma.$queryRaw`
-            UPDATE "reviewer_calls"
-            SET review_progress_state = ${progressState}
-            WHERE id = ${callId}
-          `;
-          
-          console.log(`Updated call review progress state for ${section.section_title}`);
-        }
-      } catch (progressError) {
-        console.error(`Error updating progress state for ${section.section_title}:`, progressError);
-        // Don't fail the request if progress state update fails
-      }
-      
+
       // Return success with the review data
-      return res.status(200).json({ 
+      return res.status(200).json({
         message: 'Section reviewed successfully',
-        review: reviewResult.review,
+        review: mergedReviewJson,
         context_summary: contextSummary,
         prior_section_summaries: priorSectionSummaries
       });

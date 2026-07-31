@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useReviewerSession as useSession } from '@/lib/reviewer-auth-client'
 import { useRouter } from 'next/router'
 import axios from 'axios'
@@ -13,6 +13,7 @@ import {
   FaMagic,
   FaSpinner,
 } from 'react-icons/fa'
+import ReviewerShell from '@/components/reviewer/ReviewerShell'
 
 const SKIP_VALUE = '__skip__'
 
@@ -31,10 +32,10 @@ const MATCH_STYLES = {
   title: 'bg-green-100 text-green-800',
   alias: 'bg-green-100 text-green-800',
   synonym: 'bg-green-100 text-green-800',
-  tokens: 'bg-blue-100 text-blue-800',
-  bucket: 'bg-blue-100 text-blue-800',
-  continuation: 'bg-blue-100 text-blue-800',
-  excluded: 'bg-gray-200 text-gray-700',
+  tokens: 'bg-cobalt-100 text-cobalt-800',
+  bucket: 'bg-cobalt-100 text-cobalt-800',
+  continuation: 'bg-cobalt-100 text-cobalt-800',
+  excluded: 'bg-nickel-200 text-nickel-700',
   none: 'bg-amber-100 text-amber-800',
 }
 
@@ -44,10 +45,30 @@ export default function ImportProposalPage() {
   const { id } = router.query
   const fileInputRef = useRef(null)
 
+  const [call, setCall] = useState(null)
+  const [sections, setSections] = useState([])
   const [text, setText] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState('')
+
+  // Only for the workspace chrome — the import itself needs neither.
+  useEffect(() => {
+    const loadWorkspace = async () => {
+      if (!id || status !== 'authenticated') return
+      try {
+        const [callRes, sectionsRes] = await Promise.all([
+          axios.get(`/api/reviewer/calls/${id}`),
+          axios.get(`/api/reviewer/calls/${id}/sections`),
+        ])
+        setCall(callRes.data.call)
+        setSections(sectionsRes.data.sections || [])
+      } catch (loadError) {
+        console.error('Error loading workspace chrome:', loadError)
+      }
+    }
+    loadWorkspace()
+  }, [id, status])
   const [preview, setPreview] = useState(null)
   const [assignments, setAssignments] = useState({})
   const [result, setResult] = useState(null)
@@ -161,32 +182,7 @@ export default function ImportProposalPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Head>
-        <title>Import Full Proposal - AI Grant Reviewer</title>
-      </Head>
-
-      <header className="bg-gradient-to-r from-blue-800 to-blue-600 shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-white">Import Full Proposal</h1>
-              <p className="mt-1 text-blue-100">
-                Split one document into the sections this call asks for
-              </p>
-            </div>
-            <Link
-              href={`/reviewer/${id}`}
-              className="flex items-center text-white bg-white/10 px-4 py-2 rounded-md hover:bg-white/20 transition-all"
-            >
-              <FaArrowLeft className="mr-2" />
-              Back to Project
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <ReviewerShell call={call || { id }} sections={sections} title="Import proposal">
         {error ? (
           <div className="mb-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">
             {error}
@@ -194,15 +190,15 @@ export default function ImportProposalPage() {
         ) : null}
 
         {result ? (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 flex items-center">
+          <div className="nk-panel p-6">
+            <h2 className="text-lg font-semibold text-nickel-900 flex items-center">
               <FaCheck className="text-green-600 mr-2" /> Import complete
             </h2>
             <ul className="mt-4 space-y-2 text-sm">
               {result.written.map((item) => (
-                <li key={item.sectionId} className="flex items-center justify-between rounded bg-gray-50 px-4 py-2">
-                  <span className="font-medium text-gray-900">{item.title}</span>
-                  <span className="text-gray-600">
+                <li key={item.sectionId} className="flex items-center justify-between rounded bg-nickel-50 px-4 py-2">
+                  <span className="font-medium text-nickel-900">{item.title}</span>
+                  <span className="text-nickel-600">
                     {item.mode === 'filled'
                       ? 'filled the empty section'
                       : item.mode === 'revision'
@@ -220,7 +216,7 @@ export default function ImportProposalPage() {
             <div className="mt-6 flex gap-3">
               <Link
                 href={`/reviewer/${id}`}
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="inline-flex items-center px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700"
               >
                 Review these sections
               </Link>
@@ -230,7 +226,7 @@ export default function ImportProposalPage() {
                   setResult(null)
                   setText('')
                 }}
-                className="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                className="inline-flex items-center px-4 py-2 bg-nickel-100 text-nickel-700 rounded hover:bg-nickel-200"
               >
                 Import another document
               </button>
@@ -239,9 +235,9 @@ export default function ImportProposalPage() {
         ) : null}
 
         {!preview && !result ? (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900">Paste or upload your proposal</h2>
-            <p className="mt-1 text-sm text-gray-600">
+          <div className="nk-panel p-6">
+            <h2 className="text-lg font-semibold text-nickel-900">Paste or upload your proposal</h2>
+            <p className="mt-1 text-sm text-nickel-600">
               The splitter reads your headings and matches them to the sections this call requires.
               Nothing is saved until you approve the mapping, and no AI credits are used for the split.
             </p>
@@ -251,7 +247,7 @@ export default function ImportProposalPage() {
               onChange={(event) => setText(event.target.value)}
               rows={14}
               placeholder="Paste the full proposal text, including its section headings…"
-              className="mt-4 w-full rounded-md border border-gray-300 p-3 font-mono text-sm focus:border-blue-500 focus:ring-blue-500"
+              className="mt-4 w-full rounded-md border border-nickel-300 p-3 font-mono text-sm focus:border-blue-500 focus:ring-blue-500"
             />
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -259,15 +255,15 @@ export default function ImportProposalPage() {
                 type="button"
                 onClick={handleAnalyzeText}
                 disabled={analyzing}
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-300"
+                className="inline-flex items-center px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700 disabled:bg-blue-300"
               >
                 {analyzing ? <FaSpinner className="animate-spin mr-2" /> : <FaMagic className="mr-2" />}
                 Split into sections
               </button>
 
-              <span className="text-sm text-gray-500">or</span>
+              <span className="text-sm text-nickel-500">or</span>
 
-              <label className="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 cursor-pointer">
+              <label className="inline-flex items-center px-4 py-2 bg-nickel-100 text-nickel-700 rounded hover:bg-nickel-200 cursor-pointer">
                 <FaFileUpload className="mr-2" />
                 Upload PDF / DOCX / TXT
                 <input
@@ -285,13 +281,13 @@ export default function ImportProposalPage() {
 
         {preview ? (
           <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow p-6">
+            <div className="nk-panel p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-900">
+                  <h2 className="text-lg font-semibold text-nickel-900">
                     Check the mapping before importing
                   </h2>
-                  <p className="mt-1 text-sm text-gray-600">
+                  <p className="mt-1 text-sm text-nickel-600">
                     {preview.segments.length} block(s) found · {preview.words.toLocaleString()} words
                     {preview.filename ? ` · ${preview.filename}` : ''}
                   </p>
@@ -300,7 +296,7 @@ export default function ImportProposalPage() {
                   <button
                     type="button"
                     onClick={() => setPreview(null)}
-                    className="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                    className="inline-flex items-center px-4 py-2 bg-nickel-100 text-nickel-700 rounded hover:bg-nickel-200"
                   >
                     Start over
                   </button>
@@ -308,7 +304,7 @@ export default function ImportProposalPage() {
                     type="button"
                     onClick={handleCommit}
                     disabled={committing}
-                    className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-green-300"
+                    className="inline-flex items-center px-4 py-2 bg-cobalt-600 text-white rounded hover:bg-cobalt-700 disabled:bg-green-300"
                   >
                     {committing ? <FaSpinner className="animate-spin mr-2" /> : <FaCheck className="mr-2" />}
                     Import assigned sections
@@ -329,7 +325,7 @@ export default function ImportProposalPage() {
 
               {/* Coverage against the call's own required sections */}
               <div className="mt-5">
-                <h3 className="text-sm font-medium text-gray-700">Section coverage</h3>
+                <h3 className="text-sm font-medium text-nickel-700">Section coverage</h3>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {targets.map((target) => {
                     const count = assignedCounts[target.title] || 0
@@ -340,7 +336,7 @@ export default function ImportProposalPage() {
                           count > 0
                             ? 'bg-green-100 text-green-800'
                             : target.hasContent
-                              ? 'bg-gray-100 text-gray-700'
+                              ? 'bg-nickel-100 text-nickel-700'
                               : 'bg-red-50 text-red-700'
                         }`}
                         title={
@@ -368,17 +364,17 @@ export default function ImportProposalPage() {
                   target?.wordLimit && segment.words > target.wordLimit ? target.wordLimit : null
 
                 return (
-                  <div key={segment.order} className="bg-white rounded-lg shadow">
-                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">
+                  <div key={segment.order} className="nk-panel">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-nickel-100 px-5 py-4">
                       <div className="min-w-0">
-                        <div className="font-medium text-gray-900 break-words">
-                          {segment.heading || <span className="italic text-gray-500">Untitled opening block</span>}
+                        <div className="font-medium text-nickel-900 break-words">
+                          {segment.heading || <span className="italic text-nickel-500">Untitled opening block</span>}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                           <span className={`rounded-full px-2 py-0.5 ${MATCH_STYLES[segment.matchedBy]}`}>
                             {MATCH_LABELS[segment.matchedBy]}
                           </span>
-                          <span className="text-gray-500">{segment.words} words</span>
+                          <span className="text-nickel-500">{segment.words} words</span>
                           {overWordLimit ? (
                             <span className="text-red-700">
                               over the call's {overWordLimit}-word limit for this section
@@ -392,7 +388,7 @@ export default function ImportProposalPage() {
                         onChange={(event) =>
                           setAssignments((prev) => ({ ...prev, [segment.order]: event.target.value }))
                         }
-                        className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                        className="rounded-md border border-nickel-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
                       >
                         <option value={SKIP_VALUE}>Do not import</option>
                         {targets.map((item) => (
@@ -404,7 +400,7 @@ export default function ImportProposalPage() {
                     </div>
 
                     <div className="px-5 py-4">
-                      <p className={`whitespace-pre-line text-sm text-gray-700 ${expanded[segment.order] ? '' : 'line-clamp-3'}`}>
+                      <p className={`whitespace-pre-line text-sm text-nickel-700 ${expanded[segment.order] ? '' : 'line-clamp-3'}`}>
                         {segment.body}
                       </p>
                       {segment.body.length > 240 ? (
@@ -413,7 +409,7 @@ export default function ImportProposalPage() {
                           onClick={() =>
                             setExpanded((prev) => ({ ...prev, [segment.order]: !prev[segment.order] }))
                           }
-                          className="mt-2 text-sm text-blue-600 hover:text-blue-800"
+                          className="mt-2 text-sm text-cobalt-700 hover:text-cobalt-800"
                         >
                           {expanded[segment.order] ? 'Show less' : 'Show full text'}
                         </button>
@@ -425,7 +421,6 @@ export default function ImportProposalPage() {
             </div>
           </div>
         ) : null}
-      </main>
-    </div>
+    </ReviewerShell>
   )
 }

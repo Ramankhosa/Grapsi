@@ -425,14 +425,16 @@ Return your analysis strictly as a JSON object with these keys. Do not include a
                       
       const reviewJson = JSON.parse(jsonMatch[1] || responseText);
       
-      // Ensure we have all expected fields with proper defaults
+      // Every list must come back as a list. `|| []` only covered null and
+      // undefined, so a model that answered with a single string handed the
+      // report page a value it then called .map() on.
       return {
         score: parseReviewerScore(reviewJson.score),
         improvement_summary: reviewJson.improvement_summary || "No improvement summary provided.",
-        key_changes: reviewJson.key_changes || [],
-        improvements: reviewJson.improvements || [],
-        remaining_issues: reviewJson.remaining_issues || [],
-        further_recommendations: reviewJson.further_recommendations || [],
+        key_changes: normalizeStringArray(reviewJson.key_changes),
+        improvements: normalizeStringArray(reviewJson.improvements),
+        remaining_issues: normalizeStringArray(reviewJson.remaining_issues),
+        further_recommendations: normalizeStringArray(reviewJson.further_recommendations),
         is_significant_improvement: !!reviewJson.is_significant_improvement
       };
     } catch (error) {

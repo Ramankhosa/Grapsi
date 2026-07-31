@@ -13,7 +13,8 @@ import {
   normalizeKey,
 } from '@/lib/reviewer/promptScope';
 import { generateFromOpenAI } from './openaiService';
-import { generateFromGemini } from './geminiService';
+import { generateFromGemini, generateFromGeminiWithFiles } from './geminiService';
+import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
 
 const GRANT_REVIEWER_FULL_REVIEW_STAGE = 'GRANT_REVIEWER_FULL_REVIEW';
 const GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL = 'gemini-2.5-pro';
@@ -73,23 +74,10 @@ async function executeConfiguredGrantReviewerReview(input: {
   return result.response.output;
 }
 
-// Define the section order based on the specified review flow
-export const SECTION_ORDER = [
-  'Abstract',
-  'Introduction',
-  'Objectives',
-  'Literature Review',
-  'Methodology',
-  'Project Timeline',
-  'Budget Justification',
-  'Team Expertise',
-  'Expected Outcomes',
-  'Societal Impact',
-  'Sustainability',
-  'Risk & Mitigation',
-  'IP & Commercialization',
-  'Conclusion'
-];
+// The canonical proposal order lives in the client-safe grouping module so the
+// nav, the report and the exports all sort by the same list. Re-exported here
+// for the server-side callers that already import it from this file.
+export { SECTION_ORDER };
 
 // Define dependencies between sections for contextual review
 export const SECTION_DEPENDENCIES: Record<string, string[]> = {
@@ -151,6 +139,13 @@ type ReviewInput = {
   requestHeaders?: Record<string, string | string[] | undefined>;
   tenantContext?: any;
   stageCode?: string;
+  /**
+   * Figures, Gantt charts or budget workbooks the user attached to this
+   * section. When present the review runs multimodally against the uploaded
+   * files instead of through the text-only gateway, so the model can actually
+   * read the artefact the section refers to.
+   */
+  attachments?: { google_file_id: string; displayName?: string }[];
 };
 
 type ReviewResult = {
@@ -598,13 +593,25 @@ ${summarizePreviousReview(contextSection.ai_review_json)}` : ''}`;
 
   let responseText: string | null = null;
 
-  responseText = await executeConfiguredGrantReviewerReview({
-    prompt: gatewayPrompt,
-    requestHeaders: input.requestHeaders,
-    tenantContext: input.tenantContext,
-    stageCode: input.stageCode,
-    promptCacheKey: `reviewer:section-review:${promptPrefixCacheKey(stablePrefix)}`,
-  });
+  const attachments = Array.isArray(input.attachments) ? input.attachments.filter(a => a?.google_file_id) : [];
+
+  if (attachments.length > 0) {
+    // The configured gateway is text-only, so a section with uploaded figures
+    // has to go direct to a multimodal model or the files are silently ignored.
+    responseText = await generateFromGeminiWithFiles(
+      [stablePrefix, sectionTail],
+      attachments,
+      GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL
+    );
+  } else {
+    responseText = await executeConfiguredGrantReviewerReview({
+      prompt: gatewayPrompt,
+      requestHeaders: input.requestHeaders,
+      tenantContext: input.tenantContext,
+      stageCode: input.stageCode,
+      promptCacheKey: `reviewer:section-review:${promptPrefixCacheKey(stablePrefix)}`,
+    });
+  }
 
   if (!responseText && modelType === 'O') {
     // Use OpenAI
