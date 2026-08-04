@@ -59,6 +59,30 @@ export type ProjectFilters = {
   yearTo?: number
 }
 
+export type FundingMatchCall = {
+  id: string
+  agencyName: string
+  schemeTitle: string
+  shortDescription: string
+  closeDate: string | null
+  isRolling: boolean
+  amountMin: number | null
+  amountMax: number | null
+  currency: string | null
+  eligibilitySummary: string
+  officialUrls: string[]
+  score: number
+  matchReasons: string[]
+}
+
+export type FundingMatchState = {
+  agencyName: string
+  calls: FundingMatchCall[]
+  rankedSemantically: boolean
+  lowConfidence: boolean
+  matchedAt: string
+}
+
 export type IdeaAnalysisSummary = {
   id: string
   title: string

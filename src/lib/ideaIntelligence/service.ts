@@ -26,12 +26,19 @@ import {
   buildFacetCoverage,
   buildFundedPortfolio,
   formatBudget,
+  projectStatus,
   rankAgencyRecommendations,
   type AgencyRecommendation,
   type FundedPortfolio,
   type OpenCallSummary,
   type ProjectDelivery,
 } from '@/lib/ideaIntelligence/whitespace'
+import {
+  buildPriorWork,
+  type PriorWork,
+  type PriorWorkAwardExtras,
+  type PriorWorkGap,
+} from '@/lib/ideaIntelligence/priorWork'
 import { publicProjectSearchService, type PublicProjectSearchItem } from '@/lib/publicProjects/searchService'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
 
@@ -139,6 +146,13 @@ export type WhitespaceDirection = {
   evidence: WhitespaceEvidenceRef[]
   confidence: 'strong' | 'moderate' | 'thin'
   bestFitAgency: string | null
+  /**
+   * Deterministic facts merged on from the prior-work pass: why the aspect
+   * reads as open, what work at this size has historically cost, and how long
+   * ago the neighbouring awards were sanctioned. Optional because runs made
+   * before the prior-work pass existed do not carry them.
+   */
+  gap?: PriorWorkGap | null
 }
 
 export type FundedTheme = {
@@ -822,13 +836,34 @@ function buildFallbackDirections(
   }))
 }
 
-async function loadProjectDeliveries(projectIds: string[]): Promise<ProjectDelivery[]> {
-  if (!projectIds.length) return []
+function countJsonEntries(value: unknown) {
+  if (Array.isArray(value)) return value.length
+  // Some connectors store a keyed object rather than a list; a non-empty object
+  // still means the award reported something.
+  if (value && typeof value === 'object') return Object.keys(value).length
+  return 0
+}
+
+/**
+ * The award fields the search projection does not carry: delivery status, and
+ * the patents and publications each award reported. One query, no external API
+ * call — and the patent counts are a direct record, never an inference about
+ * which patent came from which award.
+ */
+async function loadProjectRecords(projectIds: string[], now = new Date()): Promise<{
+  deliveries: ProjectDelivery[]
+  extras: PriorWorkAwardExtras[]
+}> {
+  if (!projectIds.length) return { deliveries: [], extras: [] }
   const rows = await prisma.publicProject.findMany({
     where: { id: { in: projectIds } },
-    select: { id: true, endDate: true, durationMonths: true, outputAchievedText: true, outcomes: true },
+    select: {
+      id: true, endDate: true, durationMonths: true, outputAchievedText: true,
+      outcomes: true, patents: true, publications: true, sanctionYear: true,
+    },
   })
-  return rows.map((row) => ({
+
+  const deliveries = rows.map((row) => ({
     id: row.id,
     endDate: row.endDate ? row.endDate.toISOString() : null,
     durationMonths: row.durationMonths,
@@ -837,6 +872,19 @@ async function loadProjectDeliveries(projectIds: string[]): Promise<ProjectDeliv
       || (Array.isArray(row.outcomes) && row.outcomes.length > 0)
     ),
   }))
+  const deliveryById = new Map(deliveries.map((item) => [item.id, item]))
+
+  return {
+    deliveries,
+    extras: rows.map((row): PriorWorkAwardExtras => ({
+      id: row.id,
+      durationMonths: row.durationMonths,
+      hasReportedOutput: Boolean(deliveryById.get(row.id)?.hasReportedOutput),
+      patentCount: countJsonEntries(row.patents),
+      publicationCount: countJsonEntries(row.publications),
+      status: projectStatus(deliveryById.get(row.id), row.sanctionYear, now),
+    })),
+  }
 }
 
 function normalizeWhitespaceDirections(
@@ -849,8 +897,10 @@ function normalizeWhitespaceDirections(
   const agencyLookup = new Map(knownAgencies.map((agency) => [agency.toLowerCase(), agency]))
   return (Array.isArray(raw) ? raw : [])
     .map((item: any, index: number): WhitespaceDirection | null => {
-      const title = normalizeText(item?.title, 180)
-      const stillMissing = normalizeText(item?.stillMissing, 700)
+      // Hard caps, not suggestions: an unbounded prose field is an invitation to
+      // pad, and padding is what made this report unreadable.
+      const title = normalizeText(item?.title, 110)
+      const stillMissing = normalizeText(item?.stillMissing, 240)
       if (!title || !stillMissing) return null
       const evidence = (Array.isArray(item?.evidence) ? item.evidence : [])
         .map((entry: any) => {
@@ -878,13 +928,16 @@ function normalizeWhitespaceDirections(
       return {
         id: `direction-${index + 1}`,
         title,
-        whyOpen: normalizeText(item?.whyOpen, 700),
-        alreadyCovered: normalizeText(item?.alreadyCovered, 700),
+        // Superseded by the deterministic gap reading, which is computed from
+        // the records rather than narrated. Kept on the type so runs made before
+        // the prior-work pass still render.
+        whyOpen: '',
+        alreadyCovered: '',
         stillMissing,
         example: {
-          projectIdea: normalizeText(item?.example?.projectIdea, 900),
-          whatYouWouldBuild: normalizeText(item?.example?.whatYouWouldBuild, 700),
-          firstProof: normalizeText(item?.example?.firstProof, 700),
+          projectIdea: normalizeText(item?.example?.projectIdea, 300),
+          whatYouWouldBuild: normalizeText(item?.example?.whatYouWouldBuild, 180),
+          firstProof: normalizeText(item?.example?.firstProof, 220),
         },
         relatedFacets,
         evidence,
@@ -894,6 +947,54 @@ function normalizeWhitespaceDirections(
     })
     .filter((item): item is WhitespaceDirection => Boolean(item))
     .slice(0, MAX_WHITESPACE_DIRECTIONS)
+}
+
+const GAP_READING_PRIORITY: Record<PriorWorkGap['reading'], number> = {
+  blocked: 0,
+  attempted_no_output: 1,
+  unexplored: 2,
+}
+
+/**
+ * Attaches each deterministic gap record to the direction that claims its facet,
+ * then adds back any open aspect the model skipped — blocked ones first. An
+ * aspect a live patent already claims must never quietly drop out of the report
+ * just because the narration ran out of room.
+ */
+function withGapFacts(
+  directions: WhitespaceDirection[],
+  gaps: PriorWorkGap[],
+  topAgency: string | null
+): WhitespaceDirection[] {
+  const byFacet = new Map(gaps.map((gap) => [gap.facet.toLowerCase(), gap]))
+  const claimed = new Set<string>()
+  const narrated = directions.map((direction) => {
+    const gap = direction.relatedFacets
+      .map((facet) => byFacet.get(facet.toLowerCase()))
+      .find((entry): entry is PriorWorkGap => Boolean(entry)) || null
+    if (gap) claimed.add(gap.facet.toLowerCase())
+    return { ...direction, gap }
+  })
+
+  const skipped = gaps
+    .filter((gap) => !claimed.has(gap.facet.toLowerCase()))
+    .sort((a, b) => GAP_READING_PRIORITY[a.reading] - GAP_READING_PRIORITY[b.reading])
+    .slice(0, 2)
+    .map((gap): WhitespaceDirection => ({
+      id: gap.id,
+      title: gap.facet,
+      whyOpen: '',
+      alreadyCovered: '',
+      stillMissing: gap.readingBasis,
+      example: { projectIdea: '', whatYouWouldBuild: '', firstProof: '' },
+      relatedFacets: [gap.facet],
+      evidence: [],
+      confidence: 'thin',
+      bestFitAgency: topAgency,
+      gap,
+    }))
+
+  return [...narrated, ...skipped]
 }
 
 function normalizeFundedThemes(raw: unknown, validProjectIds: Set<string>): FundedTheme[] {
@@ -2355,7 +2456,9 @@ ${promptLines([
       // Deterministic ledger of what the sanctioned corpus already funded, who
       // funded it, and how much of it is still running. The report narrates this;
       // it never produces its own counts.
-      const deliveries = await loadProjectDeliveries(projects.map((project) => project.id)).catch(() => [] as ProjectDelivery[])
+      const projectRecords = await loadProjectRecords(projects.map((project) => project.id))
+        .catch(() => ({ deliveries: [] as ProjectDelivery[], extras: [] as PriorWorkAwardExtras[] }))
+      const deliveries = projectRecords.deliveries
       const fundedPortfolio: FundedPortfolio = buildFundedPortfolio(
         projects.map((project) => ({
           id: project.id,
@@ -2373,6 +2476,30 @@ ${promptLines([
         deliveries
       )
       const facetCoverage = buildFacetCoverage(landscapeSignals.crossCorpusFacets)
+      // One ranked list of "someone already did this" across both corpora, the
+      // facet-by-facet coverage the openings are read off, and why each opening
+      // is open. All deterministic — the report only narrates it.
+      const priorWork: PriorWork = buildPriorWork({
+        awards: projects.map((project) => ({
+          id: project.id,
+          title: project.title,
+          fundingAgency: project.fundingAgency,
+          sourceName: project.sourceName,
+          sourceKey: project.sourceKey,
+          schemeName: project.schemeName,
+          sanctionYear: project.sanctionYear,
+          budgetAmount: project.budgetAmount,
+          budgetCurrency: project.budgetCurrency,
+          primaryInstitutionName: project.primaryInstitutionName,
+          state: project.state,
+          relevanceScore: project.relevanceScore,
+        })),
+        awardExtras: projectRecords.extras,
+        patents: evidenceSearch.patents,
+        awardAssessments: analysis.items.map((item) => ({ id: item.projectId, facetAssessments: item.facetAssessments })),
+        patentAssessments: analysis.patentItems.map((item) => ({ id: item.evidenceId, facetAssessments: item.facetAssessments })),
+        signals: landscapeSignals.crossCorpusFacets,
+      })
       const openCallSummaries: OpenCallSummary[] = fundingCalls.map((call) => ({
         id: call.id,
         agencyName: call.agencyName,
@@ -2392,6 +2519,7 @@ ${promptLines([
         fundedPortfolio,
         facetCoverage,
         agencyRecommendations,
+        priorWork,
       }
       await prisma.ideaIntelligenceRun.update({
         where: { id: runId }, data: { analysisJson: analysis as any, scoresJson: scores as any, currentStage: 4 },
@@ -2470,6 +2598,17 @@ ${JSON.stringify(facetCoverage)}
 FACET-BY-FACET CROSS-CORPUS SIGNAL:
 ${JSON.stringify(landscapeSignals.crossCorpusFacets)}
 
+WHY EACH OPEN ASPECT IS OPEN (already decided deterministically — do not re-explain, contradict, or re-derive):
+${JSON.stringify(priorWork.gaps.map((gap) => ({
+  facet: gap.facet,
+  reading: gap.reading,
+  basis: gap.readingBasis,
+  typicalAward: formatBudget(gap.effort?.medianBudget ?? null, gap.effort?.budgetCurrency ?? null),
+  typicalDurationMonths: gap.effort?.medianDurationMonths ?? null,
+  latestNeighbouringAward: gap.latestActivityYear,
+  looksStale: gap.stale,
+})))}
+
 ${promptSections([
   ['PUBLICATION EVIDENCE', evidenceSearch.publications.slice(0, 8)],
   ['PATENT EVIDENCE', evidenceSearch.patents.slice(0, 8)],
@@ -2481,7 +2620,7 @@ RANKED FUNDERS (ranking and numbers are already decided — you only supply the 
 ${JSON.stringify(agencyRecommendations.map((item) => ({ agencyName: item.agencyName, fundedNearbyCount: item.fundedNearbyCount, activeYears: item.activeYears, schemes: item.schemes })))}
 
 Return JSON only:
-{"headline":"2 sentences a researcher can act on: what the sanctioned corpus already covers, and where the opening is","alreadyDoneSummary":"one short paragraph on what agencies have already funded in this space, using the ledger numbers","fundedThemes":[{"theme":"a theme agencies have already funded, in plain words","projectCount":0,"agencies":["agency names from the ledger"],"exampleProjectIds":["exact sanctioned project ids"]}],"whitespaceDirections":[{"title":"a specific, pursuable direction in plain words (<=15 words)","whyOpen":"why the sanctioned evidence shows this is not yet covered","alreadyCovered":"what the funded projects DO cover next to this, so the contrast is visible","stillMissing":"exactly what nobody has been funded to do yet","example":{"projectIdea":"a concrete worked example of a project in this direction — 2 to 3 sentences, name the setting, the population or system, and the duration","whatYouWouldBuild":"the actual deliverable or artefact","firstProof":"the first result that would show it works, achievable in 6-12 months"},"relatedFacets":["exact facets from the coverage lists"],"evidence":[{"sourceType":"${['funded_project', evidenceSearch.publications.length > 0 && 'publication', evidenceSearch.patents.length > 0 && 'patent', evidenceSearch.webResults.length > 0 && 'web', fundingCalls.length > 0 && 'call'].filter(Boolean).join('|')}","evidenceId":"exact id from supplied data","quote":"short verbatim quote from supplied text, or null"}],"confidence":"${externalEvidenceEnabled ? 'strong|moderate|thin' : 'moderate|thin'}","bestFitAgency":"exact agency name from the ledger, or null"}],"agencyNarratives":[{"agencyName":"exact agency name from RANKED FUNDERS","whyThisAgency":"one sentence tying this funder's own sanctioned record to the idea and the open direction"}],"nextSteps":["at most 3 concrete actions"],"evidenceDisclaimer":"one sentence on what this analysis can and cannot tell them"}
+{"headline":"2 sentences a researcher can act on: what the sanctioned corpus already covers, and where the opening is","alreadyDoneSummary":"one short paragraph on what agencies have already funded in this space, using the ledger numbers","fundedThemes":[{"theme":"a theme agencies have already funded, in plain words","projectCount":0,"agencies":["agency names from the ledger"],"exampleProjectIds":["exact sanctioned project ids"]}],"whitespaceDirections":[{"title":"a specific, pursuable direction in plain words (<=12 words)","stillMissing":"exactly what nobody has been funded to do yet (<=30 words)","example":{"projectIdea":"a concrete worked example — name the setting, the population or system (<=35 words)","whatYouWouldBuild":"the deliverable or artefact (<=20 words)","firstProof":"the first result that would show it works, achievable in 6-12 months (<=25 words)"},"relatedFacets":["exact facets from the coverage lists"],"evidence":[{"sourceType":"${['funded_project', evidenceSearch.publications.length > 0 && 'publication', evidenceSearch.patents.length > 0 && 'patent', evidenceSearch.webResults.length > 0 && 'web', fundingCalls.length > 0 && 'call'].filter(Boolean).join('|')}","evidenceId":"exact id from supplied data","quote":"short verbatim quote from supplied text, or null"}],"confidence":"${externalEvidenceEnabled ? 'strong|moderate|thin' : 'moderate|thin'}","bestFitAgency":"exact agency name from the ledger, or null"}],"agencyNarratives":[{"agencyName":"exact agency name from RANKED FUNDERS","whyThisAgency":"one sentence tying this funder's own sanctioned record to the idea and the open direction"}],"nextSteps":["at most 3 concrete actions"],"evidenceDisclaimer":"one sentence on what this analysis can and cannot tell them"}
 
 Rules:
 ${promptLines([
@@ -2490,10 +2629,12 @@ ${promptLines([
   !externalEvidenceEnabled && '- Only the sanctioned-project corpus was searched. No literature, patent, or web check was run, so confidence can never be "strong" and the disclaimer must say the read is based on sanctioned awards alone.',
   !fundingCalls.length && '- No funding call was searched. Do not name, imply, or invent a specific call, scheme deadline, or application route.',
   '- Every direction must include a concrete worked example. Vague directions like "explore AI applications" are useless; name the setting, the users, and the artefact.',
+  priorWork.gaps.length > 0 && '- Prefer directions that map onto an aspect listed in WHY EACH OPEN ASPECT IS OPEN, and put that exact facet in relatedFacets. Its reading and basis are already written — do not restate them in your own words.',
+  priorWork.gaps.some((gap) => gap.reading === 'blocked') && '- Where the reading is "blocked", the direction must be a way around the patent, not a restatement of the blocked aspect.',
   '- Reuse the ledger\'s counts, years, and award sizes verbatim. Never state a count you were not given.',
   '- Never predict funding success, never claim novelty, never claim something is "first of its kind".',
   '- exampleProjectIds and evidenceIds must be exact ids from the supplied data.',
-  '- Keep every field short. This report is read in two minutes.',
+  '- Obey every stated word limit. Every sentence must carry a number, a name, a date or a quote; drop any sentence that carries none.',
 ])}`,
         })
         rawReport = reportResponse ? extractJsonObject(reportResponse.rawText) as Record<string, any> : {}
@@ -2514,6 +2655,11 @@ ${promptLines([
           ? direction
           : { ...direction, confidence: 'moderate' as const }
       ))
+      const directionsWithGaps = withGapFacts(
+        whitespaceDirections,
+        priorWork.gaps,
+        agencyRecommendations[0]?.agencyName || null
+      )
       const fundedThemes = normalizeFundedThemes(rawReport.fundedThemes, projectIdSet)
       const headline = normalizeText(rawReport.headline, 700)
         || `${fundedPortfolio.projectCount} comparable sanctioned project${fundedPortfolio.projectCount === 1 ? '' : 's'} were retrieved for this idea. Review the facet coverage below before claiming any part of it is unaddressed.`
@@ -2524,8 +2670,8 @@ ${promptLines([
         executiveVerdict: headline,
         alreadyDoneSummary: normalizeText(rawReport.alreadyDoneSummary, 1200),
         fundedThemes,
-        whitespaceDirections: whitespaceDirections.length
-          ? whitespaceDirections
+        whitespaceDirections: directionsWithGaps.length
+          ? directionsWithGaps
           : buildFallbackDirections(facetCoverage, fundedPortfolio, projects),
         agencyRecommendations: applyAgencyNarratives(agencyRecommendations, rawReport.agencyNarratives),
         nextSteps: (Array.isArray(rawReport.nextSteps) ? rawReport.nextSteps : [])
