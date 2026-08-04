@@ -15,6 +15,7 @@ import {
   matchSegmentsToTargets,
   splitProposalIntoSegments,
 } from '@/lib/reviewer/proposalSplit'
+import { resolveBucketKey } from '@/lib/reviewer/buckets'
 import { extractTextFromDocumentBytes } from '@/lib/reviewer/sourceText'
 import prisma from '../../../../../lib/prisma'
 
@@ -140,6 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: true,
         user_input: true,
         reviewerBucketKey: true,
+        mappingJson: true,
       },
     })
 
@@ -168,11 +170,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Several segments may target one section (a proposal often splits
       // Methodology into sub-headings), so merge by title in the given order.
+      // Only the sections the preview offered. Without this any string the
+      // client sent became a brand-new section, so one typo left an orphan
+      // nothing would ever review.
+      const offeredTitles = new Set(targets.map((target) => target.title))
+      const rejected: string[] = []
+
       const merged = new Map<string, string[]>()
       for (const assignment of assignments) {
         const title = String(assignment?.targetTitle || '').trim()
         const blockText = String(assignment?.body || '').trim()
         if (!title || !blockText) continue
+        if (!offeredTitles.has(title)) {
+          if (!rejected.includes(title)) rejected.push(title)
+          continue
+        }
         const heading = String(assignment?.heading || '').trim()
         const block = heading && !blockText.startsWith(heading) ? `## ${heading}\n${blockText}` : blockText
         const bucket = merged.get(title) || []
@@ -181,7 +193,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (merged.size === 0) {
-        return res.status(400).json({ error: 'Every assignment was empty. Assign at least one section.' })
+        return res.status(400).json({
+          error: rejected.length
+            ? `No recognised section was assigned. Unknown: ${rejected.join(', ')}`
+            : 'Every assignment was empty. Assign at least one section.',
+        })
       }
 
       const written = []
@@ -221,7 +237,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               previous_section_id: existing.id,
               is_revision: true,
               review_linked_context: true,
-              reviewerBucketKey: existing.reviewerBucketKey || null,
+              reviewerBucketKey: existing.reviewerBucketKey || resolveBucketKey({ section_title: title }),
+              ...(existing.mappingJson ? { mappingJson: existing.mappingJson } : {}),
             },
             select: { id: true, version: true },
           })
@@ -238,13 +255,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: 'draft',
             version: 1,
             review_linked_context: true,
+            reviewerBucketKey: resolveBucketKey({ section_title: title }),
           },
           select: { id: true, version: true },
         })
         written.push({ title, sectionId: created.id, version: created.version, mode: 'created' })
       }
 
-      return res.status(200).json({ written, skipped })
+      return res.status(200).json({
+        written,
+        skipped: [
+          ...skipped,
+          ...rejected.map((title) => ({ title, reason: 'unknown_section' })),
+        ],
+      })
     }
 
     // ---- Preview ----------------------------------------------------------

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  SECTION_ORDER,
   compareSectionTitles,
+  compareSections,
   countReviewerSections,
   groupReviewerSections,
   reportFreshness,
@@ -22,11 +22,33 @@ function section(overrides: Record<string, any> = {}) {
 }
 
 describe('section ordering', () => {
-  it('uses the title the section picker actually creates', () => {
-    // The final-review page carried its own copy saying 'Timeline', so a real
-    // "Project Timeline" section scored indexOf -1 and sorted to the bottom.
-    expect(SECTION_ORDER).toContain('Project Timeline')
-    expect(SECTION_ORDER).not.toContain('Timeline')
+  it('orders every naming vocabulary the same way', () => {
+    // The old guard here asserted that the ordering list contained the exact
+    // title the picker creates. That invariant was the bug: it only ever held
+    // for one of the three vocabularies, and the titles the seeder actually
+    // creates matched none of them, so real workspaces sorted alphabetically.
+    // Ordering keys off the bucket now, so all three agree by construction.
+    const picker = ['Budget Justification', 'Abstract', 'Methodology', 'Project Timeline']
+    const seeded = ['Budget & Justification', 'Summary / Abstract', 'Methodology / Approach', 'Workplan & Timeline']
+    const wild = ['Detailed Budget', 'Executive Summary', 'Proposed Methodology', 'Plan of Work']
+
+    for (const list of [picker, seeded, wild]) {
+      expect([...list].sort(compareSectionTitles), list.join(' | ')).toEqual([
+        list[1], // summary
+        list[2], // methodology
+        list[3], // workplan
+        list[0], // budget
+      ])
+    }
+  })
+
+  it('prefers a stored bucket key over the title', () => {
+    // A renamed section must keep its place in the proposal.
+    const sorted = [
+      { section_title: 'Methodology' },
+      { section_title: 'Zebra Annexe', reviewerBucketKey: 'summary' },
+    ].sort(compareSections)
+    expect(sorted.map((s) => s.section_title)).toEqual(['Zebra Annexe', 'Methodology'])
   })
 
   it('orders by the proposal, not alphabetically', () => {
@@ -34,9 +56,12 @@ describe('section ordering', () => {
     expect(sorted).toEqual(['Abstract', 'Methodology', 'Budget Justification'])
   })
 
-  it('puts unknown titles last, alphabetically among themselves', () => {
-    const sorted = ['Zebra Annexe', 'Abstract', 'Custom Block'].sort(compareSectionTitles)
-    expect(sorted).toEqual(['Abstract', 'Custom Block', 'Zebra Annexe'])
+  it('puts sections it cannot place last, with recognised tail sections in order', () => {
+    const sorted = ['Conclusion', 'Zebra Annexe', 'Abstract', 'Custom Block'].sort(compareSectionTitles)
+    // Abstract is a real bucket, so it leads. The rest fall to `other`, where
+    // an annexe and a conclusion have known positions and anything genuinely
+    // unrecognised sits between them.
+    expect(sorted).toEqual(['Abstract', 'Zebra Annexe', 'Custom Block', 'Conclusion'])
   })
 })
 

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import axios from 'axios';
 import Head from 'next/head';
-import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
+import { compareSections, compareSectionTitles } from '@/lib/reviewer/sectionGrouping';
 import { 
   FaCheck, 
   FaTimes, 
@@ -293,34 +293,12 @@ export default function SharedReport() {
   };
 
   const getSortedSections = (sectionsList: SectionReview[]) => {
-    return [...sectionsList].sort((a, b) => {
-      const aIndex = SECTION_ORDER.indexOf(a.section_title);
-      const bIndex = SECTION_ORDER.indexOf(b.section_title);
-      
-      if (aIndex === -1 && bIndex === -1) {
-        return a.section_title.localeCompare(b.section_title);
-      }
-      if (aIndex === -1) return 1;
-      if (bIndex === -1) return -1;
-      
-      return aIndex - bIndex;
-    });
+    return [...sectionsList].sort(compareSections);
   };
 
   const getSortedGroupedSections = () => {
     return Object.entries(groupedSections)
-      .sort(([titleA], [titleB]) => {
-        const aIndex = SECTION_ORDER.indexOf(titleA);
-        const bIndex = SECTION_ORDER.indexOf(titleB);
-        
-        if (aIndex === -1 && bIndex === -1) {
-          return titleA.localeCompare(titleB);
-        }
-        if (aIndex === -1) return 1;
-        if (bIndex === -1) return -1;
-        
-        return aIndex - bIndex;
-      });
+      .sort(([titleA], [titleB]) => compareSectionTitles(titleA, titleB));
   };
 
   const calculateScores = () => {

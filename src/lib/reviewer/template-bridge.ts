@@ -12,6 +12,7 @@ import {
   bucketFromText,
   dedupeRuleText as dedupe,
   normalizeBucketKey,
+  resolveBucketKey,
 } from '@/lib/reviewer/buckets'
 import { normalizeManualRubric, type ReviewerManualRubric } from '@/lib/reviewer/manualRubric'
 import {
@@ -477,16 +478,30 @@ export async function refreshIntegratedReviewerCall(input: {
       where: { call_id: reviewerCall.id },
       orderBy: [{ version: 'desc' }, { last_reviewed_at: 'desc' }],
     })
-    const latestByBucket = new Map<string, any>()
+    // Several sections can legitimately share a bucket (Introduction and
+    // Literature Review are both `problem_need`), so keep them all and let the
+    // lookup below prefer the one actually named after this mapping. Binding to
+    // whichever row happened to sort first silently rewrote the wrong section.
+    const sectionsByBucket = new Map<string, any[]>()
     for (const section of existingSections) {
-      const bucketKey = section.reviewerBucketKey || bucketFromText(section.section_title)
-      if (!latestByBucket.has(bucketKey)) {
-        latestByBucket.set(bucketKey, section)
-      }
+      const bucketKey = resolveBucketKey(section)
+      const bucket = sectionsByBucket.get(bucketKey)
+      if (bucket) bucket.push(section)
+      else sectionsByBucket.set(bucketKey, [section])
+    }
+
+    const pickExistingSection = (bucketKey: string, label: string) => {
+      const candidates = sectionsByBucket.get(bucketKey)
+      if (!candidates || candidates.length === 0) return undefined
+      const wanted = String(label || '').trim().toLowerCase()
+      return (
+        candidates.find((section) => String(section.section_title || '').trim().toLowerCase() === wanted)
+        || candidates[0]
+      )
     }
 
     for (const mapping of mappings) {
-      const existingSection = latestByBucket.get(mapping.bucketKey)
+      const existingSection = pickExistingSection(mapping.bucketKey, mapping.bucketLabel)
       const mappingJson = {
         source: 'grant_section_mapping',
         bucketKey: mapping.bucketKey,

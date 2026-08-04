@@ -13,6 +13,7 @@ import {
   FaMagic,
   FaSpinner,
 } from 'react-icons/fa'
+import { countProposalWords } from '@/lib/reviewer/proposalSplit'
 import ReviewerShell from '@/components/reviewer/ReviewerShell'
 
 const SKIP_VALUE = '__skip__'
@@ -26,6 +27,7 @@ const MATCH_LABELS = {
   continuation: 'Continues the block above',
   excluded: 'Reference or annexure — not imported',
   none: 'Not matched — choose a section',
+  manual: 'Moved here by you',
 }
 
 const MATCH_STYLES = {
@@ -37,6 +39,7 @@ const MATCH_STYLES = {
   continuation: 'bg-cobalt-100 text-cobalt-800',
   excluded: 'bg-nickel-200 text-nickel-700',
   none: 'bg-amber-100 text-amber-800',
+  manual: 'bg-cobalt-100 text-cobalt-800',
 }
 
 export default function ImportProposalPage() {
@@ -70,29 +73,126 @@ export default function ImportProposalPage() {
     loadWorkspace()
   }, [id, status])
   const [preview, setPreview] = useState(null)
-  const [assignments, setAssignments] = useState({})
+  // Blocks, not segments: a block starts as one segment but can be split when
+  // the splitter swept two sections into one and the user pulls part of the
+  // text back out.
+  const [blocks, setBlocks] = useState([])
+  const [selection, setSelection] = useState(null)
   const [result, setResult] = useState(null)
   const [expanded, setExpanded] = useState({})
+  const bodyRefs = useRef({})
 
   const targets = preview?.targets || []
 
+  const seedBlocks = (segments) =>
+    (segments || []).map((segment) => ({
+      key: String(segment.order),
+      heading: segment.heading,
+      body: segment.body,
+      words: segment.words,
+      matchedBy: segment.matchedBy,
+      target: segment.targetTitle || SKIP_VALUE,
+      split: false,
+    }))
+
   const assignedCounts = useMemo(() => {
     const counts = {}
-    for (const segment of preview?.segments || []) {
-      const target = assignments[segment.order]
-      if (!target || target === SKIP_VALUE) continue
-      counts[target] = (counts[target] || 0) + 1
+    for (const block of blocks) {
+      if (!block.target || block.target === SKIP_VALUE) continue
+      counts[block.target] = (counts[block.target] || 0) + 1
     }
     return counts
-  }, [preview, assignments])
+  }, [blocks])
 
   const unassignedCount = useMemo(
-    () =>
-      (preview?.segments || []).filter(
-        (segment) => !assignments[segment.order] || assignments[segment.order] === SKIP_VALUE
-      ).length,
-    [preview, assignments]
+    () => blocks.filter((block) => !block.target || block.target === SKIP_VALUE).length,
+    [blocks]
   )
+
+  const hasSplits = useMemo(() => blocks.some((block) => block.split), [blocks])
+
+  /**
+   * Where the current selection sits inside the block's own text.
+   *
+   * Measured against the rendered container rather than by searching for the
+   * string, so repeating a phrase twice in one block still moves the copy the
+   * user actually highlighted.
+   */
+  const captureSelection = (blockKey) => {
+    const active = typeof window !== 'undefined' ? window.getSelection() : null
+    if (!active || active.isCollapsed || active.rangeCount === 0) {
+      setSelection(null)
+      return
+    }
+
+    const text = active.toString()
+    if (!text.trim()) {
+      setSelection(null)
+      return
+    }
+
+    const container = bodyRefs.current[blockKey]
+    const range = active.getRangeAt(0)
+    if (!container || !container.contains(range.commonAncestorContainer)) {
+      setSelection(null)
+      return
+    }
+
+    const upToStart = document.createRange()
+    upToStart.selectNodeContents(container)
+    upToStart.setEnd(range.startContainer, range.startOffset)
+    const start = upToStart.toString().length
+
+    setSelection({ key: blockKey, start, end: start + text.length, text })
+  }
+
+  /** Pull the highlighted run out of its block and give it its own section. */
+  const moveSelectionTo = (targetTitle) => {
+    if (!selection) return
+    const { key, start, end } = selection
+
+    setBlocks((previous) => {
+      const index = previous.findIndex((block) => block.key === key)
+      if (index === -1) return previous
+
+      const block = previous[index]
+      const before = block.body.slice(0, start).trim()
+      const moved = block.body.slice(start, end).trim()
+      const after = block.body.slice(end).trim()
+      if (!moved) return previous
+
+      const parts = []
+      const push = (body, target, isMoved) => {
+        if (!body) return
+        parts.push({
+          ...block,
+          key: `${block.key}::${parts.length}`,
+          // The heading names the original section, so it stays with the first
+          // piece that remains there.
+          heading: parts.length === 0 ? block.heading : '',
+          body,
+          words: countProposalWords(body),
+          matchedBy: isMoved ? 'manual' : block.matchedBy,
+          target,
+          split: true,
+        })
+      }
+
+      push(before, block.target, false)
+      push(moved, targetTitle, true)
+      push(after, block.target, false)
+
+      return [...previous.slice(0, index), ...parts, ...previous.slice(index + 1)]
+    })
+
+    setSelection(null)
+    if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges()
+  }
+
+  const resetSplits = () => {
+    setBlocks(seedBlocks(preview?.segments))
+    setSelection(null)
+  }
 
   const runPreview = async (payload, isFile) => {
     setAnalyzing(true)
@@ -109,11 +209,8 @@ export default function ImportProposalPage() {
       setPreview(response.data)
       // Seed the dropdowns with what the matcher decided; the user overrides
       // only what it got wrong.
-      const seeded = {}
-      for (const segment of response.data.segments || []) {
-        seeded[segment.order] = segment.targetTitle || SKIP_VALUE
-      }
-      setAssignments(seeded)
+      setBlocks(seedBlocks(response.data.segments))
+      setSelection(null)
     } catch (nextError) {
       setError(
         nextError?.response?.data?.error ||
@@ -143,12 +240,12 @@ export default function ImportProposalPage() {
   }
 
   const handleCommit = async () => {
-    const payload = (preview?.segments || [])
-      .filter((segment) => assignments[segment.order] && assignments[segment.order] !== SKIP_VALUE)
-      .map((segment) => ({
-        targetTitle: assignments[segment.order],
-        heading: segment.heading,
-        body: segment.body,
+    const payload = blocks
+      .filter((block) => block.target && block.target !== SKIP_VALUE)
+      .map((block) => ({
+        targetTitle: block.target,
+        heading: block.heading,
+        body: block.body,
       }))
 
     if (payload.length === 0) {
@@ -288,7 +385,7 @@ export default function ImportProposalPage() {
                     Check the mapping before importing
                   </h2>
                   <p className="mt-1 text-sm text-nickel-600">
-                    {preview.segments.length} block(s) found · {preview.words.toLocaleString()} words
+                    {blocks.length} block(s) · {preview.words.toLocaleString()} words
                     {preview.filename ? ` · ${preview.filename}` : ''}
                   </p>
                 </div>
@@ -300,6 +397,15 @@ export default function ImportProposalPage() {
                   >
                     Start over
                   </button>
+                  {hasSplits ? (
+                    <button
+                      type="button"
+                      onClick={resetSplits}
+                      className="inline-flex items-center rounded border border-nickel-300 px-4 py-2 text-nickel-700 hover:bg-nickel-50"
+                    >
+                      Undo my splits
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={handleCommit}
@@ -357,24 +463,25 @@ export default function ImportProposalPage() {
             </div>
 
             <div className="space-y-4">
-              {preview.segments.map((segment) => {
-                const assigned = assignments[segment.order] || SKIP_VALUE
+              {blocks.map((block) => {
+                const assigned = block.target || SKIP_VALUE
                 const target = targets.find((item) => item.title === assigned)
                 const overWordLimit =
-                  target?.wordLimit && segment.words > target.wordLimit ? target.wordLimit : null
+                  target?.wordLimit && block.words > target.wordLimit ? target.wordLimit : null
+                const activeSelection = selection?.key === block.key ? selection : null
 
                 return (
-                  <div key={segment.order} className="nk-panel">
+                  <div key={block.key} className="nk-panel">
                     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-nickel-100 px-5 py-4">
                       <div className="min-w-0">
                         <div className="font-medium text-nickel-900 break-words">
-                          {segment.heading || <span className="italic text-nickel-500">Untitled opening block</span>}
+                          {block.heading || <span className="italic text-nickel-500">Untitled opening block</span>}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                          <span className={`rounded-full px-2 py-0.5 ${MATCH_STYLES[segment.matchedBy]}`}>
-                            {MATCH_LABELS[segment.matchedBy]}
+                          <span className={`rounded-full px-2 py-0.5 ${MATCH_STYLES[block.matchedBy]}`}>
+                            {MATCH_LABELS[block.matchedBy]}
                           </span>
-                          <span className="text-nickel-500">{segment.words} words</span>
+                          <span className="text-nickel-500">{block.words} words</span>
                           {overWordLimit ? (
                             <span className="text-red-700">
                               over the call's {overWordLimit}-word limit for this section
@@ -386,7 +493,11 @@ export default function ImportProposalPage() {
                       <select
                         value={assigned}
                         onChange={(event) =>
-                          setAssignments((prev) => ({ ...prev, [segment.order]: event.target.value }))
+                          setBlocks((previous) =>
+                            previous.map((item) =>
+                              item.key === block.key ? { ...item, target: event.target.value } : item
+                            )
+                          )
                         }
                         className="rounded-md border border-nickel-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
                       >
@@ -400,19 +511,77 @@ export default function ImportProposalPage() {
                     </div>
 
                     <div className="px-5 py-4">
-                      <p className={`whitespace-pre-line text-sm text-nickel-700 ${expanded[segment.order] ? '' : 'line-clamp-3'}`}>
-                        {segment.body}
+                      <p
+                        ref={(node) => {
+                          bodyRefs.current[block.key] = node
+                        }}
+                        onMouseUp={() => captureSelection(block.key)}
+                        onKeyUp={() => captureSelection(block.key)}
+                        className={`whitespace-pre-line text-sm text-nickel-700 ${expanded[block.key] ? '' : 'line-clamp-3'}`}
+                      >
+                        {block.body}
                       </p>
-                      {segment.body.length > 240 ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpanded((prev) => ({ ...prev, [segment.order]: !prev[segment.order] }))
-                          }
-                          className="mt-2 text-sm text-cobalt-700 hover:text-cobalt-800"
-                        >
-                          {expanded[segment.order] ? 'Show less' : 'Show full text'}
-                        </button>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                        {block.body.length > 240 ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpanded((previous) => ({ ...previous, [block.key]: !previous[block.key] }))
+                            }
+                            className="text-sm text-cobalt-700 hover:text-cobalt-800"
+                          >
+                            {expanded[block.key] ? 'Show less' : 'Show full text'}
+                          </button>
+                        ) : null}
+                        {!activeSelection ? (
+                          <span className="text-xs text-nickel-500">
+                            Wrong split? Highlight the part that belongs elsewhere to move it.
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {/* Rescue hatch for a block the splitter merged: move just
+                          the highlighted run to its real section. */}
+                      {activeSelection ? (
+                        <div className="mt-3 rounded-md border border-cobalt-200 bg-cobalt-50 p-3">
+                          <p className="text-xs text-cobalt-900">
+                            Move the highlighted {countProposalWords(activeSelection.text)} word
+                            {countProposalWords(activeSelection.text) === 1 ? '' : 's'} to:
+                          </p>
+                          <p className="mt-1 line-clamp-2 text-xs italic text-nickel-600">
+                            “{activeSelection.text.trim().slice(0, 160)}
+                            {activeSelection.text.trim().length > 160 ? '…' : ''}”
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <select
+                              defaultValue=""
+                              onChange={(event) => {
+                                if (event.target.value) moveSelectionTo(event.target.value)
+                              }}
+                              className="rounded-md border border-cobalt-300 px-3 py-2 text-sm"
+                            >
+                              <option value="">Choose a section…</option>
+                              {targets
+                                .filter((item) => item.title !== assigned)
+                                .map((item) => (
+                                  <option key={item.title} value={item.title}>
+                                    {item.title}
+                                  </option>
+                                ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelection(null)
+                                if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges()
+                              }}
+                              className="text-sm text-nickel-600 hover:text-nickel-800"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
                       ) : null}
                     </div>
                   </div>

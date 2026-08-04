@@ -15,7 +15,7 @@ import {
 } from 'react-icons/fa';
 import { extractTextFromHTML } from '../../../lib/services/markdownParserService';
 import { ReviewerProse, ReviewerText } from '@/components/reviewer/ReviewerText';
-import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
+import { compareSections, compareSectionTitles } from '@/lib/reviewer/sectionGrouping';
 import ReviewerShell from '@/components/reviewer/ReviewerShell';
 
 interface SectionReview {
@@ -435,20 +435,9 @@ export default function FinalReview() {
     setShowVersionSelector(!showVersionSelector);
   };
 
-  // Sort sections according to the predefined order
+  // Proposal order, shared with the workspace, the export and the auto-run.
   const getSortedSections = (sectionsList: SectionReview[]) => {
-    return [...sectionsList].sort((a, b) => {
-      const aIndex = SECTION_ORDER.indexOf(a.section_title);
-      const bIndex = SECTION_ORDER.indexOf(b.section_title);
-      
-      if (aIndex === -1 && bIndex === -1) {
-        return a.section_title.localeCompare(b.section_title);
-      }
-      if (aIndex === -1) return 1;
-      if (bIndex === -1) return -1;
-      
-      return aIndex - bIndex;
-    });
+    return [...sectionsList].sort(compareSections);
   };
 
   // Calculate total and average scores
@@ -1331,18 +1320,7 @@ export default function FinalReview() {
                   // Parallel mode - group by section title
                   <ol className="list-decimal list-inside space-y-1 pl-2">
                     {Object.entries(groupedSections)
-                      .sort(([titleA], [titleB]) => {
-                        const aIndex = SECTION_ORDER.indexOf(titleA);
-                        const bIndex = SECTION_ORDER.indexOf(titleB);
-                        
-                        if (aIndex === -1 && bIndex === -1) {
-                          return titleA.localeCompare(titleB);
-                        }
-                        if (aIndex === -1) return 1;
-                        if (bIndex === -1) return -1;
-                        
-                        return aIndex - bIndex;
-                      })
+                      .sort(([titleA], [titleB]) => compareSectionTitles(titleA, titleB))
                       .map(([title, group]) => {
                         // Get the versions to compare
                         const versionsToCompare = compareVersions[title] || 
@@ -1478,8 +1456,8 @@ export default function FinalReview() {
                         .map(version => group[version])
                         .filter(Boolean)
                         .sort((a, b) => {
-                          // Sort by title first, then by version (descending)
-                          const titleCompare = SECTION_ORDER.indexOf(a.section_title) - SECTION_ORDER.indexOf(b.section_title);
+                          // Proposal order first, then newest version first.
+                          const titleCompare = compareSections(a, b);
                           if (titleCompare !== 0) return titleCompare;
                           return b.version - a.version;
                         })

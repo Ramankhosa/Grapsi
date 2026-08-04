@@ -10,28 +10,120 @@
  * Kept free of Prisma and server imports so pages can use it directly.
  */
 
+import {
+  BUCKET_ORDER,
+  normalizeBucketText,
+  resolveBucketKey,
+  type SectionBucketSource,
+} from '@/lib/reviewer/buckets'
+
 /**
- * Canonical proposal order. This used to be copy-pasted into six files, which
- * had already drifted: the final-review page listed 'Timeline' where the
- * section picker creates 'Project Timeline', so that section scored an
- * `indexOf` of -1 and was sorted to the bottom of the report, after Conclusion.
+ * Proposal order, by bucket rather than by title.
+ *
+ * This used to be a list of fourteen exact title strings compared with
+ * `indexOf`. That only worked if every section was named from that one list —
+ * and nothing enforced it. The seeder names sections from `BUCKET_LABELS`, the
+ * picker from its own list, and users type whatever they like; none of the
+ * seeded labels appeared in the ordering list at all, so every seeded section
+ * scored -1 and the whole workspace sorted alphabetically. Budget was reviewed
+ * first and the abstract sixth.
+ *
+ * Ordering now keys off the section's bucket, which all three vocabularies
+ * resolve to, so a section sorts by what it *is* rather than by what it is
+ * called.
  */
-export const SECTION_ORDER = [
-  'Abstract',
-  'Introduction',
-  'Objectives',
-  'Literature Review',
-  'Methodology',
-  'Project Timeline',
-  'Budget Justification',
-  'Team Expertise',
-  'Expected Outcomes',
-  'Societal Impact',
-  'Sustainability',
-  'Risk & Mitigation',
-  'IP & Commercialization',
-  'Conclusion',
-] as const
+const BUCKET_RANK: Record<string, number> = BUCKET_ORDER.reduce(
+  (rank, key, index) => ({ ...rank, [key]: index }),
+  {} as Record<string, number>
+)
+
+/**
+ * Order *within* a bucket, for the buckets that genuinely hold several
+ * sections. Unlisted titles sit at 50, so a custom section lands after the
+ * conventional ones but before an explicit tail like a conclusion.
+ */
+const WITHIN_BUCKET_RANK: Record<string, Record<string, number>> = {
+  problem_need: {
+    introduction: 10,
+    background: 15,
+    motivation: 20,
+    significance: 25,
+    novelty: 30,
+    innovation: 35,
+    literature: 40,
+    'state of the art': 45,
+  },
+  impact_outcomes: {
+    'expected outcomes': 10,
+    outcomes: 12,
+    outputs: 15,
+    deliverables: 20,
+    impact: 30,
+    'societal impact': 32,
+    dissemination: 40,
+  },
+  sustainability_risk: {
+    risk: 10,
+    mitigation: 15,
+    contingency: 20,
+    sustainability: 30,
+    'exit strategy': 40,
+  },
+  other: {
+    ethics: 10,
+    'intellectual property': 20,
+    ip: 20,
+    commercialization: 25,
+    annex: 30,
+    appendix: 30,
+    conclusion: 90,
+  },
+}
+
+function withinBucketRank(bucketKey: string, title: string): number {
+  const table = WITHIN_BUCKET_RANK[bucketKey]
+  if (!table) return 50
+  const norm = normalizeBucketText(title)
+  if (!norm) return 50
+  let best: number | null = null
+  let bestLength = 0
+  for (const [phrase, rank] of Object.entries(table)) {
+    if (norm !== phrase && !norm.includes(phrase)) continue
+    if (phrase.length > bestLength) {
+      best = rank
+      bestLength = phrase.length
+    }
+  }
+  return best ?? 50
+}
+
+function titleOf(section: SectionBucketSource | string): string {
+  return typeof section === 'string' ? section : String(section?.section_title || '')
+}
+
+/**
+ * Proposal order: bucket first, then position within the bucket, then title.
+ *
+ * `ReviewerSection` has no `created_at`, and `last_reviewed_at` defaults to
+ * `now()` on insert, so neither is a meaningful tiebreak for unreviewed rows —
+ * the title is the only stable one available.
+ */
+export function compareSections(
+  a: SectionBucketSource | string,
+  b: SectionBucketSource | string
+): number {
+  const aBucket = resolveBucketKey(a)
+  const bBucket = resolveBucketKey(b)
+  const byBucket = (BUCKET_RANK[aBucket] ?? BUCKET_ORDER.length) - (BUCKET_RANK[bBucket] ?? BUCKET_ORDER.length)
+  if (byBucket !== 0) return byBucket
+
+  const aTitle = titleOf(a)
+  const bTitle = titleOf(b)
+  const byWithin = withinBucketRank(aBucket, aTitle) - withinBucketRank(bBucket, bTitle)
+  if (byWithin !== 0) return byWithin
+
+  return String(aTitle).localeCompare(String(bTitle))
+}
 
 export type ReviewerSectionStatus = 'draft' | 'reviewed' | 'stale'
 
@@ -48,10 +140,15 @@ export interface ReviewerSectionLike {
   improvement_flag?: boolean | null
   sourceStale?: boolean | null
   context_summary?: string | null
+  /** Semantic identity. Nullable — `resolveBucketKey` falls back to the title. */
+  reviewerBucketKey?: string | null
+  mappingJson?: unknown
 }
 
 export interface ReviewerSectionGroup<T extends ReviewerSectionLike> {
   title: string
+  /** What kind of section this is — what ordering and rule scoping key off. */
+  bucketKey: string
   /** Newest version — what the nav points at and the workspace edits. */
   current: T
   /** Every version of this title, newest first. Includes `current`. */
@@ -63,21 +160,11 @@ export interface ReviewerSectionGroup<T extends ReviewerSectionLike> {
 }
 
 /**
- * Position in the canonical order; -1 for a title the order does not name
- * (custom sections, or template sections from a specific funder).
+ * Proposal order for bare titles, where no stored bucket key is available.
+ * Resolves the bucket from the title, so it agrees with `compareSections`.
  */
-export function sectionOrderIndex(title: string): number {
-  return SECTION_ORDER.indexOf(String(title || '').trim() as (typeof SECTION_ORDER)[number])
-}
-
-/** Canonical order first, then unknown titles alphabetically at the end. */
 export function compareSectionTitles(a: string, b: string): number {
-  const aIndex = sectionOrderIndex(a)
-  const bIndex = sectionOrderIndex(b)
-  if (aIndex === -1 && bIndex === -1) return String(a).localeCompare(String(b))
-  if (aIndex === -1) return 1
-  if (bIndex === -1) return -1
-  return aIndex - bIndex
+  return compareSections(a, b)
 }
 
 function versionOf(section: ReviewerSectionLike): number {
@@ -139,6 +226,7 @@ export function groupReviewerSections<T extends ReviewerSectionLike>(
     const current = history[0]
     groups.push({
       title,
+      bucketKey: resolveBucketKey(current),
       current,
       history,
       versionCount: history.length,
@@ -148,7 +236,9 @@ export function groupReviewerSections<T extends ReviewerSectionLike>(
     })
   }
 
-  return groups.sort((a, b) => compareSectionTitles(a.title, b.title))
+  // Compare the rows, not the titles, so a stored bucket key wins over a title
+  // that was renamed away from it.
+  return groups.sort((a, b) => compareSections(a.current, b.current))
 }
 
 export interface ReviewerSectionCounts {

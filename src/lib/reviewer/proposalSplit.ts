@@ -1,4 +1,4 @@
-import { bucketFromText } from '@/lib/reviewer/buckets'
+import { bucketFromText, containsPhrase, matchSynonymBucket } from '@/lib/reviewer/buckets'
 
 /**
  * Deterministic full-proposal splitter for the reviewer workspace.
@@ -82,72 +82,6 @@ const ANY_MARKER = [WORDED_MARKER, NUMERIC_MARKER, ROMAN_MARKER, LETTER_MARKER]
  */
 const EXCLUDED_HEADING =
   /\b(reference|references|bibliography|citation|annexure|annex|appendix|appendices|enclosure|declaration|certificate|undertaking|endorsement|checklist|biodata|curriculum\s+vitae|cv|signature|acknowledgement)\b/i
-
-/**
- * Common real-world wordings for each reviewer section. This is what makes
- * "Aims & Objectives", "Objective of the Study", and "Specific Aims" all land
- * on the objectives section. Multi-word entries are preferred over single
- * words, so "budget justification" beats a bare "budget".
- */
-const SECTION_SYNONYMS: Record<string, string[]> = {
-  summary: [
-    'executive summary', 'project summary', 'abstract', 'summary', 'synopsis',
-    'overview', 'project brief', 'brief description', 'précis', 'precis',
-  ],
-  problem_need: [
-    'statement of the problem', 'problem statement', 'statement of need',
-    'needs assessment', 'need for the study', 'rationale', 'justification for the project',
-    'background', 'context', 'motivation', 'significance', 'introduction',
-    'problem', 'need', 'relevance', 'alignment with the call', 'innovation',
-    'novelty', 'state of the art', 'literature review', 'review of literature',
-  ],
-  objectives: [
-    'aims and objectives', 'goals and objectives', 'specific aims',
-    'objective of the study', 'objectives of the project', 'research questions',
-    'research question', 'hypothesis', 'hypotheses', 'objectives', 'objective',
-    'aims', 'aim', 'goals', 'goal', 'targets',
-  ],
-  methodology: [
-    'materials and methods', 'proposed methodology', 'research methodology',
-    'technical approach', 'research design', 'study design', 'experimental design',
-    'method of study', 'methodology', 'methods', 'method', 'approach',
-    'technical plan', 'scientific approach', 'work methodology',
-  ],
-  workplan: [
-    'work plan', 'workplan', 'plan of work', 'implementation plan',
-    'project schedule', 'time schedule', 'timeline', 'time frame', 'timeframe',
-    'milestones', 'milestone chart', 'gantt chart', 'activities', 'work packages',
-    'work breakdown', 'phasing', 'schedule',
-  ],
-  budget: [
-    'budget justification', 'budget breakdown', 'detailed budget',
-    'budget estimate', 'estimated expenditure', 'financial plan', 'funds requested',
-    'cost estimate', 'budget summary', 'budget', 'costs', 'cost', 'finance',
-  ],
-  evaluation: [
-    'monitoring and evaluation', 'evaluation plan', 'monitoring plan',
-    'success criteria', 'performance indicators', 'key indicators',
-    'evaluation', 'monitoring', 'indicators', 'metrics', 'assessment',
-  ],
-  impact_outcomes: [
-    'expected outcomes', 'expected outcome', 'expected results', 'anticipated impact',
-    'societal impact', 'economic impact', 'outcomes and impact', 'benefits',
-    'dissemination', 'utilisation', 'utilization', 'impact', 'outcomes', 'outcome',
-    'deliverables', 'expected deliverables', 'outputs',
-  ],
-  team: [
-    'team composition', 'project team', 'investigators', 'principal investigator',
-    'key personnel', 'personnel', 'expertise', 'qualifications', 'team',
-    'institutional capability', 'facilities available', 'infrastructure',
-    'facilities', 'organisation profile', 'organization profile',
-  ],
-  sustainability_risk: [
-    'risk and mitigation', 'risk mitigation', 'risk analysis', 'risk assessment',
-    'risks', 'risk', 'mitigation', 'contingency plan', 'contingency',
-    'sustainability', 'sustainability plan', 'limitations', 'challenges',
-    'exit strategy',
-  ],
-}
 
 function normalizeTitle(value: string): string {
   return String(value || '')
@@ -352,12 +286,6 @@ export function splitProposalIntoSegments(text: string): ProposalSegment[] {
 }
 
 /** Whole-phrase containment, so "aim" does not match inside "claim". */
-function containsPhrase(haystack: string, needle: string): boolean {
-  if (!haystack || !needle) return false
-  if (haystack === needle) return true
-  return new RegExp(`(^| )${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( |$)`).test(haystack)
-}
-
 /**
  * Is this heading text essentially just a section name? True for "Methodology"
  * and "Budget Justification", false for "Validate the methodology in phase two",
@@ -368,18 +296,6 @@ function looksLikeSectionName(text: string): boolean {
   if (!norm) return false
   const synonym = matchSynonymBucket(norm)
   return Boolean(synonym && synonym.length / norm.length >= 0.7)
-}
-
-/** Longest matching synonym across all buckets, or null. */
-function matchSynonymBucket(headingNorm: string): { bucketKey: string; length: number } | null {
-  let best: { bucketKey: string; length: number } | null = null
-  for (const [bucketKey, phrases] of Object.entries(SECTION_SYNONYMS)) {
-    for (const phrase of phrases) {
-      if (!containsPhrase(headingNorm, phrase)) continue
-      if (!best || phrase.length > best.length) best = { bucketKey, length: phrase.length }
-    }
-  }
-  return best
 }
 
 function tokenOverlapScore(headingNorm: string, candidateNorm: string): number {
@@ -411,11 +327,36 @@ export function matchSegmentsToTargets(
     bucketKey: target.bucketKey ? String(target.bucketKey) : null,
   }))
 
-  const byBucket = new Map<string, string>()
+  // Every section in a bucket, not just the first. A synonym match names a
+  // bucket, and a bucket can hold several sections — sending them all to
+  // whichever came first is what merged "Review of Literature" into
+  // "Introduction".
+  const byBucket = new Map<string, typeof prepared>()
   for (const entry of prepared) {
-    if (entry.bucketKey && !byBucket.has(entry.bucketKey)) {
-      byBucket.set(entry.bucketKey, entry.target.title)
+    if (!entry.bucketKey) continue
+    const list = byBucket.get(entry.bucketKey)
+    if (list) list.push(entry)
+    else byBucket.set(entry.bucketKey, [entry])
+  }
+
+  /** Within a bucket, the section whose title or aliases fit this heading best. */
+  const bestInBucket = (bucketKey: string, headingNorm: string): string | null => {
+    const candidates = byBucket.get(bucketKey)
+    if (!candidates || candidates.length === 0) return null
+    let bestTitle: string | null = null
+    let bestScore = -1
+    for (const entry of candidates) {
+      const score = Math.max(
+        labelAffinity(headingNorm, entry.titleNorm),
+        ...entry.aliasNorms.map((alias) => labelAffinity(headingNorm, alias)),
+        0
+      )
+      if (score > bestScore) {
+        bestScore = score
+        bestTitle = entry.target.title
+      }
     }
+    return bestTitle
   }
 
   const direct: ProposalMatch[] = segments.map((segment) => {
@@ -452,7 +393,7 @@ export function matchSegmentsToTargets(
     // A well-known wording for the section, e.g. "Aims and Objectives".
     const synonym = matchSynonymBucket(headingNorm)
     if (synonym) {
-      const title = byBucket.get(synonym.bucketKey)
+      const title = bestInBucket(synonym.bucketKey, headingNorm)
       if (title) consider(title, 500 + synonym.length, 'synonym')
     }
 
@@ -467,7 +408,7 @@ export function matchSegmentsToTargets(
 
     if (!best) {
       const bucket = bucketFromText(headingCore)
-      const title = bucket !== 'other' ? byBucket.get(bucket) : undefined
+      const title = bucket !== 'other' ? bestInBucket(bucket, headingNorm) : null
       if (title) consider(title, 50, 'bucket')
     }
 
@@ -547,6 +488,29 @@ function inheritContinuations(matches: ProposalMatch[], segments: ProposalSegmen
  * template's own section labels (aliased into the bucket's workspace section),
  * so a proposal using the call's official headings still lands correctly.
  */
+interface TemplateRuleLike {
+  label: string
+  wordLimit: number | null
+  charLimit: number | null
+}
+
+/**
+ * How strongly a template rule's label names a given workspace section.
+ * Exact match wins, then whole-phrase containment, then shared long words.
+ */
+function labelAffinity(labelNorm: string, titleNorm: string): number {
+  if (!labelNorm || !titleNorm) return 0
+  if (labelNorm === titleNorm) return 1000
+  if (containsPhrase(labelNorm, titleNorm) || containsPhrase(titleNorm, labelNorm)) {
+    return 500 + Math.min(labelNorm.length, titleNorm.length)
+  }
+  const overlap = Math.max(
+    tokenOverlapScore(labelNorm, titleNorm),
+    tokenOverlapScore(titleNorm, labelNorm)
+  )
+  return overlap > 0 ? Math.round(overlap * 100) : 0
+}
+
 export function buildProposalTargets(
   workspaceSections: Array<{ section_title: string; reviewerBucketKey?: string | null }>,
   templateSections: Array<{ label?: string; bucketKey?: string; wordLimit?: number | null; charLimit?: number | null }>
@@ -565,18 +529,83 @@ export function buildProposalTargets(
     })
   }
 
+  const rulesByBucket = new Map<string, TemplateRuleLike[]>()
   for (const rule of templateSections || []) {
     const label = String(rule?.label || '').trim()
     if (!label) continue
-    const bucket = rule?.bucketKey || bucketFromText(label)
-    const target = Array.from(byTitle.values()).find((item) => item.bucketKey === bucket)
-    if (!target) continue
-    if (normalizeTitle(target.title) !== normalizeTitle(label)) {
-      target.aliases = Array.from(new Set([...(target.aliases || []), label]))
+    const bucket = String(rule?.bucketKey || bucketFromText(label))
+    const entry: TemplateRuleLike = {
+      label,
+      wordLimit: rule?.wordLimit ?? null,
+      charLimit: rule?.charLimit ?? null,
     }
-    // Surface the tightest limit on the bucket section so the preview can warn.
-    if (rule?.wordLimit && (!target.wordLimit || rule.wordLimit < target.wordLimit)) target.wordLimit = rule.wordLimit
-    if (rule?.charLimit && (!target.charLimit || rule.charLimit < target.charLimit)) target.charLimit = rule.charLimit
+    const list = rulesByBucket.get(bucket)
+    if (list) list.push(entry)
+    else rulesByBucket.set(bucket, [entry])
+  }
+
+  const applyRule = (target: ProposalTarget, rule: TemplateRuleLike) => {
+    if (normalizeTitle(target.title) !== normalizeTitle(rule.label)) {
+      target.aliases = Array.from(new Set([...(target.aliases || []), rule.label]))
+    }
+    if (rule.wordLimit) {
+      target.wordLimit = target.wordLimit ? Math.min(target.wordLimit, rule.wordLimit) : rule.wordLimit
+    }
+    if (rule.charLimit) {
+      target.charLimit = target.charLimit ? Math.min(target.charLimit, rule.charLimit) : rule.charLimit
+    }
+  }
+
+  for (const [bucket, rules] of rulesByBucket.entries()) {
+    const candidates = Array.from(byTitle.values()).filter((item) => item.bucketKey === bucket)
+
+    // A template bucket the workspace has no section for still needs somewhere
+    // to put the text, so the rule's own label becomes the target and the
+    // commit creates the section.
+    if (candidates.length === 0) {
+      for (const rule of rules) {
+        if (byTitle.has(rule.label)) continue
+        const target: ProposalTarget = {
+          title: rule.label,
+          bucketKey: bucket,
+          aliases: [],
+          wordLimit: null,
+          charLimit: null,
+        }
+        applyRule(target, rule)
+        byTitle.set(rule.label, target)
+      }
+      continue
+    }
+
+    // Give each rule the section it actually names. Attaching every rule in a
+    // bucket to whichever section came first merged two real sections into one
+    // ("Review of Literature" landing in Introduction) and left the other
+    // empty — and it carried the wrong section's word limit with it.
+    const pairs: Array<{ rule: TemplateRuleLike; target: ProposalTarget; score: number }> = []
+    for (const rule of rules) {
+      const labelNorm = normalizeTitle(rule.label)
+      for (const target of candidates) {
+        pairs.push({ rule, target, score: labelAffinity(labelNorm, normalizeTitle(target.title)) })
+      }
+    }
+    pairs.sort((left, right) => right.score - left.score)
+
+    const claimedRules = new Set<TemplateRuleLike>()
+    const claimedTargets = new Set<ProposalTarget>()
+    for (const pair of pairs) {
+      if (claimedRules.has(pair.rule) || claimedTargets.has(pair.target)) continue
+      claimedRules.add(pair.rule)
+      claimedTargets.add(pair.target)
+      applyRule(pair.target, pair.rule)
+    }
+
+    // More rules than sections: whatever is left shares its closest section.
+    for (const rule of rules) {
+      if (claimedRules.has(rule)) continue
+      const best = pairs.filter((pair) => pair.rule === rule)[0]
+      if (best) applyRule(best.target, rule)
+    }
   }
 
   return Array.from(byTitle.values())

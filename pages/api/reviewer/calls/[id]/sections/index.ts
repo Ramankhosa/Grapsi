@@ -4,6 +4,7 @@ import {
   getReviewerSession as getServerSession,
   requireReviewerCallAccess,
 } from '@/lib/reviewer-auth-api';
+import { resolveBucketKey } from '@/lib/reviewer/buckets';
 import prisma from '../../../../../../lib/prisma';
 
 export default async function handler(
@@ -95,7 +96,7 @@ export default async function handler(
             section_title: section_title
           },
           orderBy: { version: 'desc' },
-          select: { id: true, version: true }
+          select: { id: true, version: true, reviewerBucketKey: true, mappingJson: true }
         });
 
         const version = latestForTitle ? latestForTitle.version + 1 : 1;
@@ -117,7 +118,17 @@ export default async function handler(
             version,
             previous_section_id: effectivePreviousId,
             review_linked_context: true,
-            is_revision: effectiveIsRevision
+            is_revision: effectiveIsRevision,
+            // Semantic identity, resolved server-side so every client is
+            // correct by construction. A revision inherits it rather than
+            // re-deriving, so renaming a section cannot move it.
+            reviewerBucketKey:
+              latestForTitle?.reviewerBucketKey ?? resolveBucketKey({ section_title }),
+            // Inherited too: `mappingJson.linkedSections` is what
+            // `normalizeSectionRecommendations` filters recommendations
+            // against, so dropping it silently discarded every recommendation
+            // on any revision of a grant-linked section.
+            ...(latestForTitle?.mappingJson ? { mappingJson: latestForTitle.mappingJson } : {})
           },
           select: {
             id: true,

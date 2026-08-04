@@ -71,9 +71,13 @@ describe('stored-call context with no approved template', () => {
             mustAddress: [
               // Explicit target: attaches to the methodology section.
               rule('Describe the sampling strategy for each site', ['methodology']),
-              // No target, and "Objectives" does not match the keyword router,
-              // so this rule reaches no section and must apply call-wide.
+              // No explicit target, but the wording names a section, so it must
+              // be routed there rather than applied call-wide. This used to
+              // land nowhere: the keyword router matched only the singular
+              // "objective", so the plural sent it to `other`.
               rule('Objectives must be measurable and time-bound'),
+              // Genuinely unplaceable: names no section, so it stays call-wide.
+              rule('Use 12 point type with 2.5 cm page margins'),
             ],
             avoid: [rule('Do not reuse text from an earlier application')],
             evaluationCriteria: [rule('Scientific merit')],
@@ -105,17 +109,25 @@ describe('stored-call context with no approved template', () => {
     expect([...methodology!.requiredFacts, ...methodology!.guidanceText].join(' ')).toContain(
       'sampling strategy'
     )
-    // Only evidenced sections are reported as call requirements: methodology
-    // from its own rule, budget because the budget rule routes there too.
+    // A rule that names its section reaches that section.
+    const objectives = context.template_sections.find((section) => section.bucketKey === 'objectives')
+    expect([...objectives!.requiredFacts, ...objectives!.guidanceText].join(' ')).toContain(
+      'measurable and time-bound'
+    )
+
+    // Only evidenced sections are reported as call requirements: objectives and
+    // methodology from their own rules, budget because the budget rule routes
+    // there too. Order follows BUCKET_ORDER, not the order the rules arrived in.
     expect(context.mandatory_sections).toEqual([
+      'Objectives & Specific Aims',
       'Methodology / Approach',
       'Budget & Justification',
     ])
 
     // The unplaceable rule still reaches the reviewer, as a call-wide obligation.
-    expect(context.dos).toContain('Objectives must be measurable and time-bound')
+    expect(context.dos).toContain('Use 12 point type with 2.5 cm page margins')
     expect(context.donts).toContain('Do not reuse text from an earlier application')
-    expect(context.reviewer_context_text).toContain('Objectives must be measurable and time-bound')
+    expect(context.reviewer_context_text).toContain('Use 12 point type with 2.5 cm page margins')
 
     // Budget rules survive (the gap fixed earlier) and submission stays non-scoring.
     expect(context.dos).toContain('Equipment may not exceed 40% of the budget')

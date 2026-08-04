@@ -2,7 +2,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getReviewerSession as getSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
-import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
+import { compareSections } from '@/lib/reviewer/sectionGrouping';
 import { 
   Document, 
   Packer, 
@@ -99,31 +99,8 @@ async function generateATRDocument(
     ai_review_json: ReviewJson
   }>
 ): Promise<Buffer> {
-  // Sort sections according to the preferred order
-  const sortedSections = [...sections].sort((a, b) => {
-    const titleA = a.section_title;
-    const titleB = b.section_title;
-    
-    // Get indices from the predefined order
-    const indexA = SECTION_ORDER.findIndex(
-      title => titleA.toLowerCase().includes(title.toLowerCase())
-    );
-    const indexB = SECTION_ORDER.findIndex(
-      title => titleB.toLowerCase().includes(title.toLowerCase())
-    );
-    
-    // If both sections are in the defined order list
-    if (indexA !== -1 && indexB !== -1) {
-      return indexA - indexB;
-    }
-    
-    // If only one is in the list, prioritize it
-    if (indexA !== -1) return -1;
-    if (indexB !== -1) return 1;
-    
-    // If neither is in the list, maintain alphabetical order
-    return titleA.localeCompare(titleB);
-  });
+  // Proposal order, shared with the workspace, the report and the auto-run.
+  const sortedSections = [...sections].sort(compareSections);
 
   const children = [];
 

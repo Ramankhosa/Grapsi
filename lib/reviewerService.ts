@@ -14,7 +14,8 @@ import {
 } from '@/lib/reviewer/promptScope';
 import { generateFromOpenAI } from './openaiService';
 import { generateFromGemini, generateFromGeminiWithFiles } from './geminiService';
-import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
+import { compareSections } from '@/lib/reviewer/sectionGrouping';
+import { BUCKET_ORDER, resolveBucketKey } from '@/lib/reviewer/buckets';
 
 const GRANT_REVIEWER_FULL_REVIEW_STAGE = 'GRANT_REVIEWER_FULL_REVIEW';
 const GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL = 'gemini-2.5-pro';
@@ -77,7 +78,7 @@ async function executeConfiguredGrantReviewerReview(input: {
 // The canonical proposal order lives in the client-safe grouping module so the
 // nav, the report and the exports all sort by the same list. Re-exported here
 // for the server-side callers that already import it from this file.
-export { SECTION_ORDER };
+export { compareSections };
 
 // Define dependencies between sections for contextual review
 export const SECTION_DEPENDENCIES: Record<string, string[]> = {
@@ -348,27 +349,17 @@ export function normalizeComplianceFlags(value: unknown): Array<{ rule: string; 
   return next.slice(0, 20);
 }
 
-// Get section position in the logical review flow
+/**
+ * Position in the logical review flow, as a bucket rank.
+ *
+ * This used to match section titles against a list of fourteen exact strings,
+ * falling back to a bidirectional substring test and then to 999. None of the
+ * titles the seeder creates were in that list, so most sections scored 999 and
+ * the dependency gate below (`position < current`) let almost nothing through.
+ */
 export function getSectionPosition(sectionTitle: string): number {
-  const normalizedTitle = sectionTitle.trim().toLowerCase();
-  
-  // Check for exact matches first
-  const exactIndex = SECTION_ORDER.findIndex(
-    title => title.toLowerCase() === normalizedTitle
-  );
-  
-  if (exactIndex !== -1) return exactIndex;
-  
-  // Check for partial matches
-  for (let i = 0; i < SECTION_ORDER.length; i++) {
-    if (normalizedTitle.includes(SECTION_ORDER[i].toLowerCase()) || 
-        SECTION_ORDER[i].toLowerCase().includes(normalizedTitle)) {
-      return i;
-    }
-  }
-  
-  // If no match found, return a high number to place at the end
-  return 999;
+  const index = BUCKET_ORDER.indexOf(resolveBucketKey(sectionTitle));
+  return index === -1 ? BUCKET_ORDER.length : index;
 }
 
 /**

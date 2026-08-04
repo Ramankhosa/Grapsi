@@ -7,7 +7,6 @@ import { FaSpinner, FaCheckCircle, FaExclamationTriangle, FaCircle, FaArrowLeft 
 import Head from 'next/head';
 import Link from 'next/link';
 import ContextSummaryView from '../../../components/ContextSummaryView';
-import { SECTION_ORDER } from '@/lib/reviewer/sectionGrouping';
 import ReviewerShell from '@/components/reviewer/ReviewerShell';
 
 type SectionStatus = {
