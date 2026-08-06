@@ -5,9 +5,10 @@
  * user-driven step) is what surfaces funders and, only on request, reads the
  * idea against one chosen call.
  *
- * Read-only by default. It inspects the newest completed run and exercises the
- * two non-LLM funding-match steps. The call-fit step costs an LLM call, so it
- * runs only with --with-call-fit (and writes a target call onto that run).
+ * It inspects the newest completed run and exercises the catalogue match, which
+ * reads the FundingCall table rather than the sanctioned-award ledger. The
+ * call-fit step costs an LLM call, so it runs only with --with-call-fit (and
+ * writes a target call onto that run).
  *
  *   npm run verify:idea-funding-match
  *   npm run verify:idea-funding-match -- --run-analysis
@@ -133,31 +134,16 @@ async function main() {
     access: { tenantId: run.tenantId, isSuperAdmin: false },
   }
 
-  console.log('\nPhase B step 1 — funder shortlist (no LLM, read-only)')
-  const agencyResult = await ideaIntelligenceService.listFundingAgencies(run.id, actor)
-  if (agencyResult.reason === 'no_sanctioned_evidence') {
-    console.log('  INFO  Empty sanctioned ledger — the UI shows the catalogue-search empty state.')
-    await prisma.$disconnect()
-    return
-  }
-  assert(agencyResult.agencies.length > 0, 'Expected at least one recommended funder')
-  ok(`${agencyResult.agencies.length} funders ranked`)
-  for (const agency of agencyResult.agencies) {
-    console.log(`        ${agency.role === 'primary' ? '*' : '-'} ${agency.agencyName} — ${agency.fundedNearbyCount} funded nearby, ${agency.openCallCount} open calls`)
-  }
-
-  const chosen = agencyResult.agencies[0]
-  console.log(`\nPhase B step 2 — open calls from ${chosen.agencyName}`)
-  const match = await ideaIntelligenceService.matchCallsForAgency(run.id, chosen.agencyName, actor)
-  assert(match.agencyName === chosen.agencyName, 'Match returned a different funder than the one chosen')
+  console.log('\nPhase B step 1 — open calls from the catalogue, matched to the idea')
+  const { fundingMatch: match } = await ideaIntelligenceService.matchCallsForIdea(run.id, actor)
   ok(`${match.calls.length} calls (rankedSemantically=${match.rankedSemantically}, lowConfidence=${match.lowConfidence})`)
   for (const call of match.calls.slice(0, 5)) {
     console.log(`        - ${call.schemeTitle} (${Math.round(call.score * 100)}%)`)
   }
   assert(match.calls.every((call) => call.agencyName), 'A matched call is missing its funder name')
   if (!match.calls.length) {
-    // Nothing open for this funder: show what the catalogue does hold, so it is
-    // clear whether this is a matching bug or simply an empty catalogue.
+    // Nothing matched: show what the catalogue does hold, so it is clear whether
+    // this is a matching bug or simply an empty catalogue.
     // Mirrors the published/active filter the service applies for a non-super-admin.
     const catalogue = await prisma.fundingCall.findMany({
       where: {
@@ -175,23 +161,22 @@ async function main() {
   }
 
   if (!WITH_CALL_FIT) {
-    console.log('\nPhase B step 3 — skipped (costs an LLM call). Re-run with --with-call-fit to exercise it.')
+    console.log('\nPhase B step 2 — skipped (costs an LLM call). Re-run with --with-call-fit to exercise it.')
     await prisma.$disconnect()
     return
   }
 
-  // --call-id lets step 3 be exercised on a catalogue where no call happens to
-  // belong to the recommended funder.
+  // --call-id lets step 2 be exercised on a catalogue where nothing matched.
   const callIdArg = process.argv.find((arg) => arg.startsWith('--call-id='))?.slice('--call-id='.length)
   const targetCall = callIdArg
     ? match.calls.find((call) => call.id === callIdArg) || { id: callIdArg, schemeTitle: `(catalogue call ${callIdArg})` }
     : match.calls[0]
   if (!targetCall) {
-    console.log('\nPhase B step 3 — skipped, this funder has no open call to check against. Pass --call-id=<id> to force one.')
+    console.log('\nPhase B step 2 — skipped, the catalogue has no open call to check against. Pass --call-id=<id> to force one.')
     await prisma.$disconnect()
     return
   }
-  console.log(`\nPhase B step 3 — reading the idea against "${targetCall.schemeTitle}"`)
+  console.log(`\nPhase B step 2 — reading the idea against "${targetCall.schemeTitle}"`)
   const updated = await ideaIntelligenceService.evaluateAgainstCall(run.id, targetCall.id, actor)
   const updatedReport = (updated.report || {}) as any
   const updatedScores = (updated.scores || {}) as any

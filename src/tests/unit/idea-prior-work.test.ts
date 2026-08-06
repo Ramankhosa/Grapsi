@@ -15,6 +15,7 @@ function award(overrides: Partial<PriorWorkAwardInput> = {}): PriorWorkAwardInpu
   return {
     id: 'award-1',
     title: 'Point of care diagnostic platform',
+    abstract: 'A portable diagnostic platform for rural primary health centres.',
     fundingAgency: 'BIRAC',
     sourceName: 'PRISM',
     sourceKey: 'PRISM',
@@ -45,6 +46,7 @@ function patent(overrides: Partial<PriorWorkPatentInput> = {}): PriorWorkPatentI
   return {
     id: 'patent-1',
     title: 'Serially chambered reaction cartridge',
+    abstract: 'A cartridge with serially arranged reaction chambers for point-of-care assays.',
     publicationNumber: 'IN402318',
     assignee: 'Sun Pharma Ltd',
     inventor: null,

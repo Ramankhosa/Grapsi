@@ -218,6 +218,7 @@ function fallbackPriorWork(run: AnalysisRun): PriorWork {
     matchBasis: 'Retrieved for this idea before aspect-level coverage was recorded.',
     award: {
       id: project.id,
+      abstract: project.abstractText && project.abstractText.toUpperCase() !== 'NA' ? project.abstractText : null,
       agencyName: project.fundingAgency || project.sourceKey,
       schemeName: project.schemeName,
       budgetAmount: project.budgetAmount,
@@ -833,8 +834,6 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
               directions={directions}
               rows={priorWork.rows}
               onFindFunders={(direction) => openFunders(direction.title)}
-              onStrengthen={(direction) => strengthen({ id: direction.id, title: direction.title })}
-              busyId={strengthenBusyId}
             />
 
             <CallVerdictSections

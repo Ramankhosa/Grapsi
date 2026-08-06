@@ -115,6 +115,10 @@ export default function PriorWorkList({
       <div className="mt-4 divide-y divide-slate-100">
         {visible.map((row) => {
           const isAward = row.kind === 'funded'
+          // The abstract is the only thing that lets a reader judge how close the
+          // row really is, so it is shown in full rather than teased.
+          const abstract = (isAward ? row.award?.abstract : row.patent?.abstract) || null
+          const detailHref = isAward && row.award ? `/funding/intelligence/projects/${row.award.id}` : row.patent?.url || null
           return (
             <article
               key={row.key}
@@ -130,13 +134,25 @@ export default function PriorWorkList({
               </span>
 
               <div className="min-w-0 flex-1">
-                <h3 className="font-semibold leading-6 text-slate-900">{row.title}</h3>
+                <h3 className="font-semibold leading-6 text-slate-900">
+                  {detailHref ? (
+                    isAward ? (
+                      <Link href={detailHref} className="hover:text-teal-700 hover:underline">{row.title}</Link>
+                    ) : (
+                      <a href={detailHref} target="_blank" rel="noreferrer" className="hover:text-teal-700 hover:underline">{row.title}</a>
+                    )
+                  ) : row.title}
+                </h3>
                 {isAward ? <AwardMeta row={row} /> : <PatentMeta row={row} />}
+
+                {abstract ? (
+                  <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-600">{abstract}</p>
+                ) : null}
 
                 {row.facetsCovered.length ? (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {row.facetsCovered.map((facet) => (
-                      <span key={facet} className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{facet}</span>
+                      <span key={facet} className="max-w-full break-words rounded-lg bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{facet}</span>
                     ))}
                   </div>
                 ) : null}

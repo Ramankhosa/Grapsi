@@ -14,6 +14,7 @@ import type { FacetStatus } from '@/lib/ideaIntelligence/callSignals'
 export type PriorWorkAwardInput = {
   id: string
   title: string
+  abstract: string | null
   fundingAgency: string | null
   sourceName: string | null
   sourceKey: string | null
@@ -44,6 +45,7 @@ export type PriorWorkAwardExtras = {
 export type PriorWorkPatentInput = {
   id: string
   title: string
+  abstract: string | null
   publicationNumber: string | null
   assignee: string | null
   inventor: string | null
@@ -72,6 +74,8 @@ export type PriorWorkRow = {
   matchBasis: string
   award: {
     id: string
+    /** The sanctioned project's own abstract, verbatim. Null when the feed omitted it. */
+    abstract: string | null
     agencyName: string
     schemeName: string | null
     budgetAmount: number | null
@@ -88,6 +92,8 @@ export type PriorWorkRow = {
   patent: {
     id: string
     publicationNumber: string | null
+    /** The published abstract, verbatim. Null when the source feed omitted it. */
+    abstract: string | null
     assignee: string | null
     date: string | null
     url: string | null
@@ -250,6 +256,12 @@ function buildAwardRows(
     if (existing && existing.award) {
       collapsed += 1
       existing.award.duplicateIds.push(award.id)
+      // Feeds carry the same award with unevenly truncated abstracts — keep the
+      // fullest text rather than whichever copy was indexed first.
+      const candidateAbstract = award.abstract?.trim() || null
+      if ((candidateAbstract || '').length > (existing.award.abstract || '').length) {
+        existing.award.abstract = candidateAbstract
+      }
       // Keep the strongest retrieval score of the duplicates so ordering is not
       // penalised by whichever copy happened to be indexed worse.
       existing.award.relevanceScore = Math.max(existing.award.relevanceScore, award.relevanceScore)
@@ -266,6 +278,7 @@ function buildAwardRows(
       matchBasis: '',
       award: {
         id: award.id,
+        abstract: award.abstract?.trim() || null,
         agencyName,
         schemeName: award.schemeName,
         budgetAmount: award.budgetAmount,
@@ -319,6 +332,12 @@ function buildPatentRows(
         existing.patent.date = date
         existing.year = candidateYear
       }
+      // Family members share one description, but feeds truncate it unevenly —
+      // keep the fullest text of the family rather than whichever arrived first.
+      const candidateAbstract = patent.abstract?.trim() || null
+      if ((candidateAbstract || '').length > (existing.patent.abstract || '').length) {
+        existing.patent.abstract = candidateAbstract
+      }
       // A family member may have been assessed against facets the first was not.
       for (const facet of coveredFacets(assessedById.get(patent.id))) {
         if (!existing.facetsCovered.includes(facet)) existing.facetsCovered.push(facet)
@@ -338,6 +357,7 @@ function buildPatentRows(
       patent: {
         id: patent.id,
         publicationNumber: patent.publicationNumber,
+        abstract: patent.abstract?.trim() || null,
         assignee,
         date,
         url: patent.url,

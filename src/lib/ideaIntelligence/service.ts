@@ -22,7 +22,6 @@ import { emptyIdeaEvidence, retrieveIdeaEvidence } from '@/lib/ideaIntelligence/
 import type { MultiSourceEvidence, PatentEvidence, PublicationEvidence, WebEvidence } from '@/lib/ideaIntelligence/evidenceSources'
 import { IDEA_SOURCE_FLAGS, anyExternalEvidenceEnabled, type IdeaSourcesUsed } from '@/lib/ideaIntelligence/sourceFlags'
 import {
-  agencyMatches,
   buildFacetCoverage,
   buildFundedPortfolio,
   formatBudget,
@@ -1589,76 +1588,19 @@ export class IdeaIntelligenceService {
   }
 
   // ---------------------------------------------------------------------------
-  // Funding match. A completed review says nothing about any funding call. These
-  // three steps are what the user walks through afterwards, in order: which
-  // funders their sanctioned neighbours came from, which of that funder's calls
-  // are open, and finally how the idea reads against the one call they picked.
+  // Funding match. A completed review says nothing about any funding call. Two
+  // steps follow it: which calls the catalogue currently holds for this idea,
+  // and how the idea reads against the one call the researcher picked.
   // ---------------------------------------------------------------------------
 
   /**
-   * Step 1: the funders worth approaching, ranked purely on who has already
-   * sanctioned comparable work. No LLM call, no write — it re-derives from the
-   * ledger the review pass already persisted and counts each funder's open calls.
+   * The open calls in the catalogue that match this idea, ranked against the
+   * idea itself. Deliberately reads the FundingCall table rather than deriving
+   * funders from the sanctioned-award ledger: a historical funder may have
+   * nothing open, and an agency that never appears in the ledger may still be
+   * the one advertising the right call today.
    */
-  async listFundingAgencies(runId: string, actor: ActorContext) {
-    const run = await this.requireCompletedRun(runId, actor.userId)
-    const scores = (run.scoresJson || {}) as { fundedPortfolio?: FundedPortfolio; agencyRecommendations?: AgencyRecommendation[] }
-    const report = (run.reportJson || {}) as Record<string, any>
-    const portfolio = scores.fundedPortfolio
-
-    if (!portfolio?.agencies?.length) {
-      // Honest empty state. Falling back to ranking catalogue agencies by
-      // semantic similarity is exactly the weak matching this flow removed.
-      return {
-        agencies: [],
-        reason: 'no_sanctioned_evidence' as const,
-        selectedAgencyName: null,
-        selectedFundingCallId: normalizeText(report.targetFundingCallId, 80) || null,
-      }
-    }
-
-    const catalogueCalls = await prisma.fundingCall.findMany({
-      where: fundingCallAccessWhere(actor.access),
-      select: { id: true, agency_name: true, agencyName: true, scheme_title: true, title: true, close_date: true, is_rolling: true },
-      take: 2000,
-    })
-    const openCalls: OpenCallSummary[] = catalogueCalls.map((call) => ({
-      id: call.id,
-      agencyName: call.agency_name || call.agencyName || '',
-      schemeTitle: call.scheme_title || call.title || '',
-      closeDate: call.close_date ? call.close_date.toISOString() : null,
-      isRolling: Boolean(call.is_rolling),
-    }))
-
-    const ranked = rankAgencyRecommendations(portfolio, openCalls, 6)
-    // The review pass already wrote a one-line narrative per funder; keep it so
-    // this step reads as a continuation rather than a second, different answer.
-    const narrativeByAgency = new Map(
-      (Array.isArray(report.agencyRecommendations) ? report.agencyRecommendations : scores.agencyRecommendations || [])
-        .map((item: any) => [normalizeText(item?.agencyName, 160).toLowerCase(), normalizeText(item?.whyThisAgency, 400)] as const)
-        .filter(([agency, why]) => agency && why)
-    )
-
-    return {
-      agencies: ranked.map((agency) => ({
-        ...agency,
-        whyThisAgency: narrativeByAgency.get(agency.agencyName.toLowerCase()) || agency.whyThisAgency,
-        openCallCount: agency.openCallIds.length,
-      })),
-      reason: null,
-      selectedAgencyName: normalizeText(report.fundingMatch?.agencyName, 160) || null,
-      selectedFundingCallId: normalizeText(report.targetFundingCallId, 80) || null,
-    }
-  }
-
-  /**
-   * Step 2: the chosen funder's open calls, ranked against the idea. Scoped to
-   * one agency on purpose — a global nearest-match is what used to surface calls
-   * with nothing to do with the idea.
-   */
-  async matchCallsForAgency(runId: string, agencyNameInput: string, actor: ActorContext) {
-    const agencyName = normalizeText(agencyNameInput, 160)
-    if (!agencyName) throw new Error('Pick a funder first.')
+  async matchCallsForIdea(runId: string, actor: ActorContext) {
     const run = await this.requireCompletedRun(runId, actor.userId)
     const structured = run.structuredIdeaJson as StructuredIdea | null
     if (!structured?.semanticQuery) throw new Error('This analysis has no structured idea to match against.')
@@ -1676,32 +1618,30 @@ export class IdeaIntelligenceService {
         llmContext: { tenantId: actor.tenantId, userId: actor.userId },
       })
       lowConfidence = Boolean(search?.lowConfidence)
-      calls = (search?.rawResults || [])
-        .filter((call) => agencyMatches(call.agencyName, agencyName))
-        .map((call) => ({
-          id: call.id,
-          agencyName: call.agencyName || agencyName,
-          schemeTitle: call.schemeTitle || '',
-          shortDescription: normalizeText(call.shortDescription || call.description, 600),
-          closeDate: call.closeDate ? String(call.closeDate) : null,
-          isRolling: Boolean(call.isRolling),
-          amountMin: call.amountMin ?? null,
-          amountMax: call.amountMax ?? null,
-          currency: call.currency ?? null,
-          eligibilitySummary: normalizeText(call.eligibilitySummary, 500),
-          officialUrls: Array.isArray(call.officialUrls) ? call.officialUrls : [],
-          score: typeof call.score === 'number' ? call.score : 0,
-          matchReasons: Array.isArray(call.matchReasons) ? call.matchReasons : [],
-        }))
+      calls = (search?.rawResults || []).map((call) => ({
+        id: call.id,
+        agencyName: call.agencyName || '',
+        schemeTitle: call.schemeTitle || '',
+        shortDescription: normalizeText(call.shortDescription || call.description, 600),
+        closeDate: call.closeDate ? String(call.closeDate) : null,
+        isRolling: Boolean(call.isRolling),
+        amountMin: call.amountMin ?? null,
+        amountMax: call.amountMax ?? null,
+        currency: call.currency ?? null,
+        eligibilitySummary: normalizeText(call.eligibilitySummary, 500),
+        officialUrls: Array.isArray(call.officialUrls) ? call.officialUrls : [],
+        score: typeof call.score === 'number' ? call.score : 0,
+        matchReasons: Array.isArray(call.matchReasons) ? call.matchReasons : [],
+      }))
     } catch (error) {
-      console.warn('[IdeaIntelligence] agency call search failed:', error instanceof Error ? error.message : error)
+      console.warn('[IdeaIntelligence] call search failed:', error instanceof Error ? error.message : error)
       calls = []
     }
 
     if (!calls.length) {
-      // The semantic pass found nothing for this funder. Rather than show an
-      // empty list, list what the funder actually has open — clearly labelled as
-      // not ranked against the idea, so the user judges the fit themselves.
+      // The semantic pass found nothing. Rather than show an empty drawer, list
+      // what the catalogue actually has open, soonest deadline first, clearly
+      // labelled as not ranked against the idea so the user judges the fit.
       rankedSemantically = false
       const fallback = await prisma.fundingCall.findMany({
         where: {
@@ -1716,34 +1656,32 @@ export class IdeaIntelligenceService {
           amount_min: true, amount_max: true, currency: true, eligibility_text: true, official_urls: true,
         },
         orderBy: [{ close_date: 'asc' }],
-        take: 400,
+        take: 12,
       })
-      calls = fallback
-        .filter((call) => agencyMatches(call.agency_name || call.agencyName, agencyName))
-        .slice(0, 12)
-        .map((call) => ({
-          id: call.id,
-          agencyName: call.agency_name || call.agencyName || agencyName,
-          schemeTitle: call.scheme_title || call.title || '',
-          shortDescription: normalizeText(call.description || call.summary, 600),
-          closeDate: call.close_date ? call.close_date.toISOString() : null,
-          isRolling: Boolean(call.is_rolling),
-          amountMin: call.amount_min ?? null,
-          amountMax: call.amount_max ?? null,
-          currency: call.currency ?? null,
-          eligibilitySummary: normalizeText(call.eligibility_text, 500),
-          officialUrls: Array.isArray(call.official_urls) ? call.official_urls : [],
-          score: 0,
-          matchReasons: ['Listed because this funder has it open — not ranked against your idea'],
-        }))
+      calls = fallback.map((call) => ({
+        id: call.id,
+        agencyName: call.agency_name || call.agencyName || '',
+        schemeTitle: call.scheme_title || call.title || '',
+        shortDescription: normalizeText(call.description || call.summary, 600),
+        closeDate: call.close_date ? call.close_date.toISOString() : null,
+        isRolling: Boolean(call.is_rolling),
+        amountMin: call.amount_min ?? null,
+        amountMax: call.amount_max ?? null,
+        currency: call.currency ?? null,
+        eligibilitySummary: normalizeText(call.eligibility_text, 500),
+        officialUrls: Array.isArray(call.official_urls) ? call.official_urls : [],
+        score: 0,
+        matchReasons: ['Open in the catalogue — not ranked against your idea'],
+      }))
     }
 
-    const fundingMatch = { agencyName, calls, rankedSemantically, lowConfidence, matchedAt: new Date().toISOString() }
+    const report = (run.reportJson || {}) as Record<string, any>
+    const fundingMatch = { calls, rankedSemantically, lowConfidence, matchedAt: new Date().toISOString() }
     await prisma.ideaIntelligenceRun.update({
       where: { id: runId },
-      data: { reportJson: { ...(run.reportJson as Record<string, unknown> || {}), fundingMatch } as any },
+      data: { reportJson: { ...report, fundingMatch } as any },
     })
-    return fundingMatch
+    return { fundingMatch, selectedFundingCallId: normalizeText(report.targetFundingCallId, 80) || null }
   }
 
   /**
@@ -2483,6 +2421,7 @@ ${promptLines([
         awards: projects.map((project) => ({
           id: project.id,
           title: project.title,
+          abstract: project.abstractText && project.abstractText.toUpperCase() !== 'NA' ? project.abstractText : null,
           fundingAgency: project.fundingAgency,
           sourceName: project.sourceName,
           sourceKey: project.sourceKey,

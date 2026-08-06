@@ -76,7 +76,6 @@ export type FundingMatchCall = {
 }
 
 export type FundingMatchState = {
-  agencyName: string
   calls: FundingMatchCall[]
   rankedSemantically: boolean
   lowConfidence: boolean

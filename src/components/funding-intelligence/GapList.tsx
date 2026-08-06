@@ -1,6 +1,6 @@
 'use client'
 
-import { Compass, Lightbulb, Loader2, ShieldAlert, Sparkles, TrendingDown } from 'lucide-react'
+import { Compass, Lightbulb, ShieldAlert, TrendingDown } from 'lucide-react'
 
 import type { PriorWorkGap, PriorWorkRow } from '@/lib/ideaIntelligence/priorWork'
 import { formatDuration, formatMoney } from './format'
@@ -57,14 +57,10 @@ export default function GapList({
   directions,
   rows,
   onFindFunders,
-  onStrengthen,
-  busyId,
 }: {
   directions: GapDirection[]
   rows: PriorWorkRow[]
   onFindFunders: (direction: GapDirection) => void
-  onStrengthen: (direction: GapDirection) => void
-  busyId: string | null
 }) {
   const rowsByKey = new Map(rows.map((row) => [row.key, row]))
 
@@ -182,15 +178,6 @@ export default function GapList({
                   className="inline-flex items-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-900"
                 >
                   <Compass className="h-4 w-4" /> Who funds this?
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onStrengthen(direction)}
-                  disabled={Boolean(busyId)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-4 py-2.5 text-sm font-semibold text-teal-800 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {busyId === direction.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  Take my idea here
                 </button>
               </div>
             </article>
