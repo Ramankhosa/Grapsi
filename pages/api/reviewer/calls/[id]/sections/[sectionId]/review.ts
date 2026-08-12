@@ -6,6 +6,7 @@ import {
 } from '@/lib/reviewer-auth-api';
 import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService';
 import { buildFallbackContextSummary, hasMeaningfulSectionContent } from '@/lib/reviewer/content';
+import { ensureCurrentReport } from '@/lib/reviewer/reportGeneration';
 import prisma from '../../../../../../../lib/prisma';
 import {
   reviewSection,
@@ -380,12 +381,34 @@ export default async function handler(
 
       console.log(`Database updated for ${section.section_title}`);
 
+      // Bring the panel report back in line with what was just reviewed.
+      //
+      // Reviewing a revision used to leave the stored report describing the
+      // superseded draft: the workspace flagged it "out of date" and then
+      // waited for someone to notice and press Regenerate. Anyone who exported
+      // the ATR in between got the old verdict with no warning.
+      //
+      // Only workspaces that already have a report are refreshed — a first
+      // section review must not conjure a panel verdict off one section. The
+      // full auto-run passes `skipReportRefresh` because it compiles the report
+      // once at the end; without that every section in the run would pay for a
+      // whole report.
+      let reportRefreshed = false;
+      let reportRefreshError = null;
+      if (req.body?.skipReportRefresh !== true) {
+        const refresh = await ensureCurrentReport(callId, { createIfMissing: false });
+        reportRefreshed = refresh.regenerated;
+        reportRefreshError = refresh.error;
+      }
+
       // Return success with the review data
       return res.status(200).json({
         message: 'Section reviewed successfully',
         review: mergedReviewJson,
         context_summary: contextSummary,
-        prior_section_summaries: priorSectionSummaries
+        prior_section_summaries: priorSectionSummaries,
+        report_refreshed: reportRefreshed,
+        report_refresh_error: reportRefreshError,
       });
     } catch (reviewError) {
       console.error(`Error in AI review process for ${section.section_title}:`, reviewError);

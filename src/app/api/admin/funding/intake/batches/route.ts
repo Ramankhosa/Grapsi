@@ -13,6 +13,7 @@ const batchSourceSchema = z.object({
   sourceUrl: z.string().trim().optional(),
   sourceText: z.string().optional(),
   sourceJsonText: z.string().optional(),
+  documentKind: z.enum(['call_document', 'guideline_document', 'template_document']).optional(),
 })
 
 const batchJobSchema = z.object({

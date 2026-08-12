@@ -6,28 +6,18 @@ import {
 } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 import {
-  ReviewerService,
-  ReviewSummary,
   normalizeConsistencyFlags,
   normalizeCriterionScorecard,
   normalizeFundingRecommendation,
   normalizePriorityActions,
   normalizeSectionScorecard,
 } from '../../../../../lib/services/reviewerService';
-import { hasMeaningfulSectionContent, normalizeStringArray } from '@/lib/reviewer/content';
+import { normalizeStringArray } from '@/lib/reviewer/content';
+import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService';
 import {
-  buildDeterministicSummary,
-  renderDeterministicBriefing,
-  resolveSectionVersions,
-} from '@/lib/reviewer/finalReport';
-
-function isScorableReviewedSection(section: any) {
-  if (section.status !== 'reviewed' || !hasMeaningfulSectionContent(section.user_input)) return false;
-  const mappingJson = section.mappingJson && typeof section.mappingJson === 'object' ? section.mappingJson : {};
-  const linkedSections = Array.isArray(mappingJson.linkedSections) ? mappingJson.linkedSections : [];
-  const linksDeclareWorkflow = linkedSections.some((link: any) => typeof link.workflowMode === 'string');
-  return !linksDeclareWorkflow || linkedSections.some((link: any) => String(link.workflowMode || '') === 'app_draft');
-}
+  ReviewerReportError,
+  generateReviewerReport,
+} from '@/lib/reviewer/reportGeneration';
 
 // Define types for the review JSON structure
 interface ReviewJson {
@@ -191,160 +181,56 @@ export default async function handler(
     // Handle POST request - generate new final review
     if (req.method === 'POST') {
       try {
-        // Fetch all sections
-        const allSections = await prisma.reviewerSection.findMany({
-          where: { call_id: id },
+        const result = await generateReviewerReport({
+          callId: id,
+          versionSelections: req.body?.versionSelections || null,
         });
 
-        // A revision is stored as a new row, so the raw list holds every draft
-        // ever submitted. Report on one version per section — the newest, or
-        // whichever the report page's version picker asked for — otherwise the
-        // same section is scored twice and superseded weaknesses resurface.
-        const { effective: sections, superseded, chosenVersions } = resolveSectionVersions(
-          allSections,
-          req.body?.versionSelections || null
-        );
+        const updatedCall = await prisma.reviewerCall.findUnique({ where: { id } });
 
-        // Filter to only include reviewed sections
-        const reviewedSections = sections.filter(isScorableReviewedSection);
-
-        // Check if we have reviewed sections
-        if (reviewedSections.length === 0) {
-          return res.status(400).json({
-            error: superseded.length > 0
-              ? 'The current version of every section is still awaiting review. Review the latest revisions before generating a final review.'
-              : 'No reviewed sections found for this call. Please review at least one section before generating a final review.'
-          });
-        }
-
-        // Prepare section summaries for the overall review
-        const sectionSummaries = reviewedSections.map(section => {
-          const reviewJson = section.ai_review_json as any || {
-            score: 0,
-            summary: 'No review available',
-            strengths: [],
-            weaknesses: [],
-            recommendations: []
-          };
-
-          return {
-            title: section.section_title,
+        return res.status(200).json({
+          call: {
+            ...updatedCall,
+            overall_review_json: toSafeOverallReview(result.report),
+          },
+          // Every version is returned so the report page can keep offering its
+          // version picker; score_basis.scoredVersions says which ones this
+          // report was actually built from.
+          sections: result.allSections.map(section => ({
+            ...section,
+            ai_review_json: section.ai_review_json || null,
             version: section.version || 0,
-            content: section.user_input || '',
-            context_summary: section.context_summary || '',
-            review_json: reviewJson
-          };
-        });
-
-        // Get LLM preference from call or default to Gemini
-        const modelType = call.LLM_model_used === 'OPENAI' ? 'O' : 'G';
-
-        const parsedContext = call.parsed_json && typeof call.parsed_json === 'object'
-          ? (call.parsed_json as any)
-          : null;
-        const description = parsedContext
-          ? parsedContext.reviewer_context_text || parsedContext.description || parsedContext.call_summary || ''
-          : '';
-
-        // Compliance, coverage, limit breaches, and the weighted score are
-        // counted here rather than asked for. Every *authored* section counts
-        // toward coverage, not only the reviewed ones, so a drafted-but-
-        // unreviewed section is not reported as missing.
-        const deterministic = buildDeterministicSummary(
-          sections.map(section => ({
-            title: section.section_title,
-            version: section.version || 0,
-            content: section.user_input || '',
-            contextSummary: section.context_summary || '',
-            review: (section.ai_review_json as any) || null,
-            bucketKey: (section as any).reviewerBucketKey || null,
           })),
-          parsedContext
-        );
-        const anchorScore = deterministic.weightedScore ?? deterministic.meanSectionScore ?? null;
-
-        // Generate the overall review
-        const reviewerService = new ReviewerService();
-
-        try {
-          console.log('⭐ Starting final review generation for call:', id);
-          console.log('Using model type:', modelType);
-          console.log('Number of reviewed sections:', reviewedSections.length);
-
-          const overallReview = await reviewerService.generateOverallReview(
-            call.project_title,
-            description,
-            sectionSummaries,
-            modelType as 'O' | 'G',
-            {
-              deterministicBriefing: renderDeterministicBriefing(deterministic),
-              anchorScore,
-            }
-          );
-
-          console.log('✅ Final review generated successfully:', !!overallReview);
-
-          const reportPayload = {
-            ...overallReview,
-            compliance: deterministic.compliance,
-            score_basis: {
-              weightedScore: deterministic.weightedScore,
-              meanSectionScore: deterministic.meanSectionScore,
-              anchorScore,
-              criterionRollup: deterministic.criterionRollup,
-              sectionScores: deterministic.sectionScores,
-              complianceFlagCounts: deterministic.complianceFlagCounts,
-              // Records exactly which draft each score came from, so a reader
-              // can tell a v3 report from a v1 one.
-              scoredVersions: chosenVersions,
-              supersededVersionCount: superseded.length,
-            },
-            generated_at: new Date().toISOString(),
-          };
-
-          // Update the call with the overall review
-          const updatedCall = await prisma.reviewerCall.update({
-            where: { id },
-            data: {
-              overall_review_json: reportPayload as any,
-              updated_at: new Date()
-            },
-          });
-
-          console.log('✅ Call updated successfully with overall review');
-
-          const safeOverallReview = toSafeOverallReview(reportPayload);
-
-          return res.status(200).json({
-            call: {
-              ...updatedCall,
-              overall_review_json: safeOverallReview
-            },
-            // Every version is returned so the report page can keep offering
-            // its version picker; `score_basis.scoredVersions` says which ones
-            // this report was actually built from.
-            sections: allSections.map(section => ({
-              ...section,
-              ai_review_json: section.ai_review_json || null,
-              version: section.version || 0,
-            })),
-            scoredVersions: chosenVersions,
-          });
-        } catch (error) {
-          console.error('Error generating overall review:', error);
-          return res.status(500).json({ 
-            error: 'Failed to generate the final review. There may be an issue with the AI model. Please try again.',
-            details: error.message
-          });
-        }
+          scoredVersions: result.scoredVersions,
+        });
       } catch (error) {
-        console.error('Error in POST handler:', error);
-        return res.status(500).json({ 
-          error: 'Failed to generate review',
-          details: error.message
+        if (error instanceof ReviewerReportError) {
+          return res.status(error.status).json({ error: error.message, code: error.code });
+        }
+
+        // A rate-limited report is a wait, not a failure. Returning 500 here
+        // meant the auto-run's last step died on a transient limit with no
+        // retry and no report, throwing away every section review before it.
+        if (isGeminiRateLimitErrorLike(error)) {
+          const retryAfterMs = getGeminiRetryAfterMs(error) || 60000;
+          return res
+            .status(429)
+            .setHeader('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))))
+            .json({
+              error: error.message || 'The reviewer model is rate limited.',
+              code: 'GEMINI_RATE_LIMITED',
+              retryAfterMs,
+            });
+        }
+
+        console.error('Error generating overall review:', error);
+        return res.status(500).json({
+          error: 'Failed to generate the final review. There may be an issue with the AI model. Please try again.',
+          details: error.message,
         });
       }
     }
+
     
     // Return method not allowed for other HTTP methods
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });

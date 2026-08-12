@@ -1,9 +1,14 @@
 import Head from 'next/head'
 import Link from 'next/link'
+import { useRouter } from 'next/router'
 import { useState, type ReactNode } from 'react'
 import { RULES_SOURCE_LABELS, type ReviewerRulesSource } from '@/lib/reviewer/rulesSource'
 import ReviewerSectionRail from './ReviewerSectionRail'
-import type { ReviewerSectionLike } from '@/lib/reviewer/sectionGrouping'
+import {
+  countReviewerSections,
+  reportFreshness,
+  type ReviewerSectionLike,
+} from '@/lib/reviewer/sectionGrouping'
 
 /**
  * The one chrome every reviewer page wears.
@@ -19,6 +24,77 @@ export interface ReviewerShellCall {
   project_title?: string | null
   agency_name?: string | null
   parsed_json?: any
+  overall_review_json?: any
+}
+
+/**
+ * A numbered stage in the rail.
+ *
+ * The rail used to be three unlabelled links with the section list wedged
+ * between them, which gave no sense of sequence or of where the workspace had
+ * got to. Numbering the stages and stating each one's real status turns the
+ * same navigation into a map of the process.
+ */
+function RailStage({
+  index,
+  label,
+  status,
+  href,
+  active,
+  tone = 'idle',
+  children,
+}: {
+  index: number
+  label: string
+  status: string
+  href?: string
+  active?: boolean
+  tone?: 'done' | 'active' | 'warn' | 'idle'
+  children?: ReactNode
+}) {
+  const dot = {
+    done: 'bg-emerald-500',
+    active: 'bg-cobalt-600',
+    warn: 'bg-amber-500',
+    idle: 'bg-nickel-300',
+  }[tone]
+
+  const head = (
+    <div className="flex items-start gap-2.5">
+      <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot}`} aria-hidden="true" />
+      <div className="min-w-0">
+        <div className="nk-eyebrow">
+          {index}. {label}
+        </div>
+        <div
+          className={`mt-0.5 text-[12.5px] ${
+            tone === 'warn' ? 'text-amber-700' : active ? 'text-cobalt-800' : 'text-nickel-600'
+          }`}
+        >
+          {status}
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div>
+      {href ? (
+        <Link
+          href={href}
+          aria-current={active ? 'page' : undefined}
+          className={`nk-panel-quiet block px-3 py-2.5 transition-colors hover:border-cobalt-200 hover:bg-cobalt-50 ${
+            active ? 'border-cobalt-300 bg-cobalt-50' : ''
+          }`}
+        >
+          {head}
+        </Link>
+      ) : (
+        <div className="px-3 py-2.5">{head}</div>
+      )}
+      {children}
+    </div>
+  )
 }
 
 function RulesSourceBadge({ call }: { call: ReviewerShellCall }) {
@@ -52,32 +128,79 @@ export default function ReviewerShell({
   showRail?: boolean
 }) {
   const [railOpen, setRailOpen] = useState(false)
+  const router = useRouter()
   const callId = call?.id
   const workspaceName = call?.project_title || 'Reviewer workspace'
 
+  const counts = countReviewerSections(sections)
+  const freshness = reportFreshness(call?.overall_review_json, sections)
+  const path = router?.asPath || ''
+
+  const sectionsStatus =
+    counts.total === 0
+      ? 'Nothing added yet'
+      : counts.stale > 0
+        ? `${counts.reviewed} of ${counts.total} reviewed · ${counts.stale} edited`
+        : `${counts.reviewed} of ${counts.total} reviewed`
+
+  const reportStatus =
+    counts.reviewed === 0
+      ? 'Review a section first'
+      : freshness === 'missing'
+        ? 'Not generated yet'
+        : freshness === 'stale'
+          ? 'Out of date'
+          : 'Ready to read'
+
   const rail = (
-    <div className="space-y-5">
-      <Link
+    <div className="space-y-4">
+      <RailStage
+        index={1}
+        label="The call"
+        status="Rules and criteria this is judged against"
         href={`/reviewer/${callId}/call-analysis`}
-        className="nk-panel-quiet block px-3 py-2.5 transition-colors hover:border-cobalt-200 hover:bg-cobalt-50"
+        active={path.includes('/call-analysis')}
+        tone="done"
+      />
+
+      <RailStage
+        index={2}
+        label="Your proposal"
+        status={sectionsStatus}
+        href={counts.total === 0 ? `/reviewer/${callId}/import-proposal` : undefined}
+        tone={
+          counts.total === 0
+            ? 'idle'
+            : counts.stale > 0
+              ? 'warn'
+              : counts.reviewed === counts.total
+                ? 'done'
+                : 'active'
+        }
       >
-        <div className="nk-eyebrow">The call</div>
-        <div className="mt-1 text-[13px] font-medium text-nickel-800">Rules &amp; criteria</div>
-      </Link>
+        {showRail && counts.total > 0 && (
+          <div className="mt-2">
+            <ReviewerSectionRail callId={callId} sections={sections} activeSectionId={activeSectionId} />
+          </div>
+        )}
+      </RailStage>
 
-      {showRail && (
-        <ReviewerSectionRail callId={callId} sections={sections} activeSectionId={activeSectionId} />
-      )}
-
-      <div className="border-t border-nickel-200 pt-3">
-        <Link
-          href={`/reviewer/${callId}/final-review`}
-          className="nk-panel-quiet block px-3 py-2.5 transition-colors hover:border-cobalt-200 hover:bg-cobalt-50"
-        >
-          <div className="nk-eyebrow">Outcome</div>
-          <div className="mt-1 text-[13px] font-medium text-nickel-800">Panel report</div>
-        </Link>
-      </div>
+      <RailStage
+        index={3}
+        label="Panel report"
+        status={reportStatus}
+        href={`/reviewer/${callId}/final-review`}
+        active={path.includes('/final-review')}
+        tone={
+          counts.reviewed === 0
+            ? 'idle'
+            : freshness === 'stale'
+              ? 'warn'
+              : freshness === 'missing'
+                ? 'active'
+                : 'done'
+        }
+      />
     </div>
   )
 

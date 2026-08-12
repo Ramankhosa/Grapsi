@@ -648,7 +648,7 @@ export function buildDescriptionFromEvidence(
 
 export function normalizeExtractionPayload(
   raw: any,
-  options?: { segments?: FundingSourceSegment[]; allowDescriptionWithoutEvidence?: boolean }
+  options?: { segments?: FundingSourceSegment[] }
 ): FundingExtractionPayload {
   const fields = {} as FundingExtractionPayload['fields'];
   const warnings = Array.isArray(raw?.warnings) ? raw.warnings.map((item: unknown) => String(item)) : [];
@@ -668,12 +668,18 @@ export function normalizeExtractionPayload(
     warnings.push(...normalized.warnings);
 
     if (definition.key === 'description') {
+      // The extractor now writes description as grounded prose, so the model's own
+      // text is authoritative and the stitched evidence quotes are only a fallback
+      // for older/JSON payloads that carry snippets instead. Previously a usable
+      // description was discarded whenever the evidence stitch came back empty,
+      // which left the field blank on effectively every LLM-sourced call.
       const deterministic = buildDescriptionFromEvidence(evidence, segmentMap);
-      value = status === 'supported'
-        ? deterministic.description || coerceTextareaText(value)
-        : null;
+      const resolved = status === 'supported'
+        ? coerceTextareaText(value) || deterministic.description
+        : '';
+      value = resolved || null;
       summarySegments = deterministic.segmentIds;
-      status = deterministic.description || options?.allowDescriptionWithoutEvidence ? status : 'unsupported';
+      status = resolved ? status : 'unsupported';
     }
 
     if (ARRAY_FIELD_KEYS.has(definition.key) && Array.isArray(value) && value.length === 0) {

@@ -45,7 +45,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         orderBy: { created_at: 'desc' },
       });
 
-      return res.status(200).json({ calls });
+      // Review progress per workspace, so the list can say "6 of 8 reviewed"
+      // instead of the ingestion status it used to show. `review_status` is a
+      // parser state that has been "parsed" for every workspace since the
+      // analyzer was removed, so as a list badge it told the user nothing.
+      //
+      // Section rows are counted per *title* (a revision is a new row), and
+      // `ai_review_json` is deliberately not selected — it is the largest
+      // column on the table and nothing here needs it.
+      const sectionRows = calls.length > 0
+        ? await prisma.reviewerSection.findMany({
+            where: { call_id: { in: calls.map((call) => call.id) } },
+            select: {
+              call_id: true,
+              section_title: true,
+              version: true,
+              status: true,
+              sourceStale: true,
+            },
+          })
+        : [];
+
+      const newestByCallAndTitle = new Map<string, any>();
+      for (const row of sectionRows) {
+        const key = `${row.call_id}::${row.section_title}`;
+        const seen = newestByCallAndTitle.get(key);
+        if (!seen || Number(row.version || 1) > Number(seen.version || 1)) {
+          newestByCallAndTitle.set(key, row);
+        }
+      }
+
+      const progressByCall = new Map<string, { total: number; reviewed: number; stale: number }>();
+      for (const row of newestByCallAndTitle.values()) {
+        const entry = progressByCall.get(row.call_id) || { total: 0, reviewed: 0, stale: 0 };
+        entry.total += 1;
+        // `sourceStale` is only ever set together with a return to draft, so
+        // these two are disjoint.
+        if (row.sourceStale) entry.stale += 1;
+        else if (row.status === 'reviewed') entry.reviewed += 1;
+        progressByCall.set(row.call_id, entry);
+      }
+
+      const callsWithProgress = calls.map((call) => ({
+        ...call,
+        progress: progressByCall.get(call.id) || { total: 0, reviewed: 0, stale: 0 },
+        has_report: Boolean(
+          call.overall_review_json && Object.keys(call.overall_review_json as object).length > 0
+        ),
+      }));
+
+      return res.status(200).json({ calls: callsWithProgress });
     } catch (error) {
       console.error('Error fetching reviewer calls:', error);
       return res.status(500).json({ error: 'Failed to fetch reviewer calls' });

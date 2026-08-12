@@ -5,7 +5,7 @@ import { useRouter } from "next/router";
 import axios from "axios";
 import Link from "next/link";
 import Head from "next/head";
-import { FaFileAlt, FaPlus, FaArrowLeft, FaSpinner, FaEdit, FaTrash } from "react-icons/fa";
+import { FaFileAlt, FaPlus, FaTrash } from "react-icons/fa";
 
 type ReviewerCall = {
   id: string;
@@ -14,7 +14,38 @@ type ReviewerCall = {
   reviewerMode?: string;
   review_status: string;
   created_at: string;
+  progress?: { total: number; reviewed: number; stale: number };
+  has_report?: boolean;
 };
+
+/**
+ * Where a workspace has actually got to, phrased as the user would say it.
+ *
+ * The badge here used to report `review_status`, the funding-call parser's
+ * state — which has read "parsed" for every workspace since the analyzer was
+ * removed. A list of identical green "Ready" pills told a returning user
+ * nothing about which proposal still needed work.
+ */
+function progressLabel(call: ReviewerCall): { text: string; className: string } {
+  const progress = call.progress || { total: 0, reviewed: 0, stale: 0 };
+
+  if (progress.total === 0) {
+    return { text: "No sections yet", className: "nk-badge" };
+  }
+  if (progress.stale > 0) {
+    return { text: `${progress.stale} edited since review`, className: "nk-badge nk-badge-warn" };
+  }
+  if (progress.reviewed < progress.total) {
+    return {
+      text: `${progress.reviewed} of ${progress.total} reviewed`,
+      className: "nk-badge nk-badge-warn",
+    };
+  }
+  if (!call.has_report) {
+    return { text: "Reviewed · no report yet", className: "nk-badge" };
+  }
+  return { text: "Report ready", className: "nk-badge nk-badge-ok" };
+}
 
 export default function ReviewerDashboard() {
   const { data: session, status } = useSession();
@@ -23,6 +54,7 @@ export default function ReviewerDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -58,30 +90,29 @@ export default function ReviewerDashboard() {
     fetchReviewerCalls();
   }, [status, router]);
 
-  // Handle delete project
+  // Deleting a workspace throws away every review in it, so it asks twice —
+  // inline, where the row is, rather than in a browser dialog that appears in
+  // the corner of the screen detached from the thing it is about.
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
-    if (window.confirm("Are you sure you want to delete this project? This action cannot be undone.")) {
-      try {
-        setIsDeleting(id);
-        await axios.delete(`/api/reviewer/calls/${id}`);
-        setReviewerCalls(reviewerCalls.filter(call => call.id !== id));
-      } catch (err) {
-        console.error("Error deleting project:", err);
-        setError("Failed to delete project. Please try again.");
-      } finally {
-        setIsDeleting(null);
-      }
-    }
-  };
 
-  // Handle edit project
-  const handleEdit = (id: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    router.push(`/reviewer/${id}`);
+    if (confirmDelete !== id) {
+      setConfirmDelete(id);
+      return;
+    }
+
+    try {
+      setIsDeleting(id);
+      await axios.delete(`/api/reviewer/calls/${id}`);
+      setReviewerCalls(reviewerCalls.filter(call => call.id !== id));
+    } catch (err) {
+      console.error("Error deleting project:", err);
+      setError("Failed to delete project. Please try again.");
+    } finally {
+      setIsDeleting(null);
+      setConfirmDelete(null);
+    }
   };
 
   if (status === "loading") {
@@ -160,64 +191,101 @@ export default function ReviewerDashboard() {
                     </p>
                   </div>
 
-                  <span
-                    className={
-                      call.review_status === "parsed"
-                        ? "nk-badge nk-badge-ok"
-                        : call.review_status === "pending"
-                          ? "nk-badge nk-badge-warn"
-                          : "nk-badge nk-badge-danger"
-                    }
-                  >
-                    {call.review_status === "parsed"
-                      ? "Ready"
-                      : call.review_status === "pending"
-                        ? "Pending"
-                        : "Failed"}
-                  </span>
+                  {(() => {
+                    const badge = progressLabel(call);
+                    return <span className={badge.className}>{badge.text}</span>;
+                  })()}
 
                   <span className="nk-mono hidden shrink-0 text-nickel-500 sm:inline">
                     {new Date(call.created_at).toLocaleDateString()}
                   </span>
 
                   <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      onClick={e => handleEdit(call.id, e)}
-                      className="nk-btn-ghost nk-btn-xs"
-                      aria-label={`Open ${call.project_title}`}
-                    >
-                      <FaEdit aria-hidden="true" />
-                    </button>
-                    <button
-                      onClick={e => handleDelete(call.id, e)}
-                      disabled={isDeleting === call.id}
-                      className="nk-btn-ghost nk-btn-xs text-red-600 hover:bg-red-50 hover:text-red-700"
-                      aria-label={`Delete ${call.project_title}`}
-                    >
-                      {isDeleting === call.id ? (
-                        <FaSpinner className="animate-spin" aria-hidden="true" />
-                      ) : (
+                    {/* A pencil that navigates rather than edits reads as a
+                        trap. The row title is the way in; this is the way out
+                        of a workspace you no longer want. */}
+                    {confirmDelete === call.id ? (
+                      <>
+                        <button
+                          onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setConfirmDelete(null);
+                          }}
+                          className="nk-btn-ghost nk-btn-xs"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={e => handleDelete(call.id, e)}
+                          disabled={isDeleting === call.id}
+                          className="nk-btn-xs rounded-md bg-red-600 px-2 py-1 text-white hover:bg-red-700"
+                        >
+                          {isDeleting === call.id ? "Deleting…" : "Delete for good"}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={e => handleDelete(call.id, e)}
+                        className="nk-btn-ghost nk-btn-xs text-nickel-400 hover:bg-red-50 hover:text-red-700"
+                        aria-label={`Delete ${call.project_title}`}
+                      >
                         <FaTrash aria-hidden="true" />
-                      )}
-                    </button>
+                      </button>
+                    )}
                   </div>
                 </div>
               </li>
             ))}
           </ul>
         ) : (
-          <div className="nk-panel p-12 text-center">
-            <span className="nk-tile mx-auto mb-4 h-12 w-12">
-              <FaFileAlt aria-hidden="true" />
-            </span>
-            <h3 className="nk-title">No workspaces yet</h3>
-            <p className="nk-sub mx-auto mt-2 max-w-prose">
-              Start from a funding call in the library, or paste the call's own URL and
-              its terms and reviewer rules will be pulled out for you.
-            </p>
-            <Link href="/reviewer/new" className="nk-btn-primary nk-btn-sm mt-6">
-              <FaPlus aria-hidden="true" /> New workspace
-            </Link>
+          // First contact with the module. Someone arriving here has no idea
+          // what a "workspace" is or what they get at the end, so the empty
+          // state explains the shape of the thing before asking for a click.
+          <div className="nk-panel p-8 sm:p-12">
+            <div className="text-center">
+              <span className="nk-tile mx-auto mb-4 h-12 w-12">
+                <FaFileAlt aria-hidden="true" />
+              </span>
+              <h3 className="nk-title">Have your proposal reviewed before the funder does</h3>
+              <p className="nk-sub mx-auto mt-2 max-w-prose">
+                Point it at a funding call, paste in your draft, and it scores every
+                section against that call's published rules and criteria — then writes
+                the panel report a committee would.
+              </p>
+            </div>
+
+            <ol className="mx-auto mt-8 grid max-w-3xl gap-3 sm:grid-cols-3">
+              {[
+                {
+                  n: 1,
+                  title: "Pick the call",
+                  body: "Choose one from the library, or paste its URL and the rules are extracted for you.",
+                },
+                {
+                  n: 2,
+                  title: "Add your proposal",
+                  body: "Import the document once — it is split into the sections the call asks for.",
+                },
+                {
+                  n: 3,
+                  title: "Run the review",
+                  body: "Section scores, a funding verdict, and a downloadable Action Taken Report.",
+                },
+              ].map(step => (
+                <li key={step.n} className="nk-panel-quiet px-4 py-3">
+                  <div className="nk-eyebrow">Step {step.n}</div>
+                  <div className="mt-1 text-[13px] font-medium text-nickel-900">{step.title}</div>
+                  <p className="mt-1 text-[12.5px] leading-5 text-nickel-600">{step.body}</p>
+                </li>
+              ))}
+            </ol>
+
+            <div className="mt-8 text-center">
+              <Link href="/reviewer/new" className="nk-btn-primary nk-btn-sm">
+                <FaPlus aria-hidden="true" /> Create your first workspace
+              </Link>
+            </div>
           </div>
         )}
       </main>

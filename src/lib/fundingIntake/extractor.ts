@@ -37,7 +37,7 @@ Every non-null value must include one or more evidence anchors that reference th
 If a field is unsupported, return value=null, status="unsupported", confidence=0, evidence=[].
 If the source contains conflicting values for the same field, do not choose one. Return value=null, status="ambiguous", and include evidence for the conflicting support.
 Do not invent URLs, contacts, sponsor type, funder country, open date, or duration month counts.
-Description is not a freeform summary. Return evidence-backed source snippets for description; downstream code will build the stored description deterministically from those snippets. Choose snippets that cover the call purpose, supported research or innovation themes, target applicants or beneficiaries, eligible activities, and expected outcomes when those details are present.
+Write description as a readable introduction to the call: 3 to 5 complete sentences in plain prose, grounded entirely in the supplied segments. Cover the call purpose, the research or innovation themes it supports, the target applicants or beneficiaries, the eligible activities, and the expected outcomes, whenever those details are present. Do not stitch disconnected fragments together, do not use bullet points, and do not add any fact that the segments do not support. Still attach evidence anchors quoting the exact source text each statement rests on.
 For disciplines, extract concise research-area/search tags from explicit call language: domains, subfields, themes, technologies, methods, sectors, populations, challenge areas, or mission priorities. Include both broad and specific labels only when supported by the source. Do not add administrative terms, funder names, deadlines, countries, or unsupported synonyms as disciplines.
 For eligibility_text, preserve applicant type, institution type, career stage, citizenship/residency, consortium, PI, host, and exclusion rules that affect fit.
 For expected_deliverables_text, preserve outputs, milestones, reporting, dissemination, implementation, impact, beneficiary, or commercialization expectations that affect proposal fit.
@@ -83,11 +83,12 @@ Field rules:
 - For numeric fields, return a number or null
 - For boolean fields, return a boolean or null
 - For date fields, use YYYY-MM-DD when explicitly supported, otherwise null
-- For description, return short supported source snippets; do not synthesize a new narrative
+- For description, return 3 to 5 sentences of grounded prose, not fragments or bullets
 
 Search and embedding extraction guidance:
 - disciplines: return 3 to 12 concise research-area tags when supported, prioritizing explicit themes, scientific domains, technology areas, target sectors, community/problem areas, and mission topics that researchers might search for. Keep specific phrases such as "digital health", "climate adaptation", "tribal livelihoods", "AI for agriculture", or "materials for energy" when the source uses that concept.
-- description: prefer up to three high-signal evidence snippets that collectively explain what the call funds, which research/problem areas it targets, who or what the work should benefit, and what outcomes are expected.
+- description: write the introduction a researcher would want to read first — what the call funds, which research/problem areas it targets, who or what the work should benefit, and what outcomes are expected. Prefer specific supported detail over generic funder boilerplate, and cite an evidence anchor for each claim.
+- eligibility_text and expected_deliverables_text: write compact readable prose rather than fragment lists, keeping the source's own terms for any rule, threshold, or exclusion that affects fit.
 - funding_kinds, institution_types, career_stages, geography_scope, eligible_countries, eligible_regions, host_countries, funder_country, sponsor_type, citizenship_requirements, residency_requirements, and application_languages are filter-critical. Extract them separately rather than burying them only in eligibility_text.
 - eligibility_text should include fit constraints and exclusions in compact prose copied or closely anchored to the source.
 - expected_deliverables_text should include funded activities, outputs, milestones, impact expectations, reporting obligations, and downstream adoption/commercialization expectations when stated.

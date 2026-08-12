@@ -4,8 +4,10 @@ import { prisma } from '@/lib/prisma'
 import {
   isAccessError,
   requireTenantUser,
+  withOrgScope,
   TENANT_ASSIGNER_ROLES,
 } from '@/lib/auth/tenantAccess'
+import { intersectRequestedUnits } from '@/lib/orgUnits/scope'
 import { createNotifications, serializeNotification } from '@/lib/notifications/notificationService'
 
 export const dynamic = 'force-dynamic'
@@ -65,13 +67,13 @@ export async function POST(request: NextRequest) {
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
-  if (!context.isAssigner) {
+  const scoped = await withOrgScope(context)
+  if (!scoped.scope.canAssign && !scoped.scope.canViewReports) {
     return NextResponse.json(
       { error: `Only ${TENANT_ASSIGNER_ROLES.join(', ')} can send notifications.` },
       { status: 403 }
     )
   }
-
   let payload
   try {
     payload = sendSchema.parse(await request.json())
@@ -82,10 +84,23 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // A scoped head broadcasts to their own branch only, and cannot reach the
+  // whole organization — otherwise the scope would be cosmetic.
+  if (!scoped.scope.isTenantWide && payload.allTenantUsers) {
+    return NextResponse.json(
+      { error: 'You can only message people in the departments you manage.' },
+      { status: 403 }
+    )
+  }
+  const requestedUnitIds = payload.orgUnitIds || []
+  const scopedUnitIds = scoped.scope.isTenantWide
+    ? requestedUnitIds
+    : intersectRequestedUnits(scoped.scope, requestedUnitIds)
+
   const sent = await createNotifications({
     tenantId: context.tenantId,
     userIds: payload.userIds,
-    orgUnitIds: payload.orgUnitIds,
+    orgUnitIds: scopedUnitIds,
     allTenantUsers: payload.allTenantUsers,
     title: payload.title,
     body: payload.body,

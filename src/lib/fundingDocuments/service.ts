@@ -49,10 +49,19 @@ function inferMimeType(fileName: string, explicitMime?: string | null) {
   ) {
     return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   }
+  if (mime === 'text/plain' || lowerName.endsWith('.txt')) {
+    return 'text/plain';
+  }
   if (lowerName.endsWith('.doc')) {
     throw new Error('Legacy .doc files are not supported. Please convert the file to PDF or DOCX and upload again.');
   }
-  throw new Error('Only PDF and DOCX funding documents are supported');
+  throw new Error('Only PDF, DOCX, and plain-text funding documents are supported');
+}
+
+const FUNDING_DOCUMENT_KINDS = ['call_document', 'guideline_document', 'template_document'] as const;
+
+export function isFundingDocumentKind(value: unknown): value is (typeof FUNDING_DOCUMENT_KINDS)[number] {
+  return typeof value === 'string' && (FUNDING_DOCUMENT_KINDS as readonly string[]).includes(value);
 }
 
 function sha256(buffer: Buffer) {
@@ -142,6 +151,7 @@ export class FundingDocumentService {
     const fileName = input.file.name || 'funding-call-document';
     const mimeType = inferMimeType(fileName, input.file.type);
     const byteSize = input.file.size;
+    const documentKind = input.documentKind || 'call_document';
 
     if (byteSize > getMaxBytes()) {
       throw new Error('Funding document file is too large');
@@ -157,10 +167,14 @@ export class FundingDocumentService {
     });
 
     if (existing) {
+      const kindMismatch = existing.document_kind !== documentKind;
       return {
         document: existing,
         duplicate: true,
-        message: 'This document has already been uploaded for this funding call.',
+        kindMismatch,
+        message: kindMismatch
+          ? `This document is already registered for this funding call as ${existing.document_kind}.`
+          : 'This document has already been uploaded for this funding call.',
       };
     }
 
@@ -174,15 +188,25 @@ export class FundingDocumentService {
         _max: { version: true },
       });
       const version = (aggregate._max.version || 0) + 1;
-      const previousActive = await tx.fundingCallDocument.findFirst({
-        where: { funding_call_id: input.fundingCallId, is_active: true },
+      // Documents are additive: a call can hold several active documents at once
+      // (announcement + annexure + guidelines). Only a true re-upload — same kind
+      // and same original filename — supersedes the previous version.
+      const superseded = await tx.fundingCallDocument.findMany({
+        where: {
+          funding_call_id: input.fundingCallId,
+          is_active: true,
+          document_kind: documentKind,
+          original_filename: fileName,
+        },
         select: { id: true },
       });
 
-      await tx.fundingCallDocument.updateMany({
-        where: { funding_call_id: input.fundingCallId, is_active: true },
-        data: { is_active: false },
-      });
+      if (superseded.length > 0) {
+        await tx.fundingCallDocument.updateMany({
+          where: { id: { in: superseded.map((doc) => doc.id) } },
+          data: { is_active: false },
+        });
+      }
 
       const created = await tx.fundingCallDocument.create({
         data: {
@@ -196,7 +220,7 @@ export class FundingDocumentService {
           source_url: input.sourceUrl || null,
           checksum,
           uploaded_by: input.operator.email || input.operator.userId,
-          document_kind: 'call_document',
+          document_kind: documentKind,
           parsing_status: 'pending',
           embedding_status: 'not_generated',
         },
@@ -208,14 +232,14 @@ export class FundingDocumentService {
           funding_call_id: input.fundingCallId,
           event_type: 'uploaded',
           actor_user_id: input.operator.userId,
-          payload: asJson({ originalFilename: fileName, checksum, version }),
+          payload: asJson({ originalFilename: fileName, checksum, version, documentKind }),
         },
       });
 
-      if (previousActive) {
+      for (const previous of superseded) {
         await tx.fundingCallDocumentEvent.create({
           data: {
-            document_id: previousActive.id,
+            document_id: previous.id,
             funding_call_id: input.fundingCallId,
             event_type: 'superseded',
             actor_user_id: input.operator.userId,
@@ -227,9 +251,11 @@ export class FundingDocumentService {
       return created;
     });
 
-    void this.processDocument(document.id, input.operator).catch((error) => {
-      console.error('[FundingDocuments] background document processing failed:', error);
-    });
+    if (!input.deferProcessing) {
+      void this.processDocument(document.id, input.operator).catch((error) => {
+        console.error('[FundingDocuments] background document processing failed:', error);
+      });
+    }
 
     return {
       document,
@@ -237,6 +263,215 @@ export class FundingDocumentService {
       message: 'Funding document uploaded and queued for processing.',
       call,
     };
+  }
+
+  /**
+   * Persist plain text (pasted intake text, fetched web-page content) as a
+   * .txt-backed funding document so it flows through the same parse →
+   * sectionize → chunk → embed pipeline as uploaded files.
+   */
+  async createDocumentFromText(input: {
+    fundingCallId: string;
+    text: string;
+    fileNameHint?: string | null;
+    sourceUrl?: string | null;
+    documentKind?: FundingDocumentUploadInput['documentKind'];
+    deferProcessing?: boolean;
+    operator: FundingDocumentUploadInput['operator'];
+  }) {
+    const text = String(input.text || '').trim();
+    if (!text) {
+      throw new Error('Cannot create a funding document from empty text');
+    }
+
+    let fileName = sanitizeFileName(input.fileNameHint || 'funding-call-source');
+    if (!fileName.toLowerCase().endsWith('.txt')) {
+      fileName = `${fileName}.txt`;
+    }
+
+    const bytes = Buffer.from(text, 'utf8');
+    const file = {
+      name: fileName,
+      type: 'text/plain',
+      size: bytes.byteLength,
+      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    } as unknown as File;
+
+    return this.uploadDocument({
+      fundingCallId: input.fundingCallId,
+      file,
+      sourceUrl: input.sourceUrl || null,
+      documentKind: input.documentKind,
+      deferProcessing: input.deferProcessing,
+      operator: input.operator,
+    });
+  }
+
+  /**
+   * Register a file that already exists on disk (an intake upload) as a funding
+   * document without copying it. Used by intake ingestion and syncFromIntake.
+   */
+  async registerLocalFileDocument(input: {
+    fundingCallId: string;
+    filePath: string;
+    mimeType?: string | null;
+    originalFilename?: string | null;
+    sourceUrl?: string | null;
+    documentKind?: FundingDocumentUploadInput['documentKind'];
+    /** Extra checksums that should also count as "already registered". */
+    aliasChecksums?: string[];
+    deferProcessing?: boolean;
+    operator: FundingDocumentUploadInput['operator'];
+    eventPayload?: Record<string, unknown>;
+  }) {
+    await ensureFundingCall(input.fundingCallId);
+    const documentKind = input.documentKind || 'call_document';
+    const storagePath = input.filePath;
+    const absolutePath = path.isAbsolute(storagePath) ? storagePath : path.join(process.cwd(), storagePath);
+    if (!fsSync.existsSync(absolutePath)) {
+      throw new Error('The source file for this funding document could not be found');
+    }
+
+    const fileName = sanitizeFileName(input.originalFilename || path.basename(storagePath));
+    const mimeType = inferMimeType(fileName, input.mimeType);
+    const checksum = await computeFileSha256(absolutePath);
+    const knownChecksums = [checksum, ...(input.aliasChecksums || [])].filter(Boolean);
+
+    const existing = await prisma.fundingCallDocument.findFirst({
+      where: {
+        funding_call_id: input.fundingCallId,
+        checksum: { in: knownChecksums },
+      },
+    });
+    if (existing) {
+      return {
+        document: existing,
+        duplicate: true,
+        kindMismatch: existing.document_kind !== documentKind,
+        message: 'This file is already registered as a funding document.',
+      };
+    }
+
+    const byteSize = (await fs.stat(absolutePath)).size;
+    const document = await prisma.$transaction(async (tx) => {
+      const aggregate = await tx.fundingCallDocument.aggregate({
+        where: { funding_call_id: input.fundingCallId },
+        _max: { version: true },
+      });
+      const version = (aggregate._max.version || 0) + 1;
+      const superseded = await tx.fundingCallDocument.findMany({
+        where: {
+          funding_call_id: input.fundingCallId,
+          is_active: true,
+          document_kind: documentKind,
+          original_filename: fileName,
+        },
+        select: { id: true },
+      });
+      if (superseded.length > 0) {
+        await tx.fundingCallDocument.updateMany({
+          where: { id: { in: superseded.map((doc) => doc.id) } },
+          data: { is_active: false },
+        });
+      }
+      const created = await tx.fundingCallDocument.create({
+        data: {
+          funding_call_id: input.fundingCallId,
+          version,
+          is_active: true,
+          original_filename: fileName,
+          mime_type: mimeType,
+          byte_size: byteSize,
+          storage_path: storagePath,
+          source_url: input.sourceUrl || null,
+          checksum,
+          uploaded_by: input.operator.email || input.operator.userId,
+          document_kind: documentKind,
+          parsing_status: 'pending',
+          embedding_status: 'not_generated',
+        },
+      });
+      await tx.fundingCallDocumentEvent.create({
+        data: {
+          document_id: created.id,
+          funding_call_id: input.fundingCallId,
+          event_type: 'uploaded',
+          actor_user_id: input.operator.userId,
+          payload: asJson({ originalFilename: fileName, checksum, version, documentKind, ...(input.eventPayload || {}) }),
+        },
+      });
+      for (const previous of superseded) {
+        await tx.fundingCallDocumentEvent.create({
+          data: {
+            document_id: previous.id,
+            funding_call_id: input.fundingCallId,
+            event_type: 'superseded',
+            actor_user_id: input.operator.userId,
+            payload: asJson({ supersededByDocumentId: created.id, supersededByVersion: version }),
+          },
+        });
+      }
+      return created;
+    });
+
+    if (!input.deferProcessing) {
+      void this.processDocument(document.id, input.operator).catch((error) => {
+        console.error('[FundingDocuments] background document processing failed:', error);
+      });
+    }
+
+    return {
+      document,
+      duplicate: false,
+      message: 'Funding document registered and queued for processing.',
+    };
+  }
+
+  /**
+   * Sections from all active, fully parsed documents of the preferred kind —
+   * falling back to call documents — ordered by document age then position.
+   * This is the routing surface guideline/template extraction reads from.
+   */
+  async getRoutedSections(
+    fundingCallId: string,
+    preferredKind: FundingDocumentUploadInput['documentKind'],
+    fallbackKind: FundingDocumentUploadInput['documentKind'] = 'call_document'
+  ) {
+    const loadDocuments = (kind: string) =>
+      prisma.fundingCallDocument.findMany({
+        where: {
+          funding_call_id: fundingCallId,
+          is_active: true,
+          document_kind: kind as any,
+          parsing_status: 'completed',
+        },
+        orderBy: { created_at: 'asc' },
+        select: { id: true, version: true, document_kind: true, original_filename: true, created_at: true },
+      });
+
+    let usedKind = preferredKind;
+    let documents = await loadDocuments(preferredKind as string);
+    if (documents.length === 0 && fallbackKind && fallbackKind !== preferredKind) {
+      usedKind = fallbackKind;
+      documents = await loadDocuments(fallbackKind as string);
+    }
+
+    if (documents.length === 0) {
+      return { documents: [], sections: [], usedKind: null as string | null };
+    }
+
+    const sections = await prisma.fundingCallDocumentSection.findMany({
+      where: { document_id: { in: documents.map((doc) => doc.id) } },
+      orderBy: { order_index: 'asc' },
+    });
+
+    const documentOrder = new Map(documents.map((doc, index) => [doc.id, index]));
+    sections.sort((left, right) => {
+      const docDelta = (documentOrder.get(left.document_id) ?? 0) - (documentOrder.get(right.document_id) ?? 0);
+      return docDelta !== 0 ? docDelta : left.order_index - right.order_index;
+    });
+
+    return { documents, sections, usedKind: usedKind as string };
   }
 
   async listDocuments(fundingCallId: string) {
@@ -346,7 +581,9 @@ export class FundingDocumentService {
         fundingCallId: document.funding_call_id,
       });
       const chunks = chunkFundingDocumentSections(sections);
-      const quality = runFundingDocumentQualityChecks(call as any, sections);
+      const quality = runFundingDocumentQualityChecks(call as any, sections, {
+        documentKind: document.document_kind,
+      });
 
       await prisma.$transaction(async (tx) => {
         await tx.fundingCallDocumentChunk.deleteMany({ where: { document_id: documentId } });
@@ -431,8 +668,13 @@ export class FundingDocumentService {
         }
       });
 
+      // Embedding is deliberately off the critical path: callers only need the
+      // parsed sections (extraction routing), while search catches up in the
+      // background; backfillDocumentEmbeddings sweeps up any stragglers.
       if (chunks.length > 0 && await areStoredEmbeddingJobsEnabled()) {
-        await this.embedDocumentChunks(documentId);
+        void this.embedDocumentChunks(documentId).catch((error) => {
+          console.error('[FundingDocuments] background chunk embedding failed:', error);
+        });
       }
     } catch (error) {
       await prisma.fundingCallDocument.update({
@@ -497,7 +739,7 @@ export class FundingDocumentService {
     return this.getDocumentDetail(fundingCallId, documentId);
   }
 
-  async activateDocument(fundingCallId: string, documentId: string, operator: IntakeOperator) {
+  async activateDocument(fundingCallId: string, documentId: string, operator: IntakeOperator, active = true) {
     const document = await prisma.fundingCallDocument.findFirst({
       where: { id: documentId, funding_call_id: fundingCallId },
     });
@@ -506,21 +748,35 @@ export class FundingDocumentService {
     }
 
     await prisma.$transaction(async (tx) => {
-      await tx.fundingCallDocument.updateMany({
-        where: { funding_call_id: fundingCallId, is_active: true },
-        data: { is_active: false },
-      });
+      if (active) {
+        // Activating a document only retires other versions of the SAME file —
+        // documents are additive across (and within) kinds.
+        await tx.fundingCallDocument.updateMany({
+          where: {
+            funding_call_id: fundingCallId,
+            is_active: true,
+            document_kind: document.document_kind,
+            original_filename: document.original_filename,
+            id: { not: documentId },
+          },
+          data: { is_active: false },
+        });
+      }
       await tx.fundingCallDocument.update({
         where: { id: documentId },
-        data: { is_active: true },
+        data: { is_active: active },
       });
       await tx.fundingCallDocumentEvent.create({
         data: {
           document_id: documentId,
           funding_call_id: fundingCallId,
-          event_type: 'uploaded',
+          event_type: active ? 'uploaded' : 'superseded',
           actor_user_id: operator.userId,
-          payload: asJson({ activatedVersion: document.version }),
+          payload: asJson(
+            active
+              ? { activatedVersion: document.version }
+              : { deactivatedVersion: document.version, deactivated: true }
+          ),
         },
       });
     });
@@ -760,71 +1016,23 @@ export class FundingDocumentService {
       throw new Error('The linked intake source is not a reusable PDF');
     }
 
-    const storagePath = intakeJob.source_file_path;
-    if (!fsSync.existsSync(path.isAbsolute(storagePath) ? storagePath : path.join(process.cwd(), storagePath))) {
-      throw new Error('The linked intake PDF file could not be found');
-    }
-
-    const checksum = intakeJob.source_text_hash || await computeFileSha256(storagePath);
-    const existing = await prisma.fundingCallDocument.findFirst({
-      where: { funding_call_id: fundingCallId, checksum },
-    });
-    if (existing) {
-      return {
-        document: existing,
-        duplicate: true,
-        message: 'The intake PDF is already registered as a funding document.',
-      };
-    }
-
-    const byteSize = (await fs.stat(storagePath)).size;
-    const document = await prisma.$transaction(async (tx) => {
-      const aggregate = await tx.fundingCallDocument.aggregate({
-        where: { funding_call_id: fundingCallId },
-        _max: { version: true },
-      });
-      const version = (aggregate._max.version || 0) + 1;
-      await tx.fundingCallDocument.updateMany({
-        where: { funding_call_id: fundingCallId, is_active: true },
-        data: { is_active: false },
-      });
-      const created = await tx.fundingCallDocument.create({
-        data: {
-          funding_call_id: fundingCallId,
-          version,
-          is_active: true,
-          original_filename: path.basename(storagePath),
-          mime_type: 'application/pdf',
-          byte_size: byteSize,
-          storage_path: storagePath,
-          source_url: intakeJob.source_url || null,
-          checksum,
-          uploaded_by: operator.email || operator.userId,
-          document_kind: 'call_document',
-          parsing_status: 'pending',
-          embedding_status: 'not_generated',
-        },
-      });
-      await tx.fundingCallDocumentEvent.create({
-        data: {
-          document_id: created.id,
-          funding_call_id: fundingCallId,
-          event_type: 'uploaded',
-          actor_user_id: operator.userId,
-          payload: asJson({ source: 'funding_intake', intakeJobId: intakeJob.id, version }),
-        },
-      });
-      return created;
-    });
-
-    void this.processDocument(document.id, operator).catch((error) => {
-      console.error('[FundingDocuments] background intake sync processing failed:', error);
+    const result = await this.registerLocalFileDocument({
+      fundingCallId,
+      filePath: intakeJob.source_file_path,
+      sourceUrl: intakeJob.source_url || null,
+      documentKind: 'call_document',
+      // Older sync runs stored the intake text hash as the checksum; honour it
+      // so re-syncing does not duplicate those documents.
+      aliasChecksums: intakeJob.source_text_hash ? [intakeJob.source_text_hash] : [],
+      operator,
+      eventPayload: { source: 'funding_intake', intakeJobId: intakeJob.id },
     });
 
     return {
-      document,
-      duplicate: false,
-      message: 'Intake PDF registered and queued for processing.',
+      ...result,
+      message: result.duplicate
+        ? 'The intake PDF is already registered as a funding document.'
+        : 'Intake PDF registered and queued for processing.',
     };
   }
 }

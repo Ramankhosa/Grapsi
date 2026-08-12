@@ -74,8 +74,15 @@ export default function RevisionComposer({
     // the user is handed to the new version either way.
     try {
       setStage('reviewing')
-      await axios.post(`/api/reviewer/calls/${callId}/sections/${newSectionId}/review`)
-      toast.success('Revision reviewed')
+      const reviewRes = await axios.post(`/api/reviewer/calls/${callId}/sections/${newSectionId}/review`)
+      // The API refreshes the panel report when one already exists, so the
+      // revision loop now closes on its own instead of leaving an "out of date"
+      // badge for the user to chase.
+      toast.success(
+        reviewRes?.data?.report_refreshed
+          ? 'Revision reviewed and the panel report updated'
+          : 'Revision reviewed'
+      )
     } catch (err) {
       console.error('Failed to review revision', err)
       const status = err?.response?.status
@@ -144,7 +151,7 @@ export default function RevisionComposer({
               {stage === 'saving'
                 ? 'Saving…'
                 : stage === 'reviewing'
-                  ? 'Reviewing…'
+                  ? 'Reviewing and updating the report…'
                   : 'Submit and review'}
             </button>
           </div>

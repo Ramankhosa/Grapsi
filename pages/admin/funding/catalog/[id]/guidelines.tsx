@@ -123,6 +123,31 @@ function runStatusLabel(status: string): string {
   return RUN_STATUS_LABELS[status] || status.replace(/_/g, ' ');
 }
 
+// Plain-language summary of which document sections fed an extraction run.
+function describeRunSource(source: any): string | null {
+  if (!source || typeof source !== 'object') {
+    return null;
+  }
+  if (source.mode === 'flat_text_fallback') {
+    return 'Read the flat intake text (no parsed document sections were available).';
+  }
+  const documents = Array.isArray(source.documents)
+    ? source.documents.map((doc: any) => `${doc.filename} (v${doc.version})`).join(', ')
+    : '';
+  const kindLabel = source.document_kind === 'guideline_document'
+    ? 'guideline document'
+    : source.document_kind === 'template_document'
+      ? 'template document'
+      : 'call document';
+  const sectionTypes = Array.isArray(source.section_types)
+    ? source.section_types.map((type: string) => String(type).replace(/_/g, ' ')).join(', ')
+    : '';
+  if (source.mode === 'document_all_sections') {
+    return `Read every section of the ${kindLabel}${documents ? ` ${documents}` : ''} (the document could not be classified into sections).`;
+  }
+  return `Read the ${kindLabel} sections${sectionTypes ? ` — ${sectionTypes} —` : ''}${documents ? ` from ${documents}` : ''}.`;
+}
+
 function storedStatusLabel(status: string | null | undefined): string {
   if (!status) {
     return STORED_STATUS_LABELS.none;
@@ -1019,6 +1044,11 @@ export default function FundingGuidelineWorkspacePage() {
                       <div className="text-xs text-slate-500">{new Date(run.created_at).toLocaleString()}</div>
                     </div>
                     {run.extractor_model && <div className="mt-3 text-xs text-slate-500">Model: {run.extractor_model}</div>}
+                    {describeRunSource((run as any).source_json) && (
+                      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                        {describeRunSource((run as any).source_json)}
+                      </div>
+                    )}
                     {run.error_message && <div className="mt-3 text-sm text-rose-700">{run.error_message}</div>}
                     <div className="mt-4 flex flex-wrap gap-2">
                       {run.guideline_pack_json && (

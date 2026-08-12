@@ -394,13 +394,12 @@ function buildExtractionPayload(raw: JsonRecord): FundingExtractionPayload {
     normalizedFields[definition.key] = wrapField(candidate);
   }
 
-  return normalizeExtractionPayload(
-    {
-      fields: normalizedFields,
-      warnings: extractWarnings(raw.warnings, call?.warnings),
-    },
-    { allowDescriptionWithoutEvidence: true }
-  );
+  // Uploaded JSON carries an authored description rather than evidence anchors;
+  // normalizeExtractionPayload keeps that text as-is now, so no opt-out is needed.
+  return normalizeExtractionPayload({
+    fields: normalizedFields,
+    warnings: extractWarnings(raw.warnings, call?.warnings),
+  });
 }
 
 export function parseFundingJsonUpload(rawText: string): unknown {

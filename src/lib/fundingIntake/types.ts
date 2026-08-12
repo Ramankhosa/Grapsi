@@ -143,6 +143,8 @@ export interface IntakeSourceFile {
   checksum: string;
 }
 
+export type FundingIntakeDocumentKind = 'call_document' | 'guideline_document' | 'template_document';
+
 export interface BatchIntakeSourceInput {
   sourceKey: string;
   inputType: FundingInputType;
@@ -155,6 +157,12 @@ export interface BatchIntakeSourceInput {
     mimeType: string;
     size: number;
   };
+  /**
+   * Role of this source in the call's document set. Defaults are derived from
+   * the details/guidelines/template slot assignments; tag a second source as
+   * call_document to attach an annexure or additional call PDF.
+   */
+  documentKind?: FundingIntakeDocumentKind;
 }
 
 export interface BatchIntakeJobInput {
@@ -190,6 +198,10 @@ export interface IntakeJobSummary {
   duplicate_status: FundingDuplicateStatus;
   linked_funding_call_id: string | null;
   linked_call_status?: FundingCallStatus | null;
+  // Denormalised from the linked call so the intake list can be scanned by what
+  // the call actually is, rather than only by its source URL.
+  linked_call_title?: string | null;
+  linked_call_agency?: string | null;
   processing_phase?: string | null;
   created_at: Date;
   updated_at: Date;

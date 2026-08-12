@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { isAccessError, requireTenantUser } from '@/lib/auth/tenantAccess'
+import { isAccessError, requireTenantUser, withOrgScope } from '@/lib/auth/tenantAccess'
+import { canManageAssignment } from '@/lib/orgUnits/scope'
 import { assignmentInclude, parseDate, serializeAssignment } from '@/lib/assignments/shared'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
 
@@ -51,8 +52,8 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }
 
   const isAssignee = record.assignee_user_id === context.user.id
-  const isOwner = record.assigned_by_user_id === context.user.id
-  if (!isAssignee && !isOwner && !context.isAssigner) {
+  const scoped = await withOrgScope(context)
+  if (!isAssignee && !canManageAssignment(scoped.scope, record)) {
     return NextResponse.json({ error: 'Assignment not found.' }, { status: 404 })
   }
 
@@ -71,8 +72,10 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   }
 
   const isAssignee = record.assignee_user_id === context.user.id
-  // The assigning admin, or any admin in the tenant, can manage the assignment.
-  const canManage = record.assigned_by_user_id === context.user.id || context.isAssigner
+  // The assigner keeps oversight of what they delegated; anyone else needs the
+  // assignment to sit inside the part of the org they manage.
+  const scoped = await withOrgScope(context)
+  const canManage = canManageAssignment(scoped.scope, record)
   if (!isAssignee && !canManage) {
     return NextResponse.json({ error: 'Assignment not found.' }, { status: 404 })
   }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import OrgUnitTree, { flattenForSelect, type OrgUnitNode } from '@/components/org/OrgUnitTree'
 
 interface Department {
   id: string
@@ -24,6 +25,7 @@ interface FacultyRow {
   userId: string
   email: string
   name: string
+  employeeId: string | null
   school: string | null
   department: string | null
   designation: string | null
@@ -37,6 +39,7 @@ interface ImportRowResult {
   rowNumber: number
   name: string
   email: string
+  employeeId: string
   school: string
   department: string
   outcome: 'created' | 'updated' | 'error'
@@ -86,6 +89,21 @@ export default function TenantFacultyPage() {
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  // Depth-aware shapes from the org-units API. `schools` above is the legacy
+  // two-level projection, still used by nothing but kept while callers migrate.
+  const [tree, setTree] = useState<OrgUnitNode[]>([])
+  const [units, setUnits] = useState<Array<{ id: string; name: string; depth: number }>>([])
+  const [levels, setLevels] = useState<Array<{ depth: number; singularName: string }>>([])
+  const [maxDepth, setMaxDepth] = useState(7)
+
+  const levelNameForDepth = useCallback(
+    (depth: number) => {
+      const named = levels.find(level => level.depth === depth)
+      if (named) return named.singularName
+      return ['School', 'Department', 'Centre', 'Group', 'Team', 'Unit', 'Unit'][Math.min(depth, 6)]
+    },
+    [levels]
+  )
 
   const isAdmin = Boolean(user?.roles?.some((role: string) => ADMIN_ROLES.includes(role)))
 
@@ -95,6 +113,10 @@ export default function TenantFacultyPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not load the org structure')
       setSchools(data.schools || [])
+      setTree(data.tree || [])
+      setUnits(data.units || [])
+      setLevels(data.levels || [])
+      setMaxDepth(data.maxDepth || 7)
     } catch (e: any) {
       setError(e.message)
     }
@@ -139,19 +161,20 @@ export default function TenantFacultyPage() {
     }
   }, [total, embedded, offset, search, orgUnitFilter, loadFaculty])
 
-  const createUnit = async (kind: 'SCHOOL' | 'DEPARTMENT', name: string, parentId?: string) => {
+  // `kind` is no longer sent — depth follows the parent, so any unit can nest
+  // under any other up to maxDepth.
+  const createUnit = async (name: string, parentId?: string) => {
     if (!name.trim()) return
     setError(null)
     try {
       const res = await authFetch('/api/tenant-admin/org-units', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind, name: name.trim(), parentId: parentId || null }),
+        body: JSON.stringify({ name: name.trim(), parentId: parentId || null }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not create that unit')
-      if (kind === 'SCHOOL') setNewSchool('')
-      else setNewDepartment(state => ({ ...state, [parentId!]: '' }))
+      if (!parentId) setNewSchool('')
       await loadSchools()
     } catch (e: any) {
       setError(e.message)
@@ -280,7 +303,7 @@ export default function TenantFacultyPage() {
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Faculty &amp; Organization</h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Define your School → Department structure, then upload your faculty roster so they can be
+            Define your organizational structure to any depth, then upload your faculty roster so they can be
             matched to funding calls.
           </p>
         </div>
@@ -311,115 +334,48 @@ export default function TenantFacultyPage() {
           <div className="space-y-4">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Add a school
+                Add a {levelNameForDepth(0).toLowerCase()}
               </label>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={newSchool}
                   onChange={e => setNewSchool(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && createUnit('SCHOOL', newSchool)}
+                  onKeyDown={e => e.key === 'Enter' && createUnit(newSchool)}
                   placeholder="e.g. School of Computer Science and Engineering"
                   className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
                 />
                 <button
-                  onClick={() => createUnit('SCHOOL', newSchool)}
+                  onClick={() => createUnit(newSchool)}
                   className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
                 >
-                  Add school
+                  Add {levelNameForDepth(0).toLowerCase()}
                 </button>
               </div>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                Nest as deep as your organization needs — up to {maxDepth} levels. Use “Add …” on any
+                unit to create one beneath it.
+              </p>
             </div>
 
-            {schools.length === 0 ? (
+            {tree.length === 0 ? (
               <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 py-16 text-center">
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  No schools yet. Add your first school above, or import a roster and let it create the
-                  structure for you.
+                  No units yet. Add your first {levelNameForDepth(0).toLowerCase()} above, or import a
+                  roster and let it create the structure for you.
                 </p>
               </div>
             ) : (
-              schools.map(school => (
-                <div
-                  key={school.id}
-                  className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3 flex-wrap">
-                    <div>
-                      <h2 className="text-base font-semibold text-gray-900 dark:text-white">
-                        {school.name}
-                        {!school.isActive && (
-                          <span className="ml-2 text-xs font-normal text-gray-400">(inactive)</span>
-                        )}
-                      </h2>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {school.departments.length} department{school.departments.length !== 1 ? 's' : ''} ·{' '}
-                        {school.facultyCount} faculty
-                      </p>
-                    </div>
-                    <div className="flex gap-3 text-sm">
-                      <button
-                        onClick={() => openRename(school.id, school.name)}
-                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
-                      >
-                        Rename
-                      </button>
-                      <button
-                        onClick={() => openDelete(school.id, school.name)}
-                        className="text-red-600 hover:text-red-800 dark:text-red-400"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-
-                  <ul className="mt-3 divide-y divide-gray-100 dark:divide-gray-700 border-t border-gray-100 dark:border-gray-700">
-                    {school.departments.map(department => (
-                      <li key={department.id} className="flex items-center justify-between gap-3 py-2">
-                        <span className="text-sm text-gray-700 dark:text-gray-200">
-                          {department.name}
-                          <span className="ml-2 text-xs text-gray-400">
-                            {department.facultyCount} faculty
-                          </span>
-                        </span>
-                        <span className="flex gap-3 text-sm">
-                          <button
-                            onClick={() => openRename(department.id, department.name)}
-                            className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
-                          >
-                            Rename
-                          </button>
-                          <button
-                            onClick={() => openDelete(department.id, department.name)}
-                            className="text-red-600 hover:text-red-800 dark:text-red-400"
-                          >
-                            Delete
-                          </button>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      type="text"
-                      value={newDepartment[school.id] || ''}
-                      onChange={e => setNewDepartment(state => ({ ...state, [school.id]: e.target.value }))}
-                      onKeyDown={e =>
-                        e.key === 'Enter' && createUnit('DEPARTMENT', newDepartment[school.id] || '', school.id)
-                      }
-                      placeholder="Add a department..."
-                      className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
-                    />
-                    <button
-                      onClick={() => createUnit('DEPARTMENT', newDepartment[school.id] || '', school.id)}
-                      className="px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
-                    >
-                      Add
-                    </button>
-                  </div>
-                </div>
-              ))
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+                <OrgUnitTree
+                  nodes={tree}
+                  levelNameForDepth={levelNameForDepth}
+                  maxDepth={maxDepth}
+                  onRename={openRename}
+                  onDelete={openDelete}
+                  onAddChild={(parentId, name) => createUnit(name, parentId)}
+                />
+              </div>
             )}
           </div>
         ) : (
@@ -442,16 +398,14 @@ export default function TenantFacultyPage() {
                   }}
                   className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white min-w-[220px]"
                 >
-                  <option value="">All schools &amp; departments</option>
-                  {schools.map(school => (
-                    <optgroup key={school.id} label={school.name}>
-                      <option value={school.id}>{school.name} (school only)</option>
-                      {school.departments.map(department => (
-                        <option key={department.id} value={department.id}>
-                          {department.name}
-                        </option>
-                      ))}
-                    </optgroup>
+                  {/* A depth-indented flat list, not <optgroup> — optgroups
+                      cannot nest, which is what capped this picker at two
+                      levels. Selecting a unit includes everything beneath it. */}
+                  <option value="">All units</option>
+                  {flattenForSelect(tree).map(option => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
                   ))}
                 </select>
                 <button
@@ -505,6 +459,9 @@ export default function TenantFacultyPage() {
                         <td className="px-6 py-4">
                           <div className="text-sm font-medium text-gray-900 dark:text-white">{row.name || '—'}</div>
                           <div className="text-sm text-gray-500 dark:text-gray-400">{row.email}</div>
+                          {row.employeeId && (
+                            <div className="text-xs text-gray-400 dark:text-gray-500">ID {row.employeeId}</div>
+                          )}
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">
                           <div>{row.school || '—'}</div>
@@ -642,8 +599,10 @@ export default function TenantFacultyPage() {
             <p className="mt-1 mb-4 text-sm text-gray-500 dark:text-gray-400">
               Upload a .csv or .xlsx file with the columns <strong>Name</strong>, <strong>Email</strong>,{' '}
               <strong>School</strong>, <strong>Department</strong>, <strong>Designation</strong>,{' '}
-              <strong>Research Areas</strong>, <strong>Keywords</strong>. Existing faculty are matched by
-              email and updated.{' '}
+              <strong>Research Areas</strong>, <strong>Keywords</strong>. Only Name and Email are
+              required. <strong>Employee ID</strong> is optional — include it if your organisation
+              issues staff numbers, and it must be unique within your organisation. Existing faculty
+              are matched by email and updated.{' '}
               <button onClick={downloadTemplate} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 underline">
                 Download template
               </button>

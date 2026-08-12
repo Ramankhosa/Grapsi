@@ -1,4 +1,5 @@
 import prisma from '../prisma';
+import { listSubtreeUnitIds, listUnitUserIds } from '../orgUnits/tree';
 
 /**
  * In-app notifications.
@@ -37,8 +38,8 @@ export interface CreateNotificationsInput {
 /**
  * Resolves the recipient set, constrained to the tenant.
  *
- * Schools are accepted as well as departments: selecting a school expands to
- * the faculty in all of its departments, so callers don't have to pre-expand.
+ * Any org unit may be named: selecting one reaches every faculty member at or
+ * beneath it, to any depth, so callers never have to pre-expand a hierarchy.
  */
 async function resolveRecipients(input: CreateNotificationsInput): Promise<string[]> {
   const recipients = new Set<string>();
@@ -62,29 +63,20 @@ async function resolveRecipients(input: CreateNotificationsInput): Promise<strin
 
   const orgUnitIds = (input.orgUnitIds || []).filter(Boolean);
   if (orgUnitIds.length > 0) {
-    const units = await prisma.tenantOrgUnit.findMany({
+    // Selecting a unit reaches its entire subtree at any depth, AND the unit
+    // itself. The previous implementation walked exactly one level down and
+    // silently dropped members attached directly to the selected unit, so a
+    // school-wide announcement missed anyone sitting at the school.
+    const requested = await prisma.tenantOrgUnit.findMany({
       where: { id: { in: orgUnitIds }, tenant_id: input.tenantId },
-      select: { id: true, kind: true },
+      select: { id: true },
     });
-
-    const departmentIds = units.filter((unit) => unit.kind === 'DEPARTMENT').map((unit) => unit.id);
-    const schoolIds = units.filter((unit) => unit.kind === 'SCHOOL').map((unit) => unit.id);
-
-    if (schoolIds.length > 0) {
-      const children = await prisma.tenantOrgUnit.findMany({
-        where: { parent_id: { in: schoolIds }, tenant_id: input.tenantId },
-        select: { id: true },
-      });
-      children.forEach((child) => departmentIds.push(child.id));
-    }
-
-    if (departmentIds.length > 0) {
-      const profiles = await prisma.researcherProfile.findMany({
-        where: { org_unit_id: { in: departmentIds }, user: { tenantId: input.tenantId } },
-        select: { user_id: true },
-      });
-      profiles.forEach((profile) => recipients.add(profile.user_id));
-    }
+    const subtreeUnitIds = await listSubtreeUnitIds(
+      input.tenantId,
+      requested.map((unit) => unit.id)
+    );
+    const userIds = await listUnitUserIds(input.tenantId, subtreeUnitIds);
+    userIds.forEach((userId) => recipients.add(userId));
   }
 
   for (const excluded of input.excludeUserIds || []) {

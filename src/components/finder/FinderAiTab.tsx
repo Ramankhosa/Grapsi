@@ -86,15 +86,6 @@ export default function FinderAiTab({
   const activeFilterCount = conversation ? countActiveFilters(conversation.currentFilters) : 0;
   const busy = chat.sending || chat.loadingConversation;
 
-  async function handleExplainResult(payload: { ordinal: number }) {
-    await chat.handleSendMessage(`Explain result ${payload.ordinal}.`);
-  }
-
-  async function handleAskAboutCall(payload: { ordinal: number }) {
-    chat.setComposer(`What are the eligibility rules and required documents for result ${payload.ordinal}?`);
-    chat.composerRef.current?.focus();
-  }
-
   const rail = (
     <FinderChatSidebar
       filterMode={conversation?.filterMode || 'manual'}
@@ -234,12 +225,7 @@ export default function FinderAiTab({
                   key={message.id}
                   message={message}
                   runs={conversation.runs}
-                  onExplainResult={handleExplainResult}
-                  onAskAboutCall={handleAskAboutCall}
                   onBeginWriting={onBeginWriting}
-                  onSuggestedReply={chat.handleSendMessage}
-                  onApplyFilterChip={chat.handleApplyFilterChip}
-                  suggestedReplyDisabled={chat.sending}
                   getCallDetailsHref={getCallDetailsHref}
                   strictRecoveryAction={
                     message.id === chat.latestAssistantMessageId &&

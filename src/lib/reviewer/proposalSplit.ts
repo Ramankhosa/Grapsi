@@ -60,6 +60,65 @@ const MAX_HEADING_CHARS = 90
 const NOISE_LINE =
   /^\s*(page\s+\d+(\s+of\s+\d+)?|\d+\s*\/\s*\d+|[-_=*]{3,}|confidential|draft)\s*$/i
 
+/**
+ * Fixed-format furniture, agency-agnostic. Grant agencies distribute a format
+ * document; applicants type into it and submit the whole thing, so the import
+ * arrives with the format's own text interleaved with the user's: word-limit
+ * instructions ("Up to 500 words."), cross-reference parentheticals ("(See
+ * Point No. 5.3 of the Guidelines)"), and empty table skeletons. These shapes
+ * recur across agencies even though the wording differs, which is what makes
+ * stripping them safe without knowing the specific format.
+ */
+const WORD_LIMIT_PHRASE =
+  /\(?\s*(?:up\s*to|max(?:imum)?\.?|not\s+(?:more|exceeding)\s+than|not\s+to\s+exceed|within|about|approx(?:imately)?\.?|word\s+limit:?|limit:?)\s+\d{1,3}(?:,\d{3})*(?:\s*(?:-|–|—|to)\s*\d{1,3}(?:,\d{3})*)?\s*(?:words?|characters?|chars?|pages?)\s*\)?\s*\.?/gi
+
+/** "(500 words)" / "(2 pages max)" — the number-first variant of the same. */
+const WORD_LIMIT_PAREN = /\(\s*\d{1,3}(?:,\d{3})*\s*(?:words?|characters?|chars?|pages?)(?:\s+max(?:imum)?)?\s*\)\s*\.?/gi
+
+/**
+ * Parentheticals that start with an instruction verb are the format talking to
+ * the applicant, never the applicant's own text: "(copy from your online
+ * application)", "(See Point No. 1.2 of the Guidelines)", "(same as in the
+ * online application)", "(to be filled by the office)". A parenthetical that
+ * does not open with one of these verbs — "(CLF)", "(2020)" — is content.
+ */
+const INSTRUCTION_PARENTHETICAL =
+  /\(\s*(?:please\s+)?(?:see|refer(?:\s+to)?|as\s+per|copy\s+from|same\s+as|to\s+be\s+|this\s+will\s+be\s+decided|if\s+applicable|attach|enclose|do\s+not|use\s+only)[^()]*\)/gi
+
+function stripInstructionText(value: string): string {
+  return String(value || '')
+    .replace(INSTRUCTION_PARENTHETICAL, ' ')
+    .replace(WORD_LIMIT_PHRASE, ' ')
+    .replace(WORD_LIMIT_PAREN, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/** Words that carry prose, as opposed to amounts, dates and table frame. */
+function proseWordCount(value: string): number {
+  return (String(value || '').match(/[A-Za-zÀ-ɏ]{2,}/g) || []).length
+}
+
+/**
+ * A table row that survived text extraction as literal pipes. Rows whose cells
+ * are all empty (or timeline placeholders like "6 months") are the format's
+ * blank skeleton; a row a user actually filled keeps other words and is kept.
+ */
+function isTableSkeletonRow(line: string): boolean {
+  const trimmed = line.trim()
+  if ((trimmed.match(/\|/g) || []).length < 2) return false
+
+  const cells = trimmed.split('|').map((cell) => cell.trim())
+  const meaningful = cells.filter((cell) => cell && !/^[-:\s]+$/.test(cell))
+  if (meaningful.length === 0) return true
+  if (meaningful.every((cell) => /^\d+\s*(?:months?|weeks?|years?|days?)$/i.test(cell))) return true
+
+  // A separator run glued together with empty cells ("| Head | ||---|| | |")
+  // is skeleton; a plain markdown separator row from a real pasted table is not.
+  const emptyCells = cells.filter((cell) => cell === '').length
+  return /-{4,}/.test(trimmed) && emptyCells >= 2
+}
+
 const MARKDOWN_HEADING = /^\s*#{1,4}\s+\S/
 
 /**
@@ -360,7 +419,10 @@ export function matchSegmentsToTargets(
   }
 
   const direct: ProposalMatch[] = segments.map((segment) => {
-    const headingCore = stripHeadingDecoration(segment.heading)
+    // Formats often glue the instruction onto the heading line itself
+    // ("Review of Key Research Works   Up to 600 words"), which would poison
+    // every downstream comparison if left in place.
+    const headingCore = stripInstructionText(stripHeadingDecoration(segment.heading))
     const headingNorm = normalizeTitle(headingCore)
 
     if (!headingNorm) {
@@ -613,4 +675,426 @@ export function buildProposalTargets(
 
 export function countProposalWords(text: string): number {
   return (String(text || '').match(/\S+/g) || []).length
+}
+
+// ---------------------------------------------------------------------------
+// Format-aware splitting: separating the agency's fixed format from the
+// user's content.
+//
+// Every agency ships its own proposal format; applicants fill it in and submit
+// the whole document, format text and all. Heading heuristics alone cannot
+// tell "2. Field work" (a budget-table row) from "2. Objectives" (a section),
+// so the splitter uses what the reviewer workspace already knows about THIS
+// call: its section titles, the template's own labels, and the template's
+// captured instruction text. Nothing here is specific to any one agency.
+// ---------------------------------------------------------------------------
+
+/**
+ * The template's captured instruction sentences, normalized for line matching.
+ * When the reviewer template was extracted from the agency's format document,
+ * `guidanceText` holds the very sentences the applicant leaves in their filled
+ * copy — subtracting them is what removes agency-specific boilerplate without
+ * hardcoding any agency.
+ */
+export function buildFormatInstructionIndex(templateSections: unknown[]): string[] {
+  const index = new Set<string>()
+  for (const rule of Array.isArray(templateSections) ? templateSections : []) {
+    const record = rule && typeof rule === 'object' ? (rule as Record<string, unknown>) : null
+    if (!record) continue
+    const guidance = Array.isArray(record.guidanceText) ? record.guidanceText : []
+    for (const entry of guidance) {
+      const norm = normalizeTitle(String(entry ?? ''))
+      if (norm.length >= 20) index.add(norm)
+    }
+  }
+  return Array.from(index)
+}
+
+/** Does this body line match one of the template's own instruction sentences? */
+function matchesInstructionIndex(lineNorm: string, index: string[]): boolean {
+  if (lineNorm.length < 15) return false
+  for (const guidance of index) {
+    if (lineNorm === guidance) return true
+    if (guidance.length >= 25 && lineNorm.includes(guidance)) return true
+    if (lineNorm.length >= 25 && guidance.includes(lineNorm)) return true
+  }
+  return false
+}
+
+/**
+ * Drop the format's own lines from a block body, keeping the user's text.
+ * Word-limit lines, instruction parentheticals, table skeletons, and lines
+ * matching the template's captured guidance are format text; everything else
+ * is user content and passes through untouched (inline instruction
+ * parentheticals are trimmed out of kept lines).
+ */
+export function scrubFormatLines(
+  body: string,
+  instructionIndex: string[] = []
+): { text: string; removed: number } {
+  const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n')
+  const kept: string[] = []
+  let removed = 0
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      kept.push('')
+      continue
+    }
+
+    if (NOISE_LINE.test(trimmed)) continue
+
+    if (isTableSkeletonRow(trimmed)) {
+      removed++
+      continue
+    }
+
+    // A line that is nothing but instruction text disappears entirely.
+    if (!stripInstructionText(trimmed)) {
+      removed++
+      continue
+    }
+
+    if (matchesInstructionIndex(normalizeTitle(trimmed), instructionIndex)) {
+      removed++
+      continue
+    }
+
+    // Inline instruction parentheticals are format text even mid-line.
+    const cleaned = trimmed.replace(INSTRUCTION_PARENTHETICAL, ' ').replace(/\s{2,}/g, ' ').trim()
+    if (cleaned !== trimmed) removed++
+    kept.push(cleaned || trimmed)
+  }
+
+  return { text: kept.join('\n').trim(), removed }
+}
+
+type AnchorReason = Extract<ProposalMatchReason, 'title' | 'alias' | 'synonym' | 'tokens'>
+
+interface FormatAnchor {
+  lineIndex: number
+  heading: string
+  targetTitle: string | null
+  reason: AnchorReason | 'excluded'
+  /** Strong anchors matched the call's own section names; soft ones inferred. */
+  strength: 'strong' | 'soft'
+  /** Normalized heading core, for the duplicate-mention guard. */
+  coreNorm?: string
+}
+
+/** Neighbouring lines that are table cells rather than prose. */
+function isCellLikeLine(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed) return false
+  return proseWordCount(trimmed) <= 3
+}
+
+/**
+ * Milestone rows restate section names with a duration bolted on
+ * ("Identification of Research Gap    2–3 Months"). The duration is workplan
+ * furniture; shedding it lets the duplicate-heading guard below recognise the
+ * line as a mention of the section, not the section starting again.
+ */
+function stripTrailingDuration(value: string): string {
+  return String(value || '')
+    .replace(/[\t ]+\d{1,2}\s*(?:[-–—]|to)?\s*\d{0,2}\s*(?:months?|weeks?|years?|days?)\s*$/i, '')
+    .trim()
+}
+
+/**
+ * Find the lines where the proposal uses the call's own section structure.
+ *
+ * A line anchors when — after shedding numbering and inline instructions — it
+ * names a workspace section or template label (strong), or overlaps one's
+ * vocabulary well enough (soft). Soft anchors sitting inside a run of
+ * table-cell lines are rejected: "4. Contingency" inside a budget table names
+ * a risk section by synonym, but its surroundings say it is a table row.
+ */
+function findFormatAnchors(lines: string[], targets: ProposalTarget[]): FormatAnchor[] {
+  if (targets.length === 0) return []
+
+  const prepared = targets.map((target) => ({
+    target,
+    titleNorm: normalizeTitle(target.title),
+    aliasNorms: (target.aliases || []).map(normalizeTitle).filter(Boolean),
+  }))
+
+  const byBucket = new Map<string, typeof prepared>()
+  for (const entry of prepared) {
+    const key = entry.target.bucketKey ? String(entry.target.bucketKey) : null
+    if (!key) continue
+    const list = byBucket.get(key)
+    if (list) list.push(entry)
+    else byBucket.set(key, [entry])
+  }
+
+  // A section name CONTAINED in a longer line only counts when the name is
+  // most of the line. "Budget" inside "Budget & Justification" anchors; the
+  // alias inside "Q1: From Review of Lit to Identification of Research Gap"
+  // does not — that line merely mentions the section.
+  const namesLine = (norm: string, candidate: string): boolean => {
+    if (!candidate) return false
+    if (norm === candidate) return true
+    if (containsPhrase(candidate, norm)) return true
+    return containsPhrase(norm, candidate) && candidate.length / norm.length >= 0.7
+  }
+
+  const anchors: FormatAnchor[] = []
+
+  for (let index = 0; index < lines.length; index++) {
+    const trimmed = lines[index].trim()
+    if (!trimmed || NOISE_LINE.test(trimmed)) continue
+
+    const core = stripTrailingDuration(stripInstructionText(stripHeadingDecoration(trimmed)))
+    if (!core || core.length > MAX_HEADING_CHARS) continue
+    if (core.split(/\s+/).length > 12) continue
+    // Sentence punctuation means prose, not a heading.
+    if (/[.;,]$/.test(core)) continue
+
+    if (EXCLUDED_HEADING.test(core)) {
+      anchors.push({ lineIndex: index, heading: trimmed, targetTitle: null, reason: 'excluded', strength: 'strong' })
+      continue
+    }
+
+    const norm = normalizeTitle(core)
+    if (!norm) continue
+
+    let best: { title: string; score: number; reason: AnchorReason } | null = null
+    const consider = (title: string, score: number, reason: AnchorReason) => {
+      if (score <= 0) return
+      if (!best || score > best.score) best = { title, score, reason }
+    }
+
+    for (const { target, titleNorm, aliasNorms } of prepared) {
+      if (titleNorm && namesLine(norm, titleNorm)) {
+        consider(target.title, 1000, 'title')
+        continue
+      }
+      const alias = aliasNorms.find((item) => namesLine(norm, item))
+      if (alias) consider(target.title, 800 + alias.length, 'alias')
+    }
+
+    if (!best) {
+      // Bidirectional token overlap: "Relevance of the Research for Society"
+      // anchors to "…Relevance of the Research for Policy/Society" even though
+      // neither phrase contains the other verbatim.
+      for (const { target, titleNorm, aliasNorms } of prepared) {
+        const overlap = Math.max(
+          ...[titleNorm, ...aliasNorms].map((item) =>
+            Math.max(tokenOverlapScore(norm, item), tokenOverlapScore(item, norm))
+          ),
+          0
+        )
+        if (overlap >= 0.7) consider(target.title, 100 + overlap * 50, 'tokens')
+      }
+    }
+
+    if (!best) {
+      const synonym = matchSynonymBucket(norm)
+      if (synonym && synonym.length / norm.length >= 0.7) {
+        const candidates = byBucket.get(synonym.bucketKey)
+        if (candidates && candidates.length > 0) {
+          let bestTitle = candidates[0].target.title
+          let bestAffinity = -1
+          for (const entry of candidates) {
+            const affinity = Math.max(
+              labelAffinity(norm, entry.titleNorm),
+              ...entry.aliasNorms.map((alias) => labelAffinity(norm, alias)),
+              0
+            )
+            if (affinity > bestAffinity) {
+              bestAffinity = affinity
+              bestTitle = entry.target.title
+            }
+          }
+          consider(bestTitle, 50, 'synonym')
+        }
+      }
+    }
+
+    const resolved = best as { title: string; score: number; reason: AnchorReason } | null
+    if (!resolved) continue
+    const strength: FormatAnchor['strength'] = resolved.score >= 800 ? 'strong' : 'soft'
+
+    // Soft anchors need prose surroundings. Collect up to three non-blank
+    // neighbours each way; a majority of table cells vetoes the anchor.
+    if (strength === 'soft') {
+      const neighbours: string[] = []
+      for (let back = index - 1; back >= 0 && neighbours.length < 3; back--) {
+        const candidate = lines[back].trim()
+        if (candidate) neighbours.push(candidate)
+      }
+      let forwardCount = 0
+      for (let ahead = index + 1; ahead < lines.length && forwardCount < 3; ahead++) {
+        const candidate = lines[ahead].trim()
+        if (candidate) {
+          neighbours.push(candidate)
+          forwardCount++
+        }
+      }
+      const cellLike = neighbours.filter(isCellLikeLine).length
+      if (neighbours.length >= 2 && cellLike / neighbours.length >= 0.6) continue
+    }
+
+    anchors.push({
+      lineIndex: index,
+      heading: trimmed,
+      targetTitle: resolved.title,
+      reason: resolved.reason,
+      strength,
+      coreNorm: norm,
+    })
+  }
+
+  // Second pass, with the whole document in view. A format section occurs
+  // once: a heading core that repeats is the document referring back to the
+  // section ("Identification of Research Gap    2–3 Months" in a milestone
+  // table), and a soft anchor whose target already has a strong anchor
+  // somewhere is a mention inside another section ("Identification of
+  // research gaps" as a bullet in a methodology phase list). Rejected lines
+  // simply stay inside the block they sit in.
+  const strongTargets = new Set(
+    anchors
+      .filter((anchor) => anchor.strength === 'strong' && anchor.reason !== 'excluded' && anchor.targetTitle)
+      .map((anchor) => anchor.targetTitle as string)
+  )
+  const seenCores = new Set<string>()
+  const kept: FormatAnchor[] = []
+  for (const anchor of anchors) {
+    if (anchor.reason === 'excluded') {
+      kept.push(anchor)
+      continue
+    }
+    if (anchor.coreNorm && seenCores.has(anchor.coreNorm)) continue
+    if (anchor.strength === 'soft' && anchor.targetTitle && strongTargets.has(anchor.targetTitle)) continue
+    if (anchor.coreNorm) seenCores.add(anchor.coreNorm)
+    kept.push(anchor)
+  }
+
+  return kept
+}
+
+export interface FormatAwareSplitResult {
+  matches: ProposalMatch[]
+  /** 'format' = cut at the call's own section structure; 'heuristic' = fallback. */
+  splitMode: 'format' | 'heuristic'
+  /** Fixed-format lines removed from the imported bodies. */
+  formatLinesRemoved: number
+}
+
+/**
+ * Split a full proposal, preferring the call's own format structure.
+ *
+ * When the document visibly follows the call's format (three or more section
+ * headings match the workspace's targets), the ONLY cut points are those
+ * anchored headings plus excluded material — everything between two anchors
+ * belongs to the first, however many numbered lists, sub-headings, or
+ * flattened tables it contains. Format instruction lines are subtracted from
+ * every body. Documents that do not follow the format fall back to the
+ * heading heuristics, with the same instruction scrubbing.
+ */
+export function splitProposalWithFormat(
+  text: string,
+  targets: ProposalTarget[],
+  options?: { templateSections?: unknown[] }
+): FormatAwareSplitResult {
+  const instructionIndex = buildFormatInstructionIndex(options?.templateSections || [])
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
+  const anchors = findFormatAnchors(lines, targets)
+  const sectionAnchors = anchors.filter((anchor) => anchor.reason !== 'excluded')
+
+  if (sectionAnchors.length < 3) {
+    // Free-form document: heuristic split, but still scrub format furniture.
+    let removed = 0
+    const segments = splitProposalIntoSegments(text)
+      .map((segment) => {
+        const scrubbed = scrubFormatLines(segment.body, instructionIndex)
+        removed += scrubbed.removed
+        return { ...segment, body: scrubbed.text }
+      })
+      .filter((segment) => segment.body.length > 0)
+      .map((segment, index) => ({ ...segment, order: index }))
+    return {
+      matches: matchSegmentsToTargets(segments, targets),
+      splitMode: 'heuristic',
+      formatLinesRemoved: removed,
+    }
+  }
+
+  // Cut the document only at anchors, in line order.
+  const cuts = [...anchors].sort((left, right) => left.lineIndex - right.lineIndex)
+  let removed = 0
+
+  interface Block {
+    anchor: FormatAnchor | null
+    body: string
+  }
+
+  const blocks: Block[] = []
+  const preambleEnd = cuts[0].lineIndex
+  if (preambleEnd > 0) {
+    blocks.push({ anchor: null, body: lines.slice(0, preambleEnd).join('\n') })
+  }
+  for (let index = 0; index < cuts.length; index++) {
+    const start = cuts[index].lineIndex + 1
+    const end = index + 1 < cuts.length ? cuts[index + 1].lineIndex : lines.length
+    blocks.push({ anchor: cuts[index], body: lines.slice(start, end).join('\n') })
+  }
+
+  // Scrub each body, then fold soft anchors that turned out to own no prose
+  // (a table row that happened to name a section) into the block above.
+  const scrubbed = blocks.map((block) => {
+    const result = scrubFormatLines(block.body, instructionIndex)
+    removed += result.removed
+    return { ...block, body: result.text }
+  })
+
+  const folded: Block[] = []
+  for (const block of scrubbed) {
+    const previous = folded[folded.length - 1]
+    if (
+      block.anchor &&
+      block.anchor.strength === 'soft' &&
+      block.anchor.reason !== 'excluded' &&
+      proseWordCount(block.body) < 6 &&
+      previous &&
+      previous.anchor &&
+      previous.anchor.reason !== 'excluded'
+    ) {
+      previous.body = [previous.body, block.anchor.heading, block.body].filter(Boolean).join('\n')
+      continue
+    }
+    folded.push(block)
+  }
+
+  const matches: ProposalMatch[] = []
+  let order = 0
+  for (const block of folded) {
+    const body = block.body.trim()
+    if (!body) continue
+    if (!block.anchor) {
+      matches.push({ heading: '', body, order: order++, targetTitle: null, matchedBy: 'none' })
+      continue
+    }
+    if (block.anchor.reason === 'excluded') {
+      matches.push({
+        heading: block.anchor.heading,
+        body,
+        order: order++,
+        targetTitle: null,
+        matchedBy: 'excluded',
+      })
+      continue
+    }
+    matches.push({
+      heading: block.anchor.heading,
+      body,
+      order: order++,
+      targetTitle: block.anchor.targetTitle,
+      matchedBy: block.anchor.reason,
+    })
+  }
+
+  return { matches, splitMode: 'format', formatLinesRemoved: removed }
 }

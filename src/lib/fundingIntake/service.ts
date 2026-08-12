@@ -18,6 +18,7 @@ import { fundingCatalogService } from '../services/fundingCatalogService';
 import {
   FUNDING_BATCH_SOURCE_KEYS,
   resolveBatchSourceAssignments,
+  stampSourceDocumentKind,
 } from './batchSourceMapping';
 import {
   buildFundingIntakeJobStatusCounts,
@@ -27,6 +28,8 @@ import {
   ACTIVE_IDEMPOTENT_STATUSES,
   DRAFT_MINIMUM_FIELDS,
 } from './constants';
+import { fundingDocumentService } from '../fundingDocuments/service';
+import { extractDocxPlainText } from '../fundingDocuments/parser';
 import { ingestFundingDocumentFromUrl } from './documentUrlIngestion';
 import { extractCanonicalTextFromPdf, extractFundingOpportunity } from './extractor';
 import {
@@ -74,6 +77,14 @@ const QUEUE_CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.FUNDING_IN
 const JOB_LOCK_STALE_MS = Math.max(60_000, Number(process.env.FUNDING_INTAKE_JOB_LOCK_STALE_MS || 10 * 60 * 1000));
 const MAX_RATE_LIMIT_RETRIES = Math.max(0, Number(process.env.FUNDING_INTAKE_MAX_RATE_LIMIT_RETRIES || 3));
 const WORKER_ID = `funding-intake-${process.pid}-${Math.random().toString(36).slice(2)}`;
+// Ceiling on how long intake waits for a source document to parse/sectionize
+// before letting it finish in the background (extraction then falls back to
+// flat text for that run).
+const INTAKE_DOCUMENT_PROCESS_TIMEOUT_MS = Math.max(
+  30_000,
+  Number(process.env.FUNDING_INTAKE_DOCUMENT_PROCESS_TIMEOUT_MS || 5 * 60 * 1000)
+);
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 let drainPromise: Promise<void> | null = null;
 
 function mapCatalogStatusToFundingStatus(status: FundingCallStatus) {
@@ -316,6 +327,7 @@ function readBatchFlags(value: Prisma.JsonValue | null | undefined): { autoCreat
 async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: number) {
   const sourceKey = normalizeSourceKey(source.sourceKey || `source_${sequenceNo + 1}`);
   assertAllowedSourceKey(sourceKey);
+  const kindMetadata = source.documentKind ? { document_kind: source.documentKind } : {};
 
   if (source.inputType === 'url') {
     if (!source.sourceUrl) {
@@ -332,7 +344,7 @@ async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: 
       source_file_path: null,
       raw_text: null,
       normalized_text: null,
-      fetch_metadata_json: Prisma.JsonNull,
+      fetch_metadata_json: source.documentKind ? (kindMetadata as Prisma.InputJsonValue) : Prisma.JsonNull,
       status: 'pending' as const,
     };
   }
@@ -351,14 +363,14 @@ async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: 
       source_file_path: null,
       raw_text: source.sourceText,
       normalized_text: normalizedText,
-      fetch_metadata_json: Prisma.JsonNull,
+      fetch_metadata_json: source.documentKind ? (kindMetadata as Prisma.InputJsonValue) : Prisma.JsonNull,
       status: 'ready' as const,
     };
   }
 
   if (source.inputType === 'pdf') {
     if (!source.sourceFile) {
-      throw new Error(`${sourceKey}: PDF file is required for PDF intake`);
+      throw new Error(`${sourceKey}: a PDF or DOCX file is required for file intake`);
     }
     const storedPdfPath = await storeUploadedPdf(source.sourceFile);
     return {
@@ -375,6 +387,7 @@ async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: 
         mime: source.sourceFile.mimeType,
         bytes: source.sourceFile.size,
         checksum: source.sourceFile.checksum,
+        ...kindMetadata,
       } as Prisma.InputJsonValue,
       status: 'pending' as const,
     };
@@ -410,6 +423,7 @@ async function prepareJobSourceData(source: BatchIntakeSourceInput, sequenceNo: 
         guideline_pack_json: preparedJsonIntake.guidelinePack || null,
         document_urls: preparedJsonIntake.documentUrls || [],
       },
+      ...kindMetadata,
     } as Prisma.InputJsonValue,
     status: 'ready' as const,
   };
@@ -1329,12 +1343,35 @@ class FundingIntakeService {
         sources.push(prepared);
       }
 
+      const inputKindBySourceKey = new Map(
+        jobInput.sources.map((source, index) => [
+          normalizeSourceKey(source.sourceKey) || BATCH_SOURCE_KEYS[index],
+          source.documentKind || null,
+        ])
+      );
       const assignment = resolveBatchSourceAssignments({
-        sources: sources.map((source) => ({ sourceKey: source.source_key })),
+        sources: sources.map((source) => ({
+          sourceKey: source.source_key,
+          documentKind: inputKindBySourceKey.get(source.source_key) || null,
+        })),
         detailsSourceKey: jobInput.detailsSourceKey,
         guidelinesSourceKey: jobInput.guidelinesSourceKey,
         templateSourceKey: jobInput.templateSourceKey,
       });
+
+      // Stamp each source with its resolved document role so ingestion and
+      // retries know what the operator meant without re-deriving slots.
+      // JSON/CSV sources keep their imported artifacts in this same blob, so
+      // stampSourceDocumentKind merges rather than replaces.
+      for (const prepared of sources) {
+        const resolvedKind = assignment.documentKinds[prepared.source_key];
+        if (resolvedKind) {
+          prepared.fetch_metadata_json = stampSourceDocumentKind(
+            prepared.fetch_metadata_json,
+            resolvedKind
+          ) as any;
+        }
+      }
 
       preparedJobs.push({
         input: jobInput,
@@ -1541,18 +1578,25 @@ class FundingIntakeService {
       linkedCallIds.length > 0
         ? prisma.fundingCall.findMany({
             where: { id: { in: linkedCallIds } },
-            select: { id: true, catalog_status: true },
+            select: { id: true, catalog_status: true, scheme_title: true, agency_name: true },
           })
         : Promise.resolve([]),
     ]);
     const userMap = new Map(users.map((user) => [user.id, user]));
     const linkedCallStatusMap = new Map(linkedCalls.map((call) => [call.id, readCatalogStatus(call)]));
+    const linkedCallMap = new Map(linkedCalls.map((call) => [call.id, call]));
 
     return jobs.map((job) => ({
       ...job,
       source_url: job.source_url || null,
       linked_funding_call_id: job.linked_funding_call_id || null,
       linked_call_status: job.linked_funding_call_id ? linkedCallStatusMap.get(job.linked_funding_call_id) || null : null,
+      linked_call_title: job.linked_funding_call_id
+        ? linkedCallMap.get(job.linked_funding_call_id)?.scheme_title || null
+        : null,
+      linked_call_agency: job.linked_funding_call_id
+        ? linkedCallMap.get(job.linked_funding_call_id)?.agency_name || null
+        : null,
       submitted_by: userMap.get(job.submitted_by_user_id) || null,
     }));
   }
@@ -2122,6 +2166,247 @@ class FundingIntakeService {
     };
   }
 
+  /** Mark the call as needing a dedicated template document (best-effort). */
+  private async flagTemplateNeedsSource(fundingCallId: string, operator: IntakeOperator) {
+    try {
+      const call = await prisma.fundingCall.findUnique({
+        where: { id: fundingCallId },
+        select: { metadata: true },
+      });
+      const metadata = readCatalogMetadata(call?.metadata);
+      metadata.template_extraction = {
+        skipped: true,
+        reason: 'no_application_sections',
+        flagged_at: new Date().toISOString(),
+        flagged_by: operator.email || operator.userId,
+      };
+      await prisma.fundingCall.update({
+        where: { id: fundingCallId },
+        data: { metadata: metadata as any },
+      });
+    } catch (error) {
+      console.warn('[Funding Intake] could not flag template needs-source state:', error);
+    }
+  }
+
+  /** The document role an intake source plays: explicit tag first, slot-derived otherwise. */
+  private deriveSourceDocumentKind(job: any, source: any): 'call_document' | 'guideline_document' | 'template_document' {
+    const metadata = readFetchMetadata(source.fetch_metadata_json);
+    const explicit = metadata.document_kind;
+    if (explicit === 'call_document' || explicit === 'guideline_document' || explicit === 'template_document') {
+      return explicit;
+    }
+    const detailsKey = job.details_source_key || 'source_1';
+    if (source.source_key === detailsKey) {
+      return 'call_document';
+    }
+    if (source.source_key === (job.guidelines_source_key || detailsKey)) {
+      return 'guideline_document';
+    }
+    if (source.source_key === (job.template_source_key || detailsKey)) {
+      return 'template_document';
+    }
+    return 'call_document';
+  }
+
+  /**
+   * Parse/sectionize a document now, but never longer than the intake time-box —
+   * on timeout processing continues in the background and extraction falls back
+   * to flat text for this run.
+   */
+  private async ensureDocumentProcessed(documentId: string, operator: IntakeOperator) {
+    const document = await prisma.fundingCallDocument.findUnique({
+      where: { id: documentId },
+      select: { parsing_status: true },
+    });
+    if (!document || document.parsing_status === 'completed' || document.parsing_status === 'processing') {
+      return document?.parsing_status || 'missing';
+    }
+
+    const processing = fundingDocumentService.processDocument(documentId, operator);
+    let timedOut = false;
+    await Promise.race([
+      processing.then(() => undefined).catch(() => undefined),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, INTAKE_DOCUMENT_PROCESS_TIMEOUT_MS);
+        (timer as any).unref?.();
+      }),
+    ]);
+
+    if (timedOut) {
+      console.warn(`[Funding Intake] document ${documentId} is still processing after the intake time-box; continuing in background`);
+      void processing.catch((error) => {
+        console.error('[Funding Intake] background document processing failed:', error);
+      });
+      return 'processing';
+    }
+
+    const refreshed = await prisma.fundingCallDocument.findUnique({
+      where: { id: documentId },
+      select: { parsing_status: true },
+    });
+    return refreshed?.parsing_status || 'missing';
+  }
+
+  /**
+   * Register every distinct intake source as a funding-call document of its
+   * tagged kind, so extraction can route by sections and RAG sees all files.
+   * Idempotent (checksum + per-source ledger in fetch_metadata_json) and
+   * failure-isolated: this method NEVER throws — a failed ingest degrades to
+   * today's flat-text extraction for that source.
+   */
+  private async ensureIntakeSourceDocuments(job: any, fundingCallId: string, operator: IntakeOperator) {
+    const report = {
+      ingested: [] as Array<{ sourceKey: string; documentId: string; kind: string; duplicate: boolean; parsingStatus: string }>,
+      errors: [] as Array<{ sourceKey: string; error: string }>,
+    };
+
+    try {
+      const sources = await this.ensureJobSources(job);
+      const jobRecord = await prisma.fundingIntakeJob.findUnique({
+        where: { id: job.id },
+        select: { fetch_metadata_json: true, status: true },
+      });
+      const jobMetadata = readFetchMetadata(jobRecord?.fetch_metadata_json);
+      const previousLedger =
+        jobMetadata.source_documents && typeof jobMetadata.source_documents === 'object' && !Array.isArray(jobMetadata.source_documents)
+          ? { ...(jobMetadata.source_documents as Record<string, any>) }
+          : {};
+      const ledger: Record<string, any> = { ...previousLedger };
+      const seenHashes = new Set<string>();
+      const llmContext = { tenantId: operator.tenantId || null, userId: operator.userId };
+
+      for (const source of sources) {
+        const sourceKey = source.source_key;
+        const kind = this.deriveSourceDocumentKind(job, source);
+        const sourceHash = source.source_text_hash || null;
+
+        try {
+          // Identical bytes/text in two slots become one document; the reader
+          // fallback (guideline_document → call_document) covers the second slot.
+          if (sourceHash && seenHashes.has(sourceHash)) {
+            continue;
+          }
+          if (sourceHash) {
+            seenHashes.add(sourceHash);
+          }
+
+          const already = previousLedger[sourceKey];
+          if (already?.document_id && already?.checksum && already.checksum === sourceHash) {
+            const parsingStatus = await this.ensureDocumentProcessed(already.document_id, operator);
+            report.ingested.push({ sourceKey, documentId: already.document_id, kind, duplicate: true, parsingStatus });
+            continue;
+          }
+
+          let outcome: { document: { id: string }; duplicate?: boolean } | null = null;
+          if (source.input_type === 'pdf' && source.source_file_path) {
+            const sourceMeta = readFetchMetadata(source.fetch_metadata_json);
+            outcome = await fundingDocumentService.registerLocalFileDocument({
+              fundingCallId,
+              filePath: source.source_file_path,
+              mimeType: typeof sourceMeta.mime === 'string' ? sourceMeta.mime : null,
+              originalFilename: typeof sourceMeta.original_name === 'string' ? sourceMeta.original_name : null,
+              documentKind: kind,
+              aliasChecksums: sourceHash ? [sourceHash] : [],
+              deferProcessing: true,
+              operator,
+              eventPayload: { source: 'funding_intake', intakeJobId: job.id, sourceKey },
+            });
+          } else if (source.input_type === 'url' && source.source_url) {
+            try {
+              const ingested = await ingestFundingDocumentFromUrl(fundingCallId, source.source_url, operator, {
+                documentKind: kind,
+                deferProcessing: true,
+              });
+              outcome = { document: { id: ingested.documentId }, duplicate: ingested.duplicate };
+            } catch (urlError) {
+              // The URL serves an HTML page, not a file — persist the fetched
+              // text (already prepared for extraction, no refetch in that case).
+              const prepared = source.normalized_text
+                ? source
+                : await this.prepareSourceForExtraction(job, source, llmContext);
+              if (!prepared.normalized_text) {
+                throw urlError;
+              }
+              outcome = await fundingDocumentService.createDocumentFromText({
+                fundingCallId,
+                text: prepared.normalized_text,
+                fileNameHint: `${normalizeHostname(source.source_url) || 'funding-call'}-${sourceKey}`,
+                sourceUrl: source.source_url,
+                documentKind: kind,
+                deferProcessing: true,
+                operator,
+              });
+            }
+          } else {
+            const text = source.normalized_text || source.raw_text || '';
+            if (!text.trim()) {
+              continue;
+            }
+            outcome = await fundingDocumentService.createDocumentFromText({
+              fundingCallId,
+              text,
+              fileNameHint: `funding-intake-${sourceKey}`,
+              documentKind: kind,
+              deferProcessing: true,
+              operator,
+            });
+          }
+
+          if (outcome?.document?.id) {
+            const parsingStatus = await this.ensureDocumentProcessed(outcome.document.id, operator);
+            ledger[sourceKey] = {
+              document_id: outcome.document.id,
+              document_kind: kind,
+              checksum: sourceHash,
+              ingested_at: new Date().toISOString(),
+            };
+            report.ingested.push({
+              sourceKey,
+              documentId: outcome.document.id,
+              kind,
+              duplicate: Boolean(outcome.duplicate),
+              parsingStatus,
+            });
+            await recordJobEvent(job.id, jobRecord?.status || job.status, 'source_document_ingested', {
+              actorUserId: operator.userId,
+              previousStatus: jobRecord?.status || job.status,
+              message: `Registered ${sourceKey} as ${kind} (document ${outcome.document.id}, parsing ${parsingStatus})`,
+            });
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          report.errors.push({ sourceKey, error: message });
+          console.error(`[Funding Intake] source document ingestion failed for ${sourceKey}:`, error);
+          await recordJobEvent(job.id, jobRecord?.status || job.status, 'source_document_ingest_failed', {
+            actorUserId: operator.userId,
+            previousStatus: jobRecord?.status || job.status,
+            message: `${sourceKey}: ${message}`,
+          }).catch(() => undefined);
+        }
+      }
+
+      await prisma.fundingIntakeJob.update({
+        where: { id: job.id },
+        data: {
+          fetch_metadata_json: {
+            ...jobMetadata,
+            source_documents: ledger,
+          } as any,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      report.errors.push({ sourceKey: '*', error: message });
+      console.error('[Funding Intake] source document ingestion failed:', error);
+    }
+
+    return report;
+  }
+
   private async runExtractAllForFundingCall(
     job: any,
     fundingCallId: string,
@@ -2135,14 +2420,22 @@ class FundingIntakeService {
       return this.applyJsonArtifactsForFundingCall(job, fundingCallId, operator);
     }
 
+    // Documents first: extraction below routes by the sections these produce.
+    const documentIngest = await this.ensureIntakeSourceDocuments(job, fundingCallId, operator);
+
     const guidelineTask = (async () => {
       try {
-        const source = options?.guidelineSource
-          ? {
-              sourceMode: 'text' as const,
-              sourceText: options.guidelineSource.normalized_text || options.guidelineSource.raw_text || '',
-            }
-          : undefined;
+        // Sections routed from the ingested documents drive extraction; the flat
+        // prepared text only backstops calls whose documents failed to parse.
+        const source = {
+          sourceMode: 'documents' as const,
+          fallbackText:
+            options?.guidelineSource?.normalized_text
+            || options?.guidelineSource?.raw_text
+            || job.normalized_text
+            || job.raw_text
+            || null,
+        };
         const guidelineRun = await fundingGuidelineService.createExtractionRunFromFundingCall(fundingCallId, operator, source);
         return {
           guidelineStatus: guidelineRun?.status || null,
@@ -2165,7 +2458,36 @@ class FundingIntakeService {
         const templateJob = options?.templateSource
           ? makeJobLikeFromSource(job, options.templateSource)
           : job;
-        const autoAsset = await fundingTemplateService.upsertAutoManagedAssetFromIntakeSource(fundingCallId, templateJob, operator);
+        const detailsKey = job.details_source_key || 'source_1';
+        const hasExplicitTemplateSource = Boolean(
+          options?.templateSource?.source_key && options.templateSource.source_key !== detailsKey
+        );
+        const autoAsset = await fundingTemplateService.upsertAutoManagedAssetFromIntakeSource(
+          fundingCallId,
+          templateJob,
+          operator,
+          {
+            allowSkip: !hasExplicitTemplateSource,
+            hasExplicitTemplateSource,
+          }
+        );
+        if (!autoAsset) {
+          // The parsed call document has no application-format sections and the
+          // operator supplied no template source — flag instead of compiling a
+          // template out of prose (a later template_document upload re-enables it).
+          await this.flagTemplateNeedsSource(fundingCallId, operator);
+          await recordJobEvent(job.id, job.status, 'template_extraction_skipped', {
+            actorUserId: operator.userId,
+            previousStatus: job.status,
+            message: 'No application-format sections found; template needs a dedicated document',
+          }).catch(() => undefined);
+          return {
+            templateStatus: 'skipped_needs_source',
+            templateRunId: null,
+            templateAssetId: null,
+            templateExtractionError: null as string | null,
+          };
+        }
         const templateRun = await fundingTemplateService.createExtractionRun(fundingCallId, operator, [autoAsset.id]);
         return {
           templateStatus: templateRun?.status || null,
@@ -2190,6 +2512,8 @@ class FundingIntakeService {
     return {
       ...guidelineResult,
       ...templateResult,
+      sourceDocumentsIngested: documentIngest.ingested.length,
+      sourceDocumentErrors: documentIngest.errors,
     };
   }
 
@@ -2357,7 +2681,16 @@ class FundingIntakeService {
       });
     }
 
-    const extractAllResult = extractAll || details.job.input_type === 'json'
+    const runExtractAll = extractAll || details.job.input_type === 'json';
+    if (!runExtractAll) {
+      // Still register the intake sources as documents (sections + RAG) — in the
+      // background so saving a draft stays fast.
+      void this.ensureIntakeSourceDocuments(details.job, fundingCall.id, operator).catch((error) => {
+        console.error('[Funding Intake] background source document ingestion failed:', error);
+      });
+    }
+
+    const extractAllResult = runExtractAll
       ? await this.runExtractAllForFundingCall(details.job, fundingCall.id, operator)
       : {
           guidelineStatus: null,
@@ -2377,7 +2710,7 @@ class FundingIntakeService {
       fundingCallId: fundingCall.id,
       requiredFieldsRemaining: [],
       duplicateResolutionState: details.duplicates.length > 0 ? 'resolved' : details.job.duplicate_status,
-      extractAllTriggered: extractAll || details.job.input_type === 'json',
+      extractAllTriggered: runExtractAll,
       ...extractAllResult,
     };
   }
@@ -2515,26 +2848,43 @@ class FundingIntakeService {
         sourceHash = hashText(normalizedText);
       } else if (source.input_type === 'pdf') {
         if (!source.source_file_path) {
-          throw new Error(`No stored PDF file is available for ${source.source_key}`);
+          throw new Error(`No stored document file is available for ${source.source_key}`);
         }
+
+        const isDocx =
+          String((fetchMetadata as any)?.mime || '').toLowerCase() === DOCX_MIME ||
+          source.source_file_path.toLowerCase().endsWith('.docx');
 
         await transitionJobStatus(job.id, 'extracting', {
           startedAt: job.started_at || new Date(),
           processingPhase: `source:${source.source_key}:transcribing_pdf`,
-          message: `Transcribing ${source.source_key} PDF source`,
+          message: `Transcribing ${source.source_key} ${isDocx ? 'DOCX' : 'PDF'} source`,
         });
 
-        const pdfExtraction = await extractCanonicalTextFromPdf(source.source_file_path, llmContext);
-        rawText = pdfExtraction.rawText;
-        normalizedText = pdfExtraction.normalizedText;
-        fetchMetadata = {
-          ...fetchMetadata,
-          pdf_transcription: {
-            extractor_model: pdfExtraction.extractorModel,
-            warnings: pdfExtraction.warnings,
-            source_file_path: source.source_file_path,
-          },
-        };
+        if (isDocx) {
+          // DOCX carries its own text layer — mammoth extraction, no LLM needed.
+          rawText = await extractDocxPlainText(source.source_file_path);
+          normalizedText = normalizeMultilineText(rawText);
+          fetchMetadata = {
+            ...fetchMetadata,
+            docx_extraction: {
+              extractor: 'mammoth',
+              source_file_path: source.source_file_path,
+            },
+          };
+        } else {
+          const pdfExtraction = await extractCanonicalTextFromPdf(source.source_file_path, llmContext);
+          rawText = pdfExtraction.rawText;
+          normalizedText = pdfExtraction.normalizedText;
+          fetchMetadata = {
+            ...fetchMetadata,
+            pdf_transcription: {
+              extractor_model: pdfExtraction.extractorModel,
+              warnings: pdfExtraction.warnings,
+              source_file_path: source.source_file_path,
+            },
+          };
+        }
         sourceHash = sourceHash || hashText(`${source.source_file_path || ''}::${normalizedText}`);
       } else if (source.input_type === 'json') {
         const parsed = parseFundingJsonUpload(rawText || normalizedText);

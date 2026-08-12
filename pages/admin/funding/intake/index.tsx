@@ -24,6 +24,8 @@ type JobSummary = {
   duplicate_status: string;
   linked_funding_call_id: string | null;
   linked_call_status: string | null;
+  linked_call_title: string | null;
+  linked_call_agency: string | null;
   created_at: string;
   updated_at: string;
   submitted_by: {
@@ -48,9 +50,12 @@ type BatchSummary = {
   } | null;
 };
 
+type BatchSourceRole = 'details' | 'call_extra' | 'guidelines' | 'template';
+
 type BatchSourceForm = {
   sourceKey: 'source_1' | 'source_2' | 'source_3';
   inputType: 'url' | 'text' | 'pdf' | 'json';
+  role: BatchSourceRole;
   sourceUrl: string;
   sourceText: string;
   sourceFile: File | null;
@@ -59,13 +64,24 @@ type BatchSourceForm = {
 type BatchJobForm = {
   localId: string;
   operatorNotes: string;
-  detailsSourceKey: 'source_1' | 'source_2' | 'source_3';
-  guidelinesSourceKey: 'source_1' | 'source_2' | 'source_3';
-  templateSourceKey: 'source_1' | 'source_2' | 'source_3';
   sources: BatchSourceForm[];
 };
 
 const SOURCE_KEYS: Array<BatchSourceForm['sourceKey']> = ['source_1', 'source_2', 'source_3'];
+
+const SOURCE_ROLE_OPTIONS: Array<{ value: BatchSourceRole; label: string }> = [
+  { value: 'details', label: 'Call document (drives extraction)' },
+  { value: 'call_extra', label: 'Additional call document' },
+  { value: 'guidelines', label: 'Guidelines' },
+  { value: 'template', label: 'Application template' },
+];
+
+const ROLE_TO_DOCUMENT_KIND: Record<BatchSourceRole, 'call_document' | 'guideline_document' | 'template_document'> = {
+  details: 'call_document',
+  call_extra: 'call_document',
+  guidelines: 'guideline_document',
+  template: 'template_document',
+};
 
 type WipeImpact = {
   totalCalls: number;
@@ -84,6 +100,7 @@ function createBatchSource(index = 0): BatchSourceForm {
   return {
     sourceKey: SOURCE_KEYS[index] || 'source_1',
     inputType: 'url',
+    role: index === 0 ? 'details' : index === 1 ? 'guidelines' : 'template',
     sourceUrl: '',
     sourceText: '',
     sourceFile: null,
@@ -94,10 +111,17 @@ function createBatchJob(): BatchJobForm {
   return {
     localId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     operatorNotes: '',
-    detailsSourceKey: 'source_1',
-    guidelinesSourceKey: 'source_1',
-    templateSourceKey: 'source_1',
     sources: [createBatchSource(0)],
+  };
+}
+
+/** Slot keys derived from source roles: extraction reads the details source; guideline/template slots fall back to it. */
+function deriveSourceAssignments(sources: BatchSourceForm[]) {
+  const detailsSourceKey = sources.find((source) => source.role === 'details')?.sourceKey || sources[0]?.sourceKey || 'source_1';
+  return {
+    detailsSourceKey,
+    guidelinesSourceKey: sources.find((source) => source.role === 'guidelines')?.sourceKey || detailsSourceKey,
+    templateSourceKey: sources.find((source) => source.role === 'template')?.sourceKey || detailsSourceKey,
   };
 }
 
@@ -346,16 +370,23 @@ export default function FundingIntakeAdminPage() {
       if (index !== jobIndex) {
         return job;
       }
-      const nextSources = job.sources.map((source, itemIndex) => itemIndex === sourceIndex ? { ...source, ...patch } : source);
-      const availableKeys = nextSources.map((source) => source.sourceKey);
-      const fallbackKey = availableKeys[0] || 'source_1';
-      return {
-        ...job,
-        sources: nextSources,
-        detailsSourceKey: availableKeys.includes(job.detailsSourceKey) ? job.detailsSourceKey : fallbackKey,
-        guidelinesSourceKey: availableKeys.includes(job.guidelinesSourceKey) ? job.guidelinesSourceKey : fallbackKey,
-        templateSourceKey: availableKeys.includes(job.templateSourceKey) ? job.templateSourceKey : fallbackKey,
-      };
+      let nextSources = job.sources.map((source, itemIndex) => itemIndex === sourceIndex ? { ...source, ...patch } : source);
+
+      // Exactly one source drives call-details extraction.
+      if (patch.role === 'details') {
+        nextSources = nextSources.map((source, itemIndex) =>
+          itemIndex !== sourceIndex && source.role === 'details' ? { ...source, role: 'call_extra' } : source
+        );
+      } else if (patch.role && !nextSources.some((source) => source.role === 'details')) {
+        const promoteIndex = nextSources.findIndex((_, itemIndex) => itemIndex !== sourceIndex);
+        nextSources = nextSources.map((source, itemIndex) =>
+          itemIndex === (promoteIndex === -1 ? sourceIndex : promoteIndex)
+            ? { ...source, role: 'details' }
+            : source
+        );
+      }
+
+      return { ...job, sources: nextSources };
     }));
   }
 
@@ -378,16 +409,11 @@ export default function FundingIntakeAdminPage() {
       if (index !== jobIndex || job.sources.length === 1) {
         return job;
       }
-      const nextSources = job.sources.filter((_, itemIndex) => itemIndex !== sourceIndex);
-      const fallbackKey = nextSources[0]?.sourceKey || 'source_1';
-      const availableKeys = nextSources.map((source) => source.sourceKey);
-      return {
-        ...job,
-        sources: nextSources,
-        detailsSourceKey: availableKeys.includes(job.detailsSourceKey) ? job.detailsSourceKey : fallbackKey,
-        guidelinesSourceKey: availableKeys.includes(job.guidelinesSourceKey) ? job.guidelinesSourceKey : fallbackKey,
-        templateSourceKey: availableKeys.includes(job.templateSourceKey) ? job.templateSourceKey : fallbackKey,
-      };
+      let nextSources = job.sources.filter((_, itemIndex) => itemIndex !== sourceIndex);
+      if (!nextSources.some((source) => source.role === 'details')) {
+        nextSources = nextSources.map((source, itemIndex) => itemIndex === 0 ? { ...source, role: 'details' } : source);
+      }
+      return { ...job, sources: nextSources };
     }));
   }
 
@@ -449,20 +475,24 @@ export default function FundingIntakeAdminPage() {
       const hasFiles = batchJobs.some((job) => job.sources.some((source) => source.sourceFile));
       const payload = {
         label: batchLabel.trim() || undefined,
-        jobs: batchJobs.map((job) => ({
-          operatorNotes: job.operatorNotes.trim() || undefined,
-          detailsSourceKey: job.detailsSourceKey,
-          guidelinesSourceKey: job.guidelinesSourceKey,
-          templateSourceKey: job.templateSourceKey,
-          autoCreateDraft: true,
-          extractAll: true,
-          sources: job.sources.map((source) => ({
-            sourceKey: source.sourceKey,
-            inputType: source.inputType,
-            sourceUrl: source.inputType === 'url' ? source.sourceUrl : undefined,
-            sourceText: source.inputType === 'text' ? source.sourceText : undefined,
-          })),
-        })),
+        jobs: batchJobs.map((job) => {
+          const assignment = deriveSourceAssignments(job.sources);
+          return {
+            operatorNotes: job.operatorNotes.trim() || undefined,
+            detailsSourceKey: assignment.detailsSourceKey,
+            guidelinesSourceKey: assignment.guidelinesSourceKey,
+            templateSourceKey: assignment.templateSourceKey,
+            autoCreateDraft: true,
+            extractAll: true,
+            sources: job.sources.map((source) => ({
+              sourceKey: source.sourceKey,
+              inputType: source.inputType,
+              documentKind: ROLE_TO_DOCUMENT_KIND[source.role],
+              sourceUrl: source.inputType === 'url' ? source.sourceUrl : undefined,
+              sourceText: source.inputType === 'text' ? source.sourceText : undefined,
+            })),
+          };
+        }),
       };
 
       const response = hasFiles
@@ -772,9 +802,17 @@ export default function FundingIntakeAdminPage() {
               Submit a funding opportunity source, upload a ChatGPT-extracted JSON/CSV file that seeds call fields and guidelines from one intake job, or bulk-upload a .zip of per-call CSVs to queue many calls at once.
             </p>
           </div>
-          <Link href="/admin" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
-            Back to Admin
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/admin/funding/catalog"
+              className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 shadow-sm"
+            >
+              Call history
+            </Link>
+            <Link href="/admin" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+              Back to Admin
+            </Link>
+          </div>
         </div>
 
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1.1fr),minmax(0,0.9fr)]">
@@ -806,7 +844,7 @@ export default function FundingIntakeAdminPage() {
                   onClick={() => setInputType('pdf')}
                   className={`rounded-full px-4 py-2 text-sm font-medium ${inputType === 'pdf' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}
                 >
-                  PDF
+                  PDF / DOCX
                 </button>
                 <button
                   type="button"
@@ -856,10 +894,10 @@ export default function FundingIntakeAdminPage() {
                 </label>
               ) : inputType === 'pdf' ? (
                 <label key="intake-pdf-input" className="block">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">Funding opportunity PDF</span>
+                  <span className="mb-2 block text-sm font-medium text-slate-700">Funding opportunity document (PDF or DOCX)</span>
                   <input
                     type="file"
-                    accept=".pdf,application/pdf"
+                    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     onChange={(event) => setSourcePdf(event.target.files?.[0] || null)}
                     disabled={!canWriteFundingIntake}
                     className="block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
@@ -1093,7 +1131,7 @@ export default function FundingIntakeAdminPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Batch composer</h2>
-              <p className="mt-1 text-sm text-slate-600">Submit multiple calls with reusable source slots. Details are required; guidelines and template default to the details source.</p>
+              <p className="mt-1 text-sm text-slate-600">One combined document is enough — sections are routed automatically. Add separate guideline, template, or annexure files when the call ships as multiple documents (PDF and DOCX both work).</p>
             </div>
             <button
               type="button"
@@ -1173,6 +1211,20 @@ export default function FundingIntakeAdminPage() {
                           )}
                         </div>
 
+                        <label className="mt-3 block">
+                          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Role</span>
+                          <select
+                            value={source.role}
+                            onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { role: event.target.value as BatchSourceRole })}
+                            disabled={!canWriteFundingIntake}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            {SOURCE_ROLE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+
                         <select
                           value={source.inputType}
                           onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { inputType: event.target.value as BatchSourceForm['inputType'], sourceFile: null })}
@@ -1181,7 +1233,7 @@ export default function FundingIntakeAdminPage() {
                         >
                           <option value="url">URL</option>
                           <option value="text">Text</option>
-                          <option value="pdf">PDF</option>
+                          <option value="pdf">PDF / DOCX</option>
                           <option value="json">JSON</option>
                         </select>
 
@@ -1205,35 +1257,15 @@ export default function FundingIntakeAdminPage() {
                         ) : (
                           <input
                             type="file"
-                            accept={source.inputType === 'pdf' ? '.pdf,application/pdf' : '.json,application/json'}
+                            accept={source.inputType === 'pdf'
+                              ? '.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                              : '.json,application/json'}
                             onChange={(event) => updateBatchSource(jobIndex, sourceIndex, { sourceFile: event.target.files?.[0] || null })}
                             disabled={!canWriteFundingIntake}
                             className="mt-3 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900"
                           />
                         )}
                       </div>
-                    ))}
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
-                    {[
-                      ['detailsSourceKey', 'Details source'],
-                      ['guidelinesSourceKey', 'Guidelines source'],
-                      ['templateSourceKey', 'Template source'],
-                    ].map(([field, label]) => (
-                      <label key={field} className="block">
-                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
-                        <select
-                          value={(batchJob as any)[field]}
-                          onChange={(event) => updateBatchJob(jobIndex, { [field]: event.target.value } as any)}
-                          disabled={!canWriteFundingIntake}
-                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                        >
-                          {sourceKeys.map((key) => (
-                            <option key={key} value={key}>{key.replace('_', ' ')}</option>
-                          ))}
-                        </select>
-                      </label>
                     ))}
                   </div>
 
@@ -1358,6 +1390,7 @@ export default function FundingIntakeAdminPage() {
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50">
                   <tr>
+                    <th className="px-4 py-3 text-left font-medium text-slate-500">Call</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Source</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Submitter</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Status</th>
@@ -1370,6 +1403,20 @@ export default function FundingIntakeAdminPage() {
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {jobs.map((job) => (
                     <tr key={job.id}>
+                      <td className="px-4 py-4 align-top">
+                        {job.linked_call_title || job.linked_call_agency ? (
+                          <>
+                            <div className="max-w-xs font-semibold text-slate-900">
+                              {job.linked_call_title || 'Untitled call'}
+                            </div>
+                            {job.linked_call_agency && (
+                              <div className="mt-1 max-w-xs text-slate-600">{job.linked_call_agency}</div>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-slate-400">Not extracted yet</span>
+                        )}
+                      </td>
                       <td className="px-4 py-4 align-top text-slate-700">
                         <div className="font-medium uppercase tracking-[0.18em] text-xs text-slate-500">{job.input_type}</div>
                         <div className="mt-1 max-w-sm break-all text-slate-800">

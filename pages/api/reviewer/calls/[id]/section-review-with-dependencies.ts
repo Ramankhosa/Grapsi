@@ -28,7 +28,10 @@ export default async function handler(
   
   // Get the call ID from the URL and section ID from the request body
   const callId = req.query.id as string;
-  const { sectionId } = req.body;
+  // `skipReportRefresh` is forwarded, not consumed: the full auto-run compiles
+  // the panel report once at the end, so each section review inside it must not
+  // trigger its own regeneration.
+  const { sectionId, skipReportRefresh } = req.body;
   
   if (!callId || !sectionId) {
     return res.status(400).json({ error: 'Call ID and Section ID are required' });
@@ -114,7 +117,8 @@ export default async function handler(
         ? req.headers.authorization[0]
         : req.headers.authorization;
       const response = await axios.post(apiUrl, {
-        contextSectionIds: priorSectionSummaries.map(s => s.section_title)
+        contextSectionIds: priorSectionSummaries.map(s => s.section_title),
+        skipReportRefresh: skipReportRefresh === true,
       }, {
         headers: {
           ...(authHeader ? { Authorization: authHeader } : {}),
@@ -127,7 +131,8 @@ export default async function handler(
         message: 'Section reviewed successfully with dependencies',
         context_summary: response.data.context_summary,
         review: response.data.review,
-        used_dependency_sections: priorSectionSummaries.map(s => s.section_title)
+        used_dependency_sections: priorSectionSummaries.map(s => s.section_title),
+        report_refreshed: response.data.report_refreshed === true,
       });
     } catch (error) {
       console.error('Error calling review API:', {

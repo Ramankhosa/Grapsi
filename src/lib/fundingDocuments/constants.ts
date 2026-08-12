@@ -34,6 +34,31 @@ export const PROTECTED_SINGLE_CHUNK_SECTION_TYPES = new Set<FundingDocumentSecti
   'evaluation_criteria',
 ]);
 
+/** Section types the guideline extractor should read (rules that affect drafting/fit). */
+export const GUIDELINE_SECTION_TYPES = [
+  'eligibility',
+  'funding_support',
+  'budget_rules',
+  'duration',
+  'important_dates',
+  'evaluation_criteria',
+  'exclusions',
+  'application_process',
+  'required_documents',
+  'consortium_partner_rules',
+  'intellectual_property_rules',
+  'reporting_requirements',
+] as const satisfies readonly FundingDocumentSectionType[];
+
+/** Section types that describe the application's format — the template extractor's input. */
+export const TEMPLATE_SECTION_TYPES = [
+  'application_process',
+  'required_documents',
+  'budget_rules',
+  'reporting_requirements',
+  'evaluation_criteria',
+] as const satisfies readonly FundingDocumentSectionType[];
+
 type KeywordRule = {
   type: FundingDocumentSectionType;
   patterns: RegExp[];

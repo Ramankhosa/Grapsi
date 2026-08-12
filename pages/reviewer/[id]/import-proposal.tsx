@@ -388,6 +388,18 @@ export default function ImportProposalPage() {
                     {blocks.length} block(s) · {preview.words.toLocaleString()} words
                     {preview.filename ? ` · ${preview.filename}` : ''}
                   </p>
+                  {preview.splitMode === 'format' ? (
+                    <p className="mt-1 text-xs text-emerald-700">
+                      Split along the call&apos;s own section format
+                      {preview.formatLinesRemoved > 0
+                        ? ` · ${preview.formatLinesRemoved} format instruction line(s) removed`
+                        : ''}
+                    </p>
+                  ) : preview.formatLinesRemoved > 0 ? (
+                    <p className="mt-1 text-xs text-nickel-500">
+                      {preview.formatLinesRemoved} format instruction line(s) removed
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex gap-3">
                   <button

@@ -405,6 +405,11 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
       return;
     }
 
+    // Clear the box the moment the message leaves — the sent text already shows as
+    // the optimistic bubble, and the composer stays frozen until the answer lands.
+    // A failed turn can be restored into the composer from the pending-turn card.
+    setComposer('');
+
     await postConversationMessage(
       {
         message: trimmed,
@@ -416,7 +421,6 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
           : undefined,
       },
       {
-        clearComposerOnSuccess: true,
         optimisticMessage: trimmed,
         onSuccess: () => {
           setAttachedContext(null);
@@ -426,13 +430,42 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     );
   }
 
+  /**
+   * Filters are direct manipulation: they hit the filter endpoint, which re-runs the
+   * search and never posts a chat message or spends an LLM call.
+   */
+  async function applyFiltersSilently(nextFilters: RecommendationSearchFilters) {
+    if (!conversation) return;
+    setSending(true);
+    onError(null);
+    try {
+      const previousFilters = conversation.currentFilters;
+      const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(
+        authFetch,
+        `/api/recommendations/conversations/${conversation.id}/filters`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filters: nextFilters,
+            useEligibilityProfile: preferencesRef.current.useEligibilityProfile,
+            usePublicationContext: preferencesRef.current.usePublicationContext,
+            selectedResearchAreaIds: selectedResearchAreaIdsRef.current,
+          }),
+        }
+      );
+      setLastUndoFilters(previousFilters);
+      updateConversationFromResponse(response.conversation);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to update filters');
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleApplyFilters() {
     setFilterDrawerOpen(false);
-    await postConversationMessage({
-      message: 'Apply these filter changes.',
-      manualFilterPatch: filterDraft,
-      replaceManualFilters: true,
-    });
+    await applyFiltersSilently(filterDraft);
   }
 
   async function handleResetFilters() {
@@ -492,14 +525,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
 
   async function handleUndoFilters() {
     if (!lastUndoFilters) return;
-    const success = await postConversationMessage({
-      message: 'Undo the last filter change.',
-      manualFilterPatch: lastUndoFilters,
-      replaceManualFilters: true,
-    });
-    if (success) {
-      setLastUndoFilters(null);
-    }
+    await applyFiltersSilently(lastUndoFilters);
   }
 
   async function handleFilterModeChange(mode: RecommendationFilterMode) {
@@ -526,37 +552,25 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
 
   async function handleApplyFilterChip(chip: FinderFilterSuggestionChip) {
     if (!conversation) return;
-    const nextFilters = applyFilterSuggestionChip(conversation.currentFilters, chip);
-    await postConversationMessage({
-      message: `Apply suggested filter: ${chip.label}.`,
-      manualFilterPatch: nextFilters,
-      replaceManualFilters: true,
-    });
+    await applyFiltersSilently(applyFilterSuggestionChip(conversation.currentFilters, chip));
   }
 
   async function handleRemoveArrayValue(key: keyof RecommendationSearchFilters, value: string) {
     if (!conversation) return;
-    const nextFilters = buildArrayValueRemovedFilters(conversation.currentFilters, key, value);
-    await postConversationMessage({
-      message: `Remove ${value} from the active filters.`,
-      manualFilterPatch: nextFilters,
-      replaceManualFilters: true,
-    });
+    await applyFiltersSilently(buildArrayValueRemovedFilters(conversation.currentFilters, key, value));
   }
 
   async function handleClearScalar(key: keyof RecommendationSearchFilters) {
     if (!conversation) return;
-    const nextFilters = buildClearedScalarFilters(conversation.currentFilters, key);
-    await postConversationMessage({
-      message: `Clear the ${String(key)} filter.`,
-      manualFilterPatch: nextFilters,
-      replaceManualFilters: true,
-    });
+    await applyFiltersSilently(buildClearedScalarFilters(conversation.currentFilters, key));
   }
 
   async function handleRetryWithoutStrictFilters() {
     if (!activeRun?.searchDiagnostics?.strictFilterRecovery) return;
-    await postConversationMessage(buildRetryWithoutFiltersRequest(activeRun.searchDiagnostics.strictFilterRecovery));
+    const retry = buildRetryWithoutFiltersRequest(activeRun.searchDiagnostics.strictFilterRecovery);
+    if (retry.manualFilterPatch) {
+      await applyFiltersSilently(retry.manualFilterPatch as RecommendationSearchFilters);
+    }
   }
 
   async function handleRetryPendingTurn() {

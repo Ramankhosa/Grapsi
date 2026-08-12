@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import sgMail from '@sendgrid/mail'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { isAccessError, requireTenantUser, TENANT_ASSIGNER_ROLES } from '@/lib/auth/tenantAccess'
+import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
+import { canAssignToUser, resolveAssignerUnitId } from '@/lib/orgUnits/scope'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
 import {
   ASSIGNMENT_STATUSES,
@@ -37,51 +38,103 @@ const createSchema = z.object({
   matchBasis: z.string().trim().max(20).nullable().optional(),
 })
 
-/** GET ?view=mine (default) | managed */
+/**
+ * GET ?view=mine (default) | assigned-by-me | team (alias: managed)
+ *
+ *   mine            — assignments I have to deliver
+ *   assigned-by-me  — what I delegated, and where it stands
+ *   team            — everything landing in the part of the org I manage,
+ *                     whoever assigned it (tenant-wide callers see all)
+ */
 export async function GET(request: NextRequest) {
-  const context = await requireTenantUser(request)
+  const context = await requireTenantScope(request)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
 
   const { searchParams } = new URL(request.url)
-  const view = searchParams.get('view') === 'managed' ? 'managed' : 'mine'
+  const rawView = searchParams.get('view') || 'mine'
+  const view =
+    rawView === 'managed' || rawView === 'team'
+      ? 'team'
+      : rawView === 'assigned-by-me'
+        ? 'assigned-by-me'
+        : 'mine'
   const status = searchParams.get('status')
+  const orgUnitId = (searchParams.get('orgUnitId') || '').trim()
+  const outcome = (searchParams.get('outcome') || '').trim()
+  const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 200, 1), 500)
+  const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
-  if (view === 'managed' && !context.isAssigner) {
+  const { scope } = context
+  const canSeeOthers = scope.isTenantWide || (scope.isHead && scope.canViewReports)
+  if (view === 'team' && !canSeeOthers) {
     return NextResponse.json(
       { error: 'You do not have permission to view your organization’s assignments.' },
       { status: 403 }
     )
   }
 
-  const where: any =
-    view === 'managed'
-      ? { tenant_id: context.tenantId }
-      : { assignee_user_id: context.user.id, tenant_id: context.tenantId }
+  let where: any
+  if (view === 'mine') {
+    where = { assignee_user_id: context.user.id, tenant_id: context.tenantId }
+  } else if (view === 'assigned-by-me') {
+    where = { assigned_by_user_id: context.user.id, tenant_id: context.tenantId }
+  } else if (scope.isTenantWide) {
+    where = { tenant_id: context.tenantId }
+  } else {
+    // A head sees their subtree plus anything they delegated themselves — the
+    // OR keeps a call they handed out visible even after the assignee moves
+    // out of their branch.
+    where = {
+      tenant_id: context.tenantId,
+      OR: [
+        { assigned_by_user_id: context.user.id },
+        { assignee_org_unit_id: { in: scope.managedUnitIds } },
+      ],
+    }
+  }
 
   if (status && (ASSIGNMENT_STATUSES as readonly string[]).includes(status)) {
     where.status = status
   }
+  if (outcome && ['PENDING', 'AWARDED', 'REJECTED', 'WITHDRAWN'].includes(outcome)) {
+    where.outcome = outcome
+  }
+  if (orgUnitId) {
+    where.assignee_org_unit_id = orgUnitId
+  }
 
-  const records = await prisma.callAssignment.findMany({
-    where,
-    include: assignmentInclude,
-    orderBy: [{ status: 'asc' }, { deadline_at: 'asc' }, { created_at: 'desc' }],
-    take: 200,
+  const [records, total] = await Promise.all([
+    prisma.callAssignment.findMany({
+      where,
+      include: assignmentInclude,
+      orderBy: [{ status: 'asc' }, { deadline_at: 'asc' }, { created_at: 'desc' }],
+      take: limit,
+      skip: offset,
+    }),
+    prisma.callAssignment.count({ where }),
+  ])
+
+  return NextResponse.json({
+    view,
+    assignments: records.map(serializeAssignment),
+    total,
+    limit,
+    offset,
   })
-
-  return NextResponse.json({ view, assignments: records.map(serializeAssignment) })
 }
 
 export async function POST(request: NextRequest) {
-  const context = await requireTenantUser(request)
+  const context = await requireTenantScope(request)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
-  if (!context.isAssigner) {
+  // A named head can assign without holding CALL_ASSIGNER — that grant IS the
+  // delegation. `canAssign` folds both paths together.
+  if (!context.scope.canAssign) {
     return NextResponse.json(
-      { error: `Only ${TENANT_ASSIGNER_ROLES.join(', ')} can assign calls to faculty.` },
+      { error: 'You do not have permission to assign funding calls.' },
       { status: 403 }
     )
   }
@@ -115,6 +168,17 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // The delegation boundary: a head may only assign within the part of the org
+  // they manage. 403 rather than 404 — the person plainly exists, they are just
+  // out of reach, and pretending otherwise makes the error unactionable.
+  const permission = await canAssignToUser(context.scope, assignee.id)
+  if (!permission.allowed) {
+    return NextResponse.json(
+      { error: permission.reason || 'That person is not in a department you manage.' },
+      { status: 403 }
+    )
+  }
+
   const existing = await prisma.callAssignment.findUnique({
     where: {
       funding_call_id_assignee_user_id: {
@@ -145,6 +209,11 @@ export async function POST(request: NextRequest) {
       match_score: payload.matchScore ?? null,
       match_tier: payload.matchTier || null,
       match_basis: payload.matchBasis || null,
+      // Org placement snapshotted at assignment time: moving someone next
+      // semester must not rewrite last year's report, and the assigner is often
+      // an admin with no researcher profile to join against.
+      assignee_org_unit_id: permission.assigneeUnitId,
+      assigner_org_unit_id: await resolveAssignerUnitId(context.scope),
     },
     include: assignmentInclude,
   })

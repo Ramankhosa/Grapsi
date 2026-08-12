@@ -1614,6 +1614,22 @@ function isConversationalQuestionMessage(message: string) {
   return CONVERSATIONAL_QUESTION_PATTERN.test(normalizeWhitespace(message));
 }
 
+/**
+ * Deterministic (LLM-free) line for filter-only updates. Changing a filter is a
+ * mechanical action — it never sends a chat message and never spends an LLM call,
+ * so the transcript just gets this one-liner plus the refreshed result cards.
+ */
+function describeFilterUpdateSummary(response: InternalRecommendationSearchResponse | undefined, preface: string) {
+  if (!response) {
+    return `${preface} Add a research area or paper details to search funding calls.`;
+  }
+  const shown = Math.min(response.rawResults.length, CHAT_INLINE_RESULT_LIMIT);
+  if (shown === 0) {
+    return `${preface} No funding calls match the current filters.`;
+  }
+  return `${preface} Showing ${shown} funding call${shown === 1 ? '' : 's'} that match the current filters.`;
+}
+
 async function buildNarrativeForSearch(
   response: InternalRecommendationSearchResponse,
   preface: string,
@@ -3390,9 +3406,65 @@ RULES:
       outcome: {
         intent: 'clear_filters',
         messageType: 'assistant_response',
-        assistantContent: run
-          ? await buildNarrativeForSearch(run, 'I reset the active filters and searched again.', llmContext)
-          : 'I reset the active filters. Add a research area or paper details to start a funding search.',
+        assistantContent: describeFilterUpdateSummary(run, 'Filters cleared.'),
+        nextState,
+        pendingPatch: null,
+        run,
+        citations: run ? { runId: '', resultIds: run.rawResults.slice(0, CHAT_INLINE_RESULT_LIMIT).map((result) => result.id) } : null,
+      },
+    });
+  }
+
+  /**
+   * Apply an exact filter set chosen by the user in the UI (chip removal, filter
+   * drawer, undo). No user message is recorded and no narrative LLM call is made —
+   * filters are a direct manipulation, not a conversation turn.
+   */
+  async applyFilters(
+    userId: string,
+    tenantId: string,
+    conversationId: string,
+    options: {
+      filters: RecommendationSearchFilters;
+      useProfileContext?: boolean;
+      useEligibilityProfile?: boolean;
+      usePublicationContext?: boolean;
+      selectedResearchAreaIds?: string[];
+    },
+    access?: RecommendationAccessScope
+  ): Promise<RecommendationConversationMutationResponse> {
+    const conversation = await this.getConversationRecord(userId, tenantId, conversationId);
+    const state = buildConversationState(conversation);
+    const turnIndex = state.lastTurnIndex + 1;
+    await prisma.recommendationConversation.update({ where: { id: conversationId }, data: { last_turn_index: turnIndex } });
+
+    const preferences = normalizePreferenceFlags(options);
+    const llmContext: FundingLlmRoutingContext = { tenantId, userId };
+    let profileSnapshot: RecommendationProfileSnapshot | null = null;
+    if (preferences.useEligibilityProfile || preferences.usePublicationContext) {
+      try {
+        profileSnapshot = await buildRecommendationPreferenceSnapshot(userId, preferences);
+      } catch {
+        profileSnapshot = null;
+      }
+    }
+    const selectedResearchAreas = await loadSelectedResearchAreasSafely(userId, options.selectedResearchAreaIds);
+
+    const nextState = applyStateNormalization(state.inputMode, state.query, coerceConversationFilters(options.filters));
+    const run = isConversationStateSearchable(nextState.inputMode, nextState.query, nextState.filters)
+      ? await this.runGroundedSearch(nextState, access, profileSnapshot, llmContext, undefined, selectedResearchAreas)
+      : undefined;
+
+    return this.persistOutcome({
+      userId,
+      tenantId,
+      conversationId,
+      userMessageId: conversation.messages[conversation.messages.length - 1]?.id || conversationId,
+      turnIndex,
+      outcome: {
+        intent: 'refine_filters',
+        messageType: 'assistant_response',
+        assistantContent: describeFilterUpdateSummary(run, 'Filters updated.'),
         nextState,
         pendingPatch: null,
         run,

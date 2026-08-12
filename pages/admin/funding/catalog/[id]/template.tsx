@@ -104,6 +104,28 @@ function runStatusLabel(status: string): string {
   return RUN_STATUS_LABELS[status] || status.replace(/_/g, ' ');
 }
 
+// Plain-language summary of what content fed a template extraction run.
+function describeTemplateRunSource(source: any): string | null {
+  const assets = Array.isArray(source?.assets) ? source.assets : [];
+  if (assets.length === 0) {
+    return null;
+  }
+  const modes = new Set(assets.map((asset: any) => asset.content_mode).filter(Boolean));
+  if (modes.has('document_sections')) {
+    return 'Read the application-format sections of the call documents.';
+  }
+  if (modes.has('template_document_full')) {
+    return 'Read the dedicated template document in full.';
+  }
+  if (modes.has('flat_text_explicit')) {
+    return 'Read the template source the operator supplied (as flat text).';
+  }
+  if (modes.has('flat_text_fallback')) {
+    return 'Read the flat intake text (no application-format sections were available).';
+  }
+  return null;
+}
+
 function storedStatusLabel(status: string | null | undefined): string {
   if (!status) {
     return STORED_STATUS_LABELS.none;
@@ -1033,6 +1055,12 @@ export default function FundingTemplatePage() {
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Step 3 of 4 · Application Template</p>
             <h1 className="mt-2 text-3xl font-semibold text-slate-900">{bundle.fundingCall.scheme_title}</h1>
             <p className="mt-3 text-sm text-slate-600">{bundle.fundingCall.agency_name} · Call: {bundle.fundingCall.status.replace(/_/g, ' ').toLowerCase()} · Template: {storedStatusLabel(bundle.fundingCall.template_status)}</p>
+            {(bundle.fundingCall as any).metadata?.template_extraction?.skipped && (
+              <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <span className="font-semibold">Needs template document.</span>
+                The call documents contain no application-format sections — upload a dedicated template document (Documents tab) or add a template asset below, then extract.
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <Link href={`/admin/funding/catalog/${bundle.fundingCall.id}`} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">Back to Call Details</Link>
@@ -1312,6 +1340,11 @@ export default function FundingTemplatePage() {
                     <div className="font-semibold text-slate-900">{runStatusLabel(run.status)}</div>
                     <div className="mt-1 text-xs text-slate-500">{new Date(run.created_at).toLocaleString()}</div>
                     {run.extractor_model && <div className="mt-2">Model: {run.extractor_model}</div>}
+                    {describeTemplateRunSource((run as any).source_json) && (
+                      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                        {describeTemplateRunSource((run as any).source_json)}
+                      </div>
+                    )}
                     {run.warnings_json && run.warnings_json.length > 0 && <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">{run.warnings_json.join(' · ')}</div>}
                     {run.error_message && <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800">{run.error_message}</div>}
                     <div className="mt-3 flex flex-wrap gap-2">

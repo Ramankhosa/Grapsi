@@ -20,9 +20,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
 
+  // Employee ID is optional — the column stays in the template so orgs that
+  // have staff numbers can fill it, and orgs that don't can leave it blank.
   const example = [
     'Asha Verma',
     'asha.verma@example.edu',
+    '10428',
+    // Unit Path places someone at any depth; when given it wins over the
+    // School/Department pair, which stay supported for existing workbooks.
+    'School of Computer Science and Engineering > Department of Artificial Intelligence',
     'School of Computer Science and Engineering',
     'Department of Artificial Intelligence',
     'Associate Professor',

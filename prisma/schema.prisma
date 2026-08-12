@@ -286,6 +286,8 @@ enum PublicProjectParticipantRole {
 
 enum FundingCallDocumentKind {
   call_document
+  guideline_document
+  template_document
 }
 
 enum FundingDocumentParsingStatus {
@@ -490,6 +492,12 @@ model Tenant {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
+  /// Opt-in lockdown. Named heads are ALWAYS scoped to their own subtree; this
+  /// flag additionally narrows MANAGER/CALL_ASSIGNER users who hold no head
+  /// grant, who otherwise keep today's tenant-wide reach. Default false so no
+  /// existing tenant changes behaviour on deploy.
+  org_scope_enforced Boolean @default(false)
+
   users     User[]
   projects  Project[]
   atiTokens ATIToken[]
@@ -553,6 +561,8 @@ model Tenant {
 
   // Organizational hierarchy, faculty imports and funding call assignments
   orgUnits          TenantOrgUnit[]
+  orgLevels         TenantOrgLevel[]
+  orgUnitManagers   OrgUnitManager[]
   callAssignments   CallAssignment[]
   facultyImportJobs FacultyImportJob[]
   notifications     Notification[]
@@ -675,6 +685,8 @@ model User {
   researcher_profile                 ResearcherProfile?
   researcher_notification_preference ResearcherNotificationPreference?
   researcher_saved_research_areas    ResearcherSavedResearchArea[]
+  org_unit_manager_grants            OrgUnitManager[]                  @relation("OrgUnitManagerUser")
+  org_unit_manager_grants_created    OrgUnitManager[]                  @relation("OrgUnitManagerCreator")
   research_area_taxonomy_uploads     ResearchAreaTaxonomyUpload[]      @relation("ResearchAreaTaxonomyUploadImporter")
   platform_role_assignments          PlatformTeamRoleAssignment[]      @relation("PlatformRoleAssignmentUser")
   platform_role_assignments_assigned PlatformTeamRoleAssignment[]      @relation("PlatformRoleAssignmentAssigner")
@@ -1783,6 +1795,7 @@ model FundingCallDocument {
   @@unique([funding_call_id, checksum])
   @@unique([funding_call_id, version])
   @@index([funding_call_id, is_active])
+  @@index([funding_call_id, document_kind, is_active])
   @@index([parsing_status])
   @@index([embedding_status])
   @@map("funding_call_documents")
@@ -1968,6 +1981,7 @@ model FundingCallTemplateRun {
   normalized_template_json Json?
   compatibility_json       Json?
   warnings_json            Json?
+  source_json              Json?
   error_code               String?
   error_message            String?
   created_at               DateTime                     @default(now())
@@ -2042,6 +2056,7 @@ model FundingCallGuidelineRun {
   raw_output_json     Json?
   guideline_pack_json Json?
   warnings_json       Json?
+  source_json         Json?
   error_code          String?
   error_message       String?
   created_at          DateTime                      @default(now())
@@ -2572,6 +2587,11 @@ model RecommendationQueryEmbeddingCache {
 model ResearcherProfile {
   id                    String                 @id @default(cuid())
   user_id               String                 @unique
+  // Optional org-issued staff/employee number. Not every tenant has one, so
+  // this is nullable and never a matching key on its own — email remains the
+  // identity. Uniqueness is per tenant and enforced in the import service
+  // (researcher_profiles carries no tenant_id, so no DB constraint can span it).
+  employee_id           String?
   display_name          String?
   birth_year            Int?
   country_of_residence  String?
@@ -2605,6 +2625,7 @@ model ResearcherProfile {
   user                  User                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
   org_unit              TenantOrgUnit?         @relation(fields: [org_unit_id], references: [id], onDelete: SetNull)
 
+  @@index([employee_id], map: "idx_researcher_profiles_employee_id")
   @@index([org_unit_id], map: "idx_researcher_profiles_org_unit")
   @@index([country_of_residence], map: "idx_researcher_profiles_country")
   @@index([institution_type], map: "idx_researcher_profiles_institution_type")
@@ -2733,9 +2754,15 @@ model FundingCallResearchAreaTaxonomy {
   @@map("funding_call_research_area_taxonomies")
 }
 
-// Tenant-defined organizational hierarchy. Schools are roots (parent_id null)
-// and Departments hang off them. Self-referential so deeper levels (Division,
-// Centre) can be added later without another migration.
+// Tenant-defined organizational hierarchy of arbitrary depth. Roots have a null
+// parent_id; every other unit hangs off its parent. Each tenant names its own
+// levels (University -> Faculty -> School -> Department -> Centre) via
+// TenantOrgLevel, so nothing here hardcodes a vocabulary.
+//
+// DEPRECATED: OrgUnitKind. Depth is expressed by `depth`/`ancestor_ids` and the
+// label by TenantOrgLevel/level_label. `kind` is still written (SCHOOL at depth
+// 0, DEPARTMENT below) purely so legacy readers keep working; drop it once every
+// consumer has migrated.
 enum OrgUnitKind {
   SCHOOL
   DEPARTMENT
@@ -2750,21 +2777,108 @@ model TenantOrgUnit {
   code       String?
   sort_order Int?
   is_active  Boolean     @default(true)
-  created_at DateTime    @default(now())
-  updated_at DateTime    @updatedAt
+
+  /// Materialized path, root first, INCLUDING self. A department under a school
+  /// under a faculty holds [facultyId, schoolId, selfId]. Subtree membership is
+  /// then one GIN-indexed overlap (`path && ARRAY[rootId]`) that covers the root
+  /// itself as well as its descendants — no recursive CTE on the hot path.
+  ///
+  /// MAINTAINED BY DATABASE TRIGGER (trg_tenant_org_units_set_path, see
+  /// migration 20260806160000). Never write it by hand: ~150 scripts and the
+  /// faculty importer create units, and a trigger is the only thing they cannot
+  /// forget. src/lib/orgUnits/tree.ts#rebuildPaths repairs it if it ever drifts.
+  path  String[] @default([])
+  /// Depth from the root: 0 for roots. Equals array_length(path, 1) - 1.
+  depth Int      @default(0)
+  /// Per-unit override of the tenant's level name, for ragged trees (e.g. a
+  /// Centre sitting at the same depth as a School). Falls back to TenantOrgLevel.
+  level_label  String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   tenant              Tenant              @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
   parent              TenantOrgUnit?      @relation("OrgUnitHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
   children            TenantOrgUnit[]     @relation("OrgUnitHierarchy")
   researcher_profiles ResearcherProfile[]
+  managers            OrgUnitManager[]
+  assignee_of         CallAssignment[]    @relation("AssignmentAssigneeUnit")
+  assigner_of         CallAssignment[]    @relation("AssignmentAssignerUnit")
 
   // NOTE: Postgres treats NULLs as distinct, so this constraint only enforces
-  // uniqueness for departments (non-null parent). School-name uniqueness is
-  // enforced case-insensitively in the API layer.
+  // uniqueness for non-root units. Root-name uniqueness is enforced by the
+  // partial index tenant_org_units_school_name_key and in the API layer.
   @@unique([tenant_id, parent_id, name], map: "tenant_org_units_tenant_parent_name_key")
   @@index([tenant_id, kind], map: "idx_tenant_org_units_tenant_kind")
   @@index([parent_id], map: "idx_tenant_org_units_parent")
+  @@index([tenant_id, depth], map: "idx_tenant_org_units_tenant_depth")
   @@map("tenant_org_units")
+}
+
+/// How far down a manager's authority reaches.
+enum OrgManagerScope {
+  /// This unit and everything beneath it — a Dean covers every department.
+  SUBTREE
+  /// Exactly this unit's own members; no reach into child units.
+  UNIT_ONLY
+}
+
+/// Delegated authority over an org unit. Many-to-many by construction: a unit
+/// may have several heads (Head + Deputy + Research Coordinator) and one person
+/// may head several units (a Dean over two schools).
+///
+/// Capabilities are booleans rather than a HEAD/DEPUTY role enum so they live
+/// where they are enforced, and `title` carries the human label — an org can
+/// call someone "Associate Dean (Research)" without us modelling it.
+model OrgUnitManager {
+  id          String @id @default(cuid())
+  tenant_id   String
+  org_unit_id String
+  user_id     String
+
+  scope OrgManagerScope @default(SUBTREE)
+  /// Free-form display label: "Dean", "Head of Department", "Coordinator".
+  title String?
+
+  /// Defaults describe a head who can delegate calls and read their own
+  /// numbers, but cannot restructure the tree or move people between units.
+  can_assign           Boolean @default(true)
+  can_view_reports     Boolean @default(true)
+  can_manage_structure Boolean @default(false)
+  can_manage_members   Boolean @default(false)
+
+  is_active          Boolean  @default(true)
+  created_by_user_id String?
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  tenant     Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  org_unit   TenantOrgUnit @relation(fields: [org_unit_id], references: [id], onDelete: Cascade)
+  user       User          @relation("OrgUnitManagerUser", fields: [user_id], references: [id], onDelete: Cascade)
+  created_by User?         @relation("OrgUnitManagerCreator", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([org_unit_id, user_id], map: "org_unit_managers_unit_user_key")
+  @@index([tenant_id, user_id, is_active], map: "idx_org_unit_managers_tenant_user")
+  @@index([org_unit_id], map: "idx_org_unit_managers_unit")
+  @@map("org_unit_managers")
+}
+
+/// Per-tenant name for each depth of the org tree, so "Add a Department" reads
+/// correctly whatever an organization calls its levels. Purely presentational —
+/// no permission or structural logic keys off it.
+model TenantOrgLevel {
+  id            String   @id @default(cuid())
+  tenant_id     String
+  depth         Int
+  singular_name String
+  plural_name   String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+
+  @@unique([tenant_id, depth], map: "tenant_org_levels_tenant_depth_key")
+  @@map("tenant_org_levels")
 }
 
 enum CallAssignmentStatus {
@@ -2799,6 +2913,14 @@ model CallAssignment {
   match_tier  String?
   match_basis String?
 
+  // Org placement AT THE TIME OF ASSIGNMENT, for scoping and reporting.
+  // Snapshots, not live joins: moving someone next semester must not rewrite
+  // last year's report, and the assigner is frequently an ADMIN with no
+  // ResearcherProfile at all — so joining the assigner's profile would silently
+  // yield NULL and make "who delegated this" ungroupable.
+  assignee_org_unit_id String?
+  assigner_org_unit_id String?
+
   // Submission proof recorded by the assignee on completion.
   submission_reference String?
   submission_url       String?
@@ -2818,9 +2940,11 @@ model CallAssignment {
 
   tenant        Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
   funding_call  FundingCall    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
-  assignee      User           @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
-  assigned_by   User           @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
-  notifications Notification[]
+  assignee          User           @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
+  assigned_by       User           @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
+  assignee_org_unit TenantOrgUnit? @relation("AssignmentAssigneeUnit", fields: [assignee_org_unit_id], references: [id], onDelete: SetNull)
+  assigner_org_unit TenantOrgUnit? @relation("AssignmentAssignerUnit", fields: [assigner_org_unit_id], references: [id], onDelete: SetNull)
+  notifications     Notification[]
 
   @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
   @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
@@ -2828,6 +2952,8 @@ model CallAssignment {
   @@index([tenant_id, outcome], map: "idx_call_assignments_tenant_outcome")
   @@index([assigned_by_user_id], map: "idx_call_assignments_assigned_by")
   @@index([deadline_at], map: "idx_call_assignments_deadline")
+  @@index([tenant_id, assignee_org_unit_id], map: "idx_call_assignments_assignee_unit")
+  @@index([tenant_id, assigner_org_unit_id], map: "idx_call_assignments_assigner_unit")
   @@map("call_assignments")
 }
 

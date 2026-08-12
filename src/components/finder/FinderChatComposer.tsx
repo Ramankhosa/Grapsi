@@ -274,12 +274,22 @@ export default function FinderChatComposer({
           </div>
         ) : null}
 
-        <div className="flex items-end gap-2 rounded-xl border border-hairline bg-ground p-1.5 focus-within:border-cobalt-600 focus-within:ring-2 focus-within:ring-cobalt-100">
+        {/* While a turn is in flight the whole composer freezes: no typing, no
+            attaching, no filter jumps — the only affordance is the spinner. */}
+        <div
+          aria-busy={sending}
+          className={`flex items-end gap-2 rounded-xl border p-1.5 transition ${
+            disabled
+              ? 'cursor-not-allowed border-hairline bg-inset opacity-70'
+              : 'border-hairline bg-ground focus-within:border-cobalt-600 focus-within:ring-2 focus-within:ring-cobalt-100'
+          }`}
+        >
           {showFilterButton && onOpenFilters ? (
             <button
               type="button"
               onClick={onOpenFilters}
-              className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-inset hover:text-ink lg:hidden"
+              disabled={disabled}
+              className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-inset hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 lg:hidden"
               title={activeFilterCount > 0 ? `${activeFilterCount} filters active — tap to edit` : 'Open filters'}
               aria-label="Open filters"
             >
@@ -295,7 +305,8 @@ export default function FinderChatComposer({
           <button
             type="button"
             onClick={onToggleAttachMenu}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-inset hover:text-ink"
+            disabled={disabled}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-inset hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
             title="Attach saved research context"
             aria-label="Attach research context"
           >
@@ -307,15 +318,17 @@ export default function FinderChatComposer({
             rows={1}
             value={composer}
             maxLength={CHAT_MESSAGE_MAX_LENGTH}
+            disabled={disabled}
+            readOnly={sending}
             onChange={(event) => onComposerChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                onSubmit();
+                if (!disabled) onSubmit();
               }
             }}
-            placeholder="Ask anything — find calls, check eligibility, plan a submission…"
-            className="max-h-40 min-h-[40px] flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-sm leading-6 text-ink outline-none placeholder:text-muted-soft focus:ring-0"
+            placeholder={sending ? 'Waiting for the answer…' : 'Ask anything — find calls, check eligibility, plan a submission…'}
+            className="max-h-40 min-h-[40px] flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-sm leading-6 text-ink outline-none placeholder:text-muted-soft focus:ring-0 disabled:cursor-not-allowed disabled:text-muted"
           />
 
           <button
@@ -334,7 +347,9 @@ export default function FinderChatComposer({
         </div>
 
         <div className="mt-1.5 flex items-center justify-between gap-3 px-1">
-          <span className="text-[11px] text-muted-soft">Enter to send · Shift + Enter for a new line</span>
+          <span className="text-[11px] text-muted-soft">
+            {sending ? 'Waiting for the answer — the composer unlocks when it arrives.' : 'Enter to send · Shift + Enter for a new line'}
+          </span>
           <span className={`text-[11px] ${composerOverLimit ? 'text-red-600' : 'text-muted-soft'}`}>
             {composerLength.toLocaleString()} / {CHAT_MESSAGE_MAX_LENGTH.toLocaleString()}
           </span>

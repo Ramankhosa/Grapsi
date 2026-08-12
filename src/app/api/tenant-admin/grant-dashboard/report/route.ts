@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isAccessError, requireTenantRoles, TENANT_ASSIGNER_ROLES } from '@/lib/auth/tenantAccess'
+import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
+import { intersectRequestedUnits } from '@/lib/orgUnits/scope'
 import {
   DASHBOARD_GROUP_BY,
   DashboardFilters,
@@ -17,9 +18,17 @@ export const dynamic = 'force-dynamic'
  * returns the same rows as a download.
  */
 export async function GET(request: NextRequest) {
-  const context = await requireTenantRoles(request, TENANT_ASSIGNER_ROLES)
+  const context = await requireTenantScope(request)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
+  }
+  // A head reports on their own branch; this is no longer role-gated alone,
+  // because a head may hold no tenant-wide role at all.
+  if (!context.scope.canViewReports) {
+    return NextResponse.json(
+      { error: 'You do not have permission to view grant reports.' },
+      { status: 403 }
+    )
   }
 
   const { searchParams } = new URL(request.url)
@@ -32,14 +41,21 @@ export async function GET(request: NextRequest) {
     )
   }
 
+  const requestedUnitIds = searchParams
+    .getAll('orgUnitIds')
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 200)
+
   const filters: DashboardFilters = {
     tenantId: context.tenantId,
-    orgUnitIds: searchParams
-      .getAll('orgUnitIds')
-      .flatMap((value) => value.split(','))
-      .map((value) => value.trim())
-      .filter(Boolean)
-      .slice(0, 200),
+    scopeUnitIds: context.scope.isTenantWide ? null : context.scope.managedUnitIds,
+    // Client-chosen filters are intersected with the caller's reach, so a
+    // hand-crafted query string can only narrow, never widen.
+    orgUnitIds: context.scope.isTenantWide
+      ? requestedUnitIds
+      : intersectRequestedUnits(context.scope, requestedUnitIds),
     // Accept both from/to and dateFrom/dateTo so the dashboard and report
     // panels can share one filter object on the client.
     dateFrom: parseDate(searchParams.get('from') || searchParams.get('dateFrom')),

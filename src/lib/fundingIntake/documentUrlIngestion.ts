@@ -60,7 +60,11 @@ function detectDocumentType(
 export async function ingestFundingDocumentFromUrl(
   fundingCallId: string,
   url: string,
-  operator: IntakeOperator
+  operator: IntakeOperator,
+  options: {
+    documentKind?: 'call_document' | 'guideline_document' | 'template_document';
+    deferProcessing?: boolean;
+  } = {}
 ): Promise<{ documentId: string; duplicate: boolean; fileName: string }> {
   const { bytes, contentType, contentDisposition, finalUrl } = await fetchBinaryDocumentFromUrl(url);
   if (bytes.length === 0) {
@@ -91,6 +95,8 @@ export async function ingestFundingDocumentFromUrl(
     fundingCallId,
     file,
     sourceUrl: url,
+    documentKind: options.documentKind,
+    deferProcessing: options.deferProcessing,
     operator: {
       userId: operator.userId,
       email: operator.email,

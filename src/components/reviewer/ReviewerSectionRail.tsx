@@ -129,14 +129,9 @@ export default function ReviewerSectionRail({
   const groups = groupReviewerSections(sections)
 
   return (
+    // The shell's stage 2 already names this list and states how many sections
+    // are reviewed, so the rail no longer repeats the heading and the count.
     <nav aria-label="Proposal sections">
-      <div className="mb-2 flex items-center justify-between px-1">
-        <h2 className="nk-eyebrow">Sections</h2>
-        {groups.length > 0 && (
-          <span className="nk-mono text-nickel-500">{groups.length}</span>
-        )}
-      </div>
-
       {groups.length > 0 ? (
         <ul className="space-y-0.5">
           {groups.map(group => (

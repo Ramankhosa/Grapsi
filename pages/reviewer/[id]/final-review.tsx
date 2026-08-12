@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useReviewerSession as useSession } from '@/lib/reviewer-auth-client';
+import { useAuth } from '@/lib/auth-context';
 import axios from 'axios';
 import Head from 'next/head';
 import Link from 'next/link';
@@ -110,6 +111,7 @@ export default function FinalReview() {
   const router = useRouter();
   const { id } = router.query;
   const { data: session, status } = useSession();
+  const { authFetch } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -574,18 +576,30 @@ export default function FinalReview() {
   const generateATR = async () => {
     if (!id) return;
 
+    const toastId = toast.loading('Generating Action Taken Report...');
+    setIsGeneratingATR(true);
     try {
-      setIsGeneratingATR(true);
-      toast.loading('Generating Action Taken Report...');
-      
-      // Open the export URL in a new tab to trigger the download
-      window.open(`/api/reviewer/calls/${id}/export-atr`, '_blank');
-      
-      toast.dismiss();
-      toast.success('Action Taken Report generated successfully');
+      // authFetch sends the Authorization: Bearer header required by the API
+      const response = await authFetch(`/api/reviewer/calls/${id}/export-atr`);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server error ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ATR-${id}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success('Action Taken Report downloaded', { id: toastId });
     } catch (error) {
-      toast.dismiss();
-      toast.error('Failed to generate Action Taken Report. Please try again.');
+      toast.error(`Failed to generate ATR: ${error.message}`, { id: toastId });
       console.error('Error generating ATR:', error);
     } finally {
       setIsGeneratingATR(false);

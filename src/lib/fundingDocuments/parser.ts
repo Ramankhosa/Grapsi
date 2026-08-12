@@ -199,6 +199,16 @@ async function extractDocxPages(filePath: string) {
   };
 }
 
+/**
+ * Plain-text extraction for DOCX intake sources (mammoth, no LLM). Used by the
+ * intake pipeline where only text is needed, not page/section structure.
+ */
+export async function extractDocxPlainText(filePath: string): Promise<string> {
+  const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
+  const { pages } = await extractDocxPages(absolutePath);
+  return pages.map((page) => page.rawText).join('\n\n').trim();
+}
+
 export async function parseFundingDocument(
   filePath: string,
   mimeType: string,
@@ -221,8 +231,17 @@ export async function parseFundingDocument(
   ) {
     extracted = await extractDocxPages(absolutePath);
     extractor = 'mammoth';
+  } else if (lowerMime.includes('text/plain') || lowerName.endsWith('.txt')) {
+    // Text-backed documents (pasted intake text, fetched web pages) are a single
+    // logical page so downstream sectionizing/chunking works unchanged.
+    const rawText = await fs.readFile(absolutePath, 'utf8');
+    extracted = {
+      pages: [{ pageNumber: 1, rawText, extractionConfidence: 1 }],
+      fallbackPages: [],
+    };
+    extractor = 'text';
   } else {
-    throw new Error('Only PDF and DOCX funding documents are supported');
+    throw new Error('Only PDF, DOCX, and plain-text funding documents are supported');
   }
 
   const pages = cleanFundingDocumentPages(extracted.pages);

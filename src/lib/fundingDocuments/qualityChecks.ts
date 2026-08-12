@@ -1,4 +1,4 @@
-import type { FundingCall } from '@prisma/client';
+import type { FundingCall, FundingCallDocumentKind } from '@prisma/client';
 import type { FundingDocumentQualityFlag, FundingDocumentQualityReport, FundingDocumentSectionDraft } from './types';
 
 function sameDay(date: Date, target: Date) {
@@ -79,8 +79,10 @@ export function runFundingDocumentQualityChecks(
     FundingCall,
     'open_date' | 'close_date' | 'is_rolling' | 'amount_min' | 'amount_max' | 'is_active'
   >,
-  sections: FundingDocumentSectionDraft[]
+  sections: FundingDocumentSectionDraft[],
+  options: { documentKind?: FundingCallDocumentKind } = {}
 ): FundingDocumentQualityReport {
+  const documentKind = options.documentKind || 'call_document';
   const byType = new Map(sections.map((section) => [section.sectionType, section]));
   const sectionsFor = (types: string[]) => sections.filter((section) => types.includes(section.sectionType));
   const combinedText = sections.map((section) => section.sectionText).join('\n\n');
@@ -176,10 +178,29 @@ export function runFundingDocumentQualityChecks(
     flags.push(flag);
   }
 
+  // Presence expectations and fact-conflict checks are written against the main
+  // call document. Guideline annexes legitimately omit thematic/date sections, and
+  // blank application templates trip both presence and conflict checks, so
+  // downgrade what does not apply to the document's kind instead of flagging it.
+  let adjustedFlags = flags;
+  let adjustedConflicts = conflicts;
+  if (documentKind !== 'call_document') {
+    adjustedFlags = flags.map((flag) => {
+      if (flag.code.startsWith('missing_') && flag.severity === 'warning') {
+        return { ...flag, severity: 'info' as const };
+      }
+      if (documentKind === 'template_document' && flag.severity === 'conflict') {
+        return { ...flag, severity: 'info' as const };
+      }
+      return flag;
+    });
+    adjustedConflicts = documentKind === 'template_document' ? [] : conflicts;
+  }
+
   return {
     presence,
-    flags,
-    conflicts,
-    needsManualReview: flags.some((flag) => flag.severity === 'warning' || flag.severity === 'conflict'),
+    flags: adjustedFlags,
+    conflicts: adjustedConflicts,
+    needsManualReview: adjustedFlags.some((flag) => flag.severity === 'warning' || flag.severity === 'conflict'),
   };
 }

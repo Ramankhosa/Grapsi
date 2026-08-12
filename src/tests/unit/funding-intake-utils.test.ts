@@ -40,7 +40,25 @@ describe('funding intake normalization', () => {
     )
   })
 
-  it('builds description deterministically from evidence-backed segments', () => {
+  // The extractor writes description as grounded prose (prompt v6), so its authored
+  // text is kept rather than rebuilt from quotes. Grounding is still enforced —
+  // validateFundingExtractionPayload requires every anchor quote to appear verbatim
+  // in a real segment, and an unsupported description is still nulled below.
+  const nordicSegments = [
+    { id: 'seg_001', heading: 'Call Title', text: 'Nordic Health Fund Infection Prevention Grant' },
+    { id: 'seg_002', heading: 'Overview', text: 'Supports infection prevention pilots in hospitals.' },
+    { id: 'seg_003', heading: 'Outputs', text: 'Projects must produce a final implementation report.' },
+  ]
+
+  const nordicDescriptionEvidence = [
+    { sourceType: 'segment', segmentId: 'seg_002', quote: 'Supports infection prevention pilots in hospitals.' },
+    { sourceType: 'segment', segmentId: 'seg_003', quote: 'Projects must produce a final implementation report.' },
+  ]
+
+  it('keeps the extractor-authored description prose and records the cited segments', () => {
+    const authored =
+      'The Nordic Health Fund supports infection prevention pilots in hospitals. Funded projects must produce a final implementation report.'
+
     const payload = normalizeExtractionPayload(
       {
         fields: {
@@ -50,44 +68,39 @@ describe('funding intake normalization', () => {
             confidence: 0.95,
             evidence: [{ sourceType: 'segment', segmentId: 'seg_001', quote: 'Nordic Health Fund' }],
           },
-          scheme_title: {
-            value: 'Infection Prevention Grant',
-            status: 'supported',
-            confidence: 0.94,
-            evidence: [{ sourceType: 'segment', segmentId: 'seg_001', quote: 'Infection Prevention Grant' }],
-          },
           description: {
-            value: 'hallucinated summary should be ignored',
+            value: authored,
             status: 'supported',
             confidence: 0.9,
-            evidence: [
-              {
-                sourceType: 'segment',
-                segmentId: 'seg_002',
-                quote: 'Supports infection prevention pilots in hospitals.',
-              },
-              {
-                sourceType: 'segment',
-                segmentId: 'seg_003',
-                quote: 'Projects must produce a final implementation report.',
-              },
-            ],
+            evidence: nordicDescriptionEvidence,
           },
         },
       },
+      { segments: nordicSegments }
+    )
+
+    expect(payload.fields.description.value).toBe(authored)
+    expect(payload.summarySegments).toEqual(['seg_002', 'seg_003'])
+  })
+
+  it('falls back to stitched evidence when the extractor returns no description prose', () => {
+    const payload = normalizeExtractionPayload(
       {
-        segments: [
-          { id: 'seg_001', heading: 'Call Title', text: 'Nordic Health Fund Infection Prevention Grant' },
-          { id: 'seg_002', heading: 'Overview', text: 'Supports infection prevention pilots in hospitals.' },
-          { id: 'seg_003', heading: 'Outputs', text: 'Projects must produce a final implementation report.' },
-        ],
-      }
+        fields: {
+          description: {
+            value: null,
+            status: 'supported',
+            confidence: 0.9,
+            evidence: nordicDescriptionEvidence,
+          },
+        },
+      },
+      { segments: nordicSegments }
     )
 
     expect(payload.fields.description.value).toBe(
       'Supports infection prevention pilots in hospitals.\n\nProjects must produce a final implementation report.'
     )
-    expect(payload.summarySegments).toEqual(['seg_002', 'seg_003'])
   })
 
   it('keeps unsupported fields empty and does not infer disciplines', () => {

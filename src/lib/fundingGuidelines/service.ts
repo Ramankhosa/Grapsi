@@ -16,6 +16,9 @@ import {
   fetchReadableUrlContent,
   normalizeMultilineText,
 } from '../fundingIntake/utils';
+import { GUIDELINE_SECTION_TYPES } from '../fundingDocuments/constants';
+import { composeRoutedSectionText } from '../fundingDocuments/sectionRouting';
+import { fundingDocumentService } from '../fundingDocuments/service';
 import { extractFundingGuidelines } from './extractor';
 import { buildGuidelineSummary, createEmptyGuidelinePack, generateGuidelineDiffSummary, hasGuidelineRules, normalizeGuidelinePack } from './utils';
 
@@ -250,6 +253,11 @@ type GuidelineExtractionSourceInput =
       sourceMode?: 'intake';
     }
   | {
+      sourceMode: 'documents';
+      /** Flat text used when no parsed document sections are available yet. */
+      fallbackText?: string | null;
+    }
+  | {
       sourceMode: 'url';
       sourceUrl: string;
     }
@@ -263,12 +271,82 @@ type GuidelineExtractionSourceInput =
       sourceLabel?: string | null;
     };
 
+/**
+ * Section-routed source: read the guideline-relevant sections from the call's
+ * active guideline documents (falling back to call documents). Returns null
+ * when the call has no parsed documents yet.
+ */
+async function resolveGuidelineSourceFromDocuments(callId: string) {
+  const routed = await fundingDocumentService.getRoutedSections(callId, 'guideline_document');
+  if (routed.sections.length === 0) {
+    return null;
+  }
+
+  const documentLabels = new Map(
+    routed.documents.map((document) => [document.id, `${document.original_filename} (v${document.version})`])
+  );
+  const composed = composeRoutedSectionText(routed.sections, GUIDELINE_SECTION_TYPES, { documentLabels });
+  if (!composed.text.trim()) {
+    return null;
+  }
+
+  const documentSummary = routed.documents
+    .filter((document) => composed.usedDocumentIds.includes(document.id))
+    .map((document) => `${document.original_filename} v${document.version}`)
+    .join(', ');
+  const readableLine = `Extracted from ${routed.usedKind} sections (${composed.usedSectionTypes.join(', ')}) of ${documentSummary}${composed.usedAllSections ? ' — document could not be classified, all sections used' : ''}.`;
+
+  return {
+    rawText: composed.text,
+    normalizedText: normalizeMultilineText(composed.text),
+    warnings: [readableLine],
+    changeNote: `Auto-extracted from funding call facts and ${routed.usedKind} sections`,
+    sourceProvenance: {
+      mode: composed.usedAllSections ? 'document_all_sections' : 'document_sections',
+      document_kind: routed.usedKind,
+      documents: routed.documents.map((document) => ({
+        id: document.id,
+        version: document.version,
+        filename: document.original_filename,
+      })),
+      section_ids: composed.usedSectionIds,
+      section_types: composed.usedSectionTypes,
+      truncated: composed.truncated,
+    },
+  };
+}
+
 async function resolveGuidelineSource(
   call: Awaited<ReturnType<typeof ensureFundingCall>>,
   sourceInput?: GuidelineExtractionSourceInput,
   operator?: IntakeOperator
 ) {
-  if (!sourceInput || sourceInput.sourceMode === 'intake') {
+  if (sourceInput?.sourceMode === 'documents') {
+    const fromDocuments = await resolveGuidelineSourceFromDocuments(call.id);
+    if (fromDocuments) {
+      return fromDocuments;
+    }
+    if (sourceInput.fallbackText && normalizeMultilineText(sourceInput.fallbackText)) {
+      return {
+        rawText: sourceInput.fallbackText,
+        normalizedText: normalizeMultilineText(sourceInput.fallbackText),
+        warnings: ['No parsed document sections were available; guideline extraction used the flat intake text.'],
+        changeNote: 'Auto-extracted from funding call facts and the intake source text',
+        sourceProvenance: { mode: 'flat_text_fallback' },
+      };
+    }
+    // Fall through to the legacy intake chain below.
+  }
+
+  if (!sourceInput || sourceInput.sourceMode === 'intake' || sourceInput.sourceMode === 'documents') {
+    // Documents are the preferred source even for legacy 'intake' requests —
+    // the raw_text fallback chain only runs when no parsed document exists.
+    if (sourceInput?.sourceMode !== 'documents') {
+      const fromDocuments = await resolveGuidelineSourceFromDocuments(call.id);
+      if (fromDocuments) {
+        return fromDocuments;
+      }
+    }
     let rawText = call.raw_text || null;
     let normalizedText = call.normalized_text || null;
     const warnings: string[] = [];
@@ -687,6 +765,9 @@ export class FundingGuidelineService {
             raw_output_json: asJson(extraction.rawOutput),
             guideline_pack_json: asJson(nextPack),
             warnings_json: guidelineSource.warnings.length > 0 ? asJson(guidelineSource.warnings) : Prisma.JsonNull,
+            source_json: (guidelineSource as any).sourceProvenance
+              ? asJson((guidelineSource as any).sourceProvenance)
+              : Prisma.JsonNull,
           },
         });
 

@@ -57,29 +57,34 @@ export default async function handler(
       console.error('Error parsing call JSON:', e);
     }
     
-    // Check if we need to generate a new token based on display mode change
+    // Rotate the token when the shared view changes, so an old link never
+    // silently starts showing a different report. The `!call.share_token` arm
+    // must be evaluated on its own: it used to sit behind `displayMode &&`, so
+    // a share request that carried no display preference left the token null
+    // and handed the user a link ending in "/null".
     const currentPreferences = parsedJson.report_preferences || {};
-    const needsNewToken = displayMode && 
-      (currentPreferences.displayMode !== displayMode || 
-       !call.share_token || 
-       JSON.stringify(currentPreferences.versionSelections) !== JSON.stringify(versionSelections));
-    
+    const preferencesChanged = Boolean(displayMode) && (
+      currentPreferences.displayMode !== displayMode ||
+      JSON.stringify(currentPreferences.versionSelections) !== JSON.stringify(versionSelections)
+    );
+    const needsNewToken = !call.share_token || preferencesChanged;
+
     // Generate a unique share token
     let shareToken = call.share_token;
     if (needsNewToken) {
       // Generate a new token that includes the display mode as part of its generation
-      const tokenSeed = `${callId}-${displayMode}-${Date.now()}`;
+      const tokenSeed = `${callId}-${displayMode || 'single'}-${Date.now()}-${crypto.randomBytes(16).toString('hex')}`;
       shareToken = crypto.createHash('sha256').update(tokenSeed).digest('hex');
     }
-    
+
     // Update the report preferences
-    if (displayMode && versionSelections) {
+    if (displayMode) {
       parsedJson = {
         ...parsedJson,
         report_preferences: {
           ...(parsedJson.report_preferences || {}),
           displayMode,
-          versionSelections,
+          versionSelections: versionSelections || {},
           lastUpdated: new Date().toISOString(),
           shareToken // Store the token with the preferences
         }
@@ -96,11 +101,22 @@ export default async function handler(
       }
     });
     
+    // Prefer the deployment's configured origin, but fall back to the request's
+    // own so a missing NEXTAUTH_URL yields a working relative-to-host link
+    // rather than the bare "/shared-report/<token>" this used to return.
+    const forwardedProto = Array.isArray(req.headers['x-forwarded-proto'])
+      ? req.headers['x-forwarded-proto'][0]
+      : req.headers['x-forwarded-proto'];
+    const requestOrigin = req.headers.host
+      ? `${forwardedProto || 'https'}://${req.headers.host}`
+      : '';
+    const origin = (process.env.NEXTAUTH_URL || requestOrigin).replace(/\/+$/, '');
+
     // Return the share token and URL
-    return res.status(200).json({ 
+    return res.status(200).json({
       success: true,
       share_token: shareToken,
-      share_url: `${process.env.NEXTAUTH_URL || ''}/shared-report/${shareToken}`
+      share_url: `${origin}/shared-report/${shareToken}`
     });
     
   } catch (error) {

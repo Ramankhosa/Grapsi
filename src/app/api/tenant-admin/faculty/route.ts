@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@/lib/prisma-generated'
 import { prisma } from '@/lib/prisma'
-import { isAccessError, requireTenantUser } from '@/lib/auth/tenantAccess'
+import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
+import { scopedProfileSql } from '@/lib/orgUnits/scope'
+import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,7 +14,7 @@ export const dynamic = 'force-dynamic'
  * to surface whether each profile is actually matchable.
  */
 export async function GET(request: NextRequest) {
-  const context = await requireTenantUser(request)
+  const context = await requireTenantScope(request)
   if (isAccessError(context)) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
@@ -33,10 +35,25 @@ export async function GET(request: NextRequest) {
       OR COALESCE(rp.department, '') ILIKE ${like}
       OR COALESCE(rp.school, '') ILIKE ${like}
       OR COALESCE(rp.designation, '') ILIKE ${like}
+      OR COALESCE(rp.employee_id, '') ILIKE ${like}
     )`)
   }
+  // Selecting a unit shows everyone at or beneath it — picking a school used to
+  // return only the handful of rows attached to the school itself.
   if (orgUnitId) {
-    conditions.push(Prisma.sql`rp.org_unit_id = ${orgUnitId}`)
+    const subtreeIds = await listSubtreeUnitIds(context.tenantId, [orgUnitId])
+    conditions.push(
+      subtreeIds.length === 0
+        ? Prisma.sql`FALSE`
+        : Prisma.sql`rp.org_unit_id = ANY(ARRAY[${Prisma.join(
+            subtreeIds.map((id) => Prisma.sql`${id}`)
+          )}]::text[])`
+    )
+  }
+
+  // A head sees their own branch of the roster; tenant-wide callers see all.
+  if (!context.scope.isTenantWide && context.scope.isHead) {
+    conditions.push(scopedProfileSql(context.scope))
   }
 
   const where = conditions.reduce(
@@ -50,6 +67,7 @@ export async function GET(request: NextRequest) {
         userId: string
         email: string
         name: string
+        employeeId: string | null
         school: string | null
         department: string | null
         designation: string | null
@@ -63,6 +81,7 @@ export async function GET(request: NextRequest) {
         u.id AS "userId",
         u.email,
         COALESCE(rp.display_name, u.name, '') AS name,
+        rp.employee_id AS "employeeId",
         rp.school,
         rp.department,
         rp.designation,

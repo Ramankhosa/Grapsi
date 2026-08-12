@@ -2,11 +2,9 @@ import React from 'react';
 import { Sparkles } from 'lucide-react';
 
 import type {
-  FinderFilterSuggestionChip,
   RecommendationConversationMessageRecord,
   RecommendationConversationRunRecord,
 } from '../lib/recommendations/chatTypes';
-import FinderFilterSuggestionChips from './finder/FinderFilterSuggestionChips';
 import FinderMarkdown from './finder/FinderMarkdown';
 import FinderResultCard from './finder/FinderResultCard';
 import FinderResultsHeader from './finder/FinderResultsHeader';
@@ -14,17 +12,12 @@ import FinderResultsHeader from './finder/FinderResultsHeader';
 interface FinderChatMessageProps {
   message: RecommendationConversationMessageRecord;
   runs: RecommendationConversationRunRecord[];
-  onExplainResult?: (payload: { runId: string; resultId: string; ordinal: number }) => void;
-  onAskAboutCall?: (payload: { runId: string; resultId: string; ordinal: number }) => void;
   onBeginWriting?: (payload: { resultId: string }) => void;
-  onSuggestedReply?: (message: string) => void;
-  onApplyFilterChip?: (chip: FinderFilterSuggestionChip) => void;
   getCallDetailsHref?: (resultId: string) => string;
   strictRecoveryAction?: {
     summary: string;
     onRetry: () => void;
   } | null;
-  suggestedReplyDisabled?: boolean;
 }
 
 function formatTime(value: string) {
@@ -45,14 +38,9 @@ function formatTime(value: string) {
 export default function FinderChatMessage({
   message,
   runs,
-  onExplainResult,
-  onAskAboutCall,
   onBeginWriting,
-  onSuggestedReply,
-  onApplyFilterChip,
   getCallDetailsHref,
   strictRecoveryAction = null,
-  suggestedReplyDisabled = false,
 }: FinderChatMessageProps) {
   const citedRun = message.citations ? runs.find((run) => run.id === message.citations?.runId) : null;
   const citedResults = message.citations
@@ -94,19 +82,12 @@ export default function FinderChatMessage({
           <div className="mt-2 grid grid-cols-1 gap-2.5">
             {citedResults.map((result, index) => {
               const ordinal = (citedRun?.results.findIndex((item) => item.id === result.id) ?? index) + 1;
-              const runId = citedRun?.id || message.citations?.runId || '';
               return (
                 <FinderResultCard
                   key={result.id}
                   result={result}
                   ordinal={ordinal}
                   onBeginWriting={onBeginWriting}
-                  onExplainResult={
-                    onExplainResult ? () => onExplainResult({ runId, resultId: result.id, ordinal }) : undefined
-                  }
-                  onAskAboutCall={
-                    onAskAboutCall ? () => onAskAboutCall({ runId, resultId: result.id, ordinal }) : undefined
-                  }
                   getCallDetailsHref={getCallDetailsHref}
                 />
               );
@@ -132,30 +113,6 @@ export default function FinderChatMessage({
               </span>
             ))}
           </div>
-        ) : null}
-
-        {onSuggestedReply && message.suggestedReplies?.length ? (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {message.suggestedReplies.map((reply) => (
-              <button
-                key={reply}
-                type="button"
-                onClick={() => onSuggestedReply(reply)}
-                disabled={suggestedReplyDisabled}
-                className="cb-chip disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {reply}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        {onApplyFilterChip && message.filterSuggestions?.length ? (
-          <FinderFilterSuggestionChips
-            chips={message.filterSuggestions}
-            onApplyChip={onApplyFilterChip}
-            disabled={suggestedReplyDisabled}
-          />
         ) : null}
 
         {strictRecoveryAction ? (

@@ -350,16 +350,15 @@ describe('finder trust recovery UI', () => {
     expect(markup).toContain('Retry without these filters');
   });
 
-  it('renders suggested reply chips on assistant messages', () => {
+  it('does not render suggested reply chips on assistant messages', () => {
     const markup = renderToStaticMarkup(
       <FinderChatMessage
         message={createAssistantMessageWithReplies(['result-1'], ['Only rolling opportunities', 'Sort by deadline soonest'])}
         runs={[createRun([createResult()])]}
-        onSuggestedReply={() => undefined}
       />
     );
 
-    expect(markup).toContain('Only rolling opportunities');
-    expect(markup).toContain('Sort by deadline soonest');
+    expect(markup).not.toContain('Only rolling opportunities');
+    expect(markup).not.toContain('Sort by deadline soonest');
   });
 });

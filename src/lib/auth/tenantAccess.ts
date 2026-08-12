@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
+import { resolveManagedScope, type ManagedScope } from '@/lib/orgUnits/scope'
 
 /**
  * Shared tenant guards for the org-structure, faculty and assignment routes.
@@ -79,6 +80,54 @@ export async function requireTenantRoles(
   return context
 }
 
-export function isAccessError(value: TenantContext | TenantAccessError): value is TenantAccessError {
+export function isAccessError(
+  value: TenantContext | TenantScopeContext | TenantAccessError
+): value is TenantAccessError {
   return 'error' in value
+}
+
+export interface TenantScopeContext extends TenantContext {
+  scope: ManagedScope
+}
+
+/**
+ * Per-request memo so a route that needs the scope twice pays for it once.
+ * Keyed on the context object itself, which lives exactly as long as the
+ * request does.
+ */
+const scopeCache = new WeakMap<TenantContext, Promise<ManagedScope>>()
+
+/**
+ * Attaches org-hierarchy scope to a context you already hold.
+ *
+ * Deliberately NOT folded into `requireTenantUser`: plenty of routes (a
+ * researcher reading their own notifications, an assignee opening their own
+ * assignment) do not care about org scope, and charging them two extra queries
+ * would be a regression on the common path.
+ */
+export async function withOrgScope(context: TenantContext): Promise<TenantScopeContext> {
+  let pending = scopeCache.get(context)
+  if (!pending) {
+    pending = resolveManagedScope({
+      tenantId: context.tenantId,
+      userId: context.user.id,
+      roles: context.user.roles || [],
+      // `tenant` is already loaded by authenticateUser's include, so reading
+      // the flag here costs nothing extra.
+      enforceScope: Boolean(context.user.tenant?.org_scope_enforced),
+    })
+    scopeCache.set(context, pending)
+  }
+  return { ...context, scope: await pending }
+}
+
+/** requireTenantUser + org scope, for routes that narrow by hierarchy. */
+export async function requireTenantScope(
+  request: NextRequest
+): Promise<TenantScopeContext | TenantAccessError> {
+  const context = await requireTenantUser(request)
+  if (isAccessError(context)) {
+    return context
+  }
+  return withOrgScope(context)
 }

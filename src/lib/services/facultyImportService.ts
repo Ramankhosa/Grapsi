@@ -19,13 +19,37 @@ const MAX_ROWS_PER_IMPORT = 5000;
 const EMBEDDING_WORKER_BATCH = 10;
 const EMBEDDING_WORKER_DELAY_MS = 250;
 const MULTI_VALUE_SEPARATOR = /[;,|]/;
+/** Separators accepted between levels of a Unit Path cell. */
+const UNIT_PATH_SEPARATOR = /\s*(?:>|\/|»|->)\s*/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Long enough for "LPU-2024-01042"-style codes, short enough to catch a pasted cell. */
+const MAX_EMPLOYEE_ID_LENGTH = 32;
 
 const COLUMN_ALIASES: Record<string, string[]> = {
   name: ['name', 'fullname', 'facultyname', 'employeename', 'staffname'],
   email: ['email', 'emailaddress', 'officialemail', 'emailid'],
+  // Deliberately excludes a bare "id" column — in most rosters that is a row
+  // number, and silently storing it as a staff ID would be worse than ignoring it.
+  employeeId: [
+    'employeeid',
+    'employeeno',
+    'employeenumber',
+    'employeecode',
+    'empid',
+    'empno',
+    'empcode',
+    'staffid',
+    'staffno',
+    'staffcode',
+    'facultyid',
+    'facultycode',
+    'uid',
+  ],
   school: ['school', 'schoolname', 'college', 'collegename'],
   department: ['department', 'departmentname', 'dept'],
+  // Arbitrary-depth placement: "School of Engineering > Civil > Structures".
+  // Takes precedence over School/Department when both are present.
+  unitPath: ['unitpath', 'orgpath', 'organizationpath', 'organisationpath', 'hierarchy', 'orgunitpath'],
   designation: ['designation', 'title', 'position', 'rank'],
   researchAreas: ['researchareas', 'researcharea', 'areasofresearch', 'specialization', 'specialisation'],
   keywords: ['keywords', 'keyword', 'expertise'],
@@ -39,6 +63,8 @@ const COLUMN_ALIASES: Record<string, string[]> = {
 export const FACULTY_IMPORT_TEMPLATE_HEADERS = [
   'Name',
   'Email',
+  'Employee ID',
+  'Unit Path',
   'School',
   'Department',
   'Designation',
@@ -60,6 +86,7 @@ export interface FacultyImportRowResult {
   rowNumber: number;
   name: string;
   email: string;
+  employeeId: string;
   school: string;
   department: string;
   outcome: 'created' | 'updated' | 'error';
@@ -142,6 +169,23 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
     }
   }
 
+  // Employee IDs are unique per tenant, but researcher_profiles has no
+  // tenant_id so no DB constraint can express that. Snapshot the tenant's
+  // current IDs (keyed lowercase) and check against it as we go.
+  const employeeIdOwners = new Map<string, string>();
+  if (columns.employeeId) {
+    const existingProfiles = await prisma.researcherProfile.findMany({
+      where: { employee_id: { not: null }, user: { tenantId } },
+      select: { employee_id: true, user: { select: { email: true } } },
+    });
+    for (const profile of existingProfiles) {
+      const key = (profile.employee_id || '').trim().toLowerCase();
+      if (key) {
+        employeeIdOwners.set(key, profile.user.email);
+      }
+    }
+  }
+
   const results: FacultyImportRowResult[] = [];
   const unitsCreated: string[] = [];
   const touchedUserIds: string[] = [];
@@ -149,6 +193,80 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
   let created = 0;
   let updated = 0;
   let errors = 0;
+
+  // Generic depth-agnostic lookup keyed by parent, so a Unit Path can resolve
+  // or create at any level with the same race-safe logic the two-level path
+  // already used.
+  const unitsByKey = new Map<string, { id: string; name: string }>();
+  for (const unit of existingUnits) {
+    unitsByKey.set(`${unit.parent_id || ''}::${unit.name.trim().toLowerCase()}`, {
+      id: unit.id,
+      name: unit.name,
+    });
+  }
+
+  /**
+   * Walks a "A > B > C" path, resolving or creating each level under the
+   * previous one. Returns the resolved unit at every level, deepest last.
+   */
+  const resolveUnitPath = async (
+    segments: string[]
+  ): Promise<Array<{ id: string; name: string }>> => {
+    const resolved: Array<{ id: string; name: string }> = [];
+    let parentId: string | null = null;
+
+    for (const [index, segment] of segments.entries()) {
+      const key: string = `${parentId || ''}::${segment.toLowerCase()}`;
+      const existing = unitsByKey.get(key);
+      if (existing) {
+        resolved.push(existing);
+        parentId = existing.id;
+        continue;
+      }
+      if (!autoCreateUnits) {
+        throw new Error(
+          `"${segment}" does not exist${parentId ? ' under its parent' : ''}. Create it first or enable auto-create.`
+        );
+      }
+      if (dryRun) {
+        const pending: { id: string; name: string } = { id: `pending:${key}`, name: segment };
+        resolved.push(pending);
+        unitsByKey.set(key, pending);
+        unitsCreated.push(segments.slice(0, index + 1).join(' > '));
+        parentId = pending.id;
+        continue;
+      }
+      // Defensive re-check: a concurrent import may have created this unit
+      // since `existingUnits` was snapshotted.
+      const existingRow: { id: string; name: string } | null =
+        await prisma.tenantOrgUnit.findFirst({
+          where: {
+            tenant_id: tenantId,
+            parent_id: parentId,
+            name: { equals: segment, mode: 'insensitive' },
+          },
+          select: { id: true, name: true },
+        });
+      const unit: { id: string; name: string } = existingRow
+        ? existingRow
+        : await prisma.tenantOrgUnit.create({
+            data: {
+              tenant_id: tenantId,
+              // `kind` is deprecated; depth/path are written by the trigger.
+              kind: parentId ? 'DEPARTMENT' : 'SCHOOL',
+              name: segment,
+              parent_id: parentId,
+            },
+            select: { id: true, name: true },
+          });
+      resolved.push(unit);
+      unitsByKey.set(key, unit);
+      if (!existingRow) unitsCreated.push(segments.slice(0, index + 1).join(' > '));
+      parentId = unit.id;
+    }
+
+    return resolved;
+  };
 
   const read = (row: Record<string, string>, field: string) =>
     columns[field] ? (row[columns[field]] || '').trim() : '';
@@ -162,14 +280,21 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
 
     const name = read(row, 'name');
     const email = read(row, 'email').toLowerCase();
+    const employeeId = read(row, 'employeeId');
     const schoolName = read(row, 'school');
     const departmentName = read(row, 'department');
+    const unitPath = read(row, 'unitPath');
+    // Filled by the Unit Path branch below; kept out here so the write payload
+    // can prefer them over the two-column resolution.
+    let pathSchoolName = '';
+    let pathDepartmentName = '';
+    let pathUnitId: string | null = null;
 
-    if (!name && !email && !schoolName && !departmentName) {
+    if (!name && !email && !employeeId && !schoolName && !departmentName && !unitPath) {
       continue;
     }
 
-    const base = { rowNumber, name, email, school: schoolName, department: departmentName };
+    const base = { rowNumber, name, email, employeeId, school: schoolName, department: departmentName };
     const fail = (message: string) => {
       results.push({ ...base, outcome: 'error', message });
       errors += 1;
@@ -192,11 +317,58 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
     }
     seenEmails.add(email);
 
+    // Employee ID is optional everywhere — orgs without staff numbers just
+    // leave the column out (or the cell blank). When one IS given it must be
+    // unique within the tenant, so two people can never collide on it.
+    const employeeIdKey = employeeId.toLowerCase();
+    if (employeeId) {
+      if (employeeId.length > MAX_EMPLOYEE_ID_LENGTH) {
+        fail(`Employee ID must be ${MAX_EMPLOYEE_ID_LENGTH} characters or fewer.`);
+        continue;
+      }
+      const owner = employeeIdOwners.get(employeeIdKey);
+      if (owner && owner.toLowerCase() !== email) {
+        fail(`Employee ID "${employeeId}" is already used by ${owner}.`);
+        continue;
+      }
+      // Claim it immediately so a duplicate later in the same file trips the
+      // check above — this covers both in-file and already-in-DB collisions
+      // with one mechanism, and works in dry run too.
+      employeeIdOwners.set(employeeIdKey, email);
+    }
+
     try {
+      // --- Unit Path: arbitrary-depth placement -----------------------------
+      // Wins over School/Department when supplied, so an org that has moved to
+      // a deeper structure can re-import without rewriting its old columns.
+      if (unitPath) {
+        const segments = unitPath
+          .split(UNIT_PATH_SEPARATOR)
+          .map((segment) => segment.trim())
+          .filter(Boolean);
+        if (segments.length === 0) {
+          fail('Unit Path is empty.');
+          continue;
+        }
+
+        let resolvedChain: Array<{ id: string; name: string }>;
+        try {
+          resolvedChain = await resolveUnitPath(segments);
+        } catch (pathError) {
+          fail(pathError instanceof Error ? pathError.message : String(pathError));
+          continue;
+        }
+
+        const deepest = resolvedChain[resolvedChain.length - 1];
+        pathSchoolName = resolvedChain[0].name;
+        pathDepartmentName = resolvedChain.length > 1 ? deepest.name : '';
+        pathUnitId = deepest.id;
+      }
+
       // --- Resolve School -> Department ------------------------------------
       let schoolId: string | null = null;
       let resolvedSchoolName = '';
-      if (schoolName) {
+      if (schoolName && !unitPath) {
         const key = schoolName.toLowerCase();
         const existing = schoolsByName.get(key);
         if (existing) {
@@ -239,7 +411,7 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
 
       let departmentId: string | null = null;
       let resolvedDepartmentName = '';
-      if (departmentName) {
+      if (departmentName && !unitPath) {
         if (!schoolId) {
           fail('A School is required when a Department is given.');
           continue;
@@ -316,11 +488,14 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       const institutionName = read(row, 'institutionName') || tenant?.name || null;
       const institutionType = read(row, 'institutionType');
 
-      // School-only rows attach to the school unit itself so they still show
-      // up in org-tree counts and orgUnitId filters. Two-level assumption is
-      // implicit elsewhere, but attaching to the school beats attaching to
-      // nothing.
-      const effectiveOrgUnitId = departmentId || schoolId || null;
+      // Deepest resolved unit wins. Root-only rows attach to the root itself so
+      // they still show up in org-tree counts and orgUnitId filters.
+      const effectiveOrgUnitId = pathUnitId || departmentId || schoolId || null;
+      // `school` is the root of the branch and `department` the unit the person
+      // actually sits in — the same rule deriveOrgLabels applies elsewhere, so
+      // deep placements keep both columns meaningful.
+      const effectiveSchoolName = pathSchoolName || resolvedSchoolName;
+      const effectiveDepartmentName = pathDepartmentName || resolvedDepartmentName;
 
       // Build the profile-update payload from ONLY the columns actually
       // present in this file. A re-import with a narrower schema (e.g.
@@ -328,9 +503,10 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       // research_areas/... on every existing row.
       const fullUpdate: Record<string, any> = {};
       if (hasColumn('name')) fullUpdate.display_name = name;
-      if (hasColumn('department') || hasColumn('school')) {
-        fullUpdate.department = resolvedDepartmentName || null;
-        fullUpdate.school = resolvedSchoolName || null;
+      if (hasColumn('employeeId')) fullUpdate.employee_id = employeeId || null;
+      if (hasColumn('department') || hasColumn('school') || hasColumn('unitPath')) {
+        fullUpdate.department = effectiveDepartmentName || null;
+        fullUpdate.school = effectiveSchoolName || null;
         fullUpdate.org_unit_id = effectiveOrgUnitId;
       }
       if (hasColumn('designation')) fullUpdate.designation = designation || null;
@@ -346,8 +522,9 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       // state to preserve), pulling defaults where the column was absent.
       const createPayload = {
         display_name: name,
-        department: resolvedDepartmentName || null,
-        school: resolvedSchoolName || null,
+        employee_id: employeeId || null,
+        department: effectiveDepartmentName || null,
+        school: effectiveSchoolName || null,
         designation: designation || null,
         org_unit_id: effectiveOrgUnitId,
         research_areas: researchAreas,

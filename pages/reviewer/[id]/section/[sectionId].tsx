@@ -176,10 +176,14 @@ export default function SectionDetail() {
     if (!section) return;
     try {
       setReviewBusy(true);
-      await axios.post(`/api/reviewer/calls/${callId}/sections/${sectionId}/review`);
+      const response = await axios.post(`/api/reviewer/calls/${callId}/sections/${sectionId}/review`);
       await loadSection();
       await refreshSections();
-      toast.success("Section reviewed");
+      toast.success(
+        response?.data?.report_refreshed
+          ? "Section reviewed and the panel report updated"
+          : "Section reviewed"
+      );
     } catch (err) {
       const status = err?.response?.status;
       toast.error(

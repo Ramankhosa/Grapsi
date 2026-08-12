@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireFundingOperatorRequest, requireFundingReadOperatorRequest } from '@/lib/fundingIntake/routeAuth';
-import { fundingDocumentService } from '@/lib/fundingDocuments/service';
+import { fundingDocumentService, isFundingDocumentKind } from '@/lib/fundingDocuments/service';
 
 export const runtime = 'nodejs';
 
@@ -41,10 +41,20 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ message: 'No document file received' }, { status: 400 });
     }
 
+    const rawKind = form.get('documentKind');
+    let documentKind: 'call_document' | 'guideline_document' | 'template_document' | undefined;
+    if (typeof rawKind === 'string' && rawKind.trim()) {
+      if (!isFundingDocumentKind(rawKind.trim())) {
+        return NextResponse.json({ message: `Invalid document kind: ${rawKind}` }, { status: 400 });
+      }
+      documentKind = rawKind.trim() as typeof documentKind;
+    }
+
     const result = await fundingDocumentService.uploadDocument({
       fundingCallId: params.id,
       file,
       sourceUrl: typeof form.get('sourceUrl') === 'string' ? String(form.get('sourceUrl')) : null,
+      documentKind,
       operator: auth.operator,
     });
 

@@ -13,6 +13,7 @@ type DocumentRecord = {
   funding_call_id: string;
   version: number;
   is_active: boolean;
+  document_kind: string;
   original_filename: string;
   mime_type: string;
   byte_size: number;
@@ -72,6 +73,25 @@ function StatusBadge({ value }: { value: string }) {
   return (
     <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] ${statusTone(value)}`}>
       {value.replace(/_/g, ' ')}
+    </span>
+  );
+}
+
+const DOCUMENT_KIND_LABELS: Record<string, string> = {
+  call_document: 'Call document',
+  guideline_document: 'Guidelines',
+  template_document: 'Template',
+};
+
+function KindBadge({ kind }: { kind: string | null | undefined }) {
+  const tone = kind === 'guideline_document'
+    ? 'bg-sky-100 text-sky-800'
+    : kind === 'template_document'
+      ? 'bg-violet-100 text-violet-800'
+      : 'bg-slate-100 text-slate-700';
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] ${tone}`}>
+      {DOCUMENT_KIND_LABELS[kind || 'call_document'] || 'Call document'}
     </span>
   );
 }
@@ -223,6 +243,7 @@ export default function FundingDocumentsPage() {
   const [uploading, setUploading] = useState(false);
   const [acting, setActing] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [uploadKind, setUploadKind] = useState<'call_document' | 'guideline_document' | 'template_document'>('call_document');
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
@@ -316,6 +337,7 @@ export default function FundingDocumentsPage() {
     try {
       const form = new FormData();
       form.append('file', file);
+      form.append('documentKind', uploadKind);
       const response = await fetch(`/api/admin/funding/calls/${id}/documents`, {
         method: 'POST',
         body: form,
@@ -333,7 +355,7 @@ export default function FundingDocumentsPage() {
     }
   }
 
-  async function runAction(action: 'reprocess' | 'reembed' | 'activate' | 'sync-intake', documentId?: string) {
+  async function runAction(action: 'reprocess' | 'reembed' | 'activate' | 'deactivate' | 'sync-intake', documentId?: string) {
     if (!id) return;
     if (!canWrite) {
       toast.error('Funding operations write access required.');
@@ -343,11 +365,16 @@ export default function FundingDocumentsPage() {
     try {
       const url = action === 'sync-intake'
         ? `/api/admin/funding/calls/${id}/documents`
-        : `/api/admin/funding/calls/${id}/documents/${documentId}/${action}`;
+        : `/api/admin/funding/calls/${id}/documents/${documentId}/${action === 'deactivate' ? 'activate' : action}`;
+      const body = action === 'sync-intake'
+        ? JSON.stringify({ sourceMode: 'intake' })
+        : action === 'activate' || action === 'deactivate'
+          ? JSON.stringify({ active: action === 'activate' })
+          : undefined;
       const response = await fetch(url, {
         method: 'POST',
-        headers: action === 'sync-intake' ? { 'Content-Type': 'application/json' } : undefined,
-        body: action === 'sync-intake' ? JSON.stringify({ sourceMode: 'intake' }) : undefined,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body,
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Failed to ${action}`);
@@ -401,7 +428,7 @@ export default function FundingDocumentsPage() {
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-700">Funding Documents</p>
             <h1 className="mt-2 text-3xl font-semibold text-slate-900">Document Intelligence</h1>
             <p className="mt-3 text-sm text-slate-600">
-              Active version: {activeDocument ? `v${activeDocument.version}` : 'none'} | Documents: {documents.length}
+              Active documents: {documents.filter((document) => document.is_active).length} | Total: {documents.length}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -424,6 +451,18 @@ export default function FundingDocumentsPage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-900">Upload</h2>
               <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5">
+                <label className="mb-3 block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Document kind</span>
+                  <select
+                    value={uploadKind}
+                    onChange={(event) => setUploadKind(event.target.value as typeof uploadKind)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                  >
+                    <option value="call_document">Call document (announcement, annexure)</option>
+                    <option value="guideline_document">Guidelines</option>
+                    <option value="template_document">Application template</option>
+                  </select>
+                </label>
                 <input
                   type="file"
                   accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
@@ -463,6 +502,7 @@ export default function FundingDocumentsPage() {
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
+                        <KindBadge kind={document.document_kind} />
                         <StatusBadge value={document.parsing_status} />
                         <StatusBadge value={document.embedding_status} />
                       </div>
@@ -487,22 +527,21 @@ export default function FundingDocumentsPage() {
                     <div>
                       <h2 className="text-lg font-semibold text-slate-900">v{currentDocument.version} {currentDocument.original_filename}</h2>
                       <div className="mt-3 flex flex-wrap gap-2">
+                        <KindBadge kind={currentDocument.document_kind} />
                         <StatusBadge value={currentDocument.parsing_status} />
                         <StatusBadge value={currentDocument.embedding_status} />
                         {currentDocument.is_active && <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-white">Active</span>}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {!currentDocument.is_active && (
-                        <button
-                          type="button"
-                          onClick={() => runAction('activate', currentDocument.id)}
-                          disabled={!canWrite || acting}
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-50"
-                        >
-                          Activate
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => runAction(currentDocument.is_active ? 'deactivate' : 'activate', currentDocument.id)}
+                        disabled={!canWrite || acting}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-50"
+                      >
+                        {currentDocument.is_active ? 'Deactivate' : 'Activate'}
+                      </button>
                       <button
                         type="button"
                         onClick={() => runAction('reprocess', currentDocument.id)}

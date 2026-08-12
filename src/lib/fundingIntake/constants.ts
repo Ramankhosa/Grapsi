@@ -1,5 +1,8 @@
-export const FUNDING_INTAKE_PROMPT_VERSION = 'funding-intake-v5';
-export const FUNDING_INTAKE_EXTRACTOR_VERSION = '1.4.0';
+// v6 switches description (and the long-form eligibility/deliverables fields) from
+// stitched verbatim snippets to grounded prose. Bumped so the 24h prompt cache and
+// stored extraction provenance do not blend v5 snippet output with v6 prose.
+export const FUNDING_INTAKE_PROMPT_VERSION = 'funding-intake-v6';
+export const FUNDING_INTAKE_EXTRACTOR_VERSION = '1.5.0';
 export const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 export const FETCH_TIMEOUT_MS = 15_000;
 export const ACTIVE_IDEMPOTENT_STATUSES = ['queued', 'fetching', 'extracting', 'needs_review', 'draft_created'] as const;

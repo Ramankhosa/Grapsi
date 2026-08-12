@@ -6,13 +6,18 @@ import path from 'path'
 import type { IntakeSubmitInput } from './types'
 import { MAX_INTAKE_PDF_BYTES } from './upload'
 
+const INTAKE_UPLOAD_MIMES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+])
+
 export async function stagePdfUpload(file: File): Promise<NonNullable<IntakeSubmitInput['sourceFile']>> {
-  if (file.type !== 'application/pdf') {
-    throw new Error('Only PDF files are supported for intake uploads')
+  if (!INTAKE_UPLOAD_MIMES.has(file.type)) {
+    throw new Error('Only PDF and DOCX files are supported for intake uploads')
   }
 
   if (file.size > MAX_INTAKE_PDF_BYTES) {
-    throw new Error('PDF intake file is too large')
+    throw new Error('Intake file is too large')
   }
 
   const bytes = Buffer.from(await file.arrayBuffer())

@@ -1,8 +1,10 @@
 // @ts-nocheck
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getReviewerSession as getSession, requireGrantReviewFeature } from '@/lib/reviewer-auth-api';
+import { getReviewerSession as getSession, requireReviewerCallAccess } from '@/lib/reviewer-auth-api';
 import prisma from '../../../../../lib/prisma';
 import { compareSections } from '@/lib/reviewer/sectionGrouping';
+import { resolveSectionVersions } from '@/lib/reviewer/finalReport';
+import { ensureCurrentReport } from '@/lib/reviewer/reportGeneration';
 import { 
   Document, 
   Packer, 
@@ -48,6 +50,27 @@ interface OverallReviewJson {
     impact: string;
     effort: string;
   }>;
+  // The panel-quality blocks. These existed on screen but were dropped on the
+  // way into the document, so the deliverable was a weaker artefact than the
+  // page it was exported from.
+  criterion_scorecard?: Array<{
+    criterion: string;
+    weight: number | null;
+    score: number | null;
+    verdict?: string;
+    evidence_sections?: string[];
+  }>;
+  section_scorecard?: Array<{
+    section: string;
+    score: number | null;
+    verdict?: string;
+    headline?: string;
+  }>;
+  consistency_flags?: Array<{
+    issue: string;
+    sections?: string[];
+    severity?: string;
+  }>;
 }
 
 const DECISION_LABELS: Record<string, string> = {
@@ -90,6 +113,68 @@ const Styles = {
   }
 };
 
+/** A level-2 heading in the document's own type scale. */
+function sectionHeading(text: string) {
+  return new Paragraph({
+    children: [
+      new TextRun({
+        text,
+        bold: true,
+        size: Styles.heading2.size,
+        color: Styles.heading2.color,
+      }),
+    ],
+    heading: HeadingLevel.HEADING_2,
+    spacing: Styles.heading2.spacing,
+  });
+}
+
+/**
+ * A bordered table with a shaded header row, matching the ATR's existing
+ * tables. `widths` are percentages and must line up with `headers`.
+ */
+function simpleTable(headers: string[], widths: number[], rows: string[][]) {
+  const border = { style: BorderStyle.SINGLE, size: Styles.table.borderSize, color: Styles.table.borderColor };
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: {
+      top: border,
+      bottom: border,
+      left: border,
+      right: border,
+      insideHorizontal: border,
+      insideVertical: border,
+    },
+    rows: [
+      new TableRow({
+        tableHeader: true,
+        children: headers.map((header, index) => new TableCell({
+          width: { size: widths[index] || Math.floor(100 / headers.length), type: WidthType.PERCENTAGE },
+          shading: { fill: Styles.table.headerFill, type: ShadingType.CLEAR },
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: header, bold: true })],
+              alignment: AlignmentType.CENTER,
+            }),
+          ],
+        })),
+      }),
+      ...rows.map((cells, rowIndex) => new TableRow({
+        children: cells.map((cell, index) => new TableCell({
+          width: { size: widths[index] || Math.floor(100 / headers.length), type: WidthType.PERCENTAGE },
+          shading: rowIndex % 2 === 1
+            ? { fill: Styles.table.altRowFill, type: ShadingType.CLEAR }
+            : undefined,
+          // An empty cell collapses the row height in Word, so blanks become a
+          // space rather than nothing.
+          children: [new Paragraph(cell || ' ')],
+        })),
+      })),
+    ],
+  });
+}
+
 // Generate ATR Word document
 async function generateATRDocument(
   projectTitle: string,
@@ -97,12 +182,27 @@ async function generateATRDocument(
   sections: Array<{
     section_title: string,
     ai_review_json: ReviewJson
-  }>
+  }>,
+  /** Set only when the report could not be brought up to date before export. */
+  staleNotice?: string | null
 ): Promise<Buffer> {
   // Proposal order, shared with the workspace, the report and the auto-run.
   const sortedSections = [...sections].sort(compareSections);
 
   const children = [];
+
+  if (staleNotice) {
+    children.push(
+      new Paragraph({
+        children: [
+          new TextRun({ text: 'OUT OF DATE — ', bold: true, color: "9C2C2C", size: 24 }),
+          new TextRun({ text: staleNotice, color: "9C2C2C", size: 22 }),
+        ],
+        spacing: { before: 200, after: 200 },
+        shading: { fill: "FDECEC", type: ShadingType.CLEAR },
+      })
+    );
+  }
 
   // Title with subtle styling
   children.push(
@@ -222,6 +322,79 @@ async function generateATRDocument(
     if (complianceLines.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { after: 160 } }));
     }
+  }
+
+  // Scorecards — the panel's actual marking, criterion by criterion and
+  // section by section. Rendered before the action tables so a reader sees the
+  // assessment before the remediation.
+  const criterionScorecard = (overallReview as any).criterion_scorecard;
+  if (Array.isArray(criterionScorecard) && criterionScorecard.length > 0) {
+    children.push(sectionHeading("Criterion Scorecard"));
+    children.push(
+      simpleTable(
+        ["Criterion", "Weight", "Score", "Verdict"],
+        [30, 12, 12, 46],
+        criterionScorecard.map((entry: any) => [
+          String(entry?.criterion || ''),
+          entry?.weight === null || entry?.weight === undefined ? '—' : String(entry.weight),
+          // A criterion no section evidenced is scored null on purpose; printing
+          // "0.0" would read as a failing mark rather than an absence.
+          typeof entry?.score === 'number' ? entry.score.toFixed(1) : 'Not evidenced',
+          [
+            String(entry?.verdict || ''),
+            Array.isArray(entry?.evidence_sections) && entry.evidence_sections.length > 0
+              ? `(from ${entry.evidence_sections.join(', ')})`
+              : '',
+          ].filter(Boolean).join(' '),
+        ])
+      )
+    );
+    children.push(new Paragraph({ text: "", spacing: { after: 160 } }));
+  }
+
+  const sectionScorecard = (overallReview as any).section_scorecard;
+  if (Array.isArray(sectionScorecard) && sectionScorecard.length > 0) {
+    children.push(sectionHeading("Section Scorecard"));
+    children.push(
+      simpleTable(
+        ["Section", "Score", "Verdict", "What decides it"],
+        [28, 12, 15, 45],
+        sectionScorecard.map((entry: any) => [
+          String(entry?.section || ''),
+          typeof entry?.score === 'number' ? entry.score.toFixed(1) : '—',
+          String(entry?.verdict || ''),
+          String(entry?.headline || ''),
+        ])
+      )
+    );
+    children.push(new Paragraph({ text: "", spacing: { after: 160 } }));
+  }
+
+  // Cross-section contradictions: the panel's distinctive contribution over the
+  // per-section reviews, and the thing an applicant most needs in writing.
+  const consistencyFlags = (overallReview as any).consistency_flags;
+  if (Array.isArray(consistencyFlags) && consistencyFlags.length > 0) {
+    children.push(sectionHeading("Cross-section Consistency Flags"));
+    for (const flag of consistencyFlags) {
+      const scope = Array.isArray(flag?.sections) && flag.sections.length > 0
+        ? ` [${flag.sections.join(' ↔ ')}]`
+        : '';
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: `${String(flag?.severity || 'medium').toUpperCase()}${scope}: `,
+              bold: true,
+              size: 22,
+            }),
+            new TextRun({ text: String(flag?.issue || ''), size: 22 }),
+          ],
+          bullet: { level: 0 },
+          spacing: { after: 80 },
+        })
+      );
+    }
+    children.push(new Paragraph({ text: "", spacing: { after: 160 } }));
   }
 
   // Introduction text with background
@@ -468,13 +641,16 @@ async function generateATRDocument(
       return;
     }
 
-    // Add section heading with rating
+    // Add section heading with rating. The version is named whenever the
+    // section has been revised, so a reader can tell which draft was scored.
     const sectionRating = section.ai_review_json?.score || 0;
+    const sectionVersion = Number((section as any).version || 1);
+    const versionLabel = sectionVersion > 1 ? ` — v${sectionVersion}` : '';
     children.push(
       new Paragraph({
         children: [
           new TextRun({
-            text: `2.${index + 1}. ${section.section_title} (Rating: ${sectionRating.toFixed(1)}/10)`,
+            text: `2.${index + 1}. ${section.section_title}${versionLabel} (Rating: ${sectionRating.toFixed(1)}/10)`,
             bold: true,
             size: Styles.heading2.size,
             color: Styles.heading2.color,
@@ -712,13 +888,24 @@ export default async function handler(
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  if (!(await requireGrantReviewFeature(session, res))) return;
-
   if (req.method !== 'GET') {
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
   }
-  
+
   try {
+    // The same capability check every other reviewer route uses. This used to
+    // compare `call.user_id` against the session user, which locked project
+    // collaborators — people who can read and even run the review — out of the
+    // export alone.
+    const callAccess = await requireReviewerCallAccess(id, session, res, 'read');
+    if (!callAccess) return;
+
+    // The ATR is a deliverable, so it must describe the drafts as they stand.
+    // This used to serve whatever was stored: revise a section and the
+    // downloaded document still carried the previous verdict and score beside
+    // the current section list, with nothing on the page saying so.
+    const refresh = await ensureCurrentReport(id);
+
     // Get the reviewer call details
     const call = await prisma.reviewerCall.findUnique({
       where: { id },
@@ -730,37 +917,39 @@ export default async function handler(
         parsed_json: true,
       }
     });
-    
+
     if (!call) {
       return res.status(404).json({ error: 'Call not found' });
     }
-    
-    // Verify this call belongs to the requesting user by getting user ID from email
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-      select: { id: true }
-    });
-    
-    // Allow access if user is the owner or an admin
-    if (!user || call.user_id !== user.id) {
-      return res.status(403).json({ error: 'Access denied. This call does not belong to you.' });
+
+    if (!call.overall_review_json || Object.keys(call.overall_review_json as object).length === 0) {
+      return res.status(400).json({
+        error: refresh.error
+          || 'There is no panel report to export yet. Review at least one section, then generate the report.',
+        code: 'REPORT_NOT_GENERATED',
+      });
     }
 
-    // Get all reviewed sections
-    const sections = await prisma.reviewerSection.findMany({
-      where: {
-        call_id: id,
-        status: 'reviewed'
-      },
+    // Every draft ever submitted lives in this table, so filtering on
+    // `status: 'reviewed'` alone printed a revised section once per version —
+    // two "Objectives" headings, two different scores, no version labels. The
+    // report and the workspace both resolve to one version per title; the
+    // export has to agree with them.
+    const allSections = await prisma.reviewerSection.findMany({
+      where: { call_id: id },
       select: {
         id: true,
         section_title: true,
+        version: true,
+        status: true,
         ai_review_json: true,
       },
-      orderBy: {
-        section_title: 'asc'
-      }
     });
+
+    const scoredVersions = (call.overall_review_json as any)?.score_basis?.scoredVersions || null;
+    const sections = resolveSectionVersions(allSections as any, scoredVersions)
+      .effective
+      .filter((section: any) => section.status === 'reviewed');
 
     // Ensure the overall review has the correct structure
     const defaultOverallReview: OverallReviewJson = {
@@ -844,16 +1033,29 @@ export default async function handler(
     overallReview.cross_sectional_recommendations = overallReview.cross_sectional_recommendations.map(item => 
       typeof item === 'object' ? JSON.stringify(item) : String(item).trim());
 
+    // Only reachable when the refresh above could not run — a rate limit, or a
+    // model failure. The document still ships, because a stale report beats no
+    // report, but it has to say so on its own face: this file gets forwarded to
+    // people who will never see the warning that was on the screen.
+    const staleNotice = refresh.freshness === 'stale'
+      ? 'This report was written before the latest revisions and does not describe the current drafts. Regenerate the panel report, then export again.'
+      : null;
+
     // Generate the ATR document
+    const projectTitle = call.project_title || "Untitled Project";
     const buffer = await generateATRDocument(
-      call.project_title || "Untitled Project",
+      projectTitle,
       overallReview,
-      processedSections
+      processedSections,
+      staleNotice
     );
 
     // Set headers for downloading the Word document
-    res.setHeader('Content-Disposition', `attachment; filename="ATR-${call.project_title.replace(/[^a-zA-Z0-9]/g, '_')}.docx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="ATR-${projectTitle.replace(/[^a-zA-Z0-9]/g, '_')}.docx"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    // Lets the client tell the user the export waited on a fresh report.
+    res.setHeader('X-Reviewer-Report-Regenerated', refresh.regenerated ? '1' : '0');
+    res.setHeader('X-Reviewer-Report-Freshness', refresh.freshness);
     res.send(buffer);
   } catch (error) {
     console.error('Error generating ATR document:', error);

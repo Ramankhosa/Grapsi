@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { FundingCallDocumentKind, Prisma } from '@prisma/client';
 import type { FundingLlmRoutingContext } from '@/lib/funding/llmRouting';
 import type { RecommendationAccessScope } from '@/lib/recommendations/types';
 import type { FundingDocumentQuestionCategory, FundingDocumentSectionType } from './constants';
@@ -16,7 +16,7 @@ export interface FundingDocumentParseResult {
     pageCount: number;
     rawCharCount: number;
     cleanedCharCount: number;
-    extractor: 'pdfjs' | 'mammoth' | 'mixed';
+    extractor: 'pdfjs' | 'mammoth' | 'mixed' | 'text';
     fallbackPages?: number[];
   };
 }
@@ -51,6 +51,9 @@ export interface FundingDocumentUploadInput {
   fundingCallId: string;
   file: File;
   sourceUrl?: string | null;
+  documentKind?: FundingCallDocumentKind;
+  /** Skip the automatic background processDocument call so the caller can await it. */
+  deferProcessing?: boolean;
   operator: {
     userId: string;
     email: string;
@@ -85,6 +88,8 @@ export interface FundingDocumentSearchRequest {
   query: string;
   fundingCallId?: string;
   sectionTypes?: FundingDocumentSectionType[];
+  /** Restrict retrieval to specific document kinds (default: all kinds). */
+  documentKinds?: FundingCallDocumentKind[];
   callStatus?: 'active' | 'upcoming' | 'closed' | 'any';
   topK?: number;
   minSimilarity?: number;

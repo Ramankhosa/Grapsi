@@ -5,7 +5,10 @@ import formidable, { type File } from 'formidable';
 import type { NextApiRequest } from 'next';
 
 export const MAX_INTAKE_PDF_BYTES = 20 * 1024 * 1024;
-const INTAKE_PDF_MIME = new Set(['application/pdf']);
+const INTAKE_FILE_MIME = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
 
 export async function readJsonBody<T>(req: NextApiRequest): Promise<T> {
   const chunks: Buffer[] = [];
@@ -48,17 +51,17 @@ export function parseIntakePdfForm(req: NextApiRequest): Promise<{
       const incoming = (files as any).file;
       const file = Array.isArray(incoming) ? incoming[0] : incoming;
       if (!file) {
-        reject(new Error('No PDF file received'));
+        reject(new Error('No document file received'));
         return;
       }
 
       if (file.size > MAX_INTAKE_PDF_BYTES) {
-        reject(new Error('PDF intake file is too large'));
+        reject(new Error('Intake file is too large'));
         return;
       }
 
-      if (!INTAKE_PDF_MIME.has(String(file.mimetype || ''))) {
-        reject(new Error('Only PDF files are supported for intake uploads'));
+      if (!INTAKE_FILE_MIME.has(String(file.mimetype || ''))) {
+        reject(new Error('Only PDF and DOCX files are supported for intake uploads'));
         return;
       }
 

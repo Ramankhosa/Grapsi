@@ -18,6 +18,9 @@ import {
   hashText,
   normalizeMultilineText,
 } from '../fundingIntake/utils';
+import { TEMPLATE_SECTION_TYPES } from '../fundingDocuments/constants';
+import { composeRoutedSectionText } from '../fundingDocuments/sectionRouting';
+import { fundingDocumentService } from '../fundingDocuments/service';
 import { extractGrantTemplateFromAssets } from './extractor';
 import {
   buildAssetSequenceMap,
@@ -192,6 +195,7 @@ async function ensureFundingCall(fundingCallId: string) {
       active_template_id: true,
       intake_job_id: true,
       source_url: true,
+      metadata: true,
     },
   });
 
@@ -797,7 +801,17 @@ export class FundingTemplateService {
       normalized_text?: string | null;
       fetch_metadata_json?: Prisma.JsonValue | null;
     },
-    operator: IntakeOperator
+    operator: IntakeOperator,
+    options: {
+      /**
+       * Return null instead of an asset when the parsed call documents expose
+       * no application-format sections and no explicit template source exists —
+       * the caller flags the call as needing a template document.
+       */
+      allowSkip?: boolean;
+      /** The operator pointed at this source as the template deliberately. */
+      hasExplicitTemplateSource?: boolean;
+    } = {}
   ) {
     await ensureFundingCall(fundingCallId);
 
@@ -810,10 +824,48 @@ export class FundingTemplateService {
       return metadata.auto_managed === true && metadata.intake_job_id === intakeJob.id;
     });
 
+    // Prefer routed sections from the call's parsed documents: an explicit
+    // template document is used whole; a call document contributes only its
+    // application-format sections.
+    let contentMode: string = 'flat_text_fallback';
+    let sectionProvenance: Record<string, unknown> | null = null;
+    let sectionText: string | null = null;
+
+    const routed = await fundingDocumentService.getRoutedSections(fundingCallId, 'template_document');
+    if (routed.sections.length > 0) {
+      const documentLabels = new Map(
+        routed.documents.map((document) => [document.id, `${document.original_filename} (v${document.version})`])
+      );
+      const composed = composeRoutedSectionText(routed.sections, TEMPLATE_SECTION_TYPES, { documentLabels });
+      const hasApplicationSections = !composed.usedAllSections;
+
+      if (routed.usedKind === 'template_document' || hasApplicationSections) {
+        sectionText = composed.text;
+        contentMode = routed.usedKind === 'template_document'
+          ? hasApplicationSections ? 'document_sections' : 'template_document_full'
+          : 'document_sections';
+        sectionProvenance = {
+          document_kind: routed.usedKind,
+          document_ids: composed.usedDocumentIds,
+          section_ids: composed.usedSectionIds,
+          section_types: composed.usedSectionTypes,
+          truncated: composed.truncated,
+        };
+      } else if (options.hasExplicitTemplateSource) {
+        // The operator supplied this source as the template even though the
+        // documents expose no application-format sections — honour it as text.
+        contentMode = 'flat_text_explicit';
+      } else if (options.allowSkip) {
+        // We positively know the parsed call document has no application-format
+        // content: skip instead of compiling a template out of prose.
+        return null;
+      }
+    }
+
     let rawText = intakeJob.raw_text || null;
     let normalizedText = intakeJob.normalized_text || null;
     let intakeMetadata = readAssetMetadata(intakeJob.fetch_metadata_json);
-    if (intakeJob.input_type === 'url' && intakeJob.source_url && !normalizedText) {
+    if (!sectionText && intakeJob.input_type === 'url' && intakeJob.source_url && !normalizedText) {
       const fetched = await fetchReadableUrlContent(intakeJob.source_url);
       rawText = fetched.rawText;
       normalizedText = fetched.normalizedText;
@@ -848,24 +900,43 @@ export class FundingTemplateService {
       intake_job_id: intakeJob.id,
       intake_input_type: intakeJob.input_type,
       intake_source_url: intakeJob.source_url || null,
+      content_mode: contentMode,
+      ...(sectionProvenance ? { section_provenance: sectionProvenance } : {}),
     };
-    const sourceType = intakeJob.input_type === 'url' ? 'url' : intakeJob.input_type === 'pdf' ? 'pdf' : 'text';
-    const checksum = sourceType === 'url'
-      ? hashText(`${intakeJob.source_url || ''}::${normalizedText || ''}`)
-      : sourceType === 'text'
-        ? hashText(normalizedText || rawText || '')
-        : String(intakeMetadata.checksum || intakeJob.source_text_hash || hashText(`${intakeJob.source_file_path || ''}`));
-    const assetData = {
-      source_type: sourceType,
-      source_url: sourceType === 'url' ? intakeJob.source_url || null : null,
-      storage_path: sourceType === 'pdf' ? intakeJob.source_file_path || null : null,
-      mime: sourceType === 'url' ? 'text/html' : sourceType === 'text' ? 'text/plain' : 'application/pdf',
-      raw_text: rawText,
-      normalized_text: normalizedText,
-      source_metadata_json: asJson(metadata),
-      checksum,
-      uploaded_by: operator.email,
-    } as const;
+
+    let assetData;
+    if (sectionText) {
+      const normalizedSectionText = normalizeMultilineText(sectionText);
+      assetData = {
+        source_type: 'text',
+        source_url: intakeJob.source_url || null,
+        storage_path: null,
+        mime: 'text/plain',
+        raw_text: sectionText,
+        normalized_text: normalizedSectionText,
+        source_metadata_json: asJson(metadata),
+        checksum: hashText(normalizedSectionText),
+        uploaded_by: operator.email,
+      } as const;
+    } else {
+      const sourceType = intakeJob.input_type === 'url' ? 'url' : intakeJob.input_type === 'pdf' ? 'pdf' : 'text';
+      const checksum = sourceType === 'url'
+        ? hashText(`${intakeJob.source_url || ''}::${normalizedText || ''}`)
+        : sourceType === 'text'
+          ? hashText(normalizedText || rawText || '')
+          : String(intakeMetadata.checksum || intakeJob.source_text_hash || hashText(`${intakeJob.source_file_path || ''}`));
+      assetData = {
+        source_type: sourceType,
+        source_url: sourceType === 'url' ? intakeJob.source_url || null : null,
+        storage_path: sourceType === 'pdf' ? intakeJob.source_file_path || null : null,
+        mime: sourceType === 'url' ? 'text/html' : sourceType === 'text' ? 'text/plain' : 'application/pdf',
+        raw_text: rawText,
+        normalized_text: normalizedText,
+        source_metadata_json: asJson(metadata),
+        checksum,
+        uploaded_by: operator.email,
+      } as const;
+    }
 
     if (existingAsset) {
       return prisma.fundingCallTemplateAsset.update({
@@ -909,7 +980,11 @@ export class FundingTemplateService {
       throw new Error('Funding intake source not found for this call');
     }
 
-    return this.upsertAutoManagedAssetFromIntakeSource(fundingCallId, intakeJob, operator);
+    // The operator explicitly chose the intake source as template material, so
+    // this path never skips.
+    return this.upsertAutoManagedAssetFromIntakeSource(fundingCallId, intakeJob, operator, {
+      hasExplicitTemplateSource: true,
+    });
   }
 
   async deleteAsset(fundingCallId: string, assetId: string) {
@@ -959,7 +1034,14 @@ export class FundingTemplateService {
       });
 
       if (intakeJob) {
-        const autoAsset = await this.upsertAutoManagedAssetFromIntakeSource(fundingCallId, intakeJob, operator);
+        const autoAsset = await this.upsertAutoManagedAssetFromIntakeSource(fundingCallId, intakeJob, operator, {
+          allowSkip: true,
+        });
+        if (!autoAsset) {
+          throw new Error(
+            'No application-format sections were found in the call documents. Upload a template document or add a template asset before extracting.'
+          );
+        }
         assets = [autoAsset];
       }
     }
@@ -1022,6 +1104,17 @@ export class FundingTemplateService {
             normalized_template_json: asJson(extraction.template),
             compatibility_json: asJson(extraction.compatibility),
             warnings_json: asJson(extraction.warnings),
+            source_json: asJson({
+              assets: assets.map((asset) => {
+                const metadata = readAssetMetadata(asset.source_metadata_json);
+                return {
+                  id: asset.id,
+                  source_type: asset.source_type,
+                  content_mode: metadata.content_mode || null,
+                  section_provenance: metadata.section_provenance || null,
+                };
+              }),
+            }),
           },
         });
 
@@ -1038,6 +1131,7 @@ export class FundingTemplateService {
       });
 
       if (runCompleted) {
+        await this.clearTemplateNeedsSourceFlag(fundingCallId);
         await this.autoApplyRunIfTemplateEmpty(fundingCallId, runId, operator);
       }
     } catch (error) {
@@ -1052,6 +1146,29 @@ export class FundingTemplateService {
       throw error;
     } finally {
       await stopHeartbeat?.();
+    }
+  }
+
+  /** Best-effort removal of the "needs template document" marker once a run succeeds. */
+  private async clearTemplateNeedsSourceFlag(fundingCallId: string) {
+    try {
+      const call = await prisma.fundingCall.findUnique({
+        where: { id: fundingCallId },
+        select: { metadata: true },
+      });
+      const metadata = call?.metadata && typeof call.metadata === 'object' && !Array.isArray(call.metadata)
+        ? { ...(call.metadata as Record<string, unknown>) }
+        : null;
+      if (!metadata || !(metadata as any).template_extraction?.skipped) {
+        return;
+      }
+      delete (metadata as any).template_extraction;
+      await prisma.fundingCall.update({
+        where: { id: fundingCallId },
+        data: { metadata: metadata as any },
+      });
+    } catch (error) {
+      console.warn('[Funding Template] could not clear needs-source flag:', error);
     }
   }
 

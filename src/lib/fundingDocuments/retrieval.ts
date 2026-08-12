@@ -152,6 +152,10 @@ export class FundingDocumentRetrievalService {
       conditions.push(Prisma.sql`c.section_type::text = ANY(${sqlTextArray(request.sectionTypes)})`);
     }
 
+    if (request.documentKinds?.length) {
+      conditions.push(Prisma.sql`d.document_kind::text = ANY(${sqlTextArray(request.documentKinds)})`);
+    }
+
     const where = combineConditions(conditions);
     const rows = await prisma.$queryRaw<any[]>(Prisma.sql`
       WITH scored AS (
@@ -188,7 +192,8 @@ export class FundingDocumentRetrievalService {
     fundingCallId: string,
     sectionTypes: FundingDocumentSectionType[],
     access?: FundingDocumentSearchRequest['access'],
-    limit = 20
+    limit = 20,
+    documentKinds?: string[]
   ): Promise<FundingDocumentSearchResult[]> {
     const conditions: Prisma.Sql[] = [
       Prisma.sql`d.is_active = true`,
@@ -202,6 +207,10 @@ export class FundingDocumentRetrievalService {
 
     if (sectionTypes.length > 0) {
       conditions.push(Prisma.sql`c.section_type::text = ANY(${sqlTextArray(sectionTypes)})`);
+    }
+
+    if (documentKinds?.length) {
+      conditions.push(Prisma.sql`d.document_kind::text = ANY(${sqlTextArray(documentKinds)})`);
     }
 
     const rows = await prisma.$queryRaw<any[]>(Prisma.sql`

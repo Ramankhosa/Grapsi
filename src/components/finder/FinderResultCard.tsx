@@ -7,8 +7,6 @@ interface FinderResultCardProps {
   result: RecommendationRawResultItem;
   ordinal: number;
   onBeginWriting?: (payload: { resultId: string }) => void;
-  onExplainResult?: () => void;
-  onAskAboutCall?: () => void;
   getCallDetailsHref?: (resultId: string) => string;
   /**
    * Streaming variant: render the exact same layout, but with the chat-action
@@ -74,8 +72,6 @@ export default function FinderResultCard({
   result,
   ordinal,
   onBeginWriting,
-  onExplainResult,
-  onAskAboutCall,
   getCallDetailsHref,
   pendingActions = false,
 }: FinderResultCardProps) {
@@ -196,28 +192,6 @@ export default function FinderResultCard({
             className="cb-btn-primary cb-btn-xs"
           >
             Write grant
-          </button>
-        ) : null}
-        {onExplainResult || pendingActions ? (
-          <button
-            type="button"
-            disabled={pendingActions}
-            onClick={onExplainResult}
-            className="cb-btn-secondary cb-btn-xs"
-            title="Explain this match in chat"
-          >
-            Explain
-          </button>
-        ) : null}
-        {onAskAboutCall || pendingActions ? (
-          <button
-            type="button"
-            disabled={pendingActions}
-            onClick={onAskAboutCall}
-            className="cb-btn-secondary cb-btn-xs"
-            title="Ask about eligibility, required documents, budget rules, or deadlines from the call's own documents"
-          >
-            Ask about call
           </button>
         ) : null}
         <span className="ml-auto flex items-center gap-0.5">

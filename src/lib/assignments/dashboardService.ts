@@ -26,7 +26,10 @@ export type DashboardGroupBy =
   | 'call'
   | 'school'
   | 'department'
+  | 'orgUnit'
   | 'faculty'
+  | 'assigner'
+  | 'assignerUnit'
   | 'year'
   | 'month';
 
@@ -35,14 +38,22 @@ export const DASHBOARD_GROUP_BY: DashboardGroupBy[] = [
   'call',
   'school',
   'department',
+  'orgUnit',
   'faculty',
+  'assigner',
+  'assignerUnit',
   'year',
   'month',
 ];
 
 export interface DashboardFilters {
   tenantId: string;
-  /** Department org-unit ids. A School selection expands to its departments. */
+  /**
+   * SERVER-DERIVED reach of the caller. null/undefined means tenant-wide.
+   * Never taken from client input — that is what `orgUnitIds` is for.
+   */
+  scopeUnitIds?: string[] | null;
+  /** Org-unit ids the user chose to filter by, already clamped to their scope. */
   orgUnitIds?: string[];
   /** Filters on the assignment's creation date. */
   dateFrom?: Date | null;
@@ -72,10 +83,26 @@ function combine(conditions: Prisma.Sql[]) {
 function assignmentWhere(filters: DashboardFilters) {
   const conditions: Prisma.Sql[] = [Prisma.sql`ca.tenant_id = ${filters.tenantId}`];
 
+  // Server-side reach first, so a hand-crafted orgUnitIds query string can only
+  // ever narrow what the caller already had access to, never widen it.
+  const scopeUnitIds = filters.scopeUnitIds;
+  if (scopeUnitIds) {
+    conditions.push(
+      scopeUnitIds.length === 0
+        ? Prisma.sql`FALSE`
+        : // Assignments predating the snapshot columns fall back to the
+          // assignee's current placement so old rows do not vanish from a
+          // head's dashboard.
+          Prisma.sql`COALESCE(ca.assignee_org_unit_id, rp.org_unit_id) = ANY(ARRAY[${Prisma.join(
+            scopeUnitIds.map((id) => Prisma.sql`${id}`)
+          )}]::text[])`
+    );
+  }
+
   const orgUnitIds = (filters.orgUnitIds || []).filter(Boolean);
   if (orgUnitIds.length > 0) {
     conditions.push(
-      Prisma.sql`rp.org_unit_id = ANY(ARRAY[${Prisma.join(
+      Prisma.sql`COALESCE(ca.assignee_org_unit_id, rp.org_unit_id) = ANY(ARRAY[${Prisma.join(
         orgUnitIds.map((id) => Prisma.sql`${id}`)
       )}]::text[])`
     );
@@ -106,6 +133,9 @@ function assignmentFrom() {
     JOIN funding_calls fc ON fc.id = ca.funding_call_id
     LEFT JOIN users u ON u.id = ca.assignee_user_id
     LEFT JOIN researcher_profiles rp ON rp.user_id = ca.assignee_user_id
+    LEFT JOIN users bu ON bu.id = ca.assigned_by_user_id
+    LEFT JOIN tenant_org_units aou ON aou.id = ca.assignee_org_unit_id
+    LEFT JOIN tenant_org_units bou ON bou.id = ca.assigner_org_unit_id
   `;
 }
 
@@ -143,7 +173,12 @@ export async function getSummary(filters: DashboardFilters): Promise<DashboardSu
     WHERE ${assignmentWhere(filters)}
   `);
 
-  const unassignedExpiredCalls = await countUnassignedExpiredCalls(filters.tenantId);
+  // Org-level metric by definition ("nobody in the organization took this"),
+  // so it is suppressed for a scoped head rather than reported as if it were
+  // their branch's number.
+  const unassignedExpiredCalls = filters.scopeUnitIds
+    ? 0
+    : await countUnassignedExpiredCalls(filters.tenantId);
   const decided = (row?.awarded || 0) + (row?.rejected || 0);
 
   return {
@@ -308,8 +343,18 @@ function groupExpression(groupBy: DashboardGroupBy): Prisma.Sql {
       return Prisma.sql`COALESCE(NULLIF(rp.school, ''), 'Unassigned school')`;
     case 'department':
       return Prisma.sql`COALESCE(NULLIF(rp.department, ''), 'Unassigned department')`;
+    // Depth-agnostic: groups by the unit the person actually sits in, whatever
+    // level that is, rather than the two fixed school/department slots.
+    case 'orgUnit':
+      return Prisma.sql`COALESCE(NULLIF(aou.name, ''), NULLIF(rp.department, ''), NULLIF(rp.school, ''), 'Unassigned unit')`;
     case 'faculty':
       return Prisma.sql`COALESCE(rp.display_name, u.name, u.email, 'Unknown')`;
+    // Who delegated the work. Uses the users table, not a profile join — the
+    // assigner is frequently an admin with no researcher profile at all.
+    case 'assigner':
+      return Prisma.sql`COALESCE(NULLIF(bu.name, ''), bu.email, 'Unknown')`;
+    case 'assignerUnit':
+      return Prisma.sql`COALESCE(NULLIF(bou.name, ''), 'Unattributed')`;
     case 'year':
       return Prisma.sql`to_char(ca.created_at, 'YYYY')`;
     case 'month':

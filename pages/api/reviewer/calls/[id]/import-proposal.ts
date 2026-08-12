@@ -12,8 +12,7 @@ import { hasMeaningfulSectionContent } from '@/lib/reviewer/content'
 import {
   buildProposalTargets,
   countProposalWords,
-  matchSegmentsToTargets,
-  splitProposalIntoSegments,
+  splitProposalWithFormat,
 } from '@/lib/reviewer/proposalSplit'
 import { resolveBucketKey } from '@/lib/reviewer/buckets'
 import { extractTextFromDocumentBytes } from '@/lib/reviewer/sourceText'
@@ -299,13 +298,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
 
-    const segments = splitProposalIntoSegments(text)
-    const matches = matchSegmentsToTargets(segments, targets)
+    // Format-aware: cut at the call's own section structure when the document
+    // follows it, and subtract the format's instruction lines everywhere.
+    const { matches, splitMode, formatLinesRemoved } = splitProposalWithFormat(text, targets, {
+      templateSections,
+    })
 
     return res.status(200).json({
       filename,
       chars: text.length,
       words: countProposalWords(text),
+      splitMode,
+      formatLinesRemoved,
       targets: targets.map((target) => ({
         title: target.title,
         bucketKey: target.bucketKey,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -285,6 +285,11 @@ export default function FundingIntakeJobPage() {
   const [recoverySourceText, setRecoverySourceText] = useState('');
   const [recoverySourcePdf, setRecoverySourcePdf] = useState<File | null>(null);
   const [deletingJob, setDeletingJob] = useState(false);
+  // Fields the admin has typed into since the last save. The details endpoint is
+  // re-polled every few seconds while extraction/guideline/template runs are in
+  // flight, and its draftValues are rebuilt from the extraction — so without this
+  // set, every poll would overwrite whatever the admin is currently typing.
+  const dirtyFieldKeysRef = useRef<Set<string>>(new Set());
 
   const userRoles = user?.roles || [];
   const platformPermissions = user?.platformPermissions || [];
@@ -378,7 +383,21 @@ export default function FundingIntakeJobPage() {
 
       setDetails(data);
       setLinkedCallOverrideId(data.call?.id || data.job?.linked_funding_call_id || null);
-      setDraftValues(data.draftValues || {});
+      // A full (spinner) load is authoritative and reseeds the form. Background
+      // polls must not clobber fields the admin is still editing, so those keep
+      // the local value and only take server values for untouched fields.
+      if (showSpinner) {
+        dirtyFieldKeysRef.current = new Set();
+        setDraftValues(data.draftValues || {});
+      } else {
+        setDraftValues((current) => {
+          const next = { ...(data.draftValues || {}) };
+          for (const key of dirtyFieldKeysRef.current) {
+            next[key] = current[key];
+          }
+          return next;
+        });
+      }
       setDuplicateResolutions((current) => {
         const next = { ...current };
         for (const duplicate of data.duplicates || []) {
@@ -396,6 +415,7 @@ export default function FundingIntakeJobPage() {
   }
 
   function updateDraftValue(key: string, value: any) {
+    dirtyFieldKeysRef.current.add(key);
     setDraftValues((current) => ({ ...current, [key]: value }));
   }
 
@@ -472,6 +492,8 @@ export default function FundingIntakeJobPage() {
         toast.success(`Imported JSON artifacts:${data.jsonGuidelineImported ? ' guidelines' : ''}${data.jsonTemplateImported ? ' template' : ''}.`);
       }
 
+      // The edits are now persisted, so the server copy is authoritative again.
+      dirtyFieldKeysRef.current = new Set();
       await loadDetails(false);
       return (data.fundingCallId || linkedCallOverrideId || null) as string | null;
     } catch (error) {
@@ -706,45 +728,54 @@ export default function FundingIntakeJobPage() {
   const templateCounts = getTemplateCounts(details.template?.template?.grant_template_json);
   const callBasicsFieldKeys = new Set(['agency_name', 'scheme_title', 'description', 'open_date', 'close_date', 'official_urls']);
   const callBasicsFields = FUNDING_FIELD_DEFINITIONS.filter((field) => callBasicsFieldKeys.has(field.key));
+  // Grouped by the question each cluster answers rather than by storage shape, and
+  // kept to roughly four fields each. The old single 13-field "Eligibility and Fit"
+  // panel put unrelated inputs side by side and was slow to punch through.
   const secondaryFieldGroups = [
     {
-      title: 'Eligibility and Fit',
-      description: 'Fields used for search filters, matching, and applicant fit.',
-      keys: [
-        'geography_scope',
-        'eligible_countries',
-        'eligible_regions',
-        'host_countries',
-        'funder_country',
-        'funding_kinds',
-        'institution_types',
-        'career_stages',
-        'citizenship_requirements',
-        'residency_requirements',
-        'application_languages',
-        'disciplines',
-        'sponsor_type',
-      ],
+      title: 'Who can apply',
+      description: 'Applicant type, career stage, and nationality or residence rules.',
+      keys: ['career_stages', 'institution_types', 'citizenship_requirements', 'residency_requirements'],
     },
     {
-      title: 'Funding and Timing',
-      description: 'Amounts, duration, rolling status, and currency fields.',
+      title: 'Where it applies',
+      description: 'Reach of the call, funder country, and where applicants or projects sit.',
+      keys: ['geography_scope', 'funder_country', 'eligible_countries', 'eligible_regions', 'host_countries'],
+    },
+    {
+      title: 'What it funds',
+      description: 'Funding type, research areas, sponsor, and application language.',
+      keys: ['funding_kinds', 'disciplines', 'sponsor_type', 'application_languages'],
+    },
+    {
+      title: 'Money and duration',
+      description: 'Award amounts, currency, project length, and rolling status.',
       keys: [
         'is_rolling',
+        'currency',
         'amount_min',
         'amount_max',
-        'currency',
         'project_duration_min_months',
         'project_duration_max_months',
         'project_duration_text',
       ],
     },
     {
-      title: 'Application Text and Contact',
-      description: 'Long-form eligibility, deliverables, and contact notes.',
+      title: 'Eligibility, deliverables and contact',
+      description: 'Long-form rules, expected outputs, and official contact details.',
       keys: ['eligibility_text', 'expected_deliverables_text', 'contact_info'],
     },
   ];
+
+  // Drives the per-group "3/5" progress badge. A boolean counts as answered only
+  // once it actually exists, so an untouched checkbox is not reported as filled.
+  function isDraftValueFilled(key: string): boolean {
+    const value = draftValues[key];
+    if (value === null || value === undefined) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'boolean') return true;
+    return String(value).trim() !== '';
+  }
 
   function renderFundingField(field: (typeof FUNDING_FIELD_DEFINITIONS)[number]) {
     const extracted = extractedFields[field.key];
@@ -756,8 +787,15 @@ export default function FundingIntakeJobPage() {
         ? 'bg-amber-50 text-amber-700'
         : 'bg-slate-100 text-slate-600';
 
+    // Long-form fields take the full row. Pairing a multi-line textarea beside a
+    // single-line date input is what made these panels read as a ragged wall.
+    const isWideField = field.type === 'textarea' || field.type === 'array';
+
     return (
-      <div key={field.key} className="rounded-2xl border border-slate-200 p-4">
+      <div
+        key={field.key}
+        className={`rounded-2xl border border-slate-200 p-4 ${isWideField ? 'lg:col-span-2' : ''}`}
+      >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-slate-900">{field.label}</h3>
@@ -1260,12 +1298,31 @@ export default function FundingIntakeJobPage() {
             <p className="mt-1 text-sm text-slate-600">Optional but recommended — these fields help researchers find this call and improve the quality of AI-assisted drafting.</p>
           </div>
           <div className="mt-6 space-y-4">
-            {secondaryFieldGroups.map((group) => {
-              const groupFields = FUNDING_FIELD_DEFINITIONS.filter((field) => group.keys.includes(field.key));
+            {secondaryFieldGroups.map((group, groupIndex) => {
+              // Map over the group's own key order so the reading order is the one
+              // authored above, not the order the fields happen to be declared in.
+              const groupFields = group.keys
+                .map((key) => FUNDING_FIELD_DEFINITIONS.find((field) => field.key === key))
+                .filter((field): field is (typeof FUNDING_FIELD_DEFINITIONS)[number] => Boolean(field));
+              const filledCount = groupFields.filter((field) => isDraftValueFilled(field.key)).length;
+
               return (
-                <details key={group.title} className="rounded-2xl border border-slate-200 p-5" open={group.title === 'Eligibility and Fit'}>
+                <details
+                  key={group.title}
+                  className="rounded-2xl border border-slate-200 p-5"
+                  open={groupIndex === 0}
+                >
                   <summary className="cursor-pointer text-base font-semibold text-slate-900">
                     {group.title}
+                    <span
+                      className={`ml-3 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                        filledCount === groupFields.length
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {filledCount}/{groupFields.length}
+                    </span>
                     <span className="ml-3 text-sm font-normal text-slate-500">{group.description}</span>
                   </summary>
                   <div className="mt-5 grid gap-4 lg:grid-cols-2">

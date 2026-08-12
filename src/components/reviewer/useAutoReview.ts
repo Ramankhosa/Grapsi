@@ -226,7 +226,9 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
           try {
             const result = await axios.post(
               `/api/reviewer/calls/${callId}/section-review-with-dependencies`,
-              { sectionId: section.id }
+              // The run compiles the report itself in phase 3. Without this the
+              // API would rebuild the whole panel report after every section.
+              { sectionId: section.id, skipReportRefresh: true }
             )
             const score = result?.data?.review?.score
             patchStep(key, {
@@ -283,14 +285,35 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
       }
 
       say('Compiling the panel report: comparing sections against each other, checking the budget against the workplan, and forming the funding verdict…')
-      try {
-        await axios.post(`/api/reviewer/calls/${callId}/final-review`)
-        patchStep('report', { status: 'done' })
-      } catch (reportError) {
-        patchStep('report', {
-          status: 'failed',
-          detail: reportError?.response?.data?.error || 'Could not compile the report',
-        })
+
+      // The report gets the same rate-limit patience the sections get. It used
+      // to be a single unprotected attempt, so one transient 429 at the very
+      // last step discarded the value of every section review that preceded it.
+      let reportOk = false
+      let reportFailure = ''
+
+      for (let attempt = 1; attempt <= REVIEW_MAX_ATTEMPTS && !reportOk; attempt++) {
+        try {
+          await axios.post(`/api/reviewer/calls/${callId}/final-review`)
+          patchStep('report', { status: 'done' })
+          reportOk = true
+        } catch (reportError) {
+          if (isRateLimited(reportError) && attempt < REVIEW_MAX_ATTEMPTS) {
+            const wait = retryAfterMs(reportError) + RATE_LIMIT_BUFFER_MS
+            patchStep('report', { status: 'active', detail: 'Rate limited — waiting' })
+            await waitVisibly(
+              wait,
+              `The model is rate limited. Waiting ${Math.ceil(wait / 1000)}s, then compiling the report again (attempt ${attempt + 1} of ${REVIEW_MAX_ATTEMPTS}).`
+            )
+            if (cancelRef.current) return finish('cancelled', 'Stopped.')
+            continue
+          }
+          reportFailure = reportError?.response?.data?.error || 'Could not compile the report'
+        }
+      }
+
+      if (!reportOk) {
+        patchStep('report', { status: 'failed', detail: reportFailure })
         setError('The sections were reviewed, but the panel report could not be compiled. You can retry it from the workspace.')
         finish('error', 'Sections reviewed; the report failed.')
         if (onFinished) await onFinished({ reviewed, failed, reportOk: false })

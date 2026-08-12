@@ -13,7 +13,9 @@ export async function POST(
   if ('response' in auth) return auth.response;
 
   try {
-    const detail = await fundingDocumentService.activateDocument(params.id, params.documentId, auth.operator);
+    const body = await request.json().catch(() => ({}));
+    const active = body?.active === false ? false : true;
+    const detail = await fundingDocumentService.activateDocument(params.id, params.documentId, auth.operator, active);
     return NextResponse.json(detail);
   } catch (error) {
     return NextResponse.json(

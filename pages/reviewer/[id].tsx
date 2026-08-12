@@ -9,8 +9,10 @@ import ReviewerShell from "@/components/reviewer/ReviewerShell";
 import ReviewerProgressSpine from "@/components/reviewer/ReviewerProgressSpine";
 import ScoreBar from "@/components/reviewer/ScoreBar";
 import AutoReviewPanel from "@/components/reviewer/AutoReviewPanel";
+import ReviewerNextStep from "@/components/reviewer/ReviewerNextStep";
 import useAutoReview from "@/components/reviewer/useAutoReview";
 import { ReviewerProse } from "@/components/reviewer/ReviewerText";
+import { useAuth } from "@/lib/auth-context";
 import {
   countReviewerSections,
   groupReviewerSections,
@@ -25,6 +27,7 @@ const STATUS_BADGE = {
 
 export default function ReviewerCallDetail() {
   const { status } = useSession();
+  const { authFetch } = useAuth();
   const router = useRouter();
   const { id } = router.query;
 
@@ -33,6 +36,7 @@ export default function ReviewerCallDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const [reviewingId, setReviewingId] = useState(null);
 
   useEffect(() => {
@@ -106,13 +110,54 @@ export default function ReviewerCallDetail() {
     }
   };
 
+  // The export refreshes a stale report server-side before building the
+  // document, so this can take a moment on a workspace with new revisions.
+  const handleExportAtr = async () => {
+    if (!id) return;
+    try {
+      setExportBusy(true);
+      const response = await authFetch(`/api/reviewer/calls/${id}/export-atr`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Server error ${response.status}`);
+      }
+
+      const regenerated = response.headers.get("X-Reviewer-Report-Regenerated") === "1";
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `ATR-${call?.project_title || id}.docx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      if (regenerated) {
+        await refreshCall();
+        toast.success("Report brought up to date, then exported");
+      } else {
+        toast.success("Action Taken Report downloaded");
+      }
+    } catch (err) {
+      toast.error(err?.message || "Couldn't export the report.");
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
   const handleReviewSection = async (sectionId) => {
     if (reviewingId) return;
     try {
       setReviewingId(sectionId);
-      await axios.post(`/api/reviewer/calls/${id}/sections/${sectionId}/review`);
+      const response = await axios.post(`/api/reviewer/calls/${id}/sections/${sectionId}/review`);
       await fetchSections();
-      toast.success("Section reviewed");
+      if (response?.data?.report_refreshed) {
+        await refreshCall();
+        toast.success("Section reviewed and the panel report updated");
+      } else {
+        toast.success("Section reviewed");
+      }
     } catch (err) {
       const message = err?.response?.data?.error || "Couldn't review that section.";
       toast.error(message);
@@ -161,7 +206,10 @@ export default function ReviewerCallDetail() {
       title="Overview"
       actions={
         <>
-          {counts.total > 0 && !autoRun.running && (
+          {/* Only offered while there is review work outstanding. A finished
+              workspace used to show "Continue review" in the header, which
+              reads as unfinished work that does not exist. */}
+          {counts.total > 0 && counts.reviewed < counts.total && !autoRun.running && (
             <button
               type="button"
               onClick={() => autoRun.start({ rerunAll: false })}
@@ -182,75 +230,73 @@ export default function ReviewerCallDetail() {
           onOpenReport={() => router.push(`/reviewer/${id}/final-review`)}
         />
 
+        {/* The shell's rail now carries the same three stages with the same
+            live status, so on desktop this would be a third rendering of one
+            fact. The rail is collapsed behind a button below `lg`, so the
+            spine stays as the at-a-glance status there. */}
         {autoRun.phase === "idle" && (
-          <ReviewerProgressSpine
+          <div className="lg:hidden">
+            <ReviewerProgressSpine
+              callId={id}
+              sections={sections}
+              overallReviewJson={report}
+              onGenerateReport={handleGenerateReport}
+              reportBusy={reportBusy}
+            />
+          </div>
+        )}
+
+        {/* One card, one action. This replaced a pair of panels that between
+            them offered four buttons and left the user to work out which of
+            them the workspace actually needed next. */}
+        {autoRun.phase === "idle" && (
+          <ReviewerNextStep
             callId={id}
             sections={sections}
             overallReviewJson={report}
+            onRunReview={() => autoRun.start({ rerunAll: false })}
             onGenerateReport={handleGenerateReport}
+            onExportAtr={handleExportAtr}
             reportBusy={reportBusy}
+            exportBusy={exportBusy}
           />
         )}
 
-        {/* The one-action path. Everything below stays available for working on
-            a single section, but nobody has to assemble the run by hand. */}
-        {counts.total > 0 && autoRun.phase === "idle" && (
-          <section className="nk-panel flex flex-wrap items-center justify-between gap-4 p-5">
-            <div className="min-w-0">
-              <h2 className="nk-title">
-                {counts.reviewed === 0
-                  ? "Review the whole proposal"
-                  : counts.reviewed < counts.total
-                    ? `Review the remaining ${counts.total - counts.reviewed} section${counts.total - counts.reviewed === 1 ? "" : "s"}`
-                    : "Everything is reviewed"}
-              </h2>
-              <p className="nk-sub mt-1 max-w-prose">
-                Writes the context summaries, reviews every section in proposal order
-                against this call's rules, then compiles the panel report with the
-                cross-section checks. Takes a few minutes.
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              {counts.reviewed > 0 && (
-                <button
-                  type="button"
-                  onClick={() => autoRun.start({ rerunAll: true })}
-                  className="nk-btn-secondary nk-btn-sm"
-                >
-                  Redo from scratch
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => autoRun.start({ rerunAll: false })}
-                className="nk-btn-primary nk-btn-sm"
-              >
-                {counts.reviewed === 0
-                  ? "Run full review"
-                  : counts.reviewed < counts.total
-                    ? "Continue review"
-                    : "Rebuild the report"}
-              </button>
-            </div>
-          </section>
-        )}
-
         {counts.total === 0 ? (
-          <section className="nk-panel p-10 text-center">
-            <h2 className="nk-title">Start with your proposal</h2>
-            <p className="nk-sub mx-auto mt-2 max-w-prose">
-              Import the whole document and it will be split into the sections this call
-              requires — you can correct anything placed wrongly before it saves. Or add
-              sections one at a time.
+          <section className="nk-panel p-6">
+            <h2 className="nk-title">How a review works</h2>
+            <ol className="mt-4 grid gap-3 sm:grid-cols-3">
+              {[
+                {
+                  n: 1,
+                  title: "Add your proposal",
+                  body: "Import the document once; it is split into this call's sections.",
+                },
+                {
+                  n: 2,
+                  title: "Run the review",
+                  body: "Every section is scored against the call's own rules and criteria.",
+                },
+                {
+                  n: 3,
+                  title: "Read the verdict",
+                  body: "A panel report with the funding recommendation and ranked fixes.",
+                },
+              ].map(step => (
+                <li key={step.n} className="nk-panel-quiet px-4 py-3">
+                  <div className="nk-eyebrow">Step {step.n}</div>
+                  <div className="mt-1 text-[13px] font-medium text-nickel-900">{step.title}</div>
+                  <p className="mt-1 text-[12.5px] leading-5 text-nickel-600">{step.body}</p>
+                </li>
+              ))}
+            </ol>
+            <p className="nk-sub mt-4">
+              The rules this call is judged against are already loaded —{" "}
+              <Link href={`/reviewer/${id}/call-analysis`} className="text-cobalt-700 hover:underline">
+                review them first
+              </Link>{" "}
+              if you want to check them before you start.
             </p>
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-              <Link href={`/reviewer/${id}/import-proposal`} className="nk-btn-primary nk-btn-sm">
-                Import full proposal
-              </Link>
-              <Link href={`/reviewer/${id}/section/new`} className="nk-btn-secondary nk-btn-sm">
-                Add one section
-              </Link>
-            </div>
           </section>
         ) : (
           <section className="nk-panel">
@@ -262,9 +308,23 @@ export default function ReviewerCallDetail() {
                   {counts.stale > 0 && ` · ${counts.stale} edited since review`}
                 </p>
               </div>
-              {unreviewed.length > 0 && (
-                <span className="nk-badge">{unreviewed.length} awaiting review</span>
-              )}
+              <div className="flex items-center gap-2">
+                {unreviewed.length > 0 && (
+                  <span className="nk-badge">{unreviewed.length} awaiting review</span>
+                )}
+                {/* Destructive-ish and rarely wanted, so it sits with the
+                    sections it discards rather than beside the primary action. */}
+                {counts.reviewed > 0 && autoRun.phase === "idle" && (
+                  <button
+                    type="button"
+                    onClick={() => autoRun.start({ rerunAll: true })}
+                    className="nk-btn-ghost nk-btn-xs"
+                    title="Discard every stored review and score all sections again"
+                  >
+                    Redo from scratch
+                  </button>
+                )}
+              </div>
             </div>
 
             <ul className="divide-y divide-nickel-200">
