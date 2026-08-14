@@ -21,6 +21,7 @@ export interface User {
     | 'MEMBER'
     | 'CALL_ASSIGNER'
     | 'CALL_ADMIN'
+    | 'QUALITY_AUDITOR'
   )[]
   ati_id: string | null
   /** EVENT/workshop accounts: ISO timestamp when access ends */
@@ -592,6 +593,7 @@ export function useRoleAccess() {
     isManager: hasAnyRole(user, ['MANAGER']),
     isAnalyst: hasAnyRole(user, ['ANALYST']),
     isViewer: hasAnyRole(user, ['VIEWER']),
+    isQualityAuditor: hasAnyRole(user, ['QUALITY_AUDITOR']),
 
     // Context-aware permissions (consider tenant type)
     canManageUsers: hasPermission(user, 'manage_users', tenantType),
@@ -601,6 +603,7 @@ export function useRoleAccess() {
     canViewAnalytics: hasPermission(user, 'view_analytics', tenantType),
     canCreateProjects: hasPermission(user, 'create_projects', tenantType),
     canUseProduct: hasPermission(user, 'access_novelty_search', tenantType),
+    canQualityAudit: hasPermission(user, 'quality_audit', tenantType),
 
     // Additional helpers for multiple role checks
     hasRoles: (roles: string[]) => hasAnyRole(user, roles),

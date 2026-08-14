@@ -331,6 +331,21 @@ export default function Header() {
                       </>
                     )}
 
+                    {/* Quality Audit — QUALITY_AUDITOR tag or OWNER/ADMIN */}
+                    {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN') || user.roles?.includes('QUALITY_AUDITOR' as any)) && (
+                      <>
+                        <div className="border-t border-gpt-gray-200 my-1"></div>
+                        <Link
+                          href="/quality-audit"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>🔍</span>
+                          <span>Quality Audit</span>
+                        </Link>
+                      </>
+                    )}
+
                     {/* Tenant Admin Links — OWNER/ADMIN see everything; CALL_ADMIN sees the scoped surfaces (faculty/org tree/calls). */}
                     {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN') || user.roles?.includes('CALL_ADMIN' as any)) && (
                       <>

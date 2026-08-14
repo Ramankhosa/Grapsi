@@ -13,6 +13,7 @@ export type Permission =
   | 'create_own_persona'       // Can create private personas
   | 'create_org_persona'       // Can create organization-wide personas
   | 'manage_org_personas'      // Can edit/delete any org persona
+  | 'quality_audit'            // Can view all reviews/reports across the tenant
 
 /**
  * Context-aware permission checking that considers tenant type
@@ -72,6 +73,9 @@ export function hasPermission(user: User | null, permission: Permission, tenantT
     case 'manage_org_personas':
       // Only admins can edit/delete organization personas
       return user.roles?.some(role => ['OWNER', 'ADMIN'].includes(role)) || false
+
+    case 'quality_audit':
+      return user.roles?.some(role => ['OWNER', 'ADMIN', 'QUALITY_AUDITOR'].includes(role)) || false
 
     default:
       return false

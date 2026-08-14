@@ -78,7 +78,7 @@ export interface UserWithTeams {
 // Role hierarchy for permission checks. Additive tags don't participate in
 // the hierarchy (a CALL_ASSIGNER is not "above" a VIEWER); they resolve to 0
 // so getHighestRole falls through to whichever hierarchy role the user has.
-const ROLE_HIERARCHY: Record<UserRole, number> = {
+const ROLE_HIERARCHY: Record<string, number> = {
   SUPER_ADMIN: 100,
   SUPER_ADMIN_VIEWER: 90,
   OWNER: 80,
@@ -89,6 +89,7 @@ const ROLE_HIERARCHY: Record<UserRole, number> = {
   MEMBER: 5,
   CALL_ASSIGNER: 0,
   CALL_ADMIN: 0,
+  QUALITY_AUDITOR: 0,
 }
 
 // Roles that can manage users
@@ -103,7 +104,7 @@ const USER_MANAGEMENT_ROLES: UserRole[] = ['OWNER', 'ADMIN']
  * the schema on shared dev boxes; the underlying Postgres enum has these
  * values via migration, so the string cast is safe.
  */
-const ADDITIVE_ROLES: UserRole[] = ['MEMBER', 'CALL_ASSIGNER', 'CALL_ADMIN'] as UserRole[]
+const ADDITIVE_ROLES: UserRole[] = ['MEMBER', 'CALL_ASSIGNER', 'CALL_ADMIN', 'QUALITY_AUDITOR'] as UserRole[]
 /**
  * Roles anyone below OWNER must not grant. Prevents a CALL_ADMIN (which
  * gates the scoped admin surface) from minting more admins or another

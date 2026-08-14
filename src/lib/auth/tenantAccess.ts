@@ -21,6 +21,8 @@ export const TENANT_ADMIN_ROLES = ['OWNER', 'ADMIN']
 export const TENANT_SCOPED_ADMIN_ROLES = ['OWNER', 'ADMIN', 'CALL_ADMIN']
 /** Roles allowed to assign a funding call to a faculty member. */
 export const TENANT_ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'CALL_ASSIGNER', 'CALL_ADMIN']
+/** Roles allowed to view cross-project reviews/reports for quality oversight. */
+export const TENANT_AUDITOR_ROLES = ['OWNER', 'ADMIN', 'QUALITY_AUDITOR']
 
 export interface TenantContext {
   user: any
@@ -28,6 +30,7 @@ export interface TenantContext {
   isAdmin: boolean
   isAssigner: boolean
   isCallAdmin: boolean
+  isQualityAuditor: boolean
 }
 
 export interface TenantAccessError {
@@ -60,6 +63,7 @@ export async function requireTenantUser(
     isAdmin: isSuperAdmin || hasAnyRole(roles, TENANT_ADMIN_ROLES),
     isAssigner: isSuperAdmin || hasAnyRole(roles, TENANT_ASSIGNER_ROLES),
     isCallAdmin: isSuperAdmin || hasAnyRole(roles, TENANT_SCOPED_ADMIN_ROLES),
+    isQualityAuditor: isSuperAdmin || hasAnyRole(roles, TENANT_AUDITOR_ROLES),
   }
 }
 

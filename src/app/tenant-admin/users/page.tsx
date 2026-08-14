@@ -42,16 +42,18 @@ const ROLE_COLORS: Record<string, string> = {
   MEMBER: 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200',
   CALL_ASSIGNER: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
   CALL_ADMIN: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300',
+  QUALITY_AUDITOR: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300',
 }
 
 /** Hierarchy slot (replaces the array); one at a time. */
 const HIERARCHY_ROLES = ['ADMIN', 'MANAGER', 'ANALYST', 'VIEWER'] as const
 /** Additive tags that can be mixed freely with a hierarchy role. */
-const ADDITIVE_ROLES = ['CALL_ADMIN', 'CALL_ASSIGNER', 'MEMBER'] as const
+const ADDITIVE_ROLES = ['CALL_ADMIN', 'CALL_ASSIGNER', 'MEMBER', 'QUALITY_AUDITOR'] as const
 const ADDITIVE_ROLE_HINTS: Record<string, string> = {
   CALL_ADMIN: 'Scoped tenant admin — imports and manages funding calls, faculty roster, and org tree. Cannot change user roles.',
   CALL_ASSIGNER: 'Can assign funding calls to faculty and view assignment dashboards.',
   MEMBER: 'Basic tenant member — sees published calls, gets no admin surfaces.',
+  QUALITY_AUDITOR: 'Read-only access to all reviews and reports across the tenant for quality oversight.',
 }
 
 export default function TenantAdminUsersPage() {

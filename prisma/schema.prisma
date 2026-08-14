@@ -26,6 +26,7 @@ enum UserRole {
   MEMBER
   CALL_ASSIGNER
   CALL_ADMIN
+  QUALITY_AUDITOR
 }
 
 enum UserStatus {
