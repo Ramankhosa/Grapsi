@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
-import { SECTION_WORD_LIMITS, DEFAULT_LIMITS, MAX_CHARS } from './limits/route'
+import { SECTION_WORD_LIMITS, DEFAULT_LIMITS, MAX_CHARS } from './limits/constants'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
