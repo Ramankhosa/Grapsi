@@ -1,7 +1,10 @@
-import { SITE_URL } from './mailer'
+import { SITE_URL, MAIL_FROM_NAME } from './mailer'
 
+// The name shown inside every email — the header chip, subject lines, "Welcome
+// to …" copy. Tracks the sender identity (MAIL_FROM_NAME) so the From line and
+// the body never disagree about who sent it.
 const brand = {
-  name: 'PatentNest',
+  name: MAIL_FROM_NAME,
   primary: '#4C5EFF',
   gray700: '#334155',
   gray500: '#64748B',
@@ -242,6 +245,243 @@ export function fundingAlertDigestTemplate(params: {
   return {
     subject: `${count} new funding ${count === 1 ? 'match' : 'matches'} for your research`,
     html,
+    text,
+  }
+}
+
+// --- Funding department -----------------------------------------------------
+// Assignment mail used to be hand-rolled SendGrid HTML inside the route. It
+// lives here now so the department's four emails share one look and one sender
+// with the rest of the product.
+
+const ASSIGNMENTS_URL = `${SITE_URL}/assignments`
+
+function shell(heading: string, body: string) {
+  return `
+  <div style="font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 640px; margin: 0 auto; padding: 24px; background: #ffffff">
+    <div style="text-align:center; margin-bottom: 16px">
+      <div style="display:inline-block; background:${brand.primary}; color:#fff; padding:8px 12px; border-radius:12px; font-weight:600;">${brand.name}</div>
+    </div>
+    <h2 style="color:${brand.gray700}; margin: 12px 0 8px">${heading}</h2>
+    ${body}
+  </div>`
+}
+
+function primaryButton(url: string, label: string) {
+  return `
+    <div style="margin:24px 0">
+      <a href="${url}" style="background:${brand.primary}; color:#fff; text-decoration:none; padding:12px 20px; border-radius:10px; display:inline-block; font-weight:600">${label}</a>
+    </div>`
+}
+
+function statLine(label: string, value: number) {
+  return `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong style="color:${brand.gray700}">${value}</strong> ${escapeHtml(label)}</p>`
+}
+
+/** A funding call has been handed to this faculty member. */
+export function assignmentNotificationTemplate(params: {
+  email: string
+  name?: string | null
+  assignerName: string
+  callTitle: string
+  agency: string | null
+  deadline: string | null
+  message: string | null
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const title = escapeHtml(params.callTitle)
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">${escapeHtml(params.assignerName)} has asked you to consider this funding call.</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${title}</div>
+      ${params.agency ? `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0">${escapeHtml(params.agency)}</p>` : ''}
+      ${params.deadline ? `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Internal deadline:</strong> ${escapeHtml(params.deadline)}</p>` : ''}
+      ${params.message ? `<p style="border-left:3px solid #E2E8F0; margin:12px 0 0; padding-left:12px; color:${brand.gray500}; font-size:14px">${escapeHtml(params.message)}</p>` : ''}
+    </div>
+    <p style="color:${brand.gray500}; line-height:1.6">Please let the funding department know whether you will take it up — you can accept or decline in one click.</p>
+    ${primaryButton(ASSIGNMENTS_URL, 'Respond to this assignment')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${ASSIGNMENTS_URL}" style="color:${brand.primary}">${ASSIGNMENTS_URL}</a>
+    </p>`
+  const text =
+    `Hi ${displayName}, ${params.assignerName} assigned you a funding call: ${params.callTitle}.` +
+    `${params.deadline ? ` Internal deadline ${params.deadline}.` : ''}` +
+    `${params.message ? ` Note: ${params.message}` : ''}` +
+    ` Accept or decline: ${ASSIGNMENTS_URL}`
+  return {
+    subject: `You have been assigned: ${params.callTitle.slice(0, 80)}`,
+    html: shell('New funding call assignment', body),
+    text,
+  }
+}
+
+/** A scheduled nudge from the funding department about an open assignment. */
+export function assignmentReminderTemplate(params: {
+  email: string
+  name?: string | null
+  callTitle: string
+  deadline: string | null
+  note: string | null
+  fromName: string | null
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">A reminder about the funding call you were assigned:</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.callTitle)}</div>
+      ${params.deadline ? `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Internal deadline:</strong> ${escapeHtml(params.deadline)}</p>` : ''}
+      ${params.note ? `<p style="border-left:3px solid #E2E8F0; margin:12px 0 0; padding-left:12px; color:${brand.gray500}; font-size:14px">${escapeHtml(params.note)}</p>` : ''}
+    </div>
+    ${primaryButton(ASSIGNMENTS_URL, 'Open my assignments')}
+    <p style="color:${brand.gray500}; font-size:12px">Sent by ${escapeHtml(params.fromName || 'the funding department')} at your institution.</p>`
+  const text =
+    `Hi ${displayName}, a reminder about ${params.callTitle}.` +
+    `${params.deadline ? ` Internal deadline ${params.deadline}.` : ''}` +
+    `${params.note ? ` ${params.note}` : ''} ${ASSIGNMENTS_URL}`
+  return {
+    subject: `Reminder: ${params.callTitle.slice(0, 80)}`,
+    html: shell('A reminder from the funding department', body),
+    text,
+  }
+}
+
+/** Weekly worklist for one department member. */
+export function fundingDeptWeeklyMemberTemplate(params: {
+  email: string
+  name?: string | null
+  active: number
+  missed: number
+  declined: number
+  dueSoon: Array<{ callTitle: string; facultyName: string | null; deadline: string | null }>
+  overdueReminders: Array<{ note: string; facultyName: string | null }>
+  openCalls: Array<{ title: string; closesAt: string | null }>
+  dashboardUrl: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const listBlock = (heading: string, items: string[]) =>
+    items.length === 0
+      ? ''
+      : `<h3 style="color:${brand.gray700}; font-size:15px; margin:20px 0 6px">${escapeHtml(heading)}</h3>
+         <ul style="color:${brand.gray500}; font-size:14px; line-height:1.7; padding-left:18px; margin:0">${items
+           .map((item) => `<li>${item}</li>`)
+           .join('')}</ul>`
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName}, here is where your funding calls stand this week.</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      ${statLine('active assignments', params.active)}
+      ${statLine('past their internal deadline', params.missed)}
+      ${statLine('declined and needing a new home', params.declined)}
+    </div>
+    ${listBlock(
+      'Deadlines in the next 30 days',
+      params.dueSoon.map(
+        (item) =>
+          `${escapeHtml(item.callTitle)}${item.facultyName ? ` — ${escapeHtml(item.facultyName)}` : ''}${item.deadline ? ` (${escapeHtml(item.deadline)})` : ''}`
+      )
+    )}
+    ${listBlock(
+      'Follow-ups you scheduled that are now due',
+      params.overdueReminders.map(
+        (item) =>
+          `${escapeHtml(item.note.slice(0, 120))}${item.facultyName ? ` — ${escapeHtml(item.facultyName)}` : ''}`
+      )
+    )}
+    ${listBlock(
+      'Closing soon with nobody from your schools on them',
+      params.openCalls.map(
+        (item) => `${escapeHtml(item.title)}${item.closesAt ? ` (closes ${escapeHtml(item.closesAt)})` : ''}`
+      )
+    )}
+    ${primaryButton(params.dashboardUrl, 'Open my department dashboard')}`
+
+  const text =
+    `Hi ${displayName}. Active: ${params.active}. Overdue: ${params.missed}. Declined: ${params.declined}. ` +
+    `${params.dueSoon.length} deadline(s) in the next 30 days, ${params.overdueReminders.length} follow-up(s) due, ` +
+    `${params.openCalls.length} call(s) closing soon with nobody assigned. ${params.dashboardUrl}`
+
+  return {
+    subject: `Your funding calls this week: ${params.active} active, ${params.missed} overdue`,
+    html: shell('Your week in the funding department', body),
+    text,
+  }
+}
+
+/** Weekly department rollup for the head. */
+export function fundingDeptWeeklyHeadTemplate(params: {
+  email: string
+  name?: string | null
+  memberRows: Array<{
+    name: string
+    schoolCount: number
+    active: number
+    submitted: number
+    missed: number
+    declined: number
+    followUps: number
+  }>
+  uncoveredSchools: string[]
+  overviewUrl: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const cell = (value: string | number, bold = false) =>
+    `<td style="padding:8px 10px; border-bottom:1px solid #E2E8F0; color:${bold ? brand.gray700 : brand.gray500}; font-size:14px; ${bold ? 'font-weight:600;' : ''}">${escapeHtml(String(value))}</td>`
+
+  const table = `
+    <table style="width:100%; border-collapse:collapse; margin:16px 0">
+      <thead>
+        <tr>
+          ${['Member', 'Schools', 'Active', 'Submitted', 'Overdue', 'Declined', 'Follow-ups']
+            .map(
+              (heading) =>
+                `<th style="text-align:left; padding:8px 10px; border-bottom:2px solid #E2E8F0; color:${brand.gray700}; font-size:12px; text-transform:uppercase; letter-spacing:0.04em">${heading}</th>`
+            )
+            .join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${params.memberRows
+          .map(
+            (row) => `<tr>
+              ${cell(row.name, true)}${cell(row.schoolCount)}${cell(row.active)}${cell(row.submitted)}${cell(row.missed)}${cell(row.declined)}${cell(row.followUps)}
+            </tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>`
+
+  const uncovered =
+    params.uncoveredSchools.length === 0
+      ? `<p style="color:${brand.gray500}; font-size:14px">Every school has a member looking after it.</p>`
+      : `<div style="border:1px solid #FCA5A5; background:#FEF2F2; border-radius:12px; padding:14px 16px; margin:16px 0">
+           <div style="color:#B91C1C; font-weight:600; font-size:14px; margin-bottom:4px">${params.uncoveredSchools.length} school${params.uncoveredSchools.length === 1 ? '' : 's'} with nobody assigned</div>
+           <p style="color:${brand.gray500}; font-size:13px; margin:0">${params.uncoveredSchools.map(escapeHtml).join(', ')}</p>
+         </div>`
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName}, here is how the department is tracking this week.</p>
+    ${table}
+    ${uncovered}
+    ${primaryButton(params.overviewUrl, 'Open the department overview')}`
+
+  const text =
+    `Hi ${displayName}. Department this week:\n` +
+    params.memberRows
+      .map(
+        (row) =>
+          `- ${row.name}: ${row.active} active, ${row.submitted} submitted, ${row.missed} overdue, ${row.declined} declined, ${row.followUps} follow-ups`
+      )
+      .join('\n') +
+    (params.uncoveredSchools.length > 0
+      ? `\nUncovered schools: ${params.uncoveredSchools.join(', ')}`
+      : '') +
+    `\n${params.overviewUrl}`
+
+  return {
+    subject: `Funding department weekly review${params.uncoveredSchools.length > 0 ? ` — ${params.uncoveredSchools.length} school(s) uncovered` : ''}`,
+    html: shell('Funding department: weekly review', body),
     text,
   }
 }

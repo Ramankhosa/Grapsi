@@ -14,34 +14,60 @@ import prisma from '../prisma';
  *       -> scoped to the union of those units (plus descendants for SUBTREE
  *          grants). Capabilities come from the grants, so a head can assign
  *          without also being CALL_ASSIGNER — that is the delegation.
- *   MANAGER / CALL_ASSIGNER with no grant, tenant.org_scope_enforced = false
+ *   Active FundingDeptMember with >= 1 covered school
+ *       -> scoped to those schools and their descendants, with assign and
+ *          report rights. The department head covers every school any member
+ *          covers, which is what makes their oversight views dept-wide.
+ *   MANAGER / CALL_ASSIGNER with no grant and no coverage,
+ *   tenant.org_scope_enforced = false
  *       -> tenant-wide. This is TODAY'S behaviour and the default.
- *   MANAGER / CALL_ASSIGNER with no grant, org_scope_enforced = true
+ *   MANAGER / CALL_ASSIGNER with no grant and no coverage,
+ *   org_scope_enforced = true
  *       -> no managed scope; cannot assign.
  *   Anyone else -> no managed scope.
  *
- * A tenant with zero rows in org_unit_managers and the flag off therefore
- * behaves exactly as it did before this feature existed.
+ * A tenant with zero rows in org_unit_managers and funding_dept_members and the
+ * flag off therefore behaves exactly as it did before these features existed.
  *
- * Cost is two indexed queries (grants, then subtree expansion). Subtree user
- * ids are deliberately NEVER materialized — at 1000+ faculty that would blow up
- * every query. Membership is always expressed as a unit-id predicate.
+ * Note the direction of the department rule: coverage NARROWS a user who would
+ * otherwise be a tenant-wide legacy assigner, exactly as a head grant does. That
+ * is why department membership is not a UserRole — a role would widen instead,
+ * and would keep widening after the schools were taken away.
+ *
+ * Cost is three indexed queries (grants, coverage, then one shared subtree
+ * expansion). Subtree user ids are deliberately NEVER materialized — at 1000+
+ * faculty that would blow up every query. Membership is always expressed as a
+ * unit-id predicate.
  */
 
 const TENANT_WIDE_ROLES = ['SUPER_ADMIN', 'OWNER', 'ADMIN', 'CALL_ADMIN'];
 /** Legacy tenant-wide assigners, narrowed only when a tenant opts in. */
 const LEGACY_ASSIGNER_ROLES = ['MANAGER', 'CALL_ASSIGNER'];
 
+/** Funding Department standing, as far as org scoping is concerned. */
+export interface FundingDeptScope {
+  isMember: boolean;
+  isHead: boolean;
+  memberId: string | null;
+  /**
+   * Schools reached through department coverage, before subtree expansion.
+   * For a member that is their own rota; for the head it is every school the
+   * department covers. For "which schools am I personally responsible for",
+   * read the membership record (GET /api/funding-dept/me), not this.
+   */
+  schoolUnitIds: string[];
+}
+
 export interface ManagedScope {
   tenantId: string;
   userId: string;
   /** No org narrowing at all — every predicate helper becomes a no-op. */
   isTenantWide: boolean;
-  /** Holds at least one active manager grant. */
+  /** Holds at least one active manager grant, or covers at least one school. */
   isHead: boolean;
-  /** Units directly granted, without subtree expansion. */
+  /** Units directly granted or covered, without subtree expansion. */
   headUnitIds: string[];
-  /** Granted units plus descendants of SUBTREE grants. Empty when tenant-wide. */
+  /** Those units plus descendants of SUBTREE grants and covered schools. Empty when tenant-wide. */
   managedUnitIds: string[];
   canAssign: boolean;
   canViewReports: boolean;
@@ -49,7 +75,20 @@ export interface ManagedScope {
   canManageMembers: boolean;
   /** Unit stamped onto assignments this user creates, for reporting. */
   primaryUnitId: string | null;
+  /**
+   * Only populated for non-tenant-wide callers: tenant-wide admins return
+   * before the lookup runs, so routes that need an admin's own membership ask
+   * GET /api/funding-dept/me instead of reading it from here.
+   */
+  fundingDept: FundingDeptScope;
 }
+
+const NO_FUNDING_DEPT: FundingDeptScope = {
+  isMember: false,
+  isHead: false,
+  memberId: null,
+  schoolUnitIds: [],
+};
 
 export function emptyScope(tenantId: string, userId: string): ManagedScope {
   return {
@@ -64,6 +103,7 @@ export function emptyScope(tenantId: string, userId: string): ManagedScope {
     canManageStructure: false,
     canManageMembers: false,
     primaryUnitId: null,
+    fundingDept: NO_FUNDING_DEPT,
   };
 }
 
@@ -93,42 +133,78 @@ export async function resolveManagedScope(input: {
     };
   }
 
-  const grants = await prisma.orgUnitManager.findMany({
-    where: {
-      tenant_id: tenantId,
-      user_id: userId,
-      is_active: true,
-      org_unit: { is_active: true },
-    },
-    select: {
-      org_unit_id: true,
-      scope: true,
-      can_assign: true,
-      can_view_reports: true,
-      can_manage_structure: true,
-      can_manage_members: true,
-    },
-    orderBy: { created_at: 'asc' },
-  });
+  const [grants, membership] = await Promise.all([
+    prisma.orgUnitManager.findMany({
+      where: {
+        tenant_id: tenantId,
+        user_id: userId,
+        is_active: true,
+        org_unit: { is_active: true },
+      },
+      select: {
+        org_unit_id: true,
+        scope: true,
+        can_assign: true,
+        can_view_reports: true,
+        can_manage_structure: true,
+        can_manage_members: true,
+      },
+      orderBy: { created_at: 'asc' },
+    }),
+    prisma.fundingDeptMember.findFirst({
+      where: { tenant_id: tenantId, user_id: userId, is_active: true },
+      select: { id: true, is_head: true },
+    }),
+  ]);
 
-  if (grants.length === 0) {
-    // No headship. Legacy tenant-wide assigners keep their reach unless this
-    // tenant has explicitly opted into lockdown.
+  // The head answers for the whole department, so their reach is every school
+  // any active member covers — that single difference is what makes the
+  // oversight dashboards dept-wide without a second code path.
+  const coverage = membership
+    ? await prisma.fundingDeptSchoolAssignment.findMany({
+        where: membership.is_head
+          ? { tenant_id: tenantId, member: { is_active: true } }
+          : { tenant_id: tenantId, member_id: membership.id },
+        select: { org_unit_id: true },
+        orderBy: { created_at: 'asc' },
+      })
+    : [];
+  const deptUnitIds = coverage.map((row) => row.org_unit_id);
+
+  const fundingDept: FundingDeptScope = membership
+    ? {
+        isMember: true,
+        isHead: membership.is_head,
+        memberId: membership.id,
+        schoolUnitIds: deptUnitIds,
+      }
+    : NO_FUNDING_DEPT;
+
+  if (grants.length === 0 && deptUnitIds.length === 0) {
+    // No headship and no schools to look after. Legacy tenant-wide assigners
+    // keep their reach unless this tenant has explicitly opted into lockdown.
     if (!enforceScope && hasAnyRole(roles, LEGACY_ASSIGNER_ROLES)) {
       return {
         ...base,
         isTenantWide: true,
         canAssign: true,
         canViewReports: true,
+        fundingDept,
       };
     }
-    return base;
+    return { ...base, fundingDept };
   }
 
-  const headUnitIds = grants.map((grant) => grant.org_unit_id);
-  const subtreeRoots = grants
-    .filter((grant) => grant.scope === 'SUBTREE')
-    .map((grant) => grant.org_unit_id);
+  const grantUnitIds = grants.map((grant) => grant.org_unit_id);
+  const headUnitIds = Array.from(new Set([...grantUnitIds, ...deptUnitIds]));
+  // A covered school always includes its departments: chasing a school means
+  // chasing everyone under it.
+  const subtreeRoots = Array.from(
+    new Set([
+      ...grants.filter((grant) => grant.scope === 'SUBTREE').map((grant) => grant.org_unit_id),
+      ...deptUnitIds,
+    ])
+  );
 
   const managed = new Set(headUnitIds);
   if (subtreeRoots.length > 0) {
@@ -141,17 +217,25 @@ export async function resolveManagedScope(input: {
     for (const row of rows) managed.add(row.id);
   }
 
+  const hasCoverage = deptUnitIds.length > 0;
+
   return {
     ...base,
     isHead: true,
     headUnitIds,
     managedUnitIds: Array.from(managed),
-    canAssign: grants.some((grant) => grant.can_assign),
-    canViewReports: grants.some((grant) => grant.can_view_reports),
+    canAssign: grants.some((grant) => grant.can_assign) || hasCoverage,
+    canViewReports: grants.some((grant) => grant.can_view_reports) || hasCoverage,
+    // Structural rights stay with named heads. Covering a school is a chasing
+    // duty, not permission to rename it or move people between units.
     canManageStructure: grants.some((grant) => grant.can_manage_structure),
     canManageMembers: grants.some((grant) => grant.can_manage_members),
     // The earliest grant is the unit this person is understood to act for.
-    primaryUnitId: headUnitIds[0] || null,
+    // Department coverage deliberately does NOT set this: one of four covered
+    // schools is an arbitrary choice, so resolveAssignerUnitId falls back to
+    // the member's own placement instead of inventing an attribution.
+    primaryUnitId: grantUnitIds[0] || null,
+    fundingDept,
   };
 }
 

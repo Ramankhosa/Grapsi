@@ -8,7 +8,20 @@ export interface User {
   user_id: string
   email: string
   tenant_id: string | null
-  roles: ('SUPER_ADMIN' | 'SUPER_ADMIN_VIEWER' | 'OWNER' | 'ADMIN' | 'MANAGER' | 'ANALYST' | 'VIEWER')[]
+  // Hierarchy roles plus the additive tenant-scoped tags. The tags are held
+  // alongside a hierarchy role, not instead of one.
+  roles: (
+    | 'SUPER_ADMIN'
+    | 'SUPER_ADMIN_VIEWER'
+    | 'OWNER'
+    | 'ADMIN'
+    | 'MANAGER'
+    | 'ANALYST'
+    | 'VIEWER'
+    | 'MEMBER'
+    | 'CALL_ASSIGNER'
+    | 'CALL_ADMIN'
+  )[]
   ati_id: string | null
   /** EVENT/workshop accounts: ISO timestamp when access ends */
   access_expires_at?: string | null
@@ -18,9 +31,11 @@ export interface User {
 interface AuthContextType {
   user: User | null
   token: string | null
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; code?: string }>
   logout: (logoutAll?: boolean) => Promise<void>
   signup: (email: string, password: string, atiToken: string, firstName: string, lastName: string, isTrialInvite?: boolean) => Promise<{ success: boolean; error?: string }>
+  // First-login activation for seeded accounts (email + Employee ID -> set password + sign in)
+  activateFirstLogin: (email: string, employeeId: string, password: string) => Promise<{ success: boolean; error?: string; code?: string }>
   isLoading: boolean
   refreshUser: (authToken?: string) => Promise<void>
   // Authenticated fetch that automatically handles token refresh
@@ -371,8 +386,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await refreshUser(newToken)
         return { success: true }
       } else {
-        return { success: false, error: data.message || 'Login failed' }
+        return { success: false, error: data.message || 'Login failed', code: data.code }
       }
+    } catch (error) {
+      return { success: false, error: 'Network error' }
+    }
+  }
+
+  // Activate a seeded account: verify email + Employee ID, set the password,
+  // and sign in immediately (same token handling as login()).
+  const activateFirstLogin = async (email: string, employeeId: string, password: string) => {
+    try {
+      const response = await fetch('/api/v1/auth/first-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, employeeId, password })
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        const { token: newToken } = data
+        setToken(newToken)
+        tokenRef.current = newToken
+        localStorage.setItem('auth_token', newToken)
+        tokenExpiryRef.current = getTokenExpiry(newToken)
+        scheduleTokenRefresh(newToken)
+        setIsSessionExpired(false)
+        await refreshUser(newToken)
+        return { success: true }
+      }
+      return { success: false, error: data.message || 'Activation failed', code: data.code }
     } catch (error) {
       return { success: false, error: 'Network error' }
     }
@@ -480,6 +525,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       logout,
       signup,
+      activateFirstLogin,
       isLoading,
       refreshUser,
       authFetch,

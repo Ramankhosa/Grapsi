@@ -2,9 +2,10 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { motion, useInView, useReducedMotion } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { useEffect, useState } from 'react'
 import {
+  AlertCircle,
   ArrowRight,
   Check,
   Database,
@@ -16,16 +17,25 @@ import {
   Target,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
-import { audienceCards, databaseRows, signals } from './data'
+import {
+  audienceCards,
+  databaseRows,
+  heroEligibility,
+  heroMatches,
+  heroPrecedents,
+  platformStats,
+} from './data'
+import FieldMatrix from './FieldMatrix'
+import FundedByFunder from './FundedByFunder'
 import FundingPipeline from './FundingPipeline'
-import IntelligenceGraph from './IntelligenceGraph'
 import { useHomeMotion } from './motion'
 
-const terminalLines = [
-  '> scanning 214 open calls against profile...',
-  '> 38 eligible · 6 high-alignment · 2 closing <30d',
-  '> nearest funded neighbor: GA-101094521 (2024, €1.2M)',
-]
+const BTN_BASE =
+  'inline-flex h-11 items-center justify-center gap-2 rounded-lg px-5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500 focus-visible:ring-offset-2 focus-visible:ring-offset-ground'
+const BTN_PRIMARY = `${BTN_BASE} bg-cobalt-600 text-white hover:bg-cobalt-700`
+const BTN_SECONDARY = `${BTN_BASE} border border-hairline bg-ground text-ink-soft hover:border-muted-soft hover:bg-inset`
+const LINK_QUIET =
+  'inline-flex items-center gap-1.5 rounded text-sm font-medium text-cobalt-600 transition hover:text-cobalt-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500 focus-visible:ring-offset-2'
 
 function useCta() {
   const router = useRouter()
@@ -40,193 +50,278 @@ function useCta() {
 
 export default function HomeV2Page() {
   return (
-    <main className="min-h-screen bg-white font-[var(--font-home-v2-sans)] text-ai-graphite-900">
-      <HomeV2Nav />
+    <main className="min-h-screen bg-ground font-home-v2-sans text-ink antialiased">
+      <SiteNav />
       <Hero />
-      <SignalStrip />
+      <StatsStrip />
       <FundingPipeline />
-      <PillarIntelligence />
-      <PillarPositioning />
-      <PillarPreparation />
+      <IntelligenceSection />
+      <PositioningSection />
+      <PreparationSection />
       <EvidenceSection />
       <TrustSection />
       <AudienceSection />
       <FinalCTA />
-      <HomeV2Footer />
+      <SiteFooter />
     </main>
   )
 }
 
-function HomeV2Nav() {
+function Wordmark({ className = '' }: { className?: string }) {
+  return (
+    <span className={`text-[15px] font-semibold tracking-[-0.01em] text-ink ${className}`}>
+      <span className="text-cobalt-600">AI</span>GrantMentor
+    </span>
+  )
+}
+
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.22em] text-cobalt-600">{children}</p>
+}
+
+function SiteNav() {
   const { user } = useCta()
   const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 16)
+    const onScroll = () => setScrolled(window.scrollY > 8)
     onScroll()
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
   return (
-    <nav
-      className={`fixed inset-x-0 top-0 z-40 transition duration-300 ${
-        scrolled ? 'border-b border-white/10 bg-ai-graphite-950/80 backdrop-blur-xl' : 'bg-transparent'
+    <header
+      className={`sticky top-0 z-40 border-b transition-colors duration-200 ${
+        scrolled ? 'border-hairline bg-ground/85 backdrop-blur-md' : 'border-transparent bg-ground'
       }`}
     >
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <Link href="/" className="text-sm font-semibold tracking-tight text-white md:text-base">
-          <span className="text-ai-blue-300">AI</span>GrantMentor
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-6 px-6">
+        <Link href="/" className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500">
+          <Wordmark />
         </Link>
-        <div className="hidden items-center gap-7 text-sm text-ai-graphite-300 md:flex">
-          <a href="#pipeline" className="transition hover:text-white">
-            Platform
-          </a>
-          <a href="#intelligence" className="transition hover:text-white">
-            Intelligence
-          </a>
-          <a href="#security" className="transition hover:text-white">
-            Security
-          </a>
-          <Link href={user ? '/dashboard' : '/login'} className="transition hover:text-white">
+
+        <nav aria-label="Primary" className="hidden items-center gap-8 md:flex">
+          {[
+            ['Platform', '#pipeline'],
+            ['Intelligence', '#intelligence'],
+            ['Evidence', '#evidence'],
+            ['Security', '#security'],
+          ].map(([label, href]) => (
+            <a
+              key={label}
+              href={href}
+              className="rounded text-sm text-muted transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500"
+            >
+              {label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="flex items-center gap-2 sm:gap-4">
+          <Link
+            href={user ? '/dashboard' : '/login'}
+            className="hidden rounded px-1 text-sm text-muted transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500 sm:inline-flex"
+          >
             {user ? 'Dashboard' : 'Sign in'}
           </Link>
+          <Link href="/contact" className={`${BTN_PRIMARY} h-10 px-4`}>
+            Request a demo
+          </Link>
         </div>
-        <Link
-          href="/contact"
-          className="inline-flex items-center gap-2 rounded-lg bg-ai-blue-400 px-4 py-2 text-sm font-semibold text-ai-graphite-950 transition hover:bg-ai-blue-300 focus:outline-none focus:ring-2 focus:ring-ai-blue-200 focus:ring-offset-2 focus:ring-offset-ai-graphite-950"
-        >
-          Request a demo
-          <ArrowRight className="h-4 w-4" />
-        </Link>
       </div>
-    </nav>
+    </header>
   )
 }
 
 function Hero() {
   const { primaryLabel, goPrimary } = useCta()
-  const reduced = useReducedMotion()
+  const { reduced } = useHomeMotion()
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-ai-graphite-950 text-white">
-      <div className="absolute inset-0 opacity-[0.06] [background-image:radial-gradient(circle,white_1px,transparent_1px)] [background-size:22px_22px]" />
-      <div className="absolute inset-y-0 right-0 w-full opacity-70 md:w-[64%]">
-        <IntelligenceGraph />
-      </div>
-      <div className="relative mx-auto grid min-h-screen max-w-7xl items-center gap-10 px-4 py-24 sm:px-6 lg:grid-cols-[0.82fr_1.18fr] lg:px-8">
+    <section className="relative overflow-hidden">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[560px] bg-[radial-gradient(60%_100%_at_50%_0%,rgba(29,78,216,0.055),transparent_72%)]"
+      />
+      <div className="relative mx-auto max-w-6xl px-6 pb-20 pt-16 md:pb-28 md:pt-24">
         <motion.div
-          initial={reduced ? false : { opacity: 0, y: 18 }}
-          animate={reduced ? {} : { opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, ease: 'easeOut' }}
-          className="max-w-3xl"
+          initial={reduced ? false : { opacity: 0, y: 14 }}
+          animate={reduced ? undefined : { opacity: 1, y: 0 }}
+          transition={{ duration: 0.55, ease: 'easeOut' }}
+          className="mx-auto max-w-3xl text-center"
         >
-          <p className="mb-5 font-mono text-xs uppercase tracking-[0.32em] text-ai-blue-200">
+          <span className="inline-flex items-center gap-2 rounded-full border border-hairline bg-ground px-3 py-1 font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+            <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-cobalt-600" />
             Funding intelligence platform
-          </p>
-          <p className="mb-5 max-w-2xl text-sm font-semibold text-ai-blue-100">
-            We turn the world&apos;s funding record into your unfair advantage.
-          </p>
-          <h1 className="text-5xl font-semibold leading-[0.95] tracking-normal text-white md:text-7xl">
+          </span>
+
+          <h1 className="mt-6 text-[clamp(2.25rem,5.4vw,4rem)] font-semibold leading-[1.05] tracking-[-0.03em] text-ink">
             The command center for research funding.
           </h1>
-          <p className="mt-7 max-w-2xl text-lg leading-8 text-ai-graphite-200 md:text-xl">
-            AIGrantMentor matches your research to the right calls, shows you what has actually won funding, positions
-            your idea in the gaps, and prepares a submission that survives review.
+
+          <p className="mx-auto mt-6 max-w-2xl text-[17px] leading-8 text-ink-soft md:text-lg">
+            AIGrantMentor matches your research to the right calls, shows what has actually won funding, positions your
+            idea in the gaps, and prepares a submission that survives review.
           </p>
-          <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-            <button
-              type="button"
-              onClick={goPrimary}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-ai-blue-400 px-6 py-3 text-sm font-semibold text-ai-graphite-950 transition hover:bg-ai-blue-300 focus:outline-none focus:ring-2 focus:ring-ai-blue-200 focus:ring-offset-2 focus:ring-offset-ai-graphite-950"
-            >
+
+          <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <button type="button" onClick={goPrimary} className={`${BTN_PRIMARY} w-full sm:w-auto`}>
               {primaryLabel}
-              <ArrowRight className="h-4 w-4" />
+              <ArrowRight className="h-4 w-4" aria-hidden />
             </button>
-            <a
-              href="#pipeline"
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 px-6 py-3 text-sm font-semibold text-white transition hover:border-white/30 hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/30"
-            >
-              See the platform
+            <a href="#pipeline" className={`${BTN_SECONDARY} w-full sm:w-auto`}>
+              See how it works
             </a>
-            <Link
-              href="/funding/intelligence"
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/0 px-2 py-3 text-sm font-semibold text-ai-blue-200 transition hover:text-ai-blue-100 focus:outline-none focus:ring-2 focus:ring-white/30 sm:px-4"
-            >
+          </div>
+
+          <p className="mt-6 text-[13px] text-muted">
+            No credit card · Institution-wide pilots available ·{' '}
+            <Link href="/funding/intelligence" className={LINK_QUIET}>
               Explore the Intelligence Layer
             </Link>
-          </div>
-          <TerminalStrip />
+          </p>
+        </motion.div>
+
+        <motion.div
+          initial={reduced ? false : { opacity: 0, y: 20 }}
+          animate={reduced ? undefined : { opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.12, ease: 'easeOut' }}
+          className="mt-14 md:mt-16"
+        >
+          <ScanPanel />
         </motion.div>
       </div>
     </section>
   )
 }
 
-function TerminalStrip() {
-  const reduced = useReducedMotion()
-  const [index, setIndex] = useState(0)
-
-  useEffect(() => {
-    if (reduced) return
-    const timer = window.setInterval(() => {
-      setIndex((current) => (current + 1) % terminalLines.length)
-    }, 3600)
-    return () => window.clearInterval(timer)
-  }, [reduced])
+function ScanPanel() {
+  const selected = heroMatches[0]
 
   return (
-    <div className="mt-8 max-w-2xl rounded-lg border border-white/10 bg-ai-graphite-950/80 p-4 font-mono text-xs text-ai-graphite-300">
-      {reduced ? (
-        terminalLines[0]
-      ) : (
-        <motion.span
-          key={terminalLines[index]}
-          initial={{ opacity: 0, width: '0ch' }}
-          animate={{ opacity: 1, width: `${terminalLines[index].length}ch` }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 1.1, ease: 'easeOut' }}
-          className="inline-block max-w-full overflow-hidden whitespace-nowrap align-bottom"
-        >
-          {terminalLines[index]}
-        </motion.span>
-      )}
-    </div>
-  )
-}
+    <div className="overflow-hidden rounded-2xl border border-hairline bg-ground shadow-nk-lift">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline px-5 py-3">
+        <div className="flex items-center gap-2 font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+          Funding scan
+        </div>
+        <div className="font-home-v2-mono text-[11px] text-muted-soft">
+          214 calls scanned · 38 eligible · 6 high alignment
+        </div>
+      </div>
 
-function SignalStrip() {
-  return (
-    <div className="overflow-hidden border-y border-white/10 bg-ai-graphite-950 py-4 font-mono text-xs text-ai-graphite-300">
-      <div className="flex min-w-max animate-home-v2-marquee gap-8 hover:[animation-play-state:paused] motion-reduce:animate-none">
-        {[...signals, ...signals].map((signal, index) => (
-          <span key={`${signal}-${index}`} className="whitespace-nowrap">
-            {signal}
-          </span>
-        ))}
+      <div className="grid md:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+        <ul className="divide-y divide-hairline border-b border-hairline md:border-b-0 md:border-r">
+          {heroMatches.map((match, index) => (
+            <li
+              key={match.id}
+              className={`flex items-start gap-5 px-5 py-4 ${
+                index === 0 ? 'bg-cobalt-50/60 shadow-[inset_2px_0_0_#1d4ed8]' : ''
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-ink">{match.title}</p>
+                <p className="mt-1.5 truncate font-home-v2-mono text-[11px] text-muted">
+                  {match.programme} · {match.id} · {match.closes}
+                </p>
+              </div>
+              <div className="w-20 shrink-0 pt-0.5">
+                <div className="text-right font-home-v2-mono text-xs font-semibold text-ink">{match.score}%</div>
+                <div className="mt-2 h-1 rounded-full bg-nickel-100">
+                  <div
+                    className={`h-1 rounded-full ${index === 0 ? 'bg-cobalt-600' : 'bg-nickel-300'}`}
+                    style={{ width: `${match.score}%` }}
+                  />
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        <div className="bg-inset p-5 sm:p-6">
+          <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Why it matches</p>
+          <h3 className="mt-3 text-[15px] font-semibold leading-6 text-ink">{selected.title}</h3>
+
+          <ul className="mt-4 space-y-2.5">
+            {heroEligibility.map((item) => (
+              <li key={item.label} className="flex items-center gap-2.5 text-[13px] text-ink-soft">
+                {item.state === 'met' ? (
+                  <Check className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
+                ) : (
+                  <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                )}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                <span className="font-home-v2-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+                  {item.state === 'met' ? 'met' : 'to do'}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-6 border-t border-hairline pt-4">
+            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Funded precedents</p>
+            <ul className="mt-3 space-y-2">
+              {heroPrecedents.map((precedent) => (
+                <li
+                  key={precedent}
+                  className="truncate rounded-md border border-hairline bg-ground px-3 py-2 font-home-v2-mono text-[11px] text-ink-soft"
+                >
+                  {precedent}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <p className="mt-4 text-[11px] text-muted-soft">Illustrative data.</p>
+        </div>
       </div>
     </div>
   )
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="font-mono text-xs uppercase tracking-[0.28em] text-ai-blue-600">{children}</p>
+function StatsStrip() {
+  return (
+    <section aria-label="Platform coverage" className="mx-auto max-w-6xl px-6 pb-4">
+      <dl className="grid gap-px overflow-hidden rounded-xl border border-hairline bg-hairline sm:grid-cols-3">
+        {platformStats.map((stat) => (
+          <div key={stat.label} className="flex flex-col-reverse bg-ground px-6 py-6">
+            <dt className="mt-1.5 text-[13px] text-muted">{stat.label}</dt>
+            <dd className="font-home-v2-mono text-2xl font-semibold tracking-tight text-ink">{stat.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
 }
 
-function PillarIntelligence() {
+function FeatureRows({ rows }: { rows: Array<[string, typeof Search]> }) {
+  return (
+    <ul className="mt-8 space-y-4">
+      {rows.map(([label, Icon]) => (
+        <li key={label} className="flex items-center gap-3 border-t border-hairline pt-4">
+          <Icon className="h-[18px] w-[18px] shrink-0 text-cobalt-600" aria-hidden />
+          <span className="text-[15px] font-medium text-ink-soft">{label}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function IntelligenceSection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section id="intelligence" className="bg-white py-28" {...reveal}>
-      <div className="mx-auto grid max-w-7xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-[0.88fr_1.12fr] lg:px-8">
+    <motion.section id="intelligence" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-20">
         <div>
-          <SectionLabel>Intelligence</SectionLabel>
-          <h2 className="mt-4 font-[var(--font-home-v2-serif)] text-4xl font-semibold leading-tight text-ai-graphite-950 md:text-6xl">
+          <Eyebrow>Intelligence</Eyebrow>
+          <h2 className="mt-4 text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
             Know what gets funded before you write a word.
           </h2>
-          <p className="mt-6 text-lg leading-8 text-ai-graphite-600">
+          <p className="mt-6 max-w-xl text-[17px] leading-8 text-ink-soft">
             Matching is only useful when it is grounded in the record of prior awards. The intelligence layer connects
-            profile fit, eligibility, funded precedents, and deadline pressure in one view.
+            profile fit, eligibility, funded precedents, and deadline pressure in a single view.
           </p>
           <FeatureRows
             rows={[
@@ -236,91 +331,45 @@ function PillarIntelligence() {
             ]}
           />
         </div>
-        <div className="rounded-xl border border-ai-graphite-200 bg-ai-graphite-50 p-4">
-          <div className="rounded-lg border border-ai-graphite-200 bg-white p-5">
-            <div className="mb-5 flex items-center justify-between border-b border-ai-graphite-200 pb-4 font-mono text-xs text-ai-graphite-500">
-              <span>HORIZON-CL4-2026-DATA-02</span>
-              <span>illustrative data</span>
-            </div>
-            <div className="grid gap-6 md:grid-cols-[180px_1fr]">
-              <div className="grid place-items-center">
-                <div className="relative grid h-36 w-36 place-items-center rounded-full border-[10px] border-ai-blue-100">
-                  <div className="absolute inset-[-10px] rounded-full border-[10px] border-ai-blue-500 [clip-path:polygon(50%_50%,100%_0,100%_100%,0_100%,0_18%)]" />
-                  <div className="text-center">
-                    <div className="font-mono text-3xl font-bold text-ai-graphite-950">92%</div>
-                    <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ai-graphite-500">match</div>
-                  </div>
-                </div>
-              </div>
-              <div>
-                <h3 className="text-xl font-semibold text-ai-graphite-950">AI systems for adaptive health infrastructure</h3>
-                <p className="mt-2 text-sm leading-6 text-ai-graphite-600">
-                  Strong alignment across implementation priorities, data governance requirements, and consortium profile.
-                </p>
-                <div className="mt-5 space-y-3">
-                  {['GA-101094521 · €1.2M · 2024', 'GA-101076883 · €870K · 2023', 'GA-101119044 · €1.5M · 2025'].map(
-                    (project) => (
-                      <div key={project} className="rounded border border-ai-graphite-200 bg-ai-graphite-50 px-3 py-2 font-mono text-xs text-ai-graphite-700">
-                        {project}
-                      </div>
-                    ),
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+
+        <FundedByFunder />
       </div>
     </motion.section>
   )
 }
 
-function PillarPositioning() {
+function PositioningSection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section className="bg-ai-graphite-50 py-28" {...reveal}>
-      <div className="mx-auto grid max-w-7xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-[1.12fr_0.88fr] lg:px-8">
-        <div className="relative min-h-[440px] rounded-xl border border-ai-graphite-200 bg-white p-5">
-          <div className="absolute inset-8 border-l border-b border-ai-graphite-200" />
-          {Array.from({ length: 46 }).map((_, index) => (
-            <span
-              key={index}
-              className={`absolute h-2.5 w-2.5 rounded-full ${
-                index % 5 === 0 ? 'bg-violet-400' : index % 3 === 0 ? 'bg-emerald-500' : 'bg-ai-blue-400'
-              }`}
-              style={{ left: `${10 + ((index * 19) % 78)}%`, top: `${13 + ((index * 31) % 68)}%` }}
-            />
-          ))}
-          <motion.div
-            className="absolute left-[61%] top-[43%] h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border border-emerald-500"
-            animate={{ scale: [1, 1.06, 1] }}
-            transition={{ duration: 3, repeat: Infinity }}
-          >
-            <span className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-emerald-500/60" />
-            <span className="absolute left-0 top-1/2 h-px w-full -translate-y-1/2 bg-emerald-500/60" />
-          </motion.div>
-          <div className="absolute left-[64%] top-[58%] rounded bg-white px-3 py-2 text-xs shadow-sm ring-1 ring-ai-graphite-200">
-            142 funded projects · avg award €1.2M · last call 2025
-          </div>
+    <motion.section id="positioning" className="border-t border-hairline bg-inset py-20 md:py-28" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-20">
+        <div className="order-2 lg:order-1">
+          <FieldMatrix />
         </div>
-        <div>
-          <SectionLabel>Positioning engine</SectionLabel>
-          <h2 className="mt-4 font-[var(--font-home-v2-serif)] text-4xl font-semibold leading-tight text-ai-graphite-950 md:text-6xl">
+
+        <div className="order-1 lg:order-2">
+          <Eyebrow>Positioning engine</Eyebrow>
+          <h2 className="mt-4 text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
             Find the white space between 2.8M funded projects.
           </h2>
-          <div className="mt-8 rounded-xl border border-ai-graphite-200 bg-white p-5">
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.2em] text-ai-graphite-500">Before / after idea</div>
-            <div className="rounded border border-ai-graphite-200 bg-ai-graphite-50 p-3 text-sm text-ai-graphite-500">
-              Rough idea: AI tool for improving hospital workflows.
+          <p className="mt-6 max-w-xl text-[17px] leading-8 text-ink-soft">
+            Gap analysis places your idea against everything the agency has already paid for, then sharpens it into the
+            angle that is both novel and fundable.
+          </p>
+
+          <div className="mt-8 rounded-2xl border border-hairline bg-ground p-5">
+            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Before / after</p>
+            <p className="mt-4 rounded-lg border border-hairline bg-inset px-4 py-3 text-[14px] leading-6 text-muted">
+              AI tool for improving hospital workflows.
+            </p>
+            <div aria-hidden className="my-3 flex justify-center text-nickel-400">
+              <ArrowRight className="h-4 w-4 rotate-90" />
             </div>
-            <div className="my-3 flex justify-center text-ai-blue-600">
-              <ArrowRight className="h-5 w-5 rotate-90" />
-            </div>
-            <div className="rounded border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-ai-graphite-800">
-              Positioned concept: explainable triage automation for resource-constrained care networks, aligned to open-science
-              data obligations and health-system resilience criteria.
-            </div>
+            <p className="rounded-lg border border-cobalt-100 bg-cobalt-50/70 px-4 py-3 text-[14px] leading-6 text-ink-soft">
+              Explainable triage automation for resource-constrained care networks, aligned to open-science data
+              obligations and health-system resilience criteria.
+            </p>
           </div>
         </div>
       </div>
@@ -328,17 +377,21 @@ function PillarPositioning() {
   )
 }
 
-function PillarPreparation() {
+function PreparationSection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section className="bg-white py-28" {...reveal}>
-      <div className="mx-auto grid max-w-7xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
+    <motion.section id="preparation" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-20">
         <div>
-          <SectionLabel>Preparation studio</SectionLabel>
-          <h2 className="mt-4 font-[var(--font-home-v2-serif)] text-4xl font-semibold leading-tight text-ai-graphite-950 md:text-6xl">
+          <Eyebrow>Preparation studio</Eyebrow>
+          <h2 className="mt-4 text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
             From positioned idea to reviewer-ready submission.
           </h2>
+          <p className="mt-6 max-w-xl text-[17px] leading-8 text-ink-soft">
+            The studio drafts against the call&apos;s own structure, keeps every claim attached to a source, and scores
+            the result before a reviewer ever sees it.
+          </p>
           <FeatureRows
             rows={[
               ['Structured drafting', FileCheck2],
@@ -347,22 +400,37 @@ function PillarPreparation() {
             ]}
           />
         </div>
-        <div className="grid gap-4 rounded-xl border border-ai-graphite-200 bg-ai-graphite-50 p-4 md:grid-cols-[1fr_0.8fr]">
-          <div className="rounded-lg border border-ai-graphite-200 bg-white p-5">
-            {['Objectives', 'WP1 / Evidence base', 'WP2 / Prototype', 'WP3 / Evaluation', 'Budget', 'Impact'].map((item) => (
-              <div key={item} className="mb-3 flex items-center justify-between rounded border border-ai-graphite-200 px-3 py-2 text-sm">
-                <span>{item}</span>
-                <Check className="h-4 w-4 text-emerald-600" />
-              </div>
-            ))}
+
+        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,0.72fr)]">
+          <div className="rounded-2xl border border-hairline bg-ground p-5">
+            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Proposal outline</p>
+            <ul className="mt-4 space-y-2">
+              {['Objectives', 'WP1 · Evidence base', 'WP2 · Prototype', 'WP3 · Evaluation', 'Budget', 'Impact'].map(
+                (item) => (
+                  <li
+                    key={item}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-hairline px-3 py-2.5 text-[13px] text-ink-soft"
+                  >
+                    <span className="truncate">{item}</span>
+                    <Check className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
+                  </li>
+                ),
+              )}
+            </ul>
           </div>
-          <div className="rounded-lg border border-ai-graphite-200 bg-white p-5">
-            <div className="mb-4 font-mono text-xs uppercase tracking-[0.18em] text-ai-graphite-500">Evidence rail</div>
-            {['[Nature 2024]', '[EU Policy: Green Deal S3]', '[Funded: GA 101076xxx]', '[NIH Data Mgmt 2025]'].map((chip) => (
-              <div key={chip} className="mb-3 rounded-full border border-ai-blue-200 bg-ai-blue-50 px-3 py-2 font-mono text-xs text-ai-blue-800">
-                {chip}
-              </div>
-            ))}
+
+          <div className="rounded-2xl border border-hairline bg-inset p-5">
+            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Evidence rail</p>
+            <ul className="mt-4 space-y-2">
+              {['Nature 2024', 'EU Green Deal S3', 'Funded: GA 101076xxx', 'NIH Data Mgmt 2025'].map((chip) => (
+                <li
+                  key={chip}
+                  className="truncate rounded-full border border-hairline bg-ground px-3 py-2 font-home-v2-mono text-[11px] text-ink-soft"
+                >
+                  {chip}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       </div>
@@ -371,43 +439,32 @@ function PillarPreparation() {
 }
 
 function EvidenceSection() {
+  const { reveal } = useHomeMotion()
+
   return (
-    <section className="bg-ai-graphite-950 py-28 text-white">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <SectionLabel>This is built on data, not adjectives</SectionLabel>
-        <h2 className="mt-4 max-w-3xl font-[var(--font-home-v2-serif)] text-4xl font-semibold leading-tight text-white md:text-6xl">
+    <motion.section id="evidence" className="border-t border-hairline bg-inset py-20 md:py-28" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <Eyebrow>Built on data, not adjectives</Eyebrow>
+        <h2 className="mt-4 max-w-3xl text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
           The funded-project record becomes a working surface.
         </h2>
-        <div className="mt-8 grid gap-3 sm:grid-cols-3">
-          {[
-            ['2.8', 'M', 'funded-project records'],
-            ['96', '', 'programmes normalized'],
-            ['14', '', 'source families connected'],
-          ].map(([value, suffix, label]) => (
-            <div key={label} className="border-t border-white/10 pt-4">
-              <div className="font-mono text-3xl font-semibold text-ai-blue-200">
-                <CountUp value={Number(value)} decimals={value.includes('.') ? 1 : 0} />
-                {suffix}
-              </div>
-              <div className="mt-1 font-mono text-xs text-ai-graphite-400">{label}</div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-8 grid gap-6 lg:grid-cols-2">
-          <div className="rounded-xl border border-white/10 bg-white/[0.04] p-5">
-            <div className="mb-4 flex flex-wrap gap-2 font-mono text-[11px] text-ai-graphite-300">
-              {['programme: all', 'year: 2023-2026', 'topic: AI'].map((chip) => (
-                <span key={chip} className="rounded border border-white/10 px-2 py-1">
+
+        <div className="mt-12 grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+          <div className="rounded-2xl border border-hairline bg-ground p-5 sm:p-6">
+            <div className="mb-5 flex flex-wrap gap-2 font-home-v2-mono text-[11px] text-muted">
+              {['programme: all', 'year: 2023–2026', 'topic: AI'].map((chip) => (
+                <span key={chip} className="rounded-md border border-hairline bg-inset px-2 py-1">
                   {chip}
                 </span>
               ))}
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-left font-mono text-xs">
-                <thead className="text-ai-graphite-400">
+
+            <div className="-mx-1 overflow-x-auto px-1">
+              <table className="w-full min-w-[560px] text-left font-home-v2-mono text-xs">
+                <thead>
                   <tr>
-                    {['Programme', 'Topic', 'Award', 'Year', 'Consortium'].map((head) => (
-                      <th key={head} className="border-b border-white/10 py-2 font-medium">
+                    {['Programme', 'Topic', 'Award', 'Year', 'Partners'].map((head) => (
+                      <th key={head} className="border-b border-hairline pb-3 pr-4 font-medium text-muted">
                         {head}
                       </th>
                     ))}
@@ -415,9 +472,14 @@ function EvidenceSection() {
                 </thead>
                 <tbody>
                   {databaseRows.map((row) => (
-                    <tr key={row.join('-')} className="text-ai-graphite-200">
-                      {row.map((cell) => (
-                        <td key={cell} className="border-b border-white/5 py-3 pr-4">
+                    <tr key={row.join('-')}>
+                      {row.map((cell, index) => (
+                        <td
+                          key={cell}
+                          className={`border-b border-hairline py-3 pr-4 ${
+                            index === 0 ? 'font-medium text-ink' : 'text-ink-soft'
+                          }`}
+                        >
                           {cell}
                         </td>
                       ))}
@@ -426,91 +488,116 @@ function EvidenceSection() {
                 </tbody>
               </table>
             </div>
-            <p className="mt-4 text-xs text-ai-graphite-400">
-              Funded-project intelligence layer — n programmes, updated continuously. Illustrative data.
+
+            <p className="mt-5 text-[12px] text-muted">
+              Funded-project intelligence layer — 96 programmes, updated continuously. Illustrative data.
             </p>
           </div>
-          <div className="rounded-xl border border-white/10 bg-white/[0.04] p-5">
-            <div className="mb-5 flex items-center justify-between">
-              <h3 className="text-xl font-semibold">AI review scorecard</h3>
-              <span className="rounded bg-emerald-300 px-3 py-1 font-mono text-xs font-bold text-ai-graphite-950">4.6 / 5</span>
+
+          <div className="rounded-2xl border border-hairline bg-ground p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-4">
+              <h3 className="text-[15px] font-semibold text-ink">AI review scorecard</h3>
+              <span className="rounded-md bg-cobalt-50 px-2.5 py-1 font-home-v2-mono text-[11px] font-semibold text-cobalt-700">
+                4.6 / 5
+              </span>
             </div>
-            {[
-              ['Excellence', '92%'],
-              ['Impact', '88%'],
-              ['Implementation', '84%'],
-              ['Eligibility', '98%'],
-            ].map(([label, value]) => (
-              <div key={label} className="mb-4">
-                <div className="mb-1 flex justify-between font-mono text-xs text-ai-graphite-300">
-                  <span>{label}</span>
-                  <span>{value}</span>
+
+            <div className="mt-6 space-y-4">
+              {[
+                ['Excellence', 92],
+                ['Impact', 88],
+                ['Implementation', 84],
+                ['Eligibility', 98],
+              ].map(([label, value]) => (
+                <div key={label as string}>
+                  <div className="mb-2 flex justify-between font-home-v2-mono text-[11px] text-muted">
+                    <span>{label as string}</span>
+                    <span className="text-ink-soft">{value as number}%</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-nickel-100">
+                    <div className="h-1.5 rounded-full bg-cobalt-600" style={{ width: `${value as number}%` }} />
+                  </div>
                 </div>
-                <div className="h-2 rounded-full bg-white/10">
-                  <div className="h-2 rounded-full bg-ai-blue-300" style={{ width: value }} />
-                </div>
-              </div>
-            ))}
-            <div className="mt-6 rounded border border-white/10 bg-ai-graphite-950 p-4 text-sm leading-6 text-ai-graphite-200">
+              ))}
+            </div>
+
+            <p className="mt-7 border-l-2 border-cobalt-200 bg-inset px-4 py-3 text-[13px] leading-6 text-ink-soft">
               &quot;The methodology section should address data-management obligations under the call&apos;s open-science
               requirements.&quot;
-            </div>
+            </p>
           </div>
         </div>
       </div>
-    </section>
+    </motion.section>
   )
 }
 
 function TrustSection() {
+  const { reveal } = useHomeMotion()
+
+  const pillars: Array<[string, typeof LockKeyhole, string]> = [
+    [
+      'Data governance',
+      LockKeyhole,
+      'Your proposals and ideas are never used to train models or shared across institutions. Tenant-isolated by design.',
+    ],
+    [
+      'Security',
+      ShieldCheck,
+      'Encryption in transit and at rest. Role-based access for research offices. SSO available on request.',
+    ],
+    [
+      'Methodology',
+      Target,
+      'Every match, gap, and review score is explainable. The engine shows which calls, projects, and criteria drove its conclusion.',
+    ],
+  ]
+
   return (
-    <section id="security" className="bg-white py-28">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <SectionLabel>Institutional trust</SectionLabel>
-        <div className="mt-8 grid gap-6 md:grid-cols-3">
-          {[
-            ['DATA GOVERNANCE', LockKeyhole, 'Your proposals and ideas are never used to train models or shared across institutions. Tenant-isolated by design.'],
-            ['SECURITY', ShieldCheck, 'Encryption in transit and at rest. Role-based access for research offices. SSO available on request.'],
-            ['METHODOLOGY', Target, 'Every match, gap, and review score is explainable. The engine shows which calls, projects, and criteria drove its conclusion.'],
-          ].map(([title, Icon, body]) => {
-            const TypedIcon = Icon as typeof LockKeyhole
-            return (
-              <div key={title as string} className="border-t border-ai-graphite-200 pt-6">
-                <TypedIcon className="mb-5 h-5 w-5 text-ai-blue-600" />
-                <h3 className="font-mono text-xs uppercase tracking-[0.22em] text-ai-graphite-500">{title as string}</h3>
-                <p className="mt-4 leading-7 text-ai-graphite-700">{body as string}</p>
-              </div>
-            )
-          })}
+    <motion.section id="security" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <Eyebrow>Institutional trust</Eyebrow>
+
+        <div className="mt-10 grid gap-10 md:grid-cols-3 md:gap-8">
+          {pillars.map(([title, Icon, body]) => (
+            <div key={title} className="border-t border-hairline pt-6">
+              <Icon className="h-[18px] w-[18px] text-cobalt-600" aria-hidden />
+              <h3 className="mt-5 text-[15px] font-semibold text-ink">{title}</h3>
+              <p className="mt-3 text-[15px] leading-7 text-ink-soft">{body}</p>
+            </div>
+          ))}
         </div>
-        <div className="mt-12 rounded-xl border border-ai-graphite-200 bg-ai-graphite-50 p-6">
-          <h3 className="font-semibold text-ai-graphite-950">How the intelligence is built</h3>
-          <div className="mt-4 grid gap-3 font-mono text-xs leading-6 text-ai-graphite-600 md:grid-cols-3">
+
+        <div className="mt-14 rounded-2xl border border-hairline bg-inset p-6 sm:p-8">
+          <h3 className="text-[15px] font-semibold text-ink">How the intelligence is built</h3>
+          <div className="mt-5 grid gap-6 text-[14px] leading-7 text-ink-soft md:grid-cols-3">
             <p>Public funding databases, calls, publications, and patent records are normalized into one evidence layer.</p>
-            <p>Matching and gap analysis keep source records attached so conclusions can be inspected.</p>
-            <p>Refresh cadence and source coverage are visible during institutional pilots.</p>
+            <p>Matching and gap analysis keep source records attached, so every conclusion can be inspected.</p>
+            <p>Refresh cadence and source coverage are visible throughout institutional pilots.</p>
           </div>
         </div>
       </div>
-    </section>
+    </motion.section>
   )
 }
 
 function AudienceSection() {
+  const { reveal } = useHomeMotion()
+
   return (
-    <section className="bg-ai-graphite-50 py-28">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <SectionLabel>Who it is for</SectionLabel>
-        <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+    <motion.section className="border-t border-hairline bg-inset py-20 md:py-28" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <Eyebrow>Who it is for</Eyebrow>
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {audienceCards.map((card) => (
-            <div key={card.title} className="rounded-lg border border-ai-graphite-200 bg-white p-5">
-              <h3 className="font-semibold text-ai-graphite-950">{card.title}</h3>
-              <p className="mt-3 text-sm leading-6 text-ai-graphite-600">{card.body}</p>
+            <div key={card.title} className="rounded-2xl border border-hairline bg-ground p-5">
+              <h3 className="text-[15px] font-semibold text-ink">{card.title}</h3>
+              <p className="mt-3 text-[14px] leading-7 text-ink-soft">{card.body}</p>
             </div>
           ))}
         </div>
       </div>
-    </section>
+    </motion.section>
   )
 }
 
@@ -518,113 +605,112 @@ function FinalCTA() {
   const { goPrimary } = useCta()
 
   return (
-    <section className="relative overflow-hidden bg-ai-graphite-950 py-28 text-white">
-      <div className="absolute inset-0 opacity-35">
-        <IntelligenceGraph compact />
-      </div>
-      <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
-        <h2 className="font-[var(--font-home-v2-serif)] text-4xl font-semibold leading-tight md:text-6xl">
+    <section className="border-t border-hairline bg-ground px-6 py-20 md:py-28">
+      <div className="mx-auto max-w-6xl rounded-2xl border border-hairline bg-inset px-6 py-16 text-center md:px-16">
+        <h2 className="mx-auto max-w-2xl text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold leading-[1.14] tracking-[-0.02em] text-ink">
           Your next funded project is already in the data.
         </h2>
-        <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-ai-graphite-200">
+        <p className="mx-auto mt-5 max-w-xl text-[17px] leading-8 text-ink-soft">
           See what AIGrantMentor finds for your research profile in under five minutes.
         </p>
-        <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
-          <button
-            type="button"
-            onClick={goPrimary}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-ai-blue-400 px-6 py-3 text-sm font-semibold text-ai-graphite-950 transition hover:bg-ai-blue-300"
-          >
+        <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <button type="button" onClick={goPrimary} className={`${BTN_PRIMARY} w-full sm:w-auto`}>
             Run your first funding scan
-            <ArrowRight className="h-4 w-4" />
+            <ArrowRight className="h-4 w-4" aria-hidden />
           </button>
-          <Link
-            href="/contact"
-            className="inline-flex items-center justify-center rounded-lg border border-white/15 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/5"
-          >
+          <Link href="/contact" className={`${BTN_SECONDARY} w-full sm:w-auto`}>
             Request an institutional demo
           </Link>
         </div>
-        <p className="mt-5 font-mono text-xs text-ai-graphite-400">No credit card · Institution-wide pilots available</p>
+        <p className="mt-6 text-[13px] text-muted">No credit card · Institution-wide pilots available</p>
       </div>
     </section>
   )
 }
 
-function HomeV2Footer() {
-  const columns = [
-    ['Platform', 'Pipeline', 'Preparation Studio', 'AI Review'],
-    ['Intelligence', 'Call Matching', 'Funded Projects', 'Gap Positioning'],
-    ['Institutions', 'Security', 'Governance', 'Pilots'],
-    ['Company', 'Contact', 'Privacy', 'Status'],
+function SiteFooter() {
+  const columns: Array<{ title: string; links: Array<[string, string]> }> = [
+    {
+      title: 'Platform',
+      links: [
+        ['Funding pipeline', '#pipeline'],
+        ['Preparation studio', '#preparation'],
+        ['AI review', '#evidence'],
+      ],
+    },
+    {
+      title: 'Intelligence',
+      links: [
+        ['Call matching', '#intelligence'],
+        ['Funded projects', '#evidence'],
+        ['Gap positioning', '#positioning'],
+      ],
+    },
+    {
+      title: 'Institutions',
+      links: [
+        ['Security', '#security'],
+        ['Intelligence layer', '/funding/intelligence'],
+        ['Pilots', '/contact'],
+      ],
+    },
+    {
+      title: 'Company',
+      links: [
+        ['Contact', '/contact'],
+        ['Privacy', '/privacy'],
+        ['Terms', '/terms'],
+      ],
+    },
   ]
 
   return (
-    <footer className="bg-ai-graphite-950 px-4 py-12 text-ai-graphite-300 sm:px-6 lg:px-8">
-      <div className="mx-auto grid max-w-7xl gap-8 md:grid-cols-[1fr_2fr]">
+    <footer className="border-t border-hairline bg-ground px-6 py-14">
+      <div className="mx-auto grid max-w-6xl gap-10 md:grid-cols-[1fr_2fr]">
         <div>
-          <div className="font-semibold text-white">
-            <span className="text-ai-blue-300">AI</span>GrantMentor
-          </div>
-          <div className="mt-4 font-mono text-xs text-emerald-300">system operational</div>
+          <Wordmark />
+          <p className="mt-4 max-w-xs text-[13px] leading-6 text-muted">
+            Funding intelligence for research offices, labs, and the people who write the proposals.
+          </p>
         </div>
-        <div className="grid gap-6 sm:grid-cols-4">
-          {columns.map(([title, ...items]) => (
-            <div key={title}>
-              <h3 className="mb-3 font-mono text-xs uppercase tracking-[0.2em] text-white">{title}</h3>
-              <div className="space-y-2 text-sm">
-                {items.map((item) => (
-                  <div key={item}>{item}</div>
+
+        <div className="grid gap-8 sm:grid-cols-4">
+          {columns.map((column) => (
+            <div key={column.title}>
+              <h3 className="font-home-v2-mono text-[11px] uppercase tracking-[0.2em] text-muted">{column.title}</h3>
+              <ul className="mt-4 space-y-2.5">
+                {column.links.map(([label, href]) => (
+                  <li key={label}>
+                    {href.startsWith('#') ? (
+                      <a
+                        href={href}
+                        className="rounded text-[13px] text-ink-soft transition hover:text-cobalt-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500"
+                      >
+                        {label}
+                      </a>
+                    ) : (
+                      <Link
+                        href={href}
+                        className="rounded text-[13px] text-ink-soft transition hover:text-cobalt-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500"
+                      >
+                        {label}
+                      </Link>
+                    )}
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
           ))}
         </div>
       </div>
-      <div className="mx-auto mt-10 flex max-w-7xl flex-col gap-2 border-t border-white/10 pt-6 font-mono text-xs text-ai-graphite-500 md:flex-row md:items-center md:justify-between">
+
+      <div className="mx-auto mt-12 flex max-w-6xl flex-col gap-2 border-t border-hairline pt-6 text-[12px] text-muted md:flex-row md:items-center md:justify-between">
         <span>© 2026 AIGrantMentor. All rights reserved.</span>
-        <span>Privacy · Terms · Security</span>
+        <span className="inline-flex items-center gap-2">
+          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+          All systems operational
+        </span>
       </div>
     </footer>
-  )
-}
-
-function CountUp({ value, decimals = 0 }: { value: number; decimals?: number }) {
-  const ref = useRef<HTMLSpanElement>(null)
-  const inView = useInView(ref, { once: true, margin: '-80px' })
-  const reduced = useReducedMotion()
-  const [display, setDisplay] = useState(reduced ? value : 0)
-
-  useEffect(() => {
-    if (!inView || reduced) {
-      if (reduced) setDisplay(value)
-      return
-    }
-
-    let frame = 0
-    const total = 36
-    const timer = window.setInterval(() => {
-      frame += 1
-      const progress = Math.min(frame / total, 1)
-      setDisplay(value * (1 - Math.pow(1 - progress, 3)))
-      if (progress === 1) window.clearInterval(timer)
-    }, 24)
-
-    return () => window.clearInterval(timer)
-  }, [decimals, inView, reduced, value])
-
-  return <span ref={ref}>{display.toFixed(decimals)}</span>
-}
-
-function FeatureRows({ rows }: { rows: Array<[string, typeof Search]> }) {
-  return (
-    <div className="mt-8 space-y-3">
-      {rows.map(([label, Icon]) => (
-        <div key={label} className="flex items-center gap-3 border-t border-ai-graphite-200 pt-3">
-          <Icon className="h-5 w-5 text-ai-blue-600" />
-          <span className="font-medium text-ai-graphite-800">{label}</span>
-        </div>
-      ))}
-    </div>
   )
 }

@@ -10,6 +10,13 @@ const MAILJET_KEY = getEnv('MAILJET_API_KEY', getEnv('Mailjet_Key'))
 const MAILJET_SECRET = getEnv('MAILJET_API_SECRET', getEnv('Secret_Key'))
 const SITE_URL = getEnv('SITE_URL', getEnv('NEXTAUTH_URL', 'http://localhost:3000'))
 
+// The verified sender every outbound email is sent as. Must be an address (or
+// domain) verified in the Mailjet account, or Mailjet rejects the send — see
+// the deploy note in this file's callers. Overridable per environment so the
+// same build can send as a different brand without a code change.
+const MAIL_FROM_EMAIL = getEnv('MAIL_FROM_EMAIL', 'admin@aigrantmentor.com')
+const MAIL_FROM_NAME = getEnv('MAIL_FROM_NAME', 'AIGrantMentor')
+
 export interface EmailMessage {
   to: string
   toName?: string
@@ -27,7 +34,7 @@ export async function sendEmail(msg: EmailMessage) {
   const body = {
     Messages: [
       {
-        From: { Email: 'noreply@patentnest.ai', Name: 'PatentNest' },
+        From: { Email: MAIL_FROM_EMAIL, Name: MAIL_FROM_NAME },
         To: [{ Email: msg.to, ...(msg.toName ? { Name: msg.toName } : {}) }],
         Subject: msg.subject,
         HTMLPart: msg.html,
@@ -50,4 +57,4 @@ export async function sendEmail(msg: EmailMessage) {
   return { sent: true }
 }
 
-export { SITE_URL }
+export { SITE_URL, MAIL_FROM_EMAIL, MAIL_FROM_NAME }

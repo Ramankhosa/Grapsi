@@ -58,6 +58,13 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   country: ['country', 'countryofresidence'],
   institutionName: ['institution', 'institutionname', 'university'],
   institutionType: ['institutiontype'],
+  // Access role for the seeded account (clamped; see ROSTER_ROLE_LOOKUP).
+  role: ['role', 'accessrole', 'permission', 'permissionlevel', 'userrole'],
+  // Makes the person a head of a unit ("self"/blank-of-their-own-unit, or a
+  // unit path). Only honored for OWNER/ADMIN uploaders.
+  headOf: ['headof', 'ishead', 'unithead', 'manages', 'leads'],
+  headTitle: ['headtitle', 'headrole', 'leadershiptitle'],
+  headScope: ['headscope', 'managerscope'],
 };
 
 export const FACULTY_IMPORT_TEMPLATE_HEADERS = [
@@ -71,7 +78,45 @@ export const FACULTY_IMPORT_TEMPLATE_HEADERS = [
   'Research Areas',
   'Keywords',
   'Research Summary',
+  'Role',
+  'Head Of',
+  'Head Title',
+  'Head Scope',
 ];
+
+/**
+ * Roles a roster may assign, upper-cased + friendly aliases. Deliberately
+ * clamped: an import can never mint an OWNER or SUPER_ADMIN.
+ */
+const ROSTER_ROLE_LOOKUP: Record<string, 'ADMIN' | 'MANAGER' | 'ANALYST' | 'VIEWER'> = {
+  ADMIN: 'ADMIN',
+  MANAGER: 'MANAGER',
+  ANALYST: 'ANALYST',
+  VIEWER: 'VIEWER',
+  MEMBER: 'ANALYST',
+  USER: 'ANALYST',
+  FACULTY: 'ANALYST',
+  STAFF: 'ANALYST',
+};
+const DEFAULT_ROSTER_ROLE: 'ANALYST' = 'ANALYST';
+/** Elevated roles a non-OWNER/ADMIN uploader may not seed. */
+const ELEVATED_ROLES = new Set(['ADMIN', 'MANAGER']);
+/** Existing roles we never overwrite on re-import (avoids demoting admins). */
+const PROTECTED_ROLES = new Set(['OWNER', 'SUPER_ADMIN', 'SUPER_ADMIN_VIEWER', 'ADMIN']);
+/** "Head Of" values that mean "head of this person's own placed unit". */
+const HEAD_SELF_TOKENS = new Set(['self', 'own', 'this', 'yes', 'y', 'true', 'head', '1']);
+
+function resolveRosterRole(raw: string): 'ADMIN' | 'MANAGER' | 'ANALYST' | 'VIEWER' | null {
+  const value = raw.trim().toUpperCase();
+  if (!value) return DEFAULT_ROSTER_ROLE;
+  return ROSTER_ROLE_LOOKUP[value] ?? null;
+}
+
+function parseHeadScope(raw: string): 'SUBTREE' | 'UNIT_ONLY' {
+  const value = raw.trim().toLowerCase();
+  if (['unit', 'only', 'unit_only', 'unitonly', 'unit-only'].includes(value)) return 'UNIT_ONLY';
+  return 'SUBTREE';
+}
 
 export interface FacultyImportOptions {
   tenantId: string;
@@ -102,6 +147,14 @@ export interface FacultyImportSummary {
   unitsCreated: string[];
   embeddingsIndexed: number;
   embeddingsPending: number;
+  /** Non-default access roles assigned from the Role column. */
+  rolesAssigned: number;
+  /** Unit heads created/updated from the Head Of column. */
+  headsCreated: number;
+  /** Seeded accounts still needing a password (can activate on first login). */
+  pendingActivation: number;
+  /** Of those, how many have NO Employee ID — they cannot self-activate. */
+  activationBlocked: number;
   results: FacultyImportRowResult[];
   jobId: string | null;
 }
@@ -151,6 +204,17 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
   const rawRowCount = sheet.rows.length;
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
 
+  // Appointing unit heads is an OWNER/ADMIN privilege (mirrors the org-unit
+  // managers route). A CALL_ADMIN uploader can seed people and roles below
+  // themselves, but not appoint heads or elevate anyone to ADMIN/MANAGER.
+  const uploader = await prisma.user.findUnique({
+    where: { id: uploadedByUserId },
+    select: { roles: true },
+  });
+  const canGrantHeads = (uploader?.roles || []).some(
+    (r) => r === 'OWNER' || r === 'ADMIN' || r === 'SUPER_ADMIN'
+  );
+
   // Case-insensitive lookup of the tenant's existing hierarchy.
   const existingUnits = await prisma.tenantOrgUnit.findMany({
     where: { tenant_id: tenantId },
@@ -193,6 +257,10 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
   let created = 0;
   let updated = 0;
   let errors = 0;
+  let rolesAssigned = 0;
+  let headsCreated = 0;
+  let pendingActivation = 0;
+  let activationBlocked = 0;
 
   // Generic depth-agnostic lookup keyed by parent, so a Unit Path can resolve
   // or create at any level with the same race-safe logic the two-level path
@@ -284,6 +352,10 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
     const schoolName = read(row, 'school');
     const departmentName = read(row, 'department');
     const unitPath = read(row, 'unitPath');
+    const roleRaw = read(row, 'role');
+    const headOfRaw = read(row, 'headOf');
+    const headTitle = read(row, 'headTitle');
+    const headScopeRaw = read(row, 'headScope');
     // Filled by the Unit Path branch below; kept out here so the write payload
     // can prefer them over the two-column resolution.
     let pathSchoolName = '';
@@ -335,6 +407,21 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       // check above — this covers both in-file and already-in-DB collisions
       // with one mechanism, and works in dry run too.
       employeeIdOwners.set(employeeIdKey, email);
+    }
+
+    // Optional access role (clamped). Reject an unrecognized value outright so
+    // a typo like "Editor" is surfaced rather than silently defaulted.
+    const requestedRole = resolveRosterRole(roleRaw);
+    if (requestedRole === null) {
+      fail(`Unknown role "${roleRaw}". Use ADMIN, MANAGER, ANALYST, or VIEWER.`);
+      continue;
+    }
+    // A CALL_ADMIN uploader can't elevate anyone to ADMIN/MANAGER.
+    let effectiveRole: 'ADMIN' | 'MANAGER' | 'ANALYST' | 'VIEWER' = requestedRole;
+    let roleNote: string | undefined;
+    if (ELEVATED_ROLES.has(requestedRole) && !canGrantHeads) {
+      effectiveRole = DEFAULT_ROSTER_ROLE;
+      roleNote = `Role "${requestedRole}" needs OWNER/ADMIN; assigned ANALYST.`;
     }
 
     try {
@@ -455,7 +542,7 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       // --- Upsert the user --------------------------------------------------
       const existingUser = await prisma.user.findUnique({
         where: { email },
-        select: { id: true, tenantId: true, name: true },
+        select: { id: true, tenantId: true, name: true, roles: true, passwordHash: true },
       });
 
       if (existingUser && existingUser.tenantId && existingUser.tenantId !== tenantId) {
@@ -472,8 +559,53 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       }
 
       const isNew = !existingUser;
+
+      // Deepest resolved unit wins; it is also the unit a "self" head leads.
+      const effectiveOrgUnitId = pathUnitId || departmentId || schoolId || null;
+
+      // Activation readiness: seeded accounts have no password (new rows always;
+      // existing rows keep whatever they had). Without an Employee ID they have
+      // no email-free way to activate on first login.
+      const needsActivation = isNew || !existingUser?.passwordHash;
+      if (needsActivation) {
+        pendingActivation += 1;
+        if (!employeeId) activationBlocked += 1;
+      }
+
+      // Role on update: only when the column is present and we would not be
+      // demoting an existing OWNER/ADMIN (re-imports must not lock admins out).
+      const existingProtected = (existingUser?.roles || []).some((r) => PROTECTED_ROLES.has(r));
+      const applyRole = hasColumn('role') && (isNew || !existingProtected);
+
+      // Head Of: the unit this person should head — their own placed unit
+      // ("self"), or a named unit path. OWNER/ADMIN uploaders only.
+      const wantsHead = headOfRaw.length > 0;
+      const headScope = parseHeadScope(headScopeRaw);
+      let headUnitId: string | null = null;
+      let headNote: string | undefined;
+      if (wantsHead) {
+        if (!canGrantHeads) {
+          headNote = 'Head not set: only OWNER/ADMIN can appoint heads.';
+        } else if (HEAD_SELF_TOKENS.has(headOfRaw.trim().toLowerCase())) {
+          headUnitId = effectiveOrgUnitId;
+          if (!headUnitId) headNote = 'Head not set: this person has no unit.';
+        } else {
+          try {
+            const segs = headOfRaw.split(UNIT_PATH_SEPARATOR).map((s) => s.trim()).filter(Boolean);
+            const chain = await resolveUnitPath(segs);
+            headUnitId = chain[chain.length - 1]?.id || null;
+          } catch (headError) {
+            headNote = `Head not set: ${headError instanceof Error ? headError.message : String(headError)}`;
+          }
+        }
+      }
+      const willCreateHead = wantsHead && !!headUnitId && !headNote;
+      const note = [roleNote, headNote].filter(Boolean).join(' ') || undefined;
+
       if (dryRun) {
-        results.push({ ...base, outcome: isNew ? 'created' : 'updated' });
+        if (applyRole && effectiveRole !== DEFAULT_ROSTER_ROLE) rolesAssigned += 1;
+        if (willCreateHead) headsCreated += 1;
+        results.push({ ...base, outcome: isNew ? 'created' : 'updated', message: note });
         if (isNew) created += 1;
         else updated += 1;
         continue;
@@ -488,12 +620,11 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       const institutionName = read(row, 'institutionName') || tenant?.name || null;
       const institutionType = read(row, 'institutionType');
 
-      // Deepest resolved unit wins. Root-only rows attach to the root itself so
-      // they still show up in org-tree counts and orgUnitId filters.
-      const effectiveOrgUnitId = pathUnitId || departmentId || schoolId || null;
       // `school` is the root of the branch and `department` the unit the person
       // actually sits in — the same rule deriveOrgLabels applies elsewhere, so
-      // deep placements keep both columns meaningful.
+      // deep placements keep both columns meaningful. `effectiveOrgUnitId` was
+      // resolved above (root-only rows attach to the root itself) so head
+      // grants can reuse it.
       const effectiveSchoolName = pathSchoolName || resolvedSchoolName;
       const effectiveDepartmentName = pathDepartmentName || resolvedDepartmentName;
 
@@ -541,20 +672,22 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
         if (existingUser) {
           // tenantId is intentionally NOT touched here — the guard above
           // already rejected mismatches and untenanted accounts.
-          if (hasColumn('name') && name && name !== existingUser.name) {
-            user = await tx.user.update({
-              where: { id: existingUser.id },
-              data: { name },
-              select: { id: true },
-            });
-          } else {
-            user = { id: existingUser.id };
-          }
+          const userUpdate: Record<string, any> = {};
+          if (hasColumn('name') && name && name !== existingUser.name) userUpdate.name = name;
+          if (applyRole) userUpdate.roles = [effectiveRole];
+          user =
+            Object.keys(userUpdate).length > 0
+              ? await tx.user.update({
+                  where: { id: existingUser.id },
+                  data: userUpdate,
+                  select: { id: true },
+                })
+              : { id: existingUser.id };
         } else {
           user = await tx.user.create({
-            // No passwordHash: imported faculty are seeded accounts that
-            // activate through the existing invite / password-reset flow.
-            data: { email, name, tenantId, roles: ['ANALYST'], status: 'ACTIVE' },
+            // No passwordHash: seeded accounts activate on first login with
+            // email + Employee ID — see /api/v1/auth/first-login.
+            data: { email, name, tenantId, roles: [effectiveRole], status: 'ACTIVE' },
             select: { id: true },
           });
         }
@@ -565,11 +698,38 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
           update: fullUpdate,
         });
 
+        // Appoint as head of a unit when the row asked for it (OWNER/ADMIN
+        // uploaders only; reuses the org-unit managers model + its defaults).
+        if (willCreateHead && headUnitId) {
+          await tx.orgUnitManager.upsert({
+            where: { org_unit_id_user_id: { org_unit_id: headUnitId, user_id: user.id } },
+            create: {
+              tenant_id: tenantId,
+              org_unit_id: headUnitId,
+              user_id: user.id,
+              scope: headScope,
+              title: headTitle || null,
+              can_assign: true,
+              can_view_reports: true,
+              can_manage_structure: false,
+              can_manage_members: false,
+              created_by_user_id: uploadedByUserId,
+            },
+            update: {
+              scope: headScope,
+              title: headTitle || null,
+              is_active: true,
+            },
+          });
+        }
+
         return user.id;
       });
 
       touchedUserIds.push(userId);
-      results.push({ ...base, outcome: isNew ? 'created' : 'updated' });
+      if (applyRole && effectiveRole !== DEFAULT_ROSTER_ROLE) rolesAssigned += 1;
+      if (willCreateHead) headsCreated += 1;
+      results.push({ ...base, outcome: isNew ? 'created' : 'updated', message: note });
       if (isNew) created += 1;
       else updated += 1;
     } catch (error) {
@@ -638,6 +798,10 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
             unitsCreated: Array.from(new Set(unitsCreated)),
             embeddingsIndexed,
             pending: remainingTargets.length,
+            rolesAssigned,
+            headsCreated,
+            pendingActivation,
+            activationBlocked,
           },
         },
       });
@@ -664,6 +828,10 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
     unitsCreated: Array.from(new Set(unitsCreated)),
     embeddingsIndexed,
     embeddingsPending: remainingTargets.length,
+    rolesAssigned,
+    headsCreated,
+    pendingActivation,
+    activationBlocked,
     results,
     jobId,
   };

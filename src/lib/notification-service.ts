@@ -5,6 +5,13 @@ if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY)
 }
 
+// Verified sender for these admin-facing expiry alerts. Kept in step with the
+// rest of the product's mail via the same env vars.
+const EXPIRY_MAIL_FROM = {
+  email: process.env.MAIL_FROM_EMAIL || 'admin@aigrantmentor.com',
+  name: process.env.MAIL_FROM_NAME || 'AIGrantMentor',
+}
+
 export class ExpiryNotificationService {
   /**
    * Find tokens that are expiring within the next 7 days
@@ -123,7 +130,7 @@ export class ExpiryNotificationService {
 
     const msg = {
       to: user.email,
-      from: 'noreply@patentnest.ai',
+      from: EXPIRY_MAIL_FROM,
       subject,
       html: `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -215,7 +222,7 @@ export class ExpiryNotificationService {
 
     const msg = {
       to: admin.email,
-      from: 'noreply@patentnest.ai',
+      from: EXPIRY_MAIL_FROM,
       subject,
       html: `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">

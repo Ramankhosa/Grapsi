@@ -3,13 +3,22 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantUser, withOrgScope } from '@/lib/auth/tenantAccess'
 import { canManageAssignment } from '@/lib/orgUnits/scope'
-import { assignmentInclude, parseDate, serializeAssignment } from '@/lib/assignments/shared'
+import {
+  ASSIGNMENT_STATUSES,
+  assignmentInclude,
+  humanStatus,
+  parseDate,
+  serializeAssignment,
+  validateStatusTransition,
+  type AssignmentStatus,
+} from '@/lib/assignments/shared'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
 
 export const dynamic = 'force-dynamic'
 
 const updateSchema = z.object({
-  status: z.enum(['ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']).optional(),
+  status: z.enum(ASSIGNMENT_STATUSES).optional(),
+  declineReason: z.string().trim().max(2000).optional(),
   submissionReference: z.string().trim().max(200).nullable().optional(),
   submissionUrl: z.string().trim().max(2000).nullable().optional(),
   submissionNotes: z.string().trim().max(5000).nullable().optional(),
@@ -90,6 +99,27 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     )
   }
 
+  // The lifecycle table owns every status question: which moves exist at all,
+  // and who may make each one. Checking it up front means the handlers below
+  // only deal with the side effects of a move already known to be legitimate.
+  if (payload.status) {
+    const check = validateStatusTransition({
+      from: record.status as AssignmentStatus,
+      to: payload.status,
+      isAssignee,
+      canManage,
+    })
+    if (!check.allowed) {
+      return NextResponse.json({ error: check.reason }, { status: 403 })
+    }
+    if (payload.status === 'DECLINED' && !payload.declineReason) {
+      return NextResponse.json(
+        { error: 'Please add a short reason so the department knows why.' },
+        { status: 400 }
+      )
+    }
+  }
+
   const data: any = {}
 
   // --- Assignee: progress + submission proof --------------------------------
@@ -129,16 +159,28 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
   }
 
-  // --- Admin: deadline, message, cancel -------------------------------------
-  if (payload.deadlineAt !== undefined || payload.message !== undefined || payload.status === 'CANCELLED' || payload.status === 'ASSIGNED') {
+  // --- Admin: deadline and message ------------------------------------------
+  // (Cancelling and re-requesting are status moves, gated by the table above.)
+  if (payload.deadlineAt !== undefined || payload.message !== undefined) {
     if (!canManage) {
       return NextResponse.json(
-        { error: 'Only an administrator can change the deadline, message or cancel this assignment.' },
+        { error: 'Only an administrator can change the deadline or message.' },
         { status: 403 }
       )
     }
     if (payload.deadlineAt !== undefined) {
       data.deadline_at = parseDate(payload.deadlineAt)
+      const before = record.deadline_at ? new Date(record.deadline_at).getTime() : null
+      const after = data.deadline_at ? new Date(data.deadline_at).getTime() : null
+      if (before !== after) {
+        // Moving the deadline restarts the countdown nudges. Without this, an
+        // assignment extended by a month would skip its 7-day warning, having
+        // already "sent" that stage against the old date. The no-reply chase
+        // is kept — that clock is about the request, not the deadline.
+        data.auto_nudge_stages = record.auto_nudge_stages.filter(
+          (stage) => !stage.startsWith('D')
+        )
+      }
     }
     if (payload.message !== undefined) {
       data.message = payload.message || null
@@ -182,6 +224,21 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   }
 
   if (payload.status) {
+    if (payload.status === 'ACCEPTED' || payload.status === 'DECLINED') {
+      data.responded_at = new Date()
+      data.declined_reason = payload.status === 'DECLINED' ? payload.declineReason || null : null
+    }
+    if (payload.status === 'ASSIGNED' && record.status !== 'ASSIGNED') {
+      // Back to unanswered. The previous answer is cleared from the live record
+      // so the faculty member is being asked afresh rather than shown a stale
+      // one; a decline is preserved in the follow-up log below so the
+      // department does not lose why they said no.
+      data.responded_at = null
+      data.declined_reason = null
+      // The automatic nudge ladder starts again too — otherwise a re-requested
+      // call would never chase, having already "sent" every stage.
+      data.auto_nudge_stages = []
+    }
     if (payload.status === 'COMPLETED') {
       // "Mark complete by providing submission info" — require actual proof.
       const reference = data.submission_reference ?? record.submission_reference
@@ -217,32 +274,69 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     include: assignmentInclude,
   })
 
+  // A re-request wipes the decline from the record, so keep the reason in the
+  // contact log — otherwise the next person to chase this has no idea it was
+  // already turned down once, or why.
+  if (payload.status === 'ASSIGNED' && record.status === 'DECLINED') {
+    try {
+      await prisma.assignmentFollowUp.create({
+        data: {
+          tenant_id: context.tenantId,
+          assignment_id: record.id,
+          created_by_user_id: context.user.id,
+          kind: 'NOTE',
+          note: record.declined_reason
+            ? `Re-requested after a decline. Original reason: ${record.declined_reason}`
+            : 'Re-requested after a decline (no reason was recorded).',
+        },
+      })
+    } catch (error) {
+      console.warn('Assignment re-request: follow-up log failed', error)
+    }
+  }
+
   const callTitle =
     updated.funding_call?.scheme_title || updated.funding_call?.title || 'a funding call'
 
   // Notify the other side of the change: the admin when faculty progress, the
   // faculty member when an admin changes the assignment or records a decision.
   if (data.status && data.status !== record.status) {
+    const assigneeName = updated.assignee?.name || updated.assignee?.email || 'The assignee'
     if (isAssignee) {
+      let title = `Assignment ${humanStatus(data.status)}: ${callTitle}`
+      let body = `${assigneeName} updated this assignment.`
+      if (data.status === 'COMPLETED') {
+        title = `Submission recorded: ${callTitle}`
+      } else if (data.status === 'ACCEPTED') {
+        title = `Assignment accepted: ${callTitle}`
+        body = `${assigneeName} accepted this call.`
+      } else if (data.status === 'DECLINED') {
+        title = `Assignment declined: ${callTitle}`
+        // The reason is the whole point of the notification — a member who has
+        // to open the record to find out why will not read it.
+        body = `${assigneeName} declined: ${updated.declined_reason || 'no reason given'}`
+      }
       await notifyQuietly({
         tenantId: context.tenantId,
         userIds: [updated.assigned_by_user_id],
-        title:
-          data.status === 'COMPLETED'
-            ? `Submission recorded: ${callTitle}`
-            : `Assignment ${String(data.status).toLowerCase().replace('_', ' ')}: ${callTitle}`,
-        body: `${updated.assignee?.name || updated.assignee?.email || 'The assignee'} updated this assignment.`,
+        title,
+        body,
         category: 'ASSIGNMENT',
         linkUrl: '/assignments',
         assignmentId: updated.id,
         createdByUserId: context.user.id,
       })
     } else {
+      const reRequested = data.status === 'ASSIGNED' && record.status === 'DECLINED'
       await notifyQuietly({
         tenantId: context.tenantId,
         userIds: [updated.assignee_user_id],
-        title: `Assignment updated: ${callTitle}`,
-        body: `Status is now ${String(data.status).toLowerCase().replace('_', ' ')}.`,
+        title: reRequested
+          ? `Please reconsider: ${callTitle}`
+          : `Assignment updated: ${callTitle}`,
+        body: reRequested
+          ? 'The funding department has asked you to look at this call again.'
+          : `Status is now ${humanStatus(data.status)}.`,
         category: 'ASSIGNMENT',
         linkUrl: '/assignments',
         assignmentId: updated.id,

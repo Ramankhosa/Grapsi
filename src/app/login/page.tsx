@@ -35,6 +35,12 @@ export default function LoginPage() {
     if (result.success) {
       router.push('/dashboard')
     } else {
+      // Seeded (imported) account that hasn't set a password yet — send them to
+      // first-login activation with the email prefilled.
+      if (result.code === 'PASSWORD_SETUP_REQUIRED') {
+        router.push(`/set-password?email=${encodeURIComponent(email)}`)
+        return
+      }
       // Check if this is a social login account
       if (result.error?.includes('uses') && result.error?.includes('login')) {
         // Extract provider from error message
@@ -195,6 +201,12 @@ export default function LoginPage() {
                 Forgot password?
               </Link>
             </div>
+          </div>
+
+          <div className="text-center text-sm">
+            <Link href="/set-password" className="font-medium text-ai-blue-400 hover:text-ai-blue-300 transition-colors">
+              First time here? Activate your account
+            </Link>
           </div>
 
           {error && (

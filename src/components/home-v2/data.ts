@@ -1,42 +1,89 @@
 export const pipelineSteps = [
   {
-    eyebrow: '01 · PROFILE',
+    step: '01',
+    label: 'Profile',
     title: 'Your research, understood.',
     body: 'Publications, prior grants, and expertise become a live profile the engine can match against.',
   },
   {
-    eyebrow: '02 · DISCOVERY',
+    step: '02',
+    label: 'Discovery',
     title: 'Every open call, ranked for you.',
-    body: 'Alignment scoring against eligibility, priorities, and deadlines, not keyword search.',
+    body: 'Alignment scoring against eligibility, priorities, and deadlines — not keyword search.',
   },
   {
-    eyebrow: '03 · PRECEDENT',
+    step: '03',
+    label: 'Precedent',
     title: 'See what actually won.',
     body: 'Your idea is placed among previously funded projects to reveal what agencies rewarded.',
   },
   {
-    eyebrow: '04 · POSITIONING',
+    step: '04',
+    label: 'Positioning',
     title: 'Claim the white space.',
     body: 'Gap analysis across funded projects, patents, and publications finds the angle that is both novel and fundable.',
   },
   {
-    eyebrow: '05 · REFINEMENT',
+    step: '05',
+    label: 'Refinement',
     title: 'A concept built to the call.',
     body: "Objectives, work packages, and budget logic are assembled around the agency's own evaluation criteria.",
   },
   {
-    eyebrow: '06 · REVIEW',
+    step: '06',
+    label: 'Review',
     title: 'Scored before you submit.',
     body: 'An AI panel reviews against guidelines, completeness, impact, and reviewer expectations while you can still fix it.',
   },
 ]
 
-export const signals = [
-  'HORIZON EUROPE · HEALTH-2026-TOOL-11 · closes in 41d',
-  'NIH R01 · resubmission window open',
-  'NSF CAREER · avg award $580K',
-  'DST-SERB CRG · call opened',
-  'ERC StG · success rate 14.9%',
+export const heroMatches = [
+  {
+    id: 'HORIZON-CL4-2026-DATA-02',
+    programme: 'Horizon Europe',
+    title: 'AI systems for adaptive health infrastructure',
+    score: 92,
+    closes: 'closes in 41d',
+  },
+  {
+    id: 'PAR-25-118',
+    programme: 'NIH R01',
+    title: 'Clinical decision support at the point of care',
+    score: 84,
+    closes: 'closes in 66d',
+  },
+  {
+    id: 'NSF-24-593',
+    programme: 'NSF CAREER',
+    title: 'Trustworthy autonomy in safety-critical systems',
+    score: 77,
+    closes: 'closes in 12d',
+  },
+  {
+    id: 'CRG-2026',
+    programme: 'DST-SERB',
+    title: 'Materials informatics for clean energy',
+    score: 71,
+    closes: 'open',
+  },
+]
+
+export const heroEligibility = [
+  { label: 'Consortium of 3+ partners', state: 'met' as const },
+  { label: 'TRL 4–6 at project start', state: 'met' as const },
+  { label: 'Open-science data plan', state: 'action' as const },
+]
+
+export const heroPrecedents = [
+  'GA-101094521 · €1.2M · 2024',
+  'GA-101076883 · €870K · 2023',
+  'GA-101119044 · €1.5M · 2025',
+]
+
+export const platformStats = [
+  { value: '2.8M', label: 'funded-project records' },
+  { value: '96', label: 'programmes normalized' },
+  { value: '14', label: 'source families connected' },
 ]
 
 export const databaseRows = [
@@ -54,7 +101,7 @@ export const audienceCards = [
     body: 'Run portfolio-level funding scans across every department and see where your institution is leaving money unclaimed.',
   },
   {
-    title: 'Individual Researchers & Labs',
+    title: 'Researchers & Labs',
     body: 'Turn a profile and a rough direction into ranked calls, funded precedents, and a positioned proposal concept.',
   },
   {
@@ -67,35 +114,22 @@ export const audienceCards = [
   },
 ]
 
-export const graphNodes = [
-  { id: 'r1', x: 14, y: 48, kind: 'researcher' },
-  { id: 'r2', x: 22, y: 28, kind: 'researcher' },
-  { id: 'r3', x: 26, y: 70, kind: 'researcher' },
-  { id: 'c1', x: 44, y: 35, kind: 'call' },
-  { id: 'c2', x: 50, y: 62, kind: 'call' },
-  { id: 'c3', x: 60, y: 22, kind: 'call' },
-  { id: 'f1', x: 74, y: 36, kind: 'funded' },
-  { id: 'f2', x: 82, y: 54, kind: 'funded' },
-  { id: 'f3', x: 69, y: 70, kind: 'funded' },
-  { id: 'p1', x: 36, y: 18, kind: 'publication' },
-  { id: 'p2', x: 66, y: 48, kind: 'publication' },
-  { id: 'p3', x: 88, y: 24, kind: 'publication' },
-  { id: 'p4', x: 43, y: 78, kind: 'publication' },
-  { id: 'p5', x: 91, y: 73, kind: 'publication' },
-] as const
+/** Funders that have paid for work in the example field, ranked by project count. */
+export const fieldFunders = [
+  { name: 'Horizon Europe', projects: 142, awarded: '€168M' },
+  { name: 'NIH', projects: 86, awarded: '$52M' },
+  { name: 'UKRI EPSRC', projects: 54, awarded: '£41M' },
+  { name: 'NSF', projects: 31, awarded: '$18M' },
+  { name: 'DST-SERB', projects: 17, awarded: '₹38Cr' },
+]
 
-export const graphEdges = [
-  ['r1', 'c1'],
-  ['r1', 'c2'],
-  ['r2', 'c1'],
-  ['r3', 'c2'],
-  ['c1', 'f1'],
-  ['c1', 'f2'],
-  ['c2', 'f2'],
-  ['c2', 'f3'],
-  ['p1', 'c1'],
-  ['p2', 'f2'],
-  ['p3', 'f1'],
-  ['p4', 'c2'],
-  ['p5', 'f3'],
-] as const
+export const fieldMatrixYears = ['2021', '2022', '2023', '2024', '2025']
+
+/** Sub-topic × year funded-project counts. The `open` row is the gap the engine found. */
+export const fieldMatrixRows = [
+  { topic: 'Workflow automation', counts: [28, 34, 41, 39, 44] },
+  { topic: 'Decision support', counts: [19, 22, 26, 31, 29] },
+  { topic: 'Federated health data', counts: [8, 12, 17, 22, 26] },
+  { topic: 'Predictive triage', counts: [6, 9, 11, 14, 12] },
+  { topic: 'Explainable triage', counts: [1, 2, 0, 1, 2], open: true },
+]

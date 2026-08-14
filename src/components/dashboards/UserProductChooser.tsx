@@ -3,13 +3,16 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
+import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import type { ProductModuleKey } from '@/lib/access/modules'
 import {
   ArrowRight,
   ArrowUpRight,
+  ClipboardList,
   Compass,
   FileText,
+  GraduationCap,
   LayoutDashboard,
   Lock,
   MessageSquare,
@@ -134,11 +137,57 @@ const adminGroup: ProductGroup = {
   caption: 'Your workspace and the people in it',
   options: [
     {
+      title: 'Faculty & Organization',
+      description: 'Upload your faculty roster (CSV/Excel) and build your org structure.',
+      href: '/tenant-admin/faculty',
+      icon: GraduationCap,
+      tag: 'Admin'
+    },
+    {
+      title: 'Funding Department',
+      description: 'Staff the sponsored-research office and assign schools to its members.',
+      href: '/tenant-admin/funding-dept',
+      icon: Compass,
+      tag: 'Admin'
+    },
+    {
       title: 'Team & Workspace Admin',
       description: 'Invite members, manage access codes, and oversee workspace usage.',
       href: '/admin',
       icon: Users,
       tag: 'Admin'
+    }
+  ]
+}
+
+/**
+ * Shown to funding department members. Membership is not a role, so this group
+ * is gated on the server's answer rather than on anything in the JWT.
+ */
+const fundingDeptGroup: ProductGroup = {
+  title: 'Funding department',
+  caption: 'The calls you are placing, and the people you place them with',
+  options: [
+    {
+      title: 'My Worklist',
+      description: 'Deadlines, overdue calls and the follow-ups you scheduled.',
+      href: '/funding-dept',
+      icon: Compass,
+      tag: 'Department'
+    },
+    {
+      title: 'Calls I Assigned',
+      description: 'Track replies and record what you did about them.',
+      href: '/funding-dept/assignments',
+      icon: ClipboardList,
+      tag: 'Department'
+    },
+    {
+      title: 'Faculty in My Schools',
+      description: 'The researchers you look after, and how matchable their profiles are.',
+      href: '/funding-dept/faculty',
+      icon: GraduationCap,
+      tag: 'Department'
     }
   ]
 }
@@ -257,8 +306,13 @@ function ProductCard({
 export default function UserProductChooser() {
   const { user } = useAuth()
   const { isTenantAdmin } = useRoleAccess()
+  const { me: fundingDept } = useFundingDeptMe()
   const { hasModule, plan, isLoading: entitlementsLoading, isPlatform } = useEntitlements()
-  const groups = isTenantAdmin ? [...productGroups, adminGroup] : productGroups
+  const groups = [
+    ...productGroups,
+    ...(fundingDept.isMember ? [fundingDeptGroup] : []),
+    ...(isTenantAdmin ? [adminGroup] : []),
+  ]
 
   // A card is locked when its module is not in the tenant's plan. While
   // entitlements load (or for platform/super-admin users) nothing is locked.

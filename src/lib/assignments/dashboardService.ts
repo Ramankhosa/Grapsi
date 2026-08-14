@@ -13,8 +13,11 @@ import prisma from '../prisma';
  *   Submitted — the assignee recorded submission info (status COMPLETED).
  *   Missed    — still open but the internal deadline has passed.
  *
- * Cancelled assignments are deliberately excluded from all three buckets; they
- * are reported separately so they never inflate a "missed" figure.
+ * Cancelled and declined assignments are deliberately excluded from all three
+ * buckets and reported in their own columns. A decline is an answer, not a
+ * failure to answer: counting it as missed would blame the department for work
+ * the faculty member explicitly turned down, and would hide the real signal —
+ * that this call still needs somebody.
  *
  * A fourth, org-level metric — funding calls that expired with nobody assigned
  * — is tracked in `getUnassignedExpiredCalls`, because "we missed it entirely"
@@ -59,10 +62,15 @@ export interface DashboardFilters {
   dateFrom?: Date | null;
   dateTo?: Date | null;
   agency?: string | null;
+  /**
+   * Restrict to work delegated by these users. Powers the department's
+   * per-member views ("what am I chasing", "what is each of my team chasing").
+   */
+  assignedByUserIds?: string[];
 }
 
-/** Open = the work is still live (not completed, not cancelled). */
-const OPEN_STATUSES = Prisma.sql`ca.status IN ('ASSIGNED', 'IN_PROGRESS')`;
+/** Open = the work is still live (not completed, cancelled or declined). */
+const OPEN_STATUSES = Prisma.sql`ca.status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')`;
 
 const IS_ACTIVE = Prisma.sql`(${OPEN_STATUSES} AND (ca.deadline_at IS NULL OR ca.deadline_at >= CURRENT_DATE))`;
 const IS_SUBMITTED = Prisma.sql`ca.status = 'COMPLETED'`;
@@ -107,6 +115,14 @@ function assignmentWhere(filters: DashboardFilters) {
       )}]::text[])`
     );
   }
+  const assignedByUserIds = (filters.assignedByUserIds || []).filter(Boolean);
+  if (assignedByUserIds.length > 0) {
+    conditions.push(
+      Prisma.sql`ca.assigned_by_user_id = ANY(ARRAY[${Prisma.join(
+        assignedByUserIds.map((id) => Prisma.sql`${id}`)
+      )}]::text[])`
+    );
+  }
   if (filters.dateFrom) {
     conditions.push(Prisma.sql`ca.created_at >= ${filters.dateFrom}`);
   }
@@ -144,6 +160,7 @@ const BUCKET_COLUMNS = Prisma.sql`
   COUNT(*) FILTER (WHERE ${IS_SUBMITTED})::int AS "submitted",
   COUNT(*) FILTER (WHERE ${IS_MISSED})::int    AS "missed",
   COUNT(*) FILTER (WHERE ca.status = 'CANCELLED')::int      AS "cancelled",
+  COUNT(*) FILTER (WHERE ca.status = 'DECLINED')::int       AS "declined",
   COUNT(*) FILTER (WHERE ca.outcome = 'AWARDED')::int       AS "awarded",
   COUNT(*) FILTER (WHERE ca.outcome = 'REJECTED')::int      AS "rejected",
   COUNT(*)::int                                             AS "total",
@@ -155,6 +172,7 @@ export interface DashboardSummary {
   submitted: number;
   missed: number;
   cancelled: number;
+  declined: number;
   awarded: number;
   rejected: number;
   total: number;
@@ -186,6 +204,7 @@ export async function getSummary(filters: DashboardFilters): Promise<DashboardSu
     submitted: row?.submitted || 0,
     missed: row?.missed || 0,
     cancelled: row?.cancelled || 0,
+    declined: row?.declined || 0,
     awarded: row?.awarded || 0,
     rejected: row?.rejected || 0,
     total: row?.total || 0,
@@ -204,6 +223,7 @@ export interface AllocationRow {
   submitted: number;
   missed: number;
   cancelled: number;
+  declined: number;
   awarded: number;
   rejected: number;
   total: number;
@@ -320,12 +340,81 @@ export async function getUnassignedExpiredCalls(tenantId: string, limit = 50) {
   `);
 }
 
+/**
+ * Open calls that nobody in the caller's schools has been put on yet, with the
+ * closing date approaching.
+ *
+ * Deliberately different from `getUnassignedExpiredCalls`, which is a
+ * tenant-level post-mortem. This one is scoped and forward-looking: it is the
+ * list a department member can still do something about, so "assigned" means
+ * "assigned to someone in MY schools" — a call taken up in a school I do not
+ * cover is not my job and must not disappear from my worklist because of it.
+ */
+export async function getUnassignedUpcomingCalls(
+  tenantId: string,
+  options: { withinDays?: number; scopeUnitIds?: string[] | null; limit?: number } = {}
+) {
+  const { withinDays = 45, scopeUnitIds = null, limit = 25 } = options;
+  if (scopeUnitIds && scopeUnitIds.length === 0) {
+    return [];
+  }
+
+  // A cancelled or declined assignment means nobody is on this call: the
+  // request was withdrawn or turned down. Both must leave the call visible
+  // here, or a decline would quietly remove it from the very list whose job is
+  // to say "this still needs somebody".
+  const notTakenUp = Prisma.sql`x.status NOT IN ('CANCELLED', 'DECLINED')`;
+
+  const coveredPredicate = scopeUnitIds
+    ? Prisma.sql`
+        AND NOT EXISTS (
+          SELECT 1
+            FROM call_assignments x
+            LEFT JOIN researcher_profiles xrp ON xrp.user_id = x.assignee_user_id
+           WHERE x.funding_call_id = fc.id
+             AND x.tenant_id = ${tenantId}
+             AND ${notTakenUp}
+             AND COALESCE(x.assignee_org_unit_id, xrp.org_unit_id) = ANY(ARRAY[${Prisma.join(
+               scopeUnitIds.map((id) => Prisma.sql`${id}`)
+             )}]::text[])
+        )`
+    : Prisma.sql`
+        AND NOT EXISTS (
+          SELECT 1 FROM call_assignments x
+           WHERE x.funding_call_id = fc.id
+             AND x.tenant_id = ${tenantId}
+             AND ${notTakenUp}
+        )`;
+
+  return prisma.$queryRaw<
+    Array<{ id: string; title: string | null; agencyName: string | null; closesAt: Date | null }>
+  >(Prisma.sql`
+    SELECT
+      fc.id,
+      COALESCE(fc.scheme_title, fc.title)       AS "title",
+      COALESCE(fc.agency_name, fc."agencyName") AS "agencyName",
+      COALESCE(fc.close_date, fc."deadlineAt")  AS "closesAt"
+    FROM funding_calls fc
+    WHERE (
+        fc."tenantId" = ${tenantId}
+        OR (fc."tenantId" IS NULL AND fc.visibility = 'GLOBAL_PUBLISHED' AND fc.status = 'PUBLISHED')
+      )
+      AND COALESCE(fc.close_date, fc."deadlineAt") IS NOT NULL
+      AND COALESCE(fc.close_date, fc."deadlineAt") >= CURRENT_DATE
+      AND COALESCE(fc.close_date, fc."deadlineAt") < CURRENT_DATE + ${`${withinDays} days`}::interval
+      ${coveredPredicate}
+    ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC
+    LIMIT ${limit}
+  `);
+}
+
 export interface ReportRow {
   label: string;
   active: number;
   submitted: number;
   missed: number;
   cancelled: number;
+  declined: number;
   awarded: number;
   rejected: number;
   total: number;
@@ -389,6 +478,7 @@ const CSV_COLUMNS: Array<[keyof ReportRow, string]> = [
   ['submitted', 'Submitted'],
   ['missed', 'Missed'],
   ['cancelled', 'Cancelled'],
+  ['declined', 'Declined'],
   ['awarded', 'Awarded'],
   ['rejected', 'Rejected'],
   ['total', 'Total'],

@@ -21,6 +21,7 @@ interface Summary {
   submitted: number
   missed: number
   cancelled: number
+  declined: number
   awarded: number
   rejected: number
   total: number
@@ -66,6 +67,7 @@ interface ReportRow {
   active: number
   submitted: number
   missed: number
+  declined: number
   awarded: number
   rejected: number
   total: number
@@ -325,6 +327,7 @@ export default function GrantDashboardPage() {
         { label: 'Active', value: summary.active, hint: 'Deadline ahead', tone: 'text-blue-600 dark:text-blue-400' },
         { label: 'Submitted', value: summary.submitted, hint: 'Application submitted', tone: 'text-green-600 dark:text-green-400' },
         { label: 'Missed', value: summary.missed, hint: 'Deadline passed, no submission', tone: 'text-rose-600 dark:text-rose-400' },
+        { label: 'Declined', value: summary.declined, hint: 'Turned down, needs a new home', tone: 'text-amber-600 dark:text-amber-400' },
         {
           label: 'Awarded',
           value: summary.awarded,
@@ -669,7 +672,7 @@ export default function GrantDashboardPage() {
                   <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                     <thead className="bg-gray-50 dark:bg-gray-700">
                       <tr>
-                        {['Group', 'Active', 'Submitted', 'Missed', 'Awarded', 'Rejected', 'Total', 'Funding won'].map((heading) => (
+                        {['Group', 'Active', 'Submitted', 'Missed', 'Declined', 'Awarded', 'Rejected', 'Total', 'Funding won'].map((heading) => (
                           <th key={heading} className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">
                             {heading}
                           </th>
@@ -683,6 +686,7 @@ export default function GrantDashboardPage() {
                           <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">{row.active}</td>
                           <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">{row.submitted}</td>
                           <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">{row.missed}</td>
+                          <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">{row.declined}</td>
                           <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">{row.awarded}</td>
                           <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">{row.rejected}</td>
                           <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">{row.total}</td>

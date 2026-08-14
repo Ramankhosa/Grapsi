@@ -87,19 +87,42 @@ function ResultCard({
   scoreBasis,
   onAssign,
   isAssigned,
+  selectable,
+  isSelected,
+  onToggleSelect,
 }: {
   result: MatchResult
   rank: number
   scoreBasis: string
   onAssign?: (result: MatchResult) => void
   isAssigned?: boolean
+  selectable?: boolean
+  isSelected?: boolean
+  onToggleSelect?: (userId: string) => void
 }) {
   const tier = TIER_STYLES[result.matchTier] || TIER_STYLES.weak
   return (
-    <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
+    <div
+      style={{
+        border: isSelected ? '1px solid #2563eb' : '1px solid #e5e7eb',
+        borderRadius: 8,
+        padding: 16,
+        background: isSelected ? '#f5f8ff' : '#fff',
+      }}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            {selectable && (
+              <input
+                type="checkbox"
+                checked={Boolean(isSelected)}
+                disabled={isAssigned}
+                onChange={() => onToggleSelect?.(result.userId)}
+                aria-label={`Select ${result.displayName}`}
+                style={{ width: 16, height: 16, flexShrink: 0, cursor: isAssigned ? 'default' : 'pointer' }}
+              />
+            )}
             <span style={{
               width: 28, height: 28, borderRadius: '50%',
               background: '#2563eb', color: '#fff', display: 'flex',
@@ -257,6 +280,9 @@ export default function MatchResults({
   emptyMessage = 'No researchers passed the relevance threshold. Try a different funding call or broaden the search.',
   onAssign,
   assignedUserIds,
+  selectedUserIds,
+  onToggleSelect,
+  onSelectVisible,
 }: {
   response: SearchResponse
   emptyMessage?: string
@@ -264,6 +290,14 @@ export default function MatchResults({
   onAssign?: (result: MatchResult) => void
   /** Users already assigned to the selected call — shown as "Assigned". */
   assignedUserIds?: string[]
+  /**
+   * When provided, cards become selectable for a bulk circulation. Selection
+   * lives in the parent because the assign dialog and the request both need it.
+   */
+  selectedUserIds?: string[]
+  onToggleSelect?: (userId: string) => void
+  /** Receives the currently visible, not-yet-assigned ids — powers "select all". */
+  onSelectVisible?: (userIds: string[]) => void
 }) {
   const [tierFilter, setTierFilter] = useState<TierFilter>('auto')
 
@@ -293,8 +327,19 @@ export default function MatchResults({
   }, [response.results, tierFilter])
 
   const assigned = useMemo(() => new Set(assignedUserIds || []), [assignedUserIds])
+  const selected = useMemo(() => new Set(selectedUserIds || []), [selectedUserIds])
   const screenedOut = Math.max(0, response.totalCandidates - response.totalResults)
   const hiddenByFilter = response.results.length - visible.length
+
+  const selectable = Boolean(onToggleSelect)
+  // "Select all" means all of what you can currently see, minus the people
+  // already on this call — offering to re-assign them would only produce skips.
+  const selectableVisibleIds = useMemo(
+    () => visible.filter((r) => !assigned.has(r.userId)).map((r) => r.userId),
+    [visible, assigned]
+  )
+  const allVisibleSelected =
+    selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selected.has(id))
 
   return (
     <div>
@@ -347,6 +392,34 @@ export default function MatchResults({
         </div>
       </div>
 
+      {selectable && selectableVisibleIds.length > 0 && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
+            padding: '8px 12px', borderRadius: 8, background: '#f9fafb',
+            border: '1px solid #e5e7eb', fontSize: 13, color: '#374151',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            onChange={() =>
+              onSelectVisible?.(allVisibleSelected ? [] : selectableVisibleIds)
+            }
+            aria-label="Select all shown"
+            style={{ width: 16, height: 16, cursor: 'pointer' }}
+          />
+          <span>
+            Select all {selectableVisibleIds.length} shown
+          </span>
+          {selected.size > 0 && (
+            <span style={{ marginLeft: 'auto', fontWeight: 600, color: '#2563eb' }}>
+              {selected.size} selected
+            </span>
+          )}
+        </div>
+      )}
+
       {response.results.length === 0 ? (
         <div style={{
           padding: 32, textAlign: 'center', color: '#9ca3af',
@@ -371,6 +444,9 @@ export default function MatchResults({
               scoreBasis={response.scoreBasis}
               onAssign={onAssign}
               isAssigned={assigned.has(r.userId)}
+              selectable={selectable}
+              isSelected={selected.has(r.userId)}
+              onToggleSelect={onToggleSelect}
             />
           ))}
           {hiddenByFilter > 0 && (

@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Copy,
+  GraduationCap,
   KeyRound,
   Loader2,
   LogOut,
@@ -539,6 +540,51 @@ export default function TenantAdminDashboard() {
             )}
           </>
         )}
+
+        {/* How seeded people sign in — the roster + first-login path (no emails) */}
+        <section className="nk-panel overflow-hidden">
+          <div className="nk-panel-head">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="nk-tile nk-tile-live h-9 w-9">
+                <KeyRound className="h-4 w-4" aria-hidden />
+              </span>
+              <div className="min-w-0">
+                <h2 className="nk-title text-[14px]">How your team signs in</h2>
+                <p className="nk-sub text-[12.5px]">
+                  Roster-seeded people activate themselves — no invitation emails to send.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="p-5 text-[13px] text-nickel-700">
+            <ol className="list-decimal space-y-2 pl-5">
+              <li>
+                Upload your roster in{' '}
+                <a
+                  href="/tenant-admin/faculty"
+                  className="font-medium text-blue-700 underline underline-offset-2 hover:text-blue-800"
+                >
+                  Faculty &amp; Organization
+                </a>
+                , including an <strong>Employee ID</strong> for everyone.
+              </li>
+              <li>
+                Tell your team to open{' '}
+                <code className="rounded bg-nickel-100 px-1 py-0.5 text-[12px]">/set-password</code> and enter
+                their <strong>work email + Employee ID</strong>.
+              </li>
+              <li>They choose a password and are signed in — done.</li>
+            </ol>
+            <p className="mt-3 text-[12px] text-nickel-500">
+              Anyone without an Employee ID can’t self-activate; the Faculty list flags them as “No ID”.
+              Prefer email invitations for one-off external people — use the panel below.
+            </p>
+            <a href="/tenant-admin/faculty" className="nk-btn-primary nk-btn-sm mt-4 inline-flex">
+              <GraduationCap className="h-4 w-4" aria-hidden />
+              Upload / manage faculty roster
+            </a>
+          </div>
+        </section>
 
         {/* Invite members (email invites — the default way to add people) */}
         <InviteMembersPanel />

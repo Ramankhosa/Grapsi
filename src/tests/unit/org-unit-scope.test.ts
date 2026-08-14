@@ -6,23 +6,31 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * rather than left to review discipline.
  */
 
-const { findManyGrantsMock, queryRawMock, findUniqueProfileMock } = vi.hoisted(() => ({
+const {
+  findManyGrantsMock,
+  queryRawMock,
+  findUniqueProfileMock,
+  findFirstDeptMemberMock,
+  findManyCoverageMock,
+} = vi.hoisted(() => ({
   findManyGrantsMock: vi.fn(),
   queryRawMock: vi.fn(),
   findUniqueProfileMock: vi.fn(),
+  findFirstDeptMemberMock: vi.fn(),
+  findManyCoverageMock: vi.fn(),
 }))
 
+const prismaMock = {
+  orgUnitManager: { findMany: findManyGrantsMock },
+  researcherProfile: { findUnique: findUniqueProfileMock },
+  fundingDeptMember: { findFirst: findFirstDeptMemberMock },
+  fundingDeptSchoolAssignment: { findMany: findManyCoverageMock },
+  $queryRaw: queryRawMock,
+}
+
 vi.mock('@/lib/prisma', () => ({
-  default: {
-    orgUnitManager: { findMany: findManyGrantsMock },
-    researcherProfile: { findUnique: findUniqueProfileMock },
-    $queryRaw: queryRawMock,
-  },
-  prisma: {
-    orgUnitManager: { findMany: findManyGrantsMock },
-    researcherProfile: { findUnique: findUniqueProfileMock },
-    $queryRaw: queryRawMock,
-  },
+  default: prismaMock,
+  prisma: prismaMock,
 }))
 
 const load = async () => import('@/lib/orgUnits/scope')
@@ -36,11 +44,17 @@ const GRANT = {
   can_manage_members: false,
 }
 
+const DEPT_MEMBER = { id: 'fdm-1', is_head: false }
+
 beforeEach(() => {
   vi.clearAllMocks()
   findManyGrantsMock.mockResolvedValue([])
   queryRawMock.mockResolvedValue([])
   findUniqueProfileMock.mockResolvedValue(null)
+  // No department membership by default: every pre-existing assertion below
+  // must hold unchanged, which is the back-compat proof for this feature.
+  findFirstDeptMemberMock.mockResolvedValue(null)
+  findManyCoverageMock.mockResolvedValue([])
 })
 
 describe('resolveManagedScope precedence', () => {
@@ -114,6 +128,105 @@ describe('resolveManagedScope precedence', () => {
   })
 })
 
+describe('resolveManagedScope: funding department coverage', () => {
+  it('scopes a covering member to their schools and lets them assign', async () => {
+    findFirstDeptMemberMock.mockResolvedValue(DEPT_MEMBER)
+    findManyCoverageMock.mockResolvedValue([{ org_unit_id: 'school-a' }, { org_unit_id: 'school-b' }])
+    queryRawMock.mockResolvedValue([
+      { id: 'school-a' },
+      { id: 'school-b' },
+      { id: 'dept-under-a' },
+    ])
+    const { resolveManagedScope } = await load()
+
+    const scope = await resolveManagedScope({ tenantId: 't1', userId: 'u1', roles: ['MEMBER'] })
+    expect(scope.isTenantWide).toBe(false)
+    expect(scope.isHead).toBe(true)
+    expect(scope.canAssign).toBe(true)
+    expect(scope.canViewReports).toBe(true)
+    expect(scope.managedUnitIds.sort()).toEqual(['dept-under-a', 'school-a', 'school-b'])
+    expect(scope.fundingDept).toEqual({
+      isMember: true,
+      isHead: false,
+      memberId: 'fdm-1',
+      schoolUnitIds: ['school-a', 'school-b'],
+    })
+  })
+
+  it('covers a school subtree, so departments under it are in reach', async () => {
+    findFirstDeptMemberMock.mockResolvedValue(DEPT_MEMBER)
+    findManyCoverageMock.mockResolvedValue([{ org_unit_id: 'school-a' }])
+    const { resolveManagedScope } = await load()
+    await resolveManagedScope({ tenantId: 't1', userId: 'u1', roles: ['MEMBER'] })
+
+    // Coverage is always a subtree root — there is no UNIT_ONLY equivalent.
+    expect(queryRawMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives the head every school the department covers', async () => {
+    findFirstDeptMemberMock.mockResolvedValue({ id: 'fdm-head', is_head: true })
+    findManyCoverageMock.mockResolvedValue([
+      { org_unit_id: 'school-a' },
+      { org_unit_id: 'school-b' },
+      { org_unit_id: 'school-c' },
+    ])
+    const { resolveManagedScope } = await load()
+    const scope = await resolveManagedScope({ tenantId: 't1', userId: 'head', roles: ['MEMBER'] })
+
+    expect(scope.fundingDept.isHead).toBe(true)
+    expect(scope.headUnitIds.sort()).toEqual(['school-a', 'school-b', 'school-c'])
+    // The head query asks for every active member's coverage, not just their own.
+    expect(findManyCoverageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenant_id: 't1', member: { is_active: true } },
+      })
+    )
+  })
+
+  it('NARROWS a legacy tenant-wide assigner once they cover schools', async () => {
+    findFirstDeptMemberMock.mockResolvedValue(DEPT_MEMBER)
+    findManyCoverageMock.mockResolvedValue([{ org_unit_id: 'school-a' }])
+    const { resolveManagedScope } = await load()
+
+    const scope = await resolveManagedScope({ tenantId: 't1', userId: 'u1', roles: ['CALL_ASSIGNER'] })
+    expect(scope.isTenantWide).toBe(false)
+    expect(scope.managedUnitIds).toContain('school-a')
+  })
+
+  it('leaves a member with no schools on the pre-existing code path', async () => {
+    findFirstDeptMemberMock.mockResolvedValue(DEPT_MEMBER)
+    findManyCoverageMock.mockResolvedValue([])
+    const { resolveManagedScope } = await load()
+
+    const plain = await resolveManagedScope({ tenantId: 't1', userId: 'u1', roles: ['MEMBER'] })
+    expect(plain.isHead).toBe(false)
+    expect(plain.canAssign).toBe(false)
+    expect(plain.fundingDept.isMember).toBe(true)
+
+    // ...including the legacy widening, which coverage (not membership) revokes.
+    const legacy = await resolveManagedScope({ tenantId: 't1', userId: 'u1', roles: ['MANAGER'] })
+    expect(legacy.isTenantWide).toBe(true)
+  })
+
+  it('does not grant structural rights — covering a school is not owning it', async () => {
+    findFirstDeptMemberMock.mockResolvedValue(DEPT_MEMBER)
+    findManyCoverageMock.mockResolvedValue([{ org_unit_id: 'school-a' }])
+    const { resolveManagedScope } = await load()
+
+    const scope = await resolveManagedScope({ tenantId: 't1', userId: 'u1', roles: ['MEMBER'] })
+    expect(scope.canManageStructure).toBe(false)
+    expect(scope.canManageMembers).toBe(false)
+    // Arbitrary attribution is worse than none: 1 of 4 schools is not "their" unit.
+    expect(scope.primaryUnitId).toBeNull()
+  })
+
+  it('never pays for the department lookup when the caller is tenant-wide', async () => {
+    const { resolveManagedScope } = await load()
+    await resolveManagedScope({ tenantId: 't1', userId: 'u1', roles: ['ADMIN'] })
+    expect(findFirstDeptMemberMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('canAssignToUser', () => {
   const headScope = {
     tenantId: 't1',
@@ -127,6 +240,7 @@ describe('canAssignToUser', () => {
     canManageStructure: false,
     canManageMembers: false,
     primaryUnitId: 'dept-1',
+    fundingDept: { isMember: false, isHead: false, memberId: null, schoolUnitIds: [] },
   }
 
   it('allows an assignee inside the managed subtree', async () => {
@@ -169,6 +283,7 @@ describe('canManageAssignment', () => {
     canManageStructure: false,
     canManageMembers: false,
     primaryUnitId: 'dept-1',
+    fundingDept: { isMember: false, isHead: false, memberId: null, schoolUnitIds: [] },
   }
 
   it('keeps the original assigner in control after the assignee moves away', async () => {
@@ -215,6 +330,7 @@ describe('intersectRequestedUnits', () => {
     canManageStructure: false,
     canManageMembers: false,
     primaryUnitId: 'a',
+    fundingDept: { isMember: false, isHead: false, memberId: null, schoolUnitIds: [] },
   }
 
   it('drops out-of-scope ids so a forged filter cannot widen reach', async () => {
@@ -234,3 +350,4 @@ describe('intersectRequestedUnits', () => {
     ])
   })
 })
+

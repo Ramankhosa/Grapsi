@@ -33,6 +33,7 @@ interface FacultyRow {
   keywords: string[]
   orgUnitId: string | null
   hasEmbedding: boolean
+  activated: boolean
 }
 
 interface ImportRowResult {
@@ -55,6 +56,10 @@ interface ImportSummary {
   unitsCreated: string[]
   embeddingsIndexed: number
   embeddingsPending: number
+  rolesAssigned: number
+  headsCreated: number
+  pendingActivation: number
+  activationBlocked: number
   results: ImportRowResult[]
 }
 
@@ -72,6 +77,8 @@ export default function TenantFacultyPage() {
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
   const [orgUnitFilter, setOrgUnitFilter] = useState<string>('')
+  const [accessFilter, setAccessFilter] = useState<'' | 'activated' | 'pending' | 'noid'>('')
+  const [accessCounts, setAccessCounts] = useState({ activated: 0, pending: 0, noid: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -122,17 +129,23 @@ export default function TenantFacultyPage() {
     }
   }, [authFetch])
 
-  const loadFaculty = useCallback(async (nextOffset: number, query: string, unitId: string) => {
+  const loadFaculty = useCallback(async (nextOffset: number, query: string, unitId: string, access: string = '') => {
     try {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(nextOffset) })
       if (query) params.set('q', query)
       if (unitId) params.set('orgUnitId', unitId)
+      if (access) params.set('access', access)
       const res = await authFetch(`/api/tenant-admin/faculty?${params}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not load faculty')
       setFaculty(data.faculty || [])
       setTotal(data.total || 0)
       setEmbedded(data.embedded || 0)
+      setAccessCounts({
+        activated: data.activatedCount || 0,
+        pending: data.pendingCount || 0,
+        noid: data.noIdCount || 0,
+      })
       setOffset(nextOffset)
     } catch (e: any) {
       setError(e.message)
@@ -151,7 +164,7 @@ export default function TenantFacultyPage() {
   useEffect(() => {
     if (total === 0 || embedded >= total) return
     const interval = setInterval(() => {
-      loadFaculty(offset, search, orgUnitFilter)
+      loadFaculty(offset, search, orgUnitFilter, accessFilter)
     }, 5000)
     // Stop after ~5 minutes even if something got stuck.
     const stop = setTimeout(() => clearInterval(interval), 5 * 60 * 1000)
@@ -159,7 +172,7 @@ export default function TenantFacultyPage() {
       clearInterval(interval)
       clearTimeout(stop)
     }
-  }, [total, embedded, offset, search, orgUnitFilter, loadFaculty])
+  }, [total, embedded, offset, search, orgUnitFilter, accessFilter, loadFaculty])
 
   // `kind` is no longer sent — depth follows the parent, so any unit can nest
   // under any other up to maxDepth.
@@ -260,7 +273,7 @@ export default function TenantFacultyPage() {
 
       setSummary(data)
       if (!dryRun) {
-        await Promise.all([loadSchools(), loadFaculty(0, search, orgUnitFilter)])
+        await Promise.all([loadSchools(), loadFaculty(0, search, orgUnitFilter, accessFilter)])
       }
     } catch (e: any) {
       setImportError(e.message)
@@ -386,7 +399,7 @@ export default function TenantFacultyPage() {
                   type="text"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && loadFaculty(0, search, orgUnitFilter)}
+                  onKeyDown={e => e.key === 'Enter' && loadFaculty(0, search, orgUnitFilter, accessFilter)}
                   placeholder="Search by name, email, school or department..."
                   className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
                 />
@@ -394,7 +407,7 @@ export default function TenantFacultyPage() {
                   value={orgUnitFilter}
                   onChange={e => {
                     setOrgUnitFilter(e.target.value)
-                    loadFaculty(0, search, e.target.value)
+                    loadFaculty(0, search, e.target.value, accessFilter)
                   }}
                   className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white min-w-[220px]"
                 >
@@ -409,7 +422,7 @@ export default function TenantFacultyPage() {
                   ))}
                 </select>
                 <button
-                  onClick={() => loadFaculty(0, search, orgUnitFilter)}
+                  onClick={() => loadFaculty(0, search, orgUnitFilter, accessFilter)}
                   className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
                   Search
@@ -424,7 +437,7 @@ export default function TenantFacultyPage() {
             </div>
 
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              {total} faculty · {embedded} searchable (embedded)
+              {total} {accessFilter ? 'shown' : 'faculty'} · {embedded} searchable (embedded)
               {total > embedded && (
                 <span className="text-amber-600 dark:text-amber-400">
                   {' '}· {total - embedded} awaiting embedding
@@ -432,11 +445,48 @@ export default function TenantFacultyPage() {
               )}
             </p>
 
+            {/* Activation status filter — isolate who still needs to sign in. */}
+            <div className="flex flex-wrap items-center gap-2">
+              {([
+                { key: '', label: 'All', count: accessCounts.activated + accessCounts.pending + accessCounts.noid },
+                { key: 'activated', label: 'Activated', count: accessCounts.activated },
+                { key: 'pending', label: 'Pending', count: accessCounts.pending },
+                { key: 'noid', label: 'No ID', count: accessCounts.noid },
+              ] as const).map(chip => (
+                <button
+                  key={chip.key || 'all'}
+                  onClick={() => {
+                    setAccessFilter(chip.key)
+                    loadFaculty(0, search, orgUnitFilter, chip.key)
+                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
+                    accessFilter === chip.key
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {chip.label}
+                  <span
+                    className={`rounded-full px-1.5 ${
+                      accessFilter === chip.key ? 'bg-blue-500/40' : 'bg-gray-100 dark:bg-gray-700'
+                    }`}
+                  >
+                    {chip.count}
+                  </span>
+                </button>
+              ))}
+              {accessCounts.noid > 0 && (
+                <span className="text-xs text-red-600 dark:text-red-400">
+                  {accessCounts.noid} can’t self-activate — add an Employee ID and re-import.
+                </span>
+              )}
+            </div>
+
             <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead className="bg-gray-50 dark:bg-gray-700">
                   <tr>
-                    {['Faculty', 'School / Department', 'Designation', 'Research areas', 'Searchable'].map(heading => (
+                    {['Faculty', 'School / Department', 'Designation', 'Research areas', 'Access', 'Searchable'].map(heading => (
                       <th
                         key={heading}
                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider"
@@ -449,7 +499,7 @@ export default function TenantFacultyPage() {
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {faculty.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-500 dark:text-gray-400">
+                      <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-500 dark:text-gray-400">
                         No faculty yet. Use “Import CSV / Excel” to upload your roster.
                       </td>
                     </tr>
@@ -489,6 +539,26 @@ export default function TenantFacultyPage() {
                         <td className="px-6 py-4">
                           <span
                             className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                              row.activated
+                                ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                                : row.employeeId
+                                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
+                                  : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+                            }`}
+                            title={
+                              row.activated
+                                ? 'This person has set a password and can sign in.'
+                                : row.employeeId
+                                  ? 'Seeded account — activates on first login with email + Employee ID.'
+                                  : 'Seeded but has no Employee ID, so it cannot self-activate. Add an Employee ID and re-import.'
+                            }
+                          >
+                            {row.activated ? 'Activated' : row.employeeId ? 'Pending' : 'No ID'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span
+                            className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
                               row.hasEmbedding
                                 ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
                                 : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
@@ -507,7 +577,7 @@ export default function TenantFacultyPage() {
             {total > PAGE_SIZE && (
               <div className="flex items-center justify-between text-sm">
                 <button
-                  onClick={() => loadFaculty(Math.max(0, offset - PAGE_SIZE), search, orgUnitFilter)}
+                  onClick={() => loadFaculty(Math.max(0, offset - PAGE_SIZE), search, orgUnitFilter, accessFilter)}
                   disabled={offset === 0}
                   className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-40 text-gray-700 dark:text-gray-200"
                 >
@@ -517,7 +587,7 @@ export default function TenantFacultyPage() {
                   {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
                 </span>
                 <button
-                  onClick={() => loadFaculty(offset + PAGE_SIZE, search, orgUnitFilter)}
+                  onClick={() => loadFaculty(offset + PAGE_SIZE, search, orgUnitFilter, accessFilter)}
                   disabled={offset + PAGE_SIZE >= total}
                   className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-40 text-gray-700 dark:text-gray-200"
                 >
@@ -596,17 +666,25 @@ export default function TenantFacultyPage() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-medium text-gray-900 dark:text-white">Import faculty roster</h3>
-            <p className="mt-1 mb-4 text-sm text-gray-500 dark:text-gray-400">
-              Upload a .csv or .xlsx file with the columns <strong>Name</strong>, <strong>Email</strong>,{' '}
-              <strong>School</strong>, <strong>Department</strong>, <strong>Designation</strong>,{' '}
-              <strong>Research Areas</strong>, <strong>Keywords</strong>. Only Name and Email are
-              required. <strong>Employee ID</strong> is optional — include it if your organisation
-              issues staff numbers, and it must be unique within your organisation. Existing faculty
-              are matched by email and updated.{' '}
+            <p className="mt-1 mb-3 text-sm text-gray-500 dark:text-gray-400">
+              Upload a .csv or .xlsx file. Columns: <strong>Name</strong>, <strong>Email</strong>,{' '}
+              <strong>Employee ID</strong>, <strong>Unit Path</strong> (or <strong>School</strong> +{' '}
+              <strong>Department</strong>), <strong>Designation</strong>, <strong>Research Areas</strong>,{' '}
+              <strong>Keywords</strong>, <strong>Role</strong>, <strong>Head Of</strong>. Only Name and
+              Email are required. <strong>Role</strong> defaults to Analyst (Admin/Manager need an
+              owner/admin uploader). <strong>Head Of</strong> makes someone a unit head — use{' '}
+              <code>self</code> for their own unit, or give a unit path. Existing faculty are matched
+              by email and updated.{' '}
               <button onClick={downloadTemplate} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 underline">
                 Download template
               </button>
             </p>
+
+            <div className="mb-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 px-3 py-2 text-xs text-blue-800 dark:text-blue-300">
+              <strong>How your team signs in — no emails needed.</strong> Imported people activate
+              themselves at <code>/set-password</code> using their <strong>email + Employee ID</strong>,
+              where they set a password. Include an Employee ID for everyone you want to self-activate.
+            </div>
 
             <input
               type="file"
@@ -652,6 +730,16 @@ export default function TenantFacultyPage() {
                     {summary.errors} error{summary.errors !== 1 ? 's' : ''}
                   </span>
                   {!summary.dryRun && ` · ${summary.embeddingsIndexed} embedded`}
+                </p>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                  {summary.rolesAssigned} role{summary.rolesAssigned !== 1 ? 's' : ''} set ·{' '}
+                  {summary.headsCreated} head{summary.headsCreated !== 1 ? 's' : ''} ·{' '}
+                  {summary.pendingActivation} to activate
+                  {summary.activationBlocked > 0 && (
+                    <span className="text-red-600 dark:text-red-400 font-medium">
+                      {' '}· {summary.activationBlocked} without an Employee ID (can’t self-activate)
+                    </span>
+                  )}
                 </p>
                 {summary.unitsCreated.length > 0 && (
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">

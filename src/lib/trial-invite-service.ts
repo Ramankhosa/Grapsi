@@ -588,10 +588,12 @@ async function sendTrialEmail(params: {
     throw new Error('Mailjet credentials not configured')
   }
 
-  // Sender email: use provided, or env var, or fallback to transactional sender
-  const senderEmail = params.senderEmail 
-    || process.env.MAILJET_TRIAL_SENDER_EMAIL 
-    || 'noreply@patentnest.ai'
+  // Sender email: use provided, or a trial-specific override, or the product's
+  // standard verified sender.
+  const senderEmail = params.senderEmail
+    || process.env.MAILJET_TRIAL_SENDER_EMAIL
+    || process.env.MAIL_FROM_EMAIL
+    || 'admin@aigrantmentor.com'
 
   // EXACT same format as password reset mailer.ts
   const auth = Buffer.from(`${MAILJET_KEY}:${MAILJET_SECRET}`).toString('base64')
@@ -599,7 +601,7 @@ async function sendTrialEmail(params: {
   const body = {
     Messages: [
       {
-        From: { Email: senderEmail, Name: params.senderName || 'PatentNest' },
+        From: { Email: senderEmail, Name: params.senderName || process.env.MAIL_FROM_NAME || 'AIGrantMentor' },
         To: [{ Email: params.to, ...(params.toName ? { Name: params.toName } : {}) }],
         Subject: params.subject,
         HTMLPart: params.htmlContent,

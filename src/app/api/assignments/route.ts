@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import sgMail from '@sendgrid/mail'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { canAssignToUser, resolveAssignerUnitId } from '@/lib/orgUnits/scope'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
+import { sendEmail } from '@/lib/mailer'
+import { assignmentNotificationTemplate } from '@/lib/email-templates'
 import {
   ASSIGNMENT_STATUSES,
   assignmentInclude,
@@ -14,10 +15,6 @@ import {
 } from '@/lib/assignments/shared'
 
 export const dynamic = 'force-dynamic'
-
-if (process.env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY)
-}
 
 /**
  * Funding call assignments.
@@ -258,25 +255,19 @@ async function notifyAssignee(record: any, assigner: any) {
       })
     : null
 
-  if (!process.env.SENDGRID_API_KEY) {
-    console.log(`[ASSIGNMENT] Would email ${email} about "${callTitle}"`)
-    return
-  }
-
-  await sgMail.send({
+  // Mailjet, like every other email in the product. `sendEmail` no-ops with a
+  // log line when the keys are absent, so a dev environment needs no branch.
+  await sendEmail({
     to: email,
-    from: 'noreply@patentnest.ai',
-    subject: `You have been assigned: ${callTitle}`,
-    html: `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="margin-bottom: 8px;">New funding call assignment</h2>
-        <p>${assigner?.name || assigner?.email || 'An administrator'} has assigned you a funding call.</p>
-        <p style="font-size: 16px; font-weight: 600; margin: 16px 0 4px;">${callTitle}</p>
-        ${record.funding_call?.agencyName ? `<p style="color:#6b7280; margin:0 0 12px;">${record.funding_call.agencyName}</p>` : ''}
-        ${deadline ? `<p><strong>Internal deadline:</strong> ${deadline}</p>` : ''}
-        ${record.message ? `<blockquote style="border-left:3px solid #d1d5db; margin:16px 0; padding-left:12px; color:#374151;">${record.message}</blockquote>` : ''}
-        <p style="margin-top:20px;">Open <strong>Assignments</strong> in Grapsi to review it and record your submission once you have applied.</p>
-      </div>
-    `,
+    toName: record.assignee?.name || undefined,
+    ...assignmentNotificationTemplate({
+      email,
+      name: record.assignee?.name,
+      assignerName: assigner?.name || assigner?.email || 'An administrator',
+      callTitle,
+      agency: record.funding_call?.agencyName || null,
+      deadline,
+      message: record.message || null,
+    }),
   })
 }

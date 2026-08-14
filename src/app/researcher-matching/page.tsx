@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import MatchResults, { MatchResult, SearchResponse } from '@/components/researcher-matching/MatchResults'
 
 interface FundingCall {
@@ -30,7 +31,11 @@ interface Facets {
   countries: string[]
 }
 
-const ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN']
+// Fallback only. The authoritative answer is /api/funding-dept/me, which
+// reports the server's own verdict: funding department members and org unit
+// heads can assign while holding none of these roles, and this screen used to
+// hide the assign button from exactly those people.
+const ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN', 'CALL_ASSIGNER', 'CALL_ADMIN']
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '8px 10px', borderRadius: 6,
@@ -48,6 +53,7 @@ const checkboxListStyle: React.CSSProperties = {
 
 export default function TenantResearcherMatchingPage() {
   const { user, isLoading: authLoading, authFetch } = useAuth()
+  const { me } = useFundingDeptMe()
 
   const [calls, setCalls] = useState<FundingCall[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
@@ -80,9 +86,19 @@ export default function TenantResearcherMatchingPage() {
   const [assignNotice, setAssignNotice] = useState<string | null>(null)
   const [assignedByCall, setAssignedByCall] = useState<Record<string, string[]>>({})
 
+  // Bulk circulation: one call to many faculty in a single action.
+  const [bulkSelection, setBulkSelection] = useState<string[]>([])
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkDeadline, setBulkDeadline] = useState('')
+  const [bulkMessage, setBulkMessage] = useState('')
+  const [bulkSaving, setBulkSaving] = useState(false)
+  const [bulkError, setBulkError] = useState<string | null>(null)
+
   const canAssign = useMemo(
-    () => Boolean(user?.roles?.some((role: string) => ASSIGNER_ROLES.includes(role))),
-    [user]
+    () =>
+      me.capabilities.canAssign ||
+      Boolean(user?.roles?.some((role: string) => ASSIGNER_ROLES.includes(role))),
+    [user, me]
   )
 
   const fetchStats = useCallback(async () => {
@@ -123,7 +139,15 @@ export default function TenantResearcherMatchingPage() {
       const data = await res.json()
       const map: Record<string, string[]> = {}
       for (const assignment of data.assignments || []) {
-        if (!assignment.call?.id || !assignment.assignee?.id || assignment.status === 'CANCELLED') continue
+        // A declined or cancelled assignment must not grey the person out —
+        // they are exactly who you may want to approach again, or replace.
+        if (
+          !assignment.call?.id ||
+          !assignment.assignee?.id ||
+          assignment.status === 'CANCELLED' ||
+          assignment.status === 'DECLINED'
+        )
+          continue
         map[assignment.call.id] = [...(map[assignment.call.id] || []), assignment.assignee.id]
       }
       setAssignedByCall(map)
@@ -238,6 +262,73 @@ export default function TenantResearcherMatchingPage() {
     setAssignDeadline('')
     setAssignMessage('')
     setAssignError(null)
+  }
+
+  const toggleBulkSelection = (userId: string) => {
+    setBulkSelection(current =>
+      current.includes(userId) ? current.filter(id => id !== userId) : [...current, userId]
+    )
+  }
+
+  const submitBulkAssignment = async () => {
+    if (!selectedCall || bulkSelection.length === 0) return
+    setBulkSaving(true)
+    setBulkError(null)
+    try {
+      // Carry each person's own match score through, so provenance survives a
+      // bulk circulation exactly as it does for a single assignment.
+      const byUser = new Map((results?.results || []).map(r => [r.userId, r]))
+      const res = await authFetch('/api/assignments/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fundingCallId: selectedCall.id,
+          assignees: bulkSelection.map(userId => ({
+            userId,
+            matchScore: byUser.get(userId)?.score ?? null,
+            matchTier: byUser.get(userId)?.matchTier ?? null,
+          })),
+          deadlineAt: bulkDeadline || null,
+          message: bulkMessage || null,
+          matchBasis: results?.scoreBasis || null,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not circulate the call')
+
+      const createdIds: string[] = (data.created || []).map((row: any) => row.userId)
+      setAssignedByCall(prev => ({
+        ...prev,
+        [selectedCall.id]: [...(prev[selectedCall.id] || []), ...createdIds],
+      }))
+
+      const skipped = data.skippedCount || 0
+      setAssignNotice(
+        `Assigned "${selectedCall.schemeTitle}" to ${data.createdCount} ${
+          data.createdCount === 1 ? 'person' : 'people'
+        }.` + (skipped > 0 ? ` ${skipped} skipped — see below.` : '')
+      )
+      if (skipped > 0) {
+        // Skips are not failures, but they are the thing the officer needs to
+        // read: "already assigned" and "outside your schools" mean different
+        // follow-up actions.
+        setBulkError(
+          (data.skipped || [])
+            .map((s: any) => `${s.name || s.userId}: ${s.reason}`)
+            .join('\n')
+        )
+        setBulkSelection(bulkSelection.filter(id => !createdIds.includes(id)))
+      } else {
+        setBulkOpen(false)
+        setBulkSelection([])
+        setBulkMessage('')
+        setBulkDeadline('')
+      }
+    } catch (e: any) {
+      setBulkError(e.message)
+    } finally {
+      setBulkSaving(false)
+    }
   }
 
   const submitAssignment = async () => {
@@ -655,7 +746,125 @@ export default function TenantResearcherMatchingPage() {
           emptyMessage="No researchers in your organization passed the relevance threshold. Try a different funding call, relax the filters, or tick “Broaden — include weaker matches”."
           onAssign={canAssign && mode === 'call' && selectedCall ? openAssign : undefined}
           assignedUserIds={selectedCall ? assignedByCall[selectedCall.id] || [] : []}
+          selectedUserIds={bulkSelection}
+          onToggleSelect={
+            canAssign && mode === 'call' && selectedCall ? toggleBulkSelection : undefined
+          }
+          onSelectVisible={setBulkSelection}
         />
+      )}
+
+      {/* Bulk circulation bar — appears once anyone is ticked */}
+      {canAssign && mode === 'call' && selectedCall && bulkSelection.length > 0 && (
+        <div
+          style={{
+            position: 'sticky', bottom: 16, marginTop: 16, zIndex: 20,
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            padding: '12px 16px', borderRadius: 10, background: '#111827',
+            color: '#fff', boxShadow: '0 8px 24px rgba(17,24,39,0.24)',
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: 14 }}>
+            {bulkSelection.length} selected
+          </span>
+          <span style={{ fontSize: 13, color: '#d1d5db' }}>
+            Circulate “{selectedCall.schemeTitle}” to all of them
+          </span>
+          <button
+            onClick={() => setBulkSelection([])}
+            style={{
+              marginLeft: 'auto', background: 'none', border: '1px solid #4b5563',
+              color: '#d1d5db', borderRadius: 6, padding: '6px 12px',
+              fontSize: 13, cursor: 'pointer',
+            }}
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => setBulkOpen(true)}
+            style={{
+              background: '#2563eb', border: 'none', color: '#fff', borderRadius: 6,
+              padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            Assign to {bulkSelection.length}
+          </button>
+        </div>
+      )}
+
+      {/* Bulk assign modal */}
+      {bulkOpen && selectedCall && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}
+        >
+          <div style={{ background: '#fff', borderRadius: 10, padding: 24, width: '100%', maxWidth: 520 }}>
+            <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
+              Circulate to {bulkSelection.length} {bulkSelection.length === 1 ? 'person' : 'people'}
+            </h3>
+            <p style={{ marginTop: 6, marginBottom: 16, fontSize: 13, color: '#6b7280' }}>
+              {selectedCall.schemeTitle}. Everyone gets the same internal deadline and note, and is
+              emailed individually.
+            </p>
+
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+              Internal deadline
+            </label>
+            <input
+              type="date"
+              value={bulkDeadline}
+              onChange={e => setBulkDeadline(e.target.value)}
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: 6,
+                border: '1px solid #d1d5db', fontSize: 14, marginBottom: 12,
+              }}
+            />
+
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+              Note to everyone (optional)
+            </label>
+            <textarea
+              value={bulkMessage}
+              onChange={e => setBulkMessage(e.target.value)}
+              rows={3}
+              placeholder="e.g. Please confirm by Friday if you intend to apply — happy to help with the budget."
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: 6,
+                border: '1px solid #d1d5db', fontSize: 14, marginBottom: 8,
+              }}
+            />
+
+            {bulkError && (
+              <p style={{ color: '#b91c1c', fontSize: 13, marginBottom: 8 }}>{bulkError}</p>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+              <button
+                onClick={() => setBulkOpen(false)}
+                style={{
+                  padding: '8px 16px', borderRadius: 6, border: '1px solid #d1d5db',
+                  background: '#fff', fontSize: 13, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitBulkAssignment}
+                disabled={bulkSaving}
+                style={{
+                  padding: '8px 16px', borderRadius: 6, border: 'none',
+                  background: bulkSaving ? '#93c5fd' : '#2563eb', color: '#fff',
+                  fontSize: 13, fontWeight: 600,
+                  cursor: bulkSaving ? 'default' : 'pointer',
+                }}
+              >
+                {bulkSaving ? 'Assigning…' : `Assign to ${bulkSelection.length}`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Assign modal */}

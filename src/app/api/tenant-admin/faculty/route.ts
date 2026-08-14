@@ -24,6 +24,8 @@ export async function GET(request: NextRequest) {
   const orgUnitId = (searchParams.get('orgUnitId') || '').trim()
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 50, 1), 200)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+  // Activation filter: 'activated' | 'pending' | 'noid' | '' (all).
+  const access = (searchParams.get('access') || '').trim()
 
   const conditions: Prisma.Sql[] = [Prisma.sql`u."tenantId" = ${context.tenantId}`]
 
@@ -56,12 +58,28 @@ export async function GET(request: NextRequest) {
     conditions.push(scopedProfileSql(context.scope))
   }
 
-  const where = conditions.reduce(
+  // Base filters (tenant + search + unit + head scope) — the status counts use
+  // this so they stay stable while the admin toggles the access filter.
+  const baseWhere = conditions.reduce(
     (combined, condition, index) => (index === 0 ? condition : Prisma.sql`${combined} AND ${condition}`),
     Prisma.sql`TRUE`
   )
 
-  const [rows, totals] = await Promise.all([
+  // "Pending" = seeded (no password) but has an Employee ID, so they can
+  // self-activate. "No ID" = seeded and no Employee ID, so they cannot.
+  const HAS_EMPLOYEE_ID = Prisma.sql`rp.employee_id IS NOT NULL AND rp.employee_id <> ''`
+  const accessCondition =
+    access === 'activated'
+      ? Prisma.sql`u."passwordHash" IS NOT NULL`
+      : access === 'pending'
+        ? Prisma.sql`u."passwordHash" IS NULL AND ${HAS_EMPLOYEE_ID}`
+        : access === 'noid'
+          ? Prisma.sql`u."passwordHash" IS NULL AND NOT (${HAS_EMPLOYEE_ID})`
+          : null
+
+  const where = accessCondition ? Prisma.sql`${baseWhere} AND (${accessCondition})` : baseWhere
+
+  const [rows, totals, statusCounts] = await Promise.all([
     prisma.$queryRaw<
       Array<{
         userId: string
@@ -75,6 +93,7 @@ export async function GET(request: NextRequest) {
         keywords: string[]
         orgUnitId: string | null
         hasEmbedding: boolean
+        activated: boolean
       }>
     >(Prisma.sql`
       SELECT
@@ -88,7 +107,8 @@ export async function GET(request: NextRequest) {
         COALESCE(rp.research_areas, ARRAY[]::text[]) AS "researchAreas",
         COALESCE(rp.keywords, ARRAY[]::text[]) AS keywords,
         rp.org_unit_id AS "orgUnitId",
-        (rp.embedding IS NOT NULL OR rp.embedding_voyage_1024 IS NOT NULL) AS "hasEmbedding"
+        (rp.embedding IS NOT NULL OR rp.embedding_voyage_1024 IS NOT NULL) AS "hasEmbedding",
+        (u."passwordHash" IS NOT NULL) AS activated
       FROM researcher_profiles rp
       JOIN users u ON u.id = rp.user_id
       WHERE ${where}
@@ -105,11 +125,25 @@ export async function GET(request: NextRequest) {
       JOIN users u ON u.id = rp.user_id
       WHERE ${where}
     `),
+    // Activation breakdown over the BASE filter (ignores the access toggle) so
+    // the chips show stable totals as the admin switches between them.
+    prisma.$queryRaw<[{ activated: bigint; pending: bigint; noid: bigint }]>(Prisma.sql`
+      SELECT
+        COUNT(*) FILTER (WHERE u."passwordHash" IS NOT NULL) AS activated,
+        COUNT(*) FILTER (WHERE u."passwordHash" IS NULL AND ${HAS_EMPLOYEE_ID}) AS pending,
+        COUNT(*) FILTER (WHERE u."passwordHash" IS NULL AND NOT (${HAS_EMPLOYEE_ID})) AS noid
+      FROM researcher_profiles rp
+      JOIN users u ON u.id = rp.user_id
+      WHERE ${baseWhere}
+    `),
   ])
 
   return NextResponse.json({
     faculty: rows,
     total: Number(totals[0]?.total || 0),
+    activatedCount: Number(statusCounts[0]?.activated || 0),
+    pendingCount: Number(statusCounts[0]?.pending || 0),
+    noIdCount: Number(statusCounts[0]?.noid || 0),
     embedded: Number(totals[0]?.embedded || 0),
     limit,
     offset,

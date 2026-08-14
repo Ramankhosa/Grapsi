@@ -35,6 +35,13 @@ export async function GET(request: NextRequest) {
     'machine learning; computer vision',
     'deep learning; medical imaging',
     'Works on vision models for low-resource clinical settings.',
+    // Role is optional (defaults to Analyst). Head Of makes someone a unit
+    // head: "self" = head of their own unit, or give a unit path. Head Title /
+    // Head Scope (SUBTREE | UNIT_ONLY) are optional refinements.
+    'ANALYST',
+    '',
+    '',
+    '',
   ]
 
   const csv = `${FACULTY_IMPORT_TEMPLATE_HEADERS.join(',')}\n${example

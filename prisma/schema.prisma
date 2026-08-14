@@ -567,6 +567,12 @@ model Tenant {
   facultyImportJobs FacultyImportJob[]
   notifications     Notification[]
 
+  // Funding Department: central office members, their school coverage, and the
+  // follow-up log they keep against assignments.
+  fundingDeptMembers           FundingDeptMember[]
+  fundingDeptSchoolAssignments FundingDeptSchoolAssignment[]
+  assignmentFollowUps          AssignmentFollowUp[]
+
   @@map("tenants")
 }
 
@@ -702,6 +708,12 @@ model User {
   notifications           Notification[]     @relation("NotificationRecipient")
   sentNotifications       Notification[]     @relation("NotificationSender")
   fundingCallAlerts       FundingCallAlert[]
+
+  // Funding Department membership and the follow-up log
+  fundingDeptMembership       FundingDeptMember[]           @relation("FundingDeptMemberUser")
+  fundingDeptMembersAdded     FundingDeptMember[]           @relation("FundingDeptMemberAddedBy")
+  fundingDeptSchoolsAssigned  FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolAssigner")
+  assignmentFollowUpsAuthored AssignmentFollowUp[]          @relation("AssignmentFollowUpAuthor")
 
   @@map("users")
 }
@@ -2800,10 +2812,11 @@ model TenantOrgUnit {
   tenant              Tenant              @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
   parent              TenantOrgUnit?      @relation("OrgUnitHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
   children            TenantOrgUnit[]     @relation("OrgUnitHierarchy")
-  researcher_profiles ResearcherProfile[]
-  managers            OrgUnitManager[]
-  assignee_of         CallAssignment[]    @relation("AssignmentAssigneeUnit")
-  assigner_of         CallAssignment[]    @relation("AssignmentAssignerUnit")
+  researcher_profiles  ResearcherProfile[]
+  managers             OrgUnitManager[]
+  assignee_of          CallAssignment[]              @relation("AssignmentAssigneeUnit")
+  assigner_of          CallAssignment[]              @relation("AssignmentAssignerUnit")
+  funding_dept_coverage FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolUnit")
 
   // NOTE: Postgres treats NULLs as distinct, so this constraint only enforces
   // uniqueness for non-root units. Root-name uniqueness is enforced by the
@@ -2881,11 +2894,16 @@ model TenantOrgLevel {
   @@map("tenant_org_levels")
 }
 
+/// Declaration order is the lifecycle order, and `GET /api/assignments` sorts
+/// by it (Postgres orders enums by declaration, not alphabetically). New values
+/// must be inserted positionally via `ALTER TYPE ... ADD VALUE ... AFTER ...`.
 enum CallAssignmentStatus {
   ASSIGNED
+  ACCEPTED
   IN_PROGRESS
   COMPLETED
   CANCELLED
+  DECLINED
 }
 
 enum CallAssignmentOutcome {
@@ -2907,6 +2925,19 @@ model CallAssignment {
   message             String?
   deadline_at         DateTime?
   status              CallAssignmentStatus @default(ASSIGNED)
+
+  // The assignee's answer to the request. responded_at is stamped on the first
+  // accept/decline, and cleared when a manager re-requests a declined call so
+  // the faculty member is being asked afresh rather than shown a stale answer.
+  declined_reason String?
+  responded_at    DateTime?
+
+  /// Which automatic nudges have already gone out: D30/D14/D7/D1 as the
+  /// internal deadline approaches, and NOACK for an unanswered request. Each
+  /// stage is appended exactly once, guarded by the array itself, so a sweep
+  /// that runs every hour cannot send the same nudge twice. Cleared when a
+  /// manager re-requests, because the ladder starts again.
+  auto_nudge_stages String[] @default([])
 
   // Snapshot of the match that motivated the assignment (provenance only).
   match_score Float?
@@ -2945,6 +2976,7 @@ model CallAssignment {
   assignee_org_unit TenantOrgUnit? @relation("AssignmentAssigneeUnit", fields: [assignee_org_unit_id], references: [id], onDelete: SetNull)
   assigner_org_unit TenantOrgUnit? @relation("AssignmentAssignerUnit", fields: [assigner_org_unit_id], references: [id], onDelete: SetNull)
   notifications     Notification[]
+  follow_ups        AssignmentFollowUp[]
 
   @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
   @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
@@ -3039,6 +3071,103 @@ model FacultyImportJob {
 
   @@index([tenant_id, created_at], map: "idx_faculty_import_jobs_tenant_created")
   @@map("faculty_import_jobs")
+}
+
+/// A member of the tenant's Funding Department — the central office (DSR, ORD,
+/// R&D cell) that sources funding calls and pushes them out to faculty.
+///
+/// Membership is deliberately NOT a UserRole. Roles are tenant-wide by
+/// construction, and a role grant would leak tenant-wide reach through the
+/// legacy-assigner branch of resolveManagedScope the moment a member's schools
+/// were removed. Reach comes from the coverage rows below and nothing else, so
+/// removing coverage removes reach.
+model FundingDeptMember {
+  id        String  @id @default(cuid())
+  tenant_id String
+  user_id   String
+  /// The department head: reviews every member's work and reassigns schools.
+  /// At most one active head per tenant (partial unique index
+  /// funding_dept_one_head_key, added in the migration).
+  is_head   Boolean @default(false)
+  /// Free-form label: "Deputy Director (Sponsored Research)".
+  title     String?
+  is_active Boolean @default(true)
+
+  added_by_user_id String?
+  /// Idempotency stamp for the weekly digest: the job skips anyone stamped
+  /// within the last 5 days, so a retried or double-scheduled run cannot
+  /// double-send.
+  last_digest_sent_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant             Tenant                        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  user               User                          @relation("FundingDeptMemberUser", fields: [user_id], references: [id], onDelete: Cascade)
+  added_by           User?                         @relation("FundingDeptMemberAddedBy", fields: [added_by_user_id], references: [id], onDelete: SetNull)
+  school_assignments FundingDeptSchoolAssignment[]
+
+  @@unique([tenant_id, user_id], map: "funding_dept_members_tenant_user_key")
+  @@index([tenant_id, is_active], map: "idx_funding_dept_members_tenant_active")
+  @@map("funding_dept_members")
+}
+
+/// Which schools a Funding Department member looks after. The unique key on
+/// (tenant, org_unit) is the accountability rule expressed in the database:
+/// exactly one member covers a school at any time, so "who chases this school"
+/// never has two answers.
+model FundingDeptSchoolAssignment {
+  id                  String   @id @default(cuid())
+  tenant_id           String
+  member_id           String
+  org_unit_id         String
+  assigned_by_user_id String?
+  created_at          DateTime @default(now())
+
+  tenant      Tenant            @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  member      FundingDeptMember @relation(fields: [member_id], references: [id], onDelete: Cascade)
+  org_unit    TenantOrgUnit     @relation("FundingDeptSchoolUnit", fields: [org_unit_id], references: [id], onDelete: Cascade)
+  assigned_by User?             @relation("FundingDeptSchoolAssigner", fields: [assigned_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([tenant_id, org_unit_id], map: "funding_dept_school_one_member_key")
+  @@index([member_id], map: "idx_funding_dept_school_member")
+  @@map("funding_dept_school_assignments")
+}
+
+/// A dated touchpoint on an assignment: the phone call, the corridor reminder,
+/// the email chase. This is the department's internal contact log — the
+/// assignee never sees it, which is why it lives here and not in Notification.
+///
+/// A row with remind_at set is also a scheduled nudge; the hourly sweep claims
+/// it by stamping reminder_sent_at.
+model AssignmentFollowUp {
+  id                 String @id @default(cuid())
+  tenant_id          String
+  assignment_id      String
+  created_by_user_id String
+
+  /// NOTE | CALL | EMAIL | MEETING | REMINDER. A string rather than a Postgres
+  /// enum, like Notification.category, so new kinds need no migration.
+  kind        String   @default("NOTE")
+  note        String
+  happened_at DateTime @default(now())
+
+  /// When set, the sweep fires at this time. remind_faculty decides whether the
+  /// nudge goes to the assignee or is a private tickler for the author.
+  remind_at        DateTime?
+  remind_faculty   Boolean   @default(false)
+  reminder_sent_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant     Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  assignment CallAssignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  created_by User           @relation("AssignmentFollowUpAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+
+  @@index([assignment_id, happened_at], map: "idx_assignment_follow_ups_assignment")
+  @@index([tenant_id, created_by_user_id], map: "idx_assignment_follow_ups_author")
+  @@map("assignment_follow_ups")
 }
 
 enum ApplicantCategory {

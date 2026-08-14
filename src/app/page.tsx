@@ -8,12 +8,6 @@ const inter = localFont({
   variable: '--font-home-v2-sans',
 })
 
-const sourceSerif = localFont({
-  src: './fonts/SourceSerif4-latin.woff2',
-  display: 'swap',
-  variable: '--font-home-v2-serif',
-})
-
 const jetbrainsMono = localFont({
   src: './fonts/JetBrainsMono-latin.woff2',
   display: 'swap',
@@ -28,7 +22,7 @@ export const metadata: Metadata = {
 
 export default function HomePage() {
   return (
-    <div className={`${inter.variable} ${sourceSerif.variable} ${jetbrainsMono.variable}`}>
+    <div className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <HomeV2Page />
     </div>
   )

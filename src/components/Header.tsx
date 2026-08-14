@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import AnimatedLogo from '@/components/ui/animated-logo'
 import { isFeatureEnabled } from '@/lib/feature-flags'
 import { FileText, Library, Sparkles } from 'lucide-react'
@@ -10,6 +11,7 @@ import NotificationBell from '@/components/notifications/NotificationBell'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
+  const { me: fundingDept } = useFundingDeptMe()
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isSendingReset, setIsSendingReset] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -284,6 +286,51 @@ export default function Header() {
                       </>
                     )}
 
+                    {/* Funding Department — membership, not a role, so it is
+                        answered by the server rather than guessed from roles. */}
+                    {fundingDept.isMember && (
+                      <>
+                        <div className="border-t border-gpt-gray-200 my-1"></div>
+                        <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
+                          Funding Department
+                        </div>
+                        <Link
+                          href="/funding-dept"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>🧭</span>
+                          <span>My Worklist</span>
+                        </Link>
+                        <Link
+                          href="/funding-dept/assignments"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>🗂️</span>
+                          <span>Calls I Assigned</span>
+                        </Link>
+                        <Link
+                          href="/funding-dept/faculty"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>🎓</span>
+                          <span>Faculty in My Schools</span>
+                        </Link>
+                        {fundingDept.isHead && (
+                          <Link
+                            href="/funding-dept/overview"
+                            className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                            onClick={closeMenu}
+                          >
+                            <span>📋</span>
+                            <span>Department Overview</span>
+                          </Link>
+                        )}
+                      </>
+                    )}
+
                     {/* Tenant Admin Links — OWNER/ADMIN see everything; CALL_ADMIN sees the scoped surfaces (faculty/org tree/calls). */}
                     {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN') || user.roles?.includes('CALL_ADMIN' as any)) && (
                       <>
@@ -319,6 +366,16 @@ export default function Header() {
                           <span>🎓</span>
                           <span>Faculty &amp; Organization</span>
                         </Link>
+                        {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN')) && (
+                          <Link
+                            href="/tenant-admin/funding-dept"
+                            className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                            onClick={closeMenu}
+                          >
+                            <span>🧭</span>
+                            <span>Funding Department</span>
+                          </Link>
+                        )}
                         <Link
                           href="/tenant-admin/grant-dashboard"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"

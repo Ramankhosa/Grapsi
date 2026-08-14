@@ -41,8 +41,13 @@ export async function POST(request: NextRequest) {
           { status: 401 }
         )
       }
+      // Seeded account (imported faculty) that hasn't set a password yet.
+      // Point them at first-login activation instead of a dead-end error.
       return NextResponse.json(
-        { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' },
+        {
+          code: 'PASSWORD_SETUP_REQUIRED',
+          message: 'This account has not been activated yet. Set your password to sign in.',
+        },
         { status: 401 }
       )
     }

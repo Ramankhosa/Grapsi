@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 
 interface Assignment {
   id: string
-  status: 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+  status: 'ASSIGNED' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'DECLINED'
   message: string | null
   deadlineAt: string | null
+  declinedReason: string | null
+  respondedAt: string | null
   matchScore: number | null
   matchTier: string | null
   submissionReference: string | null
@@ -32,7 +35,11 @@ interface Assignment {
   assignedBy: { id: string; name: string | null; email: string } | null
 }
 
-const ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN']
+// Roles are only a fallback here. The authoritative answer comes from
+// /api/funding-dept/me, which reports what the server will actually allow —
+// department members and org heads can manage assignments while holding none
+// of these roles.
+const ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN', 'CALL_ASSIGNER', 'CALL_ADMIN']
 
 const OUTCOME_STYLES: Record<Assignment['outcome'], { label: string; className: string }> = {
   PENDING: { label: 'Decision pending', className: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' },
@@ -42,10 +49,12 @@ const OUTCOME_STYLES: Record<Assignment['outcome'], { label: string; className: 
 }
 
 const STATUS_STYLES: Record<Assignment['status'], { label: string; className: string }> = {
-  ASSIGNED: { label: 'Assigned', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
+  ASSIGNED: { label: 'Awaiting your reply', className: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' },
+  ACCEPTED: { label: 'Accepted', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
   IN_PROGRESS: { label: 'In progress', className: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300' },
   COMPLETED: { label: 'Completed', className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' },
   CANCELLED: { label: 'Cancelled', className: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' },
+  DECLINED: { label: 'Declined', className: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300' },
 }
 
 /** Same urgency treatment the funding cards use, phrased for an internal due date. */
@@ -82,6 +91,7 @@ function deadlineBadge(value: string | null) {
 
 export default function AssignmentsPage() {
   const { user, isLoading: authLoading, authFetch } = useAuth()
+  const { me } = useFundingDeptMe()
 
   const [view, setView] = useState<'mine' | 'managed'>('mine')
   const [assignments, setAssignments] = useState<Assignment[]>([])
@@ -105,9 +115,18 @@ export default function AssignmentsPage() {
   const [outcomeSaving, setOutcomeSaving] = useState(false)
   const [outcomeError, setOutcomeError] = useState<string | null>(null)
 
+  // Decline modal — a reason is required, so it cannot be a bare button.
+  const [declining, setDeclining] = useState<Assignment | null>(null)
+  const [declineReason, setDeclineReason] = useState('')
+  const [declineSaving, setDeclineSaving] = useState(false)
+  const [declineError, setDeclineError] = useState<string | null>(null)
+
   const canManage = useMemo(
-    () => Boolean(user?.roles?.some((role: string) => ASSIGNER_ROLES.includes(role))),
-    [user]
+    () =>
+      me.capabilities.canAssign ||
+      me.capabilities.canViewReports ||
+      Boolean(user?.roles?.some((role: string) => ASSIGNER_ROLES.includes(role))),
+    [user, me]
   )
 
   const fetchAssignments = useCallback(async (nextView: 'mine' | 'managed') => {
@@ -150,6 +169,38 @@ export default function AssignmentsPage() {
       applyUpdate(await patchAssignment(assignment, { status: 'IN_PROGRESS' }))
     } catch (e: any) {
       setError(e.message)
+    }
+  }
+
+  const acceptAssignment = async (assignment: Assignment) => {
+    try {
+      applyUpdate(await patchAssignment(assignment, { status: 'ACCEPTED' }))
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  const submitDecline = async () => {
+    if (!declining) return
+    if (!declineReason.trim()) {
+      setDeclineError('Please say briefly why, so the department can find someone else.')
+      return
+    }
+    setDeclineSaving(true)
+    setDeclineError(null)
+    try {
+      applyUpdate(
+        await patchAssignment(declining, {
+          status: 'DECLINED',
+          declineReason: declineReason.trim(),
+        })
+      )
+      setDeclining(null)
+      setDeclineReason('')
+    } catch (e: any) {
+      setDeclineError(e.message)
+    } finally {
+      setDeclineSaving(false)
     }
   }
 
@@ -308,7 +359,10 @@ export default function AssignmentsPage() {
             {assignments.map(assignment => {
               const status = STATUS_STYLES[assignment.status]
               const deadline = deadlineBadge(assignment.deadlineAt)
-              const isOpen = assignment.status === 'ASSIGNED' || assignment.status === 'IN_PROGRESS'
+              const isOpen =
+                assignment.status === 'ASSIGNED' ||
+                assignment.status === 'ACCEPTED' ||
+                assignment.status === 'IN_PROGRESS'
 
               return (
                 <div
@@ -360,6 +414,25 @@ export default function AssignmentsPage() {
                     </blockquote>
                   )}
 
+                  {view === 'mine' && assignment.status === 'ASSIGNED' && (
+                    <p className="mt-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
+                      The funding department is waiting to hear whether you will take this on.
+                    </p>
+                  )}
+
+                  {assignment.status === 'DECLINED' && (
+                    <div className="mt-3 rounded-md bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 px-3 py-2 text-sm">
+                      <p className="font-medium text-rose-800 dark:text-rose-300">
+                        {view === 'mine' ? 'You declined this call' : 'Declined'}
+                      </p>
+                      {assignment.declinedReason && (
+                        <p className="mt-0.5 text-rose-900/80 dark:text-rose-200/80">
+                          {assignment.declinedReason}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {assignment.status === 'COMPLETED' && (
                     <div className="mt-3 rounded-md bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 px-3 py-2 text-sm">
                       <p className="font-medium text-green-800 dark:text-green-300">Submission recorded</p>
@@ -405,6 +478,26 @@ export default function AssignmentsPage() {
                       </a>
                     )}
                     {view === 'mine' && assignment.status === 'ASSIGNED' && (
+                      <>
+                        <button
+                          onClick={() => acceptAssignment(assignment)}
+                          className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDeclining(assignment)
+                            setDeclineReason('')
+                            setDeclineError(null)
+                          }}
+                          className="text-sm text-rose-600 hover:text-rose-800 dark:text-rose-400"
+                        >
+                          Decline
+                        </button>
+                      </>
+                    )}
+                    {view === 'mine' && assignment.status === 'ACCEPTED' && (
                       <button
                         onClick={() => startProgress(assignment)}
                         className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
@@ -453,6 +546,48 @@ export default function AssignmentsPage() {
           </div>
         )}
       </div>
+
+      {/* Decline modal — the reason is the whole point, so it is required */}
+      {declining && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-lg w-full">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">Decline this call</h3>
+            <p className="mt-1 mb-4 text-sm text-gray-500 dark:text-gray-400">
+              {declining.call?.title}. A short reason helps the funding department find someone else
+              or come back to you with a better fit.
+            </p>
+
+            <textarea
+              value={declineReason}
+              onChange={e => setDeclineReason(e.target.value)}
+              rows={3}
+              maxLength={2000}
+              placeholder="e.g. Outside my area — this is closer to materials than to photonics."
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+            />
+
+            {declineError && (
+              <p className="mt-2 text-sm text-red-600 dark:text-red-400">{declineError}</p>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setDeclining(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitDecline}
+                disabled={declineSaving}
+                className="px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-lg"
+              >
+                {declineSaving ? 'Sending…' : 'Decline call'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mark complete modal */}
       {completing && (

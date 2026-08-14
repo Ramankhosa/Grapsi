@@ -5,8 +5,115 @@
  * HTTP handlers and a fixed set of config exports from a `route.ts`.
  */
 
-export const ASSIGNMENT_STATUSES = ['ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'] as const
+/** Listed in lifecycle order, matching the Postgres enum's declaration order. */
+export const ASSIGNMENT_STATUSES = [
+  'ASSIGNED',
+  'ACCEPTED',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'CANCELLED',
+  'DECLINED',
+] as const
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number]
+
+/** Statuses that still represent work in hand, for buckets and reminders. */
+export const OPEN_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = [
+  'ASSIGNED',
+  'ACCEPTED',
+  'IN_PROGRESS',
+]
+
+type TransitionActor = 'assignee' | 'manager' | 'either'
+
+/**
+ * Who may move an assignment from one status to another.
+ *
+ * Accepting and declining are the faculty member's answer to a request, so no
+ * amount of managerial authority can supply them — a department that could
+ * accept on someone's behalf would be recording agreement that never happened.
+ * Everything a manager does instead (cancel, re-request, re-open) leaves the
+ * answer visibly theirs.
+ */
+const TRANSITIONS: Record<AssignmentStatus, Partial<Record<AssignmentStatus, TransitionActor>>> = {
+  ASSIGNED: {
+    ACCEPTED: 'assignee',
+    DECLINED: 'assignee',
+    // Starting work without clicking accept is an implicit acceptance.
+    IN_PROGRESS: 'either',
+    COMPLETED: 'either',
+    CANCELLED: 'manager',
+  },
+  ACCEPTED: {
+    IN_PROGRESS: 'either',
+    COMPLETED: 'either',
+    DECLINED: 'assignee',
+    CANCELLED: 'manager',
+    // Same reset a manager has from IN_PROGRESS: put the request back to
+    // unanswered, e.g. after the scope of the call changed.
+    ASSIGNED: 'manager',
+  },
+  IN_PROGRESS: {
+    COMPLETED: 'either',
+    CANCELLED: 'manager',
+    ASSIGNED: 'manager',
+  },
+  COMPLETED: {
+    // Re-opening a submission that turned out to be wrong.
+    IN_PROGRESS: 'either',
+    ASSIGNED: 'manager',
+    CANCELLED: 'manager',
+  },
+  CANCELLED: {
+    ASSIGNED: 'manager',
+  },
+  DECLINED: {
+    // Re-request: asking the same person again after a conversation.
+    ASSIGNED: 'manager',
+    CANCELLED: 'manager',
+  },
+}
+
+export interface TransitionCheck {
+  allowed: boolean
+  reason?: string
+}
+
+export function validateStatusTransition(input: {
+  from: AssignmentStatus
+  to: AssignmentStatus
+  isAssignee: boolean
+  canManage: boolean
+}): TransitionCheck {
+  const { from, to, isAssignee, canManage } = input
+  if (from === to) {
+    return { allowed: true }
+  }
+
+  const actor = TRANSITIONS[from]?.[to]
+  if (!actor) {
+    return {
+      allowed: false,
+      reason: `An assignment cannot go from ${humanStatus(from)} to ${humanStatus(to)}.`,
+    }
+  }
+  if (actor === 'assignee' && !isAssignee) {
+    return {
+      allowed: false,
+      reason: 'Only the assigned faculty member can respond to this assignment.',
+    }
+  }
+  if (actor === 'manager' && !canManage) {
+    return { allowed: false, reason: 'Only an administrator can make that change.' }
+  }
+  if (actor === 'either' && !isAssignee && !canManage) {
+    return { allowed: false, reason: 'You do not have permission to make that change.' }
+  }
+  return { allowed: true }
+}
+
+export function humanStatus(status: string) {
+  return String(status).toLowerCase().replace(/_/g, ' ')
+}
 
 /** Calls a tenant may see: its own, plus globally published ones. */
 export function tenantVisibleCallWhere(tenantId: string) {
@@ -48,6 +155,8 @@ export function serializeAssignment(record: any) {
     status: record.status,
     message: record.message,
     deadlineAt: record.deadline_at,
+    declinedReason: record.declined_reason,
+    respondedAt: record.responded_at,
     matchScore: record.match_score,
     matchTier: record.match_tier,
     matchBasis: record.match_basis,
