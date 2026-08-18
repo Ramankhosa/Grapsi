@@ -91,6 +91,13 @@ export async function requireFundingActor(
   const hasRequiredPlatformPermission = options?.requiredPlatformPermission
     ? actorHasPlatformPermission(actor, options.requiredPlatformPermission)
     : false
+  // NOTE: holding *any* platform permission (not just funding ones) counts as
+  // platform staff here and, below, skips tenant-level feature gating
+  // (`enforceServiceAccess`) — including higher-tier modules such as
+  // FUNDING_CHAT / FUNDING_INTELLIGENCE. Platform permissions are only granted
+  // by super admins, so this is accepted as-is (reviewed Aug 2026); usage quota
+  // still applies to those users. Tighten to funding-specific permissions or the
+  // PLATFORM tenant if that assumption ever changes.
   const hasPlatformRoleAccess =
     options?.allowPlatform &&
     (actor.platformPermissions.length > 0 || (isFundingAdminRole(actor) && user.tenant?.atiId === 'PLATFORM'))

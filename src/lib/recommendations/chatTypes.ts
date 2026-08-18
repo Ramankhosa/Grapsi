@@ -8,6 +8,17 @@ import type {
   RecommendationSearchFilters,
 } from './types';
 
+/**
+ * What the assistant does with a turn. Its remit is deliberately narrow: find and
+ * recommend funding opportunities, and answer questions about a specific funding
+ * call. Anything else (research-topic or problem-statement ideation, proposal
+ * writing, general grant-strategy coaching, unrelated requests) is `out_of_scope`
+ * and gets a short deterministic redirect — no model call, no search.
+ *
+ * `funding_strategy` is retained only so historic persisted `intent_json` rows
+ * still type-check; the orchestrator no longer emits it (it maps to
+ * `out_of_scope`).
+ */
 export type RecommendationConversationIntent =
   | 'new_search'
   | 'refine_filters'
@@ -18,8 +29,10 @@ export type RecommendationConversationIntent =
   | 'clarification_needed'
   | 'general_help'
   | 'call_question'
-  | 'funding_strategy'
-  | 'small_talk';
+  | 'out_of_scope'
+  | 'small_talk'
+  /** @deprecated legacy value from before the scope lock-down; treated as out_of_scope */
+  | 'funding_strategy';
 
 /**
  * How the conversation treats filters.
@@ -177,8 +190,19 @@ export type FinderTurnStreamEvent =
   | {
       type: 'error';
       error: string;
-      code?: 'GEMINI_RATE_LIMITED' | 'RATE_LIMITED' | 'INTERNAL';
+      code?:
+        | 'GEMINI_RATE_LIMITED'
+        | 'RATE_LIMITED'
+        | 'QUOTA_EXCEEDED'
+        | 'CONVERSATION_NOT_FOUND'
+        | 'NO_PENDING_PATCH'
+        | 'PENDING_PATCH_STALE'
+        | 'INVALID_REQUEST'
+        | 'INTERNAL'
+        | (string & {});
       retryAfterMs?: number | null;
+      /** Tracker-level reason when `code` is QUOTA_EXCEEDED (e.g. DAILY_QUOTA_EXCEEDED). */
+      quotaCode?: string;
       persisted: boolean;
     };
 

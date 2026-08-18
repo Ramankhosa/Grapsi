@@ -4,10 +4,13 @@ export type FinderStreamOutcome =
   | { status: 'final'; response: RecommendationConversationMutationResponse }
   | { status: 'error'; error: string; code?: string; retryAfterMs?: number | null; persisted: boolean }
   | { status: 'unsupported' }
-  | { status: 'connection_lost'; persisted: boolean };
+  | { status: 'connection_lost'; persisted: boolean }
+  | { status: 'aborted'; persisted: boolean };
 
 interface StreamHandlers {
   onEvent?: (event: FinderTurnStreamEvent) => void;
+  /** Abort the in-flight request (conversation switch, unmount). */
+  signal?: AbortSignal;
 }
 
 function parseSSEFrame(frame: string): { event: string; data: string } | null {
@@ -22,14 +25,21 @@ function parseSSEFrame(frame: string): { event: string; data: string } | null {
   return { event, data: dataLines.join('\n') };
 }
 
+/** Statuses that mean "this deployment has no streaming route", not "your request was rejected". */
+const ROUTE_UNAVAILABLE_STATUSES = new Set([404, 405, 501]);
+
 /**
  * POST a chat message to the SSE streaming route and surface events as they arrive.
  *
  * Fallback contract for the caller:
- * - `unsupported` (non-SSE response / no body / failed before ANY event): nothing was
- *   persisted server-side — safe to retry via the classic POST route.
- * - `connection_lost` / `error` with `persisted: true`: the user turn may already be
- *   stored — do NOT re-POST; re-fetch the conversation instead.
+ * - `unsupported` (streaming route missing / non-SSE 2xx / no body / network failure
+ *   before ANY event): nothing was persisted server-side — safe to retry via the
+ *   classic POST route.
+ * - `error` (any non-2xx JSON rejection: 400/403/429/quota, or an `error` event):
+ *   do NOT re-POST — the classic route would give the same answer and burn another
+ *   rate-limit slot. `persisted` says whether the user turn already landed.
+ * - `connection_lost` / `error` with `persisted: true`: re-fetch the conversation.
+ * - `aborted`: the caller cancelled (conversation switch); ignore silently.
  * - `final`: authoritative response, identical to the classic route's JSON.
  */
 export async function streamConversationMessage(
@@ -38,29 +48,50 @@ export async function streamConversationMessage(
   payload: RecommendationConversationMessageRequest,
   handlers: StreamHandlers = {}
 ): Promise<FinderStreamOutcome> {
+  const signal = handlers.signal;
+  const abortedOutcome = (persisted: boolean): FinderStreamOutcome => ({ status: 'aborted', persisted });
+  if (signal?.aborted) return abortedOutcome(false);
+
   let response: Response;
   try {
     response = await authFetch(`/api/recommendations/conversations/${conversationId}/messages/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify(payload),
+      ...(signal ? { signal } : {}),
     });
   } catch {
+    if (signal?.aborted) return abortedOutcome(false);
     return { status: 'unsupported' };
   }
 
-  const contentType = response.headers.get('content-type') || '';
-  if (!response.ok || !contentType.includes('text/event-stream') || !response.body) {
-    if (response.status === 429) {
-      const body = await response.json().catch(() => ({} as Record<string, unknown>));
-      return {
-        status: 'error',
-        error: typeof body.error === 'string' ? body.error : 'Too many requests. Please wait and try again.',
-        code: typeof body.code === 'string' ? body.code : 'RATE_LIMITED',
-        retryAfterMs: null,
-        persisted: false,
-      };
+  if (!response.ok) {
+    if (ROUTE_UNAVAILABLE_STATUSES.has(response.status)) {
+      return { status: 'unsupported' };
     }
+    const body = await response.json().catch(() => ({} as Record<string, unknown>));
+    const retryAfterMs =
+      typeof body.retryAfterMs === 'number'
+        ? body.retryAfterMs
+        : body.resetAt && typeof body.resetAt === 'string'
+          ? Math.max(0, new Date(body.resetAt).getTime() - Date.now())
+          : null;
+    return {
+      status: 'error',
+      error:
+        typeof body.error === 'string'
+          ? body.error
+          : response.status === 429
+            ? 'Too many requests. Please wait and try again.'
+            : `Request failed (${response.status}).`,
+      code: typeof body.code === 'string' ? body.code : response.status === 429 ? 'RATE_LIMITED' : `HTTP_${response.status}`,
+      retryAfterMs,
+      persisted: false,
+    };
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('text/event-stream') || !response.body) {
     return { status: 'unsupported' };
   }
 
@@ -123,6 +154,7 @@ export async function streamConversationMessage(
     }
     if (buffer.trim()) handleFrame(buffer.replace(/\r/g, ''));
   } catch {
+    if (signal?.aborted) return abortedOutcome(state.turnPersisted);
     if (!state.sawAnyEvent) return { status: 'unsupported' };
     if (state.finalResponse) return { status: 'final', response: state.finalResponse };
     return { status: 'connection_lost', persisted: state.turnPersisted };
@@ -130,6 +162,7 @@ export async function streamConversationMessage(
 
   if (state.finalResponse) return { status: 'final', response: state.finalResponse };
   if (state.streamError) return { status: 'error', ...state.streamError };
+  if (signal?.aborted) return abortedOutcome(state.turnPersisted);
   if (!state.sawAnyEvent) return { status: 'unsupported' };
   return { status: 'connection_lost', persisted: state.turnPersisted };
 }

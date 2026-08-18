@@ -47,6 +47,8 @@ export function tenantInviteTemplate(params: {
   role: string
   inviteLink: string
   expiresAt: Date
+  /** Platform-issued invite for the org's first administrator. */
+  isFoundingAdmin?: boolean
 }) {
   const displayName = friendlyName(params.email)
   const roleLabel = params.role.charAt(0) + params.role.slice(1).toLowerCase()
@@ -55,24 +57,38 @@ export function tenantInviteTemplate(params: {
     month: 'long',
     day: 'numeric'
   })
+
+  const heading = params.isFoundingAdmin
+    ? `Set up ${params.tenantName} on ${brand.name}`
+    : `You're invited to join ${params.tenantName}`
+  const lead = params.isFoundingAdmin
+    ? `<strong>${params.tenantName}</strong> has been set up on ${brand.name}, and you've been named its administrator. Create your account below — you'll be the workspace owner, and you can invite your colleagues from the admin dashboard straight afterwards.`
+    : `<strong>${params.inviterName}</strong> invited you to join <strong>${params.tenantName}</strong> on ${brand.name} as a <strong>${roleLabel}</strong>. Click the button below to create your account — your access is already set up.`
+  const cta = params.isFoundingAdmin ? 'Create your admin account' : 'Accept Invitation'
+  const subject = params.isFoundingAdmin
+    ? `You're the administrator for ${params.tenantName} on ${brand.name}`
+    : `${params.inviterName} invited you to ${params.tenantName} on ${brand.name}`
+
   const html = `
   <div style="font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 640px; margin: 0 auto; padding: 24px; background: #ffffff">
     <div style="text-align:center; margin-bottom: 16px">
       <div style="display:inline-block; background:${brand.primary}; color:#fff; padding:8px 12px; border-radius:12px; font-weight:600;">${brand.name}</div>
     </div>
-    <h2 style="color:${brand.gray700}; margin: 12px 0 8px">You're invited to join ${params.tenantName}</h2>
+    <h2 style="color:${brand.gray700}; margin: 12px 0 8px">${heading}</h2>
     <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
-    <p style="color:${brand.gray500}; line-height:1.6"><strong>${params.inviterName}</strong> invited you to join <strong>${params.tenantName}</strong> on ${brand.name} as a <strong>${roleLabel}</strong>. Click the button below to create your account — your access is already set up.</p>
+    <p style="color:${brand.gray500}; line-height:1.6">${lead}</p>
     <div style="margin:24px 0">
-      <a href="${params.inviteLink}" style="background:${brand.primary}; color:#fff; text-decoration:none; padding:12px 20px; border-radius:10px; display:inline-block; font-weight:600">Accept Invitation</a>
+      <a href="${params.inviteLink}" style="background:${brand.primary}; color:#fff; text-decoration:none; padding:12px 20px; border-radius:10px; display:inline-block; font-weight:600">${cta}</a>
     </div>
     <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
       <a href="${params.inviteLink}" style="color:${brand.primary}">${params.inviteLink}</a>
     </p>
     <p style="color:${brand.gray500}; font-size:12px">This invitation is for ${params.email} and expires on ${expiryDate}. If you weren't expecting it, you can safely ignore this email.</p>
   </div>`
-  const text = `Hi ${displayName}, ${params.inviterName} invited you to join ${params.tenantName} on ${brand.name} as ${roleLabel}. Accept: ${params.inviteLink} (expires ${expiryDate})`
-  return { subject: `${params.inviterName} invited you to ${params.tenantName} on ${brand.name}`, html, text }
+  const text = params.isFoundingAdmin
+    ? `Hi ${displayName}, ${params.tenantName} has been set up on ${brand.name} and you've been named its administrator. Create your account: ${params.inviteLink} (expires ${expiryDate})`
+    : `Hi ${displayName}, ${params.inviterName} invited you to join ${params.tenantName} on ${brand.name} as ${roleLabel}. Accept: ${params.inviteLink} (expires ${expiryDate})`
+  return { subject, html, text }
 }
 
 /**
@@ -84,9 +100,17 @@ export function activationTemplate(params: {
   name?: string | null
   tenantName: string
   token: string
+  /**
+   * Lifetime of the link, in hours. Bulk/roster activations reuse the
+   * forgot-password default of 1 hour; an admin provisioning a single account
+   * passes a longer window because nobody is standing by to click it.
+   */
+  expiresInHours?: number
 }) {
   const displayName = friendlyName(params.email, params.name)
   const url = `${SITE_URL}/reset-password?token=${encodeURIComponent(params.token)}`
+  const hours = params.expiresInHours ?? 1
+  const expiryPhrase = hours >= 48 ? `${Math.round(hours / 24)} days` : hours === 1 ? '1 hour' : `${hours} hours`
   const html = `
   <div style="font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 640px; margin: 0 auto; padding: 24px; background: #ffffff">
     <div style="text-align:center; margin-bottom: 16px">
@@ -101,9 +125,9 @@ export function activationTemplate(params: {
     <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
       <a href="${url}" style="color:${brand.primary}">${url}</a>
     </p>
-    <p style="color:${brand.gray500}; font-size:12px">This link expires in 1 hour. You can request a fresh one any time from the sign-in page via "Forgot password".</p>
+    <p style="color:${brand.gray500}; font-size:12px">This link expires in ${expiryPhrase}. You can request a fresh one any time from the sign-in page via "Forgot password".</p>
   </div>`
-  const text = `Hi ${displayName}, an account was created for you at ${params.tenantName} on ${brand.name}. Set your password to activate ${params.email}: ${url} (expires in 1 hour)`
+  const text = `Hi ${displayName}, an account was created for you at ${params.tenantName} on ${brand.name}. Set your password to activate ${params.email}: ${url} (expires in ${expiryPhrase})`
   return { subject: `Activate your ${params.tenantName} account on ${brand.name}`, html, text }
 }
 

@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import FeatureGate from '@/components/access/FeatureGate'
 import UserDashboard from '@/components/dashboards/UserDashboard'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import { PageLoadingBird } from '@/components/ui/loading-bird'
@@ -33,5 +34,9 @@ export default function DashboardWorkspacePage() {
     return null
   }
 
-  return <UserDashboard />
+  return (
+    <FeatureGate module="GRANT_STUDIO" title="Grant Studio is not included in your plan">
+      <UserDashboard />
+    </FeatureGate>
+  )
 }

@@ -82,27 +82,18 @@ interface DashboardData {
 
 // Service display names
 const SERVICE_LABELS: Record<string, string> = {
-  PATENT_DRAFTING: 'Patent Drafting',
-  NOVELTY_SEARCH: 'Novelty Search',
-  PRIOR_ART_SEARCH: 'Prior Art Search',
-  DIAGRAM_GENERATION: 'Diagram Generation',
-  IDEA_BANK: 'Idea Bank',
-  PERSONA_SYNC: 'Persona Sync',
-  PATENT_REVIEW: 'Patent Review',
-  IDEATION: 'Patent Ideation Engine',
+  FUNDING_INTELLIGENCE: 'Funding Intelligence',
+  GRANT_REVIEW: 'Reviewer',
+  FUNDING_CHAT: 'Funding Chat',
   FUNDING_DISCOVERY: 'Funding Discovery',
   GRANT_PREP: 'Grant Prep',
   GRANT_DRAFTING: 'Grant Drafting',
 }
 
 const FEATURE_CODES = [
-  'PATENT_DRAFTING',
-  'PRIOR_ART_SEARCH',
-  'DIAGRAM_GENERATION',
-  'IDEA_BANK',
-  'PERSONA_SYNC',
-  'PATENT_REVIEW',
-  'IDEATION',
+  'FUNDING_INTELLIGENCE',
+  'GRANT_REVIEW',
+  'FUNDING_CHAT',
   'FUNDING_DISCOVERY',
   'GRANT_PREP',
   'GRANT_DRAFTING',
@@ -771,9 +762,9 @@ export default function ServiceControlPage() {
                         <th className="text-left py-3 px-4 text-slate-400">Tenant</th>
                         <th className="text-left py-3 px-4 text-slate-400">Plan</th>
                         <th className="text-right py-3 px-4 text-slate-400">Users</th>
-                        <th className="text-right py-3 px-4 text-slate-400">Patents</th>
-                        <th className="text-right py-3 px-4 text-slate-400">Searches</th>
-                        <th className="text-right py-3 px-4 text-slate-400">Diagrams</th>
+                        <th className="text-right py-3 px-4 text-slate-400">Intelligence</th>
+                        <th className="text-right py-3 px-4 text-slate-400">Reviewer</th>
+                        <th className="text-right py-3 px-4 text-slate-400">Chat</th>
                         <th className="text-right py-3 px-4 text-slate-400">Total Cost</th>
                         <th className="text-center py-3 px-4 text-slate-400">Status</th>
                       </tr>
@@ -785,9 +776,9 @@ export default function ServiceControlPage() {
                         </tr>
                       ) : (
                         allTenants.map(tenant => {
-                          const patents = tenant.monthlyUsage?.find(u => u.serviceType === 'PATENT_DRAFTING')?.completions || 0
-                          const searches = tenant.monthlyUsage?.find(u => u.serviceType === 'PRIOR_ART_SEARCH' || u.serviceType === 'NOVELTY_SEARCH')?.completions || 0
-                          const diagrams = tenant.monthlyUsage?.find(u => u.serviceType === 'DIAGRAM_GENERATION')?.completions || 0
+                          const intelligenceRuns = tenant.monthlyUsage?.find(u => u.serviceType === 'FUNDING_INTELLIGENCE')?.completions || 0
+                          const reviewerRuns = tenant.monthlyUsage?.find(u => u.serviceType === 'GRANT_REVIEW')?.completions || 0
+                          const chatTurns = tenant.monthlyUsage?.find(u => u.serviceType === 'FUNDING_CHAT')?.completions || 0
                           
                           return (
                             <tr key={tenant.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
@@ -799,9 +790,9 @@ export default function ServiceControlPage() {
                                 <span className="px-2 py-1 bg-slate-700 rounded text-xs">{tenant.plan}</span>
                               </td>
                               <td className="py-3 px-4 text-right font-mono">{tenant.userCount}</td>
-                              <td className="py-3 px-4 text-right font-mono">{patents}</td>
-                              <td className="py-3 px-4 text-right font-mono">{searches}</td>
-                              <td className="py-3 px-4 text-right font-mono">{diagrams}</td>
+                              <td className="py-3 px-4 text-right font-mono">{intelligenceRuns}</td>
+                              <td className="py-3 px-4 text-right font-mono">{reviewerRuns}</td>
+                              <td className="py-3 px-4 text-right font-mono">{chatTurns}</td>
                               <td className="py-3 px-4 text-right font-mono text-emerald-400">
                                 {formatCurrency(tenant.totalMonthlyCost || 0)}
                               </td>

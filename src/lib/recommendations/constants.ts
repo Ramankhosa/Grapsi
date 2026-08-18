@@ -203,9 +203,32 @@ export const MULTI_AREA_MIN_SLOTS_PER_AREA = 2;
 
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 export const RATE_LIMIT_MAX_REQUESTS = 20;
+/**
+ * One shared per-user bucket for every route that runs a search or an LLM call
+ * on a conversation: /messages, /messages/stream, /filters, /reset-filters,
+ * /confirm-filters. Conversation creation gets its own, tighter bucket so a
+ * client cannot sidestep the chat bucket by minting conversations.
+ */
 export const CHAT_RATE_LIMIT_WINDOW_MS = 60_000;
 export const CHAT_RATE_LIMIT_MAX_REQUESTS = 30;
+export const CHAT_CREATE_RATE_LIMIT_WINDOW_MS = 60_000;
+export const CHAT_CREATE_RATE_LIMIT_MAX_REQUESTS = 10;
 export const CHAT_MESSAGE_MAX_LENGTH = 2_000;
+/**
+ * Bounds on the conversation query state. `researchArea` must fit the whole
+ * chat message because the service falls back to searching the raw message
+ * text; the paper fields mirror the clamps in `utils.ts` (buildPaperMetadataQuery).
+ */
+export const RESEARCH_AREA_MAX_LENGTH = CHAT_MESSAGE_MAX_LENGTH;
+export const PAPER_TITLE_MAX_LENGTH = 300;
+export const PAPER_ABSTRACT_MAX_LENGTH = 10_000;
+export const PAPER_KEYWORDS_MAX = 20;
+export const PAPER_KEYWORD_MAX_LENGTH = 64;
+/** Bounds on filter payloads: list filters and each list value. */
+export const FILTER_LIST_MAX_ITEMS = 50;
+export const FILTER_VALUE_MAX_LENGTH = 120;
+export const FILTER_DATE_MAX_LENGTH = 32;
+export const CHAT_RESULT_LIMIT_MAX = 25;
 export const CHAT_INLINE_RESULT_LIMIT = 5;
 export const CHAT_ORCHESTRATOR_MODEL = 'gemini-2.5-flash';
 export const CHAT_NARRATIVE_MODEL = 'gemini-2.0-flash-lite';

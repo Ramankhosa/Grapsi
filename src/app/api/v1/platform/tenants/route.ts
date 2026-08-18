@@ -190,20 +190,44 @@ export async function GET(request: NextRequest) {
             users: true,
             atiTokens: true
           }
+        },
+        // Who administers each tenant, so the list can show it and offer to
+        // change it without a round trip per row. OWNER first — that is the
+        // tenant principal; ADMINs are co-administrators.
+        users: {
+          where: { roles: { hasSome: ['OWNER', 'ADMIN'] } },
+          select: { id: true, email: true, name: true, roles: true, status: true },
+          orderBy: { createdAt: 'asc' }
         }
       },
       orderBy: { createdAt: 'desc' }
     })
 
-    const tenantList = tenants.map(tenant => ({
-      id: tenant.id,
-      name: tenant.name,
-      ati_id: tenant.atiId,
-      status: tenant.status,
-      user_count: tenant._count.users,
-      ati_token_count: tenant._count.atiTokens,
-      created_at: tenant.createdAt.toISOString()
-    }))
+    const tenantList = tenants.map(tenant => {
+      const admins = [...tenant.users].sort((a, b) => {
+        const aOwner = a.roles.includes('OWNER') ? 0 : 1
+        const bOwner = b.roles.includes('OWNER') ? 0 : 1
+        return aOwner - bOwner
+      })
+
+      return {
+        id: tenant.id,
+        name: tenant.name,
+        ati_id: tenant.atiId,
+        status: tenant.status,
+        user_count: tenant._count.users,
+        ati_token_count: tenant._count.atiTokens,
+        created_at: tenant.createdAt.toISOString(),
+        admins: admins.map(admin => ({
+          id: admin.id,
+          email: admin.email,
+          name: admin.name,
+          roles: admin.roles,
+          status: admin.status,
+          is_owner: admin.roles.includes('OWNER')
+        }))
+      }
+    })
 
     return NextResponse.json(tenantList, { status: 200 })
 

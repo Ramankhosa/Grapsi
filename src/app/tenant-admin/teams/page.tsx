@@ -35,12 +35,9 @@ interface Team {
 }
 
 const SERVICE_LABELS: Record<string, string> = {
-  PATENT_DRAFTING: 'Patent Drafting',
-  NOVELTY_SEARCH: 'Novelty Search',
-  PRIOR_ART_SEARCH: 'Prior Art Search',
-  IDEA_BANK: 'Idea Bank',
-  PERSONA_SYNC: 'AI Persona',
-  DIAGRAM_GENERATION: 'Diagram Generation',
+  FUNDING_INTELLIGENCE: 'Funding Intelligence',
+  GRANT_REVIEW: 'Reviewer',
+  FUNDING_CHAT: 'Funding Chat',
   FUNDING_DISCOVERY: 'Funding Discovery',
   GRANT_PREP: 'Grant Prep',
   GRANT_DRAFTING: 'Grant Drafting'

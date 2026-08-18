@@ -44,6 +44,15 @@ import {
 
 type LucideIcon = typeof Users
 
+interface TenantAdmin {
+  id: string
+  email: string
+  name: string | null
+  roles: string[]
+  status: string
+  is_owner: boolean
+}
+
 interface Tenant {
   id: string
   name: string
@@ -52,7 +61,30 @@ interface Tenant {
   user_count: number
   ati_token_count: number
   created_at: string
+  admins?: TenantAdmin[]
 }
+
+interface TenantUser {
+  id: string
+  email: string
+  name: string | null
+  roles: string[]
+  status: string
+  is_admin: boolean
+  is_owner: boolean
+  created_at: string
+}
+
+/** What happens to the sitting owner when the seat moves. */
+type DemotionChoice = 'ADMIN' | 'MANAGER' | 'ANALYST' | 'VIEWER' | 'KEEP'
+
+const DEMOTION_CHOICES: Array<{ value: DemotionChoice; label: string }> = [
+  { value: 'ADMIN', label: 'Keep as Admin' },
+  { value: 'MANAGER', label: 'Move to Manager' },
+  { value: 'ANALYST', label: 'Move to Analyst' },
+  { value: 'VIEWER', label: 'Move to Viewer' },
+  { value: 'KEEP', label: 'Leave unchanged (two owners)' }
+]
 
 interface NavItem {
   label: string
@@ -128,13 +160,15 @@ export default function SuperAdminDashboard() {
     tokens: any[]
   } | null>(null)
   const [createdTokenInfo, setCreatedTokenInfo] = useState<{
-    token: string
-    fingerprint: string
+    token: string | null
+    fingerprint: string | null
     tenantName: string
+    adminInvite: { email: string; ok: boolean; error?: string } | null
   } | null>(null)
   const [newTenant, setNewTenant] = useState({
     name: '',
     atiId: '',
+    adminEmail: '',
     generateInitialToken: true,
     expires_at: '',
     max_uses: '',
@@ -142,6 +176,17 @@ export default function SuperAdminDashboard() {
     notes: 'Initial tenant onboarding token'
   })
   const [isCreating, setIsCreating] = useState(false)
+
+  // ── Change administrator ────────────────────────────────────────────────
+  const [adminTenant, setAdminTenant] = useState<Tenant | null>(null)
+  const [tenantUsers, setTenantUsers] = useState<TenantUser[] | null>(null)
+  const [isLoadingTenantUsers, setIsLoadingTenantUsers] = useState(false)
+  const [selectedAdminId, setSelectedAdminId] = useState('')
+  const [demotionChoice, setDemotionChoice] = useState<DemotionChoice>('ADMIN')
+  const [isChangingAdmin, setIsChangingAdmin] = useState(false)
+  const [adminChangeError, setAdminChangeError] = useState<string | null>(null)
+  const [adminChangeNotice, setAdminChangeNotice] = useState<string | null>(null)
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     analytics: true,
@@ -216,7 +261,7 @@ export default function SuperAdminDashboard() {
       const requestBody: any = {
         name: newTenant.name.trim(),
         atiId: newTenant.atiId.trim().toUpperCase(),
-        generateInitialToken: true
+        generateInitialToken: newTenant.generateInitialToken
       }
 
       if (newTenant.generateInitialToken) {
@@ -255,10 +300,37 @@ export default function SuperAdminDashboard() {
       const data = await response.json()
 
       if (response.ok) {
+        // Email the named administrator their own single-use signup link. They
+        // become the tenant's first user, so signup promotes them to OWNER and
+        // they invite their members from the admin dashboard.
+        const adminEmail = newTenant.adminEmail.trim()
+        let adminInvite: { email: string; ok: boolean; error?: string } | null = null
+
+        if (adminEmail) {
+          try {
+            const inviteRes = await fetch('/api/v1/platform/tenant-admins', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+              },
+              body: JSON.stringify({ tenant_id: data.id, email: adminEmail })
+            })
+            const inviteData = await inviteRes.json()
+            adminInvite = inviteRes.ok
+              ? { email: adminEmail, ok: true }
+              : { email: adminEmail, ok: false, error: inviteData.message || 'Failed to send invite' }
+          } catch (err) {
+            console.error('Failed to invite tenant admin:', err)
+            adminInvite = { email: adminEmail, ok: false, error: 'Network error while sending the invite' }
+          }
+        }
+
         setShowCreateTenant(false)
         setNewTenant({
           name: '',
           atiId: '',
+          adminEmail: '',
           generateInitialToken: true,
           expires_at: '',
           max_uses: '',
@@ -267,11 +339,12 @@ export default function SuperAdminDashboard() {
         })
         fetchTenants()
 
-        if (data.initial_token) {
+        if (data.initial_token || adminInvite) {
           setCreatedTokenInfo({
-            token: data.initial_token.token_display_once,
-            fingerprint: data.initial_token.fingerprint,
-            tenantName: data.name
+            token: data.initial_token?.token_display_once ?? null,
+            fingerprint: data.initial_token?.fingerprint ?? null,
+            tenantName: data.name,
+            adminInvite
           })
           setShowSuccessModal(true)
         }
@@ -283,6 +356,123 @@ export default function SuperAdminDashboard() {
       alert('Failed to create tenant')
     } finally {
       setIsCreating(false)
+    }
+  }
+
+  const openChangeAdmin = async (tenant: Tenant) => {
+    setAdminTenant(tenant)
+    setTenantUsers(null)
+    setSelectedAdminId('')
+    setAdminChangeError(null)
+    setAdminChangeNotice(null)
+    // Defaulting to "keep as Admin" makes the common case — a handover where
+    // the outgoing owner stays on the team — a single click.
+    setDemotionChoice('ADMIN')
+    setIsLoadingTenantUsers(true)
+
+    try {
+      const response = await fetch(`/api/v1/platform/tenants/${tenant.id}/users`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      })
+      const data = await response.json()
+
+      if (response.ok) {
+        setTenantUsers(data.users)
+      } else {
+        setTenantUsers([])
+        setAdminChangeError(data.message || 'Failed to load this tenant’s users')
+      }
+    } catch (error) {
+      console.error('Failed to fetch tenant users:', error)
+      setTenantUsers([])
+      setAdminChangeError('Network error while loading users')
+    } finally {
+      setIsLoadingTenantUsers(false)
+    }
+  }
+
+  const closeChangeAdmin = () => {
+    setAdminTenant(null)
+    setTenantUsers(null)
+    setSelectedAdminId('')
+    setAdminChangeError(null)
+    setAdminChangeNotice(null)
+  }
+
+  const handleChangeAdmin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!adminTenant || !selectedAdminId) return
+
+    setIsChangingAdmin(true)
+    setAdminChangeError(null)
+    setAdminChangeNotice(null)
+
+    try {
+      const response = await fetch('/api/v1/platform/tenant-admins', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          tenant_id: adminTenant.id,
+          user_id: selectedAdminId,
+          role: 'OWNER',
+          demote_current_to: demotionChoice === 'KEEP' ? null : demotionChoice
+        })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setAdminChangeError(data.message || 'Failed to change the administrator')
+        return
+      }
+
+      const promotedLabel = data.promoted?.name || data.promoted?.email
+      const demotedCount = data.demoted?.length ?? 0
+      setAdminChangeNotice(
+        demotedCount > 0
+          ? `${promotedLabel} is now the owner of ${adminTenant.name}. The previous owner moved to ${demotionChoice.toLowerCase()}.`
+          : `${promotedLabel} is now the owner of ${adminTenant.name}.`
+      )
+      // Refresh both the row behind the dialog and the dialog itself, so a
+      // second transfer in the same sitting starts from the real current state.
+      fetchTenants()
+      const refreshed = await fetch(`/api/v1/platform/tenants/${adminTenant.id}/users`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
+      })
+      if (refreshed.ok) {
+        const refreshedData = await refreshed.json()
+        const users: TenantUser[] = refreshedData.users
+        setTenantUsers(users)
+        setAdminTenant(prev =>
+          prev
+            ? {
+                ...prev,
+                admins: users
+                  .filter(u => u.is_admin)
+                  .sort((a, b) => Number(b.is_owner) - Number(a.is_owner))
+                  .map(u => ({
+                    id: u.id,
+                    email: u.email,
+                    name: u.name,
+                    roles: u.roles,
+                    status: u.status,
+                    is_owner: u.is_owner
+                  }))
+              }
+            : prev
+        )
+      }
+      setSelectedAdminId('')
+    } catch (error) {
+      console.error('Failed to change tenant admin:', error)
+      setAdminChangeError('Network error while changing the administrator')
+    } finally {
+      setIsChangingAdmin(false)
     }
   }
 
@@ -392,6 +582,7 @@ export default function SuperAdminDashboard() {
       title: 'Access Management',
       icon: ShieldCheck,
       items: [
+        { label: 'Users & Roles', icon: Users, href: '/super-admin/users', badge: 'NEW' },
         { label: 'Plans & Feature Access', icon: Puzzle, href: '/super-admin/plans', badge: 'NEW' },
         { label: 'Team Roles', icon: UserCog, href: '/super-admin/team-roles', badge: 'NEW' },
         { label: 'Funding Control', icon: CircleDollarSign, href: '/super-admin/funding', badge: 'NEW' },
@@ -907,6 +1098,23 @@ export default function SuperAdminDashboard() {
                           <span>
                             <span className="nk-mono text-nickel-700">{tenant.ati_token_count}</span> tokens
                           </span>
+                          <span className="text-nickel-300" aria-hidden>·</span>
+                          {/* The owner is who to contact about this tenant; naming
+                              them here saves opening the dialog just to look. */}
+                          <span className="truncate">
+                            {tenant.admins && tenant.admins.length > 0 ? (
+                              <>
+                                <span className="text-nickel-700">
+                                  {tenant.admins[0].name || tenant.admins[0].email}
+                                </span>
+                                {tenant.admins.length > 1 && (
+                                  <span> +{tenant.admins.length - 1}</span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-amber-700">No administrator</span>
+                            )}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -919,6 +1127,13 @@ export default function SuperAdminDashboard() {
                       <span className="nk-mono text-nickel-500">
                         {new Date(tenant.created_at).toLocaleDateString()}
                       </span>
+                      <button
+                        onClick={() => openChangeAdmin(tenant)}
+                        className="nk-btn-secondary nk-btn-sm"
+                      >
+                        <UserCog className="h-4 w-4 text-nickel-400" aria-hidden />
+                        Change admin
+                      </button>
                     </div>
                   </li>
                 ))}
@@ -979,6 +1194,25 @@ export default function SuperAdminDashboard() {
                   />
                   <p className="mt-1.5 text-[12px] text-nickel-500">
                     Unique identifier used for ATI tokens and routing
+                  </p>
+                </div>
+                <div>
+                  <label htmlFor="tenant_admin_email" className="nk-label mb-1.5">
+                    Administrator email
+                  </label>
+                  <input
+                    id="tenant_admin_email"
+                    type="email"
+                    value={newTenant.adminEmail}
+                    onChange={e => setNewTenant(prev => ({ ...prev, adminEmail: e.target.value }))}
+                    className="nk-input"
+                    placeholder="admin@acme.edu"
+                  />
+                  <p className="mt-1.5 text-[12px] text-nickel-500">
+                    We email this person a personal signup link. As the first user they
+                    become the workspace <span className="font-medium text-nickel-700">Owner</span>,
+                    and invite their own members from there. Leave blank to hand over the
+                    token below manually instead.
                   </p>
                 </div>
               </fieldset>
@@ -1106,28 +1340,56 @@ export default function SuperAdminDashboard() {
             </div>
 
             <div className="space-y-4 p-5">
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3.5">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
-                  <span className="nk-eyebrow text-amber-800">Copy it now — shown once</span>
-                </div>
-                <p className="mt-3 break-all rounded-md border border-amber-200 bg-white p-3 font-mono text-[12.5px] leading-5 text-nickel-900">
-                  {createdTokenInfo.token}
-                </p>
-                <p className="mt-2.5 text-[12px] text-amber-900">
-                  Fingerprint{' '}
-                  <code className="nk-mono rounded bg-white px-1.5 py-0.5 text-nickel-700">
-                    {createdTokenInfo.fingerprint}
-                  </code>
-                </p>
-                <button
-                  onClick={() => copyToClipboard(createdTokenInfo.token)}
-                  className="nk-btn-secondary mt-3 w-full"
+              {createdTokenInfo.adminInvite && (
+                <div
+                  className={`rounded-lg border p-3.5 ${
+                    createdTokenInfo.adminInvite.ok
+                      ? 'border-emerald-200 bg-emerald-50'
+                      : 'border-red-200 bg-red-50'
+                  }`}
                 >
-                  <Copy className="h-4 w-4 text-nickel-400" aria-hidden />
-                  Copy token to clipboard
-                </button>
-              </div>
+                  {createdTokenInfo.adminInvite.ok ? (
+                    <p className="text-[12.5px] leading-5 text-emerald-900">
+                      <span className="font-semibold">Administrator invited.</span> A signup
+                      link is on its way to{' '}
+                      <span className="font-medium">{createdTokenInfo.adminInvite.email}</span>.
+                      They become the workspace Owner when they accept, and can invite
+                      members themselves. The link expires in 14 days.
+                    </p>
+                  ) : (
+                    <p className="text-[12.5px] leading-5 text-red-900">
+                      <span className="font-semibold">Admin invite failed:</span>{' '}
+                      {createdTokenInfo.adminInvite.error} — the tenant was still created.
+                      Retry from ATI Management, or hand over the token below.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {createdTokenInfo.token && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3.5">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                    <span className="nk-eyebrow text-amber-800">Copy it now — shown once</span>
+                  </div>
+                  <p className="mt-3 break-all rounded-md border border-amber-200 bg-white p-3 font-mono text-[12.5px] leading-5 text-nickel-900">
+                    {createdTokenInfo.token}
+                  </p>
+                  <p className="mt-2.5 text-[12px] text-amber-900">
+                    Fingerprint{' '}
+                    <code className="nk-mono rounded bg-white px-1.5 py-0.5 text-nickel-700">
+                      {createdTokenInfo.fingerprint}
+                    </code>
+                  </p>
+                  <button
+                    onClick={() => copyToClipboard(createdTokenInfo.token!)}
+                    className="nk-btn-secondary mt-3 w-full"
+                  >
+                    <Copy className="h-4 w-4 text-nickel-400" aria-hidden />
+                    Copy token to clipboard
+                  </button>
+                </div>
+              )}
 
               <button
                 onClick={() => { setShowSuccessModal(false); setCreatedTokenInfo(null) }}
@@ -1136,6 +1398,147 @@ export default function SuperAdminDashboard() {
                 Done
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Change administrator ─────────────────────────────────────────── */}
+      {adminTenant && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Change administrator for ${adminTenant.name}`}
+          className="fixed inset-0 z-50 overflow-y-auto bg-nickel-900/45 px-4 py-8 backdrop-blur-sm"
+        >
+          <div className="mx-auto w-full max-w-lg overflow-hidden rounded-xl border border-nickel-200 bg-white shadow-nk-sheet">
+            <div className="nk-panel-head flex-nowrap">
+              <div className="min-w-0">
+                <h2 className="nk-title">Change administrator</h2>
+                <p className="nk-sub mt-0.5 truncate">{adminTenant.name}</p>
+              </div>
+              <button
+                onClick={closeChangeAdmin}
+                aria-label="Close"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-nickel-500 transition hover:bg-nickel-100 hover:text-nickel-700"
+              >
+                <X className="h-4 w-4" aria-hidden />
+              </button>
+            </div>
+
+            <form onSubmit={handleChangeAdmin} className="space-y-5 p-5">
+              <div className="rounded-lg border border-nickel-200 bg-nickel-50 p-3.5">
+                <span className="nk-eyebrow">Current administrator</span>
+                {adminTenant.admins && adminTenant.admins.length > 0 ? (
+                  <ul className="mt-2.5 space-y-1.5">
+                    {adminTenant.admins.map(admin => (
+                      <li key={admin.id} className="flex items-center justify-between gap-3 text-[12.5px]">
+                        <span className="min-w-0 truncate text-nickel-800">
+                          {admin.name ? `${admin.name} · ` : ''}
+                          <span className="nk-mono text-nickel-600">{admin.email}</span>
+                        </span>
+                        <span className="nk-badge shrink-0">{admin.is_owner ? 'OWNER' : 'ADMIN'}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-[12.5px] leading-5 text-nickel-600">
+                    Nobody administers this tenant yet.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="new_admin_user" className="nk-label mb-1.5">
+                  New administrator
+                </label>
+                {isLoadingTenantUsers ? (
+                  <span className="block h-9 w-full animate-pulse rounded-md bg-nickel-100" aria-hidden />
+                ) : (
+                  <select
+                    id="new_admin_user"
+                    value={selectedAdminId}
+                    onChange={e => setSelectedAdminId(e.target.value)}
+                    className="nk-input"
+                    required
+                  >
+                    <option value="">Select a member of this tenant…</option>
+                    {(tenantUsers ?? []).map(u => (
+                      <option
+                        key={u.id}
+                        value={u.id}
+                        // Already the owner, so there is nothing to move. Suspended
+                        // users are rejected server-side too.
+                        disabled={u.is_owner || u.status !== 'ACTIVE'}
+                      >
+                        {u.name ? `${u.name} — ` : ''}{u.email}
+                        {u.is_owner ? ' (current owner)' : u.status !== 'ACTIVE' ? ` (${u.status.toLowerCase()})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <p className="mt-1.5 text-[12px] text-nickel-500">
+                  They take over as workspace Owner immediately — no email or acceptance
+                  step. To hand the tenant to somebody without an account yet, create it in
+                  Users &amp; Roles first, or invite them from ATI Management.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="demote_current" className="nk-label mb-1.5">
+                  Outgoing owner
+                </label>
+                <select
+                  id="demote_current"
+                  value={demotionChoice}
+                  onChange={e => setDemotionChoice(e.target.value as DemotionChoice)}
+                  className="nk-input"
+                  disabled={!adminTenant.admins?.some(a => a.is_owner)}
+                >
+                  {DEMOTION_CHOICES.map(choice => (
+                    <option key={choice.value} value={choice.value}>{choice.label}</option>
+                  ))}
+                </select>
+                <p className="mt-1.5 text-[12px] text-nickel-500">
+                  Applies to whoever holds Owner today. Their team memberships and
+                  additive grants (Call Admin, Quality Auditor) are kept either way.
+                </p>
+              </div>
+
+              {adminChangeError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3.5">
+                  <p className="text-[12.5px] leading-5 text-red-900">{adminChangeError}</p>
+                </div>
+              )}
+
+              {adminChangeNotice && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3.5">
+                  <p className="text-[12.5px] leading-5 text-emerald-900">{adminChangeNotice}</p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2.5">
+                <button type="button" onClick={closeChangeAdmin} className="nk-btn-secondary">
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={isChangingAdmin || !selectedAdminId}
+                  className="nk-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isChangingAdmin ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      Transferring…
+                    </>
+                  ) : (
+                    <>
+                      <UserCog className="h-4 w-4" aria-hidden />
+                      Make owner
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

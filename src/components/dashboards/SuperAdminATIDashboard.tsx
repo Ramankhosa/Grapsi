@@ -33,8 +33,11 @@ interface SignupUser {
   roles: string[]
   created_at: string
   usage_metrics?: {
-    patentsDrafted: number
-    noveltySearches: number
+    fundingIntelligenceRuns: number
+    reviewerRuns: number
+    reviewerCalls: number
+    chatSessions: number
+    chatMessages: number
     totalInputTokens: number
     totalOutputTokens: number
     tokensByModel: Array<{ model: string; inputTokens: number; outputTokens: number }>
@@ -75,6 +78,9 @@ export default function SuperAdminATIDashboard() {
   const [isCreating, setIsCreating] = useState(false)
   const [createdInviteLink, setCreatedInviteLink] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [adminInviteForm, setAdminInviteForm] = useState({ tenant_id: '', email: '' })
+  const [isInvitingAdmin, setIsInvitingAdmin] = useState(false)
+  const [adminInviteNotice, setAdminInviteNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [createForm, setCreateForm] = useState({
     tenant_mode: 'existing' as 'existing' | 'new',
     tenant_id: '',
@@ -302,6 +308,42 @@ export default function SuperAdminATIDashboard() {
     }
   }
 
+  const handleInviteAdmin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsInvitingAdmin(true)
+    setAdminInviteNotice(null)
+    try {
+      const response = await fetch('/api/v1/platform/tenant-admins', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          tenant_id: adminInviteForm.tenant_id,
+          email: adminInviteForm.email.trim()
+        })
+      })
+      const data = await response.json()
+      if (response.ok) {
+        setAdminInviteNotice({
+          kind: 'ok',
+          text: `Invitation sent to ${data.email}. They will join as ${data.becomes_role}${
+            data.is_founding_admin ? ' (first user in this tenant)' : ''
+          } and can invite members themselves.`
+        })
+        setAdminInviteForm({ tenant_id: '', email: '' })
+      } else {
+        setAdminInviteNotice({ kind: 'error', text: data.message || 'Failed to send the invitation' })
+      }
+    } catch (error) {
+      console.error('Failed to invite tenant admin:', error)
+      setAdminInviteNotice({ kind: 'error', text: 'Network error: unable to send the invitation' })
+    } finally {
+      setIsInvitingAdmin(false)
+    }
+  }
+
   const handleCreateToken = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsCreating(true)
@@ -483,6 +525,73 @@ export default function SuperAdminATIDashboard() {
             </div>
           </div>
         )}
+
+        {/* Primary onboarding path: name the person who will run the tenant and
+            email them a personal signup link. Raw-token hand-off below is the
+            fallback for bulk or code-based access. */}
+        <div className="bg-white shadow rounded-lg mb-8 border-l-4 border-indigo-500">
+          <div className="px-4 py-5 sm:p-6">
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Invite an Organization Administrator</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              The usual way to onboard a customer. We email this person their own single-use
+              signup link — no code to pass around. The first user in a tenant becomes its{' '}
+              <span className="font-medium text-gray-700">Owner</span>, and invites their own
+              members from the admin dashboard.
+            </p>
+
+            <form onSubmit={handleInviteAdmin} className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-end">
+              <div className="flex-1">
+                <label htmlFor="admin_invite_tenant" className="block text-sm font-semibold text-gray-800 mb-1">
+                  Tenant
+                </label>
+                <select
+                  id="admin_invite_tenant"
+                  required
+                  value={adminInviteForm.tenant_id}
+                  onChange={(e) => setAdminInviteForm(prev => ({ ...prev, tenant_id: e.target.value }))}
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                >
+                  <option value="">Select tenant…</option>
+                  {tenants.filter(tenant => tenant.status === 'ACTIVE').map(tenant => (
+                    <option key={tenant.id} value={tenant.id}>{tenant.name} ({tenant.ati_id})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex-1">
+                <label htmlFor="admin_invite_email" className="block text-sm font-semibold text-gray-800 mb-1">
+                  Administrator email
+                </label>
+                <input
+                  id="admin_invite_email"
+                  type="email"
+                  required
+                  value={adminInviteForm.email}
+                  onChange={(e) => setAdminInviteForm(prev => ({ ...prev, email: e.target.value }))}
+                  placeholder="admin@acme.edu"
+                  className="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isInvitingAdmin || !adminInviteForm.tenant_id || !adminInviteForm.email.trim()}
+                className="inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isInvitingAdmin ? 'Sending…' : 'Send invite'}
+              </button>
+            </form>
+
+            {adminInviteNotice && (
+              <p
+                role="status"
+                className={`mt-3 text-sm ${
+                  adminInviteNotice.kind === 'ok' ? 'text-emerald-700' : 'text-red-700'
+                }`}
+              >
+                {adminInviteNotice.text}
+              </p>
+            )}
+          </div>
+        </div>
 
         <div className="bg-white shadow rounded-lg mb-8">
           <div className="px-4 py-5 sm:p-6">
@@ -1143,7 +1252,7 @@ export default function SuperAdminATIDashboard() {
                                   </div>
                                   {m && (
                                     <div className="text-[10px] text-gray-500 mt-0.5">
-                                      Patents: {m.patentsDrafted} · Novelty: {m.noveltySearches} · Tokens (in/out): {m.totalInputTokens}/{m.totalOutputTokens}
+                                      Intelligence: {m.fundingIntelligenceRuns} · Reviewer: {m.reviewerRuns} · Chat: {m.chatSessions}/{m.chatMessages} · Tokens (in/out): {m.totalInputTokens}/{m.totalOutputTokens}
                                     </div>
                                   )}
                                 </div>

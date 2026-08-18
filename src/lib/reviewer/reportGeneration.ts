@@ -6,6 +6,13 @@ import {
   resolveSectionVersions,
 } from '@/lib/reviewer/finalReport'
 import { reportFreshness, type ReportFreshness } from '@/lib/reviewer/sectionGrouping'
+import {
+  completeReviewerUsage,
+  releaseReviewerUsage,
+  reserveReviewerUsage,
+  reviewerReportOperationId,
+  ServiceQuotaExceededError,
+} from '@/lib/reviewer/usage'
 import { ReviewerService } from '../../../lib/services/reviewerService'
 
 /**
@@ -176,17 +183,40 @@ export async function generateReviewerReport(input: {
   )
   const anchorScore = deterministic.weightedScore ?? deterministic.meanSectionScore ?? null
 
-  const reviewerService = new ReviewerService()
-  const overallReview = await reviewerService.generateOverallReview(
-    call.project_title,
-    description,
-    sectionSummaries,
-    modelType as 'O' | 'G',
-    {
-      deterministicBriefing: renderDeterministicBriefing(deterministic),
-      anchorScore,
+  // Hold the quota slot before the panel model runs; a failed report releases
+  // it again so the tenant is only charged for reports it actually received.
+  let reportUsage
+  try {
+    reportUsage = await reserveReviewerUsage({
+      callId: input.callId,
+      operationId: reviewerReportOperationId(input.callId),
+      operationType: 'reviewer_final_report',
+      metadata: { projectTitle: call.project_title },
+    })
+  } catch (error) {
+    if (error instanceof ServiceQuotaExceededError) {
+      throw new ReviewerReportError(error.message, error.code, 429)
     }
-  )
+    throw error
+  }
+
+  const reviewerService = new ReviewerService()
+  let overallReview
+  try {
+    overallReview = await reviewerService.generateOverallReview(
+      call.project_title,
+      description,
+      sectionSummaries,
+      modelType as 'O' | 'G',
+      {
+        deterministicBriefing: renderDeterministicBriefing(deterministic),
+        anchorScore,
+      }
+    )
+  } catch (error) {
+    await releaseReviewerUsage(reportUsage).catch(() => undefined)
+    throw error
+  }
 
   const report = {
     ...overallReview,
@@ -210,6 +240,15 @@ export async function generateReviewerReport(input: {
   await prisma.reviewerCall.update({
     where: { id: input.callId },
     data: { overall_review_json: report as any, updated_at: new Date() },
+  })
+
+  // One counted run per workspace: the operation id is keyed by call, so
+  // regenerating a report after a revision does not bill the tenant twice.
+  await completeReviewerUsage(reportUsage, {
+    callId: input.callId,
+    reviewedSectionCount: reviewedSections.length,
+  }).catch(usageError => {
+    console.error('[Reviewer] Failed to record report usage:', usageError)
   })
 
   return {

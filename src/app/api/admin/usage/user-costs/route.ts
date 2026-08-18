@@ -91,8 +91,11 @@ export async function GET(request: NextRequest) {
       totalApiCalls: acc.totalApiCalls + u.totalApiCalls,
       actualCost: acc.actualCost + u.actualCost,
       contingencyCost: acc.contingencyCost + u.contingencyCost,
-      patentDrafts: acc.patentDrafts + u.patentDrafts,
-      noveltySearches: acc.noveltySearches + u.noveltySearches,
+      fundingIntelligenceRuns: acc.fundingIntelligenceRuns + u.fundingIntelligenceRuns,
+      reviewerRuns: acc.reviewerRuns + u.reviewerRuns,
+      reviewerCalls: acc.reviewerCalls + u.reviewerCalls,
+      chatSessions: acc.chatSessions + u.chatSessions,
+      chatMessages: acc.chatMessages + u.chatMessages,
       userCount: acc.userCount + 1
     }), {
       totalInputTokens: 0,
@@ -100,8 +103,11 @@ export async function GET(request: NextRequest) {
       totalApiCalls: 0,
       actualCost: 0,
       contingencyCost: 0,
-      patentDrafts: 0,
-      noveltySearches: 0,
+      fundingIntelligenceRuns: 0,
+      reviewerRuns: 0,
+      reviewerCalls: 0,
+      chatSessions: 0,
+      chatMessages: 0,
       userCount: 0
     })
 

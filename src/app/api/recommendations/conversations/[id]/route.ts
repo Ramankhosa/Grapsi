@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
+import { recommendationErrorResponse } from '@/lib/recommendations/routeErrors'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
@@ -21,13 +22,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     const conversation = await recommendationConversationService.getConversation(auth.userId, auth.tenantId, params.id)
     return NextResponse.json({ conversation })
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: 'Failed to load recommendation conversation',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    )
+    return recommendationErrorResponse(error, 'Failed to load recommendation conversation')
   }
 }
 
@@ -47,20 +42,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     )
     return NextResponse.json({ conversation })
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json(
-        { error: 'Invalid request body', details: error.flatten() },
-        { status: 400 }
-      )
-    }
-
-    return NextResponse.json(
-      {
-        error: 'Failed to update recommendation conversation',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    )
+    return recommendationErrorResponse(error, 'Failed to update recommendation conversation')
   }
 }
 
@@ -74,12 +56,6 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     await recommendationConversationService.deleteConversation(auth.userId, auth.tenantId, params.id)
     return NextResponse.json({ ok: true })
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: 'Failed to delete recommendation conversation',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    )
+    return recommendationErrorResponse(error, 'Failed to delete recommendation conversation')
   }
 }

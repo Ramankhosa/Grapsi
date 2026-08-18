@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getStoredUsageLogActualCost } from '@/lib/metering/llm-usage'
+import {
+  collectServiceUsage,
+  emptyServiceUsageCounts,
+  NO_USER_KEY,
+} from '@/lib/usage/service-usage-metrics'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -11,7 +16,17 @@ const QuerySchema = z.object({
   page: z.string().optional(),
   pageSize: z.string().optional(),
   sortBy: z
-    .enum(['userName', 'inputTokens', 'outputTokens', 'cost', 'patentDrafts', 'noveltySearches', 'ideasReserved'])
+    .enum([
+      'userName',
+      'inputTokens',
+      'outputTokens',
+      'cost',
+      'fundingIntelligenceRuns',
+      'reviewerRuns',
+      'reviewerCalls',
+      'chatSessions',
+      'chatMessages'
+    ])
     .optional(),
   sortDir: z.enum(['asc', 'desc']).optional()
 })
@@ -69,7 +84,7 @@ export async function GET(
     const dateRange = { gte: startDate, lte: endDate }
 
     // LLM usage logs for tokens + cost
-    const [usageLogs, modelPrices, draftsByUser, noveltyRuns, reservations] = await Promise.all([
+    const [usageLogs, modelPrices, serviceUsage] = await Promise.all([
       prisma.usageLog.findMany({
         where: {
           tenantId: params.tenantId,
@@ -87,29 +102,7 @@ export async function GET(
         }
       }),
       prisma.lLMModelPrice.findMany(),
-      prisma.draftingSession.groupBy({
-        by: ['userId'],
-        where: {
-          tenantId: params.tenantId,
-          createdAt: dateRange
-        },
-        _count: { _all: true }
-      }),
-      prisma.noveltySearchRun.findMany({
-        where: {
-          createdAt: dateRange,
-          status: 'COMPLETED',
-          user: { tenantId: params.tenantId }
-        },
-        select: { userId: true }
-      }),
-      prisma.ideaBankReservation.findMany({
-        where: {
-          reservedAt: dateRange,
-          user: { tenantId: params.tenantId }
-        },
-        select: { userId: true }
-      })
+      collectServiceUsage(dateRange, { tenantId: params.tenantId })
     ])
 
     const priceMap = new Map<string, { input: number; output: number }>()
@@ -126,9 +119,6 @@ export async function GET(
       totalOutputTokens: number
       totalApiCalls: number
       totalCost: number
-      patentDrafts: number
-      noveltySearches: number
-      ideasReserved: number
       lastActivity: Date | null
     }
 
@@ -157,9 +147,6 @@ export async function GET(
           totalOutputTokens: 0,
           totalApiCalls: 0,
           totalCost: 0,
-          patentDrafts: 0,
-          noveltySearches: 0,
-          ideasReserved: 0,
           lastActivity: null
         })
       }
@@ -178,27 +165,11 @@ export async function GET(
       }
     }
 
-    // Domain counts
-    const draftMap = new Map<string, number>()
-    draftsByUser.forEach(row => draftMap.set(row.userId, row._count._all))
-
-    const noveltyMap = new Map<string, number>()
-    noveltyRuns.forEach(r => {
-      const count = noveltyMap.get(r.userId) || 0
-      noveltyMap.set(r.userId, count + 1)
-    })
-
-    const ideaMap = new Map<string, number>()
-    reservations.forEach(r => {
-      const count = ideaMap.get(r.userId) || 0
-      ideaMap.set(r.userId, count + 1)
-    })
-
     const userIds = new Set<string>()
     buckets.forEach((_, id) => userIds.add(id))
-    draftMap.forEach((_, id) => userIds.add(id))
-    noveltyMap.forEach((_, id) => userIds.add(id))
-    ideaMap.forEach((_, id) => userIds.add(id))
+    serviceUsage.byUser.forEach((_, id) => {
+      if (id !== NO_USER_KEY) userIds.add(id)
+    })
 
     if (userIds.size === 0) {
       return NextResponse.json({
@@ -226,11 +197,9 @@ export async function GET(
         totalOutputTokens: 0,
         totalApiCalls: 0,
         totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0,
         lastActivity: null as Date | null
       }
+      const counts = serviceUsage.byUser.get(id) ?? emptyServiceUsageCounts()
       const u = userRecords.find(u => u.id === id)
       return {
         userId: id,
@@ -240,9 +209,7 @@ export async function GET(
         totalOutputTokens: bucket.totalOutputTokens,
         totalApiCalls: bucket.totalApiCalls,
         totalCost: bucket.totalCost,
-        patentDrafts: (bucket.patentDrafts || 0) + (draftMap.get(id) || 0),
-        noveltySearches: (bucket.noveltySearches || 0) + (noveltyMap.get(id) || 0),
-        ideasReserved: (bucket.ideasReserved || 0) + (ideaMap.get(id) || 0),
+        ...counts,
         lastActivity: bucket.lastActivity
       }
     })
@@ -260,12 +227,16 @@ export async function GET(
             return u.totalOutputTokens
           case 'cost':
             return u.totalCost
-          case 'patentDrafts':
-            return u.patentDrafts
-          case 'noveltySearches':
-            return u.noveltySearches
-          case 'ideasReserved':
-            return u.ideasReserved
+          case 'fundingIntelligenceRuns':
+            return u.fundingIntelligenceRuns
+          case 'reviewerRuns':
+            return u.reviewerRuns
+          case 'reviewerCalls':
+            return u.reviewerCalls
+          case 'chatSessions':
+            return u.chatSessions
+          case 'chatMessages':
+            return u.chatMessages
           case 'inputTokens':
           default:
             return u.totalInputTokens

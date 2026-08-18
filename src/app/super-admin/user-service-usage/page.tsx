@@ -10,16 +10,39 @@ interface TenantOption {
   name: string
 }
 
-interface ServiceUsageUser {
+/**
+ * The services this platform bills for. A "reviewer run" is one AI review —
+ * a section review or the panel report — and reviewer calls are the proposals
+ * those runs sit inside, shown as context rather than counted as actions.
+ */
+interface ServiceUsageCounts {
+  fundingIntelligenceRuns: number
+  reviewerRuns: number
+  reviewerCalls: number
+  chatSessions: number
+  chatMessages: number
+}
+
+const EMPTY_SERVICE_USAGE_COUNTS: ServiceUsageCounts = {
+  fundingIntelligenceRuns: 0,
+  reviewerRuns: 0,
+  reviewerCalls: 0,
+  chatSessions: 0,
+  chatMessages: 0
+}
+
+// Reviewer calls are left out so a proposal is not counted alongside the runs
+// that already represent the same work.
+const totalServiceActions = (counts: ServiceUsageCounts) =>
+  counts.fundingIntelligenceRuns + counts.reviewerRuns + counts.chatSessions + counts.chatMessages
+
+interface ServiceUsageUser extends ServiceUsageCounts {
   userId: string
   userName: string
   userEmail: string
   tenantId: string | null
   tenantName: string | null
   tenantType: 'INDIVIDUAL' | 'ENTERPRISE' | null
-  patentsDrafted: number
-  noveltySearches: number
-  ideasReserved: number
   // Optional aggregated LLM usage metrics (filled from admin usage APIs when available)
   totalInputTokens?: number
   totalOutputTokens?: number
@@ -28,20 +51,24 @@ interface ServiceUsageUser {
   lastActivity?: string | null
 }
 
+interface ServiceUsageSummaryTotals {
+  totalFundingIntelligenceRuns: number
+  totalReviewerRuns: number
+  totalReviewerCalls: number
+  totalChatSessions: number
+  totalChatMessages: number
+}
+
 interface ServiceUsageResponse {
   startDate: string
   endDate: string
   users: ServiceUsageUser[]
-  summary: {
-    totalPatentsDrafted: number
-    totalNoveltySearches: number
-    totalIdeasReserved: number
-  }
+  summary: ServiceUsageSummaryTotals
 }
 
 type PeriodMode = 'date' | 'month' | 'year'
 
-interface AdminUsageTenant {
+interface AdminUsageTenant extends ServiceUsageCounts {
   tenantId: string | null
   tenantName: string | null
   tenantType: string | null
@@ -49,22 +76,16 @@ interface AdminUsageTenant {
   totalOutputTokens: number
   totalApiCalls: number
   totalCost: number
-  patentDrafts: number
-  noveltySearches: number
-  ideasReserved: number
 }
 
 interface AdminUsageSummaryResponse {
   startDate: string
   endDate: string
-  summary: {
+  summary: ServiceUsageSummaryTotals & {
     totalInputTokens: number
     totalOutputTokens: number
     totalApiCalls: number
     totalCost: number
-    totalPatentsDrafted: number
-    totalNoveltySearches: number
-    totalIdeasReserved: number
   }
   tenants: AdminUsageTenant[]
   pagination: {
@@ -74,7 +95,7 @@ interface AdminUsageSummaryResponse {
   }
 }
 
-interface TenantUserUsageRow {
+interface TenantUserUsageRow extends ServiceUsageCounts {
   userId: string
   userName: string
   userEmail: string
@@ -82,9 +103,6 @@ interface TenantUserUsageRow {
   totalOutputTokens: number
   totalApiCalls: number
   totalCost: number
-  patentDrafts: number
-  noveltySearches: number
-  ideasReserved: number
   lastActivity: string | null
 }
 
@@ -131,6 +149,7 @@ interface TokenDetailsState {
     timestamp: string
     action: string
     taskCode?: string | null
+    stageCode?: string | null
     modelClass?: string | null
     apiCode?: string | null
     inputTokens: number
@@ -138,15 +157,26 @@ interface TokenDetailsState {
     apiCalls: number
     cost: number
     meta?: {
-      patentId?: string | null
+      runId?: string | null
+      reviewerCallId?: string | null
+      conversationId?: string | null
       projectId?: string | null
-      documentId?: string | null
+      fundingCallId?: string | null
     }
   }[]
 }
 
-// Patent cost tracking interfaces
-interface PatentStageBreakdown {
+// Per-run cost tracking interfaces
+type BillableService = 'FUNDING_INTELLIGENCE' | 'GRANT_REVIEW' | 'FUNDING_CHAT'
+
+const SERVICE_FILTER_OPTIONS: { value: '' | BillableService; label: string }[] = [
+  { value: '', label: 'All services' },
+  { value: 'FUNDING_INTELLIGENCE', label: 'Funding intelligence' },
+  { value: 'GRANT_REVIEW', label: 'Reviewer' },
+  { value: 'FUNDING_CHAT', label: 'Funding chat' }
+]
+
+interface ServiceRunStageBreakdown {
   stage: string
   inputTokens: number
   outputTokens: number
@@ -155,22 +185,25 @@ interface PatentStageBreakdown {
   callCount: number
 }
 
-interface PatentCostMetrics {
-  patentId: string
-  patentTitle: string
-  userId: string
+interface ServiceRunCostMetrics {
+  runId: string
+  service: BillableService
+  serviceLabel: string
+  title: string
+  userId: string | null
   userName: string | null
-  userEmail: string
+  userEmail: string | null
   totalInputTokens: number
   totalOutputTokens: number
   totalApiCalls: number
   actualCost: number
   contingencyCost: number
-  createdAt: string
-  stageBreakdown: PatentStageBreakdown[]
+  firstActivityAt: string
+  lastActivityAt: string
+  stageBreakdown: ServiceRunStageBreakdown[]
 }
 
-interface PatentCostsResponse {
+interface ServiceRunCostsResponse {
   startDate: string
   endDate: string
   tenantId: string
@@ -181,9 +214,10 @@ interface PatentCostsResponse {
     totalApiCalls: number
     actualCost: number
     contingencyCost: number
-    patentCount: number
+    runCount: number
   }
-  patents: PatentCostMetrics[]
+  byService: Record<string, { runCount: number; actualCost: number; contingencyCost: number }>
+  runs: ServiceRunCostMetrics[]
 }
 
 export default function UserServiceUsagePage() {
@@ -216,12 +250,13 @@ export default function UserServiceUsagePage() {
   const [tenantUsersLoading, setTenantUsersLoading] = useState<boolean>(false)
   const [tenantUsersError, setTenantUsersError] = useState<string | null>(null)
   
-  // Patent cost tracking state
-  const [patentCosts, setPatentCosts] = useState<PatentCostsResponse | null>(null)
-  const [patentCostsLoading, setPatentCostsLoading] = useState<boolean>(false)
-  const [patentCostsError, setPatentCostsError] = useState<string | null>(null)
-  const [expandedPatentId, setExpandedPatentId] = useState<string | null>(null)
-  const [showPatentCosts, setShowPatentCosts] = useState<boolean>(false)
+  // Per-run cost tracking state
+  const [runCosts, setRunCosts] = useState<ServiceRunCostsResponse | null>(null)
+  const [runCostsLoading, setRunCostsLoading] = useState<boolean>(false)
+  const [runCostsError, setRunCostsError] = useState<string | null>(null)
+  const [expandedRunKey, setExpandedRunKey] = useState<string | null>(null)
+  const [showRunCosts, setShowRunCosts] = useState<boolean>(false)
+  const [runCostService, setRunCostService] = useState<'' | BillableService>('')
 
   useEffect(() => {
     if (!user) {
@@ -408,10 +443,10 @@ export default function UserServiceUsagePage() {
     }
   }
 
-  const fetchPatentCosts = async (tenantId: string, userId?: string) => {
+  const fetchRunCosts = async (tenantId: string, userId?: string) => {
     try {
-      setPatentCostsLoading(true)
-      setPatentCostsError(null)
+      setRunCostsLoading(true)
+      setRunCostsError(null)
 
       const { start, end } = resolveDateRange()
 
@@ -425,7 +460,11 @@ export default function UserServiceUsagePage() {
         params.append('userId', userId)
       }
 
-      const response = await fetch(`/api/admin/usage/patent-costs?${params.toString()}`, {
+      if (runCostService) {
+        params.append('service', runCostService)
+      }
+
+      const response = await fetch(`/api/admin/usage/run-costs?${params.toString()}`, {
         headers: {
           Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`
         }
@@ -433,17 +472,17 @@ export default function UserServiceUsagePage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
-        throw new Error(body.error || 'Failed to fetch patent costs')
+        throw new Error(body.error || 'Failed to fetch run costs')
       }
 
-      const body: PatentCostsResponse = await response.json()
-      setPatentCosts(body)
+      const body: ServiceRunCostsResponse = await response.json()
+      setRunCosts(body)
     } catch (err) {
-      console.error('Failed to fetch patent costs:', err)
-      setPatentCostsError(err instanceof Error ? err.message : 'Unknown error')
-      setPatentCosts(null)
+      console.error('Failed to fetch run costs:', err)
+      setRunCostsError(err instanceof Error ? err.message : 'Unknown error')
+      setRunCosts(null)
     } finally {
-      setPatentCostsLoading(false)
+      setRunCostsLoading(false)
     }
   }
 
@@ -544,6 +583,7 @@ export default function UserServiceUsagePage() {
               timestamp: log.timestamp,
               action: log.action,
               taskCode: log.taskCode,
+              stageCode: log.stageCode,
               modelClass: log.modelClass,
               apiCode: log.apiCode,
               inputTokens: log.inputTokens,
@@ -617,8 +657,6 @@ export default function UserServiceUsagePage() {
       return adminSummary.tenants.map(t => {
         const key = t.tenantId || 'no-tenant'
         const usersForTenant = usersByTenant[key] || []
-        const totalActions =
-          t.patentDrafts + t.noveltySearches + t.ideasReserved
 
         return {
           tenantId: key,
@@ -626,14 +664,16 @@ export default function UserServiceUsagePage() {
           name: t.tenantName || 'No tenant',
           type: t.tenantType,
           users: usersForTenant,
-          patentsDrafted: t.patentDrafts,
-          noveltySearches: t.noveltySearches,
-          ideasReserved: t.ideasReserved,
+          fundingIntelligenceRuns: t.fundingIntelligenceRuns,
+          reviewerRuns: t.reviewerRuns,
+          reviewerCalls: t.reviewerCalls,
+          chatSessions: t.chatSessions,
+          chatMessages: t.chatMessages,
           totalInputTokens: t.totalInputTokens,
           totalOutputTokens: t.totalOutputTokens,
           totalApiCalls: t.totalApiCalls,
           totalCost: t.totalCost,
-          totalActions
+          totalActions: totalServiceActions(t)
         }
       })
     }
@@ -642,10 +682,7 @@ export default function UserServiceUsagePage() {
       name: string
       type: string | null
       users: ServiceUsageUser[]
-      patentsDrafted: number
-      noveltySearches: number
-      ideasReserved: number
-    }> = {}
+    } & ServiceUsageCounts> = {}
     data.forEach(u => {
       const key = u.tenantId || 'no-tenant'
       if (!buckets[key]) {
@@ -653,21 +690,21 @@ export default function UserServiceUsagePage() {
           name: u.tenantName || 'No tenant',
           type: u.tenantType || null,
           users: [],
-          patentsDrafted: 0,
-          noveltySearches: 0,
-          ideasReserved: 0
+          ...EMPTY_SERVICE_USAGE_COUNTS
         }
       }
       buckets[key].users.push(u)
-      buckets[key].patentsDrafted += u.patentsDrafted
-      buckets[key].noveltySearches += u.noveltySearches
-      buckets[key].ideasReserved += u.ideasReserved
+      buckets[key].fundingIntelligenceRuns += u.fundingIntelligenceRuns
+      buckets[key].reviewerRuns += u.reviewerRuns
+      buckets[key].reviewerCalls += u.reviewerCalls
+      buckets[key].chatSessions += u.chatSessions
+      buckets[key].chatMessages += u.chatMessages
     })
     return Object.entries(buckets).map(([id, bucket]) => ({
       tenantId: id,
       realTenantId: id === 'no-tenant' ? null : id,
       ...bucket,
-      totalActions: bucket.patentsDrafted + bucket.noveltySearches + bucket.ideasReserved
+      totalActions: totalServiceActions(bucket)
     }))
   })()
 
@@ -687,9 +724,11 @@ export default function UserServiceUsagePage() {
           tenantId: expandedTenant === 'no-tenant' ? null : expandedTenant,
           tenantName: null,
           tenantType: null,
-          patentsDrafted: u.patentDrafts,
-          noveltySearches: u.noveltySearches,
-          ideasReserved: u.ideasReserved
+          fundingIntelligenceRuns: u.fundingIntelligenceRuns,
+          reviewerRuns: u.reviewerRuns,
+          reviewerCalls: u.reviewerCalls,
+          chatSessions: u.chatSessions,
+          chatMessages: u.chatMessages
         }
 
         return {
@@ -745,7 +784,7 @@ export default function UserServiceUsagePage() {
           <div>
             <h1 className="text-3xl font-bold text-gray-900">User Wise Service Usage</h1>
             <p className="text-gray-600 mt-1">
-              Monitor how many patents, novelty searches, idea reservations, and LLM tokens each user consumes.
+              Monitor funding intelligence runs, reviewer runs, funding chat activity, and LLM tokens per tenant and user.
             </p>
           </div>
           <div className="flex items-center space-x-4">
@@ -855,34 +894,46 @@ export default function UserServiceUsagePage() {
         </div>
 
         {/* Summary cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="bg-white p-6 rounded-lg shadow border">
-            <h3 className="text-sm font-medium text-gray-600 mb-2">Patents drafted</h3>
+            <h3 className="text-sm font-medium text-gray-600 mb-2">Funding intelligence runs</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalPatentsDrafted) : '—'}
+              {summary ? formatNumber(summary.totalFundingIntelligenceRuns) : '—'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
-              Total drafting sessions started in the selected period.
+              Idea analyses that completed in the selected period.
             </p>
           </div>
 
           <div className="bg-white p-6 rounded-lg shadow border">
-            <h3 className="text-sm font-medium text-gray-600 mb-2">Novelty searches</h3>
+            <h3 className="text-sm font-medium text-gray-600 mb-2">Reviewer runs</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalNoveltySearches) : '—'}
+              {summary ? formatNumber(summary.totalReviewerRuns) : '—'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
-              Completed novelty search runs in the selected period.
+              Section reviews executed across{' '}
+              {summary ? formatNumber(summary.totalReviewerCalls) : '—'} proposal
+              {summary && summary.totalReviewerCalls === 1 ? '' : 's'}.
             </p>
           </div>
 
           <div className="bg-white p-6 rounded-lg shadow border">
-            <h3 className="text-sm font-medium text-gray-600 mb-2">Patent ideas reserved</h3>
+            <h3 className="text-sm font-medium text-gray-600 mb-2">Chat sessions</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalIdeasReserved) : '—'}
+              {summary ? formatNumber(summary.totalChatSessions) : '—'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
-              New idea bank reservations created in the selected period.
+              Funding chat conversations started in the selected period.
+            </p>
+          </div>
+
+          <div className="bg-white p-6 rounded-lg shadow border">
+            <h3 className="text-sm font-medium text-gray-600 mb-2">Chat messages</h3>
+            <div className="text-2xl font-bold text-gray-900">
+              {summary ? formatNumber(summary.totalChatMessages) : '—'}
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              User turns sent into those conversations.
             </p>
           </div>
         </div>
@@ -944,9 +995,10 @@ export default function UserServiceUsagePage() {
                 <tr className="border-b bg-gray-50">
                   <th className="px-4 py-2 text-left">Tenant</th>
                   <th className="px-4 py-2 text-left">Type</th>
-                  <th className="px-4 py-2 text-right">Patents drafted</th>
-                  <th className="px-4 py-2 text-right">Novelty searches</th>
-                  <th className="px-4 py-2 text-right">Ideas reserved</th>
+                  <th className="px-4 py-2 text-right">Intelligence runs</th>
+                  <th className="px-4 py-2 text-right">Reviewer runs</th>
+                  <th className="px-4 py-2 text-right">Chat sessions</th>
+                  <th className="px-4 py-2 text-right">Chat messages</th>
                   <th className="px-4 py-2 text-right">Total actions</th>
                   <th className="px-4 py-2 text-right">Users</th>
                 </tr>
@@ -954,7 +1006,7 @@ export default function UserServiceUsagePage() {
               <tbody>
                 {tenantsAggregated.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
                       No tenant data for the selected filters.
                     </td>
                   </tr>
@@ -968,9 +1020,15 @@ export default function UserServiceUsagePage() {
                         <div className="text-xs text-gray-500">{t.tenantId}</div>
                       </td>
                       <td className="px-4 py-2 text-xs text-gray-700">{t.type || 'N/A'}</td>
-                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.patentsDrafted)}</td>
-                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.noveltySearches)}</td>
-                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.ideasReserved)}</td>
+                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.fundingIntelligenceRuns)}</td>
+                      <td className="px-4 py-2 text-right font-mono">
+                        {formatNumber(t.reviewerRuns)}
+                        <div className="text-[11px] text-gray-500 font-normal">
+                          {formatNumber(t.reviewerCalls)} proposal{t.reviewerCalls === 1 ? '' : 's'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.chatSessions)}</td>
+                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.chatMessages)}</td>
                       <td className="px-4 py-2 text-right font-mono font-semibold">{formatNumber(t.totalActions)}</td>
                       <td className="px-4 py-2 text-right text-xs text-indigo-600 underline">
                         {t.users.length} user{t.users.length === 1 ? '' : 's'} {isOpen ? '▼' : '▶'}
@@ -1000,9 +1058,11 @@ export default function UserServiceUsagePage() {
                     'tenantType',
                     'userName',
                     'userEmail',
-                    'patentsDrafted',
-                    'noveltySearches',
-                    'ideasReserved',
+                    'fundingIntelligenceRuns',
+                    'reviewerRuns',
+                    'reviewerCalls',
+                    'chatSessions',
+                    'chatMessages',
                     'totalActions'
                   ]
                   const rows = visibleUsers.map(row => [
@@ -1010,10 +1070,12 @@ export default function UserServiceUsagePage() {
                     row.tenantType || '',
                     row.userName,
                     row.userEmail,
-                    row.patentsDrafted,
-                    row.noveltySearches,
-                    row.ideasReserved,
-                    row.patentsDrafted + row.noveltySearches + row.ideasReserved
+                    row.fundingIntelligenceRuns,
+                    row.reviewerRuns,
+                    row.reviewerCalls,
+                    row.chatSessions,
+                    row.chatMessages,
+                    totalServiceActions(row)
                   ])
                   const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
                   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -1048,9 +1110,10 @@ export default function UserServiceUsagePage() {
                     <th className="px-4 py-2 text-left">Tenant type</th>
                     <th className="px-4 py-2 text-left">User</th>
                     <th className="px-4 py-2 text-left">Email</th>
-                    <th className="px-4 py-2 text-right">Patents drafted</th>
-                    <th className="px-4 py-2 text-right">Novelty searches</th>
-                    <th className="px-4 py-2 text-right">Ideas reserved</th>
+                    <th className="px-4 py-2 text-right">Intelligence runs</th>
+                    <th className="px-4 py-2 text-right">Reviewer runs</th>
+                    <th className="px-4 py-2 text-right">Chat sessions</th>
+                    <th className="px-4 py-2 text-right">Chat messages</th>
                     <th className="px-4 py-2 text-right">Total actions</th>
                     <th className="px-4 py-2 text-right">Details</th>
                   </tr>
@@ -1059,7 +1122,7 @@ export default function UserServiceUsagePage() {
                   {visibleUsers.length === 0 && (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={10}
                         className="px-4 py-8 text-center text-gray-500"
                       >
                         No activity found for the selected filters.
@@ -1068,8 +1131,7 @@ export default function UserServiceUsagePage() {
                   )}
 
                   {visibleUsers.map((row) => {
-                    const totalActions =
-                      row.patentsDrafted + row.noveltySearches + row.ideasReserved
+                    const totalActions = totalServiceActions(row)
 
                     const isExpanded = tokenDetails?.userId === row.userId
 
@@ -1095,13 +1157,21 @@ export default function UserServiceUsagePage() {
                           </td>
                           <td className="px-4 py-2">{row.userEmail}</td>
                           <td className="px-4 py-2 text-right font-mono">
-                            {formatNumber(row.patentsDrafted)}
+                            {formatNumber(row.fundingIntelligenceRuns)}
                           </td>
                           <td className="px-4 py-2 text-right font-mono">
-                            {formatNumber(row.noveltySearches)}
+                            {formatNumber(row.reviewerRuns)}
+                            {row.reviewerCalls > 0 && (
+                              <div className="text-[11px] text-gray-500 font-normal">
+                                {formatNumber(row.reviewerCalls)} proposal{row.reviewerCalls === 1 ? '' : 's'}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-2 text-right font-mono">
-                            {formatNumber(row.ideasReserved)}
+                            {formatNumber(row.chatSessions)}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            {formatNumber(row.chatMessages)}
                           </td>
                           <td className="px-4 py-2 text-right font-mono font-semibold">
                             {formatNumber(totalActions)}
@@ -1132,7 +1202,7 @@ export default function UserServiceUsagePage() {
                         </tr>
                         {isExpanded && tokenDetails && (
                           <tr className="bg-gray-50">
-                            <td colSpan={9} className="px-4 py-3">
+                            <td colSpan={10} className="px-4 py-3">
                               {tokenDetails.loading ? (
                                 <div className="text-xs text-gray-500">Loading token usage...</div>
                               ) : tokenDetails.error ? (
@@ -1204,85 +1274,122 @@ export default function UserServiceUsagePage() {
           )}
         </div>
 
-        {/* Patent-wise Cost Tracking Section */}
+        {/* Per-run Cost Tracking Section */}
         <div className="bg-white p-6 rounded-lg shadow border">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-lg font-semibold">Patent-wise Cost Breakdown</h2>
+              <h2 className="text-lg font-semibold">Run-wise Cost Breakdown</h2>
               <p className="text-sm text-gray-500">
-                View detailed LLM costs per patent with 10% contingency buffer for billing.
+                LLM cost per funding intelligence run, reviewer call, and chat conversation,
+                with a 10% contingency buffer for billing.
               </p>
             </div>
             <div className="flex items-center gap-3">
               {selectedTenantId && (
-                <button
-                  onClick={() => {
-                    setShowPatentCosts(true)
-                    fetchPatentCosts(selectedTenantId)
-                  }}
-                  disabled={patentCostsLoading}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                >
-                  {patentCostsLoading ? 'Loading...' : 'Load Patent Costs'}
-                </button>
+                <>
+                  <select
+                    value={runCostService}
+                    onChange={(e) => setRunCostService(e.target.value as '' | BillableService)}
+                    className="px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  >
+                    {SERVICE_FILTER_OPTIONS.map(option => (
+                      <option key={option.value || 'all'} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => {
+                      setShowRunCosts(true)
+                      fetchRunCosts(selectedTenantId)
+                    }}
+                    disabled={runCostsLoading}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {runCostsLoading ? 'Loading...' : 'Load Run Costs'}
+                  </button>
+                </>
               )}
               {!selectedTenantId && (
                 <span className="text-sm text-amber-600">
-                  ⚠️ Select a tenant to view patent-wise costs
+                  Select a tenant to view run-wise costs
                 </span>
               )}
             </div>
           </div>
 
-          {showPatentCosts && patentCostsError && (
+          {showRunCosts && runCostsError && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
-              {patentCostsError}
+              {runCostsError}
             </div>
           )}
 
-          {showPatentCosts && patentCosts && (
+          {showRunCosts && runCosts && (
             <>
-              {/* Patent Cost Summary Cards */}
+              {/* Run Cost Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
                 <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
-                  <h4 className="text-xs font-medium text-blue-700 mb-1">Total Patents</h4>
+                  <h4 className="text-xs font-medium text-blue-700 mb-1">Total Runs</h4>
                   <div className="text-xl font-bold text-blue-900">
-                    {formatNumber(patentCosts.totals.patentCount)}
+                    {formatNumber(runCosts.totals.runCount)}
                   </div>
                 </div>
                 <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
                   <h4 className="text-xs font-medium text-purple-700 mb-1">Input Tokens</h4>
                   <div className="text-xl font-bold text-purple-900">
-                    {formatNumber(patentCosts.totals.totalInputTokens)}
+                    {formatNumber(runCosts.totals.totalInputTokens)}
                   </div>
                 </div>
                 <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-4 rounded-lg border border-indigo-200">
                   <h4 className="text-xs font-medium text-indigo-700 mb-1">Output Tokens</h4>
                   <div className="text-xl font-bold text-indigo-900">
-                    {formatNumber(patentCosts.totals.totalOutputTokens)}
+                    {formatNumber(runCosts.totals.totalOutputTokens)}
                   </div>
                 </div>
                 <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border border-green-200">
                   <h4 className="text-xs font-medium text-green-700 mb-1">Actual Cost</h4>
                   <div className="text-xl font-bold text-green-900">
-                    {formatCurrency(patentCosts.totals.actualCost)}
+                    {formatCurrency(runCosts.totals.actualCost)}
                   </div>
                 </div>
                 <div className="bg-gradient-to-br from-amber-50 to-amber-100 p-4 rounded-lg border border-amber-200">
                   <h4 className="text-xs font-medium text-amber-700 mb-1">With 10% Buffer</h4>
                   <div className="text-xl font-bold text-amber-900">
-                    {formatCurrency(patentCosts.totals.contingencyCost)}
+                    {formatCurrency(runCosts.totals.contingencyCost)}
                   </div>
                   <p className="text-[10px] text-amber-600 mt-1">Use for billing</p>
                 </div>
               </div>
 
-              {/* Patent Cost Table */}
+              {/* Per-service rollup */}
+              {Object.keys(runCosts.byService).length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                  {SERVICE_FILTER_OPTIONS.filter(option => option.value).map(option => {
+                    const bucket = runCosts.byService[option.value]
+                    if (!bucket) return null
+                    return (
+                      <div key={option.value} className="border rounded-lg p-4 bg-gray-50">
+                        <h4 className="text-xs font-medium text-gray-600 mb-1">{option.label}</h4>
+                        <div className="text-lg font-bold text-gray-900">
+                          {formatCurrency(bucket.contingencyCost)}
+                        </div>
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          {formatNumber(bucket.runCount)} run{bucket.runCount === 1 ? '' : 's'} ·{' '}
+                          {formatCurrency(bucket.actualCost)} actual
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Run Cost Table */}
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="border-b bg-gray-50">
-                      <th className="px-4 py-2 text-left">Patent</th>
+                      <th className="px-4 py-2 text-left">Run</th>
+                      <th className="px-4 py-2 text-left">Service</th>
                       <th className="px-4 py-2 text-left">User</th>
                       <th className="px-4 py-2 text-right">Input Tokens</th>
                       <th className="px-4 py-2 text-right">Output Tokens</th>
@@ -1293,61 +1400,72 @@ export default function UserServiceUsagePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {patentCosts.patents.length === 0 && (
+                    {runCosts.runs.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                          No patent cost data found for the selected filters.
+                        <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
+                          No run cost data found for the selected filters.
                         </td>
                       </tr>
                     )}
-                    {patentCosts.patents.map((patent) => {
-                      const isExpanded = expandedPatentId === patent.patentId
+                    {runCosts.runs.map((run) => {
+                      const runKey = `${run.service}:${run.runId}`
+                      const isExpanded = expandedRunKey === runKey
                       return (
                         <>
-                          <tr key={patent.patentId} className="border-b hover:bg-gray-50">
+                          <tr key={runKey} className="border-b hover:bg-gray-50">
                             <td className="px-4 py-2">
-                              <div className="font-medium text-gray-900 max-w-xs truncate" title={patent.patentTitle}>
-                                {patent.patentTitle}
+                              <div className="font-medium text-gray-900 max-w-xs truncate" title={run.title}>
+                                {run.title}
                               </div>
-                              <div className="text-xs text-gray-500 font-mono">{patent.patentId.substring(0, 12)}...</div>
+                              <div className="text-xs text-gray-500 font-mono">
+                                {run.runId.substring(0, 12)}
+                              </div>
                             </td>
                             <td className="px-4 py-2">
-                              <div className="text-gray-900">{patent.userName || 'Unknown'}</div>
-                              <div className="text-xs text-gray-500">{patent.userEmail}</div>
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                                {run.serviceLabel}
+                              </span>
+                              <div className="text-[11px] text-gray-500 mt-1">
+                                {formatDateTime(run.lastActivityAt)}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="text-gray-900">{run.userName || 'Unknown'}</div>
+                              <div className="text-xs text-gray-500">{run.userEmail || '-'}</div>
                             </td>
                             <td className="px-4 py-2 text-right font-mono">
-                              {formatNumber(patent.totalInputTokens)}
+                              {formatNumber(run.totalInputTokens)}
                             </td>
                             <td className="px-4 py-2 text-right font-mono">
-                              {formatNumber(patent.totalOutputTokens)}
+                              {formatNumber(run.totalOutputTokens)}
                             </td>
                             <td className="px-4 py-2 text-right font-mono">
-                              {formatNumber(patent.totalApiCalls)}
+                              {formatNumber(run.totalApiCalls)}
                             </td>
                             <td className="px-4 py-2 text-right font-mono text-green-700">
-                              {formatCurrency(patent.actualCost)}
+                              {formatCurrency(run.actualCost)}
                             </td>
                             <td className="px-4 py-2 text-right font-mono font-semibold text-amber-700">
-                              {formatCurrency(patent.contingencyCost)}
+                              {formatCurrency(run.contingencyCost)}
                             </td>
                             <td className="px-4 py-2 text-right">
                               <button
-                                onClick={() => setExpandedPatentId(isExpanded ? null : patent.patentId)}
+                                onClick={() => setExpandedRunKey(isExpanded ? null : runKey)}
                                 className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                               >
                                 {isExpanded ? 'Hide' : 'Stages'}
                               </button>
                             </td>
                           </tr>
-                          {isExpanded && patent.stageBreakdown.length > 0 && (
+                          {isExpanded && run.stageBreakdown.length > 0 && (
                             <tr className="bg-gray-50">
-                              <td colSpan={8} className="px-4 py-3">
+                              <td colSpan={9} className="px-4 py-3">
                                 <div className="text-xs">
                                   <div className="font-semibold text-gray-700 mb-2">
                                     Cost breakdown by stage/operation:
                                   </div>
                                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                                    {patent.stageBreakdown.map((stage, idx) => (
+                                    {run.stageBreakdown.map((stage, idx) => (
                                       <div key={idx} className="bg-white border rounded p-2">
                                         <div className="font-medium text-gray-800">{stage.stage}</div>
                                         <div className="text-[11px] text-gray-600 space-y-0.5 mt-1">
@@ -1375,13 +1493,14 @@ export default function UserServiceUsagePage() {
                 </table>
               </div>
 
-              {/* Export Patent Costs Button */}
+              {/* Export Run Costs Button */}
               <div className="flex justify-end mt-4">
                 <button
                   onClick={() => {
                     const header = [
-                      'patentId',
-                      'patentTitle',
+                      'service',
+                      'runId',
+                      'title',
                       'userName',
                       'userEmail',
                       'inputTokens',
@@ -1390,35 +1509,36 @@ export default function UserServiceUsagePage() {
                       'actualCost',
                       'contingencyCost'
                     ]
-                    const rows = patentCosts.patents.map(p => [
-                      p.patentId,
-                      p.patentTitle,
-                      p.userName || '',
-                      p.userEmail,
-                      p.totalInputTokens,
-                      p.totalOutputTokens,
-                      p.totalApiCalls,
-                      p.actualCost.toFixed(6),
-                      p.contingencyCost.toFixed(6)
+                    const rows = runCosts.runs.map(run => [
+                      run.serviceLabel,
+                      run.runId,
+                      run.title,
+                      run.userName || '',
+                      run.userEmail || '',
+                      run.totalInputTokens,
+                      run.totalOutputTokens,
+                      run.totalApiCalls,
+                      run.actualCost.toFixed(6),
+                      run.contingencyCost.toFixed(6)
                     ])
                     const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
                     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
                     const url = URL.createObjectURL(blob)
                     const link = document.createElement('a')
                     link.href = url
-                    link.download = 'patent-costs.csv'
+                    link.download = 'service-run-costs.csv'
                     link.click()
                     URL.revokeObjectURL(url)
                   }}
                   className="inline-flex items-center px-3 py-2 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                 >
-                  Export Patent Costs CSV
+                  Export Run Costs CSV
                 </button>
               </div>
             </>
           )}
 
-          {showPatentCosts && patentCostsLoading && (
+          {showRunCosts && runCostsLoading && (
             <div className="flex justify-center py-12">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
             </div>

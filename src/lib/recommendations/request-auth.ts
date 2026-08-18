@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import type { FundingActor } from '@/lib/funding/access'
 import { requireFundingActor } from '@/lib/funding/access'
+import {
+  CHAT_CREATE_RATE_LIMIT_MAX_REQUESTS,
+  CHAT_CREATE_RATE_LIMIT_WINDOW_MS,
+  CHAT_RATE_LIMIT_MAX_REQUESTS,
+  CHAT_RATE_LIMIT_WINDOW_MS,
+} from '@/lib/recommendations/constants'
+import { buildFinderRateLimitKey, checkRateLimit } from '@/lib/recommendations/rateLimit'
 import type { RecommendationAccessScope } from '@/lib/recommendations/types'
 
 type AuthResult =
@@ -71,6 +78,39 @@ export async function requireRecommendationTenantUser(request: NextRequest): Pro
     userId: auth.userId,
     tenantId: auth.tenantId,
   }
+}
+
+/**
+ * Per-user rate limit for the finder chat. `chat` covers every route that runs a
+ * search or an LLM call on a conversation; `create` covers conversation creation.
+ * Returns the 429 response to send, or null when the request may proceed.
+ */
+export function enforceChatRateLimit(userId: string, bucket: 'chat' | 'create' = 'chat'): NextResponse | null {
+  const rateLimit =
+    bucket === 'create'
+      ? checkRateLimit(
+          buildFinderRateLimitKey('create', userId),
+          CHAT_CREATE_RATE_LIMIT_MAX_REQUESTS,
+          CHAT_CREATE_RATE_LIMIT_WINDOW_MS
+        )
+      : checkRateLimit(buildFinderRateLimitKey('chat', userId), CHAT_RATE_LIMIT_MAX_REQUESTS, CHAT_RATE_LIMIT_WINDOW_MS)
+
+  if (rateLimit.allowed) return null
+
+  return NextResponse.json(
+    {
+      error:
+        bucket === 'create'
+          ? 'Too many new funding chats. Please wait and try again.'
+          : 'Too many funding chat requests. Please wait and try again.',
+      code: 'RATE_LIMITED',
+      resetAt: new Date(rateLimit.resetAt).toISOString(),
+    },
+    {
+      status: 429,
+      headers: { 'Retry-After': String(Math.max(1, Math.ceil((rateLimit.resetAt - Date.now()) / 1000))) },
+    }
+  )
 }
 
 export function toRecommendationAccessScope(actor: FundingActor): RecommendationAccessScope {

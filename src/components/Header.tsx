@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
+import { useEntitlements } from '@/hooks/useEntitlements'
 import AnimatedLogo from '@/components/ui/animated-logo'
 import { isFeatureEnabled } from '@/lib/feature-flags'
 import { FileText, Library, Sparkles } from 'lucide-react'
@@ -12,6 +13,11 @@ import NotificationBell from '@/components/notifications/NotificationBell'
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
   const { me: fundingDept } = useFundingDeptMe()
+  // Plan-gated product modules: hide nav entries the tenant's plan does not
+  // include so users don't click into a 403 (enforcement stays server-side).
+  const { hasModule } = useEntitlements()
+  const canUseGrantStudio = hasModule('GRANT_STUDIO')
+  const canUseFundingIntelligence = hasModule('FUNDING_INTELLIGENCE')
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isSendingReset, setIsSendingReset] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -177,13 +183,15 @@ export default function Header() {
                   🏠 Dashboard
                 </Link>
 
-                <Link
-                  href="/funding/intelligence"
-                  className="hidden items-center px-3 py-2 text-sm font-medium text-gpt-gray-700 transition-all duration-200 hover:text-teal-700 lg:inline-flex"
-                >
-                  <Sparkles className="mr-1.5 h-4 w-4" />
-                  Funding Intelligence
-                </Link>
+                {canUseFundingIntelligence && (
+                  <Link
+                    href="/funding/intelligence"
+                    className="hidden items-center px-3 py-2 text-sm font-medium text-gpt-gray-700 transition-all duration-200 hover:text-teal-700 lg:inline-flex"
+                  >
+                    <Sparkles className="mr-1.5 h-4 w-4" />
+                    Funding Intelligence
+                  </Link>
+                )}
 
                 {/* Shared research library navigation */}
                 {isFeatureEnabled('ENABLE_PAPER_WRITING_UI') && (
@@ -245,23 +253,27 @@ export default function Header() {
                       <span>Dashboard</span>
                     </Link>
 
-                    <Link
-                      href="/projects"
-                      className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                      onClick={closeMenu}
-                    >
-                      <span>📁</span>
-                      <span>Projects</span>
-                    </Link>
+                    {canUseGrantStudio && (
+                      <Link
+                        href="/projects"
+                        className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                        onClick={closeMenu}
+                      >
+                        <span>📁</span>
+                        <span>Projects</span>
+                      </Link>
+                    )}
 
-                    <Link
-                      href="/funding/intelligence"
-                      className="flex w-full items-center space-x-2 px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50"
-                      onClick={closeMenu}
-                    >
-                      <Sparkles className="h-4 w-4" />
-                      <span>Funding Intelligence</span>
-                    </Link>
+                    {canUseFundingIntelligence && (
+                      <Link
+                        href="/funding/intelligence"
+                        className="flex w-full items-center space-x-2 px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50"
+                        onClick={closeMenu}
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        <span>Funding Intelligence</span>
+                      </Link>
+                    )}
 
                     <Link
                       href="/assignments"
@@ -355,6 +367,14 @@ export default function Header() {
                         </div>
                         {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN')) && (
                           <>
+                            <Link
+                              href="/admin"
+                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              onClick={closeMenu}
+                            >
+                              <span>✉️</span>
+                              <span>Invite Members</span>
+                            </Link>
                             <Link
                               href="/tenant-admin/users"
                               className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"

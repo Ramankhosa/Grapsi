@@ -17,19 +17,32 @@ const QuerySchema = z.object({
   apiCode: z.string().optional()
 })
 
-function mapTaskToAction(taskCode?: string | null): string {
+/**
+ * Reviewer work is billed under GRANT_SECTION_GENERATE, so the stage code is
+ * what separates a reviewer run from grant drafting.
+ */
+function mapTaskToAction(taskCode?: string | null, stageCode?: string | null): string {
+  if (stageCode && stageCode.startsWith('GRANT_REVIEWER')) {
+    return 'Reviewer run'
+  }
+
   switch (taskCode) {
-    case 'LLM2_DRAFT':
-      return 'Patent draft generation'
-    case 'LLM3_DIAGRAM':
-      return 'Diagram generation'
-    case 'LLM4_NOVELTY_SCREEN':
-    case 'LLM5_NOVELTY_ASSESS':
-      return 'Novelty search'
-    case 'LLM6_REPORT_GENERATION':
-      return 'Report generation'
-    case 'IDEA_BANK_RESERVE':
-      return 'Idea reservation'
+    case 'IDEA_INTELLIGENCE':
+      return 'Funding intelligence run'
+    case 'FUNDING_CHAT':
+      return 'Funding chat'
+    case 'FUNDING_CALL_INGEST':
+      return 'Funding call ingestion'
+    case 'FUNDING_TEMPLATE_EXTRACT':
+      return 'Funding template extraction'
+    case 'FUNDING_GUIDELINE_EXTRACT':
+      return 'Funding guideline extraction'
+    case 'GRANT_PREP_CHAT':
+      return 'Grant prep chat'
+    case 'GRANT_BLUEPRINT_GENERATE':
+      return 'Grant blueprint generation'
+    case 'GRANT_SECTION_GENERATE':
+      return 'Grant section drafting'
     default:
       return taskCode || 'LLM operation'
   }
@@ -174,7 +187,8 @@ export async function GET(
         id: log.id,
         timestamp: log.startedAt,
         taskCode: log.taskCode,
-        action: mapTaskToAction(log.taskCode),
+        stageCode: meta?.stageCode || null,
+        action: mapTaskToAction(log.taskCode, meta?.stageCode),
         modelClass: log.modelClass,
         apiCode: log.apiCode,
         inputTokens: log.inputTokens || 0,
@@ -182,9 +196,13 @@ export async function GET(
         apiCalls: log.apiCalls || 0,
         cost: calcCost(log),
         meta: {
-          patentId: meta?.patentId || null,
+          // Whichever run this call belongs to: idea analysis, reviewer call,
+          // or funding chat conversation.
+          runId: meta?.runId || null,
+          reviewerCallId: meta?.reviewerCallId || null,
+          conversationId: meta?.conversationId || null,
           projectId: meta?.projectId || null,
-          documentId: meta?.documentId || null
+          fundingCallId: meta?.fundingCallId || null
         }
       }
     })

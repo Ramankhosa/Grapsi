@@ -61,6 +61,7 @@ export default function HomeV2Page() {
       <EvidenceSection />
       <TrustSection />
       <AudienceSection />
+      <DevelopersSection />
       <FinalCTA />
       <SiteFooter />
     </main>
@@ -101,12 +102,13 @@ function SiteNav() {
           <Wordmark />
         </Link>
 
-        <nav aria-label="Primary" className="hidden items-center gap-8 md:flex">
+        <nav aria-label="Primary" className="hidden items-center gap-6 md:flex lg:gap-8">
           {[
             ['Platform', '#pipeline'],
             ['Intelligence', '#intelligence'],
             ['Evidence', '#evidence'],
             ['Security', '#security'],
+            ['Developers', '#developers'],
           ].map(([label, href]) => (
             <a
               key={label}
@@ -601,6 +603,55 @@ function AudienceSection() {
   )
 }
 
+function DevelopersSection() {
+  const { reveal } = useHomeMotion()
+
+  const developers = [
+    {
+      name: 'Dr. Ramandeep Singh',
+      role: 'Professor & Deputy Dean',
+      unit: 'Division of Research & Development',
+      institution: 'Lovely Professional University, India',
+      photo: '/team/dr-ramandeep-singh.jpg',
+    },
+  ]
+
+  return (
+    <motion.section id="developers" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <Eyebrow>Developers</Eyebrow>
+        <h2 className="mt-5 max-w-2xl text-[clamp(1.5rem,2.6vw,2rem)] font-semibold leading-[1.18] tracking-[-0.02em] text-ink">
+          Built inside a research office, for research offices.
+        </h2>
+
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {developers.map((person) => (
+            <div
+              key={person.name}
+              className="flex items-start gap-4 rounded-2xl border border-hairline bg-inset p-5"
+            >
+              <img
+                src={person.photo}
+                alt={person.name}
+                width={80}
+                height={100}
+                loading="lazy"
+                className="h-[100px] w-20 shrink-0 rounded-xl border border-hairline object-cover object-top"
+              />
+              <div className="min-w-0">
+                <h3 className="text-[15px] font-semibold text-ink">{person.name}</h3>
+                <p className="mt-1.5 text-[14px] leading-6 text-ink-soft">{person.role}</p>
+                <p className="mt-1 text-[13px] leading-6 text-muted">{person.unit}</p>
+                <p className="text-[13px] leading-6 text-muted">{person.institution}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </motion.section>
+  )
+}
+
 function FinalCTA() {
   const { goPrimary } = useCta()
 
@@ -657,6 +708,7 @@ function SiteFooter() {
     {
       title: 'Company',
       links: [
+        ['Developers', '#developers'],
         ['Contact', '/contact'],
         ['Privacy', '/privacy'],
         ['Terms', '/terms'],

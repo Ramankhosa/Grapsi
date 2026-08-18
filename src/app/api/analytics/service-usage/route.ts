@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import {
+  collectServiceUsage,
+  emptyServiceUsageCounts,
+  NO_USER_KEY,
+  totalServiceActions,
+} from '@/lib/usage/service-usage-metrics'
 import { z } from 'zod'
 
 // Force dynamic rendering for API routes that use headers
@@ -82,56 +88,13 @@ export async function GET(request: NextRequest) {
       lte: endDate,
     }
 
-    // Fetch drafting sessions per user (proxy for patents drafted)
-    const draftingByUser = await prisma.draftingSession.groupBy({
-      by: ['userId'],
-      where: {
-        createdAt: dateRange,
-        ...(query.tenantId ? { tenantId: query.tenantId } : {}),
-      },
-      _count: { _all: true },
-    })
-
-    // Fetch novelty searches per user
-    const noveltyByUser = await prisma.noveltySearchRun.groupBy({
-      by: ['userId'],
-      where: {
-        createdAt: dateRange,
-        status: 'COMPLETED',
-        ...(query.tenantId
-          ? {
-              user: {
-                tenantId: query.tenantId,
-              },
-            }
-          : {}),
-      },
-      _count: { _all: true },
-    })
-
-    // Fetch idea reservations per user
-    const reservationsByUser = await prisma.ideaBankReservation.groupBy({
-      by: ['userId'],
-      where: {
-        reservedAt: dateRange,
-        ...(query.tenantId
-          ? {
-              user: {
-                tenantId: query.tenantId,
-              },
-            }
-          : {}),
-      },
-      _count: { _all: true },
-    })
-
-    const userIds = Array.from(
-      new Set([
-        ...draftingByUser.map((r) => r.userId),
-        ...noveltyByUser.map((r) => r.userId),
-        ...reservationsByUser.map((r) => r.userId),
-      ])
+    // Funding intelligence runs, reviewer runs and funding chat usage per user
+    const serviceUsage = await collectServiceUsage(
+      dateRange,
+      query.tenantId ? { tenantId: query.tenantId } : {}
     )
+
+    const userIds = Array.from(serviceUsage.byUser.keys()).filter((id) => id !== NO_USER_KEY)
 
     if (userIds.length === 0) {
       return NextResponse.json({
@@ -139,9 +102,11 @@ export async function GET(request: NextRequest) {
         endDate,
         users: [],
         summary: {
-          totalPatentsDrafted: 0,
-          totalNoveltySearches: 0,
-          totalIdeasReserved: 0,
+          totalFundingIntelligenceRuns: 0,
+          totalReviewerRuns: 0,
+          totalReviewerCalls: 0,
+          totalChatSessions: 0,
+          totalChatMessages: 0,
         },
       })
     }
@@ -166,27 +131,22 @@ export async function GET(request: NextRequest) {
       },
     })
 
-    const draftingMap = new Map<string, number>()
-    draftingByUser.forEach((row) => draftingMap.set(row.userId, row._count._all))
-
-    const noveltyMap = new Map<string, number>()
-    noveltyByUser.forEach((row) => noveltyMap.set(row.userId, row._count._all))
-
-    const reservationMap = new Map<string, number>()
-    reservationsByUser.forEach((row) => reservationMap.set(row.userId, row._count._all))
-
-    let totalPatentsDrafted = 0
-    let totalNoveltySearches = 0
-    let totalIdeasReserved = 0
+    const summary = {
+      totalFundingIntelligenceRuns: 0,
+      totalReviewerRuns: 0,
+      totalReviewerCalls: 0,
+      totalChatSessions: 0,
+      totalChatMessages: 0,
+    }
 
     const resultUsers = users.map((u) => {
-      const patentsDrafted = draftingMap.get(u.id) || 0
-      const noveltySearches = noveltyMap.get(u.id) || 0
-      const ideasReserved = reservationMap.get(u.id) || 0
+      const counts = serviceUsage.byUser.get(u.id) ?? emptyServiceUsageCounts()
 
-      totalPatentsDrafted += patentsDrafted
-      totalNoveltySearches += noveltySearches
-      totalIdeasReserved += ideasReserved
+      summary.totalFundingIntelligenceRuns += counts.fundingIntelligenceRuns
+      summary.totalReviewerRuns += counts.reviewerRuns
+      summary.totalReviewerCalls += counts.reviewerCalls
+      summary.totalChatSessions += counts.chatSessions
+      summary.totalChatMessages += counts.chatMessages
 
       return {
         userId: u.id,
@@ -195,30 +155,18 @@ export async function GET(request: NextRequest) {
         tenantId: u.tenantId,
         tenantName: u.tenant?.name || null,
         tenantType: u.tenant?.type || null,
-        patentsDrafted,
-        noveltySearches,
-        ideasReserved,
+        ...counts,
       }
     })
 
     // Sort users by total activity descending
-    resultUsers.sort(
-      (a, b) =>
-        b.patentsDrafted +
-        b.noveltySearches +
-        b.ideasReserved -
-        (a.patentsDrafted + a.noveltySearches + a.ideasReserved)
-    )
+    resultUsers.sort((a, b) => totalServiceActions(b) - totalServiceActions(a))
 
     return NextResponse.json({
       startDate,
       endDate,
       users: resultUsers,
-      summary: {
-        totalPatentsDrafted,
-        totalNoveltySearches,
-        totalIdeasReserved,
-      },
+      summary,
     })
   } catch (error) {
     console.error('Service usage analytics API error:', error)

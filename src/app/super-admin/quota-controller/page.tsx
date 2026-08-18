@@ -5,14 +5,11 @@ import { unstable_noStore as noStore } from 'next/cache'
 import { useAuth } from '@/lib/auth-context'
 
 type FeatureCode =
-  | 'PRIOR_ART_SEARCH'
-  | 'PATENT_DRAFTING'
-  | 'IDEA_BANK'
-  | 'DIAGRAM_GENERATION'
-  | 'PERSONA_SYNC'
-  | 'PATENT_REVIEW'
-  | 'IDEATION'
+  | 'FUNDING_INTELLIGENCE'
+  | 'GRANT_REVIEW'
+  | 'FUNDING_CHAT'
   | 'FUNDING_DISCOVERY'
+  | 'GRANT_PREP'
   | 'GRANT_DRAFTING'
 type PlanCode = 'FREE_PLAN' | 'PRO_PLAN' | 'ENTERPRISE_PLAN'
 
@@ -38,14 +35,11 @@ interface ApiResponse {
 }
 
 const FEATURE_LABELS: Record<FeatureCode, string> = {
-  PRIOR_ART_SEARCH: 'Novelty searches',
-  PATENT_DRAFTING: 'Patent drafts',
-  IDEA_BANK: 'Ideas reserved',
-  DIAGRAM_GENERATION: 'Diagrams generated',
-  PERSONA_SYNC: 'Style trainings',
-  PATENT_REVIEW: 'Patent reviews',
-  IDEATION: 'Ideation sessions',
-  FUNDING_DISCOVERY: 'Funding discovery runs',
+  FUNDING_INTELLIGENCE: 'Funding intelligence runs',
+  GRANT_REVIEW: 'Reviewer runs',
+  FUNDING_CHAT: 'Funding chat turns',
+  FUNDING_DISCOVERY: 'Funding call ingestions',
+  GRANT_PREP: 'Grant prep sessions',
   GRANT_DRAFTING: 'Grant drafting sessions',
 }
 

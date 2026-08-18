@@ -1,22 +1,24 @@
 /**
  * Unified Service Usage Tracker
- * 
+ *
  * Provides comprehensive tracking for all services with dual-quota support:
  * - Completion-based quotas (counts completed operations)
  * - Token-based quotas (prevents regeneration abuse)
- * 
+ *
  * Each service type has specific completion criteria:
- * - PATENT_DRAFTING: Both description + claims drafted
- * - NOVELTY_SEARCH: Search run completed with results
- * - PRIOR_ART_SEARCH: Search completed with results
- * - DIAGRAM_GENERATION: Diagram successfully generated
- * - SKETCH_GENERATION: Sketch successfully generated (future)
- * - IDEA_BANK: Idea reservation confirmed
- * - PERSONA_SYNC: Style learning completed
+ * - FUNDING_INTELLIGENCE: Idea analysis run completed with a report
+ * - GRANT_REVIEW: One reviewer run — a section review, or the panel report
+ * - FUNDING_CHAT: One chat turn answered (sessions are recorded but unmetered)
+ * - FUNDING_DISCOVERY: Funding call ingestion completed
+ * - GRANT_DRAFTING: Grant section generated
+ * - GRANT_PREP: Quota-exempt; recorded for reporting only
+ *
+ * Reporting reads the domain tables instead of this ledger — see
+ * `usage/service-usage-metrics.ts`. This module is the enforcement side.
  */
 
 import { prisma } from './prisma'
-import type { ServiceType } from '@prisma/client'
+import type { Prisma, ServiceType } from '@prisma/client'
 
 // ============================================================================
 // Types
@@ -80,6 +82,20 @@ export class ServiceQuotaExceededError extends Error {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * The services this platform actually bills for. Dashboards and cost
+ * breakdowns iterate this list, so a service missing here is a service nobody
+ * can see usage for.
+ */
+export const METERED_SERVICE_TYPES: ServiceType[] = [
+  'FUNDING_INTELLIGENCE',
+  'GRANT_REVIEW',
+  'FUNDING_CHAT',
+  'FUNDING_DISCOVERY',
+  'GRANT_DRAFTING',
+  'GRANT_PREP'
+]
 
 function getCurrentPeriods() {
   const now = new Date()
@@ -249,138 +265,155 @@ async function countReservedUsage(
   })
 }
 
-export async function reserveServiceUsage(params: {
+export interface ReserveServiceUsageParams {
   tenantId: string
   userId: string
   serviceType: ServiceType
   operationId: string
   operationType: string
   metadata?: Record<string, any>
-}) {
+  /**
+   * Run the reservation inside a caller-owned transaction. Lets a feature
+   * reserve quota atomically with its own writes (e.g. a chat turn's user
+   * message), so a quota failure rolls everything back together. The advisory
+   * lock below is transaction-scoped and is released with the caller's tx.
+   */
+  tx?: Prisma.TransactionClient
+}
+
+export async function reserveServiceUsage(params: ReserveServiceUsageParams) {
+  if (params.tx) {
+    return reserveServiceUsageWithClient(params.tx, params)
+  }
+  return prisma.$transaction(async (tx) => reserveServiceUsageWithClient(tx, params))
+}
+
+async function reserveServiceUsageWithClient(
+  tx: Prisma.TransactionClient,
+  params: Omit<ReserveServiceUsageParams, 'tx'>
+) {
   const { currentDay, currentMonth } = getCurrentPeriods()
 
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`
-      WITH lock AS (
-        SELECT pg_advisory_xact_lock(hashtext(${`service-usage:${params.tenantId}:${params.serviceType}`}))
-      )
-      SELECT 1::int AS locked
-      FROM lock
-    `
+  await tx.$queryRaw`
+    WITH lock AS (
+      SELECT pg_advisory_xact_lock(hashtext(${`service-usage:${params.tenantId}:${params.serviceType}`}))
+    )
+    SELECT 1::int AS locked
+    FROM lock
+  `
 
-    const existing = await tx.serviceCompletionUsage.findUnique({
+  const existing = await tx.serviceCompletionUsage.findUnique({
+    where: {
+      tenantId_serviceType_operationId: {
+        tenantId: params.tenantId,
+        serviceType: params.serviceType,
+        operationId: params.operationId
+      }
+    }
+  })
+  if (existing) return existing
+
+  const skipQuotaChecks = isCompletionQuotaExempt(params.serviceType)
+
+  if (!skipQuotaChecks) {
+    const userQuota = await tx.userServiceQuota.findUnique({
       where: {
-        tenantId_serviceType_operationId: {
-          tenantId: params.tenantId,
-          serviceType: params.serviceType,
-          operationId: params.operationId
+        userId_serviceType: {
+          userId: params.userId,
+          serviceType: params.serviceType
         }
       }
     })
-    if (existing) return existing
 
-    const skipQuotaChecks = isCompletionQuotaExempt(params.serviceType)
+    if (userQuota) {
+      if (!userQuota.isEnabled) {
+        throw new ServiceQuotaExceededError('SERVICE_DISABLED', `${params.serviceType} is disabled for this user`)
+      }
 
-    if (!skipQuotaChecks) {
-      const userQuota = await tx.userServiceQuota.findUnique({
-        where: {
-          userId_serviceType: {
-            userId: params.userId,
-            serviceType: params.serviceType
+      const userWhere = { tenantId: params.tenantId, userId: params.userId, serviceType: params.serviceType }
+      const [dailyUserUsage, monthlyUserUsage] = await Promise.all([
+        countReservedUsage(tx, userWhere, 'completionDate', currentDay),
+        countReservedUsage(tx, userWhere, 'completionMonth', currentMonth)
+      ])
+      if (userQuota.dailyQuota !== null && dailyUserUsage >= userQuota.dailyQuota) {
+        throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `User daily quota exceeded for ${params.serviceType}`)
+      }
+      if (userQuota.monthlyQuota !== null && monthlyUserUsage >= userQuota.monthlyQuota) {
+        throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `User monthly quota exceeded for ${params.serviceType}`)
+      }
+    } else {
+      const memberships = await tx.teamMember.findMany({
+        where: { userId: params.userId, team: { isActive: true } },
+        include: {
+          team: {
+            include: {
+              serviceAccess: { where: { serviceType: params.serviceType } }
+            }
           }
         }
       })
+      const configuredTeams = memberships.filter(membership => membership.team.serviceAccess.length > 0)
 
-      if (userQuota) {
-        if (!userQuota.isEnabled) {
-          throw new ServiceQuotaExceededError('SERVICE_DISABLED', `${params.serviceType} is disabled for this user`)
+      if (configuredTeams.length > 0) {
+        let allowedByTeam = false
+        for (const membership of configuredTeams) {
+          const teamAccess = membership.team.serviceAccess[0]
+          if (!teamAccess.isEnabled) continue
+
+          const members = await tx.teamMember.findMany({
+            where: { teamId: membership.teamId },
+            select: { userId: true }
+          })
+          const teamWhere = {
+            tenantId: params.tenantId,
+            userId: { in: members.map(member => member.userId) },
+            serviceType: params.serviceType
+          }
+          const [dailyTeamUsage, monthlyTeamUsage] = await Promise.all([
+            countReservedUsage(tx, teamWhere, 'completionDate', currentDay),
+            countReservedUsage(tx, teamWhere, 'completionMonth', currentMonth)
+          ])
+          const withinDailyQuota = teamAccess.dailyQuota === null || dailyTeamUsage < teamAccess.dailyQuota
+          const withinMonthlyQuota = teamAccess.monthlyQuota === null || monthlyTeamUsage < teamAccess.monthlyQuota
+          if (withinDailyQuota && withinMonthlyQuota) {
+            allowedByTeam = true
+            break
+          }
         }
 
-        const userWhere = { tenantId: params.tenantId, userId: params.userId, serviceType: params.serviceType }
-        const [dailyUserUsage, monthlyUserUsage] = await Promise.all([
-          countReservedUsage(tx, userWhere, 'completionDate', currentDay),
-          countReservedUsage(tx, userWhere, 'completionMonth', currentMonth)
-        ])
-        if (userQuota.dailyQuota !== null && dailyUserUsage >= userQuota.dailyQuota) {
-          throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `User daily quota exceeded for ${params.serviceType}`)
-        }
-        if (userQuota.monthlyQuota !== null && monthlyUserUsage >= userQuota.monthlyQuota) {
-          throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `User monthly quota exceeded for ${params.serviceType}`)
-        }
-      } else {
-        const memberships = await tx.teamMember.findMany({
-          where: { userId: params.userId, team: { isActive: true } },
-          include: {
-            team: {
-              include: {
-                serviceAccess: { where: { serviceType: params.serviceType } }
-              }
-            }
-          }
-        })
-        const configuredTeams = memberships.filter(membership => membership.team.serviceAccess.length > 0)
-
-        if (configuredTeams.length > 0) {
-          let allowedByTeam = false
-          for (const membership of configuredTeams) {
-            const teamAccess = membership.team.serviceAccess[0]
-            if (!teamAccess.isEnabled) continue
-
-            const members = await tx.teamMember.findMany({
-              where: { teamId: membership.teamId },
-              select: { userId: true }
-            })
-            const teamWhere = {
-              tenantId: params.tenantId,
-              userId: { in: members.map(member => member.userId) },
-              serviceType: params.serviceType
-            }
-            const [dailyTeamUsage, monthlyTeamUsage] = await Promise.all([
-              countReservedUsage(tx, teamWhere, 'completionDate', currentDay),
-              countReservedUsage(tx, teamWhere, 'completionMonth', currentMonth)
-            ])
-            const withinDailyQuota = teamAccess.dailyQuota === null || dailyTeamUsage < teamAccess.dailyQuota
-            const withinMonthlyQuota = teamAccess.monthlyQuota === null || monthlyTeamUsage < teamAccess.monthlyQuota
-            if (withinDailyQuota && withinMonthlyQuota) {
-              allowedByTeam = true
-              break
-            }
-          }
-
-          if (!allowedByTeam) {
-            throw new ServiceQuotaExceededError('TEAM_QUOTA_EXCEEDED', `Team quota exceeded or service disabled for ${params.serviceType}`)
-          }
+        if (!allowedByTeam) {
+          throw new ServiceQuotaExceededError('TEAM_QUOTA_EXCEEDED', `Team quota exceeded or service disabled for ${params.serviceType}`)
         }
       }
     }
+  }
 
-    if (!skipQuotaChecks) {
-      const limits = await getPlanQuotaLimits(params.tenantId, params.serviceType, tx)
-      const baseWhere = { tenantId: params.tenantId, serviceType: params.serviceType }
-      const [dailyUsage, monthlyUsage] = await Promise.all([
-        countReservedUsage(tx, baseWhere, 'completionDate', currentDay),
-        countReservedUsage(tx, baseWhere, 'completionMonth', currentMonth)
-      ])
+  if (!skipQuotaChecks) {
+    const limits = await getPlanQuotaLimits(params.tenantId, params.serviceType, tx)
+    const baseWhere = { tenantId: params.tenantId, serviceType: params.serviceType }
+    const [dailyUsage, monthlyUsage] = await Promise.all([
+      countReservedUsage(tx, baseWhere, 'completionDate', currentDay),
+      countReservedUsage(tx, baseWhere, 'completionMonth', currentMonth)
+    ])
 
-      if (limits.dailyCompletionLimit !== null && dailyUsage >= limits.dailyCompletionLimit) {
-        throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `Tenant daily quota exceeded for ${params.serviceType}`)
-      }
-      if (limits.monthlyCompletionLimit !== null && monthlyUsage >= limits.monthlyCompletionLimit) {
-        throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `Tenant monthly quota exceeded for ${params.serviceType}`)
-      }
+    if (limits.dailyCompletionLimit !== null && dailyUsage >= limits.dailyCompletionLimit) {
+      throw new ServiceQuotaExceededError('DAILY_QUOTA_EXCEEDED', `Tenant daily quota exceeded for ${params.serviceType}`)
     }
+    if (limits.monthlyCompletionLimit !== null && monthlyUsage >= limits.monthlyCompletionLimit) {
+      throw new ServiceQuotaExceededError('MONTHLY_QUOTA_EXCEEDED', `Tenant monthly quota exceeded for ${params.serviceType}`)
+    }
+  }
 
-    return tx.serviceCompletionUsage.create({
-      data: {
-        tenantId: params.tenantId,
-        userId: params.userId,
-        serviceType: params.serviceType,
-        operationId: params.operationId,
-        operationType: params.operationType,
-        isCompleted: false,
-        metadata: params.metadata ? JSON.parse(JSON.stringify(params.metadata)) : null
-      }
-    })
+  return tx.serviceCompletionUsage.create({
+    data: {
+      tenantId: params.tenantId,
+      userId: params.userId,
+      serviceType: params.serviceType,
+      operationId: params.operationId,
+      operationType: params.operationType,
+      isCompleted: false,
+      metadata: params.metadata ? JSON.parse(JSON.stringify(params.metadata)) : null
+    }
   })
 }
 
@@ -660,17 +693,7 @@ export async function trackServiceUsage(params: TrackUsageParams): Promise<{
  * Get all service usage for a tenant (for dashboard)
  */
 export async function getTenantServiceUsage(tenantId: string): Promise<ServiceQuotaStatus[]> {
-  const serviceTypes: ServiceType[] = [
-    'PATENT_DRAFTING',
-    'NOVELTY_SEARCH',
-    'PRIOR_ART_SEARCH',
-    'DIAGRAM_GENERATION',
-    'IDEA_BANK',
-    'PERSONA_SYNC',
-    'FUNDING_DISCOVERY',
-    'GRANT_PREP',
-    'GRANT_DRAFTING'
-  ]
+  const serviceTypes: ServiceType[] = METERED_SERVICE_TYPES
   
   return Promise.all(
     serviceTypes.map(serviceType => getServiceUsage(tenantId, serviceType))
@@ -748,17 +771,7 @@ export async function getTenantCostBreakdown(tenantId: string): Promise<{
 }> {
   const { currentDay, currentMonth } = getCurrentPeriods()
   
-  const serviceTypes: ServiceType[] = [
-    'PATENT_DRAFTING',
-    'NOVELTY_SEARCH',
-    'PRIOR_ART_SEARCH',
-    'DIAGRAM_GENERATION',
-    'IDEA_BANK',
-    'PERSONA_SYNC',
-    'FUNDING_DISCOVERY',
-    'GRANT_PREP',
-    'GRANT_DRAFTING'
-  ]
+  const serviceTypes: ServiceType[] = METERED_SERVICE_TYPES
   
   const daily: Record<string, { completions: number; tokens: number; costUsd: number }> = {}
   const monthly: Record<string, { completions: number; tokens: number; costUsd: number }> = {}

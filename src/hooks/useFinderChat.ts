@@ -50,6 +50,21 @@ async function apiRequest<T>(authFetch: AuthFetch, url: string, options?: Reques
   return payload as T;
 }
 
+/** Friendly copy for the well-known server rejection codes; falls back to the server text. */
+export function describeStreamError(outcome: { error: string; code?: string; retryAfterMs?: number | null }): string {
+  const retryIn = outcome.retryAfterMs && outcome.retryAfterMs > 0 ? ` — try again in about ${Math.ceil(outcome.retryAfterMs / 1000)}s` : ' — try again shortly';
+  switch (outcome.code) {
+    case 'GEMINI_RATE_LIMITED':
+      return `The AI service is briefly rate limited${retryIn}.`;
+    case 'RATE_LIMITED':
+      return `You are sending messages a little too quickly${retryIn}.`;
+    case 'QUOTA_EXCEEDED':
+      return outcome.error || 'You have used up your funding chat allowance for now. Please try again later or contact your administrator.';
+    default:
+      return outcome.error;
+  }
+}
+
 function buildSummary(detail: RecommendationConversationDetail): RecommendationConversationSummary {
   const preview = [...detail.messages].reverse().find((message) => message.content.trim().length > 0)?.content || null;
   return {
@@ -130,6 +145,24 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
   preferencesRef.current = preferences;
   const selectedResearchAreaIdsRef = useRef(selectedResearchAreaIds);
   selectedResearchAreaIdsRef.current = selectedResearchAreaIds;
+  // Which conversation is on screen right now. Responses and stream events for any
+  // other conversation (user switched mid-turn) must not overwrite the active one.
+  // Set eagerly by the switch/activate paths (so a late response cannot slip in
+  // during the render between the click and the state update) and kept in sync
+  // with `conversation` as a safety net.
+  const activeConversationIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeConversationIdRef.current = conversation?.id ?? null;
+  }, [conversation?.id]);
+  // In-flight streaming request; aborted when the user leaves the conversation.
+  const streamAbortRef = useRef<AbortController | null>(null);
+
+  function abortInFlightStream() {
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+  }
+
+  useEffect(() => () => abortInFlightStream(), []);
 
   const savedResearchAreas = finderContext?.researchAreas || [];
   const selectedResearchAreas = useMemo(
@@ -166,10 +199,18 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     return null;
   }, [conversation]);
 
-  function updateConversationFromResponse(detail: RecommendationConversationDetail) {
-    setConversation(detail);
-    setPendingTurn(null);
-    setStreamingTurn(null);
+  /**
+   * Apply a server response. `activate` (default) makes it the on-screen
+   * conversation; when a late response arrives for a conversation the user has
+   * already left, only the sidebar summary is refreshed.
+   */
+  function updateConversationFromResponse(detail: RecommendationConversationDetail, activate = true) {
+    if (activate) {
+      activeConversationIdRef.current = detail.id;
+      setConversation(detail);
+      setPendingTurn(null);
+      setStreamingTurn(null);
+    }
     setConversations((current) => {
       const summary = buildSummary(detail);
       const rest = current.filter((item) => item.id !== summary.id);
@@ -177,7 +218,18 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     });
   }
 
+  /** True while `conversationId` is still the one on screen. */
+  function isActiveConversation(conversationId: string) {
+    return activeConversationIdRef.current === conversationId;
+  }
+
   async function loadConversation(conversationId: string) {
+    if (activeConversationIdRef.current && activeConversationIdRef.current !== conversationId) {
+      abortInFlightStream();
+    }
+    // Mark the target active immediately so a late response for the previous
+    // conversation cannot slip in between the click and the load completing.
+    activeConversationIdRef.current = conversationId;
     setLoadingConversation(true);
     onError(null);
     try {
@@ -185,7 +237,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
         authFetch,
         `/api/recommendations/conversations/${conversationId}`
       );
-      updateConversationFromResponse(payload.conversation);
+      updateConversationFromResponse(payload.conversation, isActiveConversation(conversationId));
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to load conversation');
     } finally {
@@ -194,6 +246,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
   }
 
   async function handleCreateConversation() {
+    abortInFlightStream();
     setCreatingConversation(true);
     onError(null);
     try {
@@ -244,7 +297,10 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
-  function applyStreamEvent(event: FinderTurnStreamEvent) {
+  function applyStreamEvent(event: FinderTurnStreamEvent, forConversationId: string) {
+    // Events for a conversation the user has since left must not render into the
+    // one now on screen.
+    if (!isActiveConversation(forConversationId)) return;
     if (event.type === 'stage') {
       setStreamingTurn((current) => {
         const base: StreamingTurnView = current || { stages: [], results: null, totalResults: 0, text: '' };
@@ -284,13 +340,17 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     if (!conversation) return false;
     setSending(true);
     onError(null);
+    // One id per *logical* turn: a retry of a failed turn (or the SSE→classic
+    // fallback) re-sends the same id, and the server treats a duplicate as a
+    // replay instead of a second, separately-charged turn.
+    const clientTurnId = payload.clientTurnId || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const optimisticMessage = options?.optimisticMessage?.trim() || '';
     const optimisticTurn: PendingTurnState | null = optimisticMessage
       ? {
           createdAt: new Date().toISOString(),
           error: null,
           message: optimisticMessage,
-          request: { ...payload },
+          request: { ...payload, clientTurnId },
           status: 'pending',
         }
       : null;
@@ -300,16 +360,26 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     }
     setStreamingTurn(null);
 
+    const targetConversationId = conversation.id;
     const previousFilters = conversation.currentFilters;
     const requestPayload: RecommendationConversationMessageRequest = {
       ...payload,
       useEligibilityProfile: preferencesRef.current.useEligibilityProfile,
       usePublicationContext: preferencesRef.current.usePublicationContext,
       selectedResearchAreaIds: selectedResearchAreaIdsRef.current,
-      clientTurnId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      clientTurnId,
     };
 
+    // Only the conversation that sent the turn may have its on-screen state
+    // replaced by the answer; a late answer for a conversation the user has left
+    // just refreshes that conversation's sidebar summary.
+    const stillActive = () => isActiveConversation(targetConversationId);
+
     const finalize = (detail: RecommendationConversationDetail, stale: boolean) => {
+      if (!stillActive()) {
+        updateConversationFromResponse(detail, false);
+        return;
+      }
       if (JSON.stringify(previousFilters) !== JSON.stringify(detail.currentFilters)) {
         setLastUndoFilters(previousFilters);
       }
@@ -325,6 +395,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     };
 
     const failPendingTurn = (message: string) => {
+      if (!stillActive()) return;
       setStreamingTurn(null);
       if (optimisticTurn) {
         setPendingTurn({ ...optimisticTurn, error: message, status: 'failed' });
@@ -333,10 +404,29 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
       }
     };
 
+    const reloadAfterPersistedFailure = async (message?: string) => {
+      if (!stillActive()) return;
+      setStreamingTurn(null);
+      setPendingTurn(null);
+      await loadConversation(targetConversationId);
+      if (message) onError(message);
+    };
+
+    const abortController = new AbortController();
+    abortInFlightStream();
+    streamAbortRef.current = abortController;
+
     try {
-      const outcome = await streamConversationMessage(authFetch, conversation.id, requestPayload, {
-        onEvent: applyStreamEvent,
+      const outcome = await streamConversationMessage(authFetch, targetConversationId, requestPayload, {
+        onEvent: (event) => applyStreamEvent(event, targetConversationId),
+        signal: abortController.signal,
       });
+
+      if (outcome.status === 'aborted') {
+        // We cancelled it ourselves (conversation switch / unmount). If the turn
+        // had already been accepted server-side its answer will show on next load.
+        return false;
+      }
 
       if (outcome.status === 'final') {
         finalize(outcome.response.conversation, outcome.response.stale);
@@ -345,11 +435,12 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
 
       if (outcome.status === 'unsupported') {
         // Streaming route unavailable (proxy stripped SSE, old deploy, …) and nothing
-        // was persisted — retry once through the classic JSON route.
-        setStreamingTurn(null);
+        // was persisted — retry once through the classic JSON route with the SAME
+        // clientTurnId, so a turn that did land is replayed rather than repeated.
+        if (stillActive()) setStreamingTurn(null);
         const response = await apiRequest<{ conversation: RecommendationConversationDetail; stale: boolean }>(
           authFetch,
-          `/api/recommendations/conversations/${conversation.id}/messages`,
+          `/api/recommendations/conversations/${targetConversationId}/messages`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -361,15 +452,9 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
       }
 
       if (outcome.status === 'error') {
-        const message =
-          outcome.code === 'GEMINI_RATE_LIMITED'
-            ? `The AI service is briefly rate limited${outcome.retryAfterMs ? ` — try again in about ${Math.ceil(outcome.retryAfterMs / 1000)}s` : ' — try again shortly'}.`
-            : outcome.error;
+        const message = describeStreamError(outcome);
         if (outcome.persisted) {
-          setStreamingTurn(null);
-          setPendingTurn(null);
-          await loadConversation(conversation.id);
-          onError(message);
+          await reloadAfterPersistedFailure(message);
         } else {
           failPendingTurn(message);
         }
@@ -378,9 +463,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
 
       // connection_lost
       if (outcome.persisted) {
-        setStreamingTurn(null);
-        setPendingTurn(null);
-        await loadConversation(conversation.id);
+        await reloadAfterPersistedFailure();
       } else {
         failPendingTurn('The connection dropped while processing your message. Try again.');
       }
@@ -389,6 +472,7 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
       failPendingTurn(err instanceof Error ? err.message : 'Failed to send message');
       return false;
     } finally {
+      if (streamAbortRef.current === abortController) streamAbortRef.current = null;
       setSending(false);
     }
   }
@@ -436,13 +520,14 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
    */
   async function applyFiltersSilently(nextFilters: RecommendationSearchFilters) {
     if (!conversation) return;
+    const targetConversationId = conversation.id;
     setSending(true);
     onError(null);
     try {
       const previousFilters = conversation.currentFilters;
       const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(
         authFetch,
-        `/api/recommendations/conversations/${conversation.id}/filters`,
+        `/api/recommendations/conversations/${targetConversationId}/filters`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -454,8 +539,8 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
           }),
         }
       );
-      setLastUndoFilters(previousFilters);
-      updateConversationFromResponse(response.conversation);
+      if (isActiveConversation(targetConversationId)) setLastUndoFilters(previousFilters);
+      updateConversationFromResponse(response.conversation, isActiveConversation(targetConversationId));
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to update filters');
     } finally {
@@ -470,12 +555,13 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
 
   async function handleResetFilters() {
     if (!conversation) return;
+    const targetConversationId = conversation.id;
     setSending(true);
     try {
       const previousFilters = conversation.currentFilters;
       const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(
         authFetch,
-        `/api/recommendations/conversations/${conversation.id}/reset-filters`,
+        `/api/recommendations/conversations/${targetConversationId}/reset-filters`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -486,8 +572,8 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
           }),
         }
       );
-      setLastUndoFilters(previousFilters);
-      updateConversationFromResponse(response.conversation);
+      if (isActiveConversation(targetConversationId)) setLastUndoFilters(previousFilters);
+      updateConversationFromResponse(response.conversation, isActiveConversation(targetConversationId));
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to reset filters');
     } finally {
@@ -497,12 +583,13 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
 
   async function handleConfirmPending(confirm: boolean) {
     if (!conversation?.pendingFilterPatch) return;
+    const targetConversationId = conversation.id;
     setSending(true);
     try {
       const previousFilters = conversation.currentFilters;
       const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(
         authFetch,
-        `/api/recommendations/conversations/${conversation.id}/confirm-filters`,
+        `/api/recommendations/conversations/${targetConversationId}/confirm-filters`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -514,8 +601,8 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
           }),
         }
       );
-      if (confirm) setLastUndoFilters(previousFilters);
-      updateConversationFromResponse(response.conversation);
+      if (confirm && isActiveConversation(targetConversationId)) setLastUndoFilters(previousFilters);
+      updateConversationFromResponse(response.conversation, isActiveConversation(targetConversationId));
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to confirm filter changes');
     } finally {
@@ -530,19 +617,20 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
 
   async function handleFilterModeChange(mode: RecommendationFilterMode) {
     if (!conversation || conversation.filterMode === mode) return;
+    const targetConversationId = conversation.id;
     setSending(true);
     onError(null);
     try {
       const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(
         authFetch,
-        `/api/recommendations/conversations/${conversation.id}`,
+        `/api/recommendations/conversations/${targetConversationId}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ filterMode: mode }),
         }
       );
-      updateConversationFromResponse(response.conversation);
+      updateConversationFromResponse(response.conversation, isActiveConversation(targetConversationId));
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to switch filter mode');
     } finally {
@@ -695,10 +783,12 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
   async function handleDeleteConversation(conversationId: string) {
     if (!window.confirm('Delete this funding conversation?')) return;
     try {
+      if (isActiveConversation(conversationId)) abortInFlightStream();
       await apiRequest(authFetch, `/api/recommendations/conversations/${conversationId}`, { method: 'DELETE' });
       const nextList = conversations.filter((item) => item.id !== conversationId);
       setConversations(nextList);
       if (conversation?.id === conversationId) {
+        activeConversationIdRef.current = null;
         setConversation(null);
         if (nextList[0]) {
           await loadConversation(nextList[0].id);
@@ -715,15 +805,17 @@ export function useFinderChat({ authFetch, enabled, preferences, finderContext, 
     if (!conversation) return;
     if (!window.confirm('Clear all messages and results from this chat?')) return;
 
+    const targetConversationId = conversation.id;
+    abortInFlightStream();
     setSending(true);
     onError(null);
     try {
       const response = await apiRequest<{ conversation: RecommendationConversationDetail }>(
         authFetch,
-        `/api/recommendations/conversations/${conversation.id}/clear`,
+        `/api/recommendations/conversations/${targetConversationId}/clear`,
         { method: 'POST' }
       );
-      updateConversationFromResponse(response.conversation);
+      updateConversationFromResponse(response.conversation, isActiveConversation(targetConversationId));
       setComposer('');
       setAttachedContext(null);
       setAttachMenuOpen(false);

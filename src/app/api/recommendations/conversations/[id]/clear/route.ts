@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
+import { recommendationErrorResponse } from '@/lib/recommendations/routeErrors'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
@@ -15,12 +16,6 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const conversation = await recommendationConversationService.clearConversation(auth.userId, auth.tenantId, params.id)
     return NextResponse.json({ conversation })
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: 'Failed to clear recommendation conversation',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    )
+    return recommendationErrorResponse(error, 'Failed to clear recommendation conversation')
   }
 }

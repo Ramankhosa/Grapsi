@@ -1,12 +1,17 @@
 /**
  * Access-control plan seeding (idempotent).
  *
- * Binds the five product modules to the Starter / Pro / Enterprise tiers:
- *   - Starter  (FREE_PLAN)      → Funding Directory only
- *   - Pro      (PRO_PLAN)       → Directory + AI Chatbot + Funding Intelligence
- *                                 + Grant Studio (prep + drafting) + AI Grant Review
- *   - Enterprise (ENTERPRISE_PLAN) → everything Pro has (premium LLM models are
- *                                 configured separately in the LLM Model Control UI)
+ * CURRENT POSTURE (18 Aug 2026): Grant Studio is switched OFF platform-wide.
+ * Every tier gets the same four modules — Funding Directory, AI Funding Chatbot,
+ * Funding Intelligence and AI Grant Review — while grant prep / blueprint /
+ * drafting (GRANT_PREP + GRANT_DRAFTING) are withheld from all plans. The tiers
+ * are deliberately identical for now; they differ only in LLM model access
+ * (configured in Super Admin → LLM Model Control) and quotas (Quota Controller).
+ *
+ * To re-open Grant Studio later, add 'GRANT_PREP' and 'GRANT_DRAFTING' back to
+ * the relevant tier's `includes` below and re-run — or just tick "Grant Studio"
+ * for that plan in Super Admin → Plans & Feature Access, which does the same
+ * thing through the UI.
  *
  * It ONLY manages the five module features listed in MODULE_FEATURES below. Any
  * other features already attached to a plan (patent / paper products, etc.) are
@@ -32,37 +37,20 @@ const MODULE_FEATURES = [
 
 const ALL_MODULE_CODES = MODULE_FEATURES.map((f) => f.code)
 
+// Modules every tier currently gets. Grant Studio (GRANT_PREP + GRANT_DRAFTING)
+// is intentionally absent — see the posture note at the top of this file.
+const ENABLED_MODULE_CODES = [
+  'FUNDING_DISCOVERY',
+  'FUNDING_CHAT',
+  'FUNDING_INTELLIGENCE',
+  'GRANT_REVIEW'
+]
+
 // Plan tier definitions: display name + which module features are included.
 const PLANS = [
-  {
-    code: 'FREE_PLAN',
-    name: 'Starter',
-    includes: ['FUNDING_DISCOVERY']
-  },
-  {
-    code: 'PRO_PLAN',
-    name: 'Pro',
-    includes: [
-      'FUNDING_DISCOVERY',
-      'FUNDING_CHAT',
-      'FUNDING_INTELLIGENCE',
-      'GRANT_PREP',
-      'GRANT_DRAFTING',
-      'GRANT_REVIEW'
-    ]
-  },
-  {
-    code: 'ENTERPRISE_PLAN',
-    name: 'Enterprise',
-    includes: [
-      'FUNDING_DISCOVERY',
-      'FUNDING_CHAT',
-      'FUNDING_INTELLIGENCE',
-      'GRANT_PREP',
-      'GRANT_DRAFTING',
-      'GRANT_REVIEW'
-    ]
-  }
+  { code: 'FREE_PLAN', name: 'Starter', includes: ENABLED_MODULE_CODES },
+  { code: 'PRO_PLAN', name: 'Pro', includes: ENABLED_MODULE_CODES },
+  { code: 'ENTERPRISE_PLAN', name: 'Enterprise', includes: ENABLED_MODULE_CODES }
 ]
 
 async function main() {

@@ -1,8 +1,15 @@
 import { prisma } from './prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER, ensurePricingLoaded } from './metering/cost-calculator'
 import { getStoredUsageLogActualCost } from './metering/llm-usage'
+import {
+  collectServiceUsage,
+  emptyServiceUsageCounts,
+  NO_TENANT_KEY,
+  NO_USER_KEY,
+  type ServiceUsageCounts,
+} from './usage/service-usage-metrics'
 
-export interface TenantUsageMetrics {
+export interface TenantUsageMetrics extends ServiceUsageCounts {
   tenantId: string | null
   tenantName: string | null
   tenantType: string | null
@@ -10,9 +17,6 @@ export interface TenantUsageMetrics {
   totalOutputTokens: number
   totalApiCalls: number
   totalCost: number
-  patentDrafts: number
-  noveltySearches: number
-  ideasReserved: number
 }
 
 export interface GlobalUsageSummary {
@@ -20,9 +24,11 @@ export interface GlobalUsageSummary {
   totalOutputTokens: number
   totalApiCalls: number
   totalCost: number
-  totalPatentsDrafted: number
-  totalNoveltySearches: number
-  totalIdeasReserved: number
+  totalFundingIntelligenceRuns: number
+  totalReviewerRuns: number
+  totalReviewerCalls: number
+  totalChatSessions: number
+  totalChatMessages: number
 }
 
 export interface UsageSummaryResult {
@@ -32,10 +38,26 @@ export interface UsageSummaryResult {
   tenants: TenantUsageMetrics[]
 }
 
+interface TokenBucket {
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalApiCalls: number
+  totalCost: number
+}
+
+function emptyTokenBucket(): TokenBucket {
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalApiCalls: 0,
+    totalCost: 0,
+  }
+}
+
 /**
  * Calculate cost for a usage log using centralized cost-calculator
  * This ensures consistent pricing with terminal logs and other cost calculations
- * 
+ *
  * @param log - Usage log with token counts and model class
  * @returns Cost in USD
  */
@@ -63,20 +85,21 @@ function calculateCostForLog(
   return inputCost + outputCost
 }
 
+function normalizeDayBounds(startDate: Date, endDate: Date) {
+  const normalizedStart = new Date(startDate)
+  const normalizedEnd = new Date(endDate)
+  normalizedStart.setHours(0, 0, 0, 0)
+  normalizedEnd.setHours(23, 59, 59, 999)
+  return { normalizedStart, normalizedEnd }
+}
+
 export async function computeUsageSummary(
   startDate: Date,
   endDate: Date,
   tenantFilterId?: string
 ): Promise<UsageSummaryResult> {
-  const normalizedStart = new Date(startDate)
-  const normalizedEnd = new Date(endDate)
-  normalizedStart.setHours(0, 0, 0, 0)
-  normalizedEnd.setHours(23, 59, 59, 999)
-
-  const dateRange = {
-    gte: normalizedStart,
-    lte: normalizedEnd
-  }
+  const { normalizedStart, normalizedEnd } = normalizeDayBounds(startDate, endDate)
+  const dateRange = { gte: normalizedStart, lte: normalizedEnd }
 
   const usageWhere: any = {
     startedAt: dateRange,
@@ -90,7 +113,7 @@ export async function computeUsageSummary(
   // Ensure pricing is loaded from database before calculating costs
   await ensurePricingLoaded()
 
-  const [usageLogs, draftsByTenant, noveltyRuns, reservations] = await Promise.all([
+  const [usageLogs, serviceUsage] = await Promise.all([
     prisma.usageLog.findMany({
       where: usageWhere,
       select: {
@@ -102,75 +125,31 @@ export async function computeUsageSummary(
         meta: true
       }
     }),
-    prisma.draftingSession.groupBy({
-      by: ['tenantId'],
-      where: {
-        createdAt: dateRange,
-        ...(tenantFilterId ? { tenantId: tenantFilterId } : {})
-      },
-      _count: { _all: true }
-    }),
-    prisma.noveltySearchRun.findMany({
-      where: {
-        createdAt: dateRange,
-        status: 'COMPLETED'
-      },
-      select: {
-        user: {
-          select: { tenantId: true }
-        }
-      }
-    }),
-    prisma.ideaBankReservation.findMany({
-      where: {
-        reservedAt: dateRange
-      },
-      select: {
-        user: {
-          select: { tenantId: true }
-        }
-      }
-    })
+    collectServiceUsage(dateRange, tenantFilterId ? { tenantId: tenantFilterId } : {})
   ])
 
-  const tenantMap = new Map<
-    string,
-    {
-      totalInputTokens: number
-      totalOutputTokens: number
-      totalApiCalls: number
-      totalCost: number
-      patentDrafts: number
-      noveltySearches: number
-      ideasReserved: number
-    }
-  >()
+  const tokenByTenant = new Map<string, TokenBucket>()
 
   const global: GlobalUsageSummary = {
     totalInputTokens: 0,
     totalOutputTokens: 0,
     totalApiCalls: 0,
     totalCost: 0,
-    totalPatentsDrafted: 0,
-    totalNoveltySearches: 0,
-    totalIdeasReserved: 0
+    totalFundingIntelligenceRuns: serviceUsage.totals.fundingIntelligenceRuns,
+    totalReviewerRuns: serviceUsage.totals.reviewerRuns,
+    totalReviewerCalls: serviceUsage.totals.reviewerCalls,
+    totalChatSessions: serviceUsage.totals.chatSessions,
+    totalChatMessages: serviceUsage.totals.chatMessages
   }
 
   // Token + cost aggregation from usage logs
   for (const log of usageLogs) {
-    const tId = log.tenantId || 'no-tenant'
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
+    const tId = log.tenantId || NO_TENANT_KEY
+    let bucket = tokenByTenant.get(tId)
+    if (!bucket) {
+      bucket = emptyTokenBucket()
+      tokenByTenant.set(tId, bucket)
     }
-    const bucket = tenantMap.get(tId)!
 
     // Use ?? (nullish coalescing) to handle 0 as a valid value
     const input = log.inputTokens ?? 0
@@ -189,67 +168,9 @@ export async function computeUsageSummary(
     global.totalCost += cost
   }
 
-  // Drafting sessions per tenant (patent drafts)
-  for (const row of draftsByTenant) {
-    const tId = row.tenantId || 'no-tenant'
-    if (tenantFilterId && tId !== tenantFilterId) continue
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
-    }
-    const bucket = tenantMap.get(tId)!
-    bucket.patentDrafts += row._count._all
-    global.totalPatentsDrafted += row._count._all
-  }
+  const tenantKeys = new Set<string>([...tokenByTenant.keys(), ...serviceUsage.byTenant.keys()])
 
-  // Novelty searches per tenant (via user.tenantId)
-  for (const run of noveltyRuns) {
-    const tId = run.user?.tenantId || 'no-tenant'
-    if (tenantFilterId && tId !== tenantFilterId) continue
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
-    }
-    const bucket = tenantMap.get(tId)!
-    bucket.noveltySearches += 1
-    global.totalNoveltySearches += 1
-  }
-
-  // Idea reservations per tenant (via user.tenantId)
-  for (const res of reservations) {
-    const tId = res.user?.tenantId || 'no-tenant'
-    if (tenantFilterId && tId !== tenantFilterId) continue
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
-    }
-    const bucket = tenantMap.get(tId)!
-    bucket.ideasReserved += 1
-    global.totalIdeasReserved += 1
-  }
-
-  const tenantIds = Array.from(tenantMap.keys()).filter(id => id !== 'no-tenant')
+  const tenantIds = Array.from(tenantKeys).filter(id => id !== NO_TENANT_KEY)
   const tenantRecords = tenantIds.length
     ? await prisma.tenant.findMany({
         where: { id: { in: tenantIds } },
@@ -262,20 +183,20 @@ export async function computeUsageSummary(
     tenantMeta.set(t.id, { name: t.name, type: t.type })
   }
 
-  const tenants: TenantUsageMetrics[] = Array.from(tenantMap.entries()).map(([id, metrics]) => {
+  const tenants: TenantUsageMetrics[] = Array.from(tenantKeys).map(id => {
     const meta = tenantMeta.get(id)
-    const isNoTenant = id === 'no-tenant'
+    const isNoTenant = id === NO_TENANT_KEY
+    const tokens = tokenByTenant.get(id) ?? emptyTokenBucket()
+    const counts = serviceUsage.byTenant.get(id) ?? emptyServiceUsageCounts()
     return {
       tenantId: isNoTenant ? null : id,
       tenantName: isNoTenant ? 'No tenant' : (meta?.name ?? 'Unknown tenant'),
       tenantType: isNoTenant ? null : (meta?.type ?? null),
-      totalInputTokens: metrics.totalInputTokens,
-      totalOutputTokens: metrics.totalOutputTokens,
-      totalApiCalls: metrics.totalApiCalls,
-      totalCost: metrics.totalCost,
-      patentDrafts: metrics.patentDrafts,
-      noveltySearches: metrics.noveltySearches,
-      ideasReserved: metrics.ideasReserved
+      totalInputTokens: tokens.totalInputTokens,
+      totalOutputTokens: tokens.totalOutputTokens,
+      totalApiCalls: tokens.totalApiCalls,
+      totalCost: tokens.totalCost,
+      ...counts
     }
   })
 
@@ -291,7 +212,7 @@ export async function computeUsageSummary(
 // USER-WISE COST TRACKING
 // ============================================================================
 
-export interface UserCostMetrics {
+export interface UserCostMetrics extends ServiceUsageCounts {
   userId: string
   userName: string | null
   userEmail: string
@@ -300,8 +221,6 @@ export interface UserCostMetrics {
   totalApiCalls: number
   actualCost: number
   contingencyCost: number  // 10% buffer
-  patentDrafts: number
-  noveltySearches: number
 }
 
 export async function computeUserCostsByTenant(
@@ -309,128 +228,53 @@ export async function computeUserCostsByTenant(
   startDate: Date,
   endDate: Date
 ): Promise<UserCostMetrics[]> {
-  const normalizedStart = new Date(startDate)
-  const normalizedEnd = new Date(endDate)
-  normalizedStart.setHours(0, 0, 0, 0)
-  normalizedEnd.setHours(23, 59, 59, 999)
+  const { normalizedStart, normalizedEnd } = normalizeDayBounds(startDate, endDate)
+  const dateRange = { gte: normalizedStart, lte: normalizedEnd }
 
-  // Get all usage logs for this tenant with user info
-  const usageLogs = await prisma.usageLog.findMany({
-    where: {
-      tenantId,
-      startedAt: {
-        gte: normalizedStart,
-        lte: normalizedEnd
+  await ensurePricingLoaded()
+
+  const [usageLogs, serviceUsage] = await Promise.all([
+    // Get all usage logs for this tenant with user info
+    prisma.usageLog.findMany({
+      where: {
+        tenantId,
+        startedAt: dateRange,
+        status: 'COMPLETED'
       },
-      status: 'COMPLETED'
-    },
-    select: {
-      userId: true,
-      inputTokens: true,
-      outputTokens: true,
-      apiCalls: true,
-      modelClass: true,
-      meta: true
-    }
-  })
-
-  // Get drafting sessions per user
-  const draftingSessions = await prisma.draftingSession.findMany({
-    where: {
-      tenantId,
-      createdAt: {
-        gte: normalizedStart,
-        lte: normalizedEnd
+      select: {
+        userId: true,
+        inputTokens: true,
+        outputTokens: true,
+        apiCalls: true,
+        modelClass: true,
+        meta: true
       }
-    },
-    select: {
-      userId: true
-    }
-  })
-
-  // Get novelty searches per user
-  const noveltyRuns = await prisma.noveltySearchRun.findMany({
-    where: {
-      user: { tenantId },
-      createdAt: {
-        gte: normalizedStart,
-        lte: normalizedEnd
-      },
-      status: 'COMPLETED'
-    },
-    select: {
-      userId: true
-    }
-  })
+    }),
+    collectServiceUsage(dateRange, { tenantId })
+  ])
 
   // Aggregate by user
-  const userMap = new Map<string, {
-    totalInputTokens: number
-    totalOutputTokens: number
-    totalApiCalls: number
-    actualCost: number
-    patentDrafts: number
-    noveltySearches: number
-  }>()
+  const tokenByUser = new Map<string, TokenBucket>()
 
   for (const log of usageLogs) {
-    const userId = log.userId || 'unknown'
-    if (!userMap.has(userId)) {
-      userMap.set(userId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        actualCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0
-      })
+    const userId = log.userId || NO_USER_KEY
+    let bucket = tokenByUser.get(userId)
+    if (!bucket) {
+      bucket = emptyTokenBucket()
+      tokenByUser.set(userId, bucket)
     }
-    const bucket = userMap.get(userId)!
 
     // Use ?? (nullish coalescing) to handle 0 as a valid value
-    const input = log.inputTokens ?? 0
-    const output = log.outputTokens ?? 0
-    const calls = log.apiCalls ?? 0
-
-    bucket.totalInputTokens += input
-    bucket.totalOutputTokens += output
-    bucket.totalApiCalls += calls
-
-    bucket.actualCost += calculateCostForLog(log)
+    bucket.totalInputTokens += log.inputTokens ?? 0
+    bucket.totalOutputTokens += log.outputTokens ?? 0
+    bucket.totalApiCalls += log.apiCalls ?? 0
+    bucket.totalCost += calculateCostForLog(log)
   }
 
-  // Add drafting session counts
-  for (const session of draftingSessions) {
-    if (!userMap.has(session.userId)) {
-      userMap.set(session.userId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        actualCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0
-      })
-    }
-    userMap.get(session.userId)!.patentDrafts += 1
-  }
-
-  // Add novelty search counts
-  for (const run of noveltyRuns) {
-    if (!userMap.has(run.userId)) {
-      userMap.set(run.userId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        actualCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0
-      })
-    }
-    userMap.get(run.userId)!.noveltySearches += 1
-  }
+  const userKeys = new Set<string>([...tokenByUser.keys(), ...serviceUsage.byUser.keys()])
 
   // Get user metadata
-  const userIds = Array.from(userMap.keys()).filter(id => id !== 'unknown')
+  const userIds = Array.from(userKeys).filter(id => id !== NO_USER_KEY)
   const users = userIds.length ? await prisma.user.findMany({
     where: { id: { in: userIds } },
     select: { id: true, name: true, email: true }
@@ -441,97 +285,152 @@ export async function computeUserCostsByTenant(
     userMeta.set(u.id, { name: u.name, email: u.email })
   }
 
-  return Array.from(userMap.entries()).map(([userId, metrics]) => {
+  return Array.from(userKeys).map(userId => {
     const meta = userMeta.get(userId)
+    const tokens = tokenByUser.get(userId) ?? emptyTokenBucket()
+    const counts = serviceUsage.byUser.get(userId) ?? emptyServiceUsageCounts()
     return {
       userId,
       userName: meta?.name ?? null,
       userEmail: meta?.email ?? 'unknown@unknown.com',
-      totalInputTokens: metrics.totalInputTokens,
-      totalOutputTokens: metrics.totalOutputTokens,
-      totalApiCalls: metrics.totalApiCalls,
-      actualCost: metrics.actualCost,
-      contingencyCost: metrics.actualCost * CONTINGENCY_MULTIPLIER,
-      patentDrafts: metrics.patentDrafts,
-      noveltySearches: metrics.noveltySearches
+      totalInputTokens: tokens.totalInputTokens,
+      totalOutputTokens: tokens.totalOutputTokens,
+      totalApiCalls: tokens.totalApiCalls,
+      actualCost: tokens.totalCost,
+      contingencyCost: tokens.totalCost * CONTINGENCY_MULTIPLIER,
+      ...counts
     }
   })
 }
 
 // ============================================================================
-// PATENT-WISE COST TRACKING
+// RUN-WISE COST TRACKING
 // ============================================================================
 
-export interface PatentCostMetrics {
-  patentId: string
-  patentTitle: string
-  userId: string
+export type BillableService = 'FUNDING_INTELLIGENCE' | 'GRANT_REVIEW' | 'FUNDING_CHAT'
+
+export const BILLABLE_SERVICE_LABELS: Record<BillableService, string> = {
+  FUNDING_INTELLIGENCE: 'Funding intelligence',
+  GRANT_REVIEW: 'Reviewer',
+  FUNDING_CHAT: 'Funding chat'
+}
+
+export interface ServiceRunStageBreakdown {
+  stage: string
+  inputTokens: number
+  outputTokens: number
+  actualCost: number
+  contingencyCost: number
+  callCount: number
+}
+
+export interface ServiceRunCostMetrics {
+  /** Domain id of the run: idea-intelligence run, reviewer call, or chat conversation. */
+  runId: string
+  service: BillableService
+  serviceLabel: string
+  title: string
+  userId: string | null
   userName: string | null
-  userEmail: string
+  userEmail: string | null
   totalInputTokens: number
   totalOutputTokens: number
   totalApiCalls: number
   actualCost: number
   contingencyCost: number  // 10% buffer
-  createdAt: Date
-  // Cost breakdown by stage/operation
-  stageBreakdown: {
-    stage: string
-    inputTokens: number
-    outputTokens: number
-    actualCost: number
-    contingencyCost: number
-    callCount: number
-  }[]
+  /** First LLM call seen for this run inside the window. */
+  firstActivityAt: Date
+  lastActivityAt: Date
+  stageBreakdown: ServiceRunStageBreakdown[]
 }
 
-export async function computePatentCosts(
+const UNATTRIBUTED_RUN_ID = 'unattributed'
+
+/**
+ * Work out which billable service an LLM call belongs to, and which domain run
+ * inside that service. Reviewer calls share `GRANT_SECTION_GENERATE` with grant
+ * drafting, so they are identified by their stage code instead.
+ */
+function classifyUsageLog(taskCode: string | null, meta: Record<string, any>): { service: BillableService; runId: string } | null {
+  const stageCode = typeof meta.stageCode === 'string' ? meta.stageCode : ''
+
+  if (stageCode.startsWith('GRANT_REVIEWER')) {
+    return {
+      service: 'GRANT_REVIEW',
+      runId: typeof meta.reviewerCallId === 'string' ? meta.reviewerCallId : UNATTRIBUTED_RUN_ID
+    }
+  }
+
+  if (taskCode === 'IDEA_INTELLIGENCE') {
+    return {
+      service: 'FUNDING_INTELLIGENCE',
+      runId: typeof meta.runId === 'string' ? meta.runId : UNATTRIBUTED_RUN_ID
+    }
+  }
+
+  if (taskCode === 'FUNDING_CHAT') {
+    return {
+      service: 'FUNDING_CHAT',
+      runId: typeof meta.conversationId === 'string' ? meta.conversationId : UNATTRIBUTED_RUN_ID
+    }
+  }
+
+  return null
+}
+
+async function loadRunTitles(
+  service: BillableService,
+  runIds: string[]
+): Promise<Map<string, { title: string; userId: string | null }>> {
+  const result = new Map<string, { title: string; userId: string | null }>()
+  if (runIds.length === 0) return result
+
+  if (service === 'FUNDING_INTELLIGENCE') {
+    const runs = await prisma.ideaIntelligenceRun.findMany({
+      where: { id: { in: runIds } },
+      select: { id: true, title: true, userId: true }
+    })
+    for (const run of runs) {
+      result.set(run.id, { title: run.title || 'Untitled analysis', userId: run.userId })
+    }
+    return result
+  }
+
+  if (service === 'GRANT_REVIEW') {
+    const calls = await prisma.reviewerCall.findMany({
+      where: { id: { in: runIds } },
+      select: { id: true, project_title: true, user_id: true }
+    })
+    for (const call of calls) {
+      result.set(call.id, { title: call.project_title || 'Untitled proposal', userId: call.user_id })
+    }
+    return result
+  }
+
+  const conversations = await prisma.recommendationConversation.findMany({
+    where: { id: { in: runIds } },
+    select: { id: true, title: true, user_id: true }
+  })
+  for (const conversation of conversations) {
+    result.set(conversation.id, { title: conversation.title || 'Funding chat', userId: conversation.user_id })
+  }
+  return result
+}
+
+/**
+ * Per-run LLM cost for the three billable services, so a tenant's bill can be
+ * traced back to the analysis, review, or conversation that produced it.
+ */
+export async function computeServiceRunCosts(
   tenantId: string,
   startDate: Date,
   endDate: Date,
   userId?: string
-): Promise<PatentCostMetrics[]> {
-  const normalizedStart = new Date(startDate)
-  const normalizedEnd = new Date(endDate)
-  normalizedStart.setHours(0, 0, 0, 0)
-  normalizedEnd.setHours(23, 59, 59, 999)
+): Promise<ServiceRunCostMetrics[]> {
+  const { normalizedStart, normalizedEnd } = normalizeDayBounds(startDate, endDate)
 
-  // Get drafting sessions with patent info
-  const sessionWhere: any = {
-    tenantId,
-    createdAt: {
-      gte: normalizedStart,
-      lte: normalizedEnd
-    }
-  }
-  if (userId) {
-    sessionWhere.userId = userId
-  }
+  await ensurePricingLoaded()
 
-  const sessions = await prisma.draftingSession.findMany({
-    where: sessionWhere,
-    select: {
-      id: true,
-      patentId: true,
-      userId: true,
-      createdAt: true,
-      patent: {
-        select: {
-          id: true,
-          title: true
-        }
-      },
-      user: {
-        select: {
-          id: true,
-          name: true,
-          email: true
-        }
-      }
-    }
-  })
-
-  // Get usage logs that have patent IDs in their metadata
   const usageLogs = await prisma.usageLog.findMany({
     where: {
       tenantId,
@@ -543,6 +442,8 @@ export async function computePatentCosts(
       ...(userId ? { userId } : {})
     },
     select: {
+      userId: true,
+      startedAt: true,
       inputTokens: true,
       outputTokens: true,
       apiCalls: true,
@@ -552,55 +453,56 @@ export async function computePatentCosts(
     }
   })
 
-  // Map sessions to metrics
-  const patentMap = new Map<string, PatentCostMetrics>()
+  const runMap = new Map<string, ServiceRunCostMetrics>()
 
-  // Initialize patents from sessions
-  for (const session of sessions) {
-    if (!patentMap.has(session.patentId)) {
-      patentMap.set(session.patentId, {
-        patentId: session.patentId,
-        patentTitle: session.patent?.title || 'Untitled Patent',
-        userId: session.userId,
-        userName: session.user?.name ?? null,
-        userEmail: session.user?.email || 'unknown@unknown.com',
+  for (const log of usageLogs) {
+    const meta = (log.meta && typeof log.meta === 'object' ? log.meta : {}) as Record<string, any>
+    const classification = classifyUsageLog(log.taskCode, meta)
+    if (!classification) continue
+
+    const key = `${classification.service}:${classification.runId}`
+    let metrics = runMap.get(key)
+    if (!metrics) {
+      metrics = {
+        runId: classification.runId,
+        service: classification.service,
+        serviceLabel: BILLABLE_SERVICE_LABELS[classification.service],
+        title: classification.runId === UNATTRIBUTED_RUN_ID
+          ? `${BILLABLE_SERVICE_LABELS[classification.service]} (unlinked calls)`
+          : classification.runId,
+        userId: log.userId,
+        userName: null,
+        userEmail: null,
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalApiCalls: 0,
         actualCost: 0,
         contingencyCost: 0,
-        createdAt: session.createdAt,
+        firstActivityAt: log.startedAt,
+        lastActivityAt: log.startedAt,
         stageBreakdown: []
-      })
+      }
+      runMap.set(key, metrics)
     }
-  }
 
-  // Process usage logs and associate with patents
-  for (const log of usageLogs) {
-    const meta = log.meta as any
-    const patentId = meta?.patentId
-    
-    if (!patentId || !patentMap.has(patentId)) continue
-
-    const metrics = patentMap.get(patentId)!
     // Use ?? (nullish coalescing) to handle 0 as a valid value
     const input = log.inputTokens ?? 0
     const output = log.outputTokens ?? 0
     const calls = log.apiCalls ?? 1
+    const actualCost = calculateCostForLog(log)
 
     metrics.totalInputTokens += input
     metrics.totalOutputTokens += output
     metrics.totalApiCalls += calls
-
-    const actualCost = calculateCostForLog(log)
     metrics.actualCost += actualCost
+    if (log.startedAt < metrics.firstActivityAt) metrics.firstActivityAt = log.startedAt
+    if (log.startedAt > metrics.lastActivityAt) metrics.lastActivityAt = log.startedAt
 
-    // Track stage breakdown
-    const stageCode = meta?.stageCode || log.taskCode || 'OTHER'
+    const stageCode = meta.stageCode || meta.purpose || log.taskCode || 'OTHER'
     let stageEntry = metrics.stageBreakdown.find(s => s.stage === stageCode)
     if (!stageEntry) {
       stageEntry = {
-        stage: stageCode,
+        stage: String(stageCode),
         inputTokens: 0,
         outputTokens: 0,
         actualCost: 0,
@@ -615,15 +517,46 @@ export async function computePatentCosts(
     stageEntry.callCount += calls
   }
 
-  // Calculate contingency costs
-  Array.from(patentMap.values()).forEach(metrics => {
-    metrics.contingencyCost = metrics.actualCost * CONTINGENCY_MULTIPLIER
-    for (const stage of metrics.stageBreakdown) {
+  const runs = Array.from(runMap.values())
+
+  // Resolve run titles and owners per service
+  const services: BillableService[] = ['FUNDING_INTELLIGENCE', 'GRANT_REVIEW', 'FUNDING_CHAT']
+  await Promise.all(services.map(async service => {
+    const ids = runs
+      .filter(run => run.service === service && run.runId !== UNATTRIBUTED_RUN_ID)
+      .map(run => run.runId)
+    if (ids.length === 0) return
+
+    const titles = await loadRunTitles(service, Array.from(new Set(ids)))
+    for (const run of runs) {
+      if (run.service !== service) continue
+      const info = titles.get(run.runId)
+      if (info) {
+        run.title = info.title
+        run.userId = run.userId || info.userId
+      }
+    }
+  }))
+
+  // Attach user identity
+  const userIds = Array.from(new Set(runs.map(run => run.userId).filter((id): id is string => Boolean(id))))
+  const users = userIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, name: true, email: true }
+      })
+    : []
+  const userMap = new Map(users.map(u => [u.id, u]))
+
+  for (const run of runs) {
+    const user = run.userId ? userMap.get(run.userId) : undefined
+    run.userName = user?.name ?? null
+    run.userEmail = user?.email ?? null
+    run.contingencyCost = run.actualCost * CONTINGENCY_MULTIPLIER
+    for (const stage of run.stageBreakdown) {
       stage.contingencyCost = stage.actualCost * CONTINGENCY_MULTIPLIER
     }
-  })
+  }
 
-  return Array.from(patentMap.values()).sort((a, b) => 
-    b.createdAt.getTime() - a.createdAt.getTime()
-  )
+  return runs.sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime())
 }

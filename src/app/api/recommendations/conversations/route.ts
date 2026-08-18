@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { requireRecommendationTenantUser, requireRecommendationUser } from '@/lib/recommendations/request-auth'
+import { enforceChatRateLimit, requireRecommendationTenantUser } from '@/lib/recommendations/request-auth'
+import { recommendationErrorResponse } from '@/lib/recommendations/routeErrors'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
@@ -20,13 +21,7 @@ export async function GET(request: NextRequest) {
     const conversations = await recommendationConversationService.listConversations(auth.userId, auth.tenantId)
     return NextResponse.json({ conversations })
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: 'Failed to load recommendation conversations',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    )
+    return recommendationErrorResponse(error, 'Failed to load recommendation conversations')
   }
 }
 
@@ -35,6 +30,12 @@ export async function POST(request: NextRequest) {
   if ('response' in auth) {
     return auth.response
   }
+
+  // Creation has its own bucket: the chat bucket is keyed per user (not per
+  // conversation), so minting conversations no longer buys extra chat capacity,
+  // but unbounded creation is still cheap abuse of the DB and usage ledger.
+  const limited = enforceChatRateLimit(auth.userId, 'create')
+  if (limited) return limited
 
   try {
     const parsed = createSchema.parse(await request.json().catch(() => ({})))
@@ -45,19 +46,6 @@ export async function POST(request: NextRequest) {
     )
     return NextResponse.json({ conversation }, { status: 201 })
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json(
-        { error: 'Invalid request body', details: error.flatten() },
-        { status: 400 }
-      )
-    }
-
-    return NextResponse.json(
-      {
-        error: 'Failed to create recommendation conversation',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    )
+    return recommendationErrorResponse(error, 'Failed to create recommendation conversation')
   }
 }

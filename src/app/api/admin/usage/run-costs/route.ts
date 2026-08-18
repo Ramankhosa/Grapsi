@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { computePatentCosts } from '@/lib/admin-usage-service'
+import { computeServiceRunCosts } from '@/lib/admin-usage-service'
 
 export const dynamic = 'force-dynamic'
 
 const QuerySchema = z.object({
   tenantId: z.string(),
   userId: z.string().optional(),
+  service: z.enum(['FUNDING_INTELLIGENCE', 'GRANT_REVIEW', 'FUNDING_CHAT']).optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional()
 })
@@ -49,6 +50,7 @@ export async function GET(request: NextRequest) {
     const parsed = QuerySchema.parse({
       tenantId: getParam('tenantId'),
       userId: getParam('userId'),
+      service: getParam('service'),
       startDate: getParam('startDate'),
       endDate: getParam('endDate')
     })
@@ -60,18 +62,18 @@ export async function GET(request: NextRequest) {
     // Validate and parse dates with error handling
     let endDate: Date
     let startDate: Date
-    
+
     try {
       endDate = parsed.endDate ? new Date(parsed.endDate) : new Date()
       if (isNaN(endDate.getTime())) {
         return NextResponse.json({ error: 'Invalid endDate format' }, { status: 400 })
       }
-      
+
       startDate = parsed.startDate ? new Date(parsed.startDate) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000)
       if (isNaN(startDate.getTime())) {
         return NextResponse.json({ error: 'Invalid startDate format' }, { status: 400 })
       }
-      
+
       // Ensure startDate is before endDate
       if (startDate > endDate) {
         return NextResponse.json({ error: 'startDate must be before endDate' }, { status: 400 })
@@ -80,29 +82,44 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid date format' }, { status: 400 })
     }
 
-    const patentCosts = await computePatentCosts(
+    const allRuns = await computeServiceRunCosts(
       parsed.tenantId,
       startDate,
       endDate,
       parsed.userId
     )
 
+    const runs = parsed.service ? allRuns.filter(run => run.service === parsed.service) : allRuns
+
     // Calculate totals
-    const totals = patentCosts.reduce((acc, p) => ({
-      totalInputTokens: acc.totalInputTokens + p.totalInputTokens,
-      totalOutputTokens: acc.totalOutputTokens + p.totalOutputTokens,
-      totalApiCalls: acc.totalApiCalls + p.totalApiCalls,
-      actualCost: acc.actualCost + p.actualCost,
-      contingencyCost: acc.contingencyCost + p.contingencyCost,
-      patentCount: acc.patentCount + 1
+    const totals = runs.reduce((acc, run) => ({
+      totalInputTokens: acc.totalInputTokens + run.totalInputTokens,
+      totalOutputTokens: acc.totalOutputTokens + run.totalOutputTokens,
+      totalApiCalls: acc.totalApiCalls + run.totalApiCalls,
+      actualCost: acc.actualCost + run.actualCost,
+      contingencyCost: acc.contingencyCost + run.contingencyCost,
+      runCount: acc.runCount + 1
     }), {
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalApiCalls: 0,
       actualCost: 0,
       contingencyCost: 0,
-      patentCount: 0
+      runCount: 0
     })
+
+    // Per-service rollup so a tenant's bill can be read by product line
+    const byService = runs.reduce<Record<string, { runCount: number; actualCost: number; contingencyCost: number }>>(
+      (acc, run) => {
+        const bucket = acc[run.service] || { runCount: 0, actualCost: 0, contingencyCost: 0 }
+        bucket.runCount += 1
+        bucket.actualCost += run.actualCost
+        bucket.contingencyCost += run.contingencyCost
+        acc[run.service] = bucket
+        return acc
+      },
+      {}
+    )
 
     return NextResponse.json({
       startDate,
@@ -110,14 +127,14 @@ export async function GET(request: NextRequest) {
       tenantId: parsed.tenantId,
       userId: parsed.userId,
       totals,
-      patents: patentCosts
+      byService,
+      runs
     })
   } catch (error) {
-    console.error('Patent costs API error:', error)
+    console.error('Service run costs API error:', error)
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: 'Invalid query parameters', details: error.errors }, { status: 400 })
     }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-

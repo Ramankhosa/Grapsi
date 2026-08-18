@@ -1,25 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { z } from 'zod'
 
-import { MAX_SELECTED_RESEARCH_AREAS } from '@/lib/recommendations/constants'
-import { conversationMessageFilterSchema } from '@/lib/recommendations/messageSchema'
-import { requireRecommendationTenantUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
+import { conversationContextFlagsSchema, conversationMessageFilterSchema } from '@/lib/recommendations/messageSchema'
+import {
+  enforceChatRateLimit,
+  requireRecommendationTenantUser,
+  toRecommendationAccessScope,
+} from '@/lib/recommendations/request-auth'
+import { recommendationErrorResponse } from '@/lib/recommendations/routeErrors'
 import { recommendationConversationService } from '@/lib/services/recommendationConversationService'
 
 export const runtime = 'nodejs'
 
-const requestSchema = z.object({
+const requestSchema = conversationContextFlagsSchema.extend({
   filters: conversationMessageFilterSchema,
-  useProfileContext: z.boolean().optional(),
-  useEligibilityProfile: z.boolean().optional(),
-  usePublicationContext: z.boolean().optional(),
-  selectedResearchAreaIds: z.array(z.string().max(120)).max(MAX_SELECTED_RESEARCH_AREAS).optional(),
 })
 
 /**
  * Direct filter manipulation from the UI. Deliberately separate from the chat
  * message endpoint: applying or removing a filter must not post a user message
- * or trigger any narrative LLM call.
+ * or trigger any narrative LLM call. It still runs an embedding + search, so it
+ * shares the per-user chat rate bucket (but is not metered against quota).
  */
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRecommendationTenantUser(request)
@@ -27,26 +27,20 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return auth.response
   }
 
+  const limited = enforceChatRateLimit(auth.userId)
+  if (limited) return limited
+
   try {
     const parsed = requestSchema.parse(await request.json())
-    const conversation = await recommendationConversationService.applyFilters(
+    const response = await recommendationConversationService.applyFilters(
       auth.userId,
       auth.tenantId,
       params.id,
       parsed,
       toRecommendationAccessScope(auth.actor)
     )
-    return NextResponse.json(conversation)
+    return NextResponse.json(response)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Invalid filter payload', details: error.flatten() }, { status: 400 })
-    }
-    return NextResponse.json(
-      {
-        error: 'Failed to update conversation filters',
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    )
+    return recommendationErrorResponse(error, 'Failed to update conversation filters')
   }
 }

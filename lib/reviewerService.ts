@@ -35,6 +35,8 @@ async function executeConfiguredGrantReviewerReview(input: {
   tenantContext?: any;
   stageCode?: string;
   promptCacheKey?: string;
+  /** Reviewer call this run belongs to, so its cost can be reported per proposal. */
+  reviewerCallId?: string | null;
 }) {
   const request = input.tenantContext
     ? { tenantContext: input.tenantContext }
@@ -62,6 +64,7 @@ async function executeConfiguredGrantReviewerReview(input: {
     metadata: {
       skipFeaturePolicy: true,
       operation: 'grant_reviewer_full_review',
+      ...(input.reviewerCallId ? { reviewerCallId: input.reviewerCallId } : {}),
       ...(input.promptCacheKey ? { promptCacheKey: input.promptCacheKey } : {}),
     },
     idempotencyKey: `grant-reviewer-full-review-${crypto.randomUUID()}`,
@@ -140,6 +143,8 @@ type ReviewInput = {
   requestHeaders?: Record<string, string | string[] | undefined>;
   tenantContext?: any;
   stageCode?: string;
+  /** Reviewer call id, recorded on the usage log for per-proposal cost reporting. */
+  callId?: string | null;
   /**
    * Figures, Gantt charts or budget workbooks the user attached to this
    * section. When present the review runs multimodally against the uploaded
@@ -600,6 +605,7 @@ ${summarizePreviousReview(contextSection.ai_review_json)}` : ''}`;
       requestHeaders: input.requestHeaders,
       tenantContext: input.tenantContext,
       stageCode: input.stageCode,
+      reviewerCallId: input.callId,
       promptCacheKey: `reviewer:section-review:${promptPrefixCacheKey(stablePrefix)}`,
     });
   }

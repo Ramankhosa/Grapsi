@@ -1,5 +1,6 @@
 import { Suspense } from 'react'
 
+import FeatureGate from '@/components/access/FeatureGate'
 import ProjectsPageClient from './ProjectsPageClient'
 
 export default function ProjectsPage() {
@@ -11,7 +12,9 @@ export default function ProjectsPage() {
         </div>
       }
     >
-      <ProjectsPageClient />
+      <FeatureGate module="GRANT_STUDIO" title="Grant Studio is not included in your plan">
+        <ProjectsPageClient />
+      </FeatureGate>
     </Suspense>
   )
 }

@@ -36,8 +36,8 @@ export default function FinderChatEmptyState({
       </h3>
       <p className="mt-1.5 max-w-md text-[13px] leading-6 text-muted">
         {primaryArea
-          ? `Describe what you need in plain English — I can search calls for ${primaryArea}, answer questions about any call's documents, or talk through application strategy.`
-          : 'Describe what you need in plain English — I can search the funding catalog, answer questions about a call’s documents, or talk through application strategy.'}
+          ? `Describe what you need in plain English — I can search calls for ${primaryArea} and answer questions about any call you find.`
+          : 'Describe what you need in plain English — I can search the funding catalog and answer questions about any call you find.'}
       </p>
 
       <div className="mt-6 grid w-full max-w-2xl gap-2 sm:grid-cols-2">

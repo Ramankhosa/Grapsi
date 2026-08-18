@@ -939,4 +939,77 @@ describe('RecommendationConversationService', () => {
     expect(parsed.nextState?.filters.fundingKinds).toEqual([]);
     expect(parsed.nextState?.filters.hostCountries).toEqual([]);
   });
+
+  it('skips every LLM call once the client has disconnected and still lands the turn deterministically', async () => {
+    const { runFundingGatewayText } = await import('@/lib/funding/llmRouting');
+    const gateway = vi.mocked(runFundingGatewayText);
+    gateway.mockClear();
+
+    const service = new RecommendationConversationService();
+    const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(makeSearchResponse());
+    const abort = new AbortController();
+    abort.abort();
+
+    const outcome = await (service as any).createTurnOutcome({
+      input: { message: 'could you tailor these a bit more to my situation with grants in Germany?' },
+      state: {
+        inputMode: 'research_area',
+        query: { researchArea: 'artificial intelligence' },
+        filters: createDefaultFilters(),
+        filterMode: 'auto',
+        pendingPatch: null,
+        lastRunId: null,
+        lastTurnIndex: 0,
+      },
+      latestRun: undefined,
+      turnIndex: 1,
+      conversationDetail: makeConversationDetail(),
+      profileSnapshot: null,
+      preferences: { useEligibilityProfile: false, usePublicationContext: false },
+      signal: abort.signal,
+    });
+
+    // Neither the orchestrator nor the narrative model was called; the search
+    // still ran (cheap) and the assistant text is the deterministic fallback.
+    expect(gateway).not.toHaveBeenCalled();
+    expect(searchSpy).toHaveBeenCalled();
+    expect(outcome.messageType).toBe('assistant_response');
+    expect(typeof outcome.assistantContent).toBe('string');
+    expect(outcome.assistantContent.length).toBeGreaterThan(0);
+  });
+
+  it('clamps oversized query text and non-finite amounts before they reach persisted state', () => {
+    const service = new RecommendationConversationService();
+    const parsed = (service as any).processOrchestratorOutput(
+      {
+        intent: 'new_search',
+        queryRewrite: 'x'.repeat(5000),
+        filterSuggestions: {
+          amountMin: Number.POSITIVE_INFINITY,
+          amountMax: 5000,
+          eligibleCountries: Array.from({ length: 80 }, () => 'India'),
+          limit: 999,
+        },
+      },
+      {
+        message: 'search',
+        state: {
+          inputMode: 'research_area',
+          query: { researchArea: '' },
+          filters: createDefaultFilters(),
+          filterMode: 'auto',
+          pendingPatch: null,
+          lastRunId: null,
+          lastTurnIndex: 0,
+        },
+      }
+    );
+
+    const researchArea = (parsed.nextState?.query as { researchArea?: string }).researchArea || '';
+    expect(researchArea.length).toBeLessThanOrEqual(2000);
+    expect(parsed.nextState?.filters.amountMin).toBeNull();
+    expect(parsed.nextState?.filters.amountMax).toBe(5000);
+    expect(parsed.nextState?.filters.eligibleCountries.length).toBeLessThanOrEqual(50);
+    expect(parsed.nextState?.filters.limit).toBeLessThanOrEqual(25);
+  });
 });

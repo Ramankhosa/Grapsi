@@ -45,8 +45,11 @@ interface SignupUser {
   roles: string[]
   created_at: string
    usage_metrics?: {
-    patentsDrafted: number
-    noveltySearches: number
+    fundingIntelligenceRuns: number
+    reviewerRuns: number
+    reviewerCalls: number
+    chatSessions: number
+    chatMessages: number
     totalInputTokens: number
     totalOutputTokens: number
     tokensByModel: Array<{ model: string; inputTokens: number; outputTokens: number }>
@@ -918,10 +921,17 @@ export default function TenantAdminDashboard() {
                                     {m && (
                                       <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11.5px] text-nickel-500">
                                         <span>
-                                          Patents <span className="nk-mono text-nickel-600">{m.patentsDrafted}</span>
+                                          Intelligence{' '}
+                                          <span className="nk-mono text-nickel-600">{m.fundingIntelligenceRuns}</span>
                                         </span>
                                         <span>
-                                          Novelty <span className="nk-mono text-nickel-600">{m.noveltySearches}</span>
+                                          Reviewer <span className="nk-mono text-nickel-600">{m.reviewerRuns}</span>
+                                        </span>
+                                        <span>
+                                          Chat{' '}
+                                          <span className="nk-mono text-nickel-600">
+                                            {m.chatSessions}/{m.chatMessages}
+                                          </span>
                                         </span>
                                         <span>
                                           Tokens in/out{' '}

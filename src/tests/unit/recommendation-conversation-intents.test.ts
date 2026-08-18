@@ -248,24 +248,101 @@ describe('RecommendationConversationService conversational intents', () => {
     expect(outcome.citations.resultIds).toEqual(['call-1']);
   });
 
-  it('answers strategy questions conversationally with the deterministic fallback when the LLM is unavailable', async () => {
+  it('redirects grant-strategy coaching as out of scope without any model call or search', async () => {
     const service = new RecommendationConversationService();
-    vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue({
-      intent: 'funding_strategy',
+    // The orchestrator itself classifies this one (fast path does not catch "what do reviewers…").
+    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue({
+      intent: 'out_of_scope',
       confidence: 0.9,
       requiresConfirmation: false,
     });
     const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(null);
-    mocks.gatewayText.mockRejectedValue(new Error('gateway down'));
 
     const run = makeRun([makeResult('call-1')]);
     const outcome = await (service as any).createTurnOutcome(
-      baseParams(service, 'how do I strengthen a fellowship application?', run)
+      baseParams(service, 'what do reviewers look for in a fellowship application?', run)
     );
 
-    expect(outcome.intent).toBe('funding_strategy');
+    expect(llmSpy).toHaveBeenCalledTimes(1);
+    expect(outcome.intent).toBe('out_of_scope');
     expect(outcome.messageType).toBe('assistant_response');
-    expect(outcome.assistantContent).toContain('I can help you search the funding catalog');
+    expect(outcome.assistantContent).toContain('outside what I can help with');
+    expect(outcome.assistantContent).toContain('results above');
+    expect(outcome.suggestedReplies).toContain('What does result 1 fund?');
+    // No narrative/answer generation: the redirect is deterministic.
+    expect(mocks.gatewayText).not.toHaveBeenCalled();
     expect(searchSpy).not.toHaveBeenCalled();
+  });
+
+  it('short-circuits explicit topic/problem ideation requests before the orchestrator runs', async () => {
+    const service = new RecommendationConversationService();
+    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM').mockRejectedValue(new Error('should not be called'));
+    const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(null);
+    const run = makeRun([makeResult('call-1')]);
+
+    for (const message of [
+      'suggest some research topics for result 1',
+      'Recommend 5 problems I could propose for this call',
+      'brainstorm project ideas that fit call 2',
+      'what problem should I propose for the first one?',
+      'can you help me write my proposal for result 1',
+      'tips for writing a strong grant application',
+    ]) {
+      const outcome = await (service as any).createTurnOutcome(baseParams(service, message, run));
+      expect(outcome.intent, message).toBe('out_of_scope');
+      expect(outcome.assistantContent, message).toContain('outside what I can help with');
+    }
+
+    expect(llmSpy).not.toHaveBeenCalled();
+    expect(mocks.gatewayText).not.toHaveBeenCalled();
+    expect(searchSpy).not.toHaveBeenCalled();
+    expect(mocks.answerCallQuestion).not.toHaveBeenCalled();
+  });
+
+  it('does not mistake funding searches or call questions for out-of-scope requests', async () => {
+    const service = new RecommendationConversationService();
+    const run = makeRun([makeResult('call-1')]);
+
+    // Searches phrased with "suggest/recommend/list … topic" must NOT hit the out-of-scope fast path.
+    for (const message of [
+      'suggest funding opportunities on the topic of battery recycling',
+      'recommend grants for research on battery recycling',
+      'list fellowships for early-career researchers in India',
+      'give me ideas of funding for AI safety',
+      'what does result 1 fund?',
+      'what research themes does result 1 fund?',
+    ]) {
+      const fast = (service as any).parseFastPathTurn({ message, state: makeState(), latestRun: run });
+      expect(fast?.intent ?? 'none', message).not.toBe('out_of_scope');
+    }
+
+    // "What does this call fund?" is a call question, in scope.
+    vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue({
+      intent: 'call_question',
+      confidence: 0.9,
+      requiresConfirmation: false,
+      referencedOrdinals: [1],
+    });
+    mocks.answerCallQuestion.mockResolvedValue({
+      answer: 'It funds **applied AI** projects [eligibility, p. 2, v1].',
+      citations: [],
+      category: 'thematic',
+      answeredFrom: 'document',
+      streamed: false,
+    });
+    const questionOutcome = await (service as any).createTurnOutcome(
+      baseParams(service, 'what research themes does result 1 fund?', run)
+    );
+    expect(questionOutcome.intent).toBe('call_question');
+    expect(mocks.answerCallQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps the legacy funding_strategy intent from the orchestrator to out_of_scope', () => {
+    const service = new RecommendationConversationService();
+    const parsed = (service as any).processOrchestratorOutput(
+      { intent: 'funding_strategy', assistantSuggestion: 'Here are three aims you could propose…' },
+      { message: 'what should I propose?', state: makeState() }
+    );
+    expect(parsed.intent).toBe('out_of_scope');
   });
 });

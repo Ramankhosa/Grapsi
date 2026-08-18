@@ -8,7 +8,11 @@ import {
   trackServiceUsage,
 } from '@/lib/service-usage-tracker'
 
-const SERVICE_TYPE = 'FUNDING_DISCOVERY' as const
+// Funding intelligence bills against its own service, matching the access gate
+// (`requiredServiceType: 'FUNDING_INTELLIGENCE'`) that guards these routes.
+// It used to be counted under FUNDING_DISCOVERY, which mixed idea analyses in
+// with call ingestion and left the intelligence quota unenforced.
+const SERVICE_TYPE = 'FUNDING_INTELLIGENCE' as const
 
 export type IdeaIntelligenceOperationType =
   | 'idea_intelligence_execute'

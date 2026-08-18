@@ -21,6 +21,7 @@ import {
   RECOMMENDATION_SPONSOR_TYPE_OPTIONS,
   REGION_ALIASES,
   RESEARCH_AREA_EXPANSIONS,
+  RESEARCH_AREA_MAX_LENGTH,
   SPONSOR_TYPE_ALIASES,
 } from './constants';
 import type {
@@ -383,7 +384,9 @@ function buildPaperMetadataQuery(query: PaperMetadataQuery) {
 }
 
 function buildResearchAreaModeQuery(query: ResearchAreaQuery) {
-  const rawResearchArea = normalizeWhitespace(query.researchArea || '');
+  // Hard cap regardless of source (client, LLM, persisted state): the topic is
+  // embedded, expanded and replayed into later prompts, so it must stay bounded.
+  const rawResearchArea = normalizeWhitespace((query.researchArea || '').slice(0, RESEARCH_AREA_MAX_LENGTH));
   const researchArea = stripResearchQueryBoilerplate(rawResearchArea) || rawResearchArea;
   const extractedTags = tokenizeText(researchArea, 12);
   const expandedTags = expandResearchTags([researchArea, ...extractedTags]);

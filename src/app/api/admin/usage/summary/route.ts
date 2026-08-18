@@ -10,7 +10,17 @@ const QuerySchema = z.object({
   page: z.string().optional(),
   pageSize: z.string().optional(),
   sortBy: z
-    .enum(['tenantName', 'inputTokens', 'outputTokens', 'cost', 'patentDrafts', 'noveltySearches', 'ideasReserved'])
+    .enum([
+      'tenantName',
+      'inputTokens',
+      'outputTokens',
+      'cost',
+      'fundingIntelligenceRuns',
+      'reviewerRuns',
+      'reviewerCalls',
+      'chatSessions',
+      'chatMessages'
+    ])
     .optional(),
   sortDir: z.enum(['asc', 'desc']).optional()
 })
@@ -77,12 +87,16 @@ export async function GET(request: NextRequest) {
             return t.totalOutputTokens
           case 'cost':
             return t.totalCost
-          case 'patentDrafts':
-            return t.patentDrafts
-          case 'noveltySearches':
-            return t.noveltySearches
-          case 'ideasReserved':
-            return t.ideasReserved
+          case 'fundingIntelligenceRuns':
+            return t.fundingIntelligenceRuns
+          case 'reviewerRuns':
+            return t.reviewerRuns
+          case 'reviewerCalls':
+            return t.reviewerCalls
+          case 'chatSessions':
+            return t.chatSessions
+          case 'chatMessages':
+            return t.chatMessages
           case 'inputTokens':
           default:
             return t.totalInputTokens

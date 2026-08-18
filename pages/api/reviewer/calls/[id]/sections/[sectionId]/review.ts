@@ -7,6 +7,13 @@ import {
 import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService';
 import { buildFallbackContextSummary, hasMeaningfulSectionContent } from '@/lib/reviewer/content';
 import { ensureCurrentReport } from '@/lib/reviewer/reportGeneration';
+import {
+  completeReviewerUsage,
+  releaseReviewerUsage,
+  reserveReviewerUsage,
+  reviewerSectionOperationId,
+  ServiceQuotaExceededError,
+} from '@/lib/reviewer/usage';
 import prisma from '../../../../../../../lib/prisma';
 import {
   reviewSection,
@@ -249,6 +256,27 @@ export default async function handler(
       WHERE id = ${callId}
     `;
     
+    // Hold a quota slot before spending on the model. The slot is released
+    // again if the review fails, so a failed run costs the tenant nothing.
+    let usageReservation;
+    try {
+      usageReservation = await reserveReviewerUsage({
+        callId,
+        operationId: reviewerSectionOperationId(sectionId, section.version),
+        operationType: 'reviewer_section_review',
+        metadata: { sectionTitle: section.section_title, version: section.version ?? 1 },
+      });
+    } catch (quotaError) {
+      if (quotaError instanceof ServiceQuotaExceededError) {
+        return res.status(429).json({
+          error: quotaError.message,
+          code: quotaError.code,
+          section: section.section_title,
+        });
+      }
+      throw quotaError;
+    }
+
     console.log(`Starting AI review for ${section.section_title}`);
 
     // Figures, charts or workbooks the user attached to this section. Any
@@ -312,6 +340,7 @@ export default async function handler(
         modelType: 'G',
         requestHeaders: req.headers,
         stageCode: 'GRANT_REVIEWER_FULL_REVIEW',
+        callId,
         attachments: linkedAssets,
       });
 
@@ -381,6 +410,15 @@ export default async function handler(
 
       console.log(`Database updated for ${section.section_title}`);
 
+      // The review landed, so the reserved slot becomes a counted run.
+      await completeReviewerUsage(usageReservation, {
+        sectionId,
+        sectionTitle: section.section_title,
+        version: section.version ?? 1,
+      }).catch(usageError => {
+        console.error('Failed to record reviewer usage:', usageError);
+      });
+
       // Bring the panel report back in line with what was just reviewed.
       //
       // Reviewing a revision used to leave the stored report describing the
@@ -412,6 +450,7 @@ export default async function handler(
       });
     } catch (reviewError) {
       console.error(`Error in AI review process for ${section.section_title}:`, reviewError);
+      await releaseReviewerUsage(usageReservation).catch(() => undefined);
       if (isGeminiRateLimitErrorLike(reviewError)) {
         const retryAfterMs = getGeminiRetryAfterMs(reviewError);
         return res

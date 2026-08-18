@@ -29,8 +29,7 @@
 import { prisma } from './prisma'
 import { TaskCode } from '@/lib/prisma-generated'
 import type { UserRole, ServiceType, TeamRole } from '@/lib/prisma-generated'
-import { getPatentDraftingQuota } from './patent-drafting-tracker'
-import { checkServiceQuota, getServiceUsage } from './service-usage-tracker'
+import { checkServiceQuota, getServiceUsage, METERED_SERVICE_TYPES } from './service-usage-tracker'
 import { checkTrialQuotaForService } from './trial-plan-service'
 import { ensureTenantEntitlementForSignup, getActiveTenantEntitlement } from './entitlement-service'
 
@@ -350,7 +349,14 @@ export async function removeUserRole(
 }
 
 /**
- * Change a user's role
+ * Replace a user's hierarchy role, preserving their additive tags.
+ *
+ * The tags sit *beside* the hierarchy slot rather than inside it, so swapping
+ * MANAGER for ANALYST must not also revoke somebody's CALL_ADMIN or
+ * QUALITY_AUDITOR grant. This previously wrote `roles: [newRole]`, which meant
+ * every role change silently stripped the tags — and the admin UI, which diffs
+ * tags separately, saw "unchanged" and never restored them. Mirrors
+ * `withHierarchyRole` in `tenant-admin-service`.
  */
 export async function changeUserRole(
   actorContext: UserContext,
@@ -380,12 +386,15 @@ export async function changeUserRole(
     return { success: false, error: check.reason }
   }
   
-  // Update role
+  // Swap the hierarchy slot, carry the tags across untouched.
+  const preservedTags = targetUser.roles.filter(r => ADDITIVE_ROLES.includes(r))
+  const nextRoles = Array.from(new Set<UserRole>([newRole, ...preservedTags]))
+
   await prisma.user.update({
     where: { id: targetUserId },
-    data: { roles: [newRole] }
+    data: { roles: nextRoles }
   })
-  
+
   // Audit log
   await prisma.auditLog.create({
     data: {
@@ -396,6 +405,8 @@ export async function changeUserRole(
       meta: {
         previousRole: targetCurrentRole,
         newRole,
+        previousRoles: targetUser.roles,
+        newRoles: nextRoles,
         targetEmail: targetUser.email
       }
     }
@@ -460,18 +471,7 @@ export async function createTeam(
   })
   
   // Create default service access (all enabled)
-  const serviceTypes: ServiceType[] = [
-    'PATENT_DRAFTING',
-    'NOVELTY_SEARCH',
-    'PRIOR_ART_SEARCH',
-    'IDEA_BANK',
-    'PERSONA_SYNC',
-    'DIAGRAM_GENERATION',
-    'PATENT_REVIEW',
-    'FUNDING_DISCOVERY',
-    'GRANT_PREP',
-    'GRANT_DRAFTING'
-  ]
+  const serviceTypes: ServiceType[] = METERED_SERVICE_TYPES
   
   await prisma.teamServiceAccess.createMany({
     data: serviceTypes.map(serviceType => ({
@@ -877,80 +877,6 @@ export async function checkServiceAccess(
     }
   }
 
-  // Special handling for PATENT_DRAFTING (uses legacy patent-based counting for completions)
-  if (serviceType === 'PATENT_DRAFTING') {
-    const patentQuota = await getPatentDraftingQuota(tenantId)
-    
-    // Check completion quota
-    if (patentQuota.monthlyLimit !== null && patentQuota.monthlyUsed >= patentQuota.monthlyLimit) {
-      return {
-        allowed: false,
-        reason: `Tenant monthly quota exceeded for ${serviceType}`,
-        remainingQuota: { daily: patentQuota.dailyRemaining, monthly: 0 },
-        quotaSource: 'tenant'
-      }
-    }
-    
-    if (patentQuota.dailyLimit !== null && patentQuota.dailyUsed >= patentQuota.dailyLimit) {
-      return {
-        allowed: false,
-        reason: `Tenant daily quota exceeded for ${serviceType}`,
-        remainingQuota: { daily: 0, monthly: patentQuota.monthlyRemaining },
-        quotaSource: 'tenant'
-      }
-    }
-    
-    // Also check token-based quota (prevents regeneration abuse)
-    const tokenLimits = {
-      dailyTokenLimit: (planFeature as any).dailyTokenLimit as number | null,
-      monthlyTokenLimit: (planFeature as any).monthlyTokenLimit as number | null
-    }
-    
-    if (tokenLimits.dailyTokenLimit !== null || tokenLimits.monthlyTokenLimit !== null) {
-      const currentMonth = new Date().toISOString().substring(0, 7)
-      const currentDay = new Date().toISOString().substring(0, 10)
-      
-      const [monthlyMeter, dailyMeter] = await Promise.all([
-        prisma.usageMeter.findFirst({
-          where: { tenantId, taskCode: getTaskCodeForService(serviceType), periodType: 'MONTHLY', periodKey: currentMonth }
-        }),
-        prisma.usageMeter.findFirst({
-          where: { tenantId, taskCode: getTaskCodeForService(serviceType), periodType: 'DAILY', periodKey: currentDay }
-        })
-      ])
-      
-      const dailyTokens = dailyMeter?.currentUsage || 0
-      const monthlyTokens = monthlyMeter?.currentUsage || 0
-      
-      if (tokenLimits.monthlyTokenLimit !== null && monthlyTokens >= tokenLimits.monthlyTokenLimit) {
-        return {
-          allowed: false,
-          reason: `Tenant monthly token limit exceeded for ${serviceType}`,
-          remainingQuota: { daily: patentQuota.dailyRemaining, monthly: 0 },
-          quotaSource: 'tenant'
-        }
-      }
-      
-      if (tokenLimits.dailyTokenLimit !== null && dailyTokens >= tokenLimits.dailyTokenLimit) {
-        return {
-          allowed: false,
-          reason: `Tenant daily token limit exceeded for ${serviceType}`,
-          remainingQuota: { daily: 0, monthly: patentQuota.monthlyRemaining },
-          quotaSource: 'tenant'
-        }
-      }
-    }
-    
-    return {
-      allowed: true,
-      remainingQuota: overrideQuota || {
-        daily: patentQuota.dailyRemaining,
-        monthly: patentQuota.monthlyRemaining
-      },
-      quotaSource: overrideQuotaSource || 'tenant'
-    }
-  }
-  
   // For other services, use the unified service usage tracker
   // This checks both completion-based AND token-based quotas
   try {

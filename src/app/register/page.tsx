@@ -310,6 +310,13 @@ function RegisterContent() {
                   <p className="mt-2 text-xs text-ai-graphite-500">
                     💡 Check your email or ask your team admin for the code.
                   </p>
+                  <p className="mt-2 text-xs text-ai-graphite-500">
+                    Your organization isn&apos;t set up yet?{' '}
+                    <Link href="/contact" className="text-ai-blue-400 hover:text-ai-blue-300 underline-offset-2 hover:underline">
+                      Request access
+                    </Link>{' '}
+                    and we&apos;ll create your workspace.
+                  </p>
                 </div>
               </div>
             )}

@@ -6,7 +6,6 @@ import axios from 'axios'
 import Link from 'next/link'
 import Head from 'next/head'
 import {
-  FaArrowLeft,
   FaCheckCircle,
   FaChevronDown,
   FaChevronUp,
@@ -19,17 +18,7 @@ import {
   FaTimesCircle,
   FaTrash,
 } from 'react-icons/fa'
-
-type FundingCallOption = {
-  id: string
-  title: string
-  agencyName?: string | null
-  summary?: string | null
-  deadlineAt?: string | null
-  sourceUrl?: string | null
-  readiness?: 'template_manual' | 'guideline_manual' | 'call_fields'
-  readinessLabel?: string
-}
+import FundingCallPicker, { type FundingCallOption } from '@/components/reviewer/FundingCallPicker'
 
 const DEFAULT_RUBRIC = {
   evaluationCriteria: [],
@@ -37,21 +26,6 @@ const DEFAULT_RUBRIC = {
   mustAddress: [],
   avoid: [],
   formatRules: [],
-}
-
-const READINESS_STYLES: Record<string, string> = {
-  template_manual: 'bg-green-100 text-green-800',
-  guideline_manual: 'bg-cobalt-100 text-cobalt-800',
-  call_fields: 'bg-amber-100 text-amber-800',
-}
-
-const READINESS_HELP: Record<string, string> = {
-  template_manual:
-    'This call has an approved application template. The reviewer will score against its exact sections, limits, and rubric.',
-  guideline_manual:
-    'This call has an extracted guideline pack. The reviewer will score against those rules mapped onto the standard proposal sections.',
-  call_fields:
-    'This call has no template or guideline pack yet. The reviewer will set up the standard proposal sections and score against the stored call record (scope, budget, duration, eligibility) plus anything you add in the manual rubric.',
 }
 
 function RuleList({ title, items, tone = 'gray' }: { title: string; items: string[]; tone?: string }) {
@@ -79,11 +53,9 @@ export default function NewReviewerCall() {
 
   const [sourceMode, setSourceMode] = useState<'library' | 'url'>('library')
 
-  // Library mode
-  const [calls, setCalls] = useState<FundingCallOption[]>([])
-  const [fundingCallId, setFundingCallId] = useState('')
-  const [callSearch, setCallSearch] = useState('')
-  const [loadingCalls, setLoadingCalls] = useState(true)
+  // Library mode. The whole call object is held, not just its id, so the
+  // selection survives any search that filters it out of the visible list.
+  const [selectedCall, setSelectedCall] = useState<FundingCallOption | null>(null)
 
   // URL mode
   const [urls, setUrls] = useState<string[]>([''])
@@ -106,42 +78,6 @@ export default function NewReviewerCall() {
       router.push('/login')
     }
   }, [router, status])
-
-  useEffect(() => {
-    if (status !== 'authenticated') return
-
-    const loadCalls = async () => {
-      try {
-        setLoadingCalls(true)
-        const response = await axios.get('/api/reviewer/funding-calls')
-        const nextCalls = response.data.calls || []
-        setCalls(nextCalls)
-        if (nextCalls.length > 0) {
-          setFundingCallId((current) => current || nextCalls[0].id)
-        }
-      } catch (nextError) {
-        console.error('Failed to load funding calls:', nextError)
-        setError('Failed to load the funding call library. You can still start from a call URL.')
-      } finally {
-        setLoadingCalls(false)
-      }
-    }
-
-    void loadCalls()
-  }, [status])
-
-  const filteredCalls = useMemo(() => {
-    const query = callSearch.trim().toLowerCase()
-    if (!query) return calls
-    return calls.filter((call) =>
-      `${call.title} ${call.agencyName || ''}`.toLowerCase().includes(query)
-    )
-  }, [calls, callSearch])
-
-  const selectedCall = useMemo(
-    () => calls.find((call) => call.id === fundingCallId) || null,
-    [calls, fundingCallId]
-  )
 
   const cleanUrls = useMemo(() => urls.map((url) => url.trim()).filter(Boolean), [urls])
 
@@ -210,8 +146,8 @@ export default function NewReviewerCall() {
   const validate = () => {
     const errors: Record<string, string> = {}
     if (!projectTitle.trim()) errors.projectTitle = 'Project title is required.'
-    if (sourceMode === 'library' && !fundingCallId) {
-      errors.fundingCallId = 'Select a funding call.'
+    if (sourceMode === 'library' && !selectedCall) {
+      errors.fundingCallId = 'Pick the funding call this proposal is being written for.'
     }
     if (sourceMode === 'url') {
       if (cleanUrls.length === 0) errors.urls = 'Enter at least one funding call URL.'
@@ -233,7 +169,7 @@ export default function NewReviewerCall() {
         sourceMode === 'library'
           ? {
               sourceMode: 'library',
-              fundingCallId,
+              fundingCallId: selectedCall?.id,
               project_title: projectTitle.trim(),
               manualRubric: parseRubric().value,
               seedSections,
@@ -311,13 +247,14 @@ export default function NewReviewerCall() {
             <button
               type="button"
               onClick={() => setSourceMode('library')}
-              className={`flex items-start rounded-lg border-2 p-4 text-left transition-colors ${
+              aria-pressed={sourceMode === 'library'}
+              className={`flex items-start rounded-lg border p-4 text-left transition-colors ${
                 sourceMode === 'library'
-                  ? 'border-green-600 bg-green-50'
+                  ? 'border-cobalt-600 bg-cobalt-50 ring-1 ring-cobalt-600'
                   : 'border-nickel-200 hover:border-nickel-300'
               }`}
             >
-              <FaSearch className={`mr-3 mt-1 ${sourceMode === 'library' ? 'text-green-600' : 'text-nickel-400'}`} />
+              <FaSearch className={`mr-3 mt-1 ${sourceMode === 'library' ? 'text-cobalt-600' : 'text-nickel-400'}`} />
               <span>
                 <span className="block font-medium text-nickel-900">Use a stored funding call</span>
                 <span className="mt-1 block text-sm text-nickel-600">
@@ -329,11 +266,14 @@ export default function NewReviewerCall() {
             <button
               type="button"
               onClick={() => setSourceMode('url')}
-              className={`flex items-start rounded-lg border-2 p-4 text-left transition-colors ${
-                sourceMode === 'url' ? 'border-green-600 bg-green-50' : 'border-nickel-200 hover:border-nickel-300'
+              aria-pressed={sourceMode === 'url'}
+              className={`flex items-start rounded-lg border p-4 text-left transition-colors ${
+                sourceMode === 'url'
+                  ? 'border-cobalt-600 bg-cobalt-50 ring-1 ring-cobalt-600'
+                  : 'border-nickel-200 hover:border-nickel-300'
               }`}
             >
-              <FaGlobe className={`mr-3 mt-1 ${sourceMode === 'url' ? 'text-green-600' : 'text-nickel-400'}`} />
+              <FaGlobe className={`mr-3 mt-1 ${sourceMode === 'url' ? 'text-cobalt-600' : 'text-nickel-400'}`} />
               <span>
                 <span className="block font-medium text-nickel-900">Not in the library? Use the call URL</span>
                 <span className="mt-1 block text-sm text-nickel-600">
@@ -347,87 +287,23 @@ export default function NewReviewerCall() {
             {/* ---------------- Library mode ---------------- */}
             {sourceMode === 'library' ? (
               <div>
-                <label htmlFor="fundingCallId" className="mb-1 block text-sm font-medium text-nickel-700">
-                  Funding call*
-                </label>
-
-                {loadingCalls ? (
-                  <div className="flex items-center rounded-md border border-nickel-300 px-3 py-2 text-sm text-nickel-500">
-                    <FaSpinner className="mr-2 animate-spin" />
-                    Loading funding calls...
-                  </div>
-                ) : calls.length === 0 ? (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                    No funding calls are available to your account yet. Switch to{' '}
-                    <button
-                      type="button"
-                      className="font-medium underline"
-                      onClick={() => setSourceMode('url')}
-                    >
-                      the call URL route
-                    </button>{' '}
-                    to start from the agency's own page.
-                  </div>
-                ) : (
-                  <>
-                    <input
-                      type="text"
-                      value={callSearch}
-                      onChange={(event) => setCallSearch(event.target.value)}
-                      placeholder="Search by scheme or agency..."
-                      className="mb-2 w-full rounded-md border border-nickel-300 px-3 py-2 text-sm shadow-sm focus:border-cobalt-600 focus:ring-cobalt-500"
-                    />
-                    <select
-                      id="fundingCallId"
-                      value={fundingCallId}
-                      onChange={(event) => setFundingCallId(event.target.value)}
-                      size={Math.min(6, Math.max(3, filteredCalls.length))}
-                      className={`w-full rounded-md border px-3 py-2 shadow-sm focus:border-cobalt-600 focus:ring-cobalt-500 ${
-                        validationErrors.fundingCallId ? 'border-red-300' : 'border-nickel-300'
-                      }`}
-                    >
-                      {filteredCalls.length === 0 ? (
-                        <option value="">No calls match that search</option>
-                      ) : null}
-                      {filteredCalls.map((call) => (
-                        <option key={call.id} value={call.id}>
-                          {call.title}
-                          {call.agencyName ? ` - ${call.agencyName}` : ''}
-                          {call.readinessLabel ? ` [${call.readinessLabel}]` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                )}
+                <FundingCallPicker
+                  value={selectedCall}
+                  onChange={(call) => {
+                    setSelectedCall(call)
+                    setValidationErrors((current) => {
+                      if (!current.fundingCallId) return current
+                      const { fundingCallId: _cleared, ...rest } = current
+                      return rest
+                    })
+                  }}
+                  enabled={status === 'authenticated'}
+                  invalid={Boolean(validationErrors.fundingCallId)}
+                  onUseUrlMode={() => setSourceMode('url')}
+                />
 
                 {validationErrors.fundingCallId ? (
-                  <p className="mt-1 text-sm text-red-600">{validationErrors.fundingCallId}</p>
-                ) : null}
-
-                {selectedCall ? (
-                  <div className="mt-3 rounded-md bg-nickel-50 p-3 text-sm text-nickel-700">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">{selectedCall.agencyName || 'Funding agency'}</span>
-                      {selectedCall.readiness ? (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                            READINESS_STYLES[selectedCall.readiness] || 'bg-nickel-100 text-nickel-700'
-                          }`}
-                        >
-                          {selectedCall.readinessLabel}
-                        </span>
-                      ) : null}
-                    </div>
-                    {selectedCall.deadlineAt ? (
-                      <div className="mt-1 text-nickel-500">
-                        Deadline: {new Date(selectedCall.deadlineAt).toLocaleDateString()}
-                      </div>
-                    ) : null}
-                    {selectedCall.summary ? <p className="mt-2 line-clamp-3">{selectedCall.summary}</p> : null}
-                    {selectedCall.readiness ? (
-                      <p className="mt-2 text-xs text-nickel-500">{READINESS_HELP[selectedCall.readiness]}</p>
-                    ) : null}
-                  </div>
+                  <p className="mt-1.5 text-[12.5px] text-red-600">{validationErrors.fundingCallId}</p>
                 ) : null}
               </div>
             ) : null}
@@ -726,11 +602,7 @@ export default function NewReviewerCall() {
           <div className="mt-8">
             <button
               type="submit"
-              disabled={
-                submitting ||
-                analyzing ||
-                (sourceMode === 'library' && (loadingCalls || calls.length === 0))
-              }
+              disabled={submitting || analyzing}
               className="flex w-full items-center justify-center rounded-md bg-cobalt-600 px-4 py-3 font-medium text-white hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:bg-gray-400"
             >
               {submitting ? (

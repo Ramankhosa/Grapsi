@@ -554,7 +554,7 @@ export async function importFacultyRoster(options: FacultyImportOptions): Promis
       // that would attach a real person to an org without consent. Bulk
       // invites are the right path to bring an existing account in.
       if (existingUser && !existingUser.tenantId) {
-        fail('This email exists as an unclaimed account. Invite the user through /tenant-admin/invites so they can accept before importing them here.');
+        fail('This email exists as an unclaimed account. Invite the user from the Invite Members panel (/admin) so they can accept before importing them here.');
         continue;
       }
 

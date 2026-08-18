@@ -12,7 +12,10 @@ vi.mock('@/lib/prisma', () => ({
 
 vi.mock('@/lib/mailer', () => ({
   sendEmail: vi.fn(),
-  SITE_URL: 'https://app.example.com'
+  SITE_URL: 'https://app.example.com',
+  // email-templates reads these at module load to brand the emails
+  MAIL_FROM_EMAIL: 'noreply@example.com',
+  MAIL_FROM_NAME: 'Grapsi'
 }))
 
 import { buildInviteLink, markInviteAccepted, validateInviteEmailLock } from '@/lib/tenant-invite-service'

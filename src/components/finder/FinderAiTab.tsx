@@ -18,7 +18,7 @@ interface FinderAiTabProps {
   finderContext: ResearcherFinderContext | null;
   preferences: FinderPreferenceValues;
   onPreferencesChange: (preferences: FinderPreferenceValues) => void;
-  onBeginWriting: (payload: { resultId: string }) => void;
+  onBeginWriting?: (payload: { resultId: string }) => void;
   getCallDetailsHref: (resultId: string) => string;
 }
 

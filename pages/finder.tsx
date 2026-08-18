@@ -8,6 +8,7 @@ import type { FinderPreferenceValues } from '@/components/FinderPreferencesPanel
 import FundingChatFilterDrawer from '@/components/FundingChatFilterDrawer';
 import FundingCallImportModal from '@/components/FundingCallImportModal';
 import FundingDirectoryPanel from '@/components/FundingDirectoryPanel';
+import { useEntitlements } from '@/hooks/useEntitlements';
 import { useFinderChat } from '@/hooks/useFinderChat';
 import type { ResearcherFinderContext } from '@/lib/researcherProfile/types';
 import type {
@@ -94,6 +95,10 @@ export default function FinderPage() {
   const [directoryFacetsLoading, setDirectoryFacetsLoading] = useState(false);
   const [directorySelections, setDirectorySelections] = useState<DirectorySelection[]>([]);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  // Grant Studio is plan-gated. When the tenant's plan excludes it, the
+  // "begin writing" affordances are hidden rather than 403-ing on click.
+  const { hasModule } = useEntitlements();
+  const canUseGrantStudio = hasModule('GRANT_STUDIO');
   const uploadQueryHandledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -339,6 +344,12 @@ export default function FinderPage() {
       return;
     }
 
+    // Plan excludes Grant Studio: land on the call instead of starting prep.
+    if (!canUseGrantStudio) {
+      await router.push(callbackUrl);
+      return;
+    }
+
     setError(null);
     try {
       const payload = await apiRequest<{ launchUrl?: string | null; prepUrl?: string | null }>(
@@ -443,7 +454,7 @@ export default function FinderPage() {
             onGoToPage={handleManualGoToPage}
             activeSelections={directorySelections}
             onOpenAdvancedFilters={() => setManualFilterDrawerOpen(true)}
-            onBeginWriting={(result) => handleBeginWritingFromCall(result.id)}
+            onBeginWriting={canUseGrantStudio ? (result) => handleBeginWritingFromCall(result.id) : undefined}
             getCallDetailsHref={(result) => buildFundingCallDetailHref(result.id)}
             preferences={preferences}
             onChangePreferences={handlePreferenceChange}
@@ -454,7 +465,7 @@ export default function FinderPage() {
             finderContext={finderContext}
             preferences={preferences}
             onPreferencesChange={handlePreferenceChange}
-            onBeginWriting={({ resultId }) => handleBeginWritingFromCall(resultId)}
+            onBeginWriting={canUseGrantStudio ? ({ resultId }) => handleBeginWritingFromCall(resultId) : undefined}
             getCallDetailsHref={buildFundingCallDetailHref}
           />
         )}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
+import { allTimeRange, collectServiceUsage } from '@/lib/usage/service-usage-metrics'
 import { authenticateRequest, requireTenantRole } from '@/lib/middleware'
 import { createAuditLog } from '@/lib/auth'
 
@@ -74,8 +75,11 @@ export async function GET(
     const userIds = signupUsers.map(u => u.id)
 
     const userMetrics: Record<string, {
-      patentsDrafted: number
-      noveltySearches: number
+      fundingIntelligenceRuns: number
+      reviewerRuns: number
+      reviewerCalls: number
+      chatSessions: number
+      chatMessages: number
       totalInputTokens: number
       totalOutputTokens: number
       tokensByModel: Array<{ model: string; inputTokens: number; outputTokens: number }>
@@ -86,8 +90,11 @@ export async function GET(
       // Initialize metrics map
       for (const id of userIds) {
         userMetrics[id] = {
-          patentsDrafted: 0,
-          noveltySearches: 0,
+          fundingIntelligenceRuns: 0,
+          reviewerRuns: 0,
+          reviewerCalls: 0,
+          chatSessions: 0,
+          chatMessages: 0,
           totalInputTokens: 0,
           totalOutputTokens: 0,
           tokensByModel: [],
@@ -96,39 +103,20 @@ export async function GET(
       }
 
       // Patents drafted (by creator)
-      const patentsByUser = await prisma.patent.groupBy({
-        by: ['createdBy'],
-        where: {
-          createdBy: { in: userIds }
-        },
-        _count: { _all: true }
-      })
+      // Lifetime funding-service activity for the users this token signed up.
+      const serviceUsage = await collectServiceUsage(allTimeRange(), { userIds })
 
-      for (const row of patentsByUser) {
-        const metrics = userMetrics[row.createdBy]
-        if (metrics) {
-          metrics.patentsDrafted = row._count._all
-        }
+      for (const id of userIds) {
+        const counts = serviceUsage.byUser.get(id)
+        if (!counts) continue
+        const metrics = userMetrics[id]
+        metrics.fundingIntelligenceRuns = counts.fundingIntelligenceRuns
+        metrics.reviewerRuns = counts.reviewerRuns
+        metrics.reviewerCalls = counts.reviewerCalls
+        metrics.chatSessions = counts.chatSessions
+        metrics.chatMessages = counts.chatMessages
       }
 
-      // Novelty searches run (completed)
-      const noveltyByUser = await prisma.noveltySearchRun.groupBy({
-        by: ['userId'],
-        where: {
-          userId: { in: userIds },
-          status: 'COMPLETED'
-        },
-        _count: { _all: true }
-      })
-
-      for (const row of noveltyByUser) {
-        const metrics = userMetrics[row.userId]
-        if (metrics) {
-          metrics.noveltySearches = row._count._all
-        }
-      }
-
-      // LLM token usage by user/model/task from UsageLog
       const usageByUser = await prisma.usageLog.groupBy({
         by: ['userId', 'modelClass', 'taskCode', 'tenantId', 'status'],
         where: {
@@ -194,8 +182,11 @@ export async function GET(
         roles: su.roles,
         created_at: su.createdAt.toISOString(),
         usage_metrics: userMetrics[su.id] || {
-          patentsDrafted: 0,
-          noveltySearches: 0,
+          fundingIntelligenceRuns: 0,
+          reviewerRuns: 0,
+          reviewerCalls: 0,
+          chatSessions: 0,
+          chatMessages: 0,
           totalInputTokens: 0,
           totalOutputTokens: 0,
           tokensByModel: [],

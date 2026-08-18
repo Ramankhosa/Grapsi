@@ -29,6 +29,11 @@ export interface FundingLlmRoutingContext {
   tenantId?: string | null
   userId?: string | null
   planId?: string | null
+  /**
+   * Funding chat conversation this call belongs to. Recorded on the usage log
+   * so per-conversation cost can be reported back to the tenant.
+   */
+  conversationId?: string | null
 }
 
 export interface FundingGatewayExtractionResult {
@@ -217,6 +222,7 @@ export async function runFundingGatewayExtraction(options: {
         skipFeaturePolicy: true,
         module: 'funding',
         action: options.stageCode,
+        ...(options.context?.conversationId ? { conversationId: options.context.conversationId } : {}),
         ...options.metadata,
       },
       idempotencyKey: crypto.randomUUID(),
@@ -301,6 +307,7 @@ export async function runFundingGatewayText(options: {
         module: 'funding',
         action: options.stageCode,
         ...(options.skipFeaturePolicy ? { skipFeaturePolicy: true } : {}),
+        ...(options.context?.conversationId ? { conversationId: options.context.conversationId } : {}),
         ...options.metadata,
       },
       idempotencyKey: crypto.randomUUID(),

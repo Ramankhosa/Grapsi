@@ -32,6 +32,12 @@ export interface CreateInviteInput {
   email: string
   role: InvitableRole
   teamId?: string | null
+  /**
+   * Platform-issued invite for a tenant's first administrator. Only changes the
+   * email copy — the recipient becomes OWNER through the normal first-user
+   * promotion in the signup transaction.
+   */
+  isFoundingAdmin?: boolean
 }
 
 export interface CreateInviteResult {
@@ -104,7 +110,8 @@ export async function createTenantInvite(input: CreateInviteInput): Promise<Crea
     tenantName: input.tenantName,
     role: input.role,
     inviteLink: buildInviteLink(rawToken, email),
-    expiresAt
+    expiresAt,
+    isFoundingAdmin: input.isFoundingAdmin
   })
 
   try {
@@ -178,13 +185,19 @@ export async function resendTenantInvite(
     return { ok: false, error: 'Invite link can no longer be regenerated' }
   }
 
+  // An invite into a tenant that still has no users is a founding-admin invite
+  // (the recipient will be promoted to OWNER on signup), so resend the copy
+  // that says so rather than the generic "join the team" wording.
+  const tenantUserCount = await prisma.user.count({ where: { tenantId } })
+
   const tpl = tenantInviteTemplate({
     email: invite.email,
     inviterName,
     tenantName,
     role: invite.role,
     inviteLink: buildInviteLink(rawToken, invite.email),
-    expiresAt: invite.expiresAt
+    expiresAt: invite.expiresAt,
+    isFoundingAdmin: tenantUserCount === 0
   })
   await sendEmail({ to: invite.email, subject: tpl.subject, html: tpl.html, text: tpl.text })
   return { ok: true }
