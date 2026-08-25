@@ -181,6 +181,21 @@ async function searchPatentnest(query: string, limit: number) {
   }
 }
 
+export type PatentnestSearchOutcome = {
+  results: PatentEvidence[]
+  status: 'ok' | 'not_configured' | 'error'
+  error?: string
+}
+
+/**
+ * Narrow entry point for callers that want PatentNest only — no SerpAPI /
+ * Google Patents lookup. Used by the reviewer's landscape step, where the
+ * patent corpus is deliberately limited to our own API.
+ */
+export async function retrievePatentnestPatents(query: string, limit = 10): Promise<PatentnestSearchOutcome> {
+  return searchPatentnest(query, Math.min(Math.max(Math.trunc(limit) || 1, 1), 20))
+}
+
 export function emptyIdeaEvidence(disabledSources: string[] = []): MultiSourceEvidence {
   return {
     publications: [],

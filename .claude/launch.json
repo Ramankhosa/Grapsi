@@ -4,27 +4,57 @@
     {
       "name": "grapsi-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3010
     },
     {
       "name": "grapsi-dev-autoport",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["scripts/run-local-command.js", "npx", "next", "dev"],
+      "runtimeArgs": [
+        "scripts/run-local-command.js",
+        "npx",
+        "next",
+        "dev"
+      ],
       "port": 3011,
       "autoPort": true
     },
     {
       "name": "spotipr-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "C:/Users/raman/Documents/spotipr", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "C:/Users/raman/Documents/spotipr",
+        "run",
+        "dev"
+      ],
       "port": 3000
     },
     {
       "name": "spotipr-dev-3789",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "C:/Users/raman/Documents/spotipr", "run", "dev", "--", "-p", "3789"],
+      "runtimeArgs": [
+        "--prefix",
+        "C:/Users/raman/Documents/spotipr",
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3789"
+      ],
       "port": 3789
+    },
+    {
+      "name": "grapsi-dev-patentmock",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set PATENTNEST_API_KEY=pn_live_mock&& set PATENTNEST_API_BASE_URL=http://localhost:4010&& npm run dev"
+      ],
+      "port": 3010
     }
   ]
 }

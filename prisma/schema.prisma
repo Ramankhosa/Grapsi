@@ -1593,6 +1593,32 @@ model IdeaRefinementCandidate {
   @@map("idea_refinement_candidates")
 }
 
+/// A patent a grant writer saved from Patent Search (Funding Intelligence).
+/// Stores a snapshot of the PatentNest record at save time so the shortlist
+/// stays readable if the upstream record changes. Like IdeaIntelligenceRun,
+/// userId/tenantId/ideaRunId are plain columns (no FK) — the shortlist is
+/// user-owned and must outlive a deleted analysis run.
+model PatentShortlistItem {
+  id                   String   @id @default(cuid())
+  tenantId             String?  @map("tenant_id")
+  userId               String   @map("user_id")
+  ideaRunId            String?  @map("idea_run_id")
+  publicationNumber    String   @map("publication_number")
+  publicationNumberKey String   @map("publication_number_key")
+  title                String
+  recordJson           Json     @map("record_json")
+  note                 String?
+  source               String   @default("patentnest")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, publicationNumberKey], map: "patent_shortlist_items_user_number_key")
+  @@index([userId, createdAt], map: "patent_shortlist_items_user_created_idx")
+  @@index([tenantId], map: "patent_shortlist_items_tenant_idx")
+  @@index([ideaRunId], map: "patent_shortlist_items_idea_run_idx")
+  @@map("patent_shortlist_items")
+}
+
 model FundingImportJob {
   id                      String                 @id @default(cuid())
   tenantId                String?

@@ -1,3 +1,5 @@
+import crypto from 'crypto'
+
 import prisma from '@/lib/prisma'
 import { hasMeaningfulSectionContent } from '@/lib/reviewer/content'
 import {
@@ -5,11 +7,15 @@ import {
   renderDeterministicBriefing,
   resolveSectionVersions,
 } from '@/lib/reviewer/finalReport'
+import { normalizeVersionSelections } from '@/lib/reviewer/finalReport'
+import { buildReviewerLandscape, buildSectionDigests } from '@/lib/reviewer/landscape'
+import { assessNovelty } from '@/lib/reviewer/novelty'
 import { reportFreshness, type ReportFreshness } from '@/lib/reviewer/sectionGrouping'
 import {
   completeReviewerUsage,
   releaseReviewerUsage,
   reserveReviewerUsage,
+  resolveReviewerCallOwner,
   reviewerReportOperationId,
   ServiceQuotaExceededError,
 } from '@/lib/reviewer/usage'
@@ -55,6 +61,10 @@ export interface ReviewerReportStatus {
   /** Titles whose current draft is newer than the version the report scored. */
   outdatedSections: string[]
   reviewedSectionCount: number
+  /** The picker's pins recorded with the stored report, honoured on regeneration. */
+  pinnedVersions: Record<string, number>
+  /** Titles the stored report deliberately left out, honoured on regeneration. */
+  excludedTitles: string[]
 }
 
 /**
@@ -69,11 +79,16 @@ export async function getReportStatus(callId: string): Promise<ReviewerReportSta
   ])
 
   const freshness = reportFreshness(call?.overall_review_json, sections as any)
-  const scoredVersions = (call?.overall_review_json as any)?.score_basis?.scoredVersions
+  const scoreBasis = (call?.overall_review_json as any)?.score_basis
+  const scoredVersions = scoreBasis?.scoredVersions
+  const pinnedVersions = normalizeVersionSelections(scoreBasis?.pinnedVersions)
+  const excludedTitles: string[] = Array.isArray(scoreBasis?.excludedTitles)
+    ? scoreBasis.excludedTitles.map((title: unknown) => String(title || '').trim()).filter(Boolean)
+    : []
   const outdatedSections: string[] = []
 
   if (freshness === 'stale' && scoredVersions && typeof scoredVersions === 'object') {
-    const { effective } = resolveSectionVersions(sections as any)
+    const { effective } = resolveSectionVersions(sections as any, pinnedVersions, { excludedTitles })
     for (const section of effective) {
       const scored = scoredVersions[section.section_title]
       if (typeof scored !== 'number' || scored !== Number(section.version || 1)) {
@@ -86,7 +101,65 @@ export async function getReportStatus(callId: string): Promise<ReviewerReportSta
     freshness,
     outdatedSections,
     reviewedSectionCount: (sections as any[]).filter(isScorableReviewedSection).length,
+    pinnedVersions,
+    excludedTitles,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Landscape & novelty reuse
+//
+// Both depend only on the section digests and the call context — never on
+// review scores — so regenerating the report after a re-review of unchanged
+// text can reuse them instead of paying for a distill call, a facet-map call,
+// a novelty call, and two searches.
+// ---------------------------------------------------------------------------
+
+const REVIEWER_LANDSCAPE_REUSE_MAX_AGE_DAYS =
+  Number(process.env.REVIEWER_LANDSCAPE_REUSE_MAX_AGE_DAYS) || 7
+
+export function reviewerLandscapeReuseEnabled(): boolean {
+  return String(process.env.REVIEWER_LANDSCAPE_REUSE || '').toLowerCase() !== 'false'
+}
+
+/**
+ * Stable fingerprint of everything the landscape and novelty steps read.
+ * `callDescription` is normalized the same way the landscape itself clips it,
+ * so cosmetic whitespace changes do not invalidate the cache.
+ */
+export function landscapeNoveltyInputHash(input: {
+  projectTitle: string
+  callDescription: string
+  digests: Array<{ title: string; text: string }>
+}): string {
+  const normalizedDescription = String(input.callDescription || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 2000)
+  const payload = JSON.stringify({
+    title: String(input.projectTitle || ''),
+    description: normalizedDescription,
+    digests: input.digests.map((digest) => [digest.title, digest.text]),
+  })
+  return crypto.createHash('sha256').update(payload).digest('hex').slice(0, 32)
+}
+
+/**
+ * Whether the previous report's landscape can stand in for a fresh build:
+ * same inputs, not an errored build, recent enough that the search corpus has
+ * not moved on, and reuse not disabled by the kill switch.
+ */
+export function shouldReuseLandscape(prevReport: any, hash: string, now: Date): boolean {
+  if (!reviewerLandscapeReuseEnabled()) return false
+  const landscape = prevReport?.landscape
+  if (!landscape || typeof landscape !== 'object') return false
+  if (landscape.input_hash !== hash) return false
+  if (landscape.status === 'error') return false
+
+  const generatedAt = Date.parse(String(prevReport?.generated_at || ''))
+  if (!Number.isFinite(generatedAt)) return false
+  const ageMs = now.getTime() - generatedAt
+  return ageMs >= 0 && ageMs <= REVIEWER_LANDSCAPE_REUSE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000
 }
 
 export interface GenerateReviewerReportResult {
@@ -108,6 +181,8 @@ export interface GenerateReviewerReportResult {
 export async function generateReviewerReport(input: {
   callId: string
   versionSelections?: Record<string, unknown> | null
+  /** Section titles to leave out of the report entirely (the picker's unchecked rows). */
+  excludedTitles?: string[] | null
 }): Promise<GenerateReviewerReportResult> {
   const call = await prisma.reviewerCall.findUnique({
     where: { id: input.callId },
@@ -116,6 +191,7 @@ export async function generateReviewerReport(input: {
       project_title: true,
       parsed_json: true,
       LLM_model_used: true,
+      overall_review_json: true,
     },
   })
 
@@ -129,9 +205,10 @@ export async function generateReviewerReport(input: {
   // submitted. Report on one version per section — the newest, or whichever the
   // report page's version picker asked for — otherwise the same section is
   // scored twice and superseded weaknesses resurface.
-  const { effective: sections, superseded, chosenVersions } = resolveSectionVersions(
+  const { effective: sections, superseded, chosenVersions, pendingDrafts, excludedTitles } = resolveSectionVersions(
     allSections as any,
-    input.versionSelections || null
+    input.versionSelections || null,
+    { excludedTitles: input.excludedTitles || null }
   )
 
   const reviewedSections = sections.filter(isScorableReviewedSection)
@@ -183,6 +260,46 @@ export async function generateReviewerReport(input: {
   )
   const anchorScore = deterministic.weightedScore ?? deterministic.meanSectionScore ?? null
 
+  // Reference-only prior-work landscape (similar funded projects + Indian
+  // patents), started here so it runs alongside the panel model. It is awaited
+  // only after the panel review returns and is never passed to it, so it
+  // cannot influence the score. Pre-caught: a panel failure below must not
+  // leave an unhandled rejection behind.
+  //
+  // When the digests and call context are unchanged since the stored report,
+  // the previous landscape (and novelty verdict) are reused outright — they
+  // read section content, never scores, so a re-review of unchanged text
+  // cannot change them.
+  const digestSections = reviewedSections.map((section: any) => ({
+    title: section.section_title,
+    contextSummary: section.context_summary || null,
+    userInput: section.user_input || '',
+  }))
+  const prevReport = call.overall_review_json && typeof call.overall_review_json === 'object'
+    ? (call.overall_review_json as any)
+    : null
+  const landscapeInputHash = landscapeNoveltyInputHash({
+    projectTitle: call.project_title || '',
+    callDescription: description,
+    digests: buildSectionDigests(digestSections),
+  })
+  const reuseLandscape = shouldReuseLandscape(prevReport, landscapeInputHash, new Date())
+  if (reuseLandscape) {
+    console.log('[Reviewer] Landscape inputs unchanged — reusing the stored landscape and novelty assessment')
+  }
+  const landscapePromise = reuseLandscape
+    ? Promise.resolve(prevReport.landscape)
+    : buildReviewerLandscape({
+        callId: input.callId,
+        projectTitle: call.project_title || '',
+        parsedContext,
+        modelType: modelType as 'O' | 'G',
+        sections: digestSections,
+      }).catch((error) => {
+        console.error('[Reviewer] Landscape build rejected unexpectedly:', error)
+        return null
+      })
+
   // Hold the quota slot before the panel model runs; a failed report releases
   // it again so the tenant is only charged for reports it actually received.
   let reportUsage
@@ -201,6 +318,7 @@ export async function generateReviewerReport(input: {
   }
 
   const reviewerService = new ReviewerService()
+  const owner = await resolveReviewerCallOwner(input.callId)
   let overallReview
   try {
     overallReview = await reviewerService.generateOverallReview(
@@ -211,6 +329,7 @@ export async function generateReviewerReport(input: {
       {
         deterministicBriefing: renderDeterministicBriefing(deterministic),
         anchorScore,
+        owner,
       }
     )
   } catch (error) {
@@ -218,9 +337,42 @@ export async function generateReviewerReport(input: {
     throw error
   }
 
+  const landscape = await landscapePromise
+
+  // Novelty & positioning: evidence-bounded verdict over the landscape. Runs
+  // after the panel report, never feeds it, and is reference-only for the PI.
+  // Reused together with the landscape when inputs are unchanged — unless the
+  // stored verdict is the `unassessed` failure fallback, in which case one
+  // fresh attempt against the (reused) landscape is worth its single call.
+  const reusableNovelty = reuseLandscape
+    && prevReport?.novelty_assessment
+    && typeof prevReport.novelty_assessment === 'object'
+    && prevReport.novelty_assessment.verdict !== 'unassessed'
+      ? prevReport.novelty_assessment
+      : null
+  const noveltyAssessment = reusableNovelty
+    ? reusableNovelty
+    : landscape
+      ? await assessNovelty({
+          callId: input.callId,
+          projectTitle: call.project_title || '',
+          parsedContext,
+          modelType: modelType as 'O' | 'G',
+          sections: digestSections,
+          landscape,
+        }).catch((error) => {
+          console.error('[Reviewer] Novelty assessment rejected unexpectedly:', error)
+          return null
+        })
+      : null
+
   const report = {
     ...overallReview,
     compliance: deterministic.compliance,
+    // input_hash records what the landscape was built from, so the next
+    // regeneration can prove the inputs unchanged and reuse it.
+    ...(landscape ? { landscape: { ...landscape, input_hash: landscapeInputHash } } : {}),
+    ...(noveltyAssessment ? { novelty_assessment: noveltyAssessment } : {}),
     score_basis: {
       weightedScore: deterministic.weightedScore,
       meanSectionScore: deterministic.meanSectionScore,
@@ -233,14 +385,28 @@ export async function generateReviewerReport(input: {
       // rather than by clock comparison.
       scoredVersions: chosenVersions,
       supersededVersionCount: superseded.length,
+      // What the picker asked for, kept apart from what was scored, so an
+      // automatic regeneration can honour the same pins and exclusions instead
+      // of silently reverting to the newest versions.
+      pinnedVersions: normalizeVersionSelections(input.versionSelections),
+      excludedTitles,
+      // Titles where a newer unreviewed draft exists — the report describes
+      // the older reviewed draft, and the page says so.
+      pendingDrafts,
     },
     generated_at: new Date().toISOString(),
   }
 
-  await prisma.reviewerCall.update({
-    where: { id: input.callId },
-    data: { overall_review_json: report as any, updated_at: new Date() },
-  })
+  try {
+    await prisma.reviewerCall.update({
+      where: { id: input.callId },
+      data: { overall_review_json: report as any, updated_at: new Date() },
+    })
+  } catch (error) {
+    // The tenant must not be charged for a report that was never stored.
+    await releaseReviewerUsage(reportUsage).catch(() => undefined)
+    throw error
+  }
 
   // One counted run per workspace: the operation id is keyed by call, so
   // regenerating a report after a revision does not bill the tenant twice.
@@ -308,7 +474,14 @@ export async function ensureCurrentReport(
   }
 
   try {
-    await generateReviewerReport({ callId })
+    // Regenerate under the same pins and exclusions the stored report used —
+    // an automatic refresh used to drop them and silently revert a pinned
+    // report to the newest versions.
+    await generateReviewerReport({
+      callId,
+      versionSelections: Object.keys(status.pinnedVersions).length ? status.pinnedVersions : null,
+      excludedTitles: status.excludedTitles,
+    })
     return { regenerated: true, freshness: 'fresh', error: null }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not regenerate the report'

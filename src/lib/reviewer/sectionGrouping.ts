@@ -272,6 +272,29 @@ export type ReportFreshness = 'missing' | 'fresh' | 'stale'
  * exactly which drafts were scored. Reports written before that field existed
  * fall back to comparing review times against `generated_at`.
  */
+function isReviewedRow(section: ReviewerSectionLike): boolean {
+  return section?.status === 'reviewed' && hasStoredReview(section)
+}
+
+/**
+ * The version the report generator would score for this title right now:
+ * the pinned version when the picker named one that is still reviewed,
+ * otherwise the newest reviewed version. Mirrors `resolveSectionVersions`,
+ * so the badge on the page and the server's regenerate decision agree.
+ */
+export function expectedScoredVersion(
+  group: ReviewerSectionGroup<ReviewerSectionLike>,
+  pinnedVersions?: Record<string, unknown> | null
+): number | null {
+  const pinned = pinnedVersions ? Number(pinnedVersions[group.title]) : Number.NaN
+  if (Number.isFinite(pinned)) {
+    const pinnedRow = group.history.find(section => versionOf(section) === pinned)
+    if (pinnedRow && isReviewedRow(pinnedRow)) return pinned
+  }
+  const newestReviewed = group.history.find(isReviewedRow)
+  return newestReviewed ? versionOf(newestReviewed) : null
+}
+
 export function reportFreshness(
   overallReviewJson: any,
   sections: ReviewerSectionLike[]
@@ -279,14 +302,32 @@ export function reportFreshness(
   if (!overallReviewJson || typeof overallReviewJson !== 'object') return 'missing'
   if (!Object.keys(overallReviewJson).length) return 'missing'
 
-  const groups = groupReviewerSections(sections).filter(g => g.hasReview)
-  if (groups.length === 0) return 'fresh'
+  const scoreBasis = overallReviewJson?.score_basis && typeof overallReviewJson.score_basis === 'object'
+    ? overallReviewJson.score_basis
+    : null
+  const excluded = new Set(
+    (Array.isArray(scoreBasis?.excludedTitles) ? scoreBasis.excludedTitles : [])
+      .map((title: unknown) => String(title).trim().toLowerCase())
+  )
+  const allGroups = groupReviewerSections(sections)
+  // A title counts once any of its versions carries a review — a group whose
+  // newest row is an unreviewed draft still has a reviewed draft the report
+  // describes, so it is judged on that draft rather than skipped.
+  const groups = allGroups.filter(
+    g => !excluded.has(g.title.toLowerCase()) && g.history.some(isReviewedRow)
+  )
+  // A report over sections that have since all been reset to draft no longer
+  // describes anything reviewed; it must not read as current.
+  if (groups.length === 0) return allGroups.length === 0 ? 'fresh' : 'stale'
 
-  const scoredVersions = overallReviewJson?.score_basis?.scoredVersions
+  const scoredVersions = scoreBasis?.scoredVersions
   if (scoredVersions && typeof scoredVersions === 'object') {
+    const pins = scoreBasis?.pinnedVersions && typeof scoreBasis.pinnedVersions === 'object'
+      ? scoreBasis.pinnedVersions
+      : null
     for (const group of groups) {
       const scored = scoredVersions[group.title]
-      if (typeof scored !== 'number' || scored !== versionOf(group.current)) return 'stale'
+      if (typeof scored !== 'number' || scored !== expectedScoredVersion(group, pins)) return 'stale'
     }
     return 'fresh'
   }
@@ -296,7 +337,8 @@ export function reportFreshness(
     const generatedMs = new Date(generatedAt).getTime()
     if (Number.isFinite(generatedMs)) {
       const newestReview = groups.reduce((max, group) => {
-        const ms = new Date(group.current.last_reviewed_at || 0).getTime()
+        const reviewed = group.history.find(isReviewedRow) || group.current
+        const ms = new Date(reviewed.last_reviewed_at || 0).getTime()
         return Number.isFinite(ms) && ms > max ? ms : max
       }, 0)
       return newestReview > generatedMs ? 'stale' : 'fresh'

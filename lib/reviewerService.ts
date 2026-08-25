@@ -12,13 +12,27 @@ import {
   dedupeStrings,
   normalizeKey,
 } from '@/lib/reviewer/promptScope';
-import { generateFromOpenAI } from './openaiService';
+import { DEFAULT_OPENAI_FALLBACK_MODEL, generateFromOpenAI } from './openaiService';
 import { generateFromGemini, generateFromGeminiWithFiles } from './geminiService';
 import { compareSections } from '@/lib/reviewer/sectionGrouping';
 import { BUCKET_ORDER, resolveBucketKey } from '@/lib/reviewer/buckets';
 
 const GRANT_REVIEWER_FULL_REVIEW_STAGE = 'GRANT_REVIEWER_FULL_REVIEW';
 const GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL = 'gemini-2.5-pro';
+
+// The funding-call context enters every section review's prompt prefix. For
+// URL-ingested calls it can be the entire scraped document, so an uncapped
+// value multiplies its token cost by the number of sections. The cap is a
+// deterministic slice: the prefix stays byte-identical across sections, which
+// prompt caching depends on.
+const REVIEWER_CALL_CONTEXT_MAX_CHARS =
+  Number(process.env.REVIEWER_CALL_CONTEXT_MAX_CHARS) || 24_000;
+
+function clipCallContext(value: string): string {
+  const text = String(value || '');
+  if (text.length <= REVIEWER_CALL_CONTEXT_MAX_CHARS) return text;
+  return `${text.slice(0, REVIEWER_CALL_CONTEXT_MAX_CHARS)}\n[Call context truncated for review]`;
+}
 
 function normalizeRequestHeaders(headers?: Record<string, string | string[] | undefined>) {
   if (!headers) return null;
@@ -464,7 +478,7 @@ export async function reviewSection(input: ReviewInput): Promise<ReviewResult> {
   
   // Get the project title and call summary
   const projectTitle = callData.project_title || callData.title || "Grant Proposal";
-  const callSummary = callData.reviewer_context_text || callData.call_summary || callData.agency_name || "Funding opportunity";
+  const callSummary = clipCallContext(callData.reviewer_context_text || callData.call_summary || callData.agency_name || "Funding opportunity");
   const thrustAreas = Array.isArray(callData.thrust_areas) ? callData.thrust_areas.join(', ') : callData.thrust_areas || 'Not specified';
   const promptScope = buildReviewerPromptScope(section, callData);
   const sectionRulesText = formatRuleList('SECTION_SCORING_RULES', promptScope.sectionRules, 'No section-specific rules were mapped. Use the global scoring rules where assessable from the provided draft.');
@@ -612,7 +626,7 @@ ${summarizePreviousReview(contextSection.ai_review_json)}` : ''}`;
 
   if (!responseText && modelType === 'O') {
     // Use OpenAI
-    responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+    responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
   } else if (!responseText) {
     responseText = await generateFromGemini(gatewayPrompt, GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL);
   }

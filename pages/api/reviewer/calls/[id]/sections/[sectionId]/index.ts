@@ -101,22 +101,54 @@ export default async function handler(
       const contentChanged = user_input !== section.user_input;
       const returnsToDraft = wasReviewed && contentChanged;
 
-      const updatedSection = await prisma.$queryRaw`
-        UPDATE "reviewer_sections"
-        SET
-          user_input = ${user_input},
-          section_title = ${section_title || section.section_title},
-          status = ${returnsToDraft ? 'draft' : section.status}::"SectionStatus",
-          "sourceStale" = ${returnsToDraft ? true : section.sourceStale},
-          last_reviewed_at = NOW()
-        WHERE id = ${sectionId}
-        RETURNING *
-      `;
+      const nextTitle = String(section_title || section.section_title).trim() || section.section_title;
+      const titleChanged = nextTitle !== section.section_title;
+
+      if (titleChanged) {
+        // Versions of a section are grouped by title everywhere (report,
+        // workspace, freshness). Renaming one row used to split its lineage:
+        // v1 kept the old title, v2 took the new one, and both were scored.
+        // A rename therefore applies to the whole lineage, and may not collide
+        // with another section's title (that would merge two lineages).
+        const clash = await prisma.reviewerSection.findFirst({
+          where: { call_id: callId, section_title: nextTitle },
+          select: { id: true },
+        });
+        if (clash) {
+          return res.status(409).json({
+            error: 'A section with that title already exists in this workspace',
+            code: 'SECTION_TITLE_TAKEN',
+          });
+        }
+      }
+
+      // `last_reviewed_at` is left alone: it records when the stored review
+      // was written, and stamping it on every edit corrupted version
+      // tie-breaks and the legacy freshness comparison.
+      const updatedSection = await prisma.$transaction(async (tx) => {
+        if (titleChanged) {
+          await tx.reviewerSection.updateMany({
+            where: { call_id: callId, section_title: section.section_title },
+            data: { section_title: nextTitle },
+          });
+        }
+        await tx.$executeRaw`
+          UPDATE "reviewer_sections"
+          SET
+            user_input = ${user_input},
+            section_title = ${nextTitle},
+            status = ${returnsToDraft ? 'draft' : section.status}::"SectionStatus",
+            "sourceStale" = ${returnsToDraft ? true : section.sourceStale}
+          WHERE id = ${sectionId}
+        `;
+        return tx.reviewerSection.findUnique({ where: { id: sectionId } });
+      });
 
       return res.status(200).json({
         success: true,
-        section: updatedSection[0],
+        section: updatedSection,
         returned_to_draft: returnsToDraft,
+        title_changed: titleChanged,
       });
 
     } catch (error) {
@@ -135,11 +167,22 @@ export default async function handler(
         return res.status(404).json({ error: 'Section not found' });
       }
       
-      // Delete the section
-      await prisma.$queryRaw`
-        DELETE FROM "reviewer_sections"
-        WHERE id = ${sectionId} AND call_id = ${callId}
-      `;
+      // Delete the version, keeping the revision chain intact: any later
+      // version that pointed at this row is re-pointed to this row's own
+      // predecessor. There is no foreign key on previous_section_id, so a bare
+      // delete left dangling pointers and the revision review fell back to
+      // guessing the previous draft by version number.
+      const deleted = sections[0];
+      await prisma.$transaction(async (tx) => {
+        await tx.reviewerSection.updateMany({
+          where: { call_id: callId, previous_section_id: sectionId },
+          data: { previous_section_id: deleted.previous_section_id || null },
+        });
+        await tx.$executeRaw`
+          DELETE FROM "reviewer_sections"
+          WHERE id = ${sectionId} AND call_id = ${callId}
+        `;
+      });
       
       return res.status(200).json({ 
         success: true,

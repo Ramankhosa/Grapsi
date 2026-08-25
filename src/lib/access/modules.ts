@@ -60,7 +60,7 @@ export const PRODUCT_MODULES: Record<ProductModuleKey, ProductModule> = {
   FUNDING_INTELLIGENCE: {
     key: 'FUNDING_INTELLIGENCE',
     name: 'Funding Intelligence',
-    description: 'Deep call intelligence, document Q&A, and idea intelligence over the funding corpus.',
+    description: 'Deep call intelligence, document Q&A, idea intelligence, and patent search over the funding and patent corpora.',
     featureCodes: ['FUNDING_INTELLIGENCE'],
     entryRoute: '/funding/intelligence',
     minTier: 'PRO',

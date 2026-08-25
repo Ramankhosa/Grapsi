@@ -11,6 +11,7 @@ import {
   ArrowUpRight,
   ClipboardList,
   Compass,
+  FileSearch,
   FileText,
   GraduationCap,
   LayoutDashboard,
@@ -76,6 +77,16 @@ const productGroups: ProductGroup[] = [
           'Deep call intelligence, document Q&A, and idea analysis over the funding corpus.',
         href: '/funding/intelligence',
         icon: Sparkles,
+        tag: 'Intelligence',
+        moduleKey: 'FUNDING_INTELLIGENCE',
+        minTier: 'Pro'
+      },
+      {
+        title: 'Patent Search',
+        description:
+          'Search patents related to your proposal by meaning and build a prior-art shortlist you can cite.',
+        href: '/funding/intelligence/patents',
+        icon: FileSearch,
         tag: 'Intelligence',
         moduleKey: 'FUNDING_INTELLIGENCE',
         minTier: 'Pro'
@@ -335,10 +346,14 @@ export default function UserProductChooser() {
     return () => clearInterval(timer)
   }, [])
 
-  const gatedOptions = productGroups.flatMap(g => g.options).filter(o => o.moduleKey)
+  // Count modules, not cards: two cards can sit on one module (Funding
+  // Intelligence + Patent Search), and the readout is "modules unlocked".
+  const gatedModules = Array.from(
+    new Set(productGroups.flatMap(g => g.options).map(o => o.moduleKey).filter((key): key is ProductModuleKey => Boolean(key)))
+  )
   const unlockedCount = isPlatform
-    ? gatedOptions.length
-    : gatedOptions.filter(o => hasModule(o.moduleKey!)).length
+    ? gatedModules.length
+    : gatedModules.filter(key => hasModule(key)).length
 
   const planLabel = isPlatform ? 'Platform' : plan?.name || 'Trial'
 
@@ -379,7 +394,7 @@ export default function UserProductChooser() {
           <Readout label="Plan" value={planLabel} pending={entitlementsLoading} live />
           <Readout
             label="Modules unlocked"
-            value={`${unlockedCount} / ${gatedOptions.length}`}
+            value={`${unlockedCount} / ${gatedModules.length}`}
             pending={entitlementsLoading}
           />
           <Readout label="Workspace" value={user?.ati_id || '—'} />

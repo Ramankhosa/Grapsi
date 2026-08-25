@@ -1573,6 +1573,42 @@ async function main() {
       description: 'Generate the full grant reviewer evaluation from mapped sections, template rules, and manual rubric context.',
       tokenLimits: { maxTokensIn: 96000, maxTokensOut: 16000 },
       models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
+    },
+    {
+      code: 'GRANT_REVIEWER_FINAL_REPORT',
+      displayName: 'Final Panel Report',
+      featureCode: 'GRANT_REVIEWER',
+      sortOrder: 3,
+      description: 'Compile the final panel report and revision comparisons from completed section reviews.',
+      tokenLimits: { maxTokensIn: 96000, maxTokensOut: 16000 },
+      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+    },
+    {
+      code: 'GRANT_REVIEWER_LANDSCAPE_DISTILL',
+      displayName: 'Landscape Search Distillation',
+      featureCode: 'GRANT_REVIEWER',
+      sortOrder: 4,
+      description: 'Distill a proposal into search facets and queries for the prior-work landscape scan.',
+      tokenLimits: { maxTokensIn: 32000, maxTokensOut: 2000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
+    },
+    {
+      code: 'GRANT_REVIEWER_LANDSCAPE_FACET_MAP',
+      displayName: 'Landscape Facet Mapping',
+      featureCode: 'GRANT_REVIEWER',
+      sortOrder: 5,
+      description: 'Tag retrieved funded projects and patents with the proposal facets they touch.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 6000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
+    },
+    {
+      code: 'GRANT_REVIEWER_NOVELTY',
+      displayName: 'Novelty & Positioning Verdict',
+      featureCode: 'GRANT_REVIEWER',
+      sortOrder: 6,
+      description: 'Evidence-bounded novelty verdict positioning the proposal against the retrieved landscape.',
+      tokenLimits: { maxTokensIn: 64000, maxTokensOut: 4000 },
+      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
     }
   ];
 

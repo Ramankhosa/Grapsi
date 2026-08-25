@@ -14,6 +14,7 @@ import {
 } from '../../../../../lib/services/reviewerService';
 import { normalizeStringArray } from '@/lib/reviewer/content';
 import { getGeminiRetryAfterMs, isGeminiRateLimitErrorLike } from '@/lib/geminiService';
+import { normalizeVersionSelections } from '@/lib/reviewer/finalReport';
 import {
   ReviewerReportError,
   generateReviewerReport,
@@ -43,6 +44,8 @@ interface OverallReviewJson {
   consistency_flags?: Array<Record<string, unknown>>;
   compliance?: Record<string, unknown> | null;
   score_basis?: Record<string, unknown> | null;
+  landscape?: Record<string, unknown> | null;
+  novelty_assessment?: Record<string, unknown> | null;
 }
 
 /**
@@ -73,6 +76,10 @@ function toSafeOverallReview(raw: any): OverallReviewJson {
     consistency_flags: normalizeConsistencyFlags(source.consistency_flags),
     compliance: source.compliance && typeof source.compliance === 'object' ? source.compliance : null,
     score_basis: source.score_basis && typeof source.score_basis === 'object' ? source.score_basis : null,
+    // Reference-only prior-work landscape; computed server-side, passed through whole.
+    landscape: source.landscape && typeof source.landscape === 'object' ? source.landscape : null,
+    // Novelty & positioning verdict, evidence-bounded; reference only.
+    novelty_assessment: source.novelty_assessment && typeof source.novelty_assessment === 'object' ? source.novelty_assessment : null,
   };
 }
 
@@ -181,10 +188,42 @@ export default async function handler(
     // Handle POST request - generate new final review
     if (req.method === 'POST') {
       try {
+        // Accept both `{ title: version }` and the legacy `{ "title|version": version }`
+        // shape; the latter was posted by compare mode and never matched anything.
+        const versionSelections = normalizeVersionSelections(req.body?.versionSelections);
+        const excludedTitles = Array.isArray(req.body?.excludedTitles)
+          ? req.body.excludedTitles.map((title: unknown) => String(title || '').trim()).filter(Boolean)
+          : [];
+        const displayMode = req.body?.displayMode === 'parallel' ? 'parallel' : 'single';
+        const hasPreferences = Boolean(req.body?.versionSelections || req.body?.excludedTitles || req.body?.displayMode);
+
         const result = await generateReviewerReport({
           callId: id,
-          versionSelections: req.body?.versionSelections || null,
+          versionSelections: Object.keys(versionSelections).length ? versionSelections : null,
+          excludedTitles,
         });
+
+        // Remember the picker's choices so the page restores them after the
+        // reload that follows generation. The share endpoint writes the same
+        // block; until now this route never did, so the picker always reset.
+        if (hasPreferences) {
+          const parsed = call.parsed_json && typeof call.parsed_json === 'object' ? (call.parsed_json as Record<string, any>) : {};
+          await prisma.reviewerCall.update({
+            where: { id },
+            data: {
+              parsed_json: {
+                ...parsed,
+                report_preferences: {
+                  ...(parsed.report_preferences || {}),
+                  displayMode,
+                  versionSelections,
+                  excludedTitles,
+                  lastUpdated: new Date().toISOString(),
+                },
+              } as any,
+            },
+          });
+        }
 
         const updatedCall = await prisma.reviewerCall.findUnique({ where: { id } });
 

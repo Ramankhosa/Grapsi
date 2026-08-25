@@ -1,6 +1,16 @@
+export interface PatentNestRateLimitSnapshot {
+  limit: number | null
+  remaining: number | null
+  resetSeconds: number | null
+  dailyRemaining: number | null
+  monthlyRemaining: number | null
+}
+
 export interface PatentNestMetadata {
   requestId: string
   durationMs: number
+  /** Parsed from the RateLimit-* / X-RateLimit-* response headers; absent when none were sent. */
+  rateLimit?: PatentNestRateLimitSnapshot
 }
 
 export interface PatentNestApplicant {
@@ -41,15 +51,36 @@ export interface IndianPatentRecord {
   relevance?: PatentNestRelevance | null
 }
 
+/**
+ * Coverage manifest returned with every search response: what corpus was
+ * searched, how big it is, and how much of it is semantically indexed. The
+ * numeric fields are null until PatentNest's background census has run.
+ */
+export interface PatentNestSearchCoverage {
+  corpus?: string | null
+  description?: string | null
+  jurisdiction?: string | null
+  documents?: number | null
+  semanticCoveragePercent?: number | null
+  searchMode?: string | null
+  embeddingModel?: string | null
+}
+
 export interface PatentNestSearchRequest {
   query: string
   limit?: number
+  /**
+   * Not accepted by the public API v1.1 (any unknown field is a 400). Only sent
+   * when PATENTNEST_SEARCH_JURISDICTION_FILTER=true, for the day the API grows it.
+   */
+  jurisdictions?: string[]
 }
 
 export interface PatentNestSearchData {
   query: string
   count: number
   results: IndianPatentRecord[]
+  coverage?: PatentNestSearchCoverage | null
 }
 
 export interface PatentNestSuccessResponse<T> {

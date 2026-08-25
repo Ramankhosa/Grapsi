@@ -43,11 +43,11 @@ function Countdown({ until }) {
 }
 
 function PhaseSpine({ phase }) {
-  const order = ['summaries', 'reviews', 'report']
+  const order = ['reviews', 'report']
   const activeIndex = order.indexOf(phase)
 
   return (
-    <ol className="grid gap-2 sm:grid-cols-3">
+    <ol className="grid gap-2 sm:grid-cols-2">
       {AUTO_PHASES.map((item, index) => {
         const state =
           activeIndex === -1

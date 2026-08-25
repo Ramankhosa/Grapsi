@@ -4,12 +4,13 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, Building2, ChevronDown, Filter, Landmark, Loader2, MapPin,
+  ArrowRight, Building2, FileSearch, Filter, Landmark, Loader2, MapPin,
   Search, SlidersHorizontal, Sparkles, Users, X, Zap,
 } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
 import AnalysisHistoryList from './AnalysisHistoryList'
+import FilterSection from './FilterSection'
 import type { ProjectFacetItem, ProjectFacets, ProjectFilters, ProjectSearchItem, ProjectSearchResponse } from './types'
 
 const EMPTY_FILTERS: ProjectFilters = { sourceKeys: [], states: [], schemes: [], disciplines: [] }
@@ -74,49 +75,6 @@ function readSort(searchParams: { get(name: string): string | null } | null | un
 
 function writeList(params: URLSearchParams, key: string, values: string[]) {
   if (values.length) params.set(key, values.join(','))
-}
-
-function FilterSection({
-  label, items, selected, onToggle, initialOpen = true,
-}: {
-  label: string
-  items: ProjectFacetItem[]
-  selected: string[]
-  onToggle: (value: string) => void
-  initialOpen?: boolean
-}) {
-  const [open, setOpen] = useState(initialOpen)
-  const visibleItems = items.slice(0, 10)
-  if (!items.length) return null
-
-  return (
-    <div className="border-b border-slate-200 py-4 last:border-0">
-      <button type="button" onClick={() => setOpen((value) => !value)} className="flex w-full items-center justify-between text-left">
-        <span className="text-sm font-semibold text-slate-800">{label}</span>
-        <ChevronDown className={`h-4 w-4 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open ? (
-        <div className="mt-3 space-y-1.5">
-          {visibleItems.map((item) => {
-            const value = String(item.value)
-            const active = selected.includes(value)
-            return (
-              <label key={value} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
-                <input
-                  type="checkbox"
-                  checked={active}
-                  onChange={() => onToggle(value)}
-                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
-                />
-                <span className="min-w-0 flex-1 truncate text-slate-600">{value}</span>
-                <span className="text-xs tabular-nums text-slate-400">{item.count}</span>
-              </label>
-            )
-          })}
-        </div>
-      ) : null}
-    </div>
-  )
 }
 
 function FiltersPanel({ facets, filters, onChange, onClear }: {
@@ -315,6 +273,7 @@ export default function ExplorerPage() {
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <Link href="/researcher-matching" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Users className="h-4 w-4" /> Find researchers</Link>
+              <Link href="/funding/intelligence/patents" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><FileSearch className="h-4 w-4" /> Search patents</Link>
               <Link href="/funding/intelligence/idea/new" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"><Sparkles className="h-4 w-4" /> Find whitespace for my idea</Link>
             </div>
           </div>

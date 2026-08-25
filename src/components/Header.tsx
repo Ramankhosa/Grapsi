@@ -7,7 +7,7 @@ import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import AnimatedLogo from '@/components/ui/animated-logo'
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import { FileText, Library, Sparkles } from 'lucide-react'
+import { FileSearch, FileText, Library, Sparkles } from 'lucide-react'
 import NotificationBell from '@/components/notifications/NotificationBell'
 
 export default function Header() {
@@ -272,6 +272,17 @@ export default function Header() {
                       >
                         <Sparkles className="h-4 w-4" />
                         <span>Funding Intelligence</span>
+                      </Link>
+                    )}
+
+                    {canUseFundingIntelligence && (
+                      <Link
+                        href="/funding/intelligence/patents"
+                        className="flex w-full items-center space-x-2 px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50"
+                        onClick={closeMenu}
+                      >
+                        <FileSearch className="h-4 w-4" />
+                        <span>Patent Search</span>
                       </Link>
                     )}
 

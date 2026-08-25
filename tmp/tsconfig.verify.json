@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./src/*"],
+      "server-only": ["./node_modules/server-only/empty.js"]
+    }
+  }
+}

@@ -54,6 +54,25 @@ export function hasMeaningfulSectionContent(value: unknown): boolean {
   return alphanumeric.length > 0
 }
 
+/**
+ * Fingerprint of a section's meaningful text, used to detect whether the
+ * content actually changed since it was last reviewed. Formatting-insensitive:
+ * HTML and whitespace differences vanish through extractMeaningfulText.
+ * Dependency-free (two FNV-1a passes + length) so this module stays
+ * importable from client components.
+ */
+export function sectionContentHash(value: unknown): string {
+  const text = extractMeaningfulText(value)
+  let h1 = 0x811c9dc5
+  let h2 = 0x01234567
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0
+    h2 = Math.imul(h2 ^ code, 0x01000193) >>> 0
+  }
+  return `${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}-${text.length.toString(16)}`
+}
+
 export function parseReviewerScore(value: unknown): number {
   const raw = typeof value === 'number'
     ? value

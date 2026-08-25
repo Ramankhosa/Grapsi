@@ -807,6 +807,16 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
 
             <PriorWorkList rows={priorWork.rows} summary={priorWork.summary} />
 
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/40 px-4 py-3 text-sm text-slate-600">
+              <span>Need more patents than the landscape pulled in? Search the PatentNest corpus with this idea and save the ones worth citing.</span>
+              <Link
+                href={`/funding/intelligence/patents?q=${encodeURIComponent((run.structuredIdea?.semanticQuery || run.title).slice(0, 2000))}&runId=${encodeURIComponent(run.id)}`}
+                className="inline-flex items-center gap-1.5 font-semibold text-indigo-700 hover:underline"
+              >
+                <FileSearch className="h-4 w-4" /> Search related patents
+              </Link>
+            </div>
+
             <CoverageMap coverage={priorWork.coverage} rows={priorWork.rows} patentsSearched={patentsSearched} />
 
             {crossHolders.length ? (

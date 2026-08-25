@@ -25,7 +25,6 @@ import {
   buildFacetCoverage,
   buildFundedPortfolio,
   formatBudget,
-  projectStatus,
   rankAgencyRecommendations,
   type AgencyRecommendation,
   type FundedPortfolio,
@@ -38,6 +37,7 @@ import {
   type PriorWorkAwardExtras,
   type PriorWorkGap,
 } from '@/lib/ideaIntelligence/priorWork'
+import { loadProjectRecords } from '@/lib/ideaIntelligence/projectRecords'
 import { publicProjectSearchService, type PublicProjectSearchItem } from '@/lib/publicProjects/searchService'
 import { recommendationSearchService } from '@/lib/services/recommendationSearchService'
 
@@ -833,57 +833,6 @@ function buildFallbackDirections(
     confidence: coverage.open.includes(facet) ? 'moderate' : 'thin',
     bestFitAgency: topAgency,
   }))
-}
-
-function countJsonEntries(value: unknown) {
-  if (Array.isArray(value)) return value.length
-  // Some connectors store a keyed object rather than a list; a non-empty object
-  // still means the award reported something.
-  if (value && typeof value === 'object') return Object.keys(value).length
-  return 0
-}
-
-/**
- * The award fields the search projection does not carry: delivery status, and
- * the patents and publications each award reported. One query, no external API
- * call — and the patent counts are a direct record, never an inference about
- * which patent came from which award.
- */
-async function loadProjectRecords(projectIds: string[], now = new Date()): Promise<{
-  deliveries: ProjectDelivery[]
-  extras: PriorWorkAwardExtras[]
-}> {
-  if (!projectIds.length) return { deliveries: [], extras: [] }
-  const rows = await prisma.publicProject.findMany({
-    where: { id: { in: projectIds } },
-    select: {
-      id: true, endDate: true, durationMonths: true, outputAchievedText: true,
-      outcomes: true, patents: true, publications: true, sanctionYear: true,
-    },
-  })
-
-  const deliveries = rows.map((row) => ({
-    id: row.id,
-    endDate: row.endDate ? row.endDate.toISOString() : null,
-    durationMonths: row.durationMonths,
-    hasReportedOutput: Boolean(
-      (row.outputAchievedText && row.outputAchievedText.trim() && row.outputAchievedText.trim().toUpperCase() !== 'NA')
-      || (Array.isArray(row.outcomes) && row.outcomes.length > 0)
-    ),
-  }))
-  const deliveryById = new Map(deliveries.map((item) => [item.id, item]))
-
-  return {
-    deliveries,
-    extras: rows.map((row): PriorWorkAwardExtras => ({
-      id: row.id,
-      durationMonths: row.durationMonths,
-      hasReportedOutput: Boolean(deliveryById.get(row.id)?.hasReportedOutput),
-      patentCount: countJsonEntries(row.patents),
-      publicationCount: countJsonEntries(row.publications),
-      status: projectStatus(deliveryById.get(row.id), row.sanctionYear, now),
-    })),
-  }
 }
 
 function normalizeWhitespaceDirections(

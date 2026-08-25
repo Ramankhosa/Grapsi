@@ -63,3 +63,9 @@ PATENTNEST_API_KEY=pn_live_replace_with_your_key
 ```
 
 Do not use a `NEXT_PUBLIC_` variable for this credential. Restart the Next.js server after configuring it.
+
+### Patent Search UI
+
+Grant writers can search the PatentNest corpus directly at `/funding/intelligence/patents` (Funding Intelligence module, `FUNDING_INTELLIGENCE` entitlement): semantic search with client-side facets, a detail page per publication number, and a per-user shortlist (`patent_shortlist_items`) that exports as Markdown citations or CSV for the proposal's prior-art section. Searches are deliberately **not** metered in the usage ledger; a per-user limiter (`PATENT_SEARCH_RATE_LIMIT_PER_MIN`, default 20/min), a global bucket (`PATENT_SEARCH_GLOBAL_RATE_LIMIT_PER_MIN`, default 25/min) and a short result cache (`PATENT_SEARCH_CACHE_MS`) protect the shared PatentNest key instead. `PATENTNEST_API_BASE_URL` overrides the origin for staging; `PATENTNEST_SEARCH_JURISDICTION_FILTER` must stay `false` until the public API accepts a `jurisdictions` request field.
+
+To exercise the UI without a real key, run `node scripts/dev/patentnest-mock-server.js` (port 4010) and start the app with `PATENTNEST_API_KEY=pn_live_mock PATENTNEST_API_BASE_URL=http://localhost:4010` (the `grapsi-dev-patentmock` entry in `.claude/launch.json` does exactly this).

@@ -7,6 +7,7 @@ import {
 import prisma from '../../../../../../../lib/prisma';
 import { ReviewerService } from '../../../../../../../lib/services/reviewerService';
 import { summarizeAddressedPoints } from '../../../../../../../lib/reviewerService';
+import { resolveReviewerCallOwner } from '@/lib/reviewer/usage';
 
 const ADDRESSED_LABEL = {
   addressed: 'Addressed',
@@ -132,9 +133,11 @@ export default async function handler(
       return res.status(400).json({ error: 'This section has no previous version to compare against' });
     }
 
-    // Get the previous section
-    const previousSection = await prisma.reviewerSection.findUnique({
-      where: { id: section.previous_section_id }
+    // Get the previous section — scoped to this call. A bare lookup by id let a
+    // row whose previous_section_id pointed into another workspace pull that
+    // workspace's draft and review into the comparison prompt and response.
+    const previousSection = await prisma.reviewerSection.findFirst({
+      where: { id: section.previous_section_id, call_id: callId }
     });
 
     if (!previousSection) {
@@ -195,12 +198,16 @@ export default async function handler(
     const modelType = req.body.modelType === 'O' ? 'O' : 'G';
 
     try {
+      // Owner context routes the call through the configured gateway stage so
+      // it is metered and uses the admin's model choice.
+      const owner = await resolveReviewerCallOwner(callId);
       const comparison = await reviewerService.compareRevision(
         section.section_title,
         previousSection.user_input,
         section.user_input,
         previousSection.ai_review_json,
-        modelType
+        modelType,
+        { owner }
       );
 
       const improvementFlag = comparison.is_significant_improvement !== undefined

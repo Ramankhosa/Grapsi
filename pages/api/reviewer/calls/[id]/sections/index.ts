@@ -72,7 +72,11 @@ export default async function handler(
           });
         }
         
-        if (is_revision && previous_section_id) {
+        // Any supplied base must belong to this call — whether or not the
+        // client labelled the submission a revision. Validating only the
+        // labelled case let a row point at another workspace's section, and
+        // the comparison endpoint then read that section.
+        if (previous_section_id) {
           const base = await prisma.reviewerSection.findFirst({
             where: { id: previous_section_id, call_id: callId },
             select: { id: true }
@@ -86,55 +90,62 @@ export default async function handler(
           }
         }
 
-        // Always number from the newest version of this title, never from the
-        // chosen base. Revising an older draft while a newer one exists would
-        // otherwise mint a second row with the same version number, and the
-        // reviewer resolves "the previous version" by version order.
-        const latestForTitle = await prisma.reviewerSection.findFirst({
-          where: {
-            call_id: callId,
-            section_title: section_title
-          },
-          orderBy: { version: 'desc' },
-          select: { id: true, version: true, reviewerBucketKey: true, mappingJson: true }
-        });
+        // Number the new version inside one transaction holding an advisory
+        // lock on (call, title). Two concurrent submissions of the same title
+        // used to both read "max version = 1" and both create a v2 — and the
+        // report and the workspace then disagreed about which v2 was current.
+        const newSection = await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${callId}::${section_title}`}))`;
 
-        const version = latestForTitle ? latestForTitle.version + 1 : 1;
+          // Always number from the newest version of this title, never from
+          // the chosen base. Revising an older draft while a newer one exists
+          // would otherwise mint a second row with the same version number,
+          // and the reviewer resolves "the previous version" by version order.
+          const latestForTitle = await tx.reviewerSection.findFirst({
+            where: {
+              call_id: callId,
+              section_title: section_title
+            },
+            orderBy: { version: 'desc' },
+            select: { id: true, version: true, reviewerBucketKey: true, mappingJson: true }
+          });
 
-        // Re-submitting a section the user already has is a revision even when
-        // the UI did not label it one. Without this the review never sees the
-        // earlier remarks and silently re-reviews from scratch.
-        const effectiveIsRevision = Boolean(is_revision) || Boolean(latestForTitle);
-        const effectivePreviousId = previous_section_id || latestForTitle?.id || null;
+          const version = latestForTitle ? latestForTitle.version + 1 : 1;
 
-        // Insert the new section using Prisma client
-        const newSection = await prisma.reviewerSection.create({
-          data: {
-            call_id: callId,
-            section_title,
-            user_input,
-            ai_review_json: {},
-            status: 'draft',
-            version,
-            previous_section_id: effectivePreviousId,
-            review_linked_context: true,
-            is_revision: effectiveIsRevision,
-            // Semantic identity, resolved server-side so every client is
-            // correct by construction. A revision inherits it rather than
-            // re-deriving, so renaming a section cannot move it.
-            reviewerBucketKey:
-              latestForTitle?.reviewerBucketKey ?? resolveBucketKey({ section_title }),
-            // Inherited too: `mappingJson.linkedSections` is what
-            // `normalizeSectionRecommendations` filters recommendations
-            // against, so dropping it silently discarded every recommendation
-            // on any revision of a grant-linked section.
-            ...(latestForTitle?.mappingJson ? { mappingJson: latestForTitle.mappingJson } : {})
-          },
-          select: {
-            id: true,
-            section_title: true,
-            version: true
-          }
+          // Re-submitting a section the user already has is a revision even
+          // when the UI did not label it one. Without this the review never
+          // sees the earlier remarks and silently re-reviews from scratch.
+          const effectiveIsRevision = Boolean(is_revision) || Boolean(latestForTitle);
+          const effectivePreviousId = previous_section_id || latestForTitle?.id || null;
+
+          return tx.reviewerSection.create({
+            data: {
+              call_id: callId,
+              section_title,
+              user_input,
+              ai_review_json: {},
+              status: 'draft',
+              version,
+              previous_section_id: effectivePreviousId,
+              review_linked_context: true,
+              is_revision: effectiveIsRevision,
+              // Semantic identity, resolved server-side so every client is
+              // correct by construction. A revision inherits it rather than
+              // re-deriving, so renaming a section cannot move it.
+              reviewerBucketKey:
+                latestForTitle?.reviewerBucketKey ?? resolveBucketKey({ section_title }),
+              // Inherited too: `mappingJson.linkedSections` is what
+              // `normalizeSectionRecommendations` filters recommendations
+              // against, so dropping it silently discarded every recommendation
+              // on any revision of a grant-linked section.
+              ...(latestForTitle?.mappingJson ? { mappingJson: latestForTitle.mappingJson } : {})
+            },
+            select: {
+              id: true,
+              section_title: true,
+              version: true
+            }
+          });
         });
         
         // If this is a revision, copy linked assets from previous section (attach_in_prompt defaults to true)

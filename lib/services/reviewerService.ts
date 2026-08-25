@@ -1,6 +1,8 @@
 // @ts-nocheck
-import { generateFromOpenAI } from '../openaiService';
+import crypto from 'crypto';
+import { DEFAULT_OPENAI_FALLBACK_MODEL, generateFromOpenAI } from '../openaiService';
 import { generateFromGemini, generateFromGeminiWithFiles } from '../geminiService';
+import { runReviewerAuxiliaryText, type OwnerContext } from '@/lib/reviewer/auxLlm';
 import { normalizeStringArray, parseReviewerScore } from '@/lib/reviewer/content';
 import axios from 'axios';
 
@@ -11,6 +13,11 @@ export interface ReviewSummary {
   review_json: any;
   context_summary?: string;
 }
+
+// Gateway stage for the panel report and revision comparison. Configurable in
+// the super-admin LLM config like every other reviewer stage; direct provider
+// calls below are the fallback ladder, not the primary path.
+const GRANT_REVIEWER_FINAL_REPORT_STAGE = 'GRANT_REVIEWER_FINAL_REPORT';
 
 const FUNDING_DECISIONS = new Set(['fund', 'fund_with_revisions', 'revise_and_resubmit', 'do_not_fund']);
 const COMPETITIVENESS_BANDS = new Set(['top_tier', 'competitive', 'borderline', 'not_competitive']);
@@ -187,7 +194,7 @@ Ensure all text values are properly escaped for JSON.`;
     
     if (modelType === 'O') {
       // Use OpenAI
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       // Use Gemini 2.5 Pro for advanced section review
       responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
@@ -333,7 +340,7 @@ IMPORTANT: You must respond ONLY with valid JSON following this exact format wit
       let responseText: string;
       
       if (modelType === 'O') {
-        responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+        responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
       } else {
         responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
       }
@@ -360,7 +367,8 @@ IMPORTANT: You must respond ONLY with valid JSON following this exact format wit
     originalContent: string,
     revisedContent: string,
     originalReview: any,
-    modelType: 'O' | 'G' = 'G'
+    modelType: 'O' | 'G' = 'G',
+    options?: { owner?: OwnerContext }
   ) {
     const systemPrompt = `You are a senior grant reviewer entrusted with evaluating very competitive research proposals for funding agencies. Your task is to analyze how a grant proposal section has been revised based on previous feedback. 
 
@@ -406,14 +414,33 @@ Please provide a detailed analysis in JSON format with the following structure:
 
 Return your analysis strictly as a JSON object with these keys. Do not include any additional commentary outside the JSON.`;
 
-    let responseText: string;
-    
-    if (modelType === 'O') {
-      // Use OpenAI
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
-    } else {
-      // Use Gemini 2.5 Pro for revision comparison
-      responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
+    let responseText: string | null = null;
+
+    // The configured gateway stage first, so the admin's model choice applies
+    // and the call is metered. The ladder inside already covers direct-provider
+    // fallbacks; the block below only runs when no owner context is available
+    // or every rung failed.
+    if (options?.owner) {
+      responseText = await runReviewerAuxiliaryText({
+        stageCode: GRANT_REVIEWER_FINAL_REPORT_STAGE,
+        prompt: userPrompt,
+        systemPrompt,
+        owner: options.owner,
+        modelType,
+        maxTokensOut: 4000,
+        fallbackGeminiModel: 'gemini-2.5-pro',
+        metadataPurpose: 'reviewer_revision_compare',
+      });
+    }
+
+    if (!responseText) {
+      if (modelType === 'O') {
+        // Use OpenAI
+        responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
+      } else {
+        // Use Gemini 2.5 Pro for revision comparison
+        responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
+      }
     }
 
     // Parse the response into JSON
@@ -459,6 +486,8 @@ Return your analysis strictly as a JSON object with these keys. Do not include a
     options?: {
       deterministicBriefing?: string;
       anchorScore?: number | null;
+      /** Enables the metered gateway path; without it the direct fallback runs. */
+      owner?: OwnerContext;
     }
   ) {
     const systemPrompt = `You are the lead reviewer writing the panel report for a competitive research funding proposal in fields related to "${callTitle}". You are deciding whether public money should back this project, and your report is what the funding committee reads.
@@ -564,14 +593,35 @@ Rules for the report:
 - supplementary_materials are reminders only and must never lower the score.
 - Never contradict the VERIFIED FACTS block.`;
 
-    let responseText: string;
+    let responseText: string | null = null;
 
-    if (modelType === 'O') {
-      // Use OpenAI with explicit JSON response format
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
-    } else {
-      // Use Gemini 2.5 Pro for overall review generation
-      responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
+    // The configured gateway stage first: the admin's model choice applies,
+    // the call is metered and logged, and the OpenAI provider can serve the
+    // shared system-prompt prefix from cache. This call was previously a
+    // direct un-metered gemini-2.5-pro request regardless of configuration.
+    if (options?.owner) {
+      responseText = await runReviewerAuxiliaryText({
+        stageCode: GRANT_REVIEWER_FINAL_REPORT_STAGE,
+        prompt: userPrompt,
+        systemPrompt,
+        owner: options.owner,
+        modelType,
+        maxTokensOut: 8000,
+        fallbackGeminiModel: 'gemini-2.5-pro',
+        promptCacheKey: `reviewer:final-report:${crypto.createHash('sha256').update(systemPrompt).digest('hex').slice(0, 32)}`,
+        promptCacheRetention: '24h',
+        metadataPurpose: 'reviewer_final_report',
+      });
+    }
+
+    if (!responseText) {
+      if (modelType === 'O') {
+        // Use OpenAI with explicit JSON response format
+        responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
+      } else {
+        // Use Gemini 2.5 Pro for overall review generation
+        responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
+      }
     }
 
     // Parse the response into JSON
@@ -699,7 +749,7 @@ Return your response strictly in JSON format with the following structure:
     let responseText: string;
     
     if (modelType === 'O') {
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
     }
@@ -839,7 +889,7 @@ Return your response strictly in JSON format with the following structure:
       let responseText: string;
       
       if (modelType === 'O') {
-        responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+        responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
       } else {
         responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
       }
@@ -946,7 +996,7 @@ Return your response strictly in JSON format with the following structure:
     
     if (modelType === 'O') {
       // Use OpenAI
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       // Use Gemini 2.5 Pro for Literature Review
       responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
@@ -1086,7 +1136,7 @@ Example of INCORRECT format (DO NOT USE):
 
     let responseText: string;
     if (modelType === 'O') {
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       if (assetGoogleFileIds && assetGoogleFileIds.length > 0) {
         responseText = await generateFromGeminiWithFiles(
@@ -1247,7 +1297,7 @@ Return your response strictly in JSON format with the following structure:
 
     let responseText: string;
     if (modelType === 'O') {
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       if (assetGoogleFileIds && assetGoogleFileIds.length > 0) {
         responseText = await generateFromGeminiWithFiles(
@@ -1379,7 +1429,7 @@ Return your response strictly in JSON format with the following structure:
 
     let responseText: string;
     if (modelType === 'O') {
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       if (assetGoogleFileIds && assetGoogleFileIds.length > 0) {
         responseText = await generateFromGeminiWithFiles(
@@ -1564,7 +1614,7 @@ Return your response strictly in JSON format with the following structure:
     
     if (modelType === 'O') {
       // Use OpenAI
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       // Use Gemini 2.5 Pro for Outcomes Review
       responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
@@ -1745,7 +1795,7 @@ Return your response strictly in JSON format with the following structure:
     
     if (modelType === 'O') {
       // Use OpenAI
-      responseText = await generateFromOpenAI(userPrompt, 'gpt-4-turbo', systemPrompt);
+      responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
     } else {
       // Use Gemini 2.5 Pro for Conclusion Review
       responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');

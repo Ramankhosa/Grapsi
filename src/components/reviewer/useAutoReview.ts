@@ -4,8 +4,9 @@ import axios from 'axios'
 import { compareSectionTitles, groupReviewerSections } from '@/lib/reviewer/sectionGrouping'
 
 /**
- * Runs the whole review end to end: context summaries, then every section in
- * proposal order, then the cross-section panel report.
+ * Runs the whole review end to end: every section in proposal order, then the
+ * cross-section panel report. Context summaries are produced by the section
+ * reviews themselves.
  *
  * The redesigned workspace lost this. Each stage had become a separate page the
  * user had to find and trigger in the right order — and the final compilation
@@ -45,8 +46,11 @@ function hasText(value) {
   return /[a-z0-9]/i.test(text)
 }
 
+// There is deliberately no context-summary phase. Each review returns its own
+// context summary and later reviews only read summaries of already-reviewed
+// sections, so pre-generating summaries paid for model calls whose output was
+// never consumed.
 export const AUTO_PHASES = [
-  { key: 'summaries', label: 'Context summaries', blurb: 'So each section is judged knowing what the others say.' },
   { key: 'reviews', label: 'Section reviews', blurb: 'Each section scored against this call\'s own rules.' },
   { key: 'report', label: 'Panel report', blurb: 'Cross-section consistency and the funding verdict.' },
 ]
@@ -64,7 +68,7 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
   const cancelRef = useRef(false)
   const runningRef = useRef(false)
 
-  const running = ['preparing', 'summaries', 'reviews', 'report'].includes(phase)
+  const running = ['preparing', 'reviews', 'report'].includes(phase)
 
   // One ticking clock for the whole run: elapsed time is the honest signal that
   // something is still happening during a long model call.
@@ -134,11 +138,9 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
     }
 
     try {
-      if (rerunAll) {
-        say('Clearing previous reviews…')
-        await axios.post(`/api/reviewer/calls/${callId}/reset-all-reviews`)
-      }
-
+      // A full re-run no longer clears reviews up front. Each section is
+      // re-reviewed with `force` and keeps its existing review until the new
+      // one lands, so stopping the run halfway leaves nothing stranded.
       say('Reading your sections…')
       const response = await axios.get(`/api/reviewer/calls/${callId}/sections`)
       const raw = response.data.sections || []
@@ -163,18 +165,11 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
         compareSectionTitles(a.section_title, b.section_title)
       )
 
-      const needsSummary = ordered.filter(section => !section.context_summary)
       const needsReview = rerunAll
         ? ordered
         : ordered.filter(section => section.status !== 'reviewed')
 
       setSteps([
-        ...needsSummary.map(section => ({
-          key: `sum:${section.id}`,
-          kind: 'summary',
-          title: section.section_title,
-          status: 'pending',
-        })),
         ...needsReview.map(section => ({
           key: `rev:${section.id}`,
           kind: 'review',
@@ -184,30 +179,10 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
         { key: 'report', kind: 'report', title: 'Panel report', status: 'pending' },
       ])
 
-      // ── Phase 1: context summaries ──────────────────────────────────────
-      setPhase('summaries')
-      if (needsSummary.length === 0) {
-        say('Every section already has a context summary.')
-      }
-      for (const section of needsSummary) {
-        if (cancelRef.current) return finish('cancelled', 'Stopped.')
-        const key = `sum:${section.id}`
-        patchStep(key, { status: 'active' })
-        say(`Summarising ${section.section_title} so later sections can be judged against it…`)
-        try {
-          await axios.post(
-            `/api/reviewer/calls/${callId}/sections/${section.id}/generate-context-summary`
-          )
-          patchStep(key, { status: 'done' })
-        } catch (summaryError) {
-          // A missing summary weakens cross-section context but does not stop
-          // the review, so this is a warning rather than a failure.
-          patchStep(key, { status: 'skipped', detail: 'Could not summarise' })
-          say(`Could not summarise ${section.section_title} — continuing without it.`)
-        }
-      }
-
-      // ── Phase 2: section reviews ────────────────────────────────────────
+      // ── Phase 1: section reviews ────────────────────────────────────────
+      // Reviews run in proposal order; each review's own returned context
+      // summary is what later sections read, so no pre-summarisation pass is
+      // needed (or ever consumed when one ran).
       setPhase('reviews')
       if (needsReview.length === 0) {
         say('Every section is already reviewed.')
@@ -222,24 +197,31 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
         say(`Reviewing ${section.section_title} (${index + 1} of ${needsReview.length}) against the call's rules…`)
 
         let done = false
+        let skippedUnchanged = false
         for (let attempt = 1; attempt <= REVIEW_MAX_ATTEMPTS && !done; attempt++) {
           try {
             const result = await axios.post(
               `/api/reviewer/calls/${callId}/section-review-with-dependencies`,
-              // The run compiles the report itself in phase 3. Without this the
-              // API would rebuild the whole panel report after every section.
-              { sectionId: section.id, skipReportRefresh: true }
+              // The run compiles the report itself at the end. Without
+              // skipReportRefresh the API would rebuild the whole panel report
+              // after every section. On a full re-run, skipIfUnchanged keeps
+              // the existing review of any section whose text has not changed
+              // instead of paying for an identical one.
+              { sectionId: section.id, skipReportRefresh: true, skipIfUnchanged: rerunAll === true }
             )
             const score = result?.data?.review?.score
             patchStep(key, {
               status: 'done',
               score: typeof score === 'number' ? score : null,
             })
+            skippedUnchanged = result?.data?.skipped_unchanged === true
             const used = result?.data?.used_dependency_sections || []
             say(
-              used.length
-                ? `${section.section_title} reviewed — read alongside ${used.join(', ')}.`
-                : `${section.section_title} reviewed.`
+              skippedUnchanged
+                ? `${section.section_title} unchanged — kept its existing review.`
+                : used.length
+                  ? `${section.section_title} reviewed — read alongside ${used.join(', ')}.`
+                  : `${section.section_title} reviewed.`
             )
             reviewed++
             done = true
@@ -266,12 +248,13 @@ export default function useAutoReview({ callId, onSectionsChanged, onFinished })
 
         if (onSectionsChanged) await onSectionsChanged()
 
-        if (index < needsReview.length - 1 && !cancelRef.current) {
+        // No pause after a skipped section — no model call happened.
+        if (index < needsReview.length - 1 && !cancelRef.current && !skippedUnchanged) {
           await waitVisibly(BETWEEN_SECTIONS_MS, 'Pausing briefly so the model is not rate limited…')
         }
       }
 
-      // ── Phase 3: the panel report ───────────────────────────────────────
+      // ── Phase 2: the panel report ───────────────────────────────────────
       if (cancelRef.current) return finish('cancelled', 'Stopped.')
 
       setPhase('report')

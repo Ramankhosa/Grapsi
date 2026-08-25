@@ -3,12 +3,16 @@ import crypto from 'crypto';
 
 import { llmGateway } from '@/lib/metering/gateway';
 import { extractMeaningfulText, hasMeaningfulSectionContent } from '@/lib/reviewer/content';
-import { generateFromOpenAI } from '../openaiService';
+import { DEFAULT_OPENAI_FALLBACK_MODEL, generateFromOpenAI } from '../openaiService';
 import { generateFromGemini } from '../geminiService';
 
 const GRANT_REVIEWER_CONTEXT_SUMMARY_STAGE = 'GRANT_REVIEWER_CONTEXT_SUMMARY';
 const GRANT_REVIEWER_CONTEXT_SUMMARY_FALLBACK_MODEL = 'gemini-2.5-flash';
 const CONTEXT_SUMMARY_MAX_CHARS = 1600;
+// A summary distils a section's key facts; past this much source text the
+// tail adds cost without changing the extractable facts.
+const CONTEXT_SUMMARY_INPUT_MAX_CHARS =
+  Number(process.env.CONTEXT_SUMMARY_INPUT_MAX_CHARS) || 20_000;
 
 function normalizeRequestHeaders(headers?: Record<string, string | string[] | undefined>) {
   if (!headers) return null;
@@ -472,7 +476,7 @@ Dependencies: ...
 Open assumptions: ...
 
 Section Content:
-${extractMeaningfulText(sectionContent)}
+${extractMeaningfulText(sectionContent).slice(0, CONTEXT_SUMMARY_INPUT_MAX_CHARS)}
 
 Return only the context summary.`;
 
@@ -485,7 +489,7 @@ Return only the context summary.`;
       if (!responseText && modelType === 'O') {
         // Use OpenAI
         try {
-          responseText = await generateFromOpenAI(fullUserPrompt, 'gpt-4-turbo', systemPrompt);
+          responseText = await generateFromOpenAI(fullUserPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
         } catch (openAiError) {
           console.warn('Error using OpenAI model, falling back to Gemini:', openAiError);
           responseText = await generateFromGemini(

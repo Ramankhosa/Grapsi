@@ -72,6 +72,38 @@ export interface ReviewerVersionResolution<T extends ReviewerVersionedSection> {
   superseded: T[]
   /** Version chosen per title, so the report can state what it scored. */
   chosenVersions: Record<string, number>
+  /**
+   * Titles whose newest row is an unreviewed draft newer than the version
+   * chosen — the report describes the older reviewed draft and should say so.
+   */
+  pendingDrafts: Record<string, number>
+  /** Titles the caller asked to leave out of the report entirely. */
+  excludedTitles: string[]
+}
+
+/**
+ * Coerce a client-supplied selection map to `{ title: version }`.
+ *
+ * The report page's compare mode used to post keys shaped `"Title|2"`, which
+ * no server code ever matched — selections made there were silently ignored.
+ * Both shapes are accepted; when several versions of a title are named, the
+ * newest wins, because a report scores one draft per section.
+ */
+export function normalizeVersionSelections(raw: unknown): Record<string, number> {
+  const selections: Record<string, number> = {}
+  if (!raw || typeof raw !== 'object') return selections
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const version = Number(value)
+    if (!Number.isFinite(version) || version < 1) continue
+    const title = String(key).includes('|') ? String(key).slice(0, String(key).lastIndexOf('|')).trim() : String(key).trim()
+    if (!title) continue
+    selections[title] = Math.max(selections[title] ?? 0, version)
+  }
+  return selections
+}
+
+function isReviewedRow(section: ReviewerVersionedSection): boolean {
+  return (section as { status?: unknown }).status === 'reviewed'
 }
 
 /**
@@ -80,12 +112,19 @@ export interface ReviewerVersionResolution<T extends ReviewerVersionedSection> {
  * A revised section is stored as a new row, so the raw list contains every
  * draft the user ever submitted. Reporting over all of them double-counts the
  * section, averages a superseded score into the total, and feeds the model
- * stale weaknesses the revision already fixed. The newest version wins unless
- * the caller names a specific one (the report page's version picker).
+ * stale weaknesses the revision already fixed.
+ *
+ * The newest *reviewed* version wins unless the caller pins a specific one
+ * (the report page's version picker). Picking the newest row regardless of
+ * status used to evict a section from the report the moment the user saved
+ * an unreviewed revision — v1's full review vanished until v2 was reviewed.
+ * A title with no reviewed version at all still resolves to its newest draft
+ * so coverage and compliance can count it.
  */
 export function resolveSectionVersions<T extends ReviewerVersionedSection>(
   sections: T[],
-  versionSelections?: Record<string, unknown> | null
+  versionSelections?: Record<string, unknown> | null,
+  options?: { excludedTitles?: string[] | null }
 ): ReviewerVersionResolution<T> {
   const byTitle = new Map<string, T[]>()
   for (const section of sections) {
@@ -96,24 +135,41 @@ export function resolveSectionVersions<T extends ReviewerVersionedSection>(
     byTitle.set(title, bucket)
   }
 
+  const pins = normalizeVersionSelections(versionSelections)
+  const excluded = new Set((options?.excludedTitles || []).map((title) => String(title).trim().toLowerCase()).filter(Boolean))
+
   const effective: T[] = []
   const superseded: T[] = []
   const chosenVersions: Record<string, number> = {}
+  const pendingDrafts: Record<string, number> = {}
+  const excludedTitles: string[] = []
 
   for (const [title, candidates] of byTitle.entries()) {
     const ordered = [...candidates].sort((left, right) => Number(right.version || 1) - Number(left.version || 1))
 
-    const requested = versionSelections ? Number(versionSelections[title]) : Number.NaN
-    const picked =
-      (Number.isFinite(requested) && ordered.find((section) => Number(section.version || 1) === requested)) ||
-      ordered[0]
+    if (excluded.has(title.toLowerCase())) {
+      excludedTitles.push(title)
+      superseded.push(...ordered)
+      continue
+    }
+
+    const requested = pins[title]
+    const pinned = Number.isFinite(requested)
+      ? ordered.find((section) => Number(section.version || 1) === requested)
+      : undefined
+    const newestReviewed = ordered.find(isReviewedRow)
+    const picked = pinned || newestReviewed || ordered[0]
+
+    if (!pinned && newestReviewed && ordered[0].id !== newestReviewed.id) {
+      pendingDrafts[title] = Number(ordered[0].version || 1)
+    }
 
     chosenVersions[title] = Number(picked.version || 1)
     effective.push(picked)
     superseded.push(...ordered.filter((section) => section.id !== picked.id))
   }
 
-  return { effective, superseded, chosenVersions }
+  return { effective, superseded, chosenVersions, pendingDrafts, excludedTitles }
 }
 
 function normalizeTitle(value: string): string {

@@ -28,10 +28,10 @@ export default async function handler(
   
   // Get the call ID from the URL and section ID from the request body
   const callId = req.query.id as string;
-  // `skipReportRefresh` is forwarded, not consumed: the full auto-run compiles
-  // the panel report once at the end, so each section review inside it must not
-  // trigger its own regeneration.
-  const { sectionId, skipReportRefresh } = req.body;
+  // `skipReportRefresh` and `skipIfUnchanged` are forwarded, not consumed:
+  // the full auto-run compiles the panel report once at the end, and its
+  // re-run mode asks the review endpoint to keep reviews of unchanged text.
+  const { sectionId, skipReportRefresh, skipIfUnchanged } = req.body;
   
   if (!callId || !sectionId) {
     return res.status(400).json({ error: 'Call ID and Section ID are required' });
@@ -59,11 +59,18 @@ export default async function handler(
     const currentSectionPosition = getSectionPosition(section.section_title);
     console.log(`Section position in flow: ${currentSectionPosition} for ${section.section_title}`);
     
-    // Get all sections for this call to find relevant previous sections
+    // Get the newest reviewed version of every other section. Superseded
+    // versions keep status 'reviewed', so selecting all of them fed v1 and v2
+    // summaries of the same section into the prompt side by side.
     const allSections = await prisma.$queryRaw`
-      SELECT id, section_title, context_summary, status
-      FROM "reviewer_sections"
-      WHERE call_id = ${callId} AND status = 'reviewed'
+      SELECT id, section_title, context_summary, status, last_reviewed_at
+      FROM (
+        SELECT DISTINCT ON (section_title) id, section_title, context_summary, status, last_reviewed_at
+        FROM "reviewer_sections"
+        WHERE call_id = ${callId} AND status = 'reviewed'
+        AND section_title <> ${section.section_title}
+        ORDER BY section_title, version DESC, last_reviewed_at DESC
+      ) newest
       ORDER BY last_reviewed_at ASC
     `;
     
@@ -98,18 +105,11 @@ export default async function handler(
     
     console.log(`Using ${priorSectionSummaries.length} prior section summaries for context`);
     
-    // Call the review API with the section ID and dependencies
+    // Call the review API with the section ID and dependencies. A reviewed
+    // section is re-reviewed with `force`; its status changes only when the
+    // new review lands. Flipping it to draft up front meant an interrupted
+    // run stranded reviewed sections as drafts, invisible to the report.
     try {
-      // Check if the section is already in draft status
-      if (section.status !== 'draft') {
-        // Set it back to draft for re-review
-        await prisma.$queryRaw`
-          UPDATE "reviewer_sections"
-          SET status = 'draft'
-          WHERE id = ${sectionId}
-        `;
-      }
-      
       // Call the review endpoint
       const origin = req.headers.origin || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
       const apiUrl = `${origin}/api/reviewer/calls/${callId}/sections/${sectionId}/review`;
@@ -119,6 +119,8 @@ export default async function handler(
       const response = await axios.post(apiUrl, {
         contextSectionIds: priorSectionSummaries.map(s => s.section_title),
         skipReportRefresh: skipReportRefresh === true,
+        skipIfUnchanged: skipIfUnchanged === true,
+        force: true,
       }, {
         headers: {
           ...(authHeader ? { Authorization: authHeader } : {}),
@@ -133,6 +135,7 @@ export default async function handler(
         review: response.data.review,
         used_dependency_sections: priorSectionSummaries.map(s => s.section_title),
         report_refreshed: response.data.report_refreshed === true,
+        skipped_unchanged: response.data.skipped_unchanged === true,
       });
     } catch (error) {
       console.error('Error calling review API:', {

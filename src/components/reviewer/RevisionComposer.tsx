@@ -75,9 +75,9 @@ export default function RevisionComposer({
     try {
       setStage('reviewing')
       const reviewRes = await axios.post(`/api/reviewer/calls/${callId}/sections/${newSectionId}/review`)
-      // The API refreshes the panel report when one already exists, so the
-      // revision loop now closes on its own instead of leaving an "out of date"
-      // badge for the user to chase.
+      // The panel report is not rebuilt per revision — it goes stale and the
+      // final-review page offers Regenerate; the ATR export always refreshes
+      // before serving.
       toast.success(
         reviewRes?.data?.report_refreshed
           ? 'Revision reviewed and the panel report updated'
