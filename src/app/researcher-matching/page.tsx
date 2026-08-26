@@ -37,19 +37,9 @@ interface Facets {
 // hide the assign button from exactly those people.
 const ASSIGNER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN', 'CALL_ASSIGNER', 'CALL_ADMIN']
 
-const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '8px 10px', borderRadius: 6,
-  border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box',
-}
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4, color: '#374151',
-}
-
-const checkboxListStyle: React.CSSProperties = {
-  maxHeight: 116, overflowY: 'auto', border: '1px solid #e5e7eb',
-  borderRadius: 6, padding: '6px 8px', background: '#fff',
-}
+/** Scroll container for the school / department checkbox facets. */
+const checkboxListClass =
+  'max-h-32 overflow-y-auto rounded-lg border border-nickel-200 bg-white px-2.5 py-1.5'
 
 export default function TenantResearcherMatchingPage() {
   const { user, isLoading: authLoading, authFetch } = useAuth()
@@ -61,6 +51,9 @@ export default function TenantResearcherMatchingPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [callSearchQuery, setCallSearchQuery] = useState('')
   const [selectedCall, setSelectedCall] = useState<FundingCall | null>(null)
+  // Once a call is chosen the picker list collapses to a compact card;
+  // "Change call" reopens it. Keeps the screen focused on the results.
+  const [changingCall, setChangingCall] = useState(false)
   const [results, setResults] = useState<SearchResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadingCalls, setLoadingCalls] = useState(false)
@@ -401,581 +394,626 @@ export default function TenantResearcherMatchingPage() {
   }
 
   if (authLoading) {
-    return <div style={{ padding: 40, textAlign: 'center' }}>Loading...</div>
+    return (
+      <main className="nk-ground nk-wash">
+        <div className="mx-auto max-w-6xl px-4 py-16">
+          <p className="nk-sub">Loading…</p>
+        </div>
+      </main>
+    )
   }
 
   if (!user) {
     return (
-      <div style={{ padding: 40, textAlign: 'center' }}>
-        <h2>Sign in required</h2>
-        <p>Please log in to find researchers in your organization.</p>
-      </div>
+      <main className="nk-ground nk-wash">
+        <div className="mx-auto max-w-2xl px-4 py-20 text-center">
+          <h1 className="nk-title text-[19px]">Sign in required</h1>
+          <p className="nk-sub mt-2">Log in to find researchers in your organization.</p>
+        </div>
+      </main>
     )
   }
 
-  return (
-    <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 16px' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>
-        Find Researchers
-      </h1>
-      <p style={{ color: '#6b7280', marginBottom: 24 }}>
-        Match colleagues in your organization to a funding call or research topic using semantic embeddings.
-      </p>
+  const searchDisabled =
+    loading || (mode === 'call' && !selectedCall) || (mode === 'text' && !searchQuery.trim())
 
-      {/* Stats bar */}
-      {stats && (
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-          gap: 12, marginBottom: 24,
-        }}>
+  return (
+    <main className="nk-ground nk-wash">
+      <div className="nk-grid absolute inset-x-0 top-0 h-56" aria-hidden />
+      <div className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        <header className="mb-5">
+          <p className="nk-eyebrow">Funding department</p>
+          <h1 className="mt-1.5 text-[24px] font-semibold tracking-[-0.02em] text-nickel-900">
+            Find researchers
+          </h1>
+          <p className="nk-sub mt-1">
+            Match colleagues to a funding call or research topic, then assign it or circulate it in
+            bulk.
+          </p>
+          <div className="nk-ticks mt-3" aria-hidden />
+        </header>
+
+        {/* Instrument row: what the matcher has to work with. */}
+        <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
-            { label: 'Researchers', value: stats.researchers, sub: `${stats.researchersWithEmbedding} embedded` },
-            { label: 'Research Areas', value: stats.researchAreas, sub: 'in your org' },
-            { label: 'Publications', value: stats.publications, sub: `${stats.publicationsWithEmbedding} embedded` },
-            { label: 'Funding Calls', value: stats.fundingCalls, sub: 'available' },
-          ].map(s => (
-            <div key={s.label} style={{
-              background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
-              padding: '12px 16px',
-            }}>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{s.value}</div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{s.label}</div>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>{s.sub}</div>
+            {
+              label: 'Researchers',
+              value: stats?.researchers,
+              sub: `${stats?.researchersWithEmbedding ?? 0} matchable`,
+            },
+            { label: 'Research areas', value: stats?.researchAreas, sub: 'saved in your org' },
+            {
+              label: 'Publications',
+              value: stats?.publications,
+              sub: `${stats?.publicationsWithEmbedding ?? 0} matchable`,
+            },
+            { label: 'Funding calls', value: stats?.fundingCalls, sub: 'available to match' },
+          ].map((s) => (
+            <div key={s.label} className="nk-panel px-4 py-3">
+              <p className="nk-eyebrow">{s.label}</p>
+              <p className="nk-readout mt-2">{s.value ?? '—'}</p>
+              <p className="nk-sub mt-1 text-[11.5px]">{s.sub}</p>
             </div>
           ))}
         </div>
-      )}
 
-      {/* Mode selector */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <button
-          onClick={() => setMode('call')}
-          style={{
-            padding: '8px 20px', borderRadius: 6, border: 'none', cursor: 'pointer',
-            fontWeight: 600, fontSize: 14,
-            background: mode === 'call' ? '#2563eb' : '#e5e7eb',
-            color: mode === 'call' ? '#fff' : '#374151',
-          }}
-        >
-          Match by Funding Call
-        </button>
-        <button
-          onClick={() => setMode('text')}
-          style={{
-            padding: '8px 20px', borderRadius: 6, border: 'none', cursor: 'pointer',
-            fontWeight: 600, fontSize: 14,
-            background: mode === 'text' ? '#2563eb' : '#e5e7eb',
-            color: mode === 'text' ? '#fff' : '#374151',
-          }}
-        >
-          Match by Research Topic
-        </button>
-      </div>
+        {/* Mode: one segmented control, not two loose buttons. */}
+        <div className="mb-4 inline-flex rounded-lg border border-nickel-200 bg-white p-0.5">
+          {(
+            [
+              { key: 'call', label: 'Match by funding call' },
+              { key: 'text', label: 'Match by research topic' },
+            ] as const
+          ).map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              onClick={() => setMode(entry.key)}
+              aria-pressed={mode === entry.key}
+              className={
+                mode === entry.key
+                  ? 'rounded-md bg-cobalt-600 px-4 py-1.5 text-[13px] font-medium text-white'
+                  : 'rounded-md px-4 py-1.5 text-[13px] font-medium text-nickel-600 transition hover:text-nickel-900'
+              }
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
 
-      {/* Search input */}
-      <div style={{
-        border: '1px solid #d1d5db', borderRadius: 8, padding: 16,
-        marginBottom: 24, background: '#fff',
-      }}>
-        {mode === 'call' ? (
-          <div>
-            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 8 }}>
-              Select a Funding Call
-            </label>
-            <input
-              type="text"
-              value={callSearchQuery}
-              onChange={e => {
-                setCallSearchQuery(e.target.value)
-                fetchCalls(e.target.value)
-              }}
-              placeholder="Search funding calls by title, agency, or description..."
-              style={{
-                width: '100%', padding: '10px 12px', borderRadius: 6,
-                border: '1px solid #d1d5db', fontSize: 14, marginBottom: 8,
-                boxSizing: 'border-box',
-              }}
-            />
-            <div style={{
-              maxHeight: 240, overflowY: 'auto', border: '1px solid #e5e7eb',
-              borderRadius: 6,
-            }}>
-              {loadingCalls ? (
-                <div style={{ padding: 16, textAlign: 'center', color: '#9ca3af' }}>Loading...</div>
-              ) : calls.length === 0 ? (
-                <div style={{ padding: 16, textAlign: 'center', color: '#9ca3af' }}>No funding calls found</div>
-              ) : calls.map(call => (
-                <div
-                  key={call.id}
-                  onClick={() => setSelectedCall(call)}
-                  style={{
-                    padding: '10px 12px', cursor: 'pointer',
-                    borderBottom: '1px solid #f3f4f6',
-                    background: selectedCall?.id === call.id ? '#eff6ff' : 'transparent',
-                  }}
+        {/* Step panel: pick the call (or describe the topic) and search. */}
+        <section className="nk-panel px-5 py-4">
+          {mode === 'call' ? (
+            selectedCall && !changingCall ? (
+              <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-cobalt-200 bg-cobalt-50 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="nk-eyebrow text-cobalt-700">Selected call</p>
+                  <p className="mt-1 text-[14.5px] font-semibold text-nickel-900">
+                    {selectedCall.schemeTitle}
+                  </p>
+                  <p className="nk-sub mt-0.5">
+                    {selectedCall.agencyName || 'Unknown agency'}
+                    {selectedCall.closeDate
+                      ? ` · closes ${new Date(selectedCall.closeDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                      : ''}
+                  </p>
+                  {selectedCall.description ? (
+                    <p className="nk-sub mt-1.5 max-w-2xl text-[12.5px]">
+                      {selectedCall.description.slice(0, 180)}
+                      {selectedCall.description.length > 180 ? '…' : ''}
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="nk-btn-secondary nk-btn-sm shrink-0"
+                  onClick={() => setChangingCall(true)}
                 >
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{call.schemeTitle}</div>
-                  <div style={{ fontSize: 12, color: '#6b7280' }}>
-                    {call.agencyName}
-                    {call.closeDate && ` · Closes: ${new Date(call.closeDate).toLocaleDateString()}`}
+                  Change call
+                </button>
+              </div>
+            ) : (
+              <div>
+                <label className="nk-label mb-2" htmlFor="call-search">
+                  Select a funding call
+                </label>
+                <input
+                  id="call-search"
+                  type="text"
+                  className="nk-input"
+                  value={callSearchQuery}
+                  onChange={(e) => {
+                    setCallSearchQuery(e.target.value)
+                    fetchCalls(e.target.value)
+                  }}
+                  placeholder="Search by title, agency, or description…"
+                />
+                <div className="mt-2 max-h-60 overflow-y-auto rounded-lg border border-nickel-200">
+                  {loadingCalls ? (
+                    <p className="nk-sub px-4 py-6 text-center">Loading calls…</p>
+                  ) : calls.length === 0 ? (
+                    <p className="nk-sub px-4 py-6 text-center">
+                      No funding calls match that search.
+                    </p>
+                  ) : (
+                    calls.map((call) => (
+                      <button
+                        key={call.id}
+                        type="button"
+                        onClick={() => {
+                          if (selectedCall?.id !== call.id) {
+                            // Stale results and ticked people belong to the old
+                            // call — carrying them over would circulate the
+                            // wrong thing.
+                            setResults(null)
+                            setBulkSelection([])
+                          }
+                          setSelectedCall(call)
+                          setChangingCall(false)
+                        }}
+                        className={`block w-full border-b border-nickel-100 px-3.5 py-2.5 text-left transition last:border-0 hover:bg-nickel-50 ${
+                          selectedCall?.id === call.id ? 'bg-cobalt-50' : 'bg-white'
+                        }`}
+                      >
+                        <span className="block text-[13.5px] font-medium text-nickel-900">
+                          {call.schemeTitle}
+                        </span>
+                        <span className="nk-sub mt-0.5 block text-[12px]">
+                          {call.agencyName || 'Unknown agency'}
+                          {call.closeDate
+                            ? ` · closes ${new Date(call.closeDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                            : ''}
+                        </span>
+                        {call.disciplines?.length > 0 && (
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            {call.disciplines.slice(0, 3).map((d) => (
+                              <span key={d} className="nk-badge normal-case tracking-normal">
+                                {d}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )
+          ) : (
+            <div>
+              <label className="nk-label mb-2" htmlFor="topic-search">
+                Research topic or description
+              </label>
+              <textarea
+                id="topic-search"
+                className="nk-input resize-y"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                rows={4}
+                placeholder="Describe the research area, e.g. 'machine learning for crop yield prediction using satellite imagery and drone data in Indian agriculture'…"
+              />
+            </div>
+          )}
+
+          {/* Filters */}
+          <div className="mt-4 border-t border-nickel-100 pt-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className="nk-btn-secondary nk-btn-sm"
+                onClick={() => setShowFilters((v) => !v)}
+                aria-expanded={showFilters}
+              >
+                {showFilters ? 'Hide filters' : 'Filters'}
+                {activeFilterCount > 0 && (
+                  <span className="rounded-full bg-cobalt-600 px-1.5 py-0.5 text-[10.5px] font-semibold leading-none text-white">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </button>
+              {activeFilterCount > 0 && (
+                <button
+                  type="button"
+                  className="text-[12.5px] font-medium text-cobalt-700 hover:underline"
+                  onClick={clearFilters}
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+
+            {showFilters && (
+              <div className="nk-panel-quiet mt-3 px-4 py-4">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {facets && facets.schools.length > 0 && (
+                    <>
+                      <div>
+                        <span className="nk-label mb-1.5">School</span>
+                        <div className={checkboxListClass}>
+                          {facets.schools.map((school) => (
+                            <label
+                              key={school.id}
+                              className="flex cursor-pointer items-center gap-2 py-1 text-[12.5px] text-nickel-700"
+                            >
+                              <input
+                                type="checkbox"
+                                className="h-3.5 w-3.5 accent-cobalt-600"
+                                checked={schoolIds.includes(school.id)}
+                                onChange={() => {
+                                  const next = toggleValue(schoolIds, school.id)
+                                  setSchoolIds(next)
+                                  // Drop department picks that are no longer offered.
+                                  if (next.length > 0) {
+                                    const allowed = new Set(
+                                      facets.schools
+                                        .filter((s) => next.includes(s.id))
+                                        .flatMap((s) => s.departments.map((d) => d.id))
+                                    )
+                                    setDepartmentIds((ids) => ids.filter((id) => allowed.has(id)))
+                                  }
+                                }}
+                              />
+                              {school.name}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <span className="nk-label mb-1.5">Department</span>
+                        <div className={checkboxListClass}>
+                          {departmentOptions.length === 0 ? (
+                            <p className="nk-sub py-1 text-[12px]">No departments yet</p>
+                          ) : (
+                            departmentOptions.map((department) => (
+                              <label
+                                key={department.id}
+                                className="flex cursor-pointer items-center gap-2 py-1 text-[12.5px] text-nickel-700"
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="h-3.5 w-3.5 accent-cobalt-600"
+                                  checked={departmentIds.includes(department.id)}
+                                  onChange={() =>
+                                    setDepartmentIds(toggleValue(departmentIds, department.id))
+                                  }
+                                />
+                                {department.name}
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  <div>
+                    <label className="nk-label mb-1.5" htmlFor="filter-areas">
+                      Discipline / research area
+                    </label>
+                    <input
+                      id="filter-areas"
+                      type="text"
+                      className="nk-input"
+                      value={researchAreaText}
+                      onChange={(e) => setResearchAreaText(e.target.value)}
+                      placeholder="e.g. machine learning, genomics"
+                    />
+                    <p className="nk-sub mt-1 text-[11.5px]">
+                      Comma-separated; matches research areas and keywords.
+                    </p>
                   </div>
-                  {call.disciplines?.length > 0 && (
-                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                      {call.disciplines.slice(0, 3).join(', ')}
+
+                  {facets && facets.careerStages.length > 0 && (
+                    <div>
+                      <label className="nk-label mb-1.5" htmlFor="filter-stage">
+                        Career stage
+                      </label>
+                      <select
+                        id="filter-stage"
+                        className="nk-select"
+                        value={careerStage}
+                        onChange={(e) => setCareerStage(e.target.value)}
+                      >
+                        <option value="">Any</option>
+                        {facets.careerStages.map((stage) => (
+                          <option key={stage} value={stage}>
+                            {stage.replace(/_/g, ' ')}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {facets && facets.institutionTypes.length > 0 && (
+                    <div>
+                      <label className="nk-label mb-1.5" htmlFor="filter-institution">
+                        Institution type
+                      </label>
+                      <select
+                        id="filter-institution"
+                        className="nk-select"
+                        value={institutionType}
+                        onChange={(e) => setInstitutionType(e.target.value)}
+                      >
+                        <option value="">Any</option>
+                        {facets.institutionTypes.map((type) => (
+                          <option key={type} value={type}>
+                            {type.replace(/_/g, ' ')}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {facets && facets.countries.length > 0 && (
+                    <div>
+                      <label className="nk-label mb-1.5" htmlFor="filter-country">
+                        Country
+                      </label>
+                      <select
+                        id="filter-country"
+                        className="nk-select"
+                        value={country}
+                        onChange={(e) => setCountry(e.target.value)}
+                      >
+                        <option value="">Any</option>
+                        {facets.countries.map((entry) => (
+                          <option key={entry} value={entry}>
+                            {entry}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
-            {selectedCall && (
-              <div style={{
-                marginTop: 12, padding: 12, background: '#f0f9ff', borderRadius: 6,
-                border: '1px solid #bfdbfe',
-              }}>
-                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-                  Selected: {selectedCall.schemeTitle}
-                </div>
-                <div style={{ fontSize: 12, color: '#4b5563' }}>
-                  {selectedCall.description?.slice(0, 200)}
-                  {(selectedCall.description?.length || 0) > 200 ? '...' : ''}
-                </div>
+
+                <label className="mt-4 flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-3.5 w-3.5 accent-cobalt-600"
+                    checked={includeBelowThreshold}
+                    onChange={(e) => setIncludeBelowThreshold(e.target.checked)}
+                  />
+                  <span>
+                    <span className="block text-[13px] font-medium text-nickel-800">
+                      Broaden — include weaker matches
+                    </span>
+                    <span className="nk-sub block text-[11.5px]">
+                      Keeps candidates below the relevance threshold so you can still explore when no
+                      strong match exists. Results stay ranked and tiered.
+                    </span>
+                  </span>
+                </label>
               </div>
             )}
           </div>
-        ) : (
-          <div>
-            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 8 }}>
-              Research Topic or Description
-            </label>
-            <textarea
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Describe the research area, e.g. 'machine learning for crop yield prediction using satellite imagery and drone data in Indian agriculture'..."
-              rows={4}
-              style={{
-                width: '100%', padding: '10px 12px', borderRadius: 6,
-                border: '1px solid #d1d5db', fontSize: 14, resize: 'vertical',
-                boxSizing: 'border-box',
-              }}
+
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-nickel-100 pt-4">
+            <button
+              type="button"
+              className="nk-btn-primary"
+              onClick={() => void handleSearch()}
+              disabled={searchDisabled}
+            >
+              {loading ? 'Searching…' : 'Find matching researchers'}
+            </button>
+            {mode === 'call' && !selectedCall && (
+              <p className="nk-sub">Select a funding call first.</p>
+            )}
+            {mode === 'text' && !searchQuery.trim() && (
+              <p className="nk-sub">Describe a topic first.</p>
+            )}
+          </div>
+        </section>
+
+        {error && (
+          <div className="nk-panel mt-4 border-red-200 bg-red-50 px-4 py-3">
+            <p className="text-[13px] text-red-700">{error}</p>
+          </div>
+        )}
+
+        {assignNotice && (
+          <div className="nk-panel mt-4 flex items-center justify-between gap-3 border-emerald-200 bg-emerald-50 px-4 py-3">
+            <p className="text-[13px] text-emerald-700">{assignNotice}</p>
+            <button
+              type="button"
+              className="text-[16px] leading-none text-emerald-700 hover:text-emerald-900"
+              onClick={() => setAssignNotice(null)}
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        {/* Skeletons while the match runs, so the page never jumps. */}
+        {loading && !results && (
+          <div className="mt-6 space-y-3" aria-hidden>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="nk-panel animate-pulse px-5 py-4">
+                <div className="h-4 w-1/3 rounded bg-nickel-100" />
+                <div className="mt-3 h-3 w-2/3 rounded bg-nickel-100" />
+                <div className="mt-2 h-3 w-1/2 rounded bg-nickel-100" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {results && (
+          <div className="mt-6">
+            <MatchResults
+              response={results}
+              emptyMessage="No researchers in your organization passed the relevance threshold. Try a different funding call, relax the filters, or tick “Broaden — include weaker matches”."
+              onAssign={canAssign && mode === 'call' && selectedCall ? openAssign : undefined}
+              assignedUserIds={selectedCall ? assignedByCall[selectedCall.id] || [] : []}
+              selectedUserIds={bulkSelection}
+              onToggleSelect={
+                canAssign && mode === 'call' && selectedCall ? toggleBulkSelection : undefined
+              }
+              onSelectVisible={setBulkSelection}
             />
           </div>
         )}
 
-        {/* Filters */}
-        <div style={{ marginTop: 12, borderTop: '1px solid #f3f4f6', paddingTop: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        {/* Bulk circulation bar — appears once anyone is ticked */}
+        {canAssign && mode === 'call' && selectedCall && bulkSelection.length > 0 && (
+          <div className="sticky bottom-4 z-20 mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-nickel-700 bg-nickel-900 px-4 py-3 text-white shadow-nk-sheet">
+            <span className="text-[14px] font-semibold">{bulkSelection.length} selected</span>
+            <span className="hidden text-[13px] text-nickel-300 sm:inline">
+              Circulate “{selectedCall.schemeTitle}” to all of them
+            </span>
             <button
-              onClick={() => setShowFilters(v => !v)}
-              style={{
-                padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db',
-                background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#374151',
-              }}
+              type="button"
+              className="ml-auto rounded-md border border-nickel-600 px-3 py-1.5 text-[12.5px] text-nickel-300 transition hover:border-nickel-500 hover:text-white"
+              onClick={() => setBulkSelection([])}
             >
-              {showFilters ? 'Hide filters' : 'Filters'}
-              {activeFilterCount > 0 && (
-                <span style={{
-                  marginLeft: 6, background: '#2563eb', color: '#fff', borderRadius: 10,
-                  padding: '1px 7px', fontSize: 11,
-                }}>
-                  {activeFilterCount}
-                </span>
-              )}
+              Clear
             </button>
-            {activeFilterCount > 0 && (
-              <button
-                onClick={clearFilters}
-                style={{
-                  background: 'none', border: 'none', color: '#2563eb',
-                  cursor: 'pointer', fontSize: 12, padding: 0,
-                }}
-              >
-                Clear all
-              </button>
-            )}
+            <button type="button" className="nk-btn-primary nk-btn-sm" onClick={() => setBulkOpen(true)}>
+              Assign to {bulkSelection.length}
+            </button>
           </div>
+        )}
 
-          {showFilters && (
-            <div style={{
-              marginTop: 12, padding: 12, background: '#f9fafb',
-              border: '1px solid #e5e7eb', borderRadius: 8,
-            }}>
-              <div style={{
-                display: 'grid', gap: 12,
-                gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-              }}>
-                {facets && facets.schools.length > 0 && (
-                  <>
-                    <div>
-                      <label style={labelStyle}>School</label>
-                      <div style={checkboxListStyle}>
-                        {facets.schools.map(school => (
-                          <label key={school.id} style={{
-                            display: 'flex', alignItems: 'center', gap: 6,
-                            fontSize: 12, padding: '2px 0', cursor: 'pointer',
-                          }}>
-                            <input
-                              type="checkbox"
-                              checked={schoolIds.includes(school.id)}
-                              onChange={() => {
-                                const next = toggleValue(schoolIds, school.id)
-                                setSchoolIds(next)
-                                // Drop department picks that are no longer offered.
-                                if (next.length > 0) {
-                                  const allowed = new Set(
-                                    facets.schools
-                                      .filter(s => next.includes(s.id))
-                                      .flatMap(s => s.departments.map(d => d.id))
-                                  )
-                                  setDepartmentIds(ids => ids.filter(id => allowed.has(id)))
-                                }
-                              }}
-                            />
-                            {school.name}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label style={labelStyle}>Department</label>
-                      <div style={checkboxListStyle}>
-                        {departmentOptions.length === 0 ? (
-                          <div style={{ fontSize: 12, color: '#9ca3af' }}>No departments yet</div>
-                        ) : departmentOptions.map(department => (
-                          <label key={department.id} style={{
-                            display: 'flex', alignItems: 'center', gap: 6,
-                            fontSize: 12, padding: '2px 0', cursor: 'pointer',
-                          }}>
-                            <input
-                              type="checkbox"
-                              checked={departmentIds.includes(department.id)}
-                              onChange={() => setDepartmentIds(toggleValue(departmentIds, department.id))}
-                            />
-                            {department.name}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                <div>
-                  <label style={labelStyle}>Discipline / research area</label>
-                  <input
-                    type="text"
-                    value={researchAreaText}
-                    onChange={e => setResearchAreaText(e.target.value)}
-                    placeholder="e.g. machine learning, genomics"
-                    style={inputStyle}
-                  />
-                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
-                    Comma-separated; matches research areas and keywords.
-                  </div>
-                </div>
-
-                {facets && facets.careerStages.length > 0 && (
-                  <div>
-                    <label style={labelStyle}>Career stage</label>
-                    <select value={careerStage} onChange={e => setCareerStage(e.target.value)} style={inputStyle}>
-                      <option value="">Any</option>
-                      {facets.careerStages.map(stage => (
-                        <option key={stage} value={stage}>{stage.replace(/_/g, ' ')}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {facets && facets.institutionTypes.length > 0 && (
-                  <div>
-                    <label style={labelStyle}>Institution type</label>
-                    <select value={institutionType} onChange={e => setInstitutionType(e.target.value)} style={inputStyle}>
-                      <option value="">Any</option>
-                      {facets.institutionTypes.map(type => (
-                        <option key={type} value={type}>{type.replace(/_/g, ' ')}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {facets && facets.countries.length > 0 && (
-                  <div>
-                    <label style={labelStyle}>Country</label>
-                    <select value={country} onChange={e => setCountry(e.target.value)} style={inputStyle}>
-                      <option value="">Any</option>
-                      {facets.countries.map(entry => (
-                        <option key={entry} value={entry}>{entry}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              <label style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 12,
-                fontSize: 13, color: '#374151', cursor: 'pointer',
-              }}>
-                <input
-                  type="checkbox"
-                  checked={includeBelowThreshold}
-                  onChange={e => setIncludeBelowThreshold(e.target.checked)}
-                  style={{ marginTop: 3 }}
-                />
-                <span>
-                  <strong>Broaden — include weaker matches</strong>
-                  <div style={{ fontSize: 11, color: '#6b7280' }}>
-                    Keeps candidates that fall below the relevance threshold, so you can still explore
-                    options when no strong match exists. Results stay ranked and tiered.
-                  </div>
-                </span>
-              </label>
-            </div>
-          )}
-        </div>
-
-        <button
-          onClick={handleSearch}
-          disabled={loading || (mode === 'call' && !selectedCall) || (mode === 'text' && !searchQuery.trim())}
-          style={{
-            marginTop: 12, padding: '10px 28px', borderRadius: 6, border: 'none',
-            background: '#2563eb', color: '#fff', fontWeight: 600, fontSize: 14,
-            cursor: loading ? 'wait' : 'pointer',
-            opacity: loading ? 0.7 : 1,
-          }}
-        >
-          {loading ? 'Searching...' : 'Find Matching Researchers'}
-        </button>
-      </div>
-
-      {/* Error */}
-      {error && (
-        <div style={{
-          padding: 12, background: '#fef2f2', border: '1px solid #fecaca',
-          borderRadius: 6, color: '#dc2626', marginBottom: 16, fontSize: 14,
-        }}>
-          {error}
-        </div>
-      )}
-
-      {/* Assignment confirmation */}
-      {assignNotice && (
-        <div style={{
-          padding: 12, background: '#ecfdf5', border: '1px solid #a7f3d0',
-          borderRadius: 6, color: '#047857', marginBottom: 16, fontSize: 14,
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
-        }}>
-          <span>{assignNotice}</span>
-          <button
-            onClick={() => setAssignNotice(null)}
-            style={{ background: 'none', border: 'none', color: '#047857', cursor: 'pointer', fontSize: 18 }}
-            aria-label="Dismiss"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* Results */}
-      {results && (
-        <MatchResults
-          response={results}
-          emptyMessage="No researchers in your organization passed the relevance threshold. Try a different funding call, relax the filters, or tick “Broaden — include weaker matches”."
-          onAssign={canAssign && mode === 'call' && selectedCall ? openAssign : undefined}
-          assignedUserIds={selectedCall ? assignedByCall[selectedCall.id] || [] : []}
-          selectedUserIds={bulkSelection}
-          onToggleSelect={
-            canAssign && mode === 'call' && selectedCall ? toggleBulkSelection : undefined
-          }
-          onSelectVisible={setBulkSelection}
-        />
-      )}
-
-      {/* Bulk circulation bar — appears once anyone is ticked */}
-      {canAssign && mode === 'call' && selectedCall && bulkSelection.length > 0 && (
-        <div
-          style={{
-            position: 'sticky', bottom: 16, marginTop: 16, zIndex: 20,
-            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-            padding: '12px 16px', borderRadius: 10, background: '#111827',
-            color: '#fff', boxShadow: '0 8px 24px rgba(17,24,39,0.24)',
-          }}
-        >
-          <span style={{ fontWeight: 600, fontSize: 14 }}>
-            {bulkSelection.length} selected
-          </span>
-          <span style={{ fontSize: 13, color: '#d1d5db' }}>
-            Circulate “{selectedCall.schemeTitle}” to all of them
-          </span>
-          <button
-            onClick={() => setBulkSelection([])}
-            style={{
-              marginLeft: 'auto', background: 'none', border: '1px solid #4b5563',
-              color: '#d1d5db', borderRadius: 6, padding: '6px 12px',
-              fontSize: 13, cursor: 'pointer',
-            }}
-          >
-            Clear
-          </button>
-          <button
-            onClick={() => setBulkOpen(true)}
-            style={{
-              background: '#2563eb', border: 'none', color: '#fff', borderRadius: 6,
-              padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            }}
-          >
-            Assign to {bulkSelection.length}
-          </button>
-        </div>
-      )}
-
-      {/* Bulk assign modal */}
-      {bulkOpen && selectedCall && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-          }}
-        >
-          <div style={{ background: '#fff', borderRadius: 10, padding: 24, width: '100%', maxWidth: 520 }}>
-            <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
-              Circulate to {bulkSelection.length} {bulkSelection.length === 1 ? 'person' : 'people'}
-            </h3>
-            <p style={{ marginTop: 6, marginBottom: 16, fontSize: 13, color: '#6b7280' }}>
-              {selectedCall.schemeTitle}. Everyone gets the same internal deadline and note, and is
-              emailed individually.
-            </p>
-
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-              Internal deadline
-            </label>
-            <input
-              type="date"
-              value={bulkDeadline}
-              onChange={e => setBulkDeadline(e.target.value)}
-              style={{
-                width: '100%', padding: '8px 10px', borderRadius: 6,
-                border: '1px solid #d1d5db', fontSize: 14, marginBottom: 12,
-              }}
-            />
-
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-              Note to everyone (optional)
-            </label>
-            <textarea
-              value={bulkMessage}
-              onChange={e => setBulkMessage(e.target.value)}
-              rows={3}
-              placeholder="e.g. Please confirm by Friday if you intend to apply — happy to help with the budget."
-              style={{
-                width: '100%', padding: '8px 10px', borderRadius: 6,
-                border: '1px solid #d1d5db', fontSize: 14, marginBottom: 8,
-              }}
-            />
-
-            {bulkError && (
-              <p style={{ color: '#b91c1c', fontSize: 13, marginBottom: 8 }}>{bulkError}</p>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-              <button
-                onClick={() => setBulkOpen(false)}
-                style={{
-                  padding: '8px 16px', borderRadius: 6, border: '1px solid #d1d5db',
-                  background: '#fff', fontSize: 13, cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitBulkAssignment}
-                disabled={bulkSaving}
-                style={{
-                  padding: '8px 16px', borderRadius: 6, border: 'none',
-                  background: bulkSaving ? '#93c5fd' : '#2563eb', color: '#fff',
-                  fontSize: 13, fontWeight: 600,
-                  cursor: bulkSaving ? 'default' : 'pointer',
-                }}
-              >
-                {bulkSaving ? 'Assigning…' : `Assign to ${bulkSelection.length}`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Assign modal */}
-      {assignTarget && selectedCall && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16,
-          }}
-          onClick={() => !assignSaving && setAssignTarget(null)}
-        >
+        {/* Bulk assign modal */}
+        {bulkOpen && selectedCall && (
           <div
-            style={{
-              background: '#fff', borderRadius: 10, padding: 20,
-              width: '100%', maxWidth: 480, boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
-            }}
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-nickel-900/50 p-4"
+            onClick={() => !bulkSaving && setBulkOpen(false)}
           >
-            <h3 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Assign funding call</h3>
-            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px' }}>
-              Assigning <strong>{selectedCall.schemeTitle}</strong> to{' '}
-              <strong>{assignTarget.displayName}</strong>.
-            </p>
+            <div
+              className="w-full max-w-lg rounded-xl border border-nickel-200 bg-white p-6 shadow-nk-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Circulate call"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-[17px] font-semibold text-nickel-900">
+                Circulate to {bulkSelection.length} {bulkSelection.length === 1 ? 'person' : 'people'}
+              </h3>
+              <p className="nk-sub mt-1">
+                {selectedCall.schemeTitle}. Everyone gets the same internal deadline and note, and is
+                emailed individually.
+              </p>
 
-            <label style={labelStyle}>Internal deadline</label>
-            <input
-              type="date"
-              value={assignDeadline}
-              onChange={e => setAssignDeadline(e.target.value)}
-              style={{ ...inputStyle, marginBottom: 12 }}
-            />
+              <label className="nk-label mt-4" htmlFor="bulk-deadline">
+                Internal deadline
+              </label>
+              <input
+                id="bulk-deadline"
+                type="date"
+                className="nk-input mt-1"
+                value={bulkDeadline}
+                onChange={(e) => setBulkDeadline(e.target.value)}
+              />
 
-            <label style={labelStyle}>Message to the faculty member</label>
-            <textarea
-              value={assignMessage}
-              onChange={e => setAssignMessage(e.target.value)}
-              rows={4}
-              placeholder="Add context — why them, what to focus on, who to coordinate with..."
-              style={{ ...inputStyle, resize: 'vertical', marginBottom: 12 }}
-            />
+              <label className="nk-label mt-3" htmlFor="bulk-message">
+                Note to everyone (optional)
+              </label>
+              <textarea
+                id="bulk-message"
+                className="nk-input mt-1 resize-y"
+                rows={3}
+                value={bulkMessage}
+                onChange={(e) => setBulkMessage(e.target.value)}
+                placeholder="e.g. Please confirm by Friday if you intend to apply — happy to help with the budget."
+              />
 
-            {assignError && (
-              <div style={{
-                padding: 10, background: '#fef2f2', border: '1px solid #fecaca',
-                borderRadius: 6, color: '#dc2626', marginBottom: 12, fontSize: 13,
-              }}>
-                {assignError}
+              {bulkError && <p className="mt-3 text-[13px] text-red-700">{bulkError}</p>}
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="nk-btn-secondary"
+                  onClick={() => setBulkOpen(false)}
+                  disabled={bulkSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="nk-btn-primary"
+                  onClick={() => void submitBulkAssignment()}
+                  disabled={bulkSaving}
+                >
+                  {bulkSaving ? 'Assigning…' : `Assign to ${bulkSelection.length}`}
+                </button>
               </div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button
-                onClick={() => setAssignTarget(null)}
-                disabled={assignSaving}
-                style={{
-                  padding: '8px 16px', borderRadius: 6, border: '1px solid #d1d5db',
-                  background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#374151',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitAssignment}
-                disabled={assignSaving}
-                style={{
-                  padding: '8px 16px', borderRadius: 6, border: 'none',
-                  background: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 600,
-                  cursor: assignSaving ? 'wait' : 'pointer', opacity: assignSaving ? 0.7 : 1,
-                }}
-              >
-                {assignSaving ? 'Assigning...' : 'Assign call'}
-              </button>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {/* Single assign modal */}
+        {assignTarget && selectedCall && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-nickel-900/50 p-4"
+            onClick={() => !assignSaving && setAssignTarget(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-xl border border-nickel-200 bg-white p-6 shadow-nk-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Assign funding call"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-[17px] font-semibold text-nickel-900">Assign funding call</h3>
+              <p className="nk-sub mt-1">
+                Assigning <span className="font-medium text-nickel-800">{selectedCall.schemeTitle}</span>{' '}
+                to <span className="font-medium text-nickel-800">{assignTarget.displayName}</span>.
+              </p>
+
+              <label className="nk-label mt-4" htmlFor="assign-deadline">
+                Internal deadline
+              </label>
+              <input
+                id="assign-deadline"
+                type="date"
+                className="nk-input mt-1"
+                value={assignDeadline}
+                onChange={(e) => setAssignDeadline(e.target.value)}
+              />
+
+              <label className="nk-label mt-3" htmlFor="assign-message">
+                Message to the faculty member
+              </label>
+              <textarea
+                id="assign-message"
+                className="nk-input mt-1 resize-y"
+                rows={4}
+                value={assignMessage}
+                onChange={(e) => setAssignMessage(e.target.value)}
+                placeholder="Add context — why them, what to focus on, who to coordinate with…"
+              />
+
+              {assignError && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                  <p className="text-[12.5px] text-red-700">{assignError}</p>
+                </div>
+              )}
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="nk-btn-secondary"
+                  onClick={() => setAssignTarget(null)}
+                  disabled={assignSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="nk-btn-primary"
+                  onClick={() => void submitAssignment()}
+                  disabled={assignSaving}
+                >
+                  {assignSaving ? 'Assigning…' : 'Assign call'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
   )
 }

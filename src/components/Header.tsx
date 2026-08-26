@@ -10,6 +10,49 @@ import { isFeatureEnabled } from '@/lib/feature-flags'
 import { FileSearch, FileText, Library, Sparkles } from 'lucide-react'
 import NotificationBell from '@/components/notifications/NotificationBell'
 
+/**
+ * Two-line menu entry: bold title plus a one-line plain-language description,
+ * so an admin can tell what lives behind each link without clicking it.
+ */
+function MenuItem({
+  href,
+  icon,
+  title,
+  description,
+  onClick,
+}: {
+  href: string
+  icon: string
+  title: string
+  description?: string
+  onClick: () => void
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex w-full items-start space-x-2 px-3 py-2 text-left hover:bg-gpt-gray-50"
+      onClick={onClick}
+    >
+      <span className="mt-0.5 text-sm leading-none">{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-sm text-gpt-gray-800">{title}</span>
+        {description ? (
+          <span className="block text-[11px] leading-snug text-gpt-gray-500">{description}</span>
+        ) : null}
+      </span>
+    </Link>
+  )
+}
+
+function MenuGroup({ label }: { label: string }) {
+  return (
+    <>
+      <div className="my-1 border-t border-gpt-gray-200"></div>
+      <div className="px-3 py-1 text-xs font-semibold uppercase text-gpt-gray-500">{label}</div>
+    </>
+  )
+}
+
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
   const { me: fundingDept } = useFundingDeptMe()
@@ -231,8 +274,8 @@ export default function Header() {
 
               {/* Compact User Dropdown Menu */}
               {showUserMenu && (
-                <div 
-                  className="absolute right-0 top-full mt-1 w-48 bg-white border border-gpt-gray-200 rounded-lg shadow-lg z-50"
+                <div
+                  className="absolute right-0 top-full mt-1 w-80 max-h-[82vh] overflow-y-auto bg-white border border-gpt-gray-200 rounded-lg shadow-lg z-50"
                   onMouseEnter={handleMenuMouseEnter}
                   onMouseLeave={handleMenuMouseLeave}
                 >
@@ -313,249 +356,255 @@ export default function Header() {
                         answered by the server rather than guessed from roles. */}
                     {fundingDept.isMember && (
                       <>
-                        <div className="border-t border-gpt-gray-200 my-1"></div>
-                        <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
-                          Funding Department
-                        </div>
-                        <Link
+                        <MenuGroup label="Funding Department" />
+                        <MenuItem
                           href="/funding-dept"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🧭"
+                          title="My Worklist"
+                          description="Deadlines, follow-ups due and open calls in your schools"
                           onClick={closeMenu}
-                        >
-                          <span>🧭</span>
-                          <span>My Worklist</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/funding-dept/assignments"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🗂️"
+                          title="Calls I Assigned"
+                          description="Track, chase and update the assignments you handed out"
                           onClick={closeMenu}
-                        >
-                          <span>🗂️</span>
-                          <span>Calls I Assigned</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/funding-dept/faculty"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🎓"
+                          title="Faculty in My Schools"
+                          description="Directory of the faculty your coverage lets you assign to"
                           onClick={closeMenu}
-                        >
-                          <span>🎓</span>
-                          <span>Faculty in My Schools</span>
-                        </Link>
+                        />
+                        <MenuItem
+                          href="/researcher-matching"
+                          icon="🎯"
+                          title="Find Researchers"
+                          description="Match faculty to a funding call and assign or circulate it"
+                          onClick={closeMenu}
+                        />
                         {fundingDept.isHead && (
                           <>
-                            <Link
+                            <MenuItem
                               href="/funding-dept/overview"
-                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              icon="📋"
+                              title="Department Overview"
+                              description="Each member's workload, school coverage and gaps"
                               onClick={closeMenu}
-                            >
-                              <span>📋</span>
-                              <span>Department Overview</span>
-                            </Link>
-                            <Link
+                            />
+                            <MenuItem
                               href="/funding-dept/calls"
-                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              icon="📈"
+                              title="Call Funnel"
+                              description="Every call with matched, assigned and submitted counts"
                               onClick={closeMenu}
-                            >
-                              <span>📈</span>
-                              <span>Call Funnel</span>
-                            </Link>
+                            />
                           </>
                         )}
                       </>
                     )}
 
-                    {/* Quality Audit — QUALITY_AUDITOR tag or OWNER/ADMIN */}
-                    {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN') || user.roles?.includes('QUALITY_AUDITOR' as any)) && (
-                      <>
-                        <div className="border-t border-gpt-gray-200 my-1"></div>
-                        <Link
-                          href="/quality-audit"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                          onClick={closeMenu}
-                        >
-                          <span>🔍</span>
-                          <span>Quality Audit</span>
-                        </Link>
-                      </>
-                    )}
+                    {/* Quality Audit for auditors who are not admins — admins get
+                        it inside the Administration group below. */}
+                    {user.roles?.includes('QUALITY_AUDITOR' as any) &&
+                      !user.roles?.includes('OWNER') &&
+                      !user.roles?.includes('ADMIN') && (
+                        <>
+                          <div className="border-t border-gpt-gray-200 my-1"></div>
+                          <MenuItem
+                            href="/quality-audit"
+                            icon="🔍"
+                            title="Quality Audit"
+                            description="Review AI output quality across the organization's projects"
+                            onClick={closeMenu}
+                          />
+                        </>
+                      )}
 
-                    {/* Tenant Admin Links — OWNER/ADMIN see everything; CALL_ADMIN sees the scoped surfaces (faculty/org tree/calls). */}
+                    {/* Administration — every tenant-admin surface in one labeled
+                        group, each with a plain-language description of what it
+                        does. OWNER/ADMIN see everything; CALL_ADMIN sees the
+                        scoped surfaces (faculty/org tree, matching, calls). */}
                     {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN') || user.roles?.includes('CALL_ADMIN' as any)) && (
                       <>
-                        <div className="border-t border-gpt-gray-200 my-1"></div>
-                        <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
-                          Organization Admin
-                        </div>
+                        <MenuGroup label="Administration" />
                         {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN')) && (
                           <>
-                            <Link
-                              href="/admin"
-                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                              onClick={closeMenu}
-                            >
-                              <span>✉️</span>
-                              <span>Invite Members</span>
-                            </Link>
-                            <Link
+                            <MenuItem
                               href="/tenant-admin/users"
-                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              icon="👥"
+                              title="User Management"
+                              description="Create accounts, change roles and issue activation links"
                               onClick={closeMenu}
-                            >
-                              <span>👥</span>
-                              <span>User Management</span>
-                            </Link>
-                            <Link
+                            />
+                            <MenuItem
+                              href="/admin"
+                              icon="✉️"
+                              title="Invite Members"
+                              description="Send email invitations for one-off or external people"
+                              onClick={closeMenu}
+                            />
+                            <MenuItem
                               href="/tenant-admin/teams"
-                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              icon="🏢"
+                              title="Team Management"
+                              description="Group people into teams and control what each team can use"
                               onClick={closeMenu}
-                            >
-                              <span>🏢</span>
-                              <span>Team Management</span>
-                            </Link>
+                            />
                           </>
                         )}
-                        <Link
+                        <MenuItem
                           href="/tenant-admin/faculty"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🎓"
+                          title="Faculty & Organization"
+                          description="Build the school/department tree and import the faculty roster"
                           onClick={closeMenu}
-                        >
-                          <span>🎓</span>
-                          <span>Faculty &amp; Organization</span>
-                        </Link>
+                        />
                         {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN')) && (
-                          <Link
+                          <MenuItem
                             href="/tenant-admin/funding-dept"
-                            className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                            icon="🧭"
+                            title="Funding Department"
+                            description="Staff the sponsored-research office and assign each member schools"
                             onClick={closeMenu}
-                          >
-                            <span>🧭</span>
-                            <span>Funding Department</span>
-                          </Link>
+                          />
                         )}
-                        <Link
+                        <MenuItem
+                          href="/funding/imports"
+                          icon="📥"
+                          title="Import Funding Calls"
+                          description="Upload call documents or URLs into your organization's catalog"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
+                          href="/funding-dept/calls"
+                          icon="📈"
+                          title="Call Funnel"
+                          description="Every call with who it reached: matched, assigned, submitted, awarded"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
+                          href="/researcher-matching"
+                          icon="🎯"
+                          title="Find Researchers"
+                          description="Match faculty to a funding call, then assign or bulk-circulate it"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
                           href="/tenant-admin/grant-dashboard"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="📊"
+                          title="Grant Dashboard"
+                          description="Allocation, deadlines, outcomes and downloadable CSV reports"
                           onClick={closeMenu}
-                        >
-                          <span>📈</span>
-                          <span>Grant Dashboard</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/tenant-admin/analytics"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="📉"
+                          title="Usage Analytics"
+                          description="Who is using which service, and how much"
                           onClick={closeMenu}
-                        >
-                          <span>📊</span>
-                          <span>Usage Analytics</span>
-                        </Link>
+                        />
+                        {(user.roles?.includes('OWNER') || user.roles?.includes('ADMIN')) && (
+                          <MenuItem
+                            href="/quality-audit"
+                            icon="🔍"
+                            title="Quality Audit"
+                            description="Review AI output quality across the organization's projects"
+                            onClick={closeMenu}
+                          />
+                        )}
                       </>
                     )}
 
-                    {/* Super Admin Links */}
+                    {/* Platform staff */}
                     {canOpenPlatformFunding && (
                       <>
-                        <div className="border-t border-gpt-gray-200 my-1"></div>
-                        <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
-                          {user.roles?.includes('SUPER_ADMIN') ? 'Platform Admin' : 'Platform Funding'}
-                        </div>
-                        <Link
+                        <MenuGroup
+                          label={user.roles?.includes('SUPER_ADMIN') ? 'Platform Admin' : 'Platform Funding'}
+                        />
+                        <MenuItem
                           href="/super-admin/funding"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="💼"
+                          title="Funding Control"
+                          description="Platform-wide call intake, catalog curation and publishing"
                           onClick={closeMenu}
-                        >
-                          <span>💼</span>
-                          <span>Funding Control</span>
-                        </Link>
+                        />
                       </>
                     )}
 
-                    {/* Super Admin Links */}
                     {user.roles?.includes('SUPER_ADMIN') && (
                       <>
                         {!canOpenPlatformFunding && (
                           <>
-                            <div className="border-t border-gpt-gray-200 my-1"></div>
-                            <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
-                              Platform Admin
-                            </div>
-                            <Link
+                            <MenuGroup label="Platform Admin" />
+                            <MenuItem
                               href="/super-admin/funding"
-                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              icon="💼"
+                              title="Funding Control"
+                              description="Platform-wide call intake, catalog curation and publishing"
                               onClick={closeMenu}
-                            >
-                              <span>💼</span>
-                              <span>Funding Control</span>
-                            </Link>
+                            />
                           </>
                         )}
-                        <Link
+                        <MenuItem
                           href="/super-admin/jurisdiction-config"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🏗️"
+                          title="Jurisdiction Config"
+                          description="Per-country drafting rules and requirements"
                           onClick={closeMenu}
-                        >
-                          <span>🏗️</span>
-                          <span>Jurisdiction Config</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/super-admin/countries"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🌍"
+                          title="Country Profiles"
+                          description="Import and activate country jurisdiction profiles"
                           onClick={closeMenu}
-                        >
-                          <span>🌍</span>
-                          <span>Country Profiles</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/super-admin/section-prompts"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="📝"
+                          title="Section Prompts"
+                          description="Prompt templates behind each generated section"
                           onClick={closeMenu}
-                        >
-                          <span>📝</span>
-                          <span>Section Prompts</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/super-admin/jurisdiction-styles"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🎨"
+                          title="Jurisdiction Styles"
+                          description="Formatting and style rules per jurisdiction"
                           onClick={closeMenu}
-                        >
-                          <span>🎨</span>
-                          <span>Jurisdiction Styles</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/super-admin/llm-config"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🤖"
+                          title="LLM Model Control"
+                          description="Which AI model runs each stage, and its settings"
                           onClick={closeMenu}
-                        >
-                          <span>🤖</span>
-                          <span>LLM Model Control</span>
-                        </Link>
-                        <div className="border-t border-gpt-gray-200 my-1"></div>
-                        <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
-                          Paper Writing Admin
-                        </div>
-                        <Link
+                        />
+                        <MenuGroup label="Paper Writing Admin" />
+                        <MenuItem
                           href="/admin/paper-types"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="📑"
+                          title="Paper Types"
+                          description="Manage the catalog of paper types authors can pick"
                           onClick={closeMenu}
-                        >
-                          <span>📑</span>
-                          <span>Paper Types</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/admin/citation-styles"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="📚"
+                          title="Citation Styles"
+                          description="Citation formats available in the writing tools"
                           onClick={closeMenu}
-                        >
-                          <span>📚</span>
-                          <span>Citation Styles</span>
-                        </Link>
-                        <Link
+                        />
+                        <MenuItem
                           href="/admin/publication-venues"
-                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          icon="🏛️"
+                          title="Publication Venues"
+                          description="Journals and conferences authors can target"
                           onClick={closeMenu}
-                        >
-                          <span>🏛️</span>
-                          <span>Publication Venues</span>
-                        </Link>
+                        />
                       </>
                     )}
 

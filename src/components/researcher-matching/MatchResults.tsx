@@ -44,10 +44,10 @@ export interface SearchResponse {
 
 type TierFilter = 'auto' | 'strong' | 'moderate' | 'weak' | 'all'
 
-const TIER_STYLES: Record<MatchResult['matchTier'], { label: string; bg: string; color: string }> = {
-  strong: { label: 'Strong match', bg: '#dcfce7', color: '#166534' },
-  moderate: { label: 'Moderate match', bg: '#fef3c7', color: '#92400e' },
-  weak: { label: 'Weak match', bg: '#f3f4f6', color: '#6b7280' },
+const TIER_BADGES: Record<MatchResult['matchTier'], { label: string; className: string }> = {
+  strong: { label: 'strong match', className: 'nk-badge nk-badge-ok' },
+  moderate: { label: 'moderate match', className: 'nk-badge nk-badge-warn' },
+  weak: { label: 'weak match', className: 'nk-badge' },
 }
 
 const SOURCE_LABELS: Record<MatchEvidence['source'], string> = {
@@ -72,7 +72,9 @@ function HighlightedSnippet({ text }: { text: string }) {
     <>
       {parts.map((part, i) =>
         i % 2 === 1 ? (
-          <mark key={i} style={{ background: '#fef08a', padding: '0 2px', borderRadius: 2 }}>{part}</mark>
+          <mark key={i} className="rounded-sm bg-amber-100 px-0.5 text-nickel-900">
+            {part}
+          </mark>
         ) : (
           <span key={i}>{part}</span>
         )
@@ -100,70 +102,60 @@ function ResultCard({
   isSelected?: boolean
   onToggleSelect?: (userId: string) => void
 }) {
-  const tier = TIER_STYLES[result.matchTier] || TIER_STYLES.weak
+  const tier = TIER_BADGES[result.matchTier] || TIER_BADGES.weak
+  const scorePct = Math.round(result.score * 100)
   return (
     <div
-      style={{
-        border: isSelected ? '1px solid #2563eb' : '1px solid #e5e7eb',
-        borderRadius: 8,
-        padding: 16,
-        background: isSelected ? '#f5f8ff' : '#fff',
-      }}
+      className={`nk-panel px-5 py-4 transition ${
+        isSelected ? 'border-cobalt-300 bg-cobalt-50/40' : ''
+      }`}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            {selectable && (
-              <input
-                type="checkbox"
-                checked={Boolean(isSelected)}
-                disabled={isAssigned}
-                onChange={() => onToggleSelect?.(result.userId)}
-                aria-label={`Select ${result.displayName}`}
-                style={{ width: 16, height: 16, flexShrink: 0, cursor: isAssigned ? 'default' : 'pointer' }}
-              />
-            )}
-            <span style={{
-              width: 28, height: 28, borderRadius: '50%',
-              background: '#2563eb', color: '#fff', display: 'flex',
-              alignItems: 'center', justifyContent: 'center',
-              fontWeight: 700, fontSize: 13, flexShrink: 0,
-            }}>
-              {rank}
-            </span>
-            <span style={{ fontWeight: 700, fontSize: 16 }}>{result.displayName}</span>
-          </div>
-          <div style={{ fontSize: 13, color: '#6b7280', marginLeft: 36 }}>
-            {[result.department, result.institutionName, result.countryOfResidence].filter(Boolean).join(' · ')}
-          </div>
-          {result.careerStage && (
-            <div style={{ fontSize: 12, color: '#9ca3af', marginLeft: 36, marginTop: 2 }}>
-              {result.careerStage.replace(/_/g, ' ')}
-            </div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          {selectable && (
+            <input
+              type="checkbox"
+              className="mt-2 h-4 w-4 shrink-0 accent-cobalt-600"
+              checked={Boolean(isSelected)}
+              disabled={isAssigned}
+              onChange={() => onToggleSelect?.(result.userId)}
+              aria-label={`Select ${result.displayName}`}
+            />
           )}
-        </div>
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <span style={{
-            display: 'inline-block', fontSize: 12, fontWeight: 700,
-            padding: '4px 10px', borderRadius: 12,
-            background: tier.bg, color: tier.color, whiteSpace: 'nowrap',
-          }}>
-            {tier.label}
+          <span className="nk-tile h-8 w-8 text-[12.5px] font-semibold" aria-hidden>
+            {rank}
           </span>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-            {(result.score * 100).toFixed(0)}% {scoreBasis === 'rerank' ? 'relevance' : 'similarity'}
+          <div className="min-w-0">
+            <p className="text-[15px] font-semibold tracking-[-0.01em] text-nickel-900">
+              {result.displayName}
+            </p>
+            <p className="nk-sub mt-0.5">
+              {[result.department, result.institutionName, result.countryOfResidence]
+                .filter(Boolean)
+                .join(' · ') || '—'}
+            </p>
+            {result.careerStage && (
+              <p className="nk-sub mt-0.5 text-[11.5px]">{result.careerStage.replace(/_/g, ' ')}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <span className={tier.className}>{tier.label}</span>
+          <div className="flex items-center gap-2">
+            <div className="nk-meter w-24">
+              <div className="nk-meter-fill" style={{ width: `${scorePct}%` }} />
+            </div>
+            <span className="nk-mono text-nickel-600">
+              {scorePct}% {scoreBasis === 'rerank' ? 'relevance' : 'similarity'}
+            </span>
           </div>
           {onAssign && (
             <button
+              type="button"
+              className={isAssigned ? 'nk-btn-secondary nk-btn-sm' : 'nk-btn-primary nk-btn-sm'}
               onClick={() => onAssign(result)}
               disabled={isAssigned}
-              style={{
-                marginTop: 8, padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                cursor: isAssigned ? 'default' : 'pointer', whiteSpace: 'nowrap',
-                border: isAssigned ? '1px solid #d1d5db' : 'none',
-                background: isAssigned ? '#f3f4f6' : '#2563eb',
-                color: isAssigned ? '#6b7280' : '#fff',
-              }}
             >
               {isAssigned ? 'Assigned' : 'Assign call'}
             </button>
@@ -171,37 +163,28 @@ function ResultCard({
         </div>
       </div>
 
-      {/* Research summary */}
       {result.researchSummary && (
-        <div style={{ marginTop: 8, marginLeft: 36, fontSize: 13, color: '#374151', lineHeight: 1.5 }}>
+        <p className="mt-3 max-w-3xl text-[13px] leading-relaxed text-nickel-700">
           {result.researchSummary.length > 300
-            ? result.researchSummary.slice(0, 300) + '...'
+            ? result.researchSummary.slice(0, 300) + '…'
             : result.researchSummary}
-        </div>
+        </p>
       )}
 
-      {/* Research areas */}
       {result.researchAreas?.length > 0 && (
-        <div style={{ marginTop: 8, marginLeft: 36, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {result.researchAreas.map(area => (
-            <span key={area} style={{
-              fontSize: 11, padding: '2px 8px', borderRadius: 12,
-              background: '#eff6ff', color: '#1d4ed8', fontWeight: 500,
-            }}>
+        <div className="mt-2.5 flex flex-wrap gap-1">
+          {result.researchAreas.map((area) => (
+            <span key={area} className="nk-badge nk-badge-live normal-case tracking-normal">
               {area}
             </span>
           ))}
         </div>
       )}
 
-      {/* Keywords */}
       {result.keywords?.length > 0 && (
-        <div style={{ marginTop: 4, marginLeft: 36, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {result.keywords.slice(0, 8).map(kw => (
-            <span key={kw} style={{
-              fontSize: 10, padding: '1px 6px', borderRadius: 8,
-              background: '#f3f4f6', color: '#6b7280',
-            }}>
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {result.keywords.slice(0, 8).map((kw) => (
+            <span key={kw} className="nk-badge normal-case tracking-normal">
               {kw}
             </span>
           ))}
@@ -210,60 +193,43 @@ function ResultCard({
 
       {/* Evidence: what actually matched, per source */}
       {result.evidence?.length > 0 && (
-        <div style={{
-          marginTop: 10, marginLeft: 36, border: '1px solid #e5e7eb',
-          borderRadius: 6, background: '#f9fafb', padding: '8px 10px',
-        }}>
-          <div style={{
-            fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
-            letterSpacing: 0.5, color: '#6b7280', marginBottom: 4,
-          }}>
-            Why this match
-          </div>
+        <div className="nk-panel-quiet mt-3 px-4 py-3">
+          <p className="nk-eyebrow mb-1.5">Why this match</p>
           {result.evidence.map((ev, i) => (
-            <div key={`${ev.source}-${i}`} style={{
-              display: 'flex', gap: 8, alignItems: 'flex-start',
-              padding: '5px 0',
-              borderTop: i > 0 ? '1px solid #eef0f2' : 'none',
-            }}>
-              <span style={{
-                fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4,
-                background: '#eef2ff', color: '#4338ca', whiteSpace: 'nowrap', flexShrink: 0,
-                marginTop: 1,
-              }}>
+            <div
+              key={`${ev.source}-${i}`}
+              className={`flex items-start gap-2.5 py-1.5 ${i > 0 ? 'border-t border-nickel-100' : ''}`}
+            >
+              <span className="nk-badge nk-badge-live mt-0.5 shrink-0 normal-case tracking-normal">
                 {SOURCE_LABELS[ev.source] || ev.source}
               </span>
-              <div style={{ flex: 1, fontSize: 12, color: '#374151', lineHeight: 1.5 }}>
+              <div className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-nickel-700">
                 {ev.title && (
-                  <div style={{ fontWeight: 600 }}>
+                  <p className="font-medium text-nickel-900">
                     {ev.title}
-                    {ev.detail && <span style={{ fontWeight: 400, color: '#6b7280' }}> ({ev.detail})</span>}
-                  </div>
+                    {ev.detail && <span className="font-normal text-nickel-500"> ({ev.detail})</span>}
+                  </p>
                 )}
                 {ev.snippet ? (
-                  <div style={{ color: '#4b5563' }}><HighlightedSnippet text={ev.snippet} /></div>
+                  <p>
+                    <HighlightedSnippet text={ev.snippet} />
+                  </p>
                 ) : !ev.title ? (
-                  <div style={{ color: '#4b5563' }}>Overall profile content is semantically similar to this search.</div>
+                  <p>Overall profile content is semantically similar to this search.</p>
                 ) : null}
               </div>
               {ev.source !== 'text' && (
-                <span style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap', flexShrink: 0, marginTop: 1 }}>
-                  {(ev.similarity * 100).toFixed(0)}% similar
+                <span className="nk-mono mt-0.5 shrink-0 text-nickel-500">
+                  {(ev.similarity * 100).toFixed(0)}%
                 </span>
               )}
             </div>
           ))}
           {result.sharedTerms?.length > 0 && (
-            <div style={{
-              marginTop: 6, paddingTop: 6, borderTop: '1px solid #eef0f2',
-              display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center',
-            }}>
-              <span style={{ fontSize: 11, color: '#6b7280' }}>Overlapping topics:</span>
-              {result.sharedTerms.map(term => (
-                <span key={term} style={{
-                  fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
-                  background: '#dcfce7', color: '#166534',
-                }}>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-nickel-100 pt-2">
+              <span className="nk-sub text-[11.5px]">Overlapping topics:</span>
+              {result.sharedTerms.map((term) => (
+                <span key={term} className="nk-badge nk-badge-ok normal-case tracking-normal">
                   {term}
                 </span>
               ))}
@@ -343,48 +309,47 @@ export default function MatchResults({
 
   return (
     <div>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
-        marginBottom: 16, gap: 12, flexWrap: 'wrap',
-      }}>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
-            {response.totalResults} Matching Researcher{response.totalResults !== 1 ? 's' : ''} Found
+          <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-nickel-900">
+            {response.totalResults} matching researcher{response.totalResults !== 1 ? 's' : ''}
           </h2>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+          <p className="nk-sub mt-1">
             Screened {response.totalCandidates} candidate{response.totalCandidates !== 1 ? 's' : ''}
             {screenedOut > 0 && ` · ${screenedOut} below the relevance threshold`}
             {' · '}
             {response.scoreBasis === 'rerank' ? 'ranked by AI reranker' : 'ranked by embedding similarity'}
-          </div>
+          </p>
           {response.results.length > 0 && (
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-              {counts.strong} strong · {counts.moderate} moderate · {counts.weak} weak
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {counts.strong > 0 && (
+                <span className="nk-badge nk-badge-ok">{counts.strong} strong</span>
+              )}
+              {counts.moderate > 0 && (
+                <span className="nk-badge nk-badge-warn">{counts.moderate} moderate</span>
+              )}
+              {counts.weak > 0 && <span className="nk-badge">{counts.weak} weak</span>}
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div className="flex flex-wrap items-center gap-2">
           {response.degradedMode && (
-            <span style={{
-              fontSize: 12, background: '#fef3c7', color: '#92400e',
-              padding: '4px 8px', borderRadius: 4,
-            }}>
+            <span className="nk-badge nk-badge-warn normal-case tracking-normal">
               Degraded mode: {response.degradedMode}
             </span>
           )}
           {response.results.length > 0 && (
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 6 }}>
-              Relevance
+            <label className="flex items-center gap-2">
+              <span className="nk-sub">Relevance</span>
               <select
+                className="nk-select w-40"
                 value={tierFilter}
-                onChange={e => setTierFilter(e.target.value as TierFilter)}
-                style={{
-                  padding: '6px 8px', borderRadius: 6, border: '1px solid #d1d5db',
-                  fontSize: 12, background: '#fff', color: '#374151',
-                }}
+                onChange={(e) => setTierFilter(e.target.value as TierFilter)}
               >
-                {TIER_FILTER_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
+                {TIER_FILTER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
                 ))}
               </select>
             </label>
@@ -393,49 +358,35 @@ export default function MatchResults({
       </div>
 
       {selectable && selectableVisibleIds.length > 0 && (
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
-            padding: '8px 12px', borderRadius: 8, background: '#f9fafb',
-            border: '1px solid #e5e7eb', fontSize: 13, color: '#374151',
-          }}
-        >
+        <label className="nk-panel-quiet mb-3 flex cursor-pointer items-center gap-2.5 px-4 py-2.5">
           <input
             type="checkbox"
+            className="h-4 w-4 accent-cobalt-600"
             checked={allVisibleSelected}
-            onChange={() =>
-              onSelectVisible?.(allVisibleSelected ? [] : selectableVisibleIds)
-            }
+            onChange={() => onSelectVisible?.(allVisibleSelected ? [] : selectableVisibleIds)}
             aria-label="Select all shown"
-            style={{ width: 16, height: 16, cursor: 'pointer' }}
           />
-          <span>
+          <span className="text-[13px] text-nickel-700">
             Select all {selectableVisibleIds.length} shown
           </span>
           {selected.size > 0 && (
-            <span style={{ marginLeft: 'auto', fontWeight: 600, color: '#2563eb' }}>
+            <span className="ml-auto text-[13px] font-semibold text-cobalt-700">
               {selected.size} selected
             </span>
           )}
-        </div>
+        </label>
       )}
 
       {response.results.length === 0 ? (
-        <div style={{
-          padding: 32, textAlign: 'center', color: '#9ca3af',
-          border: '1px dashed #d1d5db', borderRadius: 8,
-        }}>
-          {emptyMessage}
+        <div className="rounded-xl border border-dashed border-nickel-300 px-6 py-10 text-center">
+          <p className="nk-sub mx-auto max-w-md">{emptyMessage}</p>
         </div>
       ) : visible.length === 0 ? (
-        <div style={{
-          padding: 32, textAlign: 'center', color: '#9ca3af',
-          border: '1px dashed #d1d5db', borderRadius: 8,
-        }}>
-          No researchers in this relevance band. Choose a broader option above.
+        <div className="rounded-xl border border-dashed border-nickel-300 px-6 py-10 text-center">
+          <p className="nk-sub">No researchers in this relevance band. Choose a broader option above.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="flex flex-col gap-3">
           {visible.map((r, idx) => (
             <ResultCard
               key={r.userId}
@@ -450,9 +401,10 @@ export default function MatchResults({
             />
           ))}
           {hiddenByFilter > 0 && (
-            <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', padding: '4px 0' }}>
-              {hiddenByFilter} more match{hiddenByFilter !== 1 ? 'es' : ''} hidden by the relevance filter.
-            </div>
+            <p className="nk-sub py-1 text-center text-[12px]">
+              {hiddenByFilter} more match{hiddenByFilter !== 1 ? 'es' : ''} hidden by the relevance
+              filter.
+            </p>
           )}
         </div>
       )}
