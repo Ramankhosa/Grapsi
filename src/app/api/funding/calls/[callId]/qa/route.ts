@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import prisma from '@/lib/prisma';
 import { isFeatureEnabled } from '@/lib/feature-flags';
-import { buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth';
+import { actorCanSeeTenantDrafts, buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth';
 import { fundingDocumentQaService } from '@/lib/fundingDocuments/qa';
 import { toRecommendationAccessScope } from '@/lib/recommendations/request-auth';
 
@@ -22,7 +22,7 @@ export async function POST(
   try {
     const accessibleCall = await prisma.fundingCall.findFirst({
       where: {
-        AND: [{ id: params.callId }, buildFundingCallAccessWhere(auth.actor)],
+        AND: [{ id: params.callId }, buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor) })],
       },
       select: { id: true },
     });

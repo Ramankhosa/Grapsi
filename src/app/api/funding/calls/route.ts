@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
 import { toFundingCallSummary } from '@/lib/fundingIntake/compat'
-import { buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
+import {
+  actorCanSeeTenantDrafts,
+  buildFundingCallAccessWhere,
+  requireFundingImporterRequest,
+} from '@/lib/fundingIntake/routeAuth'
 import type { Prisma } from '@/lib/prisma-generated'
 
 export const runtime = 'nodejs'
@@ -116,6 +120,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const accessWhere = buildFundingCallAccessWhere(auth.actor, {
+      includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor),
+    })
     const searchParams = request.nextUrl.searchParams
     const q = normalizeQuery(searchParams.get('q'), 240)
     const title = normalizeQuery(searchParams.get('title'), 200)
@@ -167,13 +174,13 @@ export async function GET(request: NextRequest) {
       where: searching
         ? {
             AND: [
-              buildFundingCallAccessWhere(auth.actor),
+              accessWhere,
               {
                 OR: textFilters.length > 0 ? textFilters : undefined,
               },
             ],
           }
-        : buildFundingCallAccessWhere(auth.actor),
+        : accessWhere,
       orderBy: { updatedAt: 'desc' },
       take: searching ? Math.max(40, requestedLimit * 6) : requestedLimit,
     })

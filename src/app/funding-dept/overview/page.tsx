@@ -190,6 +190,11 @@ export default function FundingDeptOverviewPage() {
             What each member is carrying, and which schools have nobody looking after them.
           </p>
           <div className="nk-ticks mt-3" aria-hidden />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link href="/funding-dept/calls" className="nk-btn-secondary nk-btn-sm">
+              Call funnel
+            </Link>
+          </div>
         </header>
 
         <SummaryCards stats={stats} />

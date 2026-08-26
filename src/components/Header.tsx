@@ -342,14 +342,24 @@ export default function Header() {
                           <span>Faculty in My Schools</span>
                         </Link>
                         {fundingDept.isHead && (
-                          <Link
-                            href="/funding-dept/overview"
-                            className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
-                            onClick={closeMenu}
-                          >
-                            <span>📋</span>
-                            <span>Department Overview</span>
-                          </Link>
+                          <>
+                            <Link
+                              href="/funding-dept/overview"
+                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              onClick={closeMenu}
+                            >
+                              <span>📋</span>
+                              <span>Department Overview</span>
+                            </Link>
+                            <Link
+                              href="/funding-dept/calls"
+                              className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                              onClick={closeMenu}
+                            >
+                              <span>📈</span>
+                              <span>Call Funnel</span>
+                            </Link>
+                          </>
                         )}
                       </>
                     )}

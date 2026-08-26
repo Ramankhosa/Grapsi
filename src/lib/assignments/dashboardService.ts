@@ -305,7 +305,10 @@ export async function getUpcomingDeadlines(filters: DashboardFilters, days = 30,
 function unassignedExpiredWhere(tenantId: string) {
   return Prisma.sql`
     (
-      fc."tenantId" = ${tenantId}
+      (
+        fc."tenantId" = ${tenantId}
+        AND (fc.status = 'PUBLISHED' OR fc.catalog_status = 'PUBLISHED')
+      )
       OR (fc."tenantId" IS NULL AND fc.visibility = 'GLOBAL_PUBLISHED' AND fc.status = 'PUBLISHED')
     )
     AND COALESCE(fc.close_date, fc."deadlineAt") IS NOT NULL
@@ -396,7 +399,10 @@ export async function getUnassignedUpcomingCalls(
       COALESCE(fc.close_date, fc."deadlineAt")  AS "closesAt"
     FROM funding_calls fc
     WHERE (
-        fc."tenantId" = ${tenantId}
+        (
+          fc."tenantId" = ${tenantId}
+          AND (fc.status = 'PUBLISHED' OR fc.catalog_status = 'PUBLISHED')
+        )
         OR (fc."tenantId" IS NULL AND fc.visibility = 'GLOBAL_PUBLISHED' AND fc.status = 'PUBLISHED')
       )
       AND COALESCE(fc.close_date, fc."deadlineAt") IS NOT NULL

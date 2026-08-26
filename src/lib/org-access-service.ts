@@ -713,7 +713,20 @@ export async function checkServiceAccess(
   // 1. Check role-based access
   const allowedRoles = SERVICE_DEFAULT_ROLES[serviceType]
   if (!user.roles.some(r => allowedRoles.includes(r))) {
-    return { allowed: false, reason: `Role not authorized for ${serviceType}` }
+    // Funding-department staff run the intake desk regardless of their tenant
+    // role — faculty seeded as MEMBER are routinely made members or head, and
+    // without this the very people sourcing calls are locked out of
+    // FUNDING_DISCOVERY. Membership is a deliberate appointment (tenant admins
+    // create it), so it carries the same weight as a role grant here.
+    const deptException =
+      serviceType === 'FUNDING_DISCOVERY' &&
+      (await prisma.fundingDeptMember.findFirst({
+        where: { tenant_id: tenantId, user_id: userId, is_active: true },
+        select: { id: true }
+      }))
+    if (!deptException) {
+      return { allowed: false, reason: `Role not authorized for ${serviceType}` }
+    }
   }
   
   let overrideQuota: ServiceAccessResult['remainingQuota'] | undefined

@@ -94,5 +94,29 @@ module.exports = {
       merge_logs: true,
       time: true,
     },
+    {
+      // Fires the four cron-protected funding endpoints (reminder sweep, alert
+      // dispatch sweep, alert digests, weekly department report). Without this
+      // process — or an equivalent system cron — none of them ever run.
+      // Requires FUNDING_ALERT_CRON_SECRET in the shared env, matching the web
+      // app's value.
+      name: 'grapsi-funding-scheduler',
+      cwd: `${APP_ROOT}/current`,
+      script: 'scripts/funding-scheduler.js',
+      exec_mode: 'fork',
+      instances: 1,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 5000,
+      env: {
+        ...sharedEnv,
+        NODE_ENV: 'production',
+        FUNDING_SCHEDULER_BASE_URL: `http://127.0.0.1:${PORT}`,
+      },
+      out_file: `${APP_ROOT}/logs/funding-scheduler-out.log`,
+      error_file: `${APP_ROOT}/logs/funding-scheduler-error.log`,
+      merge_logs: true,
+      time: true,
+    },
   ],
 };

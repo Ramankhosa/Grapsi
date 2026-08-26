@@ -27,6 +27,14 @@ export interface FundingDeptMe {
   memberId: string | null
   title: string | null
   schools: FundingDeptSchool[]
+  /**
+   * The schools defining the caller's reach: for the head this is every school
+   * any active member covers, for a plain member it equals `schools`. Views
+   * that mirror server-side scoping (the faculty directory, school filters)
+   * must read this, not `schools` — a head with no personal rota still
+   * oversees the whole department.
+   */
+  reachSchools: FundingDeptSchool[]
   canAdminister: boolean
   capabilities: {
     canAssign: boolean
@@ -41,6 +49,7 @@ const EMPTY: FundingDeptMe = {
   memberId: null,
   title: null,
   schools: [],
+  reachSchools: [],
   canAdminister: false,
   capabilities: { canAssign: false, canViewReports: false, isTenantWide: false },
 }

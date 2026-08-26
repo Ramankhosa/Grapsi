@@ -4,6 +4,7 @@
  * These live outside the route files because Next.js App Router only permits
  * HTTP handlers and a fixed set of config exports from a `route.ts`.
  */
+import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 
 /** Listed in lifecycle order, matching the Postgres enum's declaration order. */
 export const ASSIGNMENT_STATUSES = [
@@ -115,14 +116,13 @@ export function humanStatus(status: string) {
   return String(status).toLowerCase().replace(/_/g, ' ')
 }
 
-/** Calls a tenant may see: its own, plus globally published ones. */
+/**
+ * Calls a tenant may see — the canonical published-only predicate. Assignment
+ * deliberately has no draft carve-out: a call must be published before it is
+ * assigned, because the assignee's own read path only shows published calls.
+ */
 export function tenantVisibleCallWhere(tenantId: string) {
-  return {
-    OR: [
-      { tenantId },
-      { tenantId: null, visibility: 'GLOBAL_PUBLISHED' as const, status: 'PUBLISHED' as const },
-    ],
-  }
+  return visibleFundingCallWhere(tenantId)
 }
 
 export function parseDate(value: string | null | undefined) {

@@ -97,7 +97,9 @@ export async function POST(request: NextRequest) {
       const existingCall = await prisma.fundingCall.findFirst({
         where: {
           AND: [
-            buildFundingCallAccessWhere(auth.actor),
+            // Dedupe must see the tenant's drafts too, or a re-import of an
+            // unpublished call silently creates a duplicate.
+            buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: true }),
             {
               catalog_status: 'PUBLISHED',
               is_active: { not: false },

@@ -60,6 +60,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get('status')
   const orgUnitId = (searchParams.get('orgUnitId') || '').trim()
   const outcome = (searchParams.get('outcome') || '').trim()
+  const fundingCallId = (searchParams.get('fundingCallId') || '').trim()
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 200, 1), 500)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
@@ -100,6 +101,10 @@ export async function GET(request: NextRequest) {
   }
   if (orgUnitId) {
     where.assignee_org_unit_id = orgUnitId
+  }
+  // "Who is on this call" — the per-call drill-in the funnel view uses.
+  if (fundingCallId) {
+    where.funding_call_id = fundingCallId
   }
 
   const [records, total] = await Promise.all([

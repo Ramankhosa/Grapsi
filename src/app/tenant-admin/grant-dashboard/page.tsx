@@ -354,12 +354,20 @@ export default function GrantDashboardPage() {
               Allocation, status and outcomes across your organization.
             </p>
           </div>
-          <button
-            onClick={() => openNotify(null)}
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
-          >
-            Notify faculty
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <a
+              href="/funding-dept/calls"
+              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+            >
+              Call funnel
+            </a>
+            <button
+              onClick={() => openNotify(null)}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
+            >
+              Notify faculty
+            </button>
+          </div>
         </div>
 
         {notice && (

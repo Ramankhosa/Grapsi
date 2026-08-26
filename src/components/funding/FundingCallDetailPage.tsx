@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useAuth } from '@/lib/auth-context'
+import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import type { FundingCallDetail } from '@/types/funding'
 
 type FundingCallDetailPageProps = {
@@ -42,10 +43,20 @@ export default function FundingCallDetailPage({
     [isPlatformAdmin, user?.platformPermissions, user?.roles]
   )
 
+  const { me } = useFundingDeptMe()
+
   const [call, setCall] = useState<FundingCallDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [publishNotice, setPublishNotice] = useState<string | null>(null)
+
+  // Publishing a tenant call is an announcement to matched faculty, so it
+  // stays with the people who answer for it: tenant admins and the funding
+  // department head (mirrors POST /api/funding/calls/[callId]/publish).
+  const canPublishTenantCall = Boolean(
+    me.canAdminister || me.isHead || user?.roles?.includes('CALL_ADMIN')
+  )
 
   const formattedFunding = useMemo(() => {
     if (!call) return null
@@ -132,6 +143,38 @@ export default function FundingCallDetailPage({
     }
   }
 
+  const publishTenantCall = async () => {
+    if (!token) return
+    setSaving(true)
+    setPublishNotice(null)
+    try {
+      const response = await fetch(`/api/funding/calls/${callId}/publish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const body = await response.json()
+      if (!response.ok) {
+        const missing: string[] = body.requiredFieldsRemaining || []
+        throw new Error(
+          missing.length > 0
+            ? `${body.error} Missing: ${missing.join(', ')}`
+            : body.error || 'Failed to publish funding call'
+        )
+      }
+      setPublishNotice(
+        body.alreadyPublished
+          ? 'This call is already published.'
+          : 'Published. Matched faculty are being alerted in the background.'
+      )
+      setError(null)
+      await fetchCall()
+    } catch (publishError) {
+      setError(publishError instanceof Error ? publishError.message : 'Failed to publish funding call')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (requireSuperAdmin && (authLoading || !isSuperAdmin)) {
     return <div className="p-8 text-sm text-gray-600">Checking platform access...</div>
   }
@@ -153,6 +196,25 @@ export default function FundingCallDetailPage({
               {call?.agencyName || 'Unknown agency'} - {call?.visibility || '...'} - {call?.status || '...'}
             </p>
           </div>
+
+          {call && canPublishTenantCall && call.visibility === 'TENANT_PRIVATE' ? (
+            <div className="flex flex-col items-end gap-1">
+              <button
+                type="button"
+                onClick={publishTenantCall}
+                disabled={saving || call.catalogStatus === 'PUBLISHED'}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+              >
+                {call.catalogStatus === 'PUBLISHED' ? 'Published' : 'Publish to faculty'}
+              </button>
+              {call.catalogStatus !== 'PUBLISHED' ? (
+                <p className="text-xs text-slate-500">
+                  Publishing alerts matched faculty and makes the call visible to everyone in your
+                  organization.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           {call && isSuperAdminWriter && call.visibility === 'GLOBAL_PUBLISHED' ? (
             <div className="flex gap-2">
@@ -178,6 +240,12 @@ export default function FundingCallDetailPage({
 
         {error ? (
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
+        ) : null}
+
+        {publishNotice ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            {publishNotice}
+          </div>
         ) : null}
 
         {loading ? (

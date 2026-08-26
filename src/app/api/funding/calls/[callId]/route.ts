@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
 import { toFundingCallDetail, toFundingImportJobView } from '@/lib/fundingIntake/compat'
-import { buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
+import { actorCanSeeTenantDrafts, buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingGuidelineService } from '@/lib/fundingGuidelines/service'
 import { fundingIntakeService } from '@/lib/fundingIntake/service'
 import { fundingTemplateService } from '@/lib/fundingTemplates/service'
@@ -144,7 +144,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   try {
     const call = await prisma.fundingCall.findFirst({
       where: {
-        AND: [{ id: params.callId }, buildFundingCallAccessWhere(auth.actor)],
+        AND: [{ id: params.callId }, buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor) })],
       },
     })
 

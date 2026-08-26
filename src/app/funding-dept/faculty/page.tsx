@@ -103,7 +103,7 @@ export default function DeptFacultyPage() {
           <p className="nk-sub mt-1">
             {me.capabilities.isTenantWide
               ? 'You can see the whole organization.'
-              : `Scoped to ${me.schools.length} school${me.schools.length === 1 ? '' : 's'} you cover.`}
+              : `Scoped to ${me.reachSchools.length} school${me.reachSchools.length === 1 ? '' : 's'} ${me.isHead ? 'the department covers' : 'you cover'}.`}
           </p>
           <div className="nk-ticks mt-3" aria-hidden />
         </header>
@@ -118,7 +118,7 @@ export default function DeptFacultyPage() {
               if (event.key === 'Enter') void load(0, search, unitFilter)
             }}
           />
-          {me.schools.length > 1 ? (
+          {me.reachSchools.length > 1 ? (
             <select
               className="nk-select max-w-xs"
               value={unitFilter}
@@ -128,7 +128,7 @@ export default function DeptFacultyPage() {
               }}
             >
               <option value="">All my schools</option>
-              {me.schools.map((school) => (
+              {me.reachSchools.map((school) => (
                 <option key={school.id} value={school.id}>
                   {school.name}
                 </option>
@@ -147,7 +147,7 @@ export default function DeptFacultyPage() {
           </Link>
         </div>
 
-        {me.schools.length === 0 && !me.capabilities.isTenantWide ? (
+        {me.reachSchools.length === 0 && !me.capabilities.isTenantWide ? (
           <div className="nk-panel-quiet px-5 py-12 text-center">
             <p className="nk-title">No schools assigned to you yet</p>
             <p className="nk-sub mx-auto mt-1 max-w-md">

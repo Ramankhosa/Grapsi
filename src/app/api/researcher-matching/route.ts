@@ -1,43 +1,64 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { authenticateUser } from '@/lib/auth-middleware'
 import { researcherSearchService } from '@/lib/services/researcherSearchService'
 import { prisma } from '@/lib/prisma'
+import { isAccessError, requireTenantScope, type TenantScopeContext } from '@/lib/auth/tenantAccess'
+import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
+import { intersectRequestedUnits } from '@/lib/orgUnits/scope'
 
 /**
  * Tenant-scoped researcher matching.
  *
- * Available to every authenticated user that belongs to a tenant. Unlike the
- * super-admin variant, all reads and searches are constrained to the caller's
- * own tenant, so a user only ever sees researchers within their organization.
+ * This is an assigner's tool: it surfaces other people's research summaries,
+ * areas and publication evidence, so it is limited to callers who can act on
+ * the answer — tenant-wide admins, org-unit heads, and funding-department
+ * members with coverage. Everything a non-tenant-wide caller sees is clamped
+ * to the schools they manage, mirroring the assignment fence in
+ * `canAssignToUser`: discovery and assignment must draw the same boundary.
  */
-async function requireTenantUser(request: NextRequest) {
-  const authResult = await authenticateUser(request)
-  if (!authResult.user) {
-    return { error: authResult.error!.message, status: authResult.error!.status }
+async function requireMatchingAccess(request: NextRequest) {
+  const context = await requireTenantScope(request)
+  if (isAccessError(context)) {
+    return context
   }
-  const tenantId: string | null = authResult.user.tenantId || null
-  if (!tenantId) {
-    return { error: 'A tenant account is required to use researcher matching.', status: 403 }
+  const { scope } = context
+  if (!scope.isTenantWide && !scope.canAssign && !scope.canViewReports) {
+    return {
+      error: 'Researcher matching is available to funding-department members and administrators.',
+      status: 403,
+    }
   }
-  return { user: authResult.user, tenantId }
+  return context
 }
 
-/** Calls this tenant is allowed to see: its own private calls + global published calls. */
-function tenantVisibleCallWhere(tenantId: string) {
-  return {
-    OR: [
-      { tenantId },
-      { tenantId: null, visibility: 'GLOBAL_PUBLISHED' as const, status: 'PUBLISHED' as const },
-    ],
+/** The org-unit filter a caller is allowed to search within. */
+function scopedOrgUnitIds(context: TenantScopeContext, requested: string[] | undefined) {
+  const clamped = intersectRequestedUnits(context.scope, requested ?? [])
+  if (context.scope.isTenantWide) {
+    // Tenant-wide callers keep whatever they asked for (possibly nothing).
+    return clamped.length > 0 ? clamped : undefined
   }
+  // Scoped callers always get a predicate. An out-of-reach request intersects
+  // to [], which must stay an impossible filter rather than widen to "all".
+  return clamped.length > 0 ? clamped : ['__none__']
+}
+
+/**
+ * Calls this tenant is allowed to match against — the canonical published-only
+ * predicate. Tenant-wide admins also see the tenant's drafts, so they can
+ * preview who a call would reach before publishing it.
+ */
+function tenantVisibleCallWhere(context: TenantScopeContext) {
+  return visibleFundingCallWhere(context.tenantId, {
+    includeTenantDrafts: context.scope.isTenantWide,
+  })
 }
 
 /**
  * GET — tenant stats (?action=stats) or the tenant-visible funding call list (?q=).
  */
 export async function GET(request: NextRequest) {
-  const auth = await requireTenantUser(request)
-  if ('error' in auth) {
+  const auth = await requireMatchingAccess(request)
+  if (isAccessError(auth)) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
   const { tenantId } = auth
@@ -79,7 +100,7 @@ export async function GET(request: NextRequest) {
         `,
       ])
 
-    const fundingCalls = await prisma.fundingCall.count({ where: tenantVisibleCallWhere(tenantId) })
+    const fundingCalls = await prisma.fundingCall.count({ where: tenantVisibleCallWhere(auth) })
 
     return NextResponse.json({
       researchers: Number(researchers[0].count),
@@ -111,15 +132,23 @@ export async function GET(request: NextRequest) {
       `,
     ])
 
+    // A scoped caller's facet tree only shows the units they manage — offering
+    // a school outside their reach would be a filter that silently returns
+    // nothing (POST clamps it to an impossible predicate).
+    const managed = new Set(auth.scope.managedUnitIds)
+    const visibleUnits = auth.scope.isTenantWide
+      ? units
+      : units.filter((unit) => managed.has(unit.id))
+
     const departmentsBySchool = new Map<string, Array<{ id: string; name: string }>>()
-    for (const unit of units) {
+    for (const unit of visibleUnits) {
       if (unit.kind !== 'DEPARTMENT' || !unit.parent_id) continue
       const list = departmentsBySchool.get(unit.parent_id) || []
       list.push({ id: unit.id, name: unit.name })
       departmentsBySchool.set(unit.parent_id, list)
     }
 
-    const schools = units
+    const schools = visibleUnits
       .filter((unit) => unit.kind === 'SCHOOL')
       .map((unit) => ({
         id: unit.id,
@@ -140,12 +169,17 @@ export async function GET(request: NextRequest) {
     })
   }
 
-  // Default: list funding calls visible to this tenant for the dropdown
+  // Default: list funding calls visible to this tenant for the dropdown.
+  // ?callId= resolves one specific call — the deep link the DSR dashboards use
+  // for "find faculty for this call".
+  const callId = (searchParams.get('callId') || '').trim()
   const q = searchParams.get('q') || ''
   const limit = Math.min(Number(searchParams.get('limit')) || 50, 200)
 
-  const where: any = tenantVisibleCallWhere(tenantId)
-  if (q) {
+  const where: any = callId
+    ? { AND: [{ id: callId }, tenantVisibleCallWhere(auth)] }
+    : tenantVisibleCallWhere(auth)
+  if (!callId && q) {
     where.AND = [
       {
         OR: [
@@ -191,8 +225,8 @@ export async function GET(request: NextRequest) {
  * POST — search researchers within the caller's tenant, by funding call or free text.
  */
 export async function POST(request: NextRequest) {
-  const auth = await requireTenantUser(request)
-  if ('error' in auth) {
+  const auth = await requireMatchingAccess(request)
+  if (isAccessError(auth)) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
   const { user, tenantId } = auth
@@ -219,7 +253,7 @@ export async function POST(request: NextRequest) {
   // Only allow matching against a call this tenant is permitted to see.
   if (fundingCallId) {
     const visible = await prisma.fundingCall.findFirst({
-      where: { AND: [{ id: fundingCallId }, tenantVisibleCallWhere(tenantId)] },
+      where: { AND: [{ id: fundingCallId }, tenantVisibleCallWhere(auth)] },
       select: { id: true },
     })
     if (!visible) {
@@ -234,7 +268,9 @@ export async function POST(request: NextRequest) {
     requesterUserId: user.id,
     requesterTenantId: tenantId,
     filters: {
-      orgUnitIds: stringList(requested.orgUnitIds),
+      // Clamped to the caller's managed units for scoped callers: discovery
+      // may never reach further than assignment does.
+      orgUnitIds: scopedOrgUnitIds(auth, stringList(requested.orgUnitIds)),
       researchAreas: stringList(requested.researchAreas),
       countries: stringList(requested.countries),
       institutionTypes: stringList(requested.institutionTypes),

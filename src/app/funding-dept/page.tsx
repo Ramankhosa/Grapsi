@@ -202,9 +202,14 @@ export default function FundingDeptHomePage() {
             Faculty in my schools
           </Link>
           {me.isHead || me.canAdminister ? (
-            <Link href="/funding-dept/overview" className="nk-btn-secondary nk-btn-sm">
-              Department overview
-            </Link>
+            <>
+              <Link href="/funding-dept/overview" className="nk-btn-secondary nk-btn-sm">
+                Department overview
+              </Link>
+              <Link href="/funding-dept/calls" className="nk-btn-secondary nk-btn-sm">
+                Call funnel
+              </Link>
+            </>
           ) : null}
         </div>
 

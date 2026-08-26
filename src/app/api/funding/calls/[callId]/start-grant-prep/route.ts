@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { requireFundingActor } from '@/lib/funding/access'
-import { buildFundingCallAccessWhere } from '@/lib/fundingIntake/routeAuth'
+import { actorCanSeeTenantDrafts, buildFundingCallAccessWhere } from '@/lib/fundingIntake/routeAuth'
 import { createOrReuseGrantPrepSession } from '@/lib/grantPrep/server'
 import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
 import { normalizeGrantPrepEngagementMode } from '@/lib/grantPrep/types'
@@ -52,7 +52,7 @@ export async function POST(
     const payload = startGrantPrepSchema.parse(await request.json().catch(() => ({})))
     const fundingCall = await prisma.fundingCall.findFirst({
       where: {
-        AND: [{ id: callId }, buildFundingCallAccessWhere(auth.actor)],
+        AND: [{ id: callId }, buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor) })],
       },
       select: {
         id: true,

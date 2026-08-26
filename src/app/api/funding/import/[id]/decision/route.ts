@@ -52,7 +52,11 @@ export async function POST(
 
       const fundingCall = await prisma.fundingCall.findFirst({
         where: {
-          AND: [{ id: payload.existingFundingCallId }, buildFundingCallAccessWhere(auth.actor)],
+          AND: [
+            { id: payload.existingFundingCallId },
+            // The duplicate being adopted may itself still be a draft.
+            buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: true }),
+          ],
         },
         select: { id: true },
       })

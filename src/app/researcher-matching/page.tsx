@@ -163,6 +163,32 @@ export default function TenantResearcherMatchingPage() {
     }
   }, [user, fetchStats, fetchCalls, fetchFacets, fetchAssignments])
 
+  // Deep link: /researcher-matching?callId=… (the DSR dashboards' "find
+  // faculty for this call") preselects that call and runs the match, instead
+  // of dropping the user on an empty picker. Read from window.location rather
+  // than useSearchParams so the page needs no Suspense boundary.
+  const [deepLinkHandled, setDeepLinkHandled] = useState(false)
+  const [autoSearchArmed, setAutoSearchArmed] = useState(false)
+  useEffect(() => {
+    if (!user || deepLinkHandled) return
+    setDeepLinkHandled(true)
+    const callId = new URLSearchParams(window.location.search).get('callId')
+    if (!callId) return
+    void (async () => {
+      try {
+        const res = await authFetch(`/api/researcher-matching?callId=${encodeURIComponent(callId)}`)
+        if (!res.ok) return
+        const data = await res.json()
+        const call: FundingCall | undefined = (data.calls || [])[0]
+        if (call) {
+          setMode('call')
+          setSelectedCall(call)
+          setAutoSearchArmed(true)
+        }
+      } catch {}
+    })()
+  }, [user, deepLinkHandled, authFetch])
+
   const departmentOptions = useMemo(() => {
     if (!facets) return []
     const schools = schoolIds.length > 0
@@ -256,6 +282,15 @@ export default function TenantResearcherMatchingPage() {
     mode, selectedCall, searchQuery, authFetch, effectiveOrgUnitIds,
     researchAreaText, careerStage, institutionType, country, includeBelowThreshold,
   ])
+
+  // Fires exactly once after a deep-linked call lands in state, so the page
+  // arrives showing matches rather than an armed-but-idle picker.
+  useEffect(() => {
+    if (autoSearchArmed && mode === 'call' && selectedCall) {
+      setAutoSearchArmed(false)
+      void handleSearch()
+    }
+  }, [autoSearchArmed, mode, selectedCall, handleSearch])
 
   const openAssign = (result: MatchResult) => {
     setAssignTarget(result)

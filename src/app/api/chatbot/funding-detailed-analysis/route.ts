@@ -2,7 +2,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { isFeatureEnabled } from '@/lib/feature-flags'
-import { buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
+import { actorCanSeeTenantDrafts, buildFundingCallAccessWhere, requireFundingImporterRequest } from '@/lib/fundingIntake/routeAuth'
 import { fundingDocumentRetrievalService } from '@/lib/fundingDocuments/retrieval'
 import { toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import { fundingCallsService } from '@/lib/services/fundingCallsService'
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
     const accessibleCall = await prisma.fundingCall.findFirst({
       where: {
         id: fundingCallId,
-        ...buildFundingCallAccessWhere(auth.actor),
+        ...buildFundingCallAccessWhere(auth.actor, { includeTenantDrafts: await actorCanSeeTenantDrafts(auth.actor) }),
       },
       select: { id: true },
     })

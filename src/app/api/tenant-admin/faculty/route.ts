@@ -53,8 +53,17 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // A head sees their own branch of the roster; tenant-wide callers see all.
-  if (!context.scope.isTenantWide && context.scope.isHead) {
+  // Deny by default: tenant-wide callers see everyone, a caller with managed
+  // scope (department coverage or an org-unit grant) sees that branch, and
+  // anyone else gets nothing — the roster carries emails and employee IDs, so
+  // "no scope" must mean "no rows", not "all rows".
+  if (!context.scope.isTenantWide) {
+    if (!context.scope.isHead) {
+      return NextResponse.json(
+        { error: 'You do not have access to the faculty roster.' },
+        { status: 403 }
+      )
+    }
     conditions.push(scopedProfileSql(context.scope))
   }
 

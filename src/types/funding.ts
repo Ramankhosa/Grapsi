@@ -118,6 +118,8 @@ export interface FundingCallSummary {
 }
 
 export interface FundingCallDetail extends FundingCallSummary {
+  /** Catalog lifecycle (DRAFT/PUBLISHED/…) — the column publish actually flips. */
+  catalogStatus?: string | null
   sourceDomain?: string | null
   sourceFingerprint?: string | null
   extractedFacts?: NormalizedFundingFacts | null
