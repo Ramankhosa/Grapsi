@@ -87,8 +87,8 @@ function matchFor(userId: string) {
 }
 
 async function loadService() {
-  const module = await import('@/lib/services/fundingAlertService')
-  return module.fundingAlertService
+  const serviceModule = await import('@/lib/services/fundingAlertService')
+  return serviceModule.fundingAlertService
 }
 
 describe('funding alert entitlement gating', () => {
