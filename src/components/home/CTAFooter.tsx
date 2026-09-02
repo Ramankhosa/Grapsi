@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { motion } from 'framer-motion'
 import { Rocket, ArrowRight } from 'lucide-react'
+import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 
 export default function CTAFooter() {
   const { user } = useAuth()
@@ -32,10 +33,10 @@ export default function CTAFooter() {
         </p>
 
         <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
-          <Link href={user ? '/projects/new/grant' : '/register'}>
+          <Link href={user ? (GRANT_PREP_ENABLED ? '/projects/new/grant' : '/finder') : '/register'}>
             <button className="group relative inline-flex items-center gap-3 px-10 py-4 bg-white text-ai-graphite-950 font-bold rounded-lg hover:bg-ai-blue-50 transition-all duration-200 shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)]">
               <Rocket className="w-5 h-5" />
-              Start Grant
+              {GRANT_PREP_ENABLED ? 'Start Grant' : 'Find Funding'}
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </Link>

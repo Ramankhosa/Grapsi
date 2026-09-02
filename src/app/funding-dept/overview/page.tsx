@@ -20,6 +20,10 @@ interface MemberRow {
   title: string | null
   schools: Array<{ id: string; name: string | null }>
   schoolCount: number
+  deputySchools: Array<{ id: string; name: string | null }>
+  awayFrom: string | null
+  awayUntil: string | null
+  isAway: boolean
   active: number
   submitted: number
   missed: number
@@ -30,9 +34,24 @@ interface MemberRow {
   overdueReminders: number
 }
 
+/** A school row with the load the coverage editor does not carry. */
+interface SchoolRow {
+  id: string
+  name: string
+  covered: boolean
+  memberName?: string | null
+  active: number
+  missed: number
+  submitted: number
+  declined: number
+  awarded: number
+  faculty: number
+  busyFaculty: number
+}
+
 interface OverviewData {
   members: MemberRow[]
-  schools: CoverageSchool[]
+  schools: Array<CoverageSchool & SchoolRow>
   uncovered: CoverageSchool[]
   openCalls: Array<{ id: string; title: string | null; agencyName: string | null; closesAt: string | null }>
   totals: {
@@ -135,6 +154,76 @@ export default function FundingDeptOverviewPage() {
     }
 
     showToast({ type: 'success', title: 'Coverage updated' })
+    await load()
+  }
+
+  /**
+   * The deputy rota. Unlike the primary rota there is nothing to release
+   * first — deputies are not exclusive, so this only ever rewrites one
+   * member's own deputy list.
+   */
+  const assignDeputy = async (schoolId: string, memberId: string | null) => {
+    if (!data) return
+    const previous = data.members.find((member) =>
+      (member.deputySchools || []).some((school) => school.id === schoolId)
+    )
+
+    if (previous && previous.id !== memberId) {
+      const response = await authFetch(`/api/funding-dept/members/${previous.id}/schools`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asDeputy: true,
+          orgUnitIds: (previous.deputySchools || [])
+            .filter((school) => school.id !== schoolId)
+            .map((school) => school.id),
+        }),
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        showToast({ type: 'error', title: payload.error || 'Could not free that deputy slot' })
+        return
+      }
+    }
+
+    if (memberId) {
+      const target = data.members.find((member) => member.id === memberId)
+      const next = Array.from(
+        new Set([...((target?.deputySchools || []).map((school) => school.id)), schoolId])
+      )
+      const response = await authFetch(`/api/funding-dept/members/${memberId}/schools`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asDeputy: true, orgUnitIds: next }),
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        showToast({ type: 'error', title: payload.error || 'Could not name that deputy' })
+        await load()
+        return
+      }
+    }
+
+    showToast({ type: 'success', title: 'Deputy updated' })
+    await load()
+  }
+
+  /** Mark a member away, or bring them back. */
+  const setLeave = async (memberId: string, awayFrom: string | null, awayUntil: string | null) => {
+    const response = await authFetch(`/api/funding-dept/members/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        awayFrom: awayFrom ? new Date(awayFrom).toISOString() : null,
+        awayUntil: awayUntil ? new Date(awayUntil).toISOString() : null,
+      }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      showToast({ type: 'error', title: payload.error || 'Could not update that leave window' })
+      return
+    }
+    showToast({ type: 'success', title: awayFrom ? 'Marked as away' : 'Marked as back' })
     await load()
   }
 
@@ -247,8 +336,55 @@ export default function FundingDeptOverviewPage() {
                           {member.isHead ? (
                             <span className="nk-badge nk-badge-live">head</span>
                           ) : null}
+                          {member.isAway ? (
+                            <span
+                              className="nk-badge nk-badge-warn"
+                              title={
+                                member.awayUntil
+                                  ? `Away until ${new Date(member.awayUntil).toLocaleDateString('en-IN')}`
+                                  : 'Away, no return date set'
+                              }
+                            >
+                              away
+                            </span>
+                          ) : null}
                         </div>
                         {member.title ? <p className="nk-sub mt-0.5">{member.title}</p> : null}
+                        {(member.deputySchools || []).length > 0 ? (
+                          <p className="nk-sub mt-0.5 text-[11.5px]">
+                            Deputy for{' '}
+                            {(member.deputySchools || []).map((s) => s.name).filter(Boolean).join(', ')}
+                          </p>
+                        ) : null}
+                        {me.canAdminister ? (
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            {member.isAway ? (
+                              <button
+                                type="button"
+                                className="nk-btn-secondary nk-btn-xs"
+                                onClick={() => void setLeave(member.id, null, null)}
+                              >
+                                Mark back
+                              </button>
+                            ) : (
+                              <label className="flex items-center gap-1.5">
+                                <span className="nk-sub text-[11.5px]">Away until</span>
+                                <input
+                                  type="date"
+                                  className="nk-input h-7 py-0 text-[12px]"
+                                  onChange={(event) => {
+                                    if (!event.target.value) return
+                                    void setLeave(
+                                      member.id,
+                                      new Date().toISOString().slice(0, 10),
+                                      event.target.value
+                                    )
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="nk-mono px-4 py-3 text-right text-nickel-700">
                         {member.schoolCount}
@@ -281,6 +417,71 @@ export default function FundingDeptOverviewPage() {
           </div>
         </section>
 
+        <section className="nk-panel mt-6">
+          <div className="nk-panel-head">
+            <div>
+              <h2 className="nk-title">Load by school</h2>
+              <p className="nk-sub">
+                Where the work actually sits — the member table above counts officers, not schools
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-nickel-200 bg-nickel-50">
+                  {['School', 'Covered by', 'Faculty', 'Engaged', 'Active', 'Overdue', 'Submitted', 'Awarded'].map(
+                    (heading) => (
+                      <th key={heading} className="nk-eyebrow px-4 py-2.5 text-left">
+                        {heading}
+                      </th>
+                    )
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.schools ?? []).map((school) => (
+                  <tr key={school.id} className="border-b border-nickel-100 last:border-0">
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/funding-dept/schools/${school.id}`}
+                        className="text-[13.5px] font-medium text-cobalt-700 hover:underline"
+                      >
+                        {school.name}
+                      </Link>
+                    </td>
+                    <td className="nk-sub px-4 py-3">
+                      {school.covered ? school.memberName || '—' : (
+                        <span className="nk-badge nk-badge-warn">nobody</span>
+                      )}
+                    </td>
+                    <td className="nk-sub px-4 py-3 tabular-nums">{school.faculty}</td>
+                    <td className="px-4 py-3 tabular-nums">
+                      <span className="nk-sub">
+                        {school.busyFaculty}
+                        {school.faculty > 0 ? ` of ${school.faculty}` : ''}
+                      </span>
+                      {school.faculty > 0 && school.busyFaculty === 0 ? (
+                        <span className="nk-badge nk-badge-warn ml-2">nobody engaged</span>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">{school.active}</td>
+                    <td className="px-4 py-3 tabular-nums">
+                      {school.missed > 0 ? (
+                        <span className="font-medium text-red-700">{school.missed}</span>
+                      ) : (
+                        <span className="nk-sub">0</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">{school.submitted}</td>
+                    <td className="px-4 py-3 tabular-nums">{school.awarded}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <section className="mt-6">
           <div className="mb-3">
             <h2 className="nk-title">School coverage</h2>
@@ -292,6 +493,7 @@ export default function FundingDeptOverviewPage() {
             schools={data?.schools ?? []}
             members={data?.members ?? []}
             onAssign={assignSchool}
+            onAssignDeputy={assignDeputy}
           />
         </section>
 

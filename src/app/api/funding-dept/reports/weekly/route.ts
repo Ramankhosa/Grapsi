@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
+import { isCronRequest, withJobRun } from '@/lib/jobs/jobRuns'
 import { sendWeeklyDigests } from '@/lib/fundingDept/weeklyReportService'
 
 export const runtime = 'nodejs'
@@ -10,14 +11,6 @@ export const maxDuration = 300
 const weeklySchema = z.object({
   tenantId: z.string().trim().min(1).optional(),
 })
-
-function isCronRequest(request: NextRequest): boolean {
-  const secret = process.env.FUNDING_ALERT_CRON_SECRET
-  if (!secret) {
-    return false
-  }
-  return request.headers.get('x-funding-alert-secret') === secret
-}
 
 /**
  * POST /api/funding-dept/reports/weekly
@@ -29,11 +22,14 @@ function isCronRequest(request: NextRequest): boolean {
  * Pass tenantId to run it for one organization, e.g. when testing.
  */
 export async function POST(request: NextRequest) {
-  if (!isCronRequest(request)) {
+  const cron = isCronRequest(request)
+  let triggeredBy: string | null = null
+  if (!cron) {
     const auth = await requireFundingOperatorRequest(request)
     if ('response' in auth) {
       return auth.response
     }
+    triggeredBy = auth.actor.email
   }
 
   let body: z.infer<typeof weeklySchema>
@@ -46,14 +42,19 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  try {
-    const result = await sendWeeklyDigests({ tenantId: body.tenantId })
-    return NextResponse.json(result)
-  } catch (error) {
-    console.error('[FUNDING-DEPT] Weekly report failed:', error)
-    return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Weekly report failed' },
-      { status: 500 }
-    )
-  }
+  return withJobRun(
+    { jobKey: 'reports-weekly', trigger: cron ? 'schedule' : 'manual', triggeredBy },
+    async () => {
+      try {
+        const result = await sendWeeklyDigests({ tenantId: body.tenantId })
+        return NextResponse.json(result)
+      } catch (error) {
+        console.error('[FUNDING-DEPT] Weekly report failed:', error)
+        return NextResponse.json(
+          { message: error instanceof Error ? error.message : 'Weekly report failed' },
+          { status: 500 }
+        )
+      }
+    }
+  )
 }

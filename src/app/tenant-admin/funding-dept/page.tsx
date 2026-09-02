@@ -27,6 +27,10 @@ interface Member {
   title: string | null
   isActive: boolean
   schools: Array<{ id: string; name: string | null }>
+  deputySchools: Array<{ id: string; name: string | null }>
+  awayFrom: string | null
+  awayUntil: string | null
+  isAway: boolean
 }
 
 interface FacultyOption {
@@ -211,6 +215,75 @@ export default function TenantAdminFundingDeptPage() {
     await load()
   }
 
+  /**
+   * The deputy rota. Unlike the primary rota there is nothing to release
+   * first — deputies are not exclusive, so this only ever rewrites one
+   * member's own deputy list.
+   */
+  const assignDeputy = async (schoolId: string, memberId: string | null) => {
+    const previous = members.find((member) =>
+      (member.deputySchools || []).some((school) => school.id === schoolId)
+    )
+
+    if (previous && previous.id !== memberId) {
+      const response = await authFetch(`/api/funding-dept/members/${previous.id}/schools`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asDeputy: true,
+          orgUnitIds: (previous.deputySchools || [])
+            .filter((school) => school.id !== schoolId)
+            .map((school) => school.id),
+        }),
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        showToast({ type: 'error', title: payload.error || 'Could not free that deputy slot' })
+        return
+      }
+    }
+
+    if (memberId) {
+      const target = members.find((member) => member.id === memberId)
+      const next = Array.from(
+        new Set([...((target?.deputySchools || []).map((school) => school.id)), schoolId])
+      )
+      const response = await authFetch(`/api/funding-dept/members/${memberId}/schools`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asDeputy: true, orgUnitIds: next }),
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        showToast({ type: 'error', title: payload.error || 'Could not name that deputy' })
+        await load()
+        return
+      }
+    }
+
+    showToast({ type: 'success', title: 'Deputy updated' })
+    await load()
+  }
+
+  /** Mark a member away, or bring them back. */
+  const setLeave = async (memberId: string, awayFrom: string | null, awayUntil: string | null) => {
+    const response = await authFetch(`/api/funding-dept/members/${memberId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        awayFrom: awayFrom ? new Date(awayFrom).toISOString() : null,
+        awayUntil: awayUntil ? new Date(awayUntil).toISOString() : null,
+      }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      showToast({ type: 'error', title: payload.error || 'Could not update that leave window' })
+      return
+    }
+    showToast({ type: 'success', title: awayFrom ? 'Marked as away' : 'Marked as back' })
+    await load()
+  }
+
   if (authLoading) {
     return (
       <main className="nk-ground nk-wash">
@@ -351,6 +424,18 @@ export default function TenantAdminFundingDeptPage() {
                         {member.isHead ? (
                           <span className="nk-badge nk-badge-live">head</span>
                         ) : null}
+                        {member.isAway ? (
+                          <span
+                            className="nk-badge nk-badge-warn"
+                            title={
+                              member.awayUntil
+                                ? `Away until ${new Date(member.awayUntil).toLocaleDateString('en-IN')}`
+                                : 'Away, no return date set'
+                            }
+                          >
+                            away
+                          </span>
+                        ) : null}
                         {!member.isActive ? <span className="nk-badge">inactive</span> : null}
                       </div>
                       <p className="nk-sub mt-0.5">{member.email}</p>
@@ -365,6 +450,43 @@ export default function TenantAdminFundingDeptPage() {
                           ))
                         )}
                       </div>
+                      {(member.deputySchools || []).length > 0 ? (
+                        <p className="nk-sub mt-1 text-[11.5px]">
+                          Deputy for{' '}
+                          {(member.deputySchools || []).map((s) => s.name).filter(Boolean).join(', ')}
+                        </p>
+                      ) : null}
+                      {member.isActive ? (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          {member.isAway ? (
+                            <button
+                              type="button"
+                              className="nk-btn-secondary nk-btn-xs"
+                              disabled={busy}
+                              onClick={() => void setLeave(member.id, null, null)}
+                            >
+                              Mark back
+                            </button>
+                          ) : (
+                            <label className="flex items-center gap-1.5">
+                              <span className="nk-sub text-[11.5px]">Away until</span>
+                              <input
+                                type="date"
+                                className="nk-input h-7 py-0 text-[12px]"
+                                disabled={busy}
+                                onChange={(event) => {
+                                  if (!event.target.value) return
+                                  void setLeave(
+                                    member.id,
+                                    new Date().toISOString().slice(0, 10),
+                                    event.target.value
+                                  )
+                                }}
+                              />
+                            </label>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
                       {!member.isHead && member.isActive ? (
@@ -418,6 +540,7 @@ export default function TenantAdminFundingDeptPage() {
             schools={schools}
             members={members.filter((member) => member.isActive)}
             onAssign={assignSchool}
+            onAssignDeputy={assignDeputy}
             disabled={busy}
           />
         </section>

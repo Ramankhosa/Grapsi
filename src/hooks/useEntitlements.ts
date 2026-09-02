@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import type { ProductModuleKey } from '@/lib/access/modules'
+import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 
 export interface EntitlementModule {
   key: ProductModuleKey
@@ -69,6 +70,9 @@ export function useEntitlements() {
 
   const hasModule = useCallback(
     (key: ProductModuleKey) => {
+      // Kill switch beats every entitlement, platform users included — the
+      // module is withdrawn from the product, not just from a plan.
+      if (key === 'GRANT_STUDIO' && !GRANT_PREP_ENABLED) return false
       if (isPlatform) return true
       const mod = data?.modules.find((m) => m.key === key)
       return Boolean(mod?.unlocked)
@@ -79,7 +83,7 @@ export function useEntitlements() {
   return {
     summary: data,
     plan: data?.plan ?? null,
-    modules: data?.modules ?? [],
+    modules: (data?.modules ?? []).filter((m) => m.key !== 'GRANT_STUDIO' || GRANT_PREP_ENABLED),
     isPlatform,
     isLoading,
     error,

@@ -1,6 +1,8 @@
 import prisma from '../prisma';
 import { sendEmail, SITE_URL } from '../mailer';
 import { fundingOpportunityTemplate, fundingAlertDigestTemplate } from '../email-templates';
+import { filterTenantsWithFeature } from '../entitlement-service';
+import { matchedAlertKeywords } from '../funding/alertKeywordBoost';
 import type { ResearcherSearchResult } from './researcherSearchService';
 import { researcherSearchService } from './researcherSearchService';
 
@@ -11,6 +13,14 @@ import { researcherSearchService } from './researcherSearchService';
  * researcher's profile, saved research areas (use_for_alerts) and tagged
  * publications using the same embedding search the admin matching screen
  * uses, then notifies the matched researchers in-app and by email.
+ *
+ * Alerts are a separately sold service: delivery is plan-gated on the
+ * FUNDING_ALERTS feature code. A matched user only receives an alert when
+ * their tenant's active plan includes FUNDING_ALERTS — institutional tenants
+ * get it through their plan, individual paying customers through the plan on
+ * their INDIVIDUAL tenant (customer-subscription-service). Unentitled matches
+ * are skipped entirely (no alert row), and queued digest alerts whose tenant
+ * has since lost the feature are closed out at digest time.
  *
  * Delivery is preference-aware (ResearcherNotificationPreference):
  *  - in_app_enabled  -> Notification row (bell + /notifications)
@@ -34,6 +44,8 @@ const MAX_ALERT_RECIPIENTS = 50;
 /** Pause between instant emails so the mail provider is not burst-hit. */
 const EMAIL_DELAY_MS = 250;
 const NOTIFICATION_CATEGORY = 'FUNDING_MATCH';
+/** Plan feature that sells alert delivery (see access/modules.ts FUNDING_ALERTS). */
+const ALERTS_FEATURE_CODE = 'FUNDING_ALERTS';
 
 export interface FundingAlertDispatchResult {
   fundingCallId: string;
@@ -46,6 +58,8 @@ export interface FundingAlertDispatchResult {
   emailsQueued: number;
   emailsFailed: number;
   skippedExisting: number;
+  /** Matches dropped because the user's tenant plan lacks FUNDING_ALERTS. */
+  skippedUnentitled: number;
 }
 
 export interface FundingAlertDigestResult {
@@ -85,6 +99,12 @@ function toPreferences(record: {
   email_enabled: boolean;
   email_address: string | null;
   notification_frequency: string;
+  /**
+   * Required in the type (though unused here) so every select feeding this
+   * function is forced to fetch it — the dispatch path reads it for the
+   * keyword boost, and a select that forgets it would otherwise fail silently.
+   */
+  alert_keywords: string[];
 } | undefined): AlertPreferences {
   if (!record) {
     return DEFAULT_PREFERENCES;
@@ -110,6 +130,9 @@ type AlertableCall = {
   is_active: boolean | null;
   title: string;
   scheme_title: string | null;
+  summary: string | null;
+  description: string | null;
+  disciplines: string[];
   agency_name: string | null;
   agencyName: string | null;
   close_date: Date | null;
@@ -130,6 +153,9 @@ const CALL_SELECT = {
   is_active: true,
   title: true,
   scheme_title: true,
+  summary: true,
+  description: true,
+  disciplines: true,
   agency_name: true,
   agencyName: true,
   close_date: true,
@@ -230,6 +256,11 @@ async function stampDispatched(call: AlertableCall, summary: FundingAlertDispatc
     alerted: summary.alerted,
     emails_sent: summary.emailsSent,
     emails_queued: summary.emailsQueued,
+    // Matches withheld for lack of the FUNDING_ALERTS plan feature. The stamp
+    // stops the sweep re-scanning this call, so if a tenant subscribes later
+    // these matches are not retried — re-dispatch with { force: true } to
+    // deliver them.
+    unentitled: summary.skippedUnentitled,
   };
   await prisma.fundingCall.update({
     where: { id: call.id },
@@ -256,6 +287,7 @@ export class FundingAlertService {
       emailsQueued: 0,
       emailsFailed: 0,
       skippedExisting: 0,
+      skippedUnentitled: 0,
     };
 
     const call = (await prisma.fundingCall.findUnique({
@@ -287,7 +319,53 @@ export class FundingAlertService {
       },
     });
 
-    const matches = search.results.filter((match) => meetsTier(match.matchTier));
+    // Preferences are fetched before the tier filter (not after, with the
+    // other batch loads) because a user's saved alert keywords can rescue a
+    // weak match: a call whose text hits one of them is promoted to moderate.
+    const preferenceRows = await prisma.researcherNotificationPreference.findMany({
+      where: { user_id: { in: search.results.map((match) => match.userId) } },
+      select: {
+        user_id: true,
+        in_app_enabled: true,
+        email_enabled: true,
+        email_address: true,
+        notification_frequency: true,
+        alert_keywords: true,
+      },
+    });
+    const preferenceRowByUser = new Map(preferenceRows.map((row) => [row.user_id, row]));
+
+    const callText = {
+      title: call.title,
+      schemeTitle: call.scheme_title,
+      summary: call.summary,
+      description: call.description,
+      disciplines: call.disciplines,
+    };
+    const matches = search.results
+      .map((match) => {
+        if (match.matchTier !== 'weak') {
+          return match;
+        }
+        const keywords = preferenceRowByUser.get(match.userId)?.alert_keywords ?? [];
+        const hits = matchedAlertKeywords(callText, keywords);
+        if (hits.length === 0) {
+          return match;
+        }
+        // Boosted tier and augmented reason are stored on the alert row, so
+        // "why did I get this?" stays honest about the keyword rescue.
+        return {
+          ...match,
+          matchTier: 'moderate' as const,
+          matchReason: [
+            match.matchReason,
+            `Matches your alert keyword${hits.length > 1 ? 's' : ''}: ${hits.slice(0, 3).join(', ')}`,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        };
+      })
+      .filter((match) => meetsTier(match.matchTier));
     result.matched = matches.length;
 
     if (matches.length === 0) {
@@ -298,7 +376,7 @@ export class FundingAlertService {
     }
 
     const matchedIds = matches.map((match) => match.userId);
-    const [existingAlerts, users, preferenceRows] = await Promise.all([
+    const [existingAlerts, users] = await Promise.all([
       prisma.fundingCallAlert.findMany({
         where: { funding_call_id: fundingCallId, user_id: { in: matchedIds } },
         select: { user_id: true },
@@ -307,21 +385,19 @@ export class FundingAlertService {
         where: { id: { in: matchedIds }, status: 'ACTIVE' },
         select: { id: true, email: true, name: true, tenantId: true },
       }),
-      prisma.researcherNotificationPreference.findMany({
-        where: { user_id: { in: matchedIds } },
-        select: {
-          user_id: true,
-          in_app_enabled: true,
-          email_enabled: true,
-          email_address: true,
-          notification_frequency: true,
-        },
-      }),
     ]);
 
     const alreadyAlerted = new Set(existingAlerts.map((alert) => alert.user_id));
     const userById = new Map(users.map((user) => [user.id, user]));
     const preferencesByUser = new Map(preferenceRows.map((row) => [row.user_id, toPreferences(row)]));
+
+    // Alert delivery is a paid service: only tenants whose active plan includes
+    // FUNDING_ALERTS receive anything. Tenantless accounts have no plan and are
+    // therefore never alerted.
+    const entitledTenants = await filterTenantsWithFeature(
+      users.map((user) => user.tenantId),
+      ALERTS_FEATURE_CODE
+    );
 
     const title = callTitle(call);
     const linkUrl = `/finder/calls/${encodeURIComponent(call.id)}`;
@@ -337,6 +413,10 @@ export class FundingAlertService {
       }
       const user = userById.get(match.userId);
       if (!user) {
+        continue;
+      }
+      if (!user.tenantId || !entitledTenants.has(user.tenantId)) {
+        result.skippedUnentitled += 1;
         continue;
       }
       const preferences = preferencesByUser.get(match.userId) || DEFAULT_PREFERENCES;
@@ -442,6 +522,9 @@ export class FundingAlertService {
     }
 
     result.dispatched = true;
+    if (result.alerted === 0 && result.skippedUnentitled > 0 && result.skippedExisting === 0) {
+      result.reason = 'no_entitled_matches';
+    }
     await stampDispatched(call, result);
     return result;
   }
@@ -489,6 +572,7 @@ export class FundingAlertService {
           emailsQueued: 0,
           emailsFailed: 0,
           skippedExisting: 0,
+          skippedUnentitled: 0,
         });
       }
     }
@@ -519,7 +603,7 @@ export class FundingAlertService {
         match_reason: true,
         match_tier: true,
         funding_call: { select: CALL_SELECT },
-        user: { select: { id: true, email: true, name: true, status: true } },
+        user: { select: { id: true, email: true, name: true, status: true, tenantId: true } },
       },
     });
 
@@ -536,6 +620,7 @@ export class FundingAlertService {
         email_enabled: true,
         email_address: true,
         notification_frequency: true,
+        alert_keywords: true,
       },
     });
     const preferencesByUser = new Map(preferenceRows.map((row) => [row.user_id, toPreferences(row)]));
@@ -559,9 +644,25 @@ export class FundingAlertService {
 
     result.usersConsidered = byUser.size;
 
+    // Entitlement can lapse between queueing and the digest run. Re-check the
+    // tenant plans here so a churned tenant's queued alerts are closed out
+    // instead of clogging the head of the queue forever.
+    const entitledTenants = await filterTenantsWithFeature(
+      Array.from(byUser.values(), (alerts) => alerts[0]?.user?.tenantId),
+      ALERTS_FEATURE_CODE
+    );
+
     for (const [userId, alerts] of byUser) {
       const user = alerts[0].user;
       if (!user || user.status !== 'ACTIVE') {
+        continue;
+      }
+
+      if (!user.tenantId || !entitledTenants.has(user.tenantId)) {
+        await prisma.fundingCallAlert.updateMany({
+          where: { id: { in: alerts.map((alert) => alert.id) } },
+          data: { email_status: 'skipped', email_error: 'Plan no longer includes funding alerts' },
+        });
         continue;
       }
 
@@ -637,7 +738,8 @@ export function dispatchFundingAlertsQuietly(fundingCallId: string): void {
     .then((summary) => {
       console.log(
         `[FUNDING-ALERT] Call ${fundingCallId}: matched ${summary.matched}, alerted ${summary.alerted} ` +
-          `(in-app ${summary.inAppCreated}, emails sent ${summary.emailsSent}, queued ${summary.emailsQueued})`
+          `(in-app ${summary.inAppCreated}, emails sent ${summary.emailsSent}, queued ${summary.emailsQueued}, ` +
+          `unentitled ${summary.skippedUnentitled})`
       );
     })
     .catch((error) => {

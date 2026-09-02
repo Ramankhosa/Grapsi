@@ -69,8 +69,15 @@ export interface ResearcherSearchFilters {
   applicationLanguages?: string[];
   /** Department org-unit ids. A School selection expands to its departments. */
   orgUnitIds?: string[];
+  /** Job titles as stored on the profile, e.g. "Professor", "Assistant Professor". */
+  designations?: string[];
   /** Free-text discipline/topic terms matched against research areas + keywords. */
   researchAreas?: string[];
+  /**
+   * Narrow to one person by name, email or employee ID — "does this specific
+   * faculty member fit this call", rather than "who fits this call".
+   */
+  person?: string | null;
   /**
    * Keep candidates that fall below the relevance gate (still tiered). Lets an
    * admin explore weak matches when nothing strong exists.
@@ -121,11 +128,26 @@ export interface ResearcherSearchResult {
   matchReason: string;
   evidence: ResearcherMatchEvidence[];
   sharedTerms: string[];
+  /** Reasons this person may not qualify for the call, if it declares any. */
+  eligibilityFlags: string[];
+}
+
+/**
+ * Eligibility the call itself declares. Surfaced as a flag on each card rather
+ * than as a filter: agency wording is inconsistent enough that a hard filter
+ * would quietly hide the right person, and the officer reading the list is
+ * better placed than the matcher to judge a borderline case.
+ */
+export interface CallEligibility {
+  careerStages: string[];
+  institutionTypes: string[];
 }
 
 export interface ResearcherSearchResponse {
   query: string;
   fundingCallId: string | null;
+  /** What the call restricts itself to, when it says. */
+  callEligibility: CallEligibility | null;
   totalResults: number;
   /** Candidates retrieved before relevance gating — lets the UI say "screened N". */
   totalCandidates: number;
@@ -258,11 +280,28 @@ function buildHardFilterConditions(input: ResearcherSearchRequest) {
     );
   }
 
+  const designations = normalizeFilterValues(filters.designations);
+  if (designations.length > 0) {
+    conditions.push(Prisma.sql`LOWER(COALESCE(rp.designation, '')) = ANY(${sqlLowerTextArray(designations)})`);
+  }
+
   const researchAreas = normalizeFilterValues(filters.researchAreas);
   if (researchAreas.length > 0) {
     conditions.push(Prisma.sql`(
       ${buildArrayContainsCondition('rp.research_areas', researchAreas)}
       OR ${buildArrayContainsCondition('rp.keywords', researchAreas)}
+    )`);
+  }
+
+  // Name / email / employee ID lookup. Substring rather than exact so a partial
+  // employee number or a surname is enough to pin the search to one person.
+  const person = normalizeWhitespace(filters.person || '');
+  if (person) {
+    const like = `%${person.toLowerCase()}%`;
+    conditions.push(Prisma.sql`(
+      LOWER(COALESCE(rp.display_name, u.name, '')) LIKE ${like}
+      OR LOWER(u.email) LIKE ${like}
+      OR LOWER(COALESCE(rp.employee_id, '')) LIKE ${like}
     )`);
   }
 
@@ -477,6 +516,9 @@ function mergeCandidates(rows: ResearcherCandidateRow[], limit: number) {
         matchReason: '',
         evidence: [evidence],
         sharedTerms: [],
+        // Filled in at the end of search(), once the call's declared
+        // eligibility is known.
+        eligibilityFlags: [],
       });
       return;
     }
@@ -602,6 +644,57 @@ async function buildFundingCallQuery(fundingCallId: string) {
     call.fundingKinds.length ? `funding types: ${call.fundingKinds.join(', ')}` : '',
     call.eligibilityText ? `eligibility context: ${call.eligibilityText}` : '',
   ].filter(Boolean).join(' | '));
+}
+
+/** The call's declared eligibility, empty arrays when it declares none. */
+async function loadCallEligibility(fundingCallId: string): Promise<CallEligibility | null> {
+  const rows = await prisma.$queryRaw<
+    Array<{ careerStages: string[]; institutionTypes: string[] }>
+  >(Prisma.sql`
+    SELECT
+      COALESCE(career_stages, ARRAY[]::text[]) AS "careerStages",
+      COALESCE(institution_types, ARRAY[]::text[]) AS "institutionTypes"
+    FROM funding_calls
+    WHERE id = ${fundingCallId}
+    LIMIT 1
+  `);
+  const row = rows[0];
+  if (!row) return null;
+  if (row.careerStages.length === 0 && row.institutionTypes.length === 0) return null;
+  return { careerStages: row.careerStages, institutionTypes: row.institutionTypes };
+}
+
+/**
+ * Why this person might not qualify.
+ *
+ * Only fires when BOTH sides state something: a call that lists no career
+ * stages restricts nobody, and a profile with no career stage recorded is a
+ * gap in our data, not evidence of ineligibility.
+ */
+function eligibilityFlagsFor(
+  result: { careerStage: string | null; institutionType: string | null },
+  eligibility: CallEligibility | null
+): string[] {
+  if (!eligibility) return [];
+  const flags: string[] = [];
+  const matches = (allowed: string[], value: string | null) =>
+    allowed.some((entry) => entry.toLowerCase() === (value || '').toLowerCase());
+
+  if (eligibility.careerStages.length > 0 && result.careerStage) {
+    if (!matches(eligibility.careerStages, result.careerStage)) {
+      flags.push(
+        `Call is for ${eligibility.careerStages.join(', ').replace(/_/g, ' ')} — this is ${result.careerStage.replace(/_/g, ' ')}`
+      );
+    }
+  }
+  if (eligibility.institutionTypes.length > 0 && result.institutionType) {
+    if (!matches(eligibility.institutionTypes, result.institutionType)) {
+      flags.push(
+        `Call is for ${eligibility.institutionTypes.join(', ').replace(/_/g, ' ')} institutions`
+      );
+    }
+  }
+  return flags;
 }
 
 export class ResearcherSearchService {
@@ -815,8 +908,13 @@ export class ResearcherSearchService {
     const merged = mergeCandidates([...vectorRows, ...textRows], MERGED_LIMIT);
     const { ranked, basis } = await this.rerank(query, merged);
     const gated = applyRelevanceGate(ranked, basis, Boolean(input.filters?.includeBelowThreshold));
+    const callEligibility = input.fundingCallId
+      ? await loadCallEligibility(input.fundingCallId).catch(() => null)
+      : null;
+
     const results = gated.slice(0, limit).map((result) => ({
       ...result,
+      eligibilityFlags: eligibilityFlagsFor(result, callEligibility),
       sharedTerms: extractSharedTerms(query, [...result.keywords, ...result.researchAreas]),
       score: roundScore(result.score),
       rerankScore: result.rerankScore === null ? null : roundScore(result.rerankScore),
@@ -831,6 +929,7 @@ export class ResearcherSearchService {
     return {
       query,
       fundingCallId: input.fundingCallId || null,
+      callEligibility,
       totalResults: results.length,
       totalCandidates: merged.length,
       scoreBasis: basis,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
+import { isCronRequest, withJobRun } from '@/lib/jobs/jobRuns'
 import { fundingAlertService } from '@/lib/services/fundingAlertService'
 
 export const runtime = 'nodejs'
@@ -14,19 +15,6 @@ const dispatchSchema = z.object({
 })
 
 /**
- * Schedulers authenticate with a shared secret header instead of a session.
- * The secret must be configured server-side for the header path to work at
- * all, so an unset env can never open the route.
- */
-function isCronRequest(request: NextRequest): boolean {
-  const secret = process.env.FUNDING_ALERT_CRON_SECRET
-  if (!secret) {
-    return false
-  }
-  return request.headers.get('x-funding-alert-secret') === secret
-}
-
-/**
  * POST /api/funding/alerts/dispatch
  *
  * With fundingCallId: match that call against researcher embeddings and alert
@@ -34,11 +22,14 @@ function isCronRequest(request: NextRequest): boolean {
  * Without: sweep recently published calls that have never been dispatched.
  */
 export async function POST(request: NextRequest) {
-  if (!isCronRequest(request)) {
+  const cron = isCronRequest(request)
+  let triggeredBy: string | null = null
+  if (!cron) {
     const auth = await requireFundingOperatorRequest(request)
     if ('response' in auth) {
       return auth.response
     }
+    triggeredBy = auth.actor.email
   }
 
   let body: z.infer<typeof dispatchSchema>
@@ -52,21 +43,26 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  try {
-    if (body.fundingCallId) {
-      const result = await fundingAlertService.dispatchAlertsForFundingCall(body.fundingCallId, {
-        force: body.force,
-      })
-      return NextResponse.json({ mode: 'single', result })
-    }
+  return withJobRun(
+    { jobKey: 'alerts-dispatch', trigger: cron ? 'schedule' : 'manual', triggeredBy },
+    async () => {
+      try {
+        if (body.fundingCallId) {
+          const result = await fundingAlertService.dispatchAlertsForFundingCall(body.fundingCallId, {
+            force: body.force,
+          })
+          return NextResponse.json({ mode: 'single', result })
+        }
 
-    const sweep = await fundingAlertService.sweepPendingFundingCallAlerts({ limit: body.limit })
-    return NextResponse.json({ mode: 'sweep', ...sweep })
-  } catch (error) {
-    console.error('[FUNDING-ALERT] Dispatch endpoint failed:', error)
-    return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Alert dispatch failed' },
-      { status: 500 }
-    )
-  }
+        const sweep = await fundingAlertService.sweepPendingFundingCallAlerts({ limit: body.limit })
+        return NextResponse.json({ mode: 'sweep', ...sweep })
+      } catch (error) {
+        console.error('[FUNDING-ALERT] Dispatch endpoint failed:', error)
+        return NextResponse.json(
+          { message: error instanceof Error ? error.message : 'Alert dispatch failed' },
+          { status: 500 }
+        )
+      }
+    }
+  )
 }

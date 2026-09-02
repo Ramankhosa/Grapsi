@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { isFeatureEnabled } from '@/lib/feature-flags'
+import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 import LoadingBird from '@/components/ui/loading-bird'
 import { motion } from 'framer-motion'
 import {
@@ -199,18 +200,20 @@ export default function UserDashboard() {
           <div className="text-xs text-slate-500">Match colleagues in your organization to a funding call or topic</div>
         </div>
       </button>
-      <button
-        onClick={() => router.push('/projects/new/grant')}
-        className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-amber-200 hover:bg-amber-50 transition-colors text-left"
-      >
-        <div className="p-2 bg-amber-100 rounded-lg">
-          <UploadCloud className="w-4 h-4 text-amber-600" />
-        </div>
-        <div>
-          <div className="font-medium text-slate-900">Upload New Call For Proposal</div>
-          <div className="text-xs text-slate-500">Upload a call, guidelines, and templates in a simple flow</div>
-        </div>
-      </button>
+      {GRANT_PREP_ENABLED ? (
+        <button
+          onClick={() => router.push('/projects/new/grant')}
+          className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-amber-200 hover:bg-amber-50 transition-colors text-left"
+        >
+          <div className="p-2 bg-amber-100 rounded-lg">
+            <UploadCloud className="w-4 h-4 text-amber-600" />
+          </div>
+          <div>
+            <div className="font-medium text-slate-900">Upload New Call For Proposal</div>
+            <div className="text-xs text-slate-500">Upload a call, guidelines, and templates in a simple flow</div>
+          </div>
+        </button>
+      ) : null}
       <button
         onClick={() => router.push('/profile/researcher')}
         className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-sky-200 hover:bg-sky-50 transition-colors text-left"
@@ -287,12 +290,14 @@ export default function UserDashboard() {
                           <div className="mt-1 text-xs text-slate-500">Updated {formatDate(job.updatedAt)}</div>
                         )}
                       </div>
-                      <button
-                        onClick={() => router.push(`/projects/new/grant?jobId=${encodeURIComponent(job.id)}`)}
-                        className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-white hover:bg-slate-700"
-                      >
-                        Resume
-                      </button>
+                      {GRANT_PREP_ENABLED ? (
+                        <button
+                          onClick={() => router.push(`/projects/new/grant?jobId=${encodeURIComponent(job.id)}`)}
+                          className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-white hover:bg-slate-700"
+                        >
+                          Resume
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -360,13 +365,15 @@ export default function UserDashboard() {
                 Continue working on your grant applications and funding opportunities
               </p>
             </div>
-            <button
-              onClick={() => router.push('/projects/new/grant')}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all duration-200"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              New Grant
-            </button>
+            {GRANT_PREP_ENABLED ? (
+              <button
+                onClick={() => router.push('/projects/new/grant')}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all duration-200"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                New Grant
+              </button>
+            ) : null}
           </motion.div>
         </div>
 
@@ -456,13 +463,15 @@ export default function UserDashboard() {
                   <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-4" />
                   <h3 className="text-lg font-medium text-slate-900 mb-2">No papers yet</h3>
                   <p className="text-slate-600 mb-6">Start your academic writing journey</p>
-                  <button
-                    onClick={() => router.push('/projects/new/grant')}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-violet-700"
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Create Your First Paper
-                  </button>
+                  {GRANT_PREP_ENABLED ? (
+                    <button
+                      onClick={() => router.push('/projects/new/grant')}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-violet-700"
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Create Your First Paper
+                    </button>
+                  ) : null}
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
@@ -527,18 +536,20 @@ export default function UserDashboard() {
                 Quick Actions
               </h2>
               <div className="space-y-3">
-                <button
-                  onClick={() => router.push('/projects/new/grant')}
-                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-violet-200 hover:bg-violet-50 transition-colors text-left"
-                >
-                  <div className="p-2 bg-violet-100 rounded-lg">
-                    <Plus className="w-4 h-4 text-violet-600" />
-                  </div>
-                  <div>
-                    <div className="font-medium text-slate-900">Start New Grant</div>
-                    <div className="text-xs text-slate-500">Create a new grant workspace</div>
-                  </div>
-                </button>
+                {GRANT_PREP_ENABLED ? (
+                  <button
+                    onClick={() => router.push('/projects/new/grant')}
+                    className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-violet-200 hover:bg-violet-50 transition-colors text-left"
+                  >
+                    <div className="p-2 bg-violet-100 rounded-lg">
+                      <Plus className="w-4 h-4 text-violet-600" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-900">Start New Grant</div>
+                      <div className="text-xs text-slate-500">Create a new grant workspace</div>
+                    </div>
+                  </button>
+                ) : null}
                 <button
                   onClick={() => router.push('/projects')}
                   className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-blue-200 hover:bg-blue-50 transition-colors text-left"

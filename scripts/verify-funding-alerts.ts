@@ -110,13 +110,32 @@ async function main() {
   );
   console.log('   ', JSON.stringify(coverage[0], (key, value) => (typeof value === 'bigint' ? Number(value) : value)));
 
+  console.log('\n5) FUNDING_ALERTS entitlement coverage (delivery is plan-gated):');
+  const entitlement = await prisma.$queryRawUnsafe<any[]>(
+    `SELECT
+       (SELECT COUNT(*) FROM features WHERE code::text = 'FUNDING_ALERTS') AS feature_seeded,
+       (SELECT COUNT(DISTINCT tp."tenantId")
+          FROM tenant_plans tp
+          JOIN plans p ON p.id = tp."planId" AND p.status::text = 'ACTIVE'
+          JOIN plan_features pf ON pf."planId" = p.id
+          JOIN features f ON f.id = pf."featureId" AND f.code::text = 'FUNDING_ALERTS'
+         WHERE tp.status::text = 'ACTIVE'
+           AND tp."effectiveFrom" <= NOW()
+           AND (tp."expiresAt" IS NULL OR tp."expiresAt" > NOW())) AS entitled_tenants,
+       (SELECT COUNT(*) FROM tenants WHERE status::text = 'ACTIVE') AS active_tenants`
+  );
+  console.log('   ', JSON.stringify(entitlement[0], (key, value) => (typeof value === 'bigint' ? Number(value) : value)));
+  if (!Number(entitlement[0]?.feature_seeded)) {
+    console.log('    ⚠ FUNDING_ALERTS feature row missing — run `npm run seed:access-control`; no alerts will deliver until then.');
+  }
+
   const digestIndex = process.argv.indexOf('--digest');
   if (digestIndex !== -1) {
     const frequency = process.argv[digestIndex + 1];
     if (frequency !== 'daily' && frequency !== 'weekly') {
       throw new Error('--digest requires "daily" or "weekly"');
     }
-    console.log(`\n5) Digest run (${frequency}):`);
+    console.log(`\n6) Digest run (${frequency}):`);
     const digest = await fundingAlertService.sendFundingAlertDigests(frequency);
     console.log('   ', JSON.stringify(digest));
   }
@@ -127,7 +146,7 @@ async function main() {
     if (!callId) {
       throw new Error('--dispatch requires a funding call id');
     }
-    console.log(`\n5) Live dispatch for call ${callId}:`);
+    console.log(`\n7) Live dispatch for call ${callId}:`);
     const result = await fundingAlertService.dispatchAlertsForFundingCall(callId, { force: true });
     console.log('   ', JSON.stringify(result, null, 2));
   }

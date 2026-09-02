@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   requireFundingActor: vi.fn(),
   buildFundingCallAccessWhere: vi.fn(),
+  actorCanSeeTenantDrafts: vi.fn(),
   enforceServiceAccess: vi.fn(),
   createOrReuseGrantPrepSession: vi.fn(),
   fundingCallFindFirst: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('@/lib/funding/access', () => ({
 
 vi.mock('@/lib/fundingIntake/routeAuth', () => ({
   buildFundingCallAccessWhere: mocks.buildFundingCallAccessWhere,
+  actorCanSeeTenantDrafts: mocks.actorCanSeeTenantDrafts,
 }))
 
 vi.mock('@/lib/service-access-middleware', () => ({
@@ -52,6 +54,7 @@ describe('funding call start-grant-prep route', () => {
       },
     })
     mocks.buildFundingCallAccessWhere.mockReturnValue({})
+    mocks.actorCanSeeTenantDrafts.mockResolvedValue(false)
     mocks.enforceServiceAccess.mockResolvedValue({ allowed: true })
     mocks.fundingCallFindFirst.mockResolvedValue({
       id: 'call-1',

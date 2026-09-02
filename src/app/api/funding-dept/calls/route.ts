@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { canReviewDept } from '@/lib/fundingDept/shared'
+import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
@@ -38,6 +39,17 @@ export async function GET(request: NextRequest) {
   const state = (searchParams.get('state') || 'all').trim()
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 50, 1), 200)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+  // Field filters. Agency / discipline / funding kind come from the facet
+  // lists below, so every offered value matches at least one call.
+  const agency = (searchParams.get('agency') || '').trim()
+  const discipline = (searchParams.get('discipline') || '').trim()
+  const fundingKind = (searchParams.get('fundingKind') || '').trim()
+  // A school: "which calls has anyone in this school been put on". Narrows the
+  // funnel to one school's workload without leaving the per-call view.
+  const orgUnitId = (searchParams.get('orgUnitId') || '').trim()
+  // Deadline window in days from now — the "closing soon" triage filter.
+  const closingInDays = Number(searchParams.get('closingInDays')) || 0
+  const sort = (searchParams.get('sort') || 'deadline').trim()
 
   const now = new Date()
   // Drafts are part of the desk's work-in-progress, so the funnel shows them
@@ -74,7 +86,80 @@ export async function GET(request: NextRequest) {
     filters.push({ close_date: { lt: now } })
   }
 
+  if (agency) {
+    // Both columns carry the agency depending on the intake path, so a value
+    // picked from the facet list has to be checked against either.
+    filters.push({
+      OR: [
+        { agency_name: { equals: agency, mode: 'insensitive' } },
+        { agencyName: { equals: agency, mode: 'insensitive' } },
+      ],
+    })
+  }
+  if (discipline) {
+    filters.push({ disciplines: { has: discipline } })
+  }
+  if (fundingKind) {
+    filters.push({ funding_kinds: { has: fundingKind } })
+  }
+  if (orgUnitId) {
+    const subtreeIds = await listSubtreeUnitIds(context.tenantId, [orgUnitId])
+    filters.push(
+      subtreeIds.length === 0
+        ? { id: '__none__' }
+        : {
+            assignments: {
+              some: {
+                tenant_id: context.tenantId,
+                assignee_org_unit_id: { in: subtreeIds },
+              },
+            },
+          }
+    )
+  }
+  if (closingInDays > 0) {
+    const until = new Date(now.getTime() + closingInDays * 24 * 60 * 60 * 1000)
+    // Undated calls are excluded on purpose: "closing within 30 days" is a
+    // question about dated calls, and a null date would otherwise read as urgent.
+    filters.push({ close_date: { gte: now, lte: until } })
+  }
+
   const where: Prisma.FundingCallWhereInput = { AND: filters }
+
+  // The agencies / disciplines / kinds actually present in this tenant's
+  // visible calls, so the dropdowns can never offer a dead filter.
+  if (searchParams.get('action') === 'facets') {
+    const facetRows = await prisma.fundingCall.findMany({
+      where: visible,
+      select: {
+        agency_name: true,
+        agencyName: true,
+        disciplines: true,
+        funding_kinds: true,
+      },
+    })
+
+    const sortedUnique = (values: Array<string | null | undefined>) =>
+      Array.from(new Set(values.map((value) => (value || '').trim()).filter(Boolean))).sort(
+        (left, right) => left.localeCompare(right)
+      )
+
+    return NextResponse.json({
+      agencies: sortedUnique(facetRows.map((row) => row.agency_name || row.agencyName)),
+      disciplines: sortedUnique(facetRows.flatMap((row) => row.disciplines)),
+      fundingKinds: sortedUnique(facetRows.flatMap((row) => row.funding_kinds)),
+    })
+  }
+
+  // Nearest deadline first keeps the funnel actionable; undated calls sink.
+  const orderBy: Prisma.FundingCallOrderByWithRelationInput[] =
+    sort === 'recent'
+      ? [{ updatedAt: 'desc' }]
+      : sort === 'assigned'
+        ? [{ assignments: { _count: 'desc' } }, { close_date: { sort: 'asc', nulls: 'last' } }]
+        : sort === 'title'
+          ? [{ scheme_title: { sort: 'asc', nulls: 'last' } }, { title: 'asc' }]
+          : [{ close_date: { sort: 'asc', nulls: 'last' } }, { updatedAt: 'desc' }]
 
   const [rows, total, allCount, draftCount, unassignedOpenCount] = await Promise.all([
     prisma.fundingCall.findMany({
@@ -91,8 +176,7 @@ export async function GET(request: NextRequest) {
         catalog_status: true,
         updatedAt: true,
       },
-      // Nearest deadline first keeps the funnel actionable; undated calls sink.
-      orderBy: [{ close_date: { sort: 'asc', nulls: 'last' } }, { updatedAt: 'desc' }],
+      orderBy,
       take: limit,
       skip: offset,
     }),

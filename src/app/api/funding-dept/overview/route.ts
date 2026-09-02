@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@/lib/prisma-generated'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { getSummary, getUnassignedUpcomingCalls } from '@/lib/assignments/dashboardService'
 import { getSchoolCoverage, listMembers } from '@/lib/fundingDept/membershipService'
@@ -82,6 +83,111 @@ export async function GET(request: NextRequest) {
     }
   })
 
+  // Per-school load, which the per-member table above cannot show: a member
+  // covering four schools reads as one busy officer, and the head still cannot
+  // see which of the four is actually carrying the work.
+  //
+  // Every school's subtree in one query, then bucketed in memory — a school
+  // with no faculty must still appear with zeroes rather than vanish.
+  const schoolIds = coverage.map((school) => school.id)
+  const unitRows =
+    schoolIds.length > 0
+      ? await prisma.$queryRaw<Array<{ id: string; root: string }>>(Prisma.sql`
+          SELECT id, unnest(path) AS root
+          FROM tenant_org_units
+          WHERE tenant_id = ${context.tenantId} AND is_active = true
+        `)
+      : []
+  const rootByUnit = new Map<string, string[]>()
+  for (const row of unitRows) {
+    if (!schoolIds.includes(row.root)) continue
+    const list = rootByUnit.get(row.id) || []
+    list.push(row.root)
+    rootByUnit.set(row.id, list)
+  }
+
+  const [assignmentRows, facultyRows] = await Promise.all([
+    prisma.$queryRaw<
+      Array<{
+        unitId: string
+        active: number
+        missed: number
+        submitted: number
+        declined: number
+        awarded: number
+      }>
+    >(Prisma.sql`
+      SELECT
+        ca.assignee_org_unit_id AS "unitId",
+        COUNT(*) FILTER (
+          WHERE ca.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS')
+            AND (ca.deadline_at IS NULL OR ca.deadline_at >= CURRENT_DATE)
+        )::int AS active,
+        COUNT(*) FILTER (
+          WHERE ca.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS')
+            AND ca.deadline_at IS NOT NULL AND ca.deadline_at < CURRENT_DATE
+        )::int AS missed,
+        COUNT(*) FILTER (WHERE ca.status = 'COMPLETED')::int AS submitted,
+        COUNT(*) FILTER (WHERE ca.status = 'DECLINED')::int AS declined,
+        COUNT(*) FILTER (WHERE ca.outcome = 'AWARDED')::int AS awarded
+      FROM call_assignments ca
+      WHERE ca.tenant_id = ${context.tenantId} AND ca.assignee_org_unit_id IS NOT NULL
+      GROUP BY ca.assignee_org_unit_id
+    `),
+    prisma.$queryRaw<Array<{ unitId: string; faculty: number; busy: number }>>(Prisma.sql`
+      SELECT
+        rp.org_unit_id AS "unitId",
+        COUNT(*)::int AS faculty,
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM call_assignments ca
+            WHERE ca.assignee_user_id = rp.user_id
+              AND ca.tenant_id = ${context.tenantId}
+              AND ca.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS')
+          )
+        )::int AS busy
+      FROM researcher_profiles rp
+      JOIN users u ON u.id = rp.user_id
+      WHERE u."tenantId" = ${context.tenantId} AND rp.org_unit_id IS NOT NULL
+      GROUP BY rp.org_unit_id
+    `),
+  ])
+
+  const emptyBucket = () => ({
+    active: 0,
+    missed: 0,
+    submitted: 0,
+    declined: 0,
+    awarded: 0,
+    faculty: 0,
+    busyFaculty: 0,
+  })
+  const bySchool = new Map(schoolIds.map((id) => [id, emptyBucket()]))
+  for (const row of assignmentRows) {
+    for (const root of rootByUnit.get(row.unitId) || []) {
+      const bucket = bySchool.get(root)
+      if (!bucket) continue
+      bucket.active += row.active
+      bucket.missed += row.missed
+      bucket.submitted += row.submitted
+      bucket.declined += row.declined
+      bucket.awarded += row.awarded
+    }
+  }
+  for (const row of facultyRows) {
+    for (const root of rootByUnit.get(row.unitId) || []) {
+      const bucket = bySchool.get(root)
+      if (!bucket) continue
+      bucket.faculty += row.faculty
+      bucket.busyFaculty += row.busy
+    }
+  }
+
+  const schoolRows = coverage.map((school) => ({
+    ...school,
+    ...(bySchool.get(school.id) || emptyBucket()),
+  }))
+
   const uncovered = coverage.filter((school) => !school.covered)
   const openCalls = await getUnassignedUpcomingCalls(context.tenantId, {
     scopeUnitIds: context.scope.isTenantWide ? null : context.scope.managedUnitIds,
@@ -91,7 +197,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     members: rows,
-    schools: coverage,
+    schools: schoolRows,
     uncovered,
     openCalls,
     totals: {

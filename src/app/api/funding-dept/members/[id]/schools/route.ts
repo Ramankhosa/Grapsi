@@ -14,6 +14,8 @@ export const dynamic = 'force-dynamic'
  */
 const schoolsSchema = z.object({
   orgUnitIds: z.array(z.string().trim().min(1)).max(200),
+  /** Replace their deputy rota instead of the schools they are primary for. */
+  asDeputy: z.boolean().optional(),
 })
 
 export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
@@ -43,6 +45,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       tenantId: context.tenantId,
       memberId: params.id,
       orgUnitIds: payload.orgUnitIds,
+      asDeputy: payload.asDeputy === true,
       actorUserId: context.user.id,
     })
     return NextResponse.json({ member: member ? serializeMember(member) : null })

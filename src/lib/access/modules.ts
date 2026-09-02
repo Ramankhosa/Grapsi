@@ -1,5 +1,5 @@
 /**
- * Product Module Registry — single source of truth for the five plan-gated
+ * Product Module Registry — single source of truth for the plan-gated
  * application modules. Used by:
  *  - the entitlements summary (`getTenantEntitlementSummary`) and the
  *    `/api/v1/me/entitlements` endpoint that drives UI show/hide,
@@ -21,6 +21,7 @@ export type ProductModuleKey =
   | 'FUNDING_INTELLIGENCE'
   | 'GRANT_STUDIO'
   | 'GRANT_REVIEW'
+  | 'FUNDING_ALERTS'
 
 export type PlanTierKey = 'STARTER' | 'PRO' | 'ENTERPRISE'
 
@@ -83,6 +84,15 @@ export const PRODUCT_MODULES: Record<ProductModuleKey, ProductModule> = {
     entryRoute: '/reviewer',
     minTier: 'PRO',
     icon: 'clipboard-check'
+  },
+  FUNDING_ALERTS: {
+    key: 'FUNDING_ALERTS',
+    name: 'Funding Alerts',
+    description: 'Automatic matching of newly published funding calls against researcher profiles, research areas, and publications, delivered by email and in-app notification.',
+    featureCodes: ['FUNDING_ALERTS'],
+    entryRoute: '/profile/researcher#alerts',
+    minTier: 'PRO',
+    icon: 'bell'
   }
 }
 

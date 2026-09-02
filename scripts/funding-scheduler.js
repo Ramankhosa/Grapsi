@@ -130,6 +130,11 @@ function tick() {
       void post('/api/funding-dept/reports/weekly')
     }
   }
+
+  // Daily hygiene: suspend EVENT users whose access window has ended.
+  if (now.getHours() === DIGEST_HOUR && minute >= 50 && due('event-user-expiry', daySlot)) {
+    void post('/api/platform/users/expire-event-access')
+  }
 }
 
 console.log(

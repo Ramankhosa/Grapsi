@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, FileText, Loader2, Sparkles } from 'lucide-react'
 
 import FundingCallImportModal from '@/components/FundingCallImportModal'
+import FeatureGate from '@/components/access/FeatureGate'
 import { useAuth } from '@/lib/auth-context'
 
 const grantProjectWizardStorageKey = 'grant-project-upload-wizard-v1'
@@ -91,6 +92,7 @@ export default function NewGrantProjectPage() {
   }
 
   return (
+    <FeatureGate module="GRANT_STUDIO" title="Grant Studio is not included in your plan">
     <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_15%_10%,rgba(16,185,129,0.25),transparent_32%),linear-gradient(135deg,#0f172a_0%,#12312b_52%,#f8fafc_52%,#eef2f7_100%)] text-slate-950">
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
         <header className="flex flex-wrap items-center justify-between gap-4">
@@ -158,5 +160,6 @@ export default function NewGrantProjectPage() {
         description="Add the call, choose any optional supporting documents, and start Grant Prep."
       />
     </div>
+    </FeatureGate>
   )
 }

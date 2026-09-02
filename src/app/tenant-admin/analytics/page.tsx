@@ -1,55 +1,71 @@
 'use client'
 
-import { useState } from 'react'
-import { UsageAnalytics } from '@/components/analytics/UsageAnalytics'
-import { useAuth } from '@/lib/auth-context'
-import { useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { unstable_noStore as noStore } from 'next/cache'
+import { UsageAnalytics } from '@/components/analytics/UsageAnalytics'
+import { useAuth, useRoleAccess } from '@/lib/auth-context'
 
+/**
+ * Tenant usage analytics. Every number on this page is fetched — a card that
+ * cannot load shows a dash rather than a made-up figure.
+ */
 export default function TenantAdminAnalyticsPage() {
-  // Prevent static generation
   noStore()
 
-  const { user, logout } = useAuth()
-  const [tenantInfo, setTenantInfo] = useState<{ id: string; name: string } | null>(null)
+  const { user, isLoading: authLoading, authFetch } = useAuth()
+  const { isTenantAdmin, isSuperAdmin } = useRoleAccess()
+
+  const [tenantName, setTenantName] = useState<string | null>(null)
+  const [memberCount, setMemberCount] = useState<number | null>(null)
+  const [planName, setPlanName] = useState<string | null>(null)
+  const [planTier, setPlanTier] = useState<string | null>(null)
+  const [monthCost, setMonthCost] = useState<number | null>(null)
+
+  const allowed = isTenantAdmin || isSuperAdmin
+
+  const loadCards = useCallback(async () => {
+    const monthStart = new Date()
+    monthStart.setDate(1)
+    monthStart.setHours(0, 0, 0, 0)
+
+    // Each card loads independently; one failing endpoint must not blank the rest.
+    await Promise.allSettled([
+      authFetch('/api/tenant-admin/users').then(async (response) => {
+        if (!response.ok) return
+        const data = await response.json()
+        if (typeof data.total === 'number') setMemberCount(data.total)
+        if (data.tenant?.name) setTenantName(data.tenant.name)
+      }),
+      authFetch('/api/v1/me/entitlements').then(async (response) => {
+        if (!response.ok) return
+        const data = await response.json()
+        setPlanName(data.plan?.name ?? 'No plan')
+        setPlanTier(data.plan?.tier ?? null)
+      }),
+      authFetch(
+        `/api/analytics/usage?startDate=${encodeURIComponent(monthStart.toISOString())}`
+      ).then(async (response) => {
+        if (!response.ok) return
+        const data = await response.json()
+        if (typeof data.summary?.cost === 'number') setMonthCost(data.summary.cost)
+      }),
+    ])
+  }, [authFetch])
 
   useEffect(() => {
+    if (authLoading) return
     if (!user) {
-      // Redirect to login if not authenticated
       window.location.href = '/login'
       return
     }
-
-    if (!user.roles?.includes('ADMIN')) {
-      // Redirect to appropriate dashboard if not tenant admin
+    if (!allowed) {
       window.location.href = '/dashboard'
       return
     }
+    void loadCards()
+  }, [authLoading, user, allowed, loadCards])
 
-    // Get tenant info from API
-    fetchTenantInfo()
-  }, [user])
-
-  const fetchTenantInfo = async () => {
-    try {
-      // Get tenant info from API
-      const response = await fetch('/api/user/profile', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      })
-      if (response.ok) {
-        const userData = await response.json()
-        if (userData.tenant) {
-          setTenantInfo(userData.tenant)
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch tenant info:', error)
-    }
-  }
-
-  if (!user) {
+  if (authLoading || !user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
@@ -57,7 +73,7 @@ export default function TenantAdminAnalyticsPage() {
     )
   }
 
-  if (!user.roles?.includes('ADMIN')) {
+  if (!allowed) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-red-600">Access denied. Tenant admin privileges required.</div>
@@ -71,118 +87,35 @@ export default function TenantAdminAnalyticsPage() {
         <h1 className="text-3xl font-bold mb-2">Tenant Analytics</h1>
         <p className="text-gray-600">
           Monitor LLM usage within your organization
-          {tenantInfo && ` - ${tenantInfo.name}`}
+          {tenantName ? ` - ${tenantName}` : ''}
         </p>
       </div>
 
-      {/* Tenant Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="bg-white p-6 rounded-lg shadow border">
           <h3 className="text-sm font-medium text-gray-600 mb-2">Team Members</h3>
-          <div className="text-2xl font-bold text-gray-900">24</div>
-          <p className="text-sm text-gray-500 mt-1">
-            Active users in tenant
-          </p>
+          <div className="text-2xl font-bold text-gray-900">{memberCount ?? '—'}</div>
+          <p className="text-sm text-gray-500 mt-1">Users in your organization</p>
         </div>
 
         <div className="bg-white p-6 rounded-lg shadow border">
           <h3 className="text-sm font-medium text-gray-600 mb-2">Current Plan</h3>
-          <div className="text-2xl font-bold text-gray-900">PRO</div>
+          <div className="text-2xl font-bold text-gray-900">{planName ?? '—'}</div>
           <p className="text-sm text-gray-500 mt-1">
-            Monthly token limit: 10,000
-          </p>
-        </div>
-
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <h3 className="text-sm font-medium text-gray-600 mb-2">Plan Expiry</h3>
-          <div className="text-2xl font-bold text-gray-900">45 days</div>
-          <p className="text-sm text-gray-500 mt-1">
-            Auto-renews monthly
+            {planTier ? `Tier: ${planTier}` : 'Active entitlement for your organization'}
           </p>
         </div>
 
         <div className="bg-white p-6 rounded-lg shadow border">
           <h3 className="text-sm font-medium text-gray-600 mb-2">Cost This Month</h3>
-          <div className="text-2xl font-bold text-gray-900">$147.23</div>
-          <p className="text-sm text-gray-500 mt-1">
-            73% of budget used
-          </p>
-        </div>
-      </div>
-
-      {/* Usage Analytics */}
-      <UsageAnalytics
-        title="Team Usage Analytics"
-        isSuperAdmin={false}
-      />
-
-      {/* Team Insights */}
-      <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <h3 className="text-lg font-semibold mb-4">Team Usage Patterns</h3>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Most active user</span>
-              <span className="text-sm font-medium">Sarah Johnson (2,847 tokens)</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Most used feature</span>
-              <span className="text-sm font-medium">Patent Drafting (68%)</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Peak usage time</span>
-              <span className="text-sm font-medium">2-4 PM weekdays</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Cost efficiency</span>
-              <span className="text-sm font-medium text-green-600">+15% vs last month</span>
-            </div>
+          <div className="text-2xl font-bold text-gray-900">
+            {monthCost != null ? `$${monthCost.toFixed(2)}` : '—'}
           </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <h3 className="text-lg font-semibold mb-4">Recommendations</h3>
-          <div className="space-y-4">
-            <div className="p-3 bg-blue-50 rounded-lg">
-              <h4 className="font-medium text-blue-900">Optimize Token Usage</h4>
-              <p className="text-sm text-blue-700 mt-1">
-                Consider using shorter prompts for routine tasks. This could save ~$23/month.
-              </p>
-            </div>
-            <div className="p-3 bg-green-50 rounded-lg">
-              <h4 className="font-medium text-green-900">Usage Distribution</h4>
-              <p className="text-sm text-green-700 mt-1">
-                Your team has good usage distribution. No single user accounts for more than 25% of usage.
-              </p>
-            </div>
-            <div className="p-3 bg-orange-50 rounded-lg">
-              <h4 className="font-medium text-orange-900">Consider Upgrading</h4>
-              <p className="text-sm text-orange-700 mt-1">
-                You&apos;re approaching 80% of your monthly limit. Consider upgrading for next month.
-              </p>
-            </div>
-          </div>
+          <p className="text-sm text-gray-500 mt-1">Estimated LLM cost since the 1st</p>
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="bg-white p-6 rounded-lg shadow border mt-8">
-        <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-            <h3 className="font-medium mb-1">Export Report</h3>
-            <p className="text-sm text-gray-600">Download detailed usage report</p>
-          </button>
-          <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-            <h3 className="font-medium mb-1">Set Usage Alerts</h3>
-            <p className="text-sm text-gray-600">Configure spending notifications</p>
-          </button>
-          <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-            <h3 className="font-medium mb-1">Upgrade Plan</h3>
-            <p className="text-sm text-gray-600">Increase token limits</p>
-          </button>
-        </div>
-      </div>
+      <UsageAnalytics title="Team Usage Analytics" isSuperAdmin={false} />
     </div>
   )
 }

@@ -147,6 +147,23 @@ export const assignmentInclude = {
   },
   assignee: { select: { id: true, name: true, email: true } },
   assigned_by: { select: { id: true, name: true, email: true } },
+  // The reassignment chain, so a passed-on call reads as one story rather than
+  // two unrelated records.
+  previous_assignment: {
+    select: {
+      id: true,
+      status: true,
+      declined_reason: true,
+      assignee: { select: { id: true, name: true, email: true } },
+    },
+  },
+  superseded_by: {
+    select: {
+      id: true,
+      status: true,
+      assignee: { select: { id: true, name: true, email: true } },
+    },
+  },
 }
 
 export function serializeAssignment(record: any) {
@@ -185,6 +202,25 @@ export function serializeAssignment(record: any) {
       : null,
     assignedBy: record.assigned_by
       ? { id: record.assigned_by.id, name: record.assigned_by.name, email: record.assigned_by.email }
+      : null,
+    passedOnFrom: record.previous_assignment
+      ? {
+          id: record.previous_assignment.id,
+          status: record.previous_assignment.status,
+          declinedReason: record.previous_assignment.declined_reason,
+          name:
+            record.previous_assignment.assignee?.name ||
+            record.previous_assignment.assignee?.email ||
+            null,
+        }
+      : null,
+    passedOnTo: record.superseded_by
+      ? {
+          id: record.superseded_by.id,
+          status: record.superseded_by.status,
+          name:
+            record.superseded_by.assignee?.name || record.superseded_by.assignee?.email || null,
+        }
       : null,
   }
 }

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
+import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
 import type { AgencyIpYield, PriorWork, PriorWorkRow } from '@/lib/ideaIntelligence/priorWork'
 import CoverageMap from './CoverageMap'
@@ -523,7 +524,7 @@ function CallVerdictSections({ run, onStrengthen, strengthenBusyId }: {
                     <ul className="mt-1 space-y-1 text-xs leading-5 text-amber-800">{fit.verifyBeforeApplying.slice(0, 4).map((item) => <li key={item}>- {item}</li>)}</ul>
                   </div>
                 ) : null}
-                <Link href={`/funding/calls/${alignment.fundingCallId}`} className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700">Open call <ArrowRight className="h-3.5 w-3.5" /></Link>
+                <Link href={`/finder/calls/${alignment.fundingCallId}`} className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700">Open call <ArrowRight className="h-3.5 w-3.5" /></Link>
               </article>
             )
           })}
@@ -871,11 +872,13 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
                 <div>
                   <h2 className="font-semibold text-slate-900">Continue from this analysis</h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    {run.linkedGrantPrepSessionId
-                      ? 'This idea has already been handed off to Grant Prep — continue where you left off.'
-                      : targetCallId
-                        ? 'Start Grant Prep with this idea locked in: the evidence and openings carry over with it.'
-                        : 'Save the idea for later. Grant Prep needs a call — pick one from "Who funds this" first.'}
+                    {!GRANT_PREP_ENABLED
+                      ? 'Save the idea to your Idea Bank so the evidence and openings stay with it.'
+                      : run.linkedGrantPrepSessionId
+                        ? 'This idea has already been handed off to Grant Prep — continue where you left off.'
+                        : targetCallId
+                          ? 'Start Grant Prep with this idea locked in: the evidence and openings carry over with it.'
+                          : 'Save the idea for later. Grant Prep needs a call — pick one from "Who funds this" first.'}
                   </p>
                   {exportMessage ? <p className="mt-2 text-xs font-semibold text-teal-700">{exportMessage}</p> : null}
                   {handoffError ? <p className="mt-2 text-xs font-semibold text-rose-700">{handoffError}</p> : null}
@@ -885,10 +888,12 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
                     {exportingIdea ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lightbulb className="h-4 w-4" />}
                     Export to Idea Bank
                   </button>
-                  <button type="button" onClick={startGrantPrep} disabled={handoffBusy} className="inline-flex items-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">
-                    {handoffBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                    {run.linkedGrantPrepSessionId ? 'Continue in Grant Prep' : 'Start Grant Prep'} <ArrowRight className="h-4 w-4" />
-                  </button>
+                  {GRANT_PREP_ENABLED ? (
+                    <button type="button" onClick={startGrantPrep} disabled={handoffBusy} className="inline-flex items-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-900 disabled:cursor-not-allowed disabled:bg-slate-300">
+                      {handoffBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      {run.linkedGrantPrepSessionId ? 'Continue in Grant Prep' : 'Start Grant Prep'} <ArrowRight className="h-4 w-4" />
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </section>

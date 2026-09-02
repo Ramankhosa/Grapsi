@@ -187,7 +187,7 @@ export default function FunderDrawer({
                             {busyCallId === call.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Target className="h-4 w-4" />}
                             {selectedCallId === call.id ? 'Re-check my fit' : 'Check my fit'}
                           </button>
-                          <Link href={`/funding/calls/${call.id}`} className="text-xs font-semibold text-teal-700 hover:underline">Open call</Link>
+                          <Link href={`/finder/calls/${call.id}`} className="text-xs font-semibold text-teal-700 hover:underline">Open call</Link>
                         </div>
                       </article>
                     )

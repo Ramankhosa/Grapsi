@@ -30,6 +30,8 @@ export interface MatchResult {
   matchReason: string
   evidence: MatchEvidence[]
   sharedTerms: string[]
+  /** Reasons this person may not qualify for the call, when it says. */
+  eligibilityFlags?: string[]
 }
 
 export interface SearchResponse {
@@ -83,12 +85,24 @@ function HighlightedSnippet({ text }: { text: string }) {
   )
 }
 
+/** How each shortlist state reads on the button. */
+const SHORTLIST_LABEL: Record<string, string> = {
+  SHORTLISTED: 'Shortlisted',
+  APPROACHED: 'Approached',
+  ASSIGNED: 'Assigned',
+  DECLINED: 'Declined',
+  PASSED_OVER: 'Passed over',
+}
+
 function ResultCard({
   result,
   rank,
   scoreBasis,
   onAssign,
+  onShortlist,
+  onViewProfile,
   isAssigned,
+  shortlistState,
   selectable,
   isSelected,
   onToggleSelect,
@@ -97,7 +111,10 @@ function ResultCard({
   rank: number
   scoreBasis: string
   onAssign?: (result: MatchResult) => void
+  onShortlist?: (result: MatchResult) => void
+  onViewProfile?: (result: MatchResult) => void
   isAssigned?: boolean
+  shortlistState?: string | null
   selectable?: boolean
   isSelected?: boolean
   onToggleSelect?: (userId: string) => void
@@ -150,18 +167,51 @@ function ResultCard({
               {scorePct}% {scoreBasis === 'rerank' ? 'relevance' : 'similarity'}
             </span>
           </div>
-          {onAssign && (
-            <button
-              type="button"
-              className={isAssigned ? 'nk-btn-secondary nk-btn-sm' : 'nk-btn-primary nk-btn-sm'}
-              onClick={() => onAssign(result)}
-              disabled={isAssigned}
-            >
-              {isAssigned ? 'Assigned' : 'Assign call'}
-            </button>
-          )}
+          <div className="flex items-center gap-1.5">
+            {onViewProfile && (
+              <button
+                type="button"
+                className="nk-btn-secondary nk-btn-sm"
+                onClick={() => onViewProfile(result)}
+              >
+                View profile
+              </button>
+            )}
+            {onShortlist && !isAssigned && (
+              <button
+                type="button"
+                className="nk-btn-secondary nk-btn-sm"
+                onClick={() => onShortlist(result)}
+                title="Keep them on the list for this call without committing yet"
+              >
+                {shortlistState ? SHORTLIST_LABEL[shortlistState] || 'On the list' : 'Shortlist'}
+              </button>
+            )}
+            {onAssign && (
+              <button
+                type="button"
+                className={isAssigned ? 'nk-btn-secondary nk-btn-sm' : 'nk-btn-primary nk-btn-sm'}
+                onClick={() => onAssign(result)}
+                disabled={isAssigned}
+              >
+                {isAssigned ? 'Assigned' : 'Assign call'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Flagged, never hidden: agency eligibility wording is inconsistent
+          enough that a hard filter would quietly drop the right person. */}
+      {result.eligibilityFlags && result.eligibilityFlags.length > 0 && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          {result.eligibilityFlags.map((flag) => (
+            <p key={flag} className="text-[12.5px] text-amber-800">
+              <span className="font-semibold">Check eligibility:</span> {flag}
+            </p>
+          ))}
+        </div>
+      )}
 
       {result.researchSummary && (
         <p className="mt-3 max-w-3xl text-[13px] leading-relaxed text-nickel-700">
@@ -245,7 +295,10 @@ export default function MatchResults({
   response,
   emptyMessage = 'No researchers passed the relevance threshold. Try a different funding call or broaden the search.',
   onAssign,
+  onShortlist,
+  onViewProfile,
   assignedUserIds,
+  shortlistByUserId,
   selectedUserIds,
   onToggleSelect,
   onSelectVisible,
@@ -254,8 +307,14 @@ export default function MatchResults({
   emptyMessage?: string
   /** When provided, each card gets an "Assign call" button. */
   onAssign?: (result: MatchResult) => void
+  /** When provided, each card gets a "Shortlist" button. */
+  onShortlist?: (result: MatchResult) => void
+  /** When provided, each card gets a "View profile" button. */
+  onViewProfile?: (result: MatchResult) => void
   /** Users already assigned to the selected call — shown as "Assigned". */
   assignedUserIds?: string[]
+  /** Shortlist state per user for the selected call, keyed by user id. */
+  shortlistByUserId?: Record<string, string>
   /**
    * When provided, cards become selectable for a bulk circulation. Selection
    * lives in the parent because the assign dialog and the request both need it.
@@ -394,6 +453,9 @@ export default function MatchResults({
               rank={idx + 1}
               scoreBasis={response.scoreBasis}
               onAssign={onAssign}
+              onShortlist={onShortlist}
+              shortlistState={shortlistByUserId?.[r.userId] ?? null}
+              onViewProfile={onViewProfile}
               isAssigned={assigned.has(r.userId)}
               selectable={selectable}
               isSelected={selected.has(r.userId)}

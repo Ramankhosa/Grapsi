@@ -145,7 +145,8 @@ export default function FinalReview() {
 
         // Defaults: the version the stored report scored (so the page agrees with
         // the report), else the latest reviewed version.
-        const scored = callResponse.data.call?.overall_review_json?.score_basis?.scoredVersions || {};
+        const storedScoreBasis = callResponse.data.call?.overall_review_json?.score_basis || null;
+        const scored = storedScoreBasis?.scoredVersions || {};
         const initialSelected: Record<string, number> = {};
         const initialCompare: Record<string, number[]> = {};
         const initialIncluded: Record<string, boolean> = {};
@@ -158,12 +159,19 @@ export default function FinalReview() {
           }
         });
 
-        // Saved picker preferences (both key shapes accepted)
+        // Saved picker preferences (both key shapes accepted). The stored
+        // report's own score_basis stays authoritative: after a revision is
+        // reviewed and the report regenerated, it scores the newest versions
+        // with nothing excluded, and letting older saved picks override that
+        // displayed sections the report no longer describes.
         if (reportPreferences?.displayMode) {
           setDisplayMode(reportPreferences.displayMode === 'parallel' ? 'parallel' : 'single');
           const saved = normalizeVersionSelections(reportPreferences.versionSelections);
           Object.entries(saved).forEach(([title, version]) => {
-            if (grouped[title]?.[version]) initialSelected[title] = version;
+            if (!grouped[title]?.[version]) return;
+            // The report says what it scored for this title — show that.
+            if (grouped[title][Number(scored[title])]) return;
+            initialSelected[title] = version;
           });
           if (reportPreferences.displayMode === 'parallel') {
             Object.entries(reportPreferences.versionSelections || {}).forEach(([key, value]) => {
@@ -174,7 +182,10 @@ export default function FinalReview() {
               initialCompare[title] = Array.from(new Set([...(initialCompare[title] || []), version])).sort((a, b) => b - a).slice(0, 2);
             });
           }
-          const excluded = new Set((reportPreferences.excludedTitles || []).map((title: string) => String(title).toLowerCase()));
+          const excludedSource = Array.isArray(storedScoreBasis?.excludedTitles)
+            ? storedScoreBasis.excludedTitles
+            : (reportPreferences.excludedTitles || []);
+          const excluded = new Set(excludedSource.map((title: string) => String(title).toLowerCase()));
           Object.keys(grouped).forEach((title) => { initialIncluded[title] = !excluded.has(title.toLowerCase()); });
         }
 

@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server'
 // Force dynamic rendering for API routes that use headers
 export const dynamic = 'force-dynamic'
 import { prisma } from '@/lib/prisma'
+import { verifyJWT } from '@/lib/auth'
 import { getStoredUsageLogActualCost } from '@/lib/metering/llm-usage'
 import { z } from 'zod'
 
@@ -68,18 +69,12 @@ export async function GET(request: NextRequest) {
 
     const token = authHeader.substring(7)
 
-    // Verify token by calling whoami endpoint
-    const whoamiResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/v1/auth/whoami`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-
-    if (!whoamiResponse.ok) {
+    // Verify the JWT locally. This used to self-fetch /api/v1/auth/whoami via
+    // NEXTAUTH_URL, which broke whenever the server ran on a different port.
+    const userData = verifyJWT(token)
+    if (!userData) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
     }
-
-    const userData = await whoamiResponse.json()
 
     const { searchParams } = new URL(request.url)
 
@@ -113,7 +108,8 @@ export async function GET(request: NextRequest) {
     }
 
     const isSuperAdmin = user.roles?.some((role: string) => role === 'SUPER_ADMIN' || role === 'SUPER_ADMIN_VIEWER')
-    const isTenantAdmin = user.roles?.includes('ADMIN')
+    // OWNER and ADMIN are both tenant admins; both stay tenant-scoped below.
+    const isTenantAdmin = user.roles?.some((role: string) => role === 'OWNER' || role === 'ADMIN')
 
     if (!isSuperAdmin && !isTenantAdmin) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })

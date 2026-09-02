@@ -94,7 +94,11 @@ export default async function handler(
         // lock on (call, title). Two concurrent submissions of the same title
         // used to both read "max version = 1" and both create a v2 — and the
         // report and the workspace then disagreed about which v2 was current.
-        const newSection = await prisma.$transaction(async (tx) => {
+        // The revision flags are returned alongside the row: the asset-copy
+        // step and the response below need them, and reading them from inside
+        // the transaction closure threw a ReferenceError *after* the row was
+        // committed — every submission then 500'd with the version created.
+        const { newSection, effectiveIsRevision, effectivePreviousId } = await prisma.$transaction(async (tx) => {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${callId}::${section_title}`}))`;
 
           // Always number from the newest version of this title, never from
@@ -118,7 +122,7 @@ export default async function handler(
           const effectiveIsRevision = Boolean(is_revision) || Boolean(latestForTitle);
           const effectivePreviousId = previous_section_id || latestForTitle?.id || null;
 
-          return tx.reviewerSection.create({
+          const created = await tx.reviewerSection.create({
             data: {
               call_id: callId,
               section_title,
@@ -146,6 +150,8 @@ export default async function handler(
               version: true
             }
           });
+
+          return { newSection: created, effectiveIsRevision, effectivePreviousId };
         });
         
         // If this is a revision, copy linked assets from previous section (attach_in_prompt defaults to true)

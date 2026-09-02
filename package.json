@@ -18,7 +18,7 @@
     "seed:llm-models": "node scripts/run-local-command.js node Seed/seed-llm-models.js",
     "seed:llm-models:prod": "node scripts/run-local-command.js node Seed/seed-llm-models-modified.js",
     "seed:call-ingestion-users": "node scripts/run-local-command.js node scripts/call_ingestion_users.js",
-    "ops:expire-event-users": "node scripts/run-local-command.js node scripts/expire-event-users.js",
+    "ops:expire-event-users": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/expire-event-users.ts",
     "seed:access-control": "node scripts/run-local-command.js node scripts/seed-access-control-plans.js",
     "create-admin": "node scripts/run-local-command.js node scripts/create-super-admin.js",
     "superadminbirth": "node scripts/run-local-command.js node scripts/create-super-admin.js ramankhosa@gmail.com",

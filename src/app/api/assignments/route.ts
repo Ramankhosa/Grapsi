@@ -3,9 +3,8 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { canAssignToUser, resolveAssignerUnitId } from '@/lib/orgUnits/scope'
-import { notifyQuietly } from '@/lib/notifications/notificationService'
-import { sendEmail } from '@/lib/mailer'
-import { assignmentNotificationTemplate } from '@/lib/email-templates'
+import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
+import { notifyNewAssignment } from '@/lib/assignments/notifyAssignment'
 import {
   ASSIGNMENT_STATUSES,
   assignmentInclude,
@@ -61,6 +60,7 @@ export async function GET(request: NextRequest) {
   const orgUnitId = (searchParams.get('orgUnitId') || '').trim()
   const outcome = (searchParams.get('outcome') || '').trim()
   const fundingCallId = (searchParams.get('fundingCallId') || '').trim()
+  const q = (searchParams.get('q') || '').trim()
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 200, 1), 500)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
@@ -100,11 +100,37 @@ export async function GET(request: NextRequest) {
     where.outcome = outcome
   }
   if (orgUnitId) {
-    where.assignee_org_unit_id = orgUnitId
+    // Expand to the subtree: faculty sit on departments, so filtering by a
+    // school on the id alone matched only the handful of people attached to
+    // the school itself and read as "nobody in this school has anything".
+    const subtreeIds = await listSubtreeUnitIds(context.tenantId, [orgUnitId])
+    where.assignee_org_unit_id = { in: subtreeIds.length > 0 ? subtreeIds : ['__none__'] }
   }
   // "Who is on this call" — the per-call drill-in the funnel view uses.
   if (fundingCallId) {
     where.funding_call_id = fundingCallId
+  }
+  // Free text over both sides of an assignment: the call it is for, and the
+  // person it is on (name, email or employee ID). ANDed via `AND` because the
+  // team branch above already occupies the top-level `OR`.
+  if (q) {
+    where.AND = [
+      ...(where.AND || []),
+      {
+        OR: [
+          { funding_call: { scheme_title: { contains: q, mode: 'insensitive' } } },
+          { funding_call: { title: { contains: q, mode: 'insensitive' } } },
+          { funding_call: { agencyName: { contains: q, mode: 'insensitive' } } },
+          { assignee: { name: { contains: q, mode: 'insensitive' } } },
+          { assignee: { email: { contains: q, mode: 'insensitive' } } },
+          {
+            assignee: {
+              researcher_profile: { employee_id: { contains: q, mode: 'insensitive' } },
+            },
+          },
+        ],
+      },
+    ]
   }
 
   const [records, total] = await Promise.all([
@@ -220,59 +246,25 @@ export async function POST(request: NextRequest) {
     include: assignmentInclude,
   })
 
-  const callTitle =
-    record.funding_call?.scheme_title || record.funding_call?.title || 'a funding call'
-
-  // In-app is the primary channel (there is no other inbox); email is a
-  // best-effort courtesy. Neither may fail the assignment write.
-  await notifyQuietly({
+  await notifyNewAssignment({
     tenantId: context.tenantId,
-    userIds: [assignee.id],
-    title: `New assignment: ${callTitle}`,
-    body: record.deadline_at
-      ? `Due ${new Date(record.deadline_at).toLocaleDateString('en-IN')}.${record.message ? ` ${record.message}` : ''}`
-      : record.message || 'You have been assigned a funding call.',
-    category: 'ASSIGNMENT',
-    linkUrl: '/assignments',
-    assignmentId: record.id,
-    createdByUserId: context.user.id,
+    record,
+    assigner: context.user,
   })
 
-  await notifyAssignee(record, context.user).catch((error) => {
-    console.warn('Assignment email failed:', error instanceof Error ? error.message : String(error))
-  })
+  // Keep the shortlist honest without making the officer restate the outcome.
+  // updateMany rather than upsert: assigning someone who was never shortlisted
+  // is normal, and inventing a shortlist row for them would be noise.
+  await prisma.callCandidate
+    .updateMany({
+      where: {
+        tenant_id: context.tenantId,
+        funding_call_id: call.id,
+        user_id: assignee.id,
+      },
+      data: { status: 'ASSIGNED' },
+    })
+    .catch(() => undefined)
 
   return NextResponse.json({ assignment: serializeAssignment(record) }, { status: 201 })
-}
-
-async function notifyAssignee(record: any, assigner: any) {
-  const email = record.assignee?.email
-  if (!email) {
-    return
-  }
-
-  const callTitle = record.funding_call?.scheme_title || record.funding_call?.title || 'a funding call'
-  const deadline = record.deadline_at
-    ? new Date(record.deadline_at).toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      })
-    : null
-
-  // Mailjet, like every other email in the product. `sendEmail` no-ops with a
-  // log line when the keys are absent, so a dev environment needs no branch.
-  await sendEmail({
-    to: email,
-    toName: record.assignee?.name || undefined,
-    ...assignmentNotificationTemplate({
-      email,
-      name: record.assignee?.name,
-      assignerName: assigner?.name || assigner?.email || 'An administrator',
-      callTitle,
-      agency: record.funding_call?.agencyName || null,
-      deadline,
-      message: record.message || null,
-    }),
-  })
 }

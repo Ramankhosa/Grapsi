@@ -40,6 +40,8 @@ export interface EscalationResult {
   considered: number
   deadlineNudges: number
   noResponseNudges: number
+  /** Post-award obligations (instalments, UC, SE) chased this run. */
+  milestoneNudges: number
   alreadySent: number
   emailFailed: number
 }
@@ -65,6 +67,108 @@ function daysUntil(deadline: Date, now: Date) {
  * Appends a stage only if it is not already there. Returns true when this call
  * is the one that claimed it — i.e. the caller owns sending the nudge.
  */
+/** The same claim-then-act lock, for a milestone's own stage array. */
+async function claimMilestoneStage(milestoneId: string, stage: string) {
+  const claimed = await prisma.$executeRaw(Prisma.sql`
+    UPDATE assignment_milestones
+       SET auto_nudge_stages = array_append(auto_nudge_stages, ${stage})
+     WHERE id = ${milestoneId}
+       AND NOT (${stage} = ANY(auto_nudge_stages))
+  `)
+  return claimed === 1
+}
+
+/**
+ * Post-award obligations, chased by the same ladder as a submission deadline.
+ *
+ * A utilisation certificate that slips is the kind of thing an office finds out
+ * about from the funder, so it gets the officer as well as the assignee — the
+ * one difference from the pre-award nudges, where the officer only hears about
+ * silence.
+ */
+async function sweepMilestones(now: Date, limit: number, result: EscalationResult) {
+  const milestones = await prisma.assignmentMilestone.findMany({
+    where: {
+      status: 'PENDING',
+      due_at: { not: null },
+      assignment: { outcome: 'AWARDED' },
+    },
+    select: {
+      id: true,
+      tenant_id: true,
+      title: true,
+      kind: true,
+      due_at: true,
+      auto_nudge_stages: true,
+      assignment: {
+        select: {
+          id: true,
+          assignee_user_id: true,
+          assigned_by_user_id: true,
+          assignee: { select: { name: true, email: true } },
+          funding_call: { select: { title: true, scheme_title: true } },
+        },
+      },
+    },
+    orderBy: { due_at: 'asc' },
+    take: limit,
+  })
+
+  for (const milestone of milestones) {
+    if (!milestone.due_at || !milestone.assignment) continue
+    const remaining = daysUntil(milestone.due_at, now)
+    const due = DEADLINE_STAGES.filter((entry) => remaining <= entry.days).pop()
+    if (!due || remaining < 0) continue
+    if (milestone.auto_nudge_stages.includes(due.stage)) {
+      result.alreadySent += 1
+      continue
+    }
+    if (!(await claimMilestoneStage(milestone.id, due.stage))) continue
+
+    const callTitle =
+      milestone.assignment.funding_call?.scheme_title ||
+      milestone.assignment.funding_call?.title ||
+      'a funded project'
+    const body =
+      remaining === 0
+        ? `${milestone.title} is due today.`
+        : remaining === 1
+          ? `${milestone.title} is due tomorrow.`
+          : `${milestone.title} is due in ${remaining} days.`
+
+    await notifyQuietly({
+      tenantId: milestone.tenant_id,
+      userIds: [milestone.assignment.assignee_user_id, milestone.assignment.assigned_by_user_id],
+      title: `${milestone.kind} due ${due.label}: ${callTitle}`,
+      body,
+      category: 'DEADLINE',
+      linkUrl: '/assignments',
+      assignmentId: milestone.assignment.id,
+    })
+
+    if (milestone.assignment.assignee?.email) {
+      try {
+        await sendEmail({
+          to: milestone.assignment.assignee.email,
+          toName: milestone.assignment.assignee.name || undefined,
+          ...assignmentReminderTemplate({
+            email: milestone.assignment.assignee.email,
+            name: milestone.assignment.assignee.name,
+            callTitle,
+            deadline: formatDate(milestone.due_at),
+            note: body,
+            fromName: null,
+          }),
+        })
+      } catch (error) {
+        result.emailFailed += 1
+        console.warn('Milestone escalation email failed', error)
+      }
+    }
+    result.milestoneNudges += 1
+  }
+}
+
 async function claimStage(assignmentId: string, stage: string) {
   const claimed = await prisma.$executeRaw(Prisma.sql`
     UPDATE call_assignments
@@ -83,6 +187,7 @@ export async function sweepDeadlineEscalations(
     considered: 0,
     deadlineNudges: 0,
     noResponseNudges: 0,
+    milestoneNudges: 0,
     alreadySent: 0,
     emailFailed: 0,
   }
@@ -232,6 +337,8 @@ export async function sweepDeadlineEscalations(
       }
     }
   }
+
+  await sweepMilestones(now, limit, result)
 
   return result
 }

@@ -12,6 +12,10 @@ const updateSchema = z
     title: z.string().trim().max(120).nullable().optional(),
     isActive: z.boolean().optional(),
     isHead: z.boolean().optional(),
+    // Leave window: while it is open this member's ticklers route to whoever
+    // deputises for each of their schools.
+    awayFrom: z.string().trim().nullable().optional(),
+    awayUntil: z.string().trim().nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'Nothing to update' })
 
@@ -38,6 +42,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       title: payload.title,
       isActive: payload.isActive,
       isHead: payload.isHead,
+      awayFrom: payload.awayFrom,
+      awayUntil: payload.awayUntil,
       actorUserId: context.user.id,
     })
     // freedSchools is surfaced so the UI can say which schools now have nobody

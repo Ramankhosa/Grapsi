@@ -1,12 +1,30 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { BookOpen, Compass, LayoutGrid, LogOut, Search, UserRound } from 'lucide-react';
+import {
+  Bell,
+  BookOpen,
+  ClipboardList,
+  Compass,
+  LayoutGrid,
+  Lightbulb,
+  LogOut,
+  Search,
+  ShieldCheck,
+  UserRound,
+} from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 
+// App Router destinations (/assignments, /funding/intelligence, …) never read
+// as "active" here — this bar only mounts on Pages Router pages, so
+// router.pathname can never equal them. That is fine: the tab still navigates.
 const tabs = [
   { href: '/profile/researcher', label: 'Profile', icon: UserRound },
   { href: '/profile/research-fit', label: 'Research Fit', icon: Compass },
   { href: '/finder', label: 'Finder', icon: Search },
+  { href: '/assignments', label: 'Assignments', icon: ClipboardList },
+  { href: '/reviewer', label: 'Reviewer', icon: ShieldCheck },
+  { href: '/funding/intelligence', label: 'Intelligence', icon: Lightbulb },
+  { href: '/notifications', label: 'Notifications', icon: Bell },
   { href: '/library', label: 'Library', icon: BookOpen },
 ];
 

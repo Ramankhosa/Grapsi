@@ -63,9 +63,31 @@ interface DrillAssignment {
   assignedBy: { id: string; name: string | null; email: string } | null
 }
 
+/** Someone considered for the call, whether or not they were assigned it. */
+interface Candidate {
+  id: string
+  userId: string
+  name: string
+  status: string
+  note: string | null
+  school: string | null
+  tier: string | null
+  addedBy: string | null
+  assigned: boolean
+}
+
 interface DrillIn {
   matched: MatchedPerson[]
   assignments: DrillAssignment[]
+  candidates: Candidate[]
+}
+
+const CANDIDATE_BADGE: Record<string, string> = {
+  SHORTLISTED: 'nk-badge',
+  APPROACHED: 'nk-badge nk-badge-live',
+  ASSIGNED: 'nk-badge nk-badge-ok',
+  DECLINED: 'nk-badge nk-badge-danger',
+  PASSED_OVER: 'nk-badge nk-badge-warn',
 }
 
 const STATES = [
@@ -75,6 +97,54 @@ const STATES = [
   { key: 'draft', label: 'Drafts' },
   { key: 'closed', label: 'Closed' },
 ] as const
+
+const CLOSING_WINDOWS = [
+  { value: '', label: 'Any deadline' },
+  { value: '7', label: 'Closing in 7 days' },
+  { value: '30', label: 'Closing in 30 days' },
+  { value: '90', label: 'Closing in 90 days' },
+] as const
+
+const SORTS = [
+  { value: 'deadline', label: 'Nearest deadline' },
+  { value: 'recent', label: 'Recently updated' },
+  { value: 'assigned', label: 'Most assigned' },
+  { value: 'title', label: 'Title A–Z' },
+] as const
+
+/** Everything the funnel query is keyed on, so one object drives every reload. */
+interface FunnelFilters {
+  state: (typeof STATES)[number]['key']
+  q: string
+  agency: string
+  discipline: string
+  fundingKind: string
+  orgUnitId: string
+  closingInDays: string
+  sort: string
+}
+
+const DEFAULT_FILTERS: FunnelFilters = {
+  state: 'open',
+  q: '',
+  agency: '',
+  discipline: '',
+  fundingKind: '',
+  orgUnitId: '',
+  closingInDays: '',
+  sort: 'deadline',
+}
+
+interface CallFacets {
+  agencies: string[]
+  disciplines: string[]
+  fundingKinds: string[]
+}
+
+interface SchoolOption {
+  id: string
+  name: string
+}
 
 const PAGE_SIZE = 50
 
@@ -91,8 +161,13 @@ export default function DeptCallFunnelPage() {
   const [counts, setCounts] = useState({ all: 0, drafts: 0, unassignedOpen: 0 })
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
-  const [state, setState] = useState<(typeof STATES)[number]['key']>('open')
-  const [search, setSearch] = useState('')
+  // `filters` is the applied query; `draft` is what the user is still typing or
+  // picking. Only Search / a chip commits, so the table never thrashes.
+  const [filters, setFilters] = useState<FunnelFilters>(DEFAULT_FILTERS)
+  const [draftFilters, setDraftFilters] = useState<FunnelFilters>(DEFAULT_FILTERS)
+  const [facets, setFacets] = useState<CallFacets>({ agencies: [], disciplines: [], fundingKinds: [] })
+  const [schools, setSchools] = useState<SchoolOption[]>([])
+  const [showFilters, setShowFilters] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -103,16 +178,24 @@ export default function DeptCallFunnelPage() {
   const canReview = me.isHead || me.canAdminister
 
   const load = useCallback(
-    async (nextOffset: number, nextState: string, query: string) => {
+    async (nextOffset: number, next: FunnelFilters) => {
       setLoading(true)
       setError(null)
+      setFilters(next)
+      setDraftFilters(next)
       try {
         const params = new URLSearchParams({
-          state: nextState,
+          state: next.state,
           limit: String(PAGE_SIZE),
           offset: String(nextOffset),
         })
-        if (query) params.set('q', query)
+        if (next.q) params.set('q', next.q)
+        if (next.agency) params.set('agency', next.agency)
+        if (next.discipline) params.set('discipline', next.discipline)
+        if (next.fundingKind) params.set('fundingKind', next.fundingKind)
+        if (next.orgUnitId) params.set('orgUnitId', next.orgUnitId)
+        if (next.closingInDays) params.set('closingInDays', next.closingInDays)
+        if (next.sort && next.sort !== 'deadline') params.set('sort', next.sort)
         const response = await authFetch(`/api/funding-dept/calls?${params.toString()}`)
         const data = await response.json()
         if (!response.ok) throw new Error(data.error || 'Failed to load the call funnel')
@@ -131,15 +214,56 @@ export default function DeptCallFunnelPage() {
 
   useEffect(() => {
     if (authLoading || meLoading || !canReview) return
-    void load(0, state, '')
+    void load(0, DEFAULT_FILTERS)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, meLoading, canReview])
+
+  // Facet lists come from the calls this tenant can actually see, and the
+  // school list from the matching facets (already clamped to the caller's
+  // reach), so neither dropdown can offer a filter that returns nothing.
+  useEffect(() => {
+    if (authLoading || meLoading || !canReview) return
+    let cancelled = false
+    const loadFacets = async () => {
+      const [callFacets, matchFacets] = await Promise.all([
+        authFetch('/api/funding-dept/calls?action=facets').then((r) => (r.ok ? r.json() : null)),
+        authFetch('/api/researcher-matching?action=facets').then((r) => (r.ok ? r.json() : null)),
+      ])
+      if (cancelled) return
+      if (callFacets) {
+        setFacets({
+          agencies: callFacets.agencies || [],
+          disciplines: callFacets.disciplines || [],
+          fundingKinds: callFacets.fundingKinds || [],
+        })
+      }
+      if (matchFacets) {
+        setSchools(
+          (matchFacets.schools || []).map((school: { id: string; name: string }) => ({
+            id: school.id,
+            name: school.name,
+          }))
+        )
+      }
+    }
+    void loadFacets().catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, meLoading, canReview])
 
   const switchState = (next: (typeof STATES)[number]['key']) => {
-    setState(next)
     setOpenCallId(null)
-    void load(0, next, search)
+    void load(0, { ...draftFilters, state: next })
   }
+
+  const activeFilterCount =
+    (filters.agency ? 1 : 0) +
+    (filters.discipline ? 1 : 0) +
+    (filters.fundingKind ? 1 : 0) +
+    (filters.orgUnitId ? 1 : 0) +
+    (filters.closingInDays ? 1 : 0)
 
   const toggleDrill = async (callId: string) => {
     if (openCallId === callId) {
@@ -155,7 +279,11 @@ export default function DeptCallFunnelPage() {
       if (!response.ok) throw new Error(data.error || 'Failed to load call detail')
       setDrill((current) => ({
         ...current,
-        [callId]: { matched: data.matched || [], assignments: data.assignments || [] },
+        [callId]: {
+          matched: data.matched || [],
+          assignments: data.assignments || [],
+          candidates: data.candidates || [],
+        },
       }))
     } catch {
       setDrill((current) => {
@@ -179,7 +307,7 @@ export default function DeptCallFunnelPage() {
           missing.length > 0 ? `${data.error} Missing: ${missing.join(', ')}` : data.error || 'Publish failed'
         )
       }
-      await load(offset, state, search)
+      await load(offset, filters)
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : 'Publish failed')
     } finally {
@@ -227,12 +355,14 @@ export default function DeptCallFunnelPage() {
           <div className="nk-ticks mt-3" aria-hidden />
         </header>
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           {STATES.map((entry) => (
             <button
               key={entry.key}
               type="button"
-              className={entry.key === state ? 'nk-btn-primary nk-btn-sm' : 'nk-btn-secondary nk-btn-sm'}
+              className={
+                entry.key === filters.state ? 'nk-btn-primary nk-btn-sm' : 'nk-btn-secondary nk-btn-sm'
+              }
               onClick={() => switchState(entry.key)}
             >
               {entry.label}
@@ -243,16 +373,148 @@ export default function DeptCallFunnelPage() {
           <input
             className="nk-input ml-auto max-w-xs"
             placeholder="Search calls or agencies"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            value={draftFilters.q}
+            onChange={(event) => setDraftFilters((current) => ({ ...current, q: event.target.value }))}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') void load(0, state, search)
+              if (event.key === 'Enter') void load(0, draftFilters)
             }}
           />
-          <button type="button" className="nk-btn-secondary nk-btn-sm" onClick={() => void load(0, state, search)}>
+          <button
+            type="button"
+            className="nk-btn-secondary nk-btn-sm"
+            onClick={() => setShowFilters((visible) => !visible)}
+            aria-expanded={showFilters}
+          >
+            {showFilters ? 'Hide filters' : 'Filters'}
+            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+          </button>
+          <button type="button" className="nk-btn-secondary nk-btn-sm" onClick={() => void load(0, draftFilters)}>
             Search
           </button>
         </div>
+
+        {showFilters ? (
+          <div className="nk-panel-quiet mb-4 px-4 py-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="block">
+                <span className="nk-label mb-1 block">Agency</span>
+                <select
+                  className="nk-select w-full"
+                  value={draftFilters.agency}
+                  onChange={(event) =>
+                    void load(0, { ...draftFilters, agency: event.target.value })
+                  }
+                >
+                  <option value="">All agencies</option>
+                  {facets.agencies.map((agency) => (
+                    <option key={agency} value={agency}>
+                      {agency}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="nk-label mb-1 block">Discipline</span>
+                <select
+                  className="nk-select w-full"
+                  value={draftFilters.discipline}
+                  onChange={(event) =>
+                    void load(0, { ...draftFilters, discipline: event.target.value })
+                  }
+                >
+                  <option value="">All disciplines</option>
+                  {facets.disciplines.map((discipline) => (
+                    <option key={discipline} value={discipline}>
+                      {discipline}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="nk-label mb-1 block">Funding kind</span>
+                <select
+                  className="nk-select w-full"
+                  value={draftFilters.fundingKind}
+                  onChange={(event) =>
+                    void load(0, { ...draftFilters, fundingKind: event.target.value })
+                  }
+                >
+                  <option value="">All kinds</option>
+                  {facets.fundingKinds.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {kind}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="nk-label mb-1 block">School on the call</span>
+                <select
+                  className="nk-select w-full"
+                  value={draftFilters.orgUnitId}
+                  onChange={(event) =>
+                    void load(0, { ...draftFilters, orgUnitId: event.target.value })
+                  }
+                >
+                  <option value="">Any school</option>
+                  {schools.map((school) => (
+                    <option key={school.id} value={school.id}>
+                      {school.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="nk-sub mt-1 block text-[11.5px]">
+                  Calls someone in that school has been assigned.
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="nk-label mb-1 block">Deadline</span>
+                <select
+                  className="nk-select w-full"
+                  value={draftFilters.closingInDays}
+                  onChange={(event) =>
+                    void load(0, { ...draftFilters, closingInDays: event.target.value })
+                  }
+                >
+                  {CLOSING_WINDOWS.map((window) => (
+                    <option key={window.value} value={window.value}>
+                      {window.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="nk-label mb-1 block">Sort by</span>
+                <select
+                  className="nk-select w-full"
+                  value={draftFilters.sort}
+                  onChange={(event) => void load(0, { ...draftFilters, sort: event.target.value })}
+                >
+                  {SORTS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {activeFilterCount > 0 ? (
+              <button
+                type="button"
+                className="nk-btn-secondary nk-btn-sm mt-3"
+                onClick={() => void load(0, { ...DEFAULT_FILTERS, state: filters.state, q: filters.q })}
+              >
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         {error ? (
           <div className="nk-panel-quiet mb-4 px-4 py-3">
@@ -369,7 +631,7 @@ export default function DeptCallFunnelPage() {
                               {detail === 'loading' || !detail ? (
                                 <p className="nk-sub">Loading detail…</p>
                               ) : (
-                                <div className="grid gap-6 lg:grid-cols-2">
+                                <div className="grid gap-6 lg:grid-cols-3">
                                   <div>
                                     <p className="nk-eyebrow mb-2">
                                       Matched by alerts ({detail.matched.length})
@@ -442,6 +704,46 @@ export default function DeptCallFunnelPage() {
                                       </ul>
                                     )}
                                   </div>
+                                  <div>
+                                    <p className="nk-eyebrow mb-2">
+                                      Shortlist ({detail.candidates.length})
+                                    </p>
+                                    {detail.candidates.length === 0 ? (
+                                      <p className="nk-sub">
+                                        Nobody has been shortlisted. Build one from
+                                        {' '}
+                                        <Link
+                                          href={`/researcher-matching?callId=${encodeURIComponent(call.id)}`}
+                                          className="text-cobalt-700 hover:underline"
+                                        >
+                                          matching
+                                        </Link>
+                                        .
+                                      </p>
+                                    ) : (
+                                      <ul className="space-y-1.5">
+                                        {detail.candidates.map((candidate) => (
+                                          <li key={candidate.id} className="flex flex-wrap items-center gap-2">
+                                            <span className="text-[13px] font-medium text-nickel-900">
+                                              {candidate.name}
+                                            </span>
+                                            <span
+                                              className={
+                                                CANDIDATE_BADGE[candidate.status] || 'nk-badge'
+                                              }
+                                            >
+                                              {candidate.status.toLowerCase().replace(/_/g, ' ')}
+                                            </span>
+                                            {candidate.note ? (
+                                              <span className="nk-sub text-[12px]">
+                                                {candidate.note}
+                                              </span>
+                                            ) : null}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
                                 </div>
                               )}
                             </td>
@@ -464,7 +766,7 @@ export default function DeptCallFunnelPage() {
                   type="button"
                   className="nk-btn-secondary nk-btn-sm"
                   disabled={offset === 0}
-                  onClick={() => void load(Math.max(offset - PAGE_SIZE, 0), state, search)}
+                  onClick={() => void load(Math.max(offset - PAGE_SIZE, 0), filters)}
                 >
                   Previous
                 </button>
@@ -472,7 +774,7 @@ export default function DeptCallFunnelPage() {
                   type="button"
                   className="nk-btn-secondary nk-btn-sm"
                   disabled={offset + PAGE_SIZE >= total}
-                  onClick={() => void load(offset + PAGE_SIZE, state, search)}
+                  onClick={() => void load(offset + PAGE_SIZE, filters)}
                 >
                   Next
                 </button>

@@ -85,6 +85,30 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
 
   const assignedUserIds = new Set(assignments.map((row) => row.assignee_user_id))
 
+  // The shortlist: everyone considered, including the people who were passed
+  // over. Without it the record of a call shows only whoever said yes.
+  const candidates = await prisma.callCandidate.findMany({
+    where: { tenant_id: context.tenantId, funding_call_id: call.id },
+    select: {
+      id: true,
+      status: true,
+      note: true,
+      match_score: true,
+      match_tier: true,
+      updated_at: true,
+      created_by: { select: { id: true, name: true, email: true } },
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          researcher_profile: { select: { school: true, department: true, employee_id: true } },
+        },
+      },
+    },
+    orderBy: [{ status: 'asc' }, { updated_at: 'desc' }],
+  })
+
   return NextResponse.json({
     call: {
       id: call.id,
@@ -116,5 +140,21 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       assigned: assignedUserIds.has(alert.user.id),
     })),
     assignments: assignments.map(serializeAssignment),
+    candidates: candidates.map((row) => ({
+      id: row.id,
+      status: row.status,
+      note: row.note,
+      score: row.match_score,
+      tier: row.match_tier,
+      updatedAt: row.updated_at,
+      addedBy: row.created_by?.name || row.created_by?.email || null,
+      userId: row.user.id,
+      name: row.user.name || row.user.email,
+      email: row.user.email,
+      employeeId: row.user.researcher_profile?.employee_id ?? null,
+      school: row.user.researcher_profile?.school ?? null,
+      department: row.user.researcher_profile?.department ?? null,
+      assigned: assignedUserIds.has(row.user.id),
+    })),
   })
 }

@@ -16,6 +16,8 @@ yarn-error.log*
 # Next.js build output
 .next/
 **/.next/
+# Alternate dist dirs from NEXT_DIST_DIR (see .claude/launch.json)
+.next-*/
 out/
 
 # Production deploy artifacts (release dirs / current symlink if deploying in-tree)

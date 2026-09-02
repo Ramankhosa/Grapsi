@@ -26,6 +26,8 @@ interface ReminderRow {
   assignmentId: string | null
   facultyName: string | null
   callTitle: string | null
+  authorName: string | null
+  authorIsMe: boolean
 }
 
 interface OpenCall {
@@ -36,6 +38,7 @@ interface OpenCall {
 }
 
 interface DashboardData {
+  view: 'mine' | 'schools'
   summary: {
     active: number
     submitted: number
@@ -73,11 +76,16 @@ export default function FundingDeptHomePage() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // 'mine' is what I delegated; 'schools' is everything landing in the schools
+  // I cover, whoever delegated it. Personal stays the default — an officer's
+  // own chase list should not be diluted by a colleague's work.
+  const [view, setView] = useState<'mine' | 'schools'>('mine')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (nextView: 'mine' | 'schools') => {
     setLoading(true)
+    setView(nextView)
     try {
-      const response = await authFetch('/api/funding-dept/dashboard')
+      const response = await authFetch(`/api/funding-dept/dashboard?view=${nextView}`)
       const payload = await response.json()
       if (!response.ok) {
         setError(payload.error || 'Could not load your dashboard.')
@@ -98,8 +106,9 @@ export default function FundingDeptHomePage() {
       setLoading(false)
       return
     }
-    void load()
-  }, [authLoading, meLoading, me.isMember, me.canAdminister, load])
+    void load('mine')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, meLoading, me.isMember, me.canAdminister])
 
   if (authLoading || meLoading || loading) {
     return (
@@ -150,14 +159,24 @@ export default function FundingDeptHomePage() {
         <header className="mb-6">
           <p className="nk-eyebrow">Funding department</p>
           <h1 className="mt-1.5 text-[24px] font-semibold tracking-[-0.02em] text-nickel-900">
-            My worklist
+            {view === 'schools' ? 'My schools' : 'My worklist'}
           </h1>
+          <p className="nk-sub mt-1">
+            {view === 'schools'
+              ? 'Everything landing in the schools you cover, whoever assigned it.'
+              : 'The calls you handed out and are chasing.'}
+          </p>
           <div className="nk-ticks mt-3" aria-hidden />
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {me.schools.map((school) => (
-              <span key={school.id} className="nk-badge">
+            {/* Each school is a door into its own desk, not just a label. */}
+            {me.reachSchools.map((school) => (
+              <Link
+                key={school.id}
+                href={`/funding-dept/schools/${school.id}`}
+                className="nk-badge transition hover:bg-nickel-100"
+              >
                 {school.name}
-              </span>
+              </Link>
             ))}
             {/* An admin viewing this page is not a member and has no schools —
                 telling them theirs are missing would be nonsense. */}
@@ -189,11 +208,33 @@ export default function FundingDeptHomePage() {
           </div>
         ) : null}
 
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {([
+            { key: 'mine' as const, label: 'Assigned by me' },
+            { key: 'schools' as const, label: 'In my schools' },
+          ]).map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              className={view === option.key ? 'nk-btn-primary nk-btn-sm' : 'nk-btn-secondary nk-btn-sm'}
+              onClick={() => void load(option.key)}
+            >
+              {option.label}
+            </button>
+          ))}
+          {view === 'schools' && me.reachSchools.length === 0 && !me.capabilities.isTenantWide ? (
+            <span className="nk-sub">No schools assigned to you, so there is nothing to show.</span>
+          ) : null}
+        </div>
+
         <SummaryCards stats={stats} />
 
         <div className="mt-4 flex flex-wrap gap-2">
           <Link href="/researcher-matching" className="nk-btn-primary nk-btn-sm">
             Find researchers for a call
+          </Link>
+          <Link href="/funding-dept/chase" className="nk-btn-secondary nk-btn-sm">
+            Chase queue
           </Link>
           <Link href="/funding-dept/assignments" className="nk-btn-secondary nk-btn-sm">
             My assignments
@@ -218,7 +259,11 @@ export default function FundingDeptHomePage() {
             <div className="nk-panel-head">
               <div>
                 <h2 className="nk-title">Follow-ups due</h2>
-                <p className="nk-sub">Reminders you set that have come around</p>
+                <p className="nk-sub">
+                  {view === 'schools'
+                    ? 'Reminders now due on work in your schools'
+                    : 'Reminders you set that have come around'}
+                </p>
               </div>
               {(data?.dueReminders.length ?? 0) > 0 ? (
                 <span className="nk-badge nk-badge-warn">{data?.dueReminders.length}</span>
@@ -236,6 +281,9 @@ export default function FundingDeptHomePage() {
                         <span className="nk-sub"> · {row.callTitle || 'Untitled call'}</span>
                       </p>
                       <p className="nk-sub mt-0.5">{row.note}</p>
+                      {view === 'schools' && !row.authorIsMe && row.authorName ? (
+                        <p className="nk-sub mt-0.5">Set by {row.authorName}</p>
+                      ) : null}
                       <p className="nk-sub mt-1">
                         Due {formatDate(row.remindAt)}
                         {row.remindFaculty ? ' · they were emailed too' : ' · private to you'}

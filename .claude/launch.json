@@ -48,6 +48,26 @@
       "port": 3789
     },
     {
+      "name": "moni-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "C:/Users/raman/Documents/Websitemonitor",
+        "run",
+        "dev"
+      ],
+      "port": 3100
+    },
+    {
+      "name": "grapsi-dev-isolated",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set NEXT_DIST_DIR=.next-claude&& npx next dev -p 3012"
+      ],
+      "port": 3012
+    },
+    {
       "name": "grapsi-dev-patentmock",
       "runtimeExecutable": "cmd",
       "runtimeArgs": [

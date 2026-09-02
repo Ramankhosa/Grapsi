@@ -1,19 +1,26 @@
 /**
  * Access-control plan seeding (idempotent).
  *
- * CURRENT POSTURE (18 Aug 2026): Grant Studio is switched OFF platform-wide.
+ * CURRENT POSTURE (1 Sep 2026): Grant Studio is switched OFF platform-wide.
  * Every tier gets the same four modules — Funding Directory, AI Funding Chatbot,
  * Funding Intelligence and AI Grant Review — while grant prep / blueprint /
  * drafting (GRANT_PREP + GRANT_DRAFTING) are withheld from all plans. The tiers
- * are deliberately identical for now; they differ only in LLM model access
+ * are otherwise deliberately identical; they differ only in LLM model access
  * (configured in Super Admin → LLM Model Control) and quotas (Quota Controller).
+ *
+ * Funding Alerts (FUNDING_ALERTS) is a separately sold delivery service: the
+ * publish-hooked matcher only emails/notifies users whose tenant plan includes
+ * it. It is seeded onto Pro and Enterprise but NOT Starter — grant it to a
+ * specific institution via Super Admin → Plans & Feature Access (tick "Funding
+ * Alerts" on their plan or custom plan); individual paying customers get it
+ * through the plan their subscription assigns.
  *
  * To re-open Grant Studio later, add 'GRANT_PREP' and 'GRANT_DRAFTING' back to
  * the relevant tier's `includes` below and re-run — or just tick "Grant Studio"
  * for that plan in Super Admin → Plans & Feature Access, which does the same
  * thing through the UI.
  *
- * It ONLY manages the five module features listed in MODULE_FEATURES below. Any
+ * It ONLY manages the module features listed in MODULE_FEATURES below. Any
  * other features already attached to a plan (patent / paper products, etc.) are
  * left untouched. Plan display names are normalised to Starter/Pro/Enterprise.
  *
@@ -25,14 +32,15 @@
 const { PrismaClient } = require('@prisma/client')
 const prisma = new PrismaClient()
 
-// Feature catalog rows for the five modules (upserted so PlanFeature can attach).
+// Feature catalog rows for the plan-gated modules (upserted so PlanFeature can attach).
 const MODULE_FEATURES = [
   { code: 'FUNDING_DISCOVERY', name: 'Funding Directory', unit: 'calls' },
   { code: 'FUNDING_CHAT', name: 'AI Funding Chatbot', unit: 'messages' },
   { code: 'FUNDING_INTELLIGENCE', name: 'Funding Intelligence', unit: 'runs' },
   { code: 'GRANT_PREP', name: 'Grant Prep', unit: 'sessions' },
   { code: 'GRANT_DRAFTING', name: 'Grant Drafting', unit: 'tokens' },
-  { code: 'GRANT_REVIEW', name: 'AI Grant Review', unit: 'reviews' }
+  { code: 'GRANT_REVIEW', name: 'AI Grant Review', unit: 'reviews' },
+  { code: 'FUNDING_ALERTS', name: 'Funding Alerts', unit: 'alerts' }
 ]
 
 const ALL_MODULE_CODES = MODULE_FEATURES.map((f) => f.code)
@@ -47,10 +55,11 @@ const ENABLED_MODULE_CODES = [
 ]
 
 // Plan tier definitions: display name + which module features are included.
+// Funding Alerts is a paid add-on: Pro/Enterprise only, never Starter.
 const PLANS = [
   { code: 'FREE_PLAN', name: 'Starter', includes: ENABLED_MODULE_CODES },
-  { code: 'PRO_PLAN', name: 'Pro', includes: ENABLED_MODULE_CODES },
-  { code: 'ENTERPRISE_PLAN', name: 'Enterprise', includes: ENABLED_MODULE_CODES }
+  { code: 'PRO_PLAN', name: 'Pro', includes: [...ENABLED_MODULE_CODES, 'FUNDING_ALERTS'] },
+  { code: 'ENTERPRISE_PLAN', name: 'Enterprise', includes: [...ENABLED_MODULE_CODES, 'FUNDING_ALERTS'] }
 ]
 
 async function main() {

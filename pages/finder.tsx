@@ -99,6 +99,11 @@ export default function FinderPage() {
   // "begin writing" affordances are hidden rather than 403-ing on click.
   const { hasModule } = useEntitlements();
   const canUseGrantStudio = hasModule('GRANT_STUDIO');
+  // Call import mirrors the API gate (OWNER/ADMIN/CALL_ADMIN or platform
+  // staff) so a plain researcher never fills the modal only to hit a 403.
+  const canUploadCall =
+    Boolean(user?.roles?.some((role) => role === 'OWNER' || role === 'ADMIN' || role === 'CALL_ADMIN')) ||
+    user?.ati_id === 'PLATFORM';
   const uploadQueryHandledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -418,10 +423,12 @@ export default function FinderPage() {
             </button>
           </div>
 
-          <button type="button" onClick={() => setImportModalOpen(true)} className="cb-btn-secondary cb-btn-sm justify-center">
-            <Upload className="h-4 w-4" />
-            Upload a call
-          </button>
+          {canUploadCall && (
+            <button type="button" onClick={() => setImportModalOpen(true)} className="cb-btn-secondary cb-btn-sm justify-center">
+              <Upload className="h-4 w-4" />
+              Upload a call
+            </button>
+          )}
         </div>
 
         {error ? (

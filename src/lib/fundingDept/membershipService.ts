@@ -13,7 +13,7 @@
 import { Prisma } from '@prisma/client'
 
 import prisma from '@/lib/prisma'
-import { memberInclude } from './shared'
+import { isMemberAway, memberInclude } from './shared'
 
 export class FundingDeptError extends Error {
   status: number
@@ -123,6 +123,9 @@ export async function updateMember(input: {
   title?: string | null
   isActive?: boolean
   isHead?: boolean
+  /** Leave window. Pass null to either to clear it. */
+  awayFrom?: string | Date | null
+  awayUntil?: string | Date | null
   actorUserId: string
 }) {
   const existing = await prisma.fundingDeptMember.findFirst({
@@ -157,6 +160,12 @@ export async function updateMember(input: {
         // slot for their successor via the partial unique index.
         ...(input.isHead === undefined ? {} : { is_head: input.isHead }),
         ...(deactivating ? { is_head: false } : {}),
+        ...(input.awayFrom === undefined
+          ? {}
+          : { away_from: input.awayFrom ? new Date(input.awayFrom) : null }),
+        ...(input.awayUntil === undefined
+          ? {}
+          : { away_until: input.awayUntil ? new Date(input.awayUntil) : null }),
       },
       include: memberInclude,
     })
@@ -225,7 +234,14 @@ export async function setMemberSchools(input: {
   memberId: string
   orgUnitIds: string[]
   actorUserId: string
+  /**
+   * Deputy rota rather than primary. A deputy is a standing backup: they get
+   * the school's reach and receive its nudges while the primary is away, but
+   * the primary stays the person answerable for it.
+   */
+  asDeputy?: boolean
 }) {
+  const asDeputy = input.asDeputy === true
   const member = await prisma.fundingDeptMember.findFirst({
     where: { id: input.memberId, tenant_id: input.tenantId },
     include: memberInclude,
@@ -262,7 +278,11 @@ export async function setMemberSchools(input: {
     }
   }
 
-  const existingIds = member.school_assignments.map((s) => s.org_unit_id)
+  // Each rota is replaced independently: setting someone's deputy schools must
+  // not silently drop the schools they are primary for.
+  const existingIds = member.school_assignments
+    .filter((s) => Boolean((s as { is_deputy?: boolean }).is_deputy) === asDeputy)
+    .map((s) => s.org_unit_id)
   const toRemove = existingIds.filter((id) => !wanted.includes(id))
   const toAdd = wanted.filter((id) => !existingIds.includes(id))
 
@@ -270,7 +290,7 @@ export async function setMemberSchools(input: {
     await prisma.$transaction(async (tx) => {
       if (toRemove.length > 0) {
         await tx.fundingDeptSchoolAssignment.deleteMany({
-          where: { member_id: member.id, org_unit_id: { in: toRemove } },
+          where: { member_id: member.id, org_unit_id: { in: toRemove }, is_deputy: asDeputy },
         })
       }
       if (toAdd.length > 0) {
@@ -280,6 +300,7 @@ export async function setMemberSchools(input: {
             member_id: member.id,
             org_unit_id: orgUnitId,
             assigned_by_user_id: input.actorUserId,
+            is_deputy: asDeputy,
           })),
         })
       }
@@ -287,6 +308,12 @@ export async function setMemberSchools(input: {
   } catch (error) {
     if (isUniqueViolation(error)) {
       const clash = await findCoveringMember(input.tenantId, toAdd)
+      if (asDeputy) {
+        throw new FundingDeptError(
+          'They already cover one of those schools. A member cannot deputise for their own school.',
+          409
+        )
+      }
       throw new FundingDeptError(
         clash
           ? `${clash.schoolName} is already covered by ${clash.memberName}. Remove it from them first.`
@@ -300,9 +327,9 @@ export async function setMemberSchools(input: {
   await writeAudit({
     actorUserId: input.actorUserId,
     tenantId: input.tenantId,
-    action: 'FUNDING_DEPT_COVERAGE_SET',
+    action: asDeputy ? 'FUNDING_DEPT_DEPUTY_SET' : 'FUNDING_DEPT_COVERAGE_SET',
     resource: `funding_dept_member:${member.id}`,
-    meta: { userId: member.user_id, added: toAdd, removed: toRemove },
+    meta: { userId: member.user_id, added: toAdd, removed: toRemove, asDeputy },
   })
 
   return getMemberById(input.tenantId, member.id)
@@ -320,11 +347,14 @@ export async function getSchoolCoverage(tenantId: string) {
       where: { tenant_id: tenantId },
       select: {
         org_unit_id: true,
+        is_deputy: true,
         member: {
           select: {
             id: true,
             is_active: true,
             is_head: true,
+            away_from: true,
+            away_until: true,
             user: { select: { id: true, name: true, email: true } },
           },
         },
@@ -332,9 +362,20 @@ export async function getSchoolCoverage(tenantId: string) {
     }),
   ])
 
-  const byUnit = new Map(coverage.map((row) => [row.org_unit_id, row.member]))
+  const byUnit = new Map(
+    coverage.filter((row) => !row.is_deputy).map((row) => [row.org_unit_id, row.member])
+  )
+  const deputyByUnit = new Map<string, (typeof coverage)[number]['member']>()
+  for (const row of coverage) {
+    if (row.is_deputy && !deputyByUnit.has(row.org_unit_id)) {
+      deputyByUnit.set(row.org_unit_id, row.member)
+    }
+  }
+
   return schools.map((school) => {
     const member = byUnit.get(school.id)
+    const deputy = deputyByUnit.get(school.id)
+    const primaryAway = member ? isMemberAway(member) : false
     return {
       id: school.id,
       name: school.name,
@@ -344,6 +385,12 @@ export async function getSchoolCoverage(tenantId: string) {
       memberName: member?.user?.name || member?.user?.email || null,
       memberIsHead: member?.is_head ?? false,
       covered: Boolean(member),
+      deputyMemberId: deputy?.id ?? null,
+      deputyName: deputy?.user?.name || deputy?.user?.email || null,
+      // A covered school whose officer is away and has no deputy is not
+      // covered in any way that matters, and the head needs to see that.
+      primaryAway,
+      uncoveredRightNow: Boolean(member) && primaryAway && !deputy,
     }
   })
 }

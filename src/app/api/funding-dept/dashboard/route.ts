@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: context.error }, { status: context.status })
   }
 
+  const { searchParams } = new URL(request.url)
   const membership = await getMembership(context.tenantId, context.user.id)
   const isActiveMember = Boolean(membership?.is_active)
   if (!isActiveMember && !context.isAdmin) {
@@ -37,30 +38,57 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  const filters = {
-    tenantId: context.tenantId,
-    assignedByUserIds: [context.user.id],
-  }
+  // `mine` (default) is the personal chase list this endpoint was built for.
+  // `schools` widens to everything landing in the schools the caller covers,
+  // whoever delegated it — otherwise a call the head or a colleague assigns
+  // into your school never appears in the numbers you are answerable for.
+  const view = searchParams.get('view') === 'schools' ? 'schools' : 'mine'
+  const reach = context.scope.isTenantWide ? null : context.scope.managedUnitIds
+
+  const filters =
+    view === 'schools'
+      ? { tenantId: context.tenantId, scopeUnitIds: reach }
+      : { tenantId: context.tenantId, assignedByUserIds: [context.user.id] }
+
   const schoolUnitIds = membership?.school_assignments.map((s) => s.org_unit_id) ?? []
+
+  // In the personal view a due reminder is the caller's own tickler. In the
+  // schools view it is anything now due on work inside their reach, so cover
+  // does not depend on who happened to set the reminder.
+  const reminderWhere =
+    view === 'schools'
+      ? {
+          tenant_id: context.tenantId,
+          reminder_sent_at: null,
+          remind_at: { not: null, lte: new Date() },
+          ...(reach
+            ? {
+                assignment: {
+                  assignee_org_unit_id: { in: reach.length > 0 ? reach : ['__none__'] },
+                },
+              }
+            : {}),
+        }
+      : {
+          tenant_id: context.tenantId,
+          created_by_user_id: context.user.id,
+          reminder_sent_at: null,
+          remind_at: { not: null, lte: new Date() },
+        }
 
   const [summary, upcoming, missed, dueReminders, openCalls] = await Promise.all([
     getSummary(filters),
     getUpcomingDeadlines(filters, 30, 25),
     getMissedAssignments(filters, 25),
-    // Reminders this person set for themselves or for faculty that are now due.
     prisma.assignmentFollowUp.findMany({
-      where: {
-        tenant_id: context.tenantId,
-        created_by_user_id: context.user.id,
-        reminder_sent_at: null,
-        remind_at: { not: null, lte: new Date() },
-      },
+      where: reminderWhere,
       select: {
         id: true,
         note: true,
         kind: true,
         remind_at: true,
         remind_faculty: true,
+        created_by: { select: { id: true, name: true, email: true } },
         assignment: {
           select: {
             id: true,
@@ -85,7 +113,12 @@ export async function GET(request: NextRequest) {
   ])
 
   return NextResponse.json({
+    view,
     member: membership ? serializeMember(membership) : null,
+    schools: (membership?.school_assignments ?? []).map((row) => ({
+      id: row.org_unit_id,
+      name: row.org_unit?.name ?? null,
+    })),
     summary,
     upcoming,
     missed,
@@ -95,6 +128,8 @@ export async function GET(request: NextRequest) {
       kind: row.kind,
       remindAt: row.remind_at,
       remindFaculty: row.remind_faculty,
+      authorName: row.created_by?.name || row.created_by?.email || null,
+      authorIsMe: row.created_by?.id === context.user.id,
       assignmentId: row.assignment?.id ?? null,
       assignmentStatus: row.assignment?.status ?? null,
       facultyName: row.assignment?.assignee?.name || row.assignment?.assignee?.email || null,

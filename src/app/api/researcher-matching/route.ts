@@ -121,11 +121,19 @@ export async function GET(request: NextRequest) {
         orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
         select: { id: true, name: true, kind: true, parent_id: true },
       }),
-      prisma.$queryRaw<Array<{ careerStage: string | null; institutionType: string | null; country: string | null }>>`
+      prisma.$queryRaw<
+        Array<{
+          careerStage: string | null
+          institutionType: string | null
+          country: string | null
+          designation: string | null
+        }>
+      >`
         SELECT DISTINCT
           rp.career_stage AS "careerStage",
           rp.institution_type AS "institutionType",
-          rp.country_of_residence AS "country"
+          rp.country_of_residence AS "country",
+          rp.designation
         FROM researcher_profiles rp
         JOIN users u ON u.id = rp.user_id
         WHERE u."tenantId" = ${tenantId}
@@ -156,16 +164,119 @@ export async function GET(request: NextRequest) {
         departments: departmentsBySchool.get(unit.id) || [],
       }))
 
-    const distinct = (key: 'careerStage' | 'institutionType' | 'country') =>
+    const distinct = (key: 'careerStage' | 'institutionType' | 'country' | 'designation') =>
       Array.from(
         new Set(attributes.map((row) => (row[key] || '').trim()).filter(Boolean))
       ).sort((left, right) => left.localeCompare(right))
+
+    // Agencies and disciplines of the calls this caller can match against, so
+    // the call picker can be narrowed the same way the people list can.
+    const callRows = await prisma.fundingCall.findMany({
+      where: tenantVisibleCallWhere(auth),
+      select: { agencyName: true, agency_name: true, disciplines: true, funding_kinds: true },
+    })
+    const sortedUnique = (values: Array<string | null | undefined>) =>
+      Array.from(new Set(values.map((value) => (value || '').trim()).filter(Boolean))).sort(
+        (left, right) => left.localeCompare(right)
+      )
 
     return NextResponse.json({
       schools,
       careerStages: distinct('careerStage'),
       institutionTypes: distinct('institutionType'),
       countries: distinct('country'),
+      designations: distinct('designation'),
+      callAgencies: sortedUnique(callRows.map((row) => row.agency_name || row.agencyName)),
+      callDisciplines: sortedUnique(callRows.flatMap((row) => row.disciplines)),
+      callFundingKinds: sortedUnique(callRows.flatMap((row) => row.funding_kinds)),
+    })
+  }
+
+  // One researcher's stored profile — powers "View profile" beside Assign.
+  // Same fence as discovery: a scoped caller can only open profiles inside
+  // their managed schools, mirroring who they could assign to.
+  if (action === 'profile') {
+    const userId = (searchParams.get('userId') || '').trim()
+    if (!userId) {
+      return NextResponse.json({ error: 'userId is required' }, { status: 400 })
+    }
+    const managed = auth.scope.managedUnitIds
+    const profile = await prisma.researcherProfile.findFirst({
+      where: {
+        user_id: userId,
+        user: { tenantId },
+        ...(auth.scope.isTenantWide
+          ? {}
+          : { org_unit_id: { in: managed.length > 0 ? managed : ['__none__'] } }),
+      },
+      select: {
+        user: { select: { id: true, name: true, email: true } },
+        display_name: true,
+        employee_id: true,
+        designation: true,
+        school: true,
+        department: true,
+        institution_name: true,
+        career_stage: true,
+        years_of_experience: true,
+        country_of_residence: true,
+        application_languages: true,
+        research_summary: true,
+        research_areas: true,
+        keywords: true,
+        linkedin_url: true,
+        google_scholar_url: true,
+        scopus_url: true,
+        orcid_url: true,
+      },
+    })
+    if (!profile) {
+      return NextResponse.json(
+        { error: 'Researcher not found or outside your schools.' },
+        { status: 404 }
+      )
+    }
+
+    const publications = await prisma.referenceLibrary.findMany({
+      where: { userId, isActive: true, tags: { has: 'my-publication' } },
+      select: { id: true, title: true, authors: true, year: true, venue: true, doi: true, url: true },
+      orderBy: [{ year: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+      take: 25,
+    })
+
+    return NextResponse.json({
+      profile: {
+        userId: profile.user.id,
+        name: profile.display_name || profile.user.name || profile.user.email,
+        email: profile.user.email,
+        employeeId: profile.employee_id,
+        designation: profile.designation,
+        school: profile.school,
+        department: profile.department,
+        institution: profile.institution_name,
+        careerStage: profile.career_stage,
+        yearsOfExperience: profile.years_of_experience,
+        country: profile.country_of_residence,
+        languages: profile.application_languages,
+        summary: profile.research_summary,
+        researchAreas: profile.research_areas,
+        keywords: profile.keywords,
+        links: {
+          googleScholar: profile.google_scholar_url,
+          scopus: profile.scopus_url,
+          orcid: profile.orcid_url,
+          linkedin: profile.linkedin_url,
+        },
+        publications: publications.map((p) => ({
+          id: p.id,
+          title: p.title,
+          authors: p.authors,
+          year: p.year,
+          venue: p.venue,
+          doi: p.doi,
+          url: p.url,
+        })),
+      },
     })
   }
 
@@ -174,22 +285,51 @@ export async function GET(request: NextRequest) {
   // for "find faculty for this call".
   const callId = (searchParams.get('callId') || '').trim()
   const q = searchParams.get('q') || ''
+  const callAgency = (searchParams.get('agency') || '').trim()
+  const callDiscipline = (searchParams.get('discipline') || '').trim()
+  const callFundingKind = (searchParams.get('fundingKind') || '').trim()
+  const closingInDays = Number(searchParams.get('closingInDays')) || 0
   const limit = Math.min(Number(searchParams.get('limit')) || 50, 200)
 
   const where: any = callId
     ? { AND: [{ id: callId }, tenantVisibleCallWhere(auth)] }
     : tenantVisibleCallWhere(auth)
-  if (!callId && q) {
-    where.AND = [
-      {
+  if (!callId) {
+    // A resolved ?callId= is a deep link to one specific call, so the browse
+    // filters below only apply to the list form.
+    const callFilters: any[] = []
+    if (q) {
+      callFilters.push({
         OR: [
           { title: { contains: q, mode: 'insensitive' } },
           { scheme_title: { contains: q, mode: 'insensitive' } },
           { agencyName: { contains: q, mode: 'insensitive' } },
           { description: { contains: q, mode: 'insensitive' } },
         ],
-      },
-    ]
+      })
+    }
+    if (callAgency) {
+      callFilters.push({
+        OR: [
+          { agency_name: { equals: callAgency, mode: 'insensitive' } },
+          { agencyName: { equals: callAgency, mode: 'insensitive' } },
+        ],
+      })
+    }
+    if (callDiscipline) {
+      callFilters.push({ disciplines: { has: callDiscipline } })
+    }
+    if (callFundingKind) {
+      callFilters.push({ funding_kinds: { has: callFundingKind } })
+    }
+    if (closingInDays > 0) {
+      const now = new Date()
+      const until = new Date(now.getTime() + closingInDays * 24 * 60 * 60 * 1000)
+      callFilters.push({ close_date: { gte: now, lte: until } })
+    }
+    if (callFilters.length > 0) {
+      where.AND = callFilters
+    }
   }
 
   const rows = await prisma.fundingCall.findMany({
@@ -275,6 +415,8 @@ export async function POST(request: NextRequest) {
       countries: stringList(requested.countries),
       institutionTypes: stringList(requested.institutionTypes),
       careerStages: stringList(requested.careerStages),
+      designations: stringList(requested.designations),
+      person: typeof requested.person === 'string' ? requested.person.trim().slice(0, 120) : null,
       includeBelowThreshold: requested.includeBelowThreshold === true,
       // Tenant scope is enforced here and can never be widened by the client.
       tenantOnly: true,

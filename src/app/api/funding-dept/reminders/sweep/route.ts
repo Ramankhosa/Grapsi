@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
+import { isCronRequest, withJobRun } from '@/lib/jobs/jobRuns'
 import { sweepDueReminders } from '@/lib/fundingDept/reminderService'
 import { sweepDeadlineEscalations } from '@/lib/fundingDept/escalationService'
 
@@ -11,20 +12,6 @@ export const maxDuration = 300
 const sweepSchema = z.object({
   limit: z.number().int().min(1).max(1000).optional(),
 })
-
-/**
- * Schedulers authenticate with the same shared secret the funding alert jobs
- * use — one scheduler credential for the whole product. The secret must be
- * configured server-side for the header path to work at all, so an unset env
- * can never open the route.
- */
-function isCronRequest(request: NextRequest): boolean {
-  const secret = process.env.FUNDING_ALERT_CRON_SECRET
-  if (!secret) {
-    return false
-  }
-  return request.headers.get('x-funding-alert-secret') === secret
-}
 
 /**
  * POST /api/funding-dept/reminders/sweep
@@ -38,11 +25,14 @@ function isCronRequest(request: NextRequest): boolean {
  * Hourly is the intended cadence.
  */
 export async function POST(request: NextRequest) {
-  if (!isCronRequest(request)) {
+  const cron = isCronRequest(request)
+  let triggeredBy: string | null = null
+  if (!cron) {
     const auth = await requireFundingOperatorRequest(request)
     if ('response' in auth) {
       return auth.response
     }
+    triggeredBy = auth.actor.email
   }
 
   let body: z.infer<typeof sweepSchema>
@@ -55,17 +45,22 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  try {
-    // Sequential, not parallel: both write notifications for the same people,
-    // and a member reading their bell should see them in a sensible order.
-    const reminders = await sweepDueReminders({ limit: body.limit })
-    const escalations = await sweepDeadlineEscalations({ limit: body.limit })
-    return NextResponse.json({ reminders, escalations })
-  } catch (error) {
-    console.error('[FUNDING-DEPT] Reminder sweep failed:', error)
-    return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Reminder sweep failed' },
-      { status: 500 }
-    )
-  }
+  return withJobRun(
+    { jobKey: 'reminders-sweep', trigger: cron ? 'schedule' : 'manual', triggeredBy },
+    async () => {
+      try {
+        // Sequential, not parallel: both write notifications for the same people,
+        // and a member reading their bell should see them in a sensible order.
+        const reminders = await sweepDueReminders({ limit: body.limit })
+        const escalations = await sweepDeadlineEscalations({ limit: body.limit })
+        return NextResponse.json({ reminders, escalations })
+      } catch (error) {
+        console.error('[FUNDING-DEPT] Reminder sweep failed:', error)
+        return NextResponse.json(
+          { message: error instanceof Error ? error.message : 'Reminder sweep failed' },
+          { status: 500 }
+        )
+      }
+    }
+  )
 }

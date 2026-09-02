@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
+import AssignmentDossier from '@/components/funding-dept/AssignmentDossier'
 
 interface Assignment {
   id: string
@@ -114,6 +115,9 @@ export default function AssignmentsPage() {
   const [decisionAt, setDecisionAt] = useState('')
   const [outcomeSaving, setOutcomeSaving] = useState(false)
   const [outcomeError, setOutcomeError] = useState<string | null>(null)
+
+  // One dossier (documents + milestones) open at a time on the mine view.
+  const [openDossierId, setOpenDossierId] = useState<string | null>(null)
 
   // Decline modal — a reason is required, so it cannot be a bare button.
   const [declining, setDeclining] = useState<Assignment | null>(null)
@@ -539,7 +543,27 @@ export default function AssignmentsPage() {
                         Cancel assignment
                       </button>
                     )}
+                    {view === 'mine' && (
+                      <button
+                        onClick={() =>
+                          setOpenDossierId((current) => (current === assignment.id ? null : assignment.id))
+                        }
+                        className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                      >
+                        {openDossierId === assignment.id
+                          ? 'Hide documents & milestones'
+                          : 'Documents & milestones'}
+                      </button>
+                    )}
                   </div>
+                  {view === 'mine' && openDossierId === assignment.id && (
+                    // Forced-light wrapper: the dossier uses the nk-* light
+                    // palette, which would go illegible on this page's
+                    // dark-mode card background.
+                    <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4">
+                      <AssignmentDossier assignmentId={assignment.id} outcome={assignment.outcome} />
+                    </div>
+                  )}
                 </div>
               )
             })}

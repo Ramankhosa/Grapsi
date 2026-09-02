@@ -30,6 +30,8 @@ interface FacultyRow {
   department: string | null
   designation: string | null
   researchAreas: string[]
+  liveAssignments: number
+  lastAssignedAt: string | null
   keywords: string[]
   orgUnitId: string | null
   hasEmbedding: boolean
@@ -64,7 +66,54 @@ interface ImportSummary {
 }
 
 const ADMIN_ROLES = ['OWNER', 'ADMIN', 'SUPER_ADMIN', 'CALL_ADMIN']
+// The managers API is stricter than the page: appointing a Dean/HoD hands out
+// assign/report authority, so only OWNER and ADMIN may do it. CALL_ADMIN can
+// manage the tree but must not see a Heads button that would 403.
+const HEAD_MANAGER_ROLES = ['OWNER', 'ADMIN']
 const PAGE_SIZE = 50
+
+/** Serialized OrgUnitManager from /api/tenant-admin/org-units/[id]/managers. */
+interface ManagerRow {
+  id: string
+  userId: string
+  userName: string | null
+  userEmail: string | null
+  scope: 'SUBTREE' | 'UNIT_ONLY'
+  title: string | null
+  canAssign: boolean
+  canViewReports: boolean
+  isActive: boolean
+}
+
+/** Roster filters beyond free text, unit and activation state. */
+interface FieldFilters {
+  department: string
+  designation: string
+  employeeId: string
+  researchArea: string
+  matchable: '' | 'yes' | 'no'
+  load: '' | 'free' | 'busy'
+}
+
+const EMPTY_FIELD_FILTERS: FieldFilters = {
+  department: '',
+  designation: '',
+  employeeId: '',
+  researchArea: '',
+  matchable: '',
+  load: '',
+}
+
+const FILTER_CONTROL_CLASS =
+  'w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white'
+
+/** Distinct values present in the roster, so no dropdown offers a dead filter. */
+interface FacultyFacets {
+  schools: string[]
+  departments: string[]
+  designations: string[]
+  departmentsBySchool: Record<string, string[]>
+}
 
 export default function TenantFacultyPage() {
   const { user, isLoading: authLoading, authFetch } = useAuth()
@@ -78,6 +127,14 @@ export default function TenantFacultyPage() {
   const [search, setSearch] = useState('')
   const [orgUnitFilter, setOrgUnitFilter] = useState<string>('')
   const [accessFilter, setAccessFilter] = useState<'' | 'activated' | 'pending' | 'noid'>('')
+  const [fieldFilters, setFieldFilters] = useState<FieldFilters>(EMPTY_FIELD_FILTERS)
+  const [facets, setFacets] = useState<FacultyFacets>({
+    schools: [],
+    departments: [],
+    designations: [],
+    departmentsBySchool: {},
+  })
+  const [showFieldFilters, setShowFieldFilters] = useState(false)
   const [accessCounts, setAccessCounts] = useState({ activated: 0, pending: 0, noid: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -96,6 +153,18 @@ export default function TenantFacultyPage() {
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  // Heads (Dean/HoD) dialog — appoints OrgUnitManager rows on one unit.
+  const [managersTarget, setManagersTarget] = useState<{ id: string; name: string } | null>(null)
+  const [managers, setManagers] = useState<ManagerRow[]>([])
+  const [managersLoading, setManagersLoading] = useState(false)
+  const [managersError, setManagersError] = useState<string | null>(null)
+  const [managerSearch, setManagerSearch] = useState('')
+  const [managerResults, setManagerResults] = useState<Array<{ userId: string; name: string | null; email: string }>>([])
+  const [managerSearching, setManagerSearching] = useState(false)
+  const [managerPicked, setManagerPicked] = useState<{ userId: string; label: string } | null>(null)
+  const [managerScope, setManagerScope] = useState<'SUBTREE' | 'UNIT_ONLY'>('SUBTREE')
+  const [managerTitle, setManagerTitle] = useState('')
+  const [managerSaving, setManagerSaving] = useState(false)
   // Depth-aware shapes from the org-units API. `schools` above is the legacy
   // two-level projection, still used by nothing but kept while callers migrate.
   const [tree, setTree] = useState<OrgUnitNode[]>([])
@@ -113,6 +182,9 @@ export default function TenantFacultyPage() {
   )
 
   const isAdmin = Boolean(user?.roles?.some((role: string) => ADMIN_ROLES.includes(role)))
+  const canManageHeads = Boolean(user?.roles?.some((role: string) => HEAD_MANAGER_ROLES.includes(role)))
+
+  const activeFieldFilterCount = Object.values(fieldFilters).filter(Boolean).length
 
   const loadSchools = useCallback(async () => {
     try {
@@ -129,12 +201,24 @@ export default function TenantFacultyPage() {
     }
   }, [authFetch])
 
-  const loadFaculty = useCallback(async (nextOffset: number, query: string, unitId: string, access: string = '') => {
+  const loadFaculty = useCallback(async (
+    nextOffset: number,
+    query: string,
+    unitId: string,
+    access: string = '',
+    fields: FieldFilters = EMPTY_FIELD_FILTERS
+  ) => {
     try {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(nextOffset) })
       if (query) params.set('q', query)
       if (unitId) params.set('orgUnitId', unitId)
       if (access) params.set('access', access)
+      if (fields.department) params.set('department', fields.department)
+      if (fields.designation) params.set('designation', fields.designation)
+      if (fields.employeeId) params.set('employeeId', fields.employeeId)
+      if (fields.researchArea) params.set('researchArea', fields.researchArea)
+      if (fields.matchable) params.set('matchable', fields.matchable)
+      if (fields.load) params.set('load', fields.load)
       const res = await authFetch(`/api/tenant-admin/faculty?${params}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not load faculty')
@@ -158,13 +242,34 @@ export default function TenantFacultyPage() {
     Promise.all([loadSchools(), loadFaculty(0, '', '')]).finally(() => setLoading(false))
   }, [user, loadSchools, loadFaculty])
 
+  // Department / designation lists, built from the roster itself.
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    void authFetch('/api/tenant-admin/faculty?action=facets')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled || !data) return
+        setFacets({
+          schools: data.schools || [],
+          departments: data.departments || [],
+          designations: data.designations || [],
+          departmentsBySchool: data.departmentsBySchool || {},
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [user, authFetch])
+
   // Poll the faculty endpoint while embeddings are catching up — the async
   // worker after an import writes to researcher_profiles and this is the
   // authoritative source for progress.
   useEffect(() => {
     if (total === 0 || embedded >= total) return
     const interval = setInterval(() => {
-      loadFaculty(offset, search, orgUnitFilter, accessFilter)
+      loadFaculty(offset, search, orgUnitFilter, accessFilter, fieldFilters)
     }, 5000)
     // Stop after ~5 minutes even if something got stuck.
     const stop = setTimeout(() => clearInterval(interval), 5 * 60 * 1000)
@@ -172,7 +277,7 @@ export default function TenantFacultyPage() {
       clearInterval(interval)
       clearTimeout(stop)
     }
-  }, [total, embedded, offset, search, orgUnitFilter, accessFilter, loadFaculty])
+  }, [total, embedded, offset, search, orgUnitFilter, accessFilter, fieldFilters, loadFaculty])
 
   // `kind` is no longer sent — depth follows the parent, so any unit can nest
   // under any other up to maxDepth.
@@ -240,6 +345,105 @@ export default function TenantFacultyPage() {
     }
   }
 
+  const loadManagers = useCallback(
+    async (unitId: string) => {
+      setManagersLoading(true)
+      setManagersError(null)
+      try {
+        const res = await authFetch(`/api/tenant-admin/org-units/${unitId}/managers`)
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Could not load the heads of this unit')
+        setManagers(data.managers || [])
+      } catch (e: any) {
+        setManagersError(e.message)
+      } finally {
+        setManagersLoading(false)
+      }
+    },
+    [authFetch]
+  )
+
+  const openManagers = (id: string, name: string) => {
+    setManagersTarget({ id, name })
+    setManagers([])
+    setManagerSearch('')
+    setManagerResults([])
+    setManagerPicked(null)
+    setManagerScope('SUBTREE')
+    setManagerTitle('')
+    void loadManagers(id)
+  }
+
+  const runManagerSearch = async () => {
+    if (!managerSearch.trim()) {
+      setManagerResults([])
+      return
+    }
+    setManagerSearching(true)
+    try {
+      const params = new URLSearchParams({ q: managerSearch.trim(), limit: '10' })
+      const res = await authFetch(`/api/tenant-admin/faculty?${params.toString()}`)
+      if (res.ok) {
+        const data = await res.json()
+        setManagerResults(
+          (data.faculty || []).map((row: { userId: string; name: string | null; email: string }) => ({
+            userId: row.userId,
+            name: row.name,
+            email: row.email,
+          }))
+        )
+      }
+    } finally {
+      setManagerSearching(false)
+    }
+  }
+
+  // POST upserts on (unit, user): re-adding an existing head is how scope or
+  // title get edited — there is no separate PATCH by design.
+  const addManager = async () => {
+    if (!managersTarget || !managerPicked) return
+    setManagerSaving(true)
+    setManagersError(null)
+    try {
+      const res = await authFetch(`/api/tenant-admin/org-units/${managersTarget.id}/managers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: managerPicked.userId,
+          scope: managerScope,
+          title: managerTitle.trim() || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not appoint that person')
+      setManagerPicked(null)
+      setManagerSearch('')
+      setManagerResults([])
+      setManagerTitle('')
+      await loadManagers(managersTarget.id)
+    } catch (e: any) {
+      setManagersError(e.message)
+    } finally {
+      setManagerSaving(false)
+    }
+  }
+
+  const removeManager = async (managerId: string) => {
+    if (!managersTarget) return
+    setManagersError(null)
+    try {
+      const res = await authFetch(
+        `/api/tenant-admin/org-units/${managersTarget.id}/managers/${managerId}`,
+        { method: 'DELETE' }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not remove that head')
+      await loadManagers(managersTarget.id)
+    } catch (e: any) {
+      setManagersError(e.message)
+    }
+  }
+
   const downloadTemplate = async () => {
     try {
       const res = await authFetch('/api/tenant-admin/faculty/import')
@@ -273,7 +477,7 @@ export default function TenantFacultyPage() {
 
       setSummary(data)
       if (!dryRun) {
-        await Promise.all([loadSchools(), loadFaculty(0, search, orgUnitFilter, accessFilter)])
+        await Promise.all([loadSchools(), loadFaculty(0, search, orgUnitFilter, accessFilter, fieldFilters)])
       }
     } catch (e: any) {
       setImportError(e.message)
@@ -387,6 +591,7 @@ export default function TenantFacultyPage() {
                   onRename={openRename}
                   onDelete={openDelete}
                   onAddChild={(parentId, name) => createUnit(name, parentId)}
+                  onManageHeads={canManageHeads ? openManagers : undefined}
                 />
               </div>
             )}
@@ -399,7 +604,7 @@ export default function TenantFacultyPage() {
                   type="text"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && loadFaculty(0, search, orgUnitFilter, accessFilter)}
+                  onKeyDown={e => e.key === 'Enter' && loadFaculty(0, search, orgUnitFilter, accessFilter, fieldFilters)}
                   placeholder="Search by name, email, school or department..."
                   className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
                 />
@@ -407,7 +612,7 @@ export default function TenantFacultyPage() {
                   value={orgUnitFilter}
                   onChange={e => {
                     setOrgUnitFilter(e.target.value)
-                    loadFaculty(0, search, e.target.value, accessFilter)
+                    loadFaculty(0, search, e.target.value, accessFilter, fieldFilters)
                   }}
                   className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white min-w-[220px]"
                 >
@@ -422,7 +627,15 @@ export default function TenantFacultyPage() {
                   ))}
                 </select>
                 <button
-                  onClick={() => loadFaculty(0, search, orgUnitFilter, accessFilter)}
+                  onClick={() => setShowFieldFilters(v => !v)}
+                  aria-expanded={showFieldFilters}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  {showFieldFilters ? 'Hide filters' : 'Filters'}
+                  {activeFieldFilterCount > 0 ? ` (${activeFieldFilterCount})` : ''}
+                </button>
+                <button
+                  onClick={() => loadFaculty(0, search, orgUnitFilter, accessFilter, fieldFilters)}
                   className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
                   Search
@@ -435,6 +648,130 @@ export default function TenantFacultyPage() {
                 Import CSV / Excel
               </button>
             </div>
+
+            {showFieldFilters && (
+              <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">Department</span>
+                    <select
+                      value={fieldFilters.department}
+                      onChange={e => {
+                        const next = { ...fieldFilters, department: e.target.value }
+                        setFieldFilters(next)
+                        loadFaculty(0, search, orgUnitFilter, accessFilter, next)
+                      }}
+                      className={FILTER_CONTROL_CLASS}
+                    >
+                      <option value="">All departments</option>
+                      {facets.departments.map(department => (
+                        <option key={department} value={department}>
+                          {department}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">Designation</span>
+                    <select
+                      value={fieldFilters.designation}
+                      onChange={e => {
+                        const next = { ...fieldFilters, designation: e.target.value }
+                        setFieldFilters(next)
+                        loadFaculty(0, search, orgUnitFilter, accessFilter, next)
+                      }}
+                      className={FILTER_CONTROL_CLASS}
+                    >
+                      <option value="">All designations</option>
+                      {facets.designations.map(designation => (
+                        <option key={designation} value={designation}>
+                          {designation}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">Employee ID</span>
+                    <input
+                      type="text"
+                      value={fieldFilters.employeeId}
+                      onChange={e => setFieldFilters({ ...fieldFilters, employeeId: e.target.value })}
+                      onKeyDown={e =>
+                        e.key === 'Enter' && loadFaculty(0, search, orgUnitFilter, accessFilter, fieldFilters)
+                      }
+                      placeholder="e.g. 21345"
+                      className={FILTER_CONTROL_CLASS}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                      Research area or keyword
+                    </span>
+                    <input
+                      type="text"
+                      value={fieldFilters.researchArea}
+                      onChange={e => setFieldFilters({ ...fieldFilters, researchArea: e.target.value })}
+                      onKeyDown={e =>
+                        e.key === 'Enter' && loadFaculty(0, search, orgUnitFilter, accessFilter, fieldFilters)
+                      }
+                      placeholder="e.g. photovoltaics"
+                      className={FILTER_CONTROL_CLASS}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">Matchable</span>
+                    <select
+                      value={fieldFilters.matchable}
+                      onChange={e => {
+                        const next = { ...fieldFilters, matchable: e.target.value as FieldFilters['matchable'] }
+                        setFieldFilters(next)
+                        loadFaculty(0, search, orgUnitFilter, accessFilter, next)
+                      }}
+                      className={FILTER_CONTROL_CLASS}
+                    >
+                      <option value="">Everyone</option>
+                      <option value="yes">Has a profile embedding</option>
+                      <option value="no">Not yet matchable</option>
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                      Current workload
+                    </span>
+                    <select
+                      value={fieldFilters.load}
+                      onChange={e => {
+                        const next = { ...fieldFilters, load: e.target.value as FieldFilters['load'] }
+                        setFieldFilters(next)
+                        loadFaculty(0, search, orgUnitFilter, accessFilter, next)
+                      }}
+                      className={FILTER_CONTROL_CLASS}
+                    >
+                      <option value="">Any workload</option>
+                      <option value="free">Nothing live — has capacity</option>
+                      <option value="busy">Already carrying something</option>
+                    </select>
+                  </label>
+                </div>
+
+                {activeFieldFilterCount > 0 && (
+                  <button
+                    onClick={() => {
+                      setFieldFilters(EMPTY_FIELD_FILTERS)
+                      loadFaculty(0, search, orgUnitFilter, accessFilter, EMPTY_FIELD_FILTERS)
+                    }}
+                    className="mt-3 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
+                    Clear filters
+                  </button>
+                )}
+              </div>
+            )}
 
             <p className="text-sm text-gray-500 dark:text-gray-400">
               {total} {accessFilter ? 'shown' : 'faculty'} · {embedded} searchable (embedded)
@@ -457,7 +794,7 @@ export default function TenantFacultyPage() {
                   key={chip.key || 'all'}
                   onClick={() => {
                     setAccessFilter(chip.key)
-                    loadFaculty(0, search, orgUnitFilter, chip.key)
+                    loadFaculty(0, search, orgUnitFilter, chip.key, fieldFilters)
                   }}
                   className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
                     accessFilter === chip.key
@@ -486,7 +823,7 @@ export default function TenantFacultyPage() {
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead className="bg-gray-50 dark:bg-gray-700">
                   <tr>
-                    {['Faculty', 'School / Department', 'Designation', 'Research areas', 'Access', 'Searchable'].map(heading => (
+                    {['Faculty', 'School / Department', 'Designation', 'Live calls', 'Research areas', 'Access', 'Searchable'].map(heading => (
                       <th
                         key={heading}
                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider"
@@ -499,7 +836,7 @@ export default function TenantFacultyPage() {
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {faculty.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-500 dark:text-gray-400">
+                      <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-500 dark:text-gray-400">
                         No faculty yet. Use “Import CSV / Excel” to upload your roster.
                       </td>
                     </tr>
@@ -519,6 +856,15 @@ export default function TenantFacultyPage() {
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">
                           {row.designation || '—'}
+                        </td>
+                        <td className="px-6 py-4 text-sm tabular-nums text-gray-700 dark:text-gray-300">
+                          {row.liveAssignments > 0 ? (
+                            <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                              {row.liveAssignments}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">0</span>
+                          )}
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex flex-wrap gap-1 max-w-md">
@@ -577,7 +923,7 @@ export default function TenantFacultyPage() {
             {total > PAGE_SIZE && (
               <div className="flex items-center justify-between text-sm">
                 <button
-                  onClick={() => loadFaculty(Math.max(0, offset - PAGE_SIZE), search, orgUnitFilter, accessFilter)}
+                  onClick={() => loadFaculty(Math.max(0, offset - PAGE_SIZE), search, orgUnitFilter, accessFilter, fieldFilters)}
                   disabled={offset === 0}
                   className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-40 text-gray-700 dark:text-gray-200"
                 >
@@ -587,7 +933,7 @@ export default function TenantFacultyPage() {
                   {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
                 </span>
                 <button
-                  onClick={() => loadFaculty(offset + PAGE_SIZE, search, orgUnitFilter, accessFilter)}
+                  onClick={() => loadFaculty(offset + PAGE_SIZE, search, orgUnitFilter, accessFilter, fieldFilters)}
                   disabled={offset + PAGE_SIZE >= total}
                   className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-40 text-gray-700 dark:text-gray-200"
                 >
@@ -655,6 +1001,162 @@ export default function TenantFacultyPage() {
                 className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Heads (Dean/HoD) dialog */}
+      {managersTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+              Heads of &ldquo;{managersTarget.name}&rdquo;
+            </h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              A head can see this unit&apos;s reports and assign calls to its faculty. Whole subtree
+              covers every unit underneath; this unit only does not.
+            </p>
+
+            {managersError && (
+              <div className="mt-3 rounded-lg bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+                {managersError}
+              </div>
+            )}
+
+            {managersLoading ? (
+              <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading heads…</p>
+            ) : managers.length === 0 ? (
+              <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                Nobody is appointed yet.
+              </p>
+            ) : (
+              <ul className="mt-4 divide-y divide-gray-200 dark:divide-gray-700 rounded-lg border border-gray-200 dark:border-gray-700">
+                {managers.map(manager => (
+                  <li key={manager.id} className="flex flex-wrap items-center gap-2 px-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-gray-900 dark:text-white">
+                        {manager.userName || manager.userEmail}
+                        {manager.title ? (
+                          <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
+                            {manager.title}
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="truncate text-xs text-gray-500 dark:text-gray-400">
+                        {manager.userEmail} ·{' '}
+                        {manager.scope === 'SUBTREE' ? 'whole subtree' : 'this unit only'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => void removeManager(manager.id)}
+                      className="text-sm text-red-600 hover:text-red-800 dark:text-red-400"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="mt-5 border-t border-gray-200 dark:border-gray-700 pt-4">
+              <p className="text-sm font-medium text-gray-900 dark:text-white">Appoint a head</p>
+              {managerPicked ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-blue-50 dark:bg-blue-900/30 px-3 py-1 text-sm text-blue-800 dark:text-blue-300">
+                    {managerPicked.label}
+                  </span>
+                  <button
+                    onClick={() => setManagerPicked(null)}
+                    className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      type="text"
+                      value={managerSearch}
+                      onChange={e => setManagerSearch(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && runManagerSearch()}
+                      placeholder="Search by name, email or employee ID"
+                      className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                    />
+                    <button
+                      onClick={() => void runManagerSearch()}
+                      disabled={managerSearching}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                    >
+                      {managerSearching ? 'Searching…' : 'Search'}
+                    </button>
+                  </div>
+                  {managerResults.length > 0 && (
+                    <ul className="mt-2 max-h-40 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-700 rounded-lg border border-gray-200 dark:border-gray-700">
+                      {managerResults.map(person => (
+                        <li key={person.userId} className="flex items-center justify-between gap-3 px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm text-gray-900 dark:text-white">
+                              {person.name || person.email}
+                            </p>
+                            <p className="truncate text-xs text-gray-500 dark:text-gray-400">{person.email}</p>
+                          </div>
+                          <button
+                            onClick={() =>
+                              setManagerPicked({
+                                userId: person.userId,
+                                label: person.name || person.email,
+                              })
+                            }
+                            className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                          >
+                            Select
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <select
+                  value={managerScope}
+                  onChange={e => setManagerScope(e.target.value as 'SUBTREE' | 'UNIT_ONLY')}
+                  className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                >
+                  <option value="SUBTREE">Whole subtree</option>
+                  <option value="UNIT_ONLY">This unit only</option>
+                </select>
+                <input
+                  type="text"
+                  value={managerTitle}
+                  onChange={e => setManagerTitle(e.target.value)}
+                  placeholder="Title, e.g. Dean or Head of Department"
+                  className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                />
+              </div>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                Appointing someone who is already a head updates their scope and title instead of
+                adding them twice.
+              </p>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setManagersTarget(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => void addManager()}
+                disabled={!managerPicked || managerSaving}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+              >
+                {managerSaving ? 'Saving…' : 'Appoint'}
               </button>
             </div>
           </div>

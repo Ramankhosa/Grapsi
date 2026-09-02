@@ -295,6 +295,21 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
   }
 
+  // Mirror the answer onto the shortlist, so an officer opening the worksheet
+  // sees who said no without reading the assignment records one by one.
+  if (data.status === 'DECLINED') {
+    await prisma.callCandidate
+      .updateMany({
+        where: {
+          tenant_id: context.tenantId,
+          funding_call_id: record.funding_call_id,
+          user_id: record.assignee_user_id,
+        },
+        data: { status: 'DECLINED' },
+      })
+      .catch(() => undefined)
+  }
+
   const callTitle =
     updated.funding_call?.scheme_title || updated.funding_call?.title || 'a funding call'
 

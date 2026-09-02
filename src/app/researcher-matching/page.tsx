@@ -29,7 +29,60 @@ interface Facets {
   careerStages: string[]
   institutionTypes: string[]
   countries: string[]
+  designations: string[]
+  /** Attributes of the calls in the picker, not of the people. */
+  callAgencies: string[]
+  callDisciplines: string[]
+  callFundingKinds: string[]
 }
+
+const CALL_CLOSING_WINDOWS = [
+  { value: '', label: 'Any deadline' },
+  { value: '7', label: 'Closing in 7 days' },
+  { value: '30', label: 'Closing in 30 days' },
+  { value: '90', label: 'Closing in 90 days' },
+] as const
+
+/** The stored faculty profile shown in the "View profile" panel. */
+interface FacultyProfile {
+  userId: string
+  name: string
+  email: string
+  employeeId: string | null
+  designation: string | null
+  school: string | null
+  department: string | null
+  institution: string | null
+  careerStage: string | null
+  yearsOfExperience: number | null
+  country: string | null
+  languages: string[]
+  summary: string | null
+  researchAreas: string[]
+  keywords: string[]
+  links: {
+    googleScholar: string | null
+    scopus: string | null
+    orcid: string | null
+    linkedin: string | null
+  }
+  publications: Array<{
+    id: string
+    title: string
+    authors: string[]
+    year: number | null
+    venue: string | null
+    doi: string | null
+    url: string | null
+  }>
+}
+
+const PROFILE_LINKS: Array<{ key: keyof FacultyProfile['links']; label: string }> = [
+  { key: 'googleScholar', label: 'Google Scholar' },
+  { key: 'scopus', label: 'Scopus' },
+  { key: 'orcid', label: 'ORCID' },
+  { key: 'linkedin', label: 'LinkedIn' },
+]
 
 // Fallback only. The authoritative answer is /api/funding-dept/me, which
 // reports the server's own verdict: funding department members and org unit
@@ -66,9 +119,19 @@ export default function TenantResearcherMatchingPage() {
   const [departmentIds, setDepartmentIds] = useState<string[]>([])
   const [researchAreaText, setResearchAreaText] = useState('')
   const [careerStage, setCareerStage] = useState('')
+  const [designation, setDesignation] = useState('')
+  // Name / email / employee ID — turns the search into "does THIS person fit
+  // this call", which is what an assigner asks when a name comes up in a meeting.
+  const [personLookup, setPersonLookup] = useState('')
   const [institutionType, setInstitutionType] = useState('')
   const [country, setCountry] = useState('')
   const [includeBelowThreshold, setIncludeBelowThreshold] = useState(false)
+
+  // Call-picker filters (attributes of the call, not of the people).
+  const [callAgency, setCallAgency] = useState('')
+  const [callDiscipline, setCallDiscipline] = useState('')
+  const [callFundingKind, setCallFundingKind] = useState('')
+  const [callClosingInDays, setCallClosingInDays] = useState('')
 
   // Assignment
   const [assignTarget, setAssignTarget] = useState<MatchResult | null>(null)
@@ -78,6 +141,16 @@ export default function TenantResearcherMatchingPage() {
   const [assignError, setAssignError] = useState<string | null>(null)
   const [assignNotice, setAssignNotice] = useState<string | null>(null)
   const [assignedByCall, setAssignedByCall] = useState<Record<string, string[]>>({})
+
+  // Shortlist for the selected call: who is being kept in play without being
+  // committed yet, so a colleague working the same call sees the thinking.
+  const [shortlist, setShortlist] = useState<Record<string, string>>({})
+
+  // Profile viewer: the stored faculty profile plus external research links.
+  const [profileTarget, setProfileTarget] = useState<MatchResult | null>(null)
+  const [profileData, setProfileData] = useState<FacultyProfile | null>(null)
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [profileError, setProfileError] = useState<string | null>(null)
 
   // Bulk circulation: one call to many faculty in a single action.
   const [bulkSelection, setBulkSelection] = useState<string[]>([])
@@ -108,11 +181,18 @@ export default function TenantResearcherMatchingPage() {
     } catch {}
   }, [authFetch])
 
-  const fetchCalls = useCallback(async (q = '') => {
+  const fetchCalls = useCallback(async (
+    q = '',
+    callFilters: { agency?: string; discipline?: string; fundingKind?: string; closingInDays?: string } = {}
+  ) => {
     setLoadingCalls(true)
     try {
       const params = new URLSearchParams({ limit: '50' })
       if (q) params.set('q', q)
+      if (callFilters.agency) params.set('agency', callFilters.agency)
+      if (callFilters.discipline) params.set('discipline', callFilters.discipline)
+      if (callFilters.fundingKind) params.set('fundingKind', callFilters.fundingKind)
+      if (callFilters.closingInDays) params.set('closingInDays', callFilters.closingInDays)
       const res = await authFetch(`/api/researcher-matching?${params}`)
       if (res.ok) {
         const data = await res.json()
@@ -165,7 +245,15 @@ export default function TenantResearcherMatchingPage() {
   useEffect(() => {
     if (!user || deepLinkHandled) return
     setDeepLinkHandled(true)
-    const callId = new URLSearchParams(window.location.search).get('callId')
+    const query = new URLSearchParams(window.location.search)
+    // ?school=… arrives from a school desk: preselect it and open the filter
+    // panel, so the officer lands on their own people rather than the whole org.
+    const school = query.get('school')
+    if (school) {
+      setSchoolIds([school])
+      setShowFilters(true)
+    }
+    const callId = query.get('callId')
     if (!callId) return
     void (async () => {
       try {
@@ -181,6 +269,70 @@ export default function TenantResearcherMatchingPage() {
       } catch {}
     })()
   }, [user, deepLinkHandled, authFetch])
+
+  /** The shortlist for whichever call is selected. */
+  const loadShortlist = useCallback(async (callId: string) => {
+    try {
+      const res = await authFetch(`/api/funding-dept/calls/${callId}/candidates`)
+      if (!res.ok) {
+        setShortlist({})
+        return
+      }
+      const data = await res.json()
+      const map: Record<string, string> = {}
+      for (const row of data.candidates || []) map[row.user.id] = row.status
+      setShortlist(map)
+    } catch {
+      setShortlist({})
+    }
+  }, [authFetch])
+
+  useEffect(() => {
+    if (!selectedCall) {
+      setShortlist({})
+      return
+    }
+    void loadShortlist(selectedCall.id)
+  }, [selectedCall, loadShortlist])
+
+  /** Add someone to the shortlist, or take them off it again. */
+  const toggleShortlist = useCallback(async (target: MatchResult) => {
+    if (!selectedCall) return
+    const already = shortlist[target.userId]
+    // Only a plain shortlist entry can be undone by the same button — someone
+    // who has already been approached or has answered is history, not a draft.
+    const removable = already === 'SHORTLISTED'
+    try {
+      const res = removable
+        ? await authFetch(
+            `/api/funding-dept/calls/${selectedCall.id}/candidates?userId=${encodeURIComponent(target.userId)}`,
+            { method: 'DELETE' }
+          )
+        : await authFetch(`/api/funding-dept/calls/${selectedCall.id}/candidates`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: target.userId,
+              status: 'SHORTLISTED',
+              matchScore: target.score ?? null,
+              matchTier: target.matchTier ?? null,
+            }),
+          })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setAssignError(data.error || 'Could not update the shortlist.')
+        return
+      }
+      setShortlist((current) => {
+        const next = { ...current }
+        if (removable) delete next[target.userId]
+        else next[target.userId] = 'SHORTLISTED'
+        return next
+      })
+    } catch {
+      setAssignError('Could not update the shortlist.')
+    }
+  }, [authFetch, selectedCall, shortlist])
 
   const departmentOptions = useMemo(() => {
     if (!facets) return []
@@ -207,10 +359,15 @@ export default function TenantResearcherMatchingPage() {
     (departmentIds.length > 0 ? 1 : 0) +
     (researchAreaText.trim() ? 1 : 0) +
     (careerStage ? 1 : 0) +
+    (designation ? 1 : 0) +
+    (personLookup.trim() ? 1 : 0) +
     (institutionType ? 1 : 0) +
     (country ? 1 : 0) +
     (includeBelowThreshold ? 1 : 0)
-  ), [schoolIds, departmentIds, researchAreaText, careerStage, institutionType, country, includeBelowThreshold])
+  ), [
+    schoolIds, departmentIds, researchAreaText, careerStage, designation, personLookup,
+    institutionType, country, includeBelowThreshold,
+  ])
 
   const toggleValue = (list: string[], value: string) =>
     list.includes(value) ? list.filter(entry => entry !== value) : [...list, value]
@@ -220,6 +377,8 @@ export default function TenantResearcherMatchingPage() {
     setDepartmentIds([])
     setResearchAreaText('')
     setCareerStage('')
+    setDesignation('')
+    setPersonLookup('')
     setInstitutionType('')
     setCountry('')
     setIncludeBelowThreshold(false)
@@ -243,6 +402,8 @@ export default function TenantResearcherMatchingPage() {
             .map(entry => entry.trim())
             .filter(Boolean),
           careerStages: careerStage ? [careerStage] : [],
+          designations: designation ? [designation] : [],
+          person: personLookup.trim() || null,
           institutionTypes: institutionType ? [institutionType] : [],
           countries: country ? [country] : [],
           includeBelowThreshold,
@@ -273,7 +434,8 @@ export default function TenantResearcherMatchingPage() {
     }
   }, [
     mode, selectedCall, searchQuery, authFetch, effectiveOrgUnitIds,
-    researchAreaText, careerStage, institutionType, country, includeBelowThreshold,
+    researchAreaText, careerStage, designation, personLookup, institutionType, country,
+    includeBelowThreshold,
   ])
 
   // Fires exactly once after a deep-linked call lands in state, so the page
@@ -291,6 +453,28 @@ export default function TenantResearcherMatchingPage() {
     setAssignMessage('')
     setAssignError(null)
   }
+
+  const openProfile = useCallback(
+    async (result: MatchResult) => {
+      setProfileTarget(result)
+      setProfileData(null)
+      setProfileError(null)
+      setProfileLoading(true)
+      try {
+        const res = await authFetch(
+          `/api/researcher-matching?action=profile&userId=${encodeURIComponent(result.userId)}`
+        )
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Could not load the profile')
+        setProfileData(data.profile)
+      } catch (e: any) {
+        setProfileError(e.message)
+      } finally {
+        setProfileLoading(false)
+      }
+    },
+    [authFetch]
+  )
 
   const toggleBulkSelection = (userId: string) => {
     setBulkSelection(current =>
@@ -524,10 +708,113 @@ export default function TenantResearcherMatchingPage() {
                   value={callSearchQuery}
                   onChange={(e) => {
                     setCallSearchQuery(e.target.value)
-                    fetchCalls(e.target.value)
+                    fetchCalls(e.target.value, {
+                      agency: callAgency,
+                      discipline: callDiscipline,
+                      fundingKind: callFundingKind,
+                      closingInDays: callClosingInDays,
+                    })
                   }}
                   placeholder="Search by title, agency, or description…"
                 />
+
+                {/* Narrowing the call list matters most where it is longest —
+                    a tenant with hundreds of published calls. */}
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {facets && facets.callAgencies.length > 0 && (
+                    <select
+                      className="nk-select"
+                      aria-label="Filter calls by agency"
+                      value={callAgency}
+                      onChange={(e) => {
+                        setCallAgency(e.target.value)
+                        fetchCalls(callSearchQuery, {
+                          agency: e.target.value,
+                          discipline: callDiscipline,
+                          fundingKind: callFundingKind,
+                          closingInDays: callClosingInDays,
+                        })
+                      }}
+                    >
+                      <option value="">All agencies</option>
+                      {facets.callAgencies.map((entry) => (
+                        <option key={entry} value={entry}>
+                          {entry}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {facets && facets.callDisciplines.length > 0 && (
+                    <select
+                      className="nk-select"
+                      aria-label="Filter calls by discipline"
+                      value={callDiscipline}
+                      onChange={(e) => {
+                        setCallDiscipline(e.target.value)
+                        fetchCalls(callSearchQuery, {
+                          agency: callAgency,
+                          discipline: e.target.value,
+                          fundingKind: callFundingKind,
+                          closingInDays: callClosingInDays,
+                        })
+                      }}
+                    >
+                      <option value="">All disciplines</option>
+                      {facets.callDisciplines.map((entry) => (
+                        <option key={entry} value={entry}>
+                          {entry}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {facets && facets.callFundingKinds.length > 0 && (
+                    <select
+                      className="nk-select"
+                      aria-label="Filter calls by funding kind"
+                      value={callFundingKind}
+                      onChange={(e) => {
+                        setCallFundingKind(e.target.value)
+                        fetchCalls(callSearchQuery, {
+                          agency: callAgency,
+                          discipline: callDiscipline,
+                          fundingKind: e.target.value,
+                          closingInDays: callClosingInDays,
+                        })
+                      }}
+                    >
+                      <option value="">All funding kinds</option>
+                      {facets.callFundingKinds.map((entry) => (
+                        <option key={entry} value={entry}>
+                          {entry}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  <select
+                    className="nk-select"
+                    aria-label="Filter calls by deadline"
+                    value={callClosingInDays}
+                    onChange={(e) => {
+                      setCallClosingInDays(e.target.value)
+                      fetchCalls(callSearchQuery, {
+                        agency: callAgency,
+                        discipline: callDiscipline,
+                        fundingKind: callFundingKind,
+                        closingInDays: e.target.value,
+                      })
+                    }}
+                  >
+                    {CALL_CLOSING_WINDOWS.map((window) => (
+                      <option key={window.value} value={window.value}>
+                        {window.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="mt-2 max-h-60 overflow-y-auto rounded-lg border border-nickel-200">
                   {loadingCalls ? (
                     <p className="nk-sub px-4 py-6 text-center">Loading calls…</p>
@@ -704,6 +991,45 @@ export default function TenantResearcherMatchingPage() {
                     </p>
                   </div>
 
+                  <div>
+                    <label className="nk-label mb-1.5" htmlFor="filter-person">
+                      Name, email or employee ID
+                    </label>
+                    <input
+                      id="filter-person"
+                      type="text"
+                      className="nk-input"
+                      value={personLookup}
+                      onChange={(e) => setPersonLookup(e.target.value)}
+                      placeholder="e.g. 21345 or Sharma"
+                    />
+                    <p className="nk-sub mt-1 text-[11.5px]">
+                      Pins the search to one person — use it to check whether a specific faculty
+                      member fits this call.
+                    </p>
+                  </div>
+
+                  {facets && facets.designations.length > 0 && (
+                    <div>
+                      <label className="nk-label mb-1.5" htmlFor="filter-designation">
+                        Designation
+                      </label>
+                      <select
+                        id="filter-designation"
+                        className="nk-select"
+                        value={designation}
+                        onChange={(e) => setDesignation(e.target.value)}
+                      >
+                        <option value="">Any</option>
+                        {facets.designations.map((entry) => (
+                          <option key={entry} value={entry}>
+                            {entry}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   {facets && facets.careerStages.length > 0 && (
                     <div>
                       <label className="nk-label mb-1.5" htmlFor="filter-stage">
@@ -846,7 +1172,12 @@ export default function TenantResearcherMatchingPage() {
               response={results}
               emptyMessage="No researchers in your organization passed the relevance threshold. Try a different funding call, relax the filters, or tick “Broaden — include weaker matches”."
               onAssign={canAssign && mode === 'call' && selectedCall ? openAssign : undefined}
+              onShortlist={
+                canAssign && mode === 'call' && selectedCall ? toggleShortlist : undefined
+              }
+              onViewProfile={openProfile}
               assignedUserIds={selectedCall ? assignedByCall[selectedCall.id] || [] : []}
+              shortlistByUserId={shortlist}
               selectedUserIds={bulkSelection}
               onToggleSelect={
                 canAssign && mode === 'call' && selectedCall ? toggleBulkSelection : undefined
@@ -939,6 +1270,228 @@ export default function TenantResearcherMatchingPage() {
                 >
                   {bulkSaving ? 'Assigning…' : `Assign to ${bulkSelection.length}`}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Profile viewer */}
+        {profileTarget && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-nickel-900/50 p-4"
+            onClick={() => setProfileTarget(null)}
+          >
+            <div
+              className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-nickel-200 bg-white shadow-nk-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Faculty profile"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3 border-b border-nickel-200 px-6 py-4">
+                <div className="min-w-0">
+                  <p className="nk-eyebrow">Faculty profile</p>
+                  <h3 className="mt-1 text-[17px] font-semibold text-nickel-900">
+                    {profileData?.name || profileTarget.displayName}
+                  </h3>
+                  <p className="nk-sub mt-0.5">
+                    {[
+                      profileData?.designation,
+                      profileData?.department,
+                      profileData?.school,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') ||
+                      [profileTarget.department, profileTarget.institutionName]
+                        .filter(Boolean)
+                        .join(' · ')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="nk-btn-ghost nk-btn-sm"
+                  onClick={() => setProfileTarget(null)}
+                  aria-label="Close profile"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                {profileLoading ? (
+                  <div className="animate-pulse space-y-3" aria-hidden>
+                    <div className="h-4 w-1/2 rounded bg-nickel-100" />
+                    <div className="h-3 w-2/3 rounded bg-nickel-100" />
+                    <div className="h-3 w-1/3 rounded bg-nickel-100" />
+                  </div>
+                ) : profileError ? (
+                  <p className="text-[13px] text-red-700">{profileError}</p>
+                ) : profileData ? (
+                  <div className="space-y-4">
+                    {/* External research profiles — the quick outbound checks. */}
+                    <div>
+                      <p className="nk-eyebrow mb-2">Research profiles</p>
+                      <div className="flex flex-wrap gap-2">
+                        {PROFILE_LINKS.filter((l) => profileData.links[l.key]).map((l) => (
+                          <a
+                            key={l.key}
+                            href={profileData.links[l.key] as string}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="nk-btn-secondary nk-btn-sm"
+                          >
+                            {l.label} ↗
+                          </a>
+                        ))}
+                        {PROFILE_LINKS.every((l) => !profileData.links[l.key]) && (
+                          <p className="nk-sub">
+                            No external profiles on file — ask them to add Google Scholar / Scopus /
+                            ORCID links to their researcher profile.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="nk-panel-quiet px-3.5 py-2.5">
+                        <p className="nk-eyebrow">Contact</p>
+                        <a
+                          href={`mailto:${profileData.email}`}
+                          className="mt-1 block truncate text-[13px] font-medium text-cobalt-700 hover:underline"
+                        >
+                          {profileData.email}
+                        </a>
+                        {profileData.employeeId && (
+                          <p className="nk-sub mt-0.5 text-[11.5px]">
+                            Employee ID {profileData.employeeId}
+                          </p>
+                        )}
+                      </div>
+                      <div className="nk-panel-quiet px-3.5 py-2.5">
+                        <p className="nk-eyebrow">Standing</p>
+                        <p className="mt-1 text-[13px] text-nickel-800">
+                          {[
+                            profileData.careerStage?.replace(/_/g, ' '),
+                            profileData.yearsOfExperience
+                              ? `${profileData.yearsOfExperience} yrs experience`
+                              : null,
+                            profileData.country,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ') || '—'}
+                        </p>
+                        {profileData.languages.length > 0 && (
+                          <p className="nk-sub mt-0.5 text-[11.5px]">
+                            Applies in {profileData.languages.join(', ')}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {profileData.summary && (
+                      <div>
+                        <p className="nk-eyebrow mb-1.5">Research summary</p>
+                        <p className="text-[13px] leading-relaxed text-nickel-700">
+                          {profileData.summary}
+                        </p>
+                      </div>
+                    )}
+
+                    {profileData.researchAreas.length > 0 && (
+                      <div>
+                        <p className="nk-eyebrow mb-1.5">Research areas</p>
+                        <div className="flex flex-wrap gap-1">
+                          {profileData.researchAreas.map((area) => (
+                            <span key={area} className="nk-badge nk-badge-live normal-case tracking-normal">
+                              {area}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profileData.keywords.length > 0 && (
+                      <div>
+                        <p className="nk-eyebrow mb-1.5">Keywords</p>
+                        <div className="flex flex-wrap gap-1">
+                          {profileData.keywords.map((kw) => (
+                            <span key={kw} className="nk-badge normal-case tracking-normal">
+                              {kw}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <p className="nk-eyebrow mb-1.5">
+                        Publications on file ({profileData.publications.length})
+                      </p>
+                      {profileData.publications.length === 0 ? (
+                        <p className="nk-sub">
+                          None uploaded yet — publications strengthen matching, so worth nudging.
+                        </p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {profileData.publications.map((pub) => {
+                            const link = pub.doi
+                              ? `https://doi.org/${pub.doi}`
+                              : pub.url || null
+                            return (
+                              <li key={pub.id} className="border-l-2 border-nickel-200 pl-3">
+                                {link ? (
+                                  <a
+                                    href={link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[13px] font-medium text-nickel-900 hover:text-cobalt-700 hover:underline"
+                                  >
+                                    {pub.title}
+                                  </a>
+                                ) : (
+                                  <p className="text-[13px] font-medium text-nickel-900">{pub.title}</p>
+                                )}
+                                <p className="nk-sub text-[11.5px]">
+                                  {[
+                                    pub.authors.slice(0, 4).join(', ') +
+                                      (pub.authors.length > 4 ? ' et al.' : ''),
+                                    pub.venue,
+                                    pub.year,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </p>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex justify-end gap-2 border-t border-nickel-200 px-6 py-4">
+                <button type="button" className="nk-btn-secondary" onClick={() => setProfileTarget(null)}>
+                  Close
+                </button>
+                {canAssign &&
+                  mode === 'call' &&
+                  selectedCall &&
+                  profileTarget &&
+                  !(assignedByCall[selectedCall.id] || []).includes(profileTarget.userId) && (
+                    <button
+                      type="button"
+                      className="nk-btn-primary"
+                      onClick={() => {
+                        const target = profileTarget
+                        setProfileTarget(null)
+                        openAssign(target)
+                      }}
+                    >
+                      Assign call
+                    </button>
+                  )}
               </div>
             </div>
           </div>

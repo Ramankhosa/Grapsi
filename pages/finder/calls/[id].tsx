@@ -5,6 +5,7 @@ import { useRouter } from 'next/router'
 import { ArrowLeft, CalendarDays, ExternalLink, Globe2, MapPin } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
+import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 
 type FundingRulePreview = {
   key?: string | null
@@ -268,7 +269,7 @@ export default function FundingCallDetailsPage() {
             Back to Finder
           </Link>
           <div className="flex flex-wrap items-center gap-2">
-            {(call.catalogStatus === 'PUBLISHED' || call.status === 'PUBLISHED') ? (
+            {GRANT_PREP_ENABLED && (call.catalogStatus === 'PUBLISHED' || call.status === 'PUBLISHED') ? (
               <button
                 type="button"
                 onClick={() => void handleStartGrantPrep()}

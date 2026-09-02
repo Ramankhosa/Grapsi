@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { motion, useScroll, useTransform } from 'framer-motion'
 import { ArrowRight, Sparkles, FileText } from 'lucide-react'
+import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 
 export default function HeroSection() {
   const { user } = useAuth()
@@ -116,11 +117,14 @@ export default function HeroSection() {
           transition={{ delay: 1.1, duration: 0.8 }}
           className="flex flex-col sm:flex-row gap-6 items-center justify-center w-full"
         >
-          <Link href={user ? '/projects/new/grant' : '/login'} className="group relative w-full sm:w-auto">
+          <Link
+            href={user ? (GRANT_PREP_ENABLED ? '/projects/new/grant' : '/finder') : '/login'}
+            className="group relative w-full sm:w-auto"
+          >
             <div className="absolute -inset-0.5 bg-gradient-to-r from-ai-blue-500 to-cyan-500 rounded-lg blur opacity-30 group-hover:opacity-70 transition duration-200"></div>
             <button className="relative w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 bg-ai-graphite-900 border border-ai-blue-500/50 rounded-lg text-white font-medium hover:bg-ai-graphite-800 transition-all duration-200">
               <FileText className="w-5 h-5" />
-              Start Grant
+              {GRANT_PREP_ENABLED ? 'Start Grant' : 'Find Funding'}
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </Link>

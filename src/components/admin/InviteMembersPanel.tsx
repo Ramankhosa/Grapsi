@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { CheckCircle2, Loader2, MailPlus, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, FileUp, Loader2, MailPlus, TriangleAlert } from 'lucide-react'
 
 interface TenantInvite {
   id: string
@@ -12,6 +12,24 @@ interface TenantInvite {
   accepted_at: string | null
   created_at: string
   invited_by: string | null
+}
+
+/** Summary returned by POST /api/tenant-admin/invites/import. */
+interface BulkInviteSummary {
+  dryRun: boolean
+  totalRows: number
+  invited: number
+  activationSent: number
+  skipped: number
+  errors: number
+  results: Array<{
+    rowNumber: number
+    name: string | null
+    email: string
+    role: string
+    outcome: 'invited' | 'activation_sent' | 'skipped' | 'error'
+    message?: string
+  }>
 }
 
 const ROLE_OPTIONS = [
@@ -31,6 +49,13 @@ export default function InviteMembersPanel() {
   const [role, setRole] = useState('ANALYST')
   const [isSending, setIsSending] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+
+  // Bulk CSV/XLSX import — preview (dry run) before anything is sent.
+  const [showBulk, setShowBulk] = useState(false)
+  const [bulkFile, setBulkFile] = useState<File | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkSummary, setBulkSummary] = useState<BulkInviteSummary | null>(null)
+  const [bulkError, setBulkError] = useState<string | null>(null)
 
   const fetchInvites = useCallback(async () => {
     try {
@@ -108,6 +133,63 @@ export default function InviteMembersPanel() {
     }
   }
 
+  const downloadTemplate = async () => {
+    try {
+      // The route is Bearer-authenticated, so a plain <a href> (cookies only)
+      // would 401 — fetch with auth and hand the blob over.
+      const res = await fetch('/api/tenant-admin/invites/import', { headers: authHeaders() })
+      if (!res.ok) throw new Error('Could not download the template')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'user-invite-template.csv'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Could not download the template')
+    }
+  }
+
+  const runBulkImport = async (dryRun: boolean) => {
+    if (!bulkFile) return
+    setBulkBusy(true)
+    setBulkError(null)
+    try {
+      const body = new FormData()
+      body.append('file', bulkFile)
+      // Strings, not booleans — FormData carries text and the API compares === 'true'.
+      body.append('dryRun', String(dryRun))
+      // No Content-Type header: the browser must set the multipart boundary.
+      const res = await fetch('/api/tenant-admin/invites/import', {
+        method: 'POST',
+        headers: authHeaders(),
+        body,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || 'Import failed')
+      }
+      setBulkSummary(data)
+      if (!dryRun) {
+        void fetchInvites()
+      }
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const closeBulk = () => {
+    setShowBulk(false)
+    setBulkFile(null)
+    setBulkSummary(null)
+    setBulkError(null)
+  }
+
   const statusBadge = (status: TenantInvite['status'], expiresAt: string) => {
     const expired = status === 'PENDING' && new Date(expiresAt) < new Date()
     const effective = expired ? 'EXPIRED' : status
@@ -134,6 +216,14 @@ export default function InviteMembersPanel() {
             </p>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowBulk(true)}
+          className="nk-btn-secondary nk-btn-sm shrink-0"
+        >
+          <FileUp className="h-4 w-4" aria-hidden />
+          Bulk import
+        </button>
       </div>
 
       <div className="p-5">
@@ -237,6 +327,110 @@ export default function InviteMembersPanel() {
             </li>
           ))}
         </ul>
+      )}
+
+      {showBulk && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="nk-panel max-h-[90vh] w-full max-w-2xl overflow-y-auto bg-white p-6">
+            <h3 className="nk-title text-[15px]">Bulk invite from CSV or Excel</h3>
+            <p className="nk-sub mt-1">
+              Columns: <strong>Name</strong> (optional), <strong>Email</strong> (required),{' '}
+              <strong>Role</strong> (Analyst, Manager or Admin — blank means Analyst).{' '}
+              <button type="button" onClick={() => void downloadTemplate()} className="font-medium text-cobalt-700 hover:underline">
+                Download the template
+              </button>
+              . Existing members are skipped; seeded accounts without a password get an activation
+              email instead of an invite.
+            </p>
+
+            <div className="mt-4">
+              <input
+                type="file"
+                accept=".csv,.tsv,.txt,.xlsx,.xlsm"
+                onChange={e => {
+                  setBulkFile(e.target.files?.[0] || null)
+                  // A new file invalidates the previous preview.
+                  setBulkSummary(null)
+                  setBulkError(null)
+                }}
+                className="text-[13px] text-nickel-700"
+              />
+            </div>
+
+            {bulkError && (
+              <p className="mt-3 flex items-center gap-2 text-[13px] text-red-700">
+                <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
+                {bulkError}
+              </p>
+            )}
+
+            {bulkSummary && (
+              <div className="nk-panel-quiet mt-4 px-4 py-3">
+                <p className="text-[13.5px] font-medium text-nickel-900">
+                  {bulkSummary.dryRun ? 'Preview' : 'Import complete'} — {bulkSummary.totalRows} rows
+                </p>
+                <p className="nk-sub mt-1">
+                  {bulkSummary.invited} to invite · {bulkSummary.activationSent} activation emails ·{' '}
+                  <span className={bulkSummary.skipped > 0 ? 'font-medium text-nickel-900' : ''}>
+                    {bulkSummary.skipped} skipped (already members)
+                  </span>{' '}
+                  ·{' '}
+                  <span className={bulkSummary.errors > 0 ? 'font-medium text-red-700' : ''}>
+                    {bulkSummary.errors} errors
+                  </span>
+                </p>
+                {bulkSummary.results.some(row => row.outcome === 'error') && (
+                  <div className="mt-2 max-h-48 overflow-y-auto rounded border border-nickel-200">
+                    <table className="w-full text-[12.5px]">
+                      <thead>
+                        <tr className="text-left text-nickel-500">
+                          <th className="px-2 py-1.5 font-medium">Row</th>
+                          <th className="px-2 py-1.5 font-medium">Email</th>
+                          <th className="px-2 py-1.5 font-medium">Problem</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bulkSummary.results
+                          .filter(row => row.outcome === 'error')
+                          .slice(0, 100)
+                          .map(row => (
+                            <tr key={row.rowNumber} className="border-t border-nickel-100">
+                              <td className="px-2 py-1.5 text-nickel-700">{row.rowNumber}</td>
+                              <td className="px-2 py-1.5 text-nickel-700">{row.email || '—'}</td>
+                              <td className="px-2 py-1.5 text-red-700">{row.message || 'Error'}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={closeBulk} className="nk-btn-ghost nk-btn-sm">
+                {bulkSummary && !bulkSummary.dryRun ? 'Close' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void runBulkImport(true)}
+                disabled={!bulkFile || bulkBusy}
+                className="nk-btn-secondary nk-btn-sm"
+              >
+                {bulkBusy ? 'Working…' : 'Preview'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void runBulkImport(false)}
+                disabled={!bulkFile || bulkBusy || !bulkSummary || !bulkSummary.dryRun}
+                title={!bulkSummary ? 'Preview first to see what will be sent' : undefined}
+                className="nk-btn-primary nk-btn-sm"
+              >
+                {bulkBusy ? 'Importing…' : 'Send invites'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   )

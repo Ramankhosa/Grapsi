@@ -10,6 +10,7 @@ import prisma from '@/lib/prisma'
 import { sendEmail } from '@/lib/mailer'
 import { assignmentReminderTemplate } from '@/lib/email-templates'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
+import { isMemberAway } from './shared'
 
 /** Statuses where a nudge is pointless — the work is closed or refused. */
 const CLOSED_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'DECLINED'])
@@ -21,6 +22,43 @@ export interface ReminderSweepResult {
   skippedClosed: number
   claimFailed: number
   emailFailed: number
+  /** Ticklers that went to a deputy because the author was on leave. */
+  reroutedToDeputy: number
+}
+
+/**
+ * Who actually receives a private tickler.
+ *
+ * Normally its author. While the author is on leave it goes to whoever
+ * deputises for the school the work sits in — and to the author as well, so
+ * nothing disappears from their own history while they are away. With no
+ * deputy the tickler still fires to the author: an unread reminder beats a
+ * silently dropped one.
+ */
+async function ticklerRecipients(
+  tenantId: string,
+  authorUserId: string,
+  orgUnitId: string | null
+): Promise<string[]> {
+  const author = await prisma.fundingDeptMember.findFirst({
+    where: { tenant_id: tenantId, user_id: authorUserId },
+    select: { away_from: true, away_until: true },
+  })
+  if (!author || !isMemberAway(author)) return [authorUserId]
+  if (!orgUnitId) return [authorUserId]
+
+  const deputy = await prisma.fundingDeptSchoolAssignment.findFirst({
+    where: {
+      tenant_id: tenantId,
+      org_unit_id: orgUnitId,
+      is_deputy: true,
+      member: { is_active: true },
+    },
+    select: { member: { select: { user_id: true } } },
+  })
+  const deputyUserId = deputy?.member?.user_id
+  if (!deputyUserId || deputyUserId === authorUserId) return [authorUserId]
+  return [authorUserId, deputyUserId]
 }
 
 function formatDate(value: Date | null) {
@@ -43,6 +81,7 @@ export async function sweepDueReminders(
     skippedClosed: 0,
     claimFailed: 0,
     emailFailed: 0,
+    reroutedToDeputy: 0,
   }
 
   const due = await prisma.assignmentFollowUp.findMany({
@@ -56,6 +95,7 @@ export async function sweepDueReminders(
           tenant_id: true,
           deadline_at: true,
           assignee_user_id: true,
+          assignee_org_unit_id: true,
           assignee: { select: { id: true, name: true, email: true } },
           funding_call: { select: { title: true, scheme_title: true } },
         },
@@ -126,10 +166,17 @@ export async function sweepDueReminders(
       result.sentToFaculty += 1
     } else {
       // A private tickler: the member asked to be reminded to chase, so the
-      // faculty member hears nothing.
+      // faculty member hears nothing. If they are on leave it goes to whoever
+      // is deputising for that school instead — an unread tickler in an absent
+      // officer's inbox is the silence this is meant to prevent.
+      const recipients = await ticklerRecipients(
+        assignment.tenant_id,
+        followUp.created_by_user_id,
+        assignment.assignee_org_unit_id
+      )
       await notifyQuietly({
         tenantId: assignment.tenant_id,
-        userIds: [followUp.created_by_user_id],
+        userIds: recipients,
         title: `Follow up on: ${callTitle}`,
         body: `${assignment.assignee?.name || assignment.assignee?.email || 'The assignee'} — ${followUp.note}`,
         category: 'DEADLINE',
@@ -137,6 +184,9 @@ export async function sweepDueReminders(
         assignmentId: assignment.id,
       })
       result.sentToMember += 1
+      if (recipients.length > 1 || recipients[0] !== followUp.created_by_user_id) {
+        result.reroutedToDeputy += 1
+      }
     }
   }
 

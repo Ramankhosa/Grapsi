@@ -7,6 +7,7 @@
  * run cannot double-send.
  */
 import prisma from '@/lib/prisma'
+import { isMemberAway } from './shared'
 import { SITE_URL, sendEmail } from '@/lib/mailer'
 import {
   fundingDeptWeeklyHeadTemplate,
@@ -30,6 +31,8 @@ export interface WeeklyDigestResult {
   headDigestsSent: number
   skippedRecentlySent: number
   skippedNothingPending: number
+  /** Members whose digest was held back because they are on leave. */
+  skippedAway: number
   failed: number
 }
 
@@ -55,6 +58,7 @@ export async function sendWeeklyDigests(
     headDigestsSent: 0,
     skippedRecentlySent: 0,
     skippedNothingPending: 0,
+    skippedAway: 0,
     failed: 0,
   }
 
@@ -65,7 +69,9 @@ export async function sendWeeklyDigests(
     },
     include: {
       user: { select: { id: true, name: true, email: true } },
-      school_assignments: { select: { org_unit_id: true } },
+      // Primary rota only: a deputy's digest should describe the schools they
+      // are answerable for, not every school they might one day cover.
+      school_assignments: { where: { is_deputy: false }, select: { org_unit_id: true } },
     },
     orderBy: [{ tenant_id: 'asc' }, { created_at: 'asc' }],
   })
@@ -161,6 +167,15 @@ export async function sendWeeklyDigests(
 
     if (member.last_digest_sent_at && member.last_digest_sent_at > cutoff) {
       result.skippedRecentlySent += 1
+      continue
+    }
+
+    // On leave: their row still counts towards the head's rollup above — the
+    // work does not pause — but there is no point mailing a digest into an
+    // inbox nobody is reading. The deputy sees the same work on their own
+    // school desk and in the chase queue.
+    if (isMemberAway(member, now)) {
+      result.skippedAway += 1
       continue
     }
 

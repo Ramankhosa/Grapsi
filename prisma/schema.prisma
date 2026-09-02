@@ -565,6 +565,9 @@ model Tenant {
   orgLevels         TenantOrgLevel[]
   orgUnitManagers   OrgUnitManager[]
   callAssignments   CallAssignment[]
+  callCandidates    CallCandidate[]
+  assignmentDocuments  AssignmentDocument[]
+  assignmentMilestones AssignmentMilestone[]
   facultyImportJobs FacultyImportJob[]
   notifications     Notification[]
 
@@ -705,6 +708,10 @@ model User {
   // Funding call assignments and faculty imports
   callAssignmentsReceived CallAssignment[]   @relation("CallAssignmentAssignee")
   callAssignmentsCreated  CallAssignment[]   @relation("CallAssignmentAssignedBy")
+  callCandidacies         CallCandidate[]    @relation("CallCandidateUser")
+  callCandidatesCreated   CallCandidate[]    @relation("CallCandidateAuthor")
+  assignmentDocumentsUploaded AssignmentDocument[]  @relation("AssignmentDocumentUploader")
+  assignmentMilestonesCreated AssignmentMilestone[] @relation("AssignmentMilestoneAuthor")
   facultyImportJobs       FacultyImportJob[]
   notifications           Notification[]     @relation("NotificationRecipient")
   sentNotifications       Notification[]     @relation("NotificationSender")
@@ -1147,6 +1154,7 @@ model FundingCall {
   grantBlueprints             GrantBlueprint[]
   research_area_taxonomies    FundingCallResearchAreaTaxonomy[]
   assignments                 CallAssignment[]
+  candidates                  CallCandidate[]
   alerts                      FundingCallAlert[]
 
   @@index([tenantId, visibility])
@@ -2993,17 +3001,26 @@ model CallAssignment {
   award_currency String?
   decision_at    DateTime?
 
+  /// The assignment this one replaces, when a manager passed the call on after
+  /// a decline. Unique because a record can only be superseded once, which also
+  /// makes the chain a list rather than a tree: asked A, asked B, asked C.
+  previous_assignment_id String? @unique
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   tenant        Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
   funding_call  FundingCall    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  previous_assignment CallAssignment?  @relation("CallAssignmentChain", fields: [previous_assignment_id], references: [id], onDelete: SetNull)
+  superseded_by       CallAssignment?  @relation("CallAssignmentChain")
   assignee          User           @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
   assigned_by       User           @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
   assignee_org_unit TenantOrgUnit? @relation("AssignmentAssigneeUnit", fields: [assignee_org_unit_id], references: [id], onDelete: SetNull)
   assigner_org_unit TenantOrgUnit? @relation("AssignmentAssignerUnit", fields: [assigner_org_unit_id], references: [id], onDelete: SetNull)
   notifications     Notification[]
   follow_ups        AssignmentFollowUp[]
+  documents         AssignmentDocument[]
+  milestones        AssignmentMilestone[]
 
   @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
   @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
@@ -3014,6 +3031,122 @@ model CallAssignment {
   @@index([tenant_id, assignee_org_unit_id], map: "idx_call_assignments_assignee_unit")
   @@index([tenant_id, assigner_org_unit_id], map: "idx_call_assignments_assigner_unit")
   @@map("call_assignments")
+}
+
+/// A file attached to an assignment: concept note, endorsement, the submitted
+/// proposal, the sanction order.
+///
+/// Without this the evidence for an application lives in email, which is where
+/// it stops being findable the moment the officer who sent it moves on. Stored
+/// on disk beside the funding-call intake assets rather than in the row.
+model AssignmentDocument {
+  id            String @id @default(cuid())
+  tenant_id     String
+  assignment_id String
+
+  /// CONCEPT_NOTE | ENDORSEMENT | PROPOSAL | SANCTION | OTHER. A string rather
+  /// than a Postgres enum, like AssignmentFollowUp.kind.
+  kind      String @default("OTHER")
+  file_name String
+  mime_type String?
+  byte_size Int    @default(0)
+  /// Absolute path on the app server, like FundingImportAsset.storagePath.
+  storage_path String
+  note         String?
+
+  /// Whether the assignee can see and download it. Endorsements and sanction
+  /// orders are theirs; an internal review note is not.
+  visible_to_assignee Boolean @default(true)
+
+  uploaded_by_user_id String
+  created_at          DateTime @default(now())
+
+  tenant      Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  assignment  CallAssignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  uploaded_by User           @relation("AssignmentDocumentUploader", fields: [uploaded_by_user_id], references: [id], onDelete: Cascade)
+
+  @@index([assignment_id, created_at], map: "idx_assignment_documents_assignment")
+  @@index([tenant_id], map: "idx_assignment_documents_tenant")
+  @@map("assignment_documents")
+}
+
+/// A post-award obligation: an instalment to claim, a utilisation certificate
+/// or statement of expenditure to file, a project milestone.
+///
+/// `outcome = AWARDED` used to be where the system's knowledge ended, which is
+/// exactly where the office's work continues. Due dates here feed the same
+/// escalation sweep that chases a submission deadline.
+model AssignmentMilestone {
+  id            String @id @default(cuid())
+  tenant_id     String
+  assignment_id String
+
+  /// INSTALMENT | UC | SE | REPORT | OTHER — a string, as above.
+  kind   String @default("OTHER")
+  title  String
+  due_at DateTime?
+  amount Float?
+  currency String?
+
+  /// PENDING | SUBMITTED | CLEARED | WAIVED.
+  status       String    @default("PENDING")
+  completed_at DateTime?
+  note         String?
+
+  /// The countdown nudges already fired for this milestone, guarded by the
+  /// array itself exactly like CallAssignment.auto_nudge_stages.
+  auto_nudge_stages String[] @default([])
+
+  created_by_user_id String
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  tenant     Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  assignment CallAssignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  created_by User           @relation("AssignmentMilestoneAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+
+  @@index([assignment_id, due_at], map: "idx_assignment_milestones_assignment")
+  @@index([tenant_id, status, due_at], map: "idx_assignment_milestones_due")
+  @@map("assignment_milestones")
+}
+
+/// Someone considered for a call, before (or instead of) being assigned it.
+///
+/// Assignment is the commitment; this is everything that leads up to one — the
+/// shortlist an officer builds, who they actually approached, and who they
+/// passed over and why. Without it the record of a call shows only the person
+/// who said yes, and a colleague working the same call cannot see the thinking.
+model CallCandidate {
+  id              String @id @default(cuid())
+  tenant_id       String
+  funding_call_id String
+  user_id         String
+
+  /// SHORTLISTED | APPROACHED | ASSIGNED | DECLINED | PASSED_OVER. A string
+  /// rather than a Postgres enum, like AssignmentFollowUp.kind, so a new state
+  /// needs no migration.
+  status String @default("SHORTLISTED")
+  /// Why they were passed over, or any note the officer wants on the record.
+  note   String?
+
+  /// Snapshot of the match that put them on the list, so the shortlist still
+  /// explains itself after the ranking model changes.
+  match_score Float?
+  match_tier  String?
+
+  created_by_user_id String
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  tenant       Tenant      @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call FundingCall @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  user         User        @relation("CallCandidateUser", fields: [user_id], references: [id], onDelete: Cascade)
+  created_by   User        @relation("CallCandidateAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+
+  @@unique([funding_call_id, user_id], map: "call_candidates_call_user_key")
+  @@index([tenant_id, funding_call_id], map: "idx_call_candidates_tenant_call")
+  @@index([tenant_id, user_id], map: "idx_call_candidates_tenant_user")
+  @@map("call_candidates")
 }
 
 // In-app notification delivered to a single user. The app has no other inbox,
@@ -3126,6 +3259,13 @@ model FundingDeptMember {
   /// double-send.
   last_digest_sent_at DateTime?
 
+  /// Leave window. While today falls inside it, this member's nudges, digests
+  /// and unassigned-call warnings route to the deputy covering each of their
+  /// schools instead. Without this a fortnight's absence silently stopped a
+  /// school's chasing and nothing anywhere said so.
+  away_from  DateTime?
+  away_until DateTime?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -3152,11 +3292,17 @@ model FundingDeptSchoolAssignment {
   created_at          DateTime @default(now())
 
   tenant      Tenant            @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  /// A second, non-exclusive cover for the school. The primary row stays
+  /// unique (partial unique index WHERE NOT is_deputy, added in the migration);
+  /// deputies are unconstrained so a school can have a standing backup without
+  /// the handover being a permanent transfer.
+  is_deputy Boolean @default(false)
+
   member      FundingDeptMember @relation(fields: [member_id], references: [id], onDelete: Cascade)
   org_unit    TenantOrgUnit     @relation("FundingDeptSchoolUnit", fields: [org_unit_id], references: [id], onDelete: Cascade)
   assigned_by User?             @relation("FundingDeptSchoolAssigner", fields: [assigned_by_user_id], references: [id], onDelete: SetNull)
 
-  @@unique([tenant_id, org_unit_id], map: "funding_dept_school_one_member_key")
+  @@unique([tenant_id, org_unit_id, member_id], map: "funding_dept_school_member_key")
   @@index([member_id], map: "idx_funding_dept_school_member")
   @@map("funding_dept_school_assignments")
 }
@@ -3246,6 +3392,7 @@ enum FeatureCode {
   FUNDING_CHAT // AI funding chatbot (Pro tier)
   FUNDING_INTELLIGENCE // Funding call intelligence / RAG / idea intelligence (Pro tier)
   GRANT_REVIEW // AI grant review / reviewer module (Pro tier)
+  FUNDING_ALERTS // Proactive funding-match alerts (email + in-app) for matched researchers
 }
 
 enum TaskCode {
@@ -7721,4 +7868,36 @@ model SystemPromptTemplate {
   @@index([templateKey, applicationMode])
   @@index([applicationMode])
   @@map("system_prompt_templates")
+}
+
+/// One row per execution of a scheduled/background job (reminder sweep, alert
+/// dispatch, digests, weekly reports, event-user expiry). Written by the route
+/// handlers themselves via withJobRun, so scheduled, manual (super-admin
+/// "run now") and script-triggered runs all land here.
+///
+/// Deliberately FK-free: job history must survive user/tenant deletion and is
+/// never joined. `job_key` is a string registry, `counts` stores the endpoint's
+/// response body verbatim so one panel can render differently-shaped payloads.
+model JobRun {
+  id      String @id @default(cuid())
+  job_key String
+
+  /// schedule | manual | script — a string, like AssignmentDocument.kind.
+  trigger String
+  /// running | succeeded | failed.
+  status  String @default("running")
+
+  started_at  DateTime  @default(now())
+  finished_at DateTime?
+  duration_ms Int?
+  http_status Int?
+
+  /// The endpoint's JSON response body, verbatim.
+  counts        Json?
+  error_message String?
+  /// Operator email for manual runs; null for cron.
+  triggered_by  String?
+
+  @@index([job_key, started_at], map: "idx_job_runs_key_started")
+  @@map("job_runs")
 }

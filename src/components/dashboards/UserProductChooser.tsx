@@ -6,6 +6,7 @@ import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import type { ProductModuleKey } from '@/lib/access/modules'
+import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 import {
   ArrowRight,
   ArrowUpRight,
@@ -319,8 +320,16 @@ export default function UserProductChooser() {
   const { isTenantAdmin } = useRoleAccess()
   const { me: fundingDept } = useFundingDeptMe()
   const { hasModule, plan, isLoading: entitlementsLoading, isPlatform } = useEntitlements()
+  // Grant Prep is withdrawn from the product: its card disappears entirely
+  // rather than rendering as locked.
+  const visibleProductGroups = productGroups
+    .map((group) => ({
+      ...group,
+      options: group.options.filter((option) => GRANT_PREP_ENABLED || option.moduleKey !== 'GRANT_STUDIO'),
+    }))
+    .filter((group) => group.options.length > 0)
   const groups = [
-    ...productGroups,
+    ...visibleProductGroups,
     ...(fundingDept.isMember ? [fundingDeptGroup] : []),
     ...(isTenantAdmin ? [adminGroup] : []),
   ]
@@ -349,7 +358,7 @@ export default function UserProductChooser() {
   // Count modules, not cards: two cards can sit on one module (Funding
   // Intelligence + Patent Search), and the readout is "modules unlocked".
   const gatedModules = Array.from(
-    new Set(productGroups.flatMap(g => g.options).map(o => o.moduleKey).filter((key): key is ProductModuleKey => Boolean(key)))
+    new Set(visibleProductGroups.flatMap(g => g.options).map(o => o.moduleKey).filter((key): key is ProductModuleKey => Boolean(key)))
   )
   const unlockedCount = isPlatform
     ? gatedModules.length

@@ -259,6 +259,40 @@ export async function hasFeature(tenantId: string, featureCode: string, now = ne
   return entitlement.plan.planFeatures.some((pf) => (pf.feature.code as string) === featureCode)
 }
 
+/**
+ * Which of the given tenants have an active plan that includes `featureCode`?
+ * One query regardless of tenant count — used by fan-out senders (e.g. the
+ * funding alert service) to gate delivery per recipient without a per-tenant
+ * entitlement lookup.
+ */
+export async function filterTenantsWithFeature(
+  tenantIds: Array<string | null | undefined>,
+  featureCode: string,
+  now = new Date()
+): Promise<Set<string>> {
+  const ids = Array.from(new Set(tenantIds.filter((id): id is string => Boolean(id))))
+  if (ids.length === 0) {
+    return new Set()
+  }
+  const rows = await prisma.tenantPlan.findMany({
+    where: {
+      tenantId: { in: ids },
+      status: 'ACTIVE',
+      effectiveFrom: { lte: now },
+      OR: [
+        { expiresAt: null },
+        { expiresAt: { gt: now } }
+      ],
+      plan: {
+        status: 'ACTIVE',
+        planFeatures: { some: { feature: { code: featureCode as any } } }
+      }
+    },
+    select: { tenantId: true }
+  })
+  return new Set(rows.map((row) => row.tenantId))
+}
+
 export async function grantTenantEntitlement(input: GrantTenantEntitlementInput) {
   const effectiveFrom = input.effectiveFrom || new Date()
   const sourceRef = input.sourceRef?.trim() || null

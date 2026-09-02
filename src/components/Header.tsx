@@ -365,6 +365,13 @@ export default function Header() {
                           onClick={closeMenu}
                         />
                         <MenuItem
+                          href="/funding-dept/chase"
+                          icon="⏰"
+                          title="Chase Queue"
+                          description="Everything overdue, unanswered or gone quiet, worst first"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
                           href="/funding-dept/assignments"
                           icon="🗂️"
                           title="Calls I Assigned"

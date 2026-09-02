@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { FaLinkedin, FaWhatsapp } from 'react-icons/fa';
+import { FaLinkedin } from 'react-icons/fa';
 import {
   BellRing,
   Building2,
@@ -16,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
+import { useEntitlements } from '@/hooks/useEntitlements';
 import ResearcherWorkspaceShell from '@/components/ResearcherWorkspaceShell';
 import type { ResearcherProfilePayload } from '@/lib/researcherProfile/types';
 
@@ -145,11 +145,16 @@ const sectionCardClass = 'cb-card scroll-mt-32 p-4 sm:p-6';
 
 export default function ResearcherProfilePage() {
   const { user, isLoading, authFetch } = useAuth();
+  const { hasFeature, isPlatform, isLoading: entitlementsLoading } = useEntitlements();
+  // Funding Alerts is a separately sold service — preferences always save, but
+  // delivery only happens for plans that include FUNDING_ALERTS.
+  const alertsEntitled = entitlementsLoading || isPlatform || hasFeature('FUNDING_ALERTS');
   const router = useRouter();
   const [data, setData] = useState<ResearcherProfilePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -176,8 +181,34 @@ export default function ResearcherProfilePage() {
     return () => clearTimeout(timer);
   }, [success]);
 
+  // Warn before discarding unsaved edits — covers tab close/refresh and any in-app navigation.
+  // Reads dirtyRef (kept in sync where dirty changes) so a just-completed save is seen
+  // immediately, without waiting for a re-render.
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    const handleRouteChangeStart = () => {
+      if (!dirtyRef.current) return;
+      if (window.confirm('You have unsaved profile changes. Leave without saving?')) return;
+      router.events.emit('routeChangeError');
+      throw 'Route change aborted: unsaved profile changes.';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    router.events.on('routeChangeStart', handleRouteChangeStart);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      router.events.off('routeChangeStart', handleRouteChangeStart);
+    };
+  }, [router.events]);
+
   function updateProfileField<K extends keyof ResearcherProfilePayload['profile']>(key: K, value: ResearcherProfilePayload['profile'][K]) {
     setDirty(true);
+    dirtyRef.current = true;
     setData((current) => (current ? { ...current, profile: { ...current.profile, [key]: value } } : current));
   }
 
@@ -186,13 +217,14 @@ export default function ResearcherProfilePage() {
     value: ResearcherProfilePayload['notificationPreferences'][K]
   ) {
     setDirty(true);
+    dirtyRef.current = true;
     setData((current) =>
       current ? { ...current, notificationPreferences: { ...current.notificationPreferences, [key]: value } } : current
     );
   }
 
-  async function handleSave() {
-    if (!data) return;
+  async function handleSave(): Promise<boolean> {
+    if (!data) return false;
     setSaving(true);
     setError(null);
     setSuccess(null);
@@ -205,12 +237,23 @@ export default function ResearcherProfilePage() {
       });
       setData(payload);
       setDirty(false);
+      dirtyRef.current = false;
       setSuccess('Researcher profile saved. Finder can now reuse your profile defaults and alert keywords.');
+      return true;
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to save profile');
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleOpenResearchFit() {
+    if (dirtyRef.current) {
+      const saved = await handleSave();
+      if (!saved) return;
+    }
+    router.push('/profile/research-fit');
   }
 
   if (isLoading || loading || !data) {
@@ -389,10 +432,15 @@ export default function ResearcherProfilePage() {
                   Manage matching topics and the five publications that best represent your funding direction.
                 </p>
               </div>
-              <Link href="/profile/research-fit" className="cb-btn-secondary cb-btn-sm shrink-0 justify-center">
-                Open Research Fit
+              <button
+                type="button"
+                onClick={handleOpenResearchFit}
+                disabled={saving}
+                className="cb-btn-secondary cb-btn-sm shrink-0 justify-center"
+              >
+                {saving ? 'Saving…' : dirty ? 'Save & open Research Fit' : 'Open Research Fit'}
                 <ChevronRight className="h-4 w-4" />
-              </Link>
+              </button>
             </div>
           </section>
 
@@ -426,14 +474,24 @@ export default function ResearcherProfilePage() {
             <SectionHeader
               icon={<BellRing className="h-4 w-4" />}
               title="Funding alerts"
-              description="Control where, when, and how opportunity updates reach you."
-              purpose="Your delivery choices prevent missed deadlines while quiet hours and frequency controls reduce unnecessary interruption."
+              description="Control where and how often opportunity updates reach you."
+              purpose="Your delivery choices prevent missed deadlines while frequency controls reduce unnecessary interruption."
             />
+            {!alertsEntitled && (
+              <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <BellRing className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  Funding alert delivery is not included in your institution&apos;s current plan. Your
+                  preferences are saved, but matched opportunities will not be emailed or shown as
+                  notifications until the <span className="font-medium">Funding Alerts</span> service is
+                  enabled for your plan. Contact your administrator to add it.
+                </p>
+              </div>
+            )}
             <div className="mt-5 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
               <div className="rounded-lg border border-hairline bg-inset px-4">
                 <PreferenceToggle icon={<MonitorSmartphone className="h-4 w-4" />} label="In-app notifications" description="Show relevant updates inside GrantGenie." checked={data.notificationPreferences.inAppEnabled} onChange={(checked) => updateNotificationField('inAppEnabled', checked)} />
                 <PreferenceToggle icon={<Mail className="h-4 w-4" />} label="Email alerts" description="Send opportunities to your saved email address." checked={data.notificationPreferences.emailEnabled} onChange={(checked) => updateNotificationField('emailEnabled', checked)} />
-                <PreferenceToggle icon={<FaWhatsapp className="h-4 w-4" />} label="WhatsApp alerts" description="Send time-sensitive updates to your saved number." checked={data.notificationPreferences.whatsappEnabled} onChange={(checked) => updateNotificationField('whatsappEnabled', checked)} />
               </div>
               <div className="grid gap-x-5 gap-y-5 md:grid-cols-2">
                 <Field label="Notification frequency" why="Controls alert batching across enabled channels.">
@@ -444,17 +502,6 @@ export default function ResearcherProfilePage() {
                 <Field label="Email address" why="Used only when email alerts are enabled.">
                   <input type="email" value={data.notificationPreferences.emailAddress} onChange={(event) => updateNotificationField('emailAddress', event.target.value)} className="cb-input" />
                 </Field>
-                <Field label="WhatsApp number" why="Used only when WhatsApp alerts are enabled.">
-                  <input type="text" value={data.notificationPreferences.whatsappNumber} onChange={(event) => updateNotificationField('whatsappNumber', event.target.value)} className="cb-input" />
-                </Field>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Quiet start" why="Start of your no-alert window.">
-                    <input type="time" value={data.notificationPreferences.quietHoursStart} onChange={(event) => updateNotificationField('quietHoursStart', event.target.value)} className="cb-input" />
-                  </Field>
-                  <Field label="Quiet end" why="End of your no-alert window.">
-                    <input type="time" value={data.notificationPreferences.quietHoursEnd} onChange={(event) => updateNotificationField('quietHoursEnd', event.target.value)} className="cb-input" />
-                  </Field>
-                </div>
                 <div className="md:col-span-2">
                   <Field label="Alert keywords" hint="Comma-separated" why="Adds explicit topics, methods, regions, or funders that should raise an opportunity's alert relevance.">
                     <textarea rows={3} value={joinList(data.notificationPreferences.alertKeywords)} onChange={(event) => updateNotificationField('alertKeywords', parseList(event.target.value))} className="cb-textarea" />
