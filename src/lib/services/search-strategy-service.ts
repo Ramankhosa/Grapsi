@@ -741,15 +741,30 @@ Return ONLY the JSON array.`;
       total += min;
     }
 
-    // If under minimum, add to HIGH priority categories
+    // If under the minimum, top up — HIGH categories first, then MEDIUM, then
+    // LOW. The lower tiers matter: a plan where no category is HIGH (the model
+    // can return all-LOW) has nothing for a HIGH-only pass to increment, and
+    // the loop would spin forever short of the minimum.
+    const topUpOrder: Array<'HIGH' | 'MEDIUM' | 'LOW'> = ['HIGH', 'MEDIUM', 'LOW'];
     while (total < QUERY_CONSTRAINTS.MIN_QUERIES) {
-      for (const [category, priority] of Object.entries(priorities)) {
-        if (priority === 'HIGH' && counts[category] < QUERY_CONSTRAINTS.PRIORITY_MAXIMUMS.HIGH) {
+      let added = 0;
+
+      for (const tier of topUpOrder) {
+        for (const [category, priority] of Object.entries(priorities)) {
+          if (priority !== tier) continue;
+          if (counts[category] >= QUERY_CONSTRAINTS.PRIORITY_MAXIMUMS[tier]) continue;
+
           counts[category]++;
           total++;
+          added++;
           if (total >= QUERY_CONSTRAINTS.MIN_QUERIES) break;
         }
+        if (total >= QUERY_CONSTRAINTS.MIN_QUERIES) break;
       }
+
+      // Every category sits at its ceiling, so no further pass can help.
+      // Without this the loop could not terminate.
+      if (added === 0) break;
     }
 
     return counts;

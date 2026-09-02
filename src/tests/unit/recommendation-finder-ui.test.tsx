@@ -342,7 +342,9 @@ describe('finder trust recovery UI', () => {
       />
     );
 
-    expect(markup).toContain('Amount: USD 10,000 - 25,000');
+    // The amount is a bare chip: the "Amount:" label was dropped in 5e4444d
+    // because the badge sits in a row where the currency already says what it is.
+    expect(markup).toContain('USD 10,000 - 25,000');
     expect(markup).toContain('Closes in 5 days');
     expect(markup).toContain('Closed');
     expect(markup).toContain('Rolling');

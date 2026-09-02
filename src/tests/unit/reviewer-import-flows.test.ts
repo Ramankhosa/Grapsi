@@ -9,14 +9,8 @@ const {
   extractReviewerContextFromUrlsMock,
   prismaMock,
   axiosMock,
-} = vi.hoisted(() => ({
-  getReviewerSessionMock: vi.fn(),
-  requireReviewerCallAccessMock: vi.fn(),
-  requireGrantReviewFeatureMock: vi.fn(),
-  createReviewerCallFromContextMock: vi.fn(),
-  buildReviewerContextFromStoredCallMock: vi.fn(),
-  extractReviewerContextFromUrlsMock: vi.fn(),
-  prismaMock: {
+} = vi.hoisted(() => {
+  const prismaMock = {
     fundingCall: {
       findFirst: vi.fn(),
     },
@@ -36,14 +30,36 @@ const {
       findMany: vi.fn(),
       create: vi.fn(),
     },
-  },
-  axiosMock: {
-    get: vi.fn(),
-    post: vi.fn(),
-    head: vi.fn(),
-    isAxiosError: vi.fn(),
-  },
-}))
+    // Section creation takes an advisory lock inside the transaction so two
+    // submissions cannot mint the same version number.
+    $executeRaw: vi.fn().mockResolvedValue(0),
+    $transaction: vi.fn(),
+  }
+
+  // The route wraps section creation in a transaction. The callback is handed
+  // a client exposing the same delegates, so pass the mock itself; the array
+  // form is supported too, for callers that batch writes. Implemented after
+  // the literal so it can refer to the mock without losing its inferred type.
+  prismaMock.$transaction.mockImplementation(async (arg: any) =>
+    typeof arg === 'function' ? await arg(prismaMock) : await Promise.all(arg)
+  )
+
+  return {
+    getReviewerSessionMock: vi.fn(),
+    requireReviewerCallAccessMock: vi.fn(),
+    requireGrantReviewFeatureMock: vi.fn(),
+    createReviewerCallFromContextMock: vi.fn(),
+    buildReviewerContextFromStoredCallMock: vi.fn(),
+    extractReviewerContextFromUrlsMock: vi.fn(),
+    prismaMock,
+    axiosMock: {
+      get: vi.fn(),
+      post: vi.fn(),
+      head: vi.fn(),
+      isAxiosError: vi.fn(),
+    },
+  }
+})
 
 vi.mock('@/lib/reviewer-auth-api', () => ({
   getReviewerSession: getReviewerSessionMock,

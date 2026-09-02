@@ -12,6 +12,13 @@ export default defineConfig({
     //   ALLOW_REAL_DB_TESTS=true npx vitest run src/tests/integration --config vitest.realdb.config.ts
     // or by pointing --exclude at nothing and setting the env var yourself.
     exclude: [...configDefaults.exclude, '**/*.real-db.test.ts'],
+    // Several suites build a real module graph or parse fixtures and take a
+    // couple of seconds on their own. Under a full parallel run on a loaded
+    // machine that drifts past vitest's 5s default, which showed up as tests
+    // that passed alone and failed in the suite. The work is unchanged; only
+    // the ceiling moves, so a genuine hang still fails rather than hanging.
+    testTimeout: 20000,
+    hookTimeout: 20000,
     server: {
       deps: {
         // pdf-parse-fork ships a prebuilt webpack bundle of pdf.js that Vite's
