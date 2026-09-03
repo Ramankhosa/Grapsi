@@ -117,6 +117,9 @@ export async function GET(request: NextRequest) {
   })
   const reminderByAssignment = new Map<string, (typeof pendingReminders)[number]>()
   for (const reminder of pendingReminders) {
+    // The query filters on assignment_id, so it is always set here; the column
+    // is nullable now that call-level follow-ups exist, and the type must know.
+    if (!reminder.assignment_id) continue
     if (!reminderByAssignment.has(reminder.assignment_id)) {
       reminderByAssignment.set(reminder.assignment_id, reminder)
     }
@@ -197,6 +200,7 @@ export async function GET(request: NextRequest) {
           }
         : null,
       school: record.assignee_org_unit?.name ?? null,
+      schoolId: record.assignee_org_unit?.id ?? null,
       call: record.funding_call
         ? {
             id: record.funding_call.id,

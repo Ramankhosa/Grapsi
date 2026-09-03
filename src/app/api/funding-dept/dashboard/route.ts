@@ -61,11 +61,19 @@ export async function GET(request: NextRequest) {
           tenant_id: context.tenantId,
           reminder_sent_at: null,
           remind_at: { not: null, lte: new Date() },
+          // Either an assignment inside reach, or a call-level tickler logged
+          // against one of these schools before anyone was assigned. A to-one
+          // relation filter alone would silently exclude the latter.
           ...(reach
             ? {
-                assignment: {
-                  assignee_org_unit_id: { in: reach.length > 0 ? reach : ['__none__'] },
-                },
+                OR: [
+                  {
+                    assignment: {
+                      assignee_org_unit_id: { in: reach.length > 0 ? reach : ['__none__'] },
+                    },
+                  },
+                  { org_unit_id: { in: reach.length > 0 ? reach : ['__none__'] } },
+                ],
               }
             : {}),
         }
@@ -89,6 +97,8 @@ export async function GET(request: NextRequest) {
         remind_at: true,
         remind_faculty: true,
         created_by: { select: { id: true, name: true, email: true } },
+        funding_call: { select: { id: true, title: true, scheme_title: true } },
+        org_unit: { select: { id: true, name: true } },
         assignment: {
           select: {
             id: true,
@@ -106,6 +116,10 @@ export async function GET(request: NextRequest) {
     schoolUnitIds.length > 0
       ? getUnassignedUpcomingCalls(context.tenantId, {
           scopeUnitIds: context.scope.isTenantWide ? null : context.scope.managedUnitIds,
+          // Narrowed to the disciplines of the schools this person actually
+          // covers. Without this the "needs somebody" list was the whole
+          // tenant's open catalog framed as one officer's to-do.
+          relevanceUnitIds: schoolUnitIds,
           withinDays: 45,
           limit: 15,
         })
@@ -133,8 +147,16 @@ export async function GET(request: NextRequest) {
       assignmentId: row.assignment?.id ?? null,
       assignmentStatus: row.assignment?.status ?? null,
       facultyName: row.assignment?.assignee?.name || row.assignment?.assignee?.email || null,
+      // A call-level tickler has no assignee; it has a school instead.
+      schoolName: row.org_unit?.name ?? null,
+      callId: row.assignment?.funding_call?.id ?? row.funding_call?.id ?? null,
+      orgUnitId: row.org_unit?.id ?? null,
       callTitle:
-        row.assignment?.funding_call?.scheme_title || row.assignment?.funding_call?.title || null,
+        row.assignment?.funding_call?.scheme_title ||
+        row.assignment?.funding_call?.title ||
+        row.funding_call?.scheme_title ||
+        row.funding_call?.title ||
+        null,
     })),
     openCalls,
   })

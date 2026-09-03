@@ -295,6 +295,56 @@ export function expectedScoredVersion(
   return newestReviewed ? versionOf(newestReviewed) : null
 }
 
+export interface SupersededScoredSection {
+  title: string
+  /** The version the stored report scored. */
+  scored: number
+  /** The newest reviewed version, which the report does not describe. */
+  latest: number
+}
+
+/**
+ * Sections the report scores at an older version than the newest reviewed one.
+ *
+ * `reportFreshness` deliberately calls a pinned report fresh — it still
+ * describes exactly the drafts it was asked to describe. But a pin is a
+ * point-in-time choice, and once the user revises and re-reviews that section
+ * the page would otherwise say nothing at all: no amber banner, and a version
+ * picker that quietly re-pins the superseded draft on the next regeneration.
+ * That is the trap behind "I regenerate and nothing changes" — the report is
+ * rebuilt, and paid for, over the same old version every time.
+ *
+ * This lists what has moved on so the page can offer to score the latest.
+ */
+export function supersededScoredSections(
+  overallReviewJson: any,
+  sections: ReviewerSectionLike[]
+): SupersededScoredSection[] {
+  const scoreBasis = overallReviewJson?.score_basis && typeof overallReviewJson.score_basis === 'object'
+    ? overallReviewJson.score_basis
+    : null
+  const scoredVersions = scoreBasis?.scoredVersions
+  if (!scoredVersions || typeof scoredVersions !== 'object') return []
+
+  const excluded = new Set(
+    (Array.isArray(scoreBasis?.excludedTitles) ? scoreBasis.excludedTitles : [])
+      .map((title: unknown) => String(title).trim().toLowerCase())
+  )
+
+  const superseded: SupersededScoredSection[] = []
+  for (const group of groupReviewerSections(sections)) {
+    if (excluded.has(group.title.toLowerCase())) continue
+    const scored = Number(scoredVersions[group.title])
+    if (!Number.isFinite(scored)) continue
+    const newestReviewed = group.history.find(isReviewedRow)
+    if (!newestReviewed) continue
+    const latest = versionOf(newestReviewed)
+    if (latest > scored) superseded.push({ title: group.title, scored, latest })
+  }
+
+  return superseded
+}
+
 export function reportFreshness(
   overallReviewJson: any,
   sections: ReviewerSectionLike[]

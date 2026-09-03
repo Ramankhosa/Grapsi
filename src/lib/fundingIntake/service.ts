@@ -1120,18 +1120,25 @@ async function persistDraft(
     },
   };
 
-  if (job.linked_funding_call_id) {
-    return prisma.fundingCall.update({
-      where: { id: job.linked_funding_call_id },
-      data: sharedData,
-      select: { id: true },
-    });
-  }
+  const call = job.linked_funding_call_id
+    ? await prisma.fundingCall.update({
+        where: { id: job.linked_funding_call_id },
+        data: sharedData,
+        select: { id: true },
+      })
+    : await prisma.fundingCall.create({
+        data: sharedData,
+        select: { id: true },
+      });
 
-  return prisma.fundingCall.create({
-    data: sharedData,
-    select: { id: true },
-  });
+  // Classify the draft into the discipline catalog now, so it is already
+  // routable to the right schools before anyone publishes it — the funding
+  // department works drafts too. Fire-and-forget: intake must not fail or wait
+  // on classification. Publishing re-runs this, which is a no-op if it worked.
+  const { classifyFundingCallQuietly } = await import('@/lib/funding/disciplineClassifier');
+  classifyFundingCallQuietly(call.id);
+
+  return call;
 }
 
 class FundingIntakeService {

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 import prisma from '../prisma';
+import { loadUnitAreaProfile, relevantCallWhereSql } from '../funding/callUnitRelevance';
 
 /**
  * Tenant grant-portfolio analytics.
@@ -355,12 +356,29 @@ export async function getUnassignedExpiredCalls(tenantId: string, limit = 50) {
  */
 export async function getUnassignedUpcomingCalls(
   tenantId: string,
-  options: { withinDays?: number; scopeUnitIds?: string[] | null; limit?: number } = {}
+  options: {
+    withinDays?: number;
+    scopeUnitIds?: string[] | null;
+    limit?: number;
+    /**
+     * Narrow to calls in these units' disciplines. Without it this list is
+     * every open call in the tenant, which is how an officer covering
+     * Pharmacy ended up looking at quantum-computing backlog. Units with
+     * nothing mapped fall back to the unfiltered list rather than an empty
+     * one — see `relevantCallWhereSql`.
+     */
+    relevanceUnitIds?: string[] | null;
+  } = {}
 ) {
-  const { withinDays = 45, scopeUnitIds = null, limit = 25 } = options;
+  const { withinDays = 45, scopeUnitIds = null, limit = 25, relevanceUnitIds = null } = options;
   if (scopeUnitIds && scopeUnitIds.length === 0) {
     return [];
   }
+
+  const relevancePredicate =
+    relevanceUnitIds && relevanceUnitIds.length > 0
+      ? relevantCallWhereSql(await loadUnitAreaProfile(tenantId, relevanceUnitIds), 'fc')
+      : Prisma.sql`TRUE`;
 
   // A cancelled or declined assignment means nobody is on this call: the
   // request was withdrawn or turned down. Both must leave the call visible
@@ -408,6 +426,7 @@ export async function getUnassignedUpcomingCalls(
       AND COALESCE(fc.close_date, fc."deadlineAt") IS NOT NULL
       AND COALESCE(fc.close_date, fc."deadlineAt") >= CURRENT_DATE
       AND COALESCE(fc.close_date, fc."deadlineAt") < CURRENT_DATE + ${`${withinDays} days`}::interval
+      AND ${relevancePredicate}
       ${coveredPredicate}
     ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC
     LIMIT ${limit}

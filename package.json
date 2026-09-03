@@ -47,7 +47,9 @@
     "quality:public-projects": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-quality-worker.ts",
     "crawl:public-projects:once": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-crawler-worker.ts --once",
     "embed:public-projects:once": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/public-project-embedding-worker.ts --once",
-    "ingest:funded-projects:raw": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/ingest-funded-project-raw-sources.ts"
+    "ingest:funded-projects:raw": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/ingest-funded-project-raw-sources.ts",
+    "seed:research-areas": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/seed-research-area-taxonomy.ts",
+    "ops:classify-calls": "node scripts/run-local-command.js node ./node_modules/tsx/dist/cli.cjs scripts/backfill-call-disciplines.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

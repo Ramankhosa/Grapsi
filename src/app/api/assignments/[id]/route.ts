@@ -283,6 +283,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         data: {
           tenant_id: context.tenantId,
           assignment_id: record.id,
+          funding_call_id: record.funding_call_id,
+          org_unit_id: record.assignee_org_unit_id,
           created_by_user_id: context.user.id,
           kind: 'NOTE',
           note: record.declined_reason

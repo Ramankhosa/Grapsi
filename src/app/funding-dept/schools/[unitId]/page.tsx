@@ -233,9 +233,16 @@ export default function SchoolWorkspacePage() {
                     return (
                       <tr key={row.id} className="border-b border-nickel-100 last:border-0">
                         <td className="px-4 py-3">
-                          <p className="text-[13.5px] font-medium text-nickel-900">
-                            {row.call?.title || 'Untitled call'}
-                          </p>
+                          {row.call ? (
+                            <Link
+                              href={`/funding-dept/calls/${row.call.id}?school=${unitId}`}
+                              className="text-[13.5px] font-medium text-cobalt-700 hover:underline"
+                            >
+                              {row.call.title || 'Untitled call'}
+                            </Link>
+                          ) : (
+                            <p className="text-[13.5px] font-medium text-nickel-900">Untitled call</p>
+                          )}
                           <p className="nk-sub mt-0.5">{row.call?.agency || 'Unknown agency'}</p>
                         </td>
                         <td className="nk-sub px-4 py-3">{row.assignee?.name || '—'}</td>
@@ -324,8 +331,10 @@ export default function SchoolWorkspacePage() {
           <section className="nk-panel">
             <div className="nk-panel-head">
               <div>
-                <h2 className="nk-title">Closing with nobody on it</h2>
-                <p className="nk-sub">Open calls no one in this school has been assigned</p>
+                <h2 className="nk-title">Needs somebody</h2>
+                <p className="nk-sub">
+                  Calls in this school&rsquo;s disciplines that nobody here has been put on
+                </p>
               </div>
               {data.openCalls.length > 0 ? (
                 <span className="nk-badge nk-badge-warn">{data.openCalls.length}</span>
@@ -347,10 +356,10 @@ export default function SchoolWorkspacePage() {
                         {call.agencyName || 'Unknown agency'} · closes {formatDate(call.closesAt)}
                       </p>
                       <Link
-                        href={`/researcher-matching?callId=${encodeURIComponent(call.id)}`}
+                        href={`/funding-dept/calls/${call.id}?school=${unitId}`}
                         className="nk-btn-secondary nk-btn-sm mt-2"
                       >
-                        Find faculty
+                        Open
                       </Link>
                     </li>
                   ))}

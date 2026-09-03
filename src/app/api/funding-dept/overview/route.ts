@@ -6,6 +6,7 @@ import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { getSummary, getUnassignedUpcomingCalls } from '@/lib/assignments/dashboardService'
 import { getSchoolCoverage, listMembers } from '@/lib/fundingDept/membershipService'
 import { canReviewDept, serializeMember } from '@/lib/fundingDept/shared'
+import { getDepartmentTotals, getSchoolFunnel } from '@/lib/fundingDept/schoolFunnelService'
 
 export const dynamic = 'force-dynamic'
 
@@ -195,9 +196,46 @@ export async function GET(request: NextRequest) {
     limit: 25,
   })
 
+  // The discipline funnel per school: what is relevant, and what nobody has
+  // picked up. The assignment rollup below cannot see the second thing at all —
+  // a school with a hundred untouched calls and one with nothing to do look
+  // identical in it.
+  const funnel = await getSchoolFunnel(context.tenantId)
+  const funnelBySchool = new Map(funnel.map((row) => [row.schoolId, row]))
+  const totals = await getDepartmentTotals(context.tenantId, funnel)
+
+  const pendingByMember = new Map<string, number>()
+  for (const member of members) {
+    const covered = member.school_assignments.filter((row: any) => !row.is_deputy)
+    pendingByMember.set(
+      member.id,
+      covered.reduce(
+        (sum: number, row: any) => sum + (funnelBySchool.get(row.org_unit_id)?.pending ?? 0),
+        0
+      )
+    )
+  }
+
   return NextResponse.json({
-    members: rows,
-    schools: schoolRows,
+    members: rows.map((row: any) => ({
+      ...row,
+      pendingInSchools: pendingByMember.get(row.id) ?? 0,
+    })),
+    schools: schoolRows.map((row: any) => {
+      const extra = funnelBySchool.get(row.id)
+      return {
+        ...row,
+        mappedAreas: extra?.mappedAreas ?? 0,
+        isUnmapped: extra?.isUnmapped ?? true,
+        relevantOpen: extra?.relevantOpen ?? 0,
+        live: extra?.live ?? 0,
+        pending: extra?.pending ?? 0,
+        shortlisted: extra?.shortlisted ?? 0,
+        awardAmount: extra?.awardAmount ?? 0,
+        lastContactAt: extra?.lastContactAt ?? null,
+      }
+    }),
+    departmentTotals: totals,
     uncovered,
     openCalls,
     totals: {

@@ -4,6 +4,7 @@ import { DEFAULT_OPENAI_FALLBACK_MODEL, generateFromOpenAI } from '../openaiServ
 import { generateFromGemini, generateFromGeminiWithFiles } from '../geminiService';
 import { runReviewerAuxiliaryText, type OwnerContext } from '@/lib/reviewer/auxLlm';
 import { normalizeStringArray, parseReviewerScore } from '@/lib/reviewer/content';
+import { hasUsableKeys, looksTruncated, parseReviewerModelJson } from '@/lib/reviewer/modelJson';
 import axios from 'axios';
 
 export interface ReviewSummary {
@@ -18,6 +19,37 @@ export interface ReviewSummary {
 // the super-admin LLM config like every other reviewer stage; direct provider
 // calls below are the fallback ladder, not the primary path.
 const GRANT_REVIEWER_FINAL_REPORT_STAGE = 'GRANT_REVIEWER_FINAL_REPORT';
+
+/**
+ * Appended when a first reply came back unusable — almost always because the
+ * model hit its output ceiling part-way through one of the scorecards.
+ */
+const COMPACT_RETRY_INSTRUCTION = `### RETRY — YOUR PREVIOUS ANSWER WAS CUT OFF
+The last reply did not finish, so none of it could be used. Answer again, complete this time:
+- Output the JSON object and nothing else. No preamble, no commentary, no code fence.
+- Keep the executive summary to one paragraph and every other string under 40 words.
+- At most 4 major_strengths, 4 major_weaknesses, 4 cross_sectional_recommendations, 4 priority_actions and 3 consistency_flags.
+Finishing the object matters more than covering everything.`;
+
+/**
+ * Read a panel report out of a model reply, or null when nothing usable came
+ * back. A repaired (truncated) reply counts only when the parts a committee
+ * actually reads survived — a salvage down to `{}` would replace a real report
+ * with a blank one, which is worse than saying the run failed.
+ */
+function readPanelReportJson(responseText: unknown): any | null {
+  try {
+    const { value, repaired } = parseReviewerModelJson(responseText);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    // The executive summary is the bar: a salvage that kept only a number is
+    // not a panel report, and storing it would replace a committee's reading
+    // with a blank page.
+    if (repaired && !hasUsableKeys(value, ['executive_summary'])) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
 
 const FUNDING_DECISIONS = new Set(['fund', 'fund_with_revisions', 'revise_and_resubmit', 'do_not_fund']);
 const COMPETITIVENESS_BANDS = new Set(['top_tier', 'competitive', 'borderline', 'not_competitive']);
@@ -445,13 +477,8 @@ Return your analysis strictly as a JSON object with these keys. Do not include a
 
     // Parse the response into JSON
     try {
-      // Try to extract JSON from response (might be wrapped in markdown code blocks)
-      const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) || 
-                       responseText.match(/```\n([\s\S]*?)\n```/) ||
-                       [null, responseText];
-                      
-      const reviewJson = JSON.parse(jsonMatch[1] || responseText);
-      
+      const { value: reviewJson } = parseReviewerModelJson(responseText);
+
       // Every list must come back as a list. `|| []` only covered null and
       // undefined, so a model that answered with a single string handed the
       // report page a value it then called .map() on.
@@ -593,63 +620,81 @@ Rules for the report:
 - supplementary_materials are reminders only and must never lower the score.
 - Never contradict the VERIFIED FACTS block.`;
 
-    let responseText: string | null = null;
+    /**
+     * One pass at the model, down the usual ladder: the configured gateway
+     * stage first (the admin's model choice applies, the call is metered and
+     * logged, and the OpenAI provider can serve the shared system-prompt prefix
+     * from cache), then the direct provider.
+     *
+     * `maxTokensOut` matches the seeded ceiling for this stage. It used to ask
+     * for 8000 while the stage was configured for 16000, so the report was the
+     * one reviewer call deliberately given half the room it was allowed — and
+     * this schema is the largest the reviewer asks for.
+     */
+    const askModel = async (prompt: string): Promise<string | null> => {
+      if (options?.owner) {
+        const viaGateway = await runReviewerAuxiliaryText({
+          stageCode: GRANT_REVIEWER_FINAL_REPORT_STAGE,
+          prompt,
+          systemPrompt,
+          owner: options.owner,
+          modelType,
+          maxTokensOut: 16000,
+          fallbackGeminiModel: 'gemini-2.5-pro',
+          promptCacheKey: `reviewer:final-report:${crypto.createHash('sha256').update(systemPrompt).digest('hex').slice(0, 32)}`,
+          promptCacheRetention: '24h',
+          metadataPurpose: 'reviewer_final_report',
+        });
+        if (viaGateway) return viaGateway;
+      }
 
-    // The configured gateway stage first: the admin's model choice applies,
-    // the call is metered and logged, and the OpenAI provider can serve the
-    // shared system-prompt prefix from cache. This call was previously a
-    // direct un-metered gemini-2.5-pro request regardless of configuration.
-    if (options?.owner) {
-      responseText = await runReviewerAuxiliaryText({
-        stageCode: GRANT_REVIEWER_FINAL_REPORT_STAGE,
-        prompt: userPrompt,
-        systemPrompt,
-        owner: options.owner,
-        modelType,
-        maxTokensOut: 8000,
-        fallbackGeminiModel: 'gemini-2.5-pro',
-        promptCacheKey: `reviewer:final-report:${crypto.createHash('sha256').update(systemPrompt).digest('hex').slice(0, 32)}`,
-        promptCacheRetention: '24h',
-        metadataPurpose: 'reviewer_final_report',
-      });
-    }
-
-    if (!responseText) {
       if (modelType === 'O') {
         // Use OpenAI with explicit JSON response format
-        responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
-      } else {
-        // Use Gemini 2.5 Pro for overall review generation
-        responseText = await generateFromGemini(systemPrompt + '\n\n' + userPrompt, 'gemini-2.5-pro');
+        return generateFromOpenAI(prompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
       }
+      // Use Gemini 2.5 Pro for overall review generation
+      return generateFromGemini(`${systemPrompt}\n\n${prompt}`, 'gemini-2.5-pro');
+    };
+
+    let responseText = await askModel(userPrompt);
+    let reviewJson = readPanelReportJson(responseText);
+
+    // A reply that ran out of room part-way through `priority_actions` used to
+    // fail the whole regeneration, and the only recourse the page offered was a
+    // button that paid for the entire report again. One compact re-ask is both
+    // cheaper and far likelier to land than the manual retries users report.
+    if (!reviewJson) {
+      console.warn('[Reviewer] Unusable panel report JSON; re-asking once for a compact answer.');
+      responseText = await askModel(`${userPrompt}\n\n${COMPACT_RETRY_INSTRUCTION}`);
+      reviewJson = readPanelReportJson(responseText);
     }
 
-    // Parse the response into JSON
-    try {
-      // Try to extract JSON from response (might be wrapped in markdown code blocks)
-      const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) ||
-                       responseText.match(/```\n([\s\S]*?)\n```/) ||
-                       [null, responseText];
-
-      const reviewJson = JSON.parse(jsonMatch[1] || responseText);
-
-      return {
-        overall_score: parseReviewerScore(reviewJson.overall_score),
-        executive_summary: reviewJson.executive_summary || "No executive summary provided.",
-        major_strengths: normalizeStringArray(reviewJson.major_strengths),
-        major_weaknesses: normalizeStringArray(reviewJson.major_weaknesses),
-        cross_sectional_recommendations: normalizeStringArray(reviewJson.cross_sectional_recommendations),
-        supplementary_materials: normalizeStringArray(reviewJson.supplementary_materials),
-        funding_recommendation: normalizeFundingRecommendation(reviewJson.funding_recommendation),
-        criterion_scorecard: normalizeCriterionScorecard(reviewJson.criterion_scorecard),
-        section_scorecard: normalizeSectionScorecard(reviewJson.section_scorecard),
-        priority_actions: normalizePriorityActions(reviewJson.priority_actions),
-        consistency_flags: normalizeConsistencyFlags(reviewJson.consistency_flags),
-      };
-    } catch (error) {
-      console.error('Error parsing LLM response for overall review:', error);
-      throw new Error('The reviewer model returned an invalid final review. Please retry.');
+    if (!reviewJson) {
+      const truncated = looksTruncated(String(responseText || ''));
+      console.error('[Reviewer] Both panel report attempts were unusable', {
+        truncated,
+        sample: String(responseText || '').slice(-400),
+      });
+      throw new Error(
+        truncated
+          ? 'The reviewer model ran out of room before it finished the panel report. Try again, or leave some sections out of this report.'
+          : 'The reviewer model returned an invalid final review. Please retry.'
+      );
     }
+
+    return {
+      overall_score: parseReviewerScore(reviewJson.overall_score),
+      executive_summary: reviewJson.executive_summary || "No executive summary provided.",
+      major_strengths: normalizeStringArray(reviewJson.major_strengths),
+      major_weaknesses: normalizeStringArray(reviewJson.major_weaknesses),
+      cross_sectional_recommendations: normalizeStringArray(reviewJson.cross_sectional_recommendations),
+      supplementary_materials: normalizeStringArray(reviewJson.supplementary_materials),
+      funding_recommendation: normalizeFundingRecommendation(reviewJson.funding_recommendation),
+      criterion_scorecard: normalizeCriterionScorecard(reviewJson.criterion_scorecard),
+      section_scorecard: normalizeSectionScorecard(reviewJson.section_scorecard),
+      priority_actions: normalizePriorityActions(reviewJson.priority_actions),
+      consistency_flags: normalizeConsistencyFlags(reviewJson.consistency_flags),
+    };
   }
 
   async generateIntroductionReview(

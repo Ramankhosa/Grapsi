@@ -79,6 +79,10 @@ export function serializeFollowUp(row: any) {
   return {
     id: row.id,
     assignmentId: row.assignment_id,
+    // Null on an assignment-level row written before call-level follow-ups
+    // existed; stamped on everything since, so the dossier can group by call.
+    fundingCallId: row.funding_call_id ?? null,
+    orgUnitId: row.org_unit_id ?? null,
     kind: row.kind,
     note: row.note,
     happenedAt: row.happened_at,
@@ -107,6 +111,31 @@ export function canAdministerDept(context: TenantContext): boolean {
  */
 export function canReviewDept(context: TenantContext, scope: ManagedScope): boolean {
   return context.isAdmin || scope.fundingDept.isHead
+}
+
+/**
+ * Who may open one school's work: its queue, a call's dossier in it, its
+ * call-level follow-ups, the school page.
+ *
+ * Three surfaces had grown three different answers — the overview used
+ * `canReviewDept`, the school page required the unit in `managedUnitIds`, the
+ * shortlist accepted anyone who could assign. The visible casualty was a
+ * department head with no coverage rows of their own, who could open the
+ * whole-department funnel and was then 403'd from every individual school. One
+ * rule, written once:
+ *
+ *   tenant-wide admin            -> every school
+ *   the department head          -> every school (they answer for the department)
+ *   anyone else                  -> the schools inside their reach
+ *
+ * `scope.fundingDept.isHead` is the department head. Do not confuse it with
+ * `scope.isHead`, which is true for anyone holding a manager grant or covering
+ * a school.
+ */
+export function canOpenSchoolWork(scope: ManagedScope, orgUnitId: string): boolean {
+  if (scope.isTenantWide) return true
+  if (scope.fundingDept.isHead) return true
+  return scope.managedUnitIds.includes(orgUnitId)
 }
 
 /**

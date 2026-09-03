@@ -25,6 +25,8 @@ interface ReminderRow {
   remindFaculty: boolean
   assignmentId: string | null
   facultyName: string | null
+  /** Set on a call-level tickler, which has a school instead of a person. */
+  schoolName?: string | null
   callTitle: string | null
   authorName: string | null
   authorIsMe: boolean
@@ -277,7 +279,7 @@ export default function FundingDeptHomePage() {
                   {data?.dueReminders.map((row) => (
                     <li key={row.id} className="border-b border-nickel-100 pb-3 last:border-0 last:pb-0">
                       <p className="text-[13.5px] font-medium text-nickel-900">
-                        {row.facultyName || 'Unknown'}
+                        {row.facultyName || (row.schoolName ? `${row.schoolName} (nobody assigned yet)` : 'Unknown')}
                         <span className="nk-sub"> · {row.callTitle || 'Untitled call'}</span>
                       </p>
                       <p className="nk-sub mt-0.5">{row.note}</p>

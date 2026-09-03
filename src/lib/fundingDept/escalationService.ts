@@ -34,6 +34,28 @@ const DEADLINE_STAGES = [
 const NO_RESPONSE_AFTER_DAYS = 7
 const NO_RESPONSE_STAGE = 'NOACK'
 
+/**
+ * The opening words of every notification this ladder (and the milestone
+ * sweep) writes. `auto_nudge_stages` records THAT a stage fired but not when,
+ * and is wiped on re-request, so the Notification row is the only dated record
+ * of a nudge. The call dossier's timeline picks nudges out of a person's inbox
+ * by these prefixes — keep them in step with the `title:` literals below.
+ */
+export const NUDGE_TITLE_PREFIXES = [
+  'Deadline ',
+  'Still waiting on your reply:',
+  `No reply after ${NO_RESPONSE_AFTER_DAYS} days:`,
+  'INSTALMENT due ',
+  'UC due ',
+  'SE due ',
+  'REPORT due ',
+  'OTHER due ',
+] as const
+
+export function isNudgeTitle(title: string): boolean {
+  return NUDGE_TITLE_PREFIXES.some((prefix) => title.startsWith(prefix))
+}
+
 const OPEN_STATUSES = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']
 
 export interface EscalationResult {

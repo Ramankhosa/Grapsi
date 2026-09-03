@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
       },
       select: {
         id: true,
+        org_unit_id: true,
         assignment: {
           select: {
             id: true,
@@ -83,8 +84,19 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    // Assignment-level reminders answer to the assignment's reach; call-level
+    // ones (no assignment yet) to the school they were logged against.
     const allowed = reminders
-      .filter((row) => row.assignment && canManageAssignment(context.scope, row.assignment))
+      .filter((row) =>
+        row.assignment
+          ? canManageAssignment(context.scope, row.assignment)
+          : Boolean(
+              row.org_unit_id &&
+                (context.scope.isTenantWide ||
+                  context.scope.fundingDept.isHead ||
+                  context.scope.managedUnitIds.includes(row.org_unit_id))
+            )
+      )
       .map((row) => row.id)
 
     if (allowed.length > 0) {
@@ -106,6 +118,7 @@ export async function POST(request: NextRequest) {
     where: { id: { in: ids }, tenant_id: context.tenantId },
     select: {
       id: true,
+      funding_call_id: true,
       assigned_by_user_id: true,
       assignee_org_unit_id: true,
       assignee: { select: { name: true, email: true } },
@@ -139,6 +152,8 @@ export async function POST(request: NextRequest) {
       data: targets.map((assignmentId) => ({
         tenant_id: context.tenantId,
         assignment_id: assignmentId,
+        funding_call_id: found.get(assignmentId)?.funding_call_id ?? null,
+        org_unit_id: found.get(assignmentId)?.assignee_org_unit_id ?? null,
         created_by_user_id: context.user.id,
         kind: payload.kind,
         note: payload.note,

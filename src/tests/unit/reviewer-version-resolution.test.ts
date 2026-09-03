@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import { normalizeVersionSelections, resolveSectionVersions } from '@/lib/reviewer/finalReport'
-import { expectedScoredVersion, groupReviewerSections, reportFreshness } from '@/lib/reviewer/sectionGrouping'
+import {
+  expectedScoredVersion,
+  groupReviewerSections,
+  reportFreshness,
+  supersededScoredSections,
+} from '@/lib/reviewer/sectionGrouping'
 
 function row(overrides: Record<string, any>) {
   return {
@@ -106,5 +111,40 @@ describe('reportFreshness with versions', () => {
     expect(expectedScoredVersion(group, { Methodology: 1 })).toBe(1)
     expect(expectedScoredVersion(group, { Methodology: 3 })).toBe(2)
     expect(expectedScoredVersion(group, null)).toBe(2)
+  })
+})
+
+describe('supersededScoredSections', () => {
+  const report = (scored: Record<string, number>, extra: Record<string, any> = {}) => ({
+    overall_score: 7,
+    score_basis: { scoredVersions: scored, ...extra },
+    generated_at: '2026-08-02T00:00:00Z',
+  })
+
+  it('names a section the report scores at an older reviewed version', () => {
+    const sections = [row({ version: 1 }), row({ version: 2 })]
+    expect(supersededScoredSections(report({ Methodology: 1 }, { pinnedVersions: { Methodology: 1 } }), sections))
+      .toEqual([{ title: 'Methodology', scored: 1, latest: 2 }])
+  })
+
+  it('says nothing when the report already scores the newest reviewed version', () => {
+    const sections = [row({ version: 1 }), row({ version: 2 })]
+    expect(supersededScoredSections(report({ Methodology: 2 }), sections)).toEqual([])
+  })
+
+  it('ignores a newer version that has not been reviewed yet', () => {
+    const sections = [row({ version: 1 }), row({ version: 2, status: 'draft', ai_review_json: {} })]
+    expect(supersededScoredSections(report({ Methodology: 1 }), sections)).toEqual([])
+  })
+
+  it('ignores sections the report deliberately left out', () => {
+    const sections = [row({ section_title: 'Budget', version: 1 }), row({ section_title: 'Budget', version: 2 })]
+    const stored = report({ Budget: 1 }, { excludedTitles: ['Budget'] })
+    expect(supersededScoredSections(stored, sections)).toEqual([])
+  })
+
+  it('is empty for a report with no score basis', () => {
+    expect(supersededScoredSections({ overall_score: 7 }, [row({ version: 1 })])).toEqual([])
+    expect(supersededScoredSections(null, [row({ version: 1 })])).toEqual([])
   })
 })

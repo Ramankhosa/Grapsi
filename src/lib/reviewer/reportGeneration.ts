@@ -145,21 +145,81 @@ export function landscapeNoveltyInputHash(input: {
 }
 
 /**
- * Whether the previous report's landscape can stand in for a fresh build:
- * same inputs, not an errored build, recent enough that the search corpus has
- * not moved on, and reuse not disabled by the kill switch.
+ * Whether a landscape built at `builtAt` can stand in for a fresh build: same
+ * inputs, not an errored build, recent enough that the search corpus has not
+ * moved on, and reuse not disabled by the kill switch.
  */
-export function shouldReuseLandscape(prevReport: any, hash: string, now: Date): boolean {
+export function landscapeIsReusable(
+  landscape: any,
+  builtAt: unknown,
+  hash: string,
+  now: Date
+): boolean {
   if (!reviewerLandscapeReuseEnabled()) return false
-  const landscape = prevReport?.landscape
   if (!landscape || typeof landscape !== 'object') return false
   if (landscape.input_hash !== hash) return false
   if (landscape.status === 'error') return false
 
-  const generatedAt = Date.parse(String(prevReport?.generated_at || ''))
-  if (!Number.isFinite(generatedAt)) return false
-  const ageMs = now.getTime() - generatedAt
+  const builtAtMs = Date.parse(String(builtAt || ''))
+  if (!Number.isFinite(builtAtMs)) return false
+  const ageMs = now.getTime() - builtAtMs
   return ageMs >= 0 && ageMs <= REVIEWER_LANDSCAPE_REUSE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000
+}
+
+/**
+ * Whether the previous report's landscape can stand in for a fresh build.
+ */
+export function shouldReuseLandscape(prevReport: any, hash: string, now: Date): boolean {
+  return landscapeIsReusable(prevReport?.landscape, prevReport?.generated_at, hash, now)
+}
+
+/**
+ * Where a landscape is parked when the panel model fails after it was built.
+ *
+ * The landscape costs a distillation call, a facet-mapping call and two
+ * searches, and it is started before the panel report so the two run together.
+ * When the panel call then failed, all of that was thrown away with it and the
+ * user's retry paid for it again — the exact charge behind "we regenerate three
+ * or four times and it costs us tokens". Parking it means a retry pays only for
+ * the panel report.
+ */
+export function landscapeCacheOf(parsedJson: unknown): { landscape: any; built_at: string } | null {
+  const parsed = parsedJson && typeof parsedJson === 'object' ? (parsedJson as Record<string, any>) : null
+  const cache = parsed?.landscape_cache
+  if (!cache || typeof cache !== 'object' || !cache.landscape) return null
+  return { landscape: cache.landscape, built_at: String(cache.built_at || '') }
+}
+
+/** Park a landscape a failed run already paid for. Best effort by design. */
+async function parkLandscape(callId: string, landscape: any, hash: string): Promise<void> {
+  if (!landscape || typeof landscape !== 'object' || landscape.status === 'error') return
+
+  const call = await prisma.reviewerCall.findUnique({ where: { id: callId }, select: { parsed_json: true } })
+  const parsed = call?.parsed_json && typeof call.parsed_json === 'object'
+    ? (call.parsed_json as Record<string, any>)
+    : {}
+
+  await prisma.reviewerCall.update({
+    where: { id: callId },
+    data: {
+      parsed_json: {
+        ...parsed,
+        landscape_cache: {
+          landscape: { ...landscape, input_hash: hash },
+          built_at: new Date().toISOString(),
+        },
+      } as any,
+    },
+  })
+  console.log('[Reviewer] Panel report failed — kept the landscape so a retry does not rebuild it')
+}
+
+/** Drop a parked landscape once a report has been stored with its own copy. */
+function withoutLandscapeCache(parsedJson: unknown): Record<string, any> | null {
+  const parsed = parsedJson && typeof parsedJson === 'object' ? (parsedJson as Record<string, any>) : null
+  if (!parsed || !('landscape_cache' in parsed)) return null
+  const { landscape_cache: _dropped, ...rest } = parsed
+  return rest
 }
 
 export interface GenerateReviewerReportResult {
@@ -283,12 +343,21 @@ export async function generateReviewerReport(input: {
     callDescription: description,
     digests: buildSectionDigests(digestSections),
   })
-  const reuseLandscape = shouldReuseLandscape(prevReport, landscapeInputHash, new Date())
+  const now = new Date()
+  // Either the landscape stored with the last report, or one parked by a run
+  // whose panel model failed after the landscape had already been paid for.
+  const parkedLandscape = landscapeCacheOf(call.parsed_json)
+  const reusableLandscape = shouldReuseLandscape(prevReport, landscapeInputHash, now)
+    ? prevReport.landscape
+    : parkedLandscape && landscapeIsReusable(parkedLandscape.landscape, parkedLandscape.built_at, landscapeInputHash, now)
+      ? parkedLandscape.landscape
+      : null
+  const reuseLandscape = Boolean(reusableLandscape)
   if (reuseLandscape) {
     console.log('[Reviewer] Landscape inputs unchanged — reusing the stored landscape and novelty assessment')
   }
   const landscapePromise = reuseLandscape
-    ? Promise.resolve(prevReport.landscape)
+    ? Promise.resolve(reusableLandscape)
     : buildReviewerLandscape({
         callId: input.callId,
         projectTitle: call.project_title || '',
@@ -334,6 +403,11 @@ export async function generateReviewerReport(input: {
     )
   } catch (error) {
     await releaseReviewerUsage(reportUsage).catch(() => undefined)
+    // Park whatever the landscape build produced alongside the failed report,
+    // so the retry the user is about to make does not pay for it a second time.
+    if (!reuseLandscape) {
+      await parkLandscape(input.callId, await landscapePromise, landscapeInputHash).catch(() => undefined)
+    }
     throw error
   }
 
@@ -398,9 +472,16 @@ export async function generateReviewerReport(input: {
   }
 
   try {
+    // The stored report now carries its own landscape, so any parked copy is
+    // dead weight.
+    const parsedWithoutCache = withoutLandscapeCache(call.parsed_json)
     await prisma.reviewerCall.update({
       where: { id: input.callId },
-      data: { overall_review_json: report as any, updated_at: new Date() },
+      data: {
+        overall_review_json: report as any,
+        updated_at: new Date(),
+        ...(parsedWithoutCache ? { parsed_json: parsedWithoutCache as any } : {}),
+      },
     })
   } catch (error) {
     // The tenant must not be charged for a report that was never stored.

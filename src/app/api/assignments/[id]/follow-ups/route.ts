@@ -36,6 +36,7 @@ async function loadAssignment(tenantId: string, id: string) {
     where: { id, tenant_id: tenantId },
     select: {
       id: true,
+      funding_call_id: true,
       assigned_by_user_id: true,
       assignee_org_unit_id: true,
       assignee_user_id: true,
@@ -105,6 +106,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     data: {
       tenant_id: context.tenantId,
       assignment_id: record.id,
+      // Stamped on assignment-level rows too, so a call's whole history in a
+      // school is one indexed scan rather than a union through assignments.
+      funding_call_id: record.funding_call_id,
+      org_unit_id: record.assignee_org_unit_id,
       created_by_user_id: context.user.id,
       kind: payload.kind,
       note: payload.note,

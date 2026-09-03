@@ -365,6 +365,13 @@ export default function Header() {
                           onClick={closeMenu}
                         />
                         <MenuItem
+                          href="/funding-dept/queue"
+                          icon="🧪"
+                          title="My Schools&rsquo; Calls"
+                          description="Open calls matching your schools&rsquo; disciplines, and what is still unassigned"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
                           href="/funding-dept/chase"
                           icon="⏰"
                           title="Chase Queue"
@@ -483,6 +490,13 @@ export default function Header() {
                           icon="📥"
                           title="Import Funding Calls"
                           description="Upload call documents or URLs into your organization's catalog"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
+                          href="/funding-dept/overview"
+                          icon="📋"
+                          title="Department Overview"
+                          description="Pendency, load and coverage — by member and by school"
                           onClick={closeMenu}
                         />
                         <MenuItem

@@ -120,6 +120,9 @@ export async function sendWeeklyDigests(
           select: {
             note: true,
             assignment: { select: { assignee: { select: { name: true, email: true } } } },
+            // Call-level reminders (no assignee yet) still need a name in the mail.
+            funding_call: { select: { title: true, scheme_title: true } },
+            org_unit: { select: { name: true } },
           },
           orderBy: { remind_at: 'asc' },
           take: 10,
@@ -127,6 +130,10 @@ export async function sendWeeklyDigests(
         schoolUnitIds.length > 0
           ? getUnassignedUpcomingCalls(member.tenant_id, {
               scopeUnitIds: schoolUnitIds,
+              // Only calls in these schools' disciplines. A weekly mail listing
+              // the whole tenant's open catalog is the kind a reader stops
+              // opening, which costs more than sending nothing.
+              relevanceUnitIds: schoolUnitIds,
               withinDays: 45,
               limit: 10,
             })
@@ -143,7 +150,14 @@ export async function sendWeeklyDigests(
       dueSoon = upcoming
       overdueReminders = reminders.map((row) => ({
         note: row.note,
-        facultyName: row.assignment?.assignee?.name || row.assignment?.assignee?.email || null,
+        facultyName:
+          row.assignment?.assignee?.name ||
+          row.assignment?.assignee?.email ||
+          // No assignee yet: say which call and school it was logged against.
+          [row.funding_call?.scheme_title || row.funding_call?.title, row.org_unit?.name]
+            .filter(Boolean)
+            .join(' — ') ||
+          null,
       }))
       openCalls = calls
       followUpCount = followUps

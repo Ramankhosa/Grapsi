@@ -45,7 +45,9 @@ export async function PATCH(
   }
 
   const record = await load(context.tenantId, params.id, params.followUpId)
-  if (!record || !canManageAssignment(context.scope, record.assignment)) {
+  // `assignment` is nullable now that call-level rows exist; this route is
+  // addressed by assignment id so it is always set here, but the type must know.
+  if (!record || !record.assignment || !canManageAssignment(context.scope, record.assignment)) {
     return NextResponse.json({ error: 'Follow-up not found.' }, { status: 404 })
   }
   // A colleague can read the log and act on it; only the person who wrote a
@@ -122,7 +124,9 @@ export async function DELETE(
   }
 
   const record = await load(context.tenantId, params.id, params.followUpId)
-  if (!record || !canManageAssignment(context.scope, record.assignment)) {
+  // `assignment` is nullable now that call-level rows exist; this route is
+  // addressed by assignment id so it is always set here, but the type must know.
+  if (!record || !record.assignment || !canManageAssignment(context.scope, record.assignment)) {
     return NextResponse.json({ error: 'Follow-up not found.' }, { status: 404 })
   }
   if (record.created_by_user_id !== context.user.id && !context.scope.fundingDept.isHead && !context.isAdmin) {

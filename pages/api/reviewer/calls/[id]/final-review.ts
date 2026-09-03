@@ -207,7 +207,16 @@ export default async function handler(
         // reload that follows generation. The share endpoint writes the same
         // block; until now this route never did, so the picker always reset.
         if (hasPreferences) {
-          const parsed = call.parsed_json && typeof call.parsed_json === 'object' ? (call.parsed_json as Record<string, any>) : {};
+          // Re-read rather than reusing the snapshot taken before generation:
+          // the report run writes to `parsed_json` itself, and merging into a
+          // stale copy would put back what it just cleaned up.
+          const current = await prisma.reviewerCall.findUnique({
+            where: { id },
+            select: { parsed_json: true },
+          });
+          const parsed = current?.parsed_json && typeof current.parsed_json === 'object'
+            ? (current.parsed_json as Record<string, any>)
+            : {};
           await prisma.reviewerCall.update({
             where: { id },
             data: {

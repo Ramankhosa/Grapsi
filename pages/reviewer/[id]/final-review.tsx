@@ -10,8 +10,7 @@ import {
   FaFilter, FaPrint, FaShare, FaLink, FaFileWord, FaCheck, FaTimes, FaExclamationTriangle, FaFileExport,
 } from 'react-icons/fa';
 import { ReviewerText } from '@/components/reviewer/ReviewerText';
-import { compareSections, reportFreshness } from '@/lib/reviewer/sectionGrouping';
-import { normalizeVersionSelections } from '@/lib/reviewer/finalReport';
+import { compareSections, reportFreshness, supersededScoredSections } from '@/lib/reviewer/sectionGrouping';
 import ReviewerShell from '@/components/reviewer/ReviewerShell';
 import PriorWorkList from '@/components/funding-intelligence/PriorWorkList';
 import CoverageMap from '@/components/funding-intelligence/CoverageMap';
@@ -143,36 +142,34 @@ export default function FinalReview() {
         });
         setGroupedSections(grouped);
 
-        // Defaults: the version the stored report scored (so the page agrees with
-        // the report), else the latest reviewed version.
+        // Defaults: the latest reviewed version of each section.
+        //
+        // This used to default to whatever the stored report scored, which read
+        // as "agree with the report" and behaved as a trap. Regenerating from
+        // the picker posts the selection back as a pin, so after a revision the
+        // dropdown pre-selected the superseded draft, pinned it again, and the
+        // rebuilt report was identical to the one before — at the cost of a full
+        // panel call each time. Which version the report actually scored is
+        // still shown, as the "(in report)" marker on the option.
         const storedScoreBasis = callResponse.data.call?.overall_review_json?.score_basis || null;
-        const scored = storedScoreBasis?.scoredVersions || {};
         const initialSelected: Record<string, number> = {};
         const initialCompare: Record<string, number[]> = {};
         const initialIncluded: Record<string, boolean> = {};
         Object.keys(grouped).forEach((title) => {
-          const scoredVersion = Number(scored[title]);
-          initialSelected[title] = grouped[title][scoredVersion] ? scoredVersion : grouped[title].latestVersion;
+          initialSelected[title] = grouped[title].latestVersion;
           initialIncluded[title] = true;
           if (grouped[title].versions.length > 1) {
             initialCompare[title] = [...grouped[title].versions].sort((a, b) => b - a).slice(0, 2);
           }
         });
 
-        // Saved picker preferences (both key shapes accepted). The stored
-        // report's own score_basis stays authoritative: after a revision is
-        // reviewed and the report regenerated, it scores the newest versions
-        // with nothing excluded, and letting older saved picks override that
-        // displayed sections the report no longer describes.
+        // Saved picker preferences (both key shapes accepted). Exclusions are a
+        // standing choice and are restored as they were; a saved *version* is
+        // not, because it only ever meant "the newest at the time". Restoring
+        // one over a version that has since been revised and re-reviewed is
+        // what kept the report frozen on a superseded draft.
         if (reportPreferences?.displayMode) {
           setDisplayMode(reportPreferences.displayMode === 'parallel' ? 'parallel' : 'single');
-          const saved = normalizeVersionSelections(reportPreferences.versionSelections);
-          Object.entries(saved).forEach(([title, version]) => {
-            if (!grouped[title]?.[version]) return;
-            // The report says what it scored for this title — show that.
-            if (grouped[title][Number(scored[title])]) return;
-            initialSelected[title] = version;
-          });
           if (reportPreferences.displayMode === 'parallel') {
             Object.entries(reportPreferences.versionSelections || {}).forEach(([key, value]) => {
               if (!String(key).includes('|')) return;
@@ -239,6 +236,14 @@ export default function FinalReview() {
   const scoredVersions: Record<string, number> = scoreBasis.scoredVersions || {};
   const pendingDrafts: Record<string, number> = scoreBasis.pendingDrafts || {};
   const freshness = useMemo(() => reportFreshness(callData?.overall_review_json, rawSections), [callData, rawSections]);
+  // Sections the report scores at an older version than the newest reviewed
+  // one. A pinned report is not "stale" — it describes what it was asked to —
+  // but the page has to say so, or a user who revised and re-reviewed sees a
+  // report that never changes and no explanation of why.
+  const superseded = useMemo(
+    () => supersededScoredSections(callData?.overall_review_json, rawSections),
+    [callData, rawSections]
+  );
 
   const supplementaryMaterials = Array.from(new Set([
     ...(Array.isArray(overallReview.supplementary_materials) ? overallReview.supplementary_materials : []),
@@ -326,31 +331,41 @@ export default function FinalReview() {
   };
 
   const generateWithSelections = async () => {
+    // A pin is recorded only when the user picked something other than the
+    // newest reviewed version. Sending one for every section made the picker
+    // freeze the report on whatever was current at the time: the pin was
+    // replayed by every later regeneration and by the ATR export, so a revision
+    // reviewed afterwards could never enter the report.
+    const versionSelections: Record<string, number> = {};
+    const excludedTitles: string[] = [];
+    let includedCount = 0;
+    Object.keys(groupedSections).forEach((title) => {
+      if (!includedSections[title]) { excludedTitles.push(title); return; }
+      includedCount++;
+      const latest = groupedSections[title].latestVersion;
+      const chosen = displayMode === 'single'
+        ? (selectedVersions[title] || latest)
+        // A report scores one draft per section: the newest of the compared versions.
+        : Math.max(...(compareVersions[title]?.length ? compareVersions[title] : [latest]));
+      if (chosen !== latest) versionSelections[title] = chosen;
+    });
+
+    if (includedCount === 0) {
+      toast.error('Tick at least one section to include in the report.');
+      return;
+    }
+
     try {
-      setLoading(true);
-      const versionSelections: Record<string, number> = {};
-      const excludedTitles: string[] = [];
-      Object.keys(groupedSections).forEach((title) => {
-        if (!includedSections[title]) { excludedTitles.push(title); return; }
-        if (displayMode === 'single') {
-          versionSelections[title] = selectedVersions[title] || groupedSections[title].latestVersion;
-        } else {
-          // A report scores one draft per section: the newest of the compared versions.
-          const versions = compareVersions[title]?.length ? compareVersions[title] : [groupedSections[title].latestVersion];
-          versionSelections[title] = Math.max(...versions);
-        }
-      });
-      if (Object.keys(versionSelections).length === 0) {
-        setError('Please select at least one section to include in the report');
-        setLoading(false);
-        return;
-      }
+      setIsRegenerating(true);
       await axios.post(`/api/reviewer/calls/${id}/final-review`, { versionSelections, excludedTitles, displayMode });
       router.reload();
     } catch (err) {
       console.error('Error generating custom report:', err);
-      setError(err?.response?.data?.error || 'Failed to generate custom report with selected versions');
-      setLoading(false);
+      // The report that is already on screen stays there. Replacing the page
+      // with an error screen — which is what `setError` does here — is why a
+      // failed regeneration read as "the report will not load".
+      toast.error(err?.response?.data?.error || 'Could not rebuild the report with those choices. The report below is unchanged.');
+      setIsRegenerating(false);
     }
   };
 
@@ -455,6 +470,18 @@ export default function FinalReview() {
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 print:hidden">
             <span><strong>Out of date.</strong> A section was reviewed after this report was written. Regenerate to bring the verdict in line with the current drafts.</span>
             <button onClick={regenerateFinalReview} disabled={isRegenerating} className="nk-btn-secondary nk-btn-sm">{isRegenerating ? 'Regenerating…' : 'Regenerate now'}</button>
+          </div>
+        ) : superseded.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 print:hidden">
+            <span>
+              <strong>Scoring an earlier draft.</strong> This report is pinned to{' '}
+              {superseded.map((entry) => `${entry.title} v${entry.scored}`).join(', ')}, and{' '}
+              {superseded.map((entry) => `v${entry.latest}`).join(', ')}{' '}
+              {superseded.length === 1 ? 'has' : 'have'} since been reviewed. Regenerate to score the latest instead.
+            </span>
+            <button onClick={regenerateFinalReview} disabled={isRegenerating} className="nk-btn-secondary nk-btn-sm">
+              {isRegenerating ? 'Regenerating…' : 'Score the latest versions'}
+            </button>
           </div>
         ) : null}
 

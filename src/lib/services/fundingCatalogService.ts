@@ -841,6 +841,28 @@ export class FundingCatalogService {
       }
     });
 
+    // Classify into the discipline catalog, then tell the officer covering each
+    // school it matches. The two are chained rather than fired in parallel
+    // because the notice reads the mappings the classifier writes — racing them
+    // would silently notify nobody on a call's first publish.
+    //
+    // The whole chain is off the critical path and swallows its own errors: a
+    // classification we could not make must never fail a publish. Imported
+    // lazily for the same reason as the alert service below.
+    void (async () => {
+      try {
+        const { classifyFundingCall } = await import('@/lib/funding/disciplineClassifier');
+        await classifyFundingCall(fundingCallId);
+        const { notifyCoveringOfficers } = await import('@/lib/fundingDept/newCallNoticeService');
+        await notifyCoveringOfficers(fundingCallId);
+      } catch (error) {
+        console.warn(
+          `[CLASSIFY] Could not classify or route call ${fundingCallId}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    })();
+
     // Alert matched researchers in the background; a publish must never fail
     // or wait on notification fan-out. Imported lazily so the catalog module
     // doesn't pull in the researcher-search stack at load time.

@@ -30,6 +30,8 @@ vi.mock('@/lib/reviewer/usage', () => ({
 }))
 
 import {
+  landscapeCacheOf,
+  landscapeIsReusable,
   landscapeNoveltyInputHash,
   shouldReuseLandscape,
 } from '@/lib/reviewer/reportGeneration'
@@ -130,5 +132,43 @@ describe('shouldReuseLandscape', () => {
   it('is disabled by the kill switch', () => {
     process.env.REVIEWER_LANDSCAPE_REUSE = 'false'
     expect(shouldReuseLandscape(prevReport(), hash, NOW)).toBe(false)
+  })
+})
+
+describe('landscapeCacheOf', () => {
+  it('reads a landscape parked by a run whose panel report failed', () => {
+    const parked = {
+      landscape_cache: { landscape: { status: 'ok' }, built_at: '2026-08-24T11:00:00Z' },
+    }
+    expect(landscapeCacheOf(parked)).toEqual({
+      landscape: { status: 'ok' },
+      built_at: '2026-08-24T11:00:00Z',
+    })
+  })
+
+  it('is null when nothing was parked', () => {
+    expect(landscapeCacheOf(null)).toBeNull()
+    expect(landscapeCacheOf({})).toBeNull()
+    expect(landscapeCacheOf({ landscape_cache: {} })).toBeNull()
+  })
+})
+
+describe('landscapeIsReusable', () => {
+  const hash = landscapeNoveltyInputHash(hashInput())
+
+  it('accepts a parked landscape built moments ago, so the retry does not rebuild it', () => {
+    const parked = { status: 'ok', input_hash: hash }
+    expect(landscapeIsReusable(parked, new Date(NOW.getTime() - 30_000).toISOString(), hash, NOW)).toBe(true)
+  })
+
+  it('rejects a parked landscape whose inputs have since changed', () => {
+    const parked = { status: 'ok', input_hash: 'stale-hash' }
+    expect(landscapeIsReusable(parked, NOW.toISOString(), hash, NOW)).toBe(false)
+  })
+
+  it('rejects a parked landscape that is past the max age', () => {
+    const parked = { status: 'ok', input_hash: hash }
+    const old = new Date(NOW.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString()
+    expect(landscapeIsReusable(parked, old, hash, NOW)).toBe(false)
   })
 })

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import OrgUnitTree, { flattenForSelect, type OrgUnitNode } from '@/components/org/OrgUnitTree'
+import BulkAreaSuggestPanel from '@/components/org/BulkAreaSuggestPanel'
 
 interface Department {
   id: string
@@ -71,6 +72,22 @@ const ADMIN_ROLES = ['OWNER', 'ADMIN', 'SUPER_ADMIN', 'CALL_ADMIN']
 // manage the tree but must not see a Heads button that would 403.
 const HEAD_MANAGER_ROLES = ['OWNER', 'ADMIN']
 const PAGE_SIZE = 50
+
+/** One level-1 group of the discipline catalog, from /api/tenant-admin/research-areas. */
+interface CatalogGroup {
+  level1Code: string
+  level1Name: string
+  areas: Array<{ id: string; level2Code: string; level2Name: string }>
+}
+
+/** A proposed area from the suggest endpoint — never saved until confirmed. */
+interface AreaSuggestion {
+  taxonomyAreaId: string
+  label: string
+  confidence: number
+  matchedTerms: string[]
+  alreadyMapped: boolean
+}
 
 /** Serialized OrgUnitManager from /api/tenant-admin/org-units/[id]/managers. */
 interface ManagerRow {
@@ -165,6 +182,21 @@ export default function TenantFacultyPage() {
   const [managerScope, setManagerScope] = useState<'SUBTREE' | 'UNIT_ONLY'>('SUBTREE')
   const [managerTitle, setManagerTitle] = useState('')
   const [managerSaving, setManagerSaving] = useState(false)
+  // Research areas dialog — sets a unit's discipline profile, which is what
+  // makes "calls relevant to this school" answerable at all.
+  const [areasTarget, setAreasTarget] = useState<{ id: string; name: string } | null>(null)
+  const [catalog, setCatalog] = useState<CatalogGroup[]>([])
+  const [selectedAreaIds, setSelectedAreaIds] = useState<string[]>([])
+  const [areaKeywords, setAreaKeywords] = useState('')
+  const [inheritedAreas, setInheritedAreas] = useState<Array<{ label: string; unit_name: string }>>([])
+  const [areasLoading, setAreasLoading] = useState(false)
+  const [areasSaving, setAreasSaving] = useState(false)
+  const [areasError, setAreasError] = useState<string | null>(null)
+  const [suggestions, setSuggestions] = useState<AreaSuggestion[]>([])
+  const [suggestEvidence, setSuggestEvidence] = useState<string | null>(null)
+  const [suggesting, setSuggesting] = useState<null | 'from_name' | 'from_faculty'>(null)
+  const [areaCounts, setAreaCounts] = useState<Record<string, number>>({})
+  const [bulkOpen, setBulkOpen] = useState(false)
   // Depth-aware shapes from the org-units API. `schools` above is the legacy
   // two-level projection, still used by nothing but kept while callers migrate.
   const [tree, setTree] = useState<OrgUnitNode[]>([])
@@ -182,6 +214,10 @@ export default function TenantFacultyPage() {
   )
 
   const isAdmin = Boolean(user?.roles?.some((role: string) => ADMIN_ROLES.includes(role)))
+  // A unit with no areas is not broken — it simply cannot filter, so its queue
+  // shows the whole catalog. Saying so here is what stops a half-done setup
+  // from looking finished.
+  const mappedUnitCount = units.filter(unit => (areaCounts[unit.id] || 0) > 0).length
   const canManageHeads = Boolean(user?.roles?.some((role: string) => HEAD_MANAGER_ROLES.includes(role)))
 
   const activeFieldFilterCount = Object.values(fieldFilters).filter(Boolean).length
@@ -239,7 +275,9 @@ export default function TenantFacultyPage() {
   useEffect(() => {
     if (!user) return
     setLoading(true)
-    Promise.all([loadSchools(), loadFaculty(0, '', '')]).finally(() => setLoading(false))
+    Promise.all([loadSchools(), loadAreaCounts(), loadFaculty(0, '', '')]).finally(() =>
+      setLoading(false)
+    )
   }, [user, loadSchools, loadFaculty])
 
   // Department / designation lists, built from the roster itself.
@@ -444,6 +482,94 @@ export default function TenantFacultyPage() {
     }
   }
 
+  // Per-unit mapped-area counts, so the tree can flag an unmapped unit without
+  // one request per node.
+  const loadAreaCounts = useCallback(async () => {
+    try {
+      const res = await authFetch('/api/tenant-admin/org-units/research-area-counts')
+      if (!res.ok) return
+      const data = await res.json()
+      setAreaCounts(data.counts || {})
+    } catch {
+      // A missing badge is cosmetic; never block the structure page on it.
+    }
+  }, [authFetch])
+
+  const openAreas = async (id: string, name: string) => {
+    setAreasTarget({ id, name })
+    setAreasError(null)
+    setSuggestions([])
+    setSuggestEvidence(null)
+    setAreasLoading(true)
+    try {
+      const [catalogRes, unitRes] = await Promise.all([
+        authFetch('/api/tenant-admin/research-areas'),
+        authFetch(`/api/tenant-admin/org-units/${id}/research-areas`),
+      ])
+      const catalogData = await catalogRes.json()
+      const unitData = await unitRes.json()
+      if (!catalogRes.ok) throw new Error(catalogData.error || 'Could not load the discipline catalog')
+      if (!unitRes.ok) throw new Error(unitData.error || 'Could not load this unit&apos;s research areas')
+
+      setCatalog(catalogData.groups || [])
+      setSelectedAreaIds((unitData.areas || []).map((area: { taxonomyAreaId: string }) => area.taxonomyAreaId))
+      setAreaKeywords((unitData.keywords || []).join(', '))
+      setInheritedAreas(unitData.inherited || [])
+    } catch (e: any) {
+      setAreasError(e.message)
+    } finally {
+      setAreasLoading(false)
+    }
+  }
+
+  const runSuggest = async (mode: 'from_name' | 'from_faculty') => {
+    if (!areasTarget) return
+    setSuggesting(mode)
+    setAreasError(null)
+    try {
+      const res = await authFetch(`/api/tenant-admin/org-units/${areasTarget.id}/research-areas/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not work out any suggestions')
+      setSuggestions(data.suggestions || [])
+      setSuggestEvidence(data.evidence || null)
+    } catch (e: any) {
+      setAreasError(e.message)
+    } finally {
+      setSuggesting(null)
+    }
+  }
+
+  const saveAreas = async () => {
+    if (!areasTarget) return
+    setAreasSaving(true)
+    setAreasError(null)
+    try {
+      const res = await authFetch(`/api/tenant-admin/org-units/${areasTarget.id}/research-areas`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taxonomyAreaIds: selectedAreaIds,
+          keywords: areaKeywords
+            .split(',')
+            .map(keyword => keyword.trim())
+            .filter(Boolean),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not save the research areas')
+      setAreasTarget(null)
+      await loadAreaCounts()
+    } catch (e: any) {
+      setAreasError(e.message)
+    } finally {
+      setAreasSaving(false)
+    }
+  }
+
   const downloadTemplate = async () => {
     try {
       const res = await authFetch('/api/tenant-admin/faculty/import')
@@ -573,6 +699,22 @@ export default function TenantFacultyPage() {
                 Nest as deep as your organization needs — up to {maxDepth} levels. Use “Add …” on any
                 unit to create one beneath it.
               </p>
+              {isAdmin && units.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={() => setBulkOpen(true)}
+                    className="rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
+                    Suggest research areas for all unmapped
+                  </button>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {mappedUnitCount} of {units.length} units mapped
+                    {mappedUnitCount < units.length
+                      ? ` — the rest see every funding call until they are.`
+                      : ''}
+                  </span>
+                </div>
+              )}
             </div>
 
             {tree.length === 0 ? (
@@ -592,6 +734,8 @@ export default function TenantFacultyPage() {
                   onDelete={openDelete}
                   onAddChild={(parentId, name) => createUnit(name, parentId)}
                   onManageHeads={canManageHeads ? openManagers : undefined}
+                  onManageResearchAreas={isAdmin ? openAreas : undefined}
+                  areaCounts={areaCounts}
                 />
               </div>
             )}
@@ -1157,6 +1301,181 @@ export default function TenantFacultyPage() {
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
               >
                 {managerSaving ? 'Saving…' : 'Appoint'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkOpen && (
+        <BulkAreaSuggestPanel
+          onClose={() => setBulkOpen(false)}
+          onSaved={() => {
+            setBulkOpen(false)
+            void loadAreaCounts()
+          }}
+        />
+      )}
+
+      {/* Research areas modal */}
+      {areasTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+              Research areas for &ldquo;{areasTarget.name}&rdquo;
+            </h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              These decide which funding calls reach this unit. A unit with nothing mapped sees the
+              whole catalog rather than nothing, so it is safe to leave until you get to it.
+            </p>
+
+            {areasError && (
+              <div className="mt-3 rounded-lg bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+                {areasError}
+              </div>
+            )}
+
+            {areasLoading ? (
+              <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading research areas&hellip;</p>
+            ) : catalog.length === 0 ? (
+              <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                No discipline catalog has been loaded for the platform yet, so there is nothing to
+                map to. Ask a platform administrator to load one.
+              </p>
+            ) : (
+              <>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => void runSuggest('from_name')}
+                    disabled={suggesting !== null}
+                    className="rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                  >
+                    {suggesting === 'from_name' ? 'Working&hellip;' : 'Suggest from name'}
+                  </button>
+                  <button
+                    onClick={() => void runSuggest('from_faculty')}
+                    disabled={suggesting !== null}
+                    className="rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                  >
+                    {suggesting === 'from_faculty' ? 'Working&hellip;' : 'Suggest from faculty'}
+                  </button>
+                  <span className="self-center text-xs text-gray-500 dark:text-gray-400">
+                    Suggestions are only proposals &mdash; nothing is saved until you press Save.
+                  </span>
+                </div>
+
+                {suggestEvidence && (
+                  <div className="mt-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3">
+                    <p className="text-xs text-blue-800 dark:text-blue-200">{suggestEvidence}</p>
+                    {suggestions.length === 0 ? (
+                      <p className="mt-2 text-sm text-blue-900 dark:text-blue-100">
+                        Nothing matched confidently. Pick the areas by hand below.
+                      </p>
+                    ) : (
+                      <ul className="mt-2 space-y-1.5">
+                        {suggestions.map(suggestion => {
+                          const chosen = selectedAreaIds.includes(suggestion.taxonomyAreaId)
+                          return (
+                            <li
+                              key={suggestion.taxonomyAreaId}
+                              className="flex flex-wrap items-center gap-2 text-sm"
+                            >
+                              <span className="text-gray-900 dark:text-white">{suggestion.label}</span>
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                matched {suggestion.matchedTerms.slice(0, 3).join(', ')}
+                              </span>
+                              <button
+                                onClick={() =>
+                                  setSelectedAreaIds(current =>
+                                    chosen
+                                      ? current.filter(id => id !== suggestion.taxonomyAreaId)
+                                      : [...current, suggestion.taxonomyAreaId]
+                                  )
+                                }
+                                className="ml-auto text-xs text-blue-700 dark:text-blue-300 hover:underline"
+                              >
+                                {chosen ? 'Remove' : 'Add'}
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {inheritedAreas.length > 0 && (
+                  <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                    Already covered from above: {inheritedAreas.map(row => row.label).join(', ')}.
+                  </p>
+                )}
+
+                <div className="mt-4 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                  {catalog.map(group => (
+                    <div key={group.level1Code} className="mb-3 last:mb-0">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        {group.level1Name}
+                      </p>
+                      <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                        {group.areas.map(area => (
+                          <label
+                            key={area.id}
+                            className="flex items-start gap-2 text-sm text-gray-800 dark:text-gray-200"
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5"
+                              checked={selectedAreaIds.includes(area.id)}
+                              onChange={event =>
+                                setSelectedAreaIds(current =>
+                                  event.target.checked
+                                    ? [...current, area.id]
+                                    : current.filter(id => id !== area.id)
+                                )
+                              }
+                            />
+                            <span>{area.level2Name || group.level1Name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Local keywords
+                  </label>
+                  <input
+                    type="text"
+                    value={areaKeywords}
+                    onChange={event => setAreaKeywords(event.target.value)}
+                    placeholder="tribal livelihoods, millet processing"
+                    className="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Comma-separated. For specialities the shared catalog has no room for &mdash;
+                    matched against a call&apos;s own topic tags.
+                  </p>
+                </div>
+              </>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setAreasTarget(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void saveAreas()}
+                disabled={areasSaving || areasLoading}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+              >
+                {areasSaving
+                  ? 'Saving&hellip;'
+                  : 'Save ' + selectedAreaIds.length + ' area' + (selectedAreaIds.length === 1 ? '' : 's')}
               </button>
             </div>
           </div>

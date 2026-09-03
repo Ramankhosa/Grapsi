@@ -28,6 +28,8 @@ interface ChaseRow {
   assignee: { id: string; name: string } | null
   assignedBy: { id: string; name: string; isMe: boolean } | null
   school: string | null
+  /** The assignee's unit, for the dossier link. */
+  schoolId?: string | null
   call: { id: string; title: string; agency: string | null } | null
   lastContact: { note: string; kind: string; happenedAt: string; author: string | null } | null
   pendingReminder: {
@@ -465,7 +467,11 @@ export default function ChaseQueuePage() {
                     <div className="flex shrink-0 flex-col items-end gap-1.5">
                       <span className="nk-sub">{formatDate(row.deadlineAt)}</span>
                       <Link
-                        href="/funding-dept/assignments"
+                        href={
+                          row.call
+                            ? `/funding-dept/calls/${row.call.id}${row.schoolId ? `?school=${row.schoolId}` : ''}`
+                            : '/funding-dept/assignments'
+                        }
                         className="nk-btn-secondary nk-btn-sm"
                       >
                         Open

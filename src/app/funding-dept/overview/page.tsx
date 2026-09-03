@@ -32,6 +32,8 @@ interface MemberRow {
   total: number
   followUpsLast30Days: number
   overdueReminders: number
+  /** Relevant open calls in this member's schools that nobody is on yet. */
+  pendingInSchools: number
 }
 
 /** A school row with the load the coverage editor does not carry. */
@@ -47,6 +49,15 @@ interface SchoolRow {
   awarded: number
   faculty: number
   busyFaculty: number
+  mappedAreas: number
+  isUnmapped: boolean
+  relevantOpen: number
+  /** Work in hand, overdue or not. `active` excludes anything past its date. */
+  live: number
+  pending: number
+  shortlisted: number
+  awardAmount: number
+  lastContactAt: string | null
 }
 
 interface OverviewData {
@@ -63,6 +74,25 @@ interface OverviewData {
     declined: number
     submitted: number
   }
+  departmentTotals: {
+    openCalls: number
+    unclassifiedCalls: number
+    unmappedSchools: number
+    pending: number
+    overdue: number
+    live: number
+    submitted: number
+    awarded: number
+    awardAmount: number
+  }
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
 }
 
 export default function FundingDeptOverviewPage() {
@@ -266,6 +296,31 @@ export default function FundingDeptOverviewPage() {
     { label: 'Submitted', value: totals?.submitted ?? 0, hint: 'applications recorded' },
   ]
 
+  const dept = data?.departmentTotals
+  // The discipline funnel, which the assignment rollup above cannot see: a
+  // school with a hundred untouched relevant calls scores zero in every card
+  // that counts assignments.
+  const reachStats = [
+    {
+      label: 'Needs somebody',
+      value: dept?.pending ?? 0,
+      hint: 'relevant open calls nobody is on',
+      tone: (dept?.pending ?? 0) > 0 ? ('warn' as const) : ('neutral' as const),
+    },
+    { label: 'Open calls', value: dept?.openCalls ?? 0, hint: 'in the catalog right now' },
+    {
+      label: 'Unclassified',
+      value: dept?.unclassifiedCalls ?? 0,
+      hint: 'shown to every school until classified',
+    },
+    {
+      label: 'Unmapped schools',
+      value: dept?.unmappedSchools ?? 0,
+      hint: 'no disciplines, so no filtering',
+      tone: (dept?.unmappedSchools ?? 0) > 0 ? ('warn' as const) : ('neutral' as const),
+    },
+  ]
+
   return (
     <main className="nk-ground nk-wash">
       <div className="nk-grid absolute inset-x-0 top-0 h-56" aria-hidden />
@@ -288,6 +343,19 @@ export default function FundingDeptOverviewPage() {
 
         <SummaryCards stats={stats} />
 
+        <div className="mt-3">
+          <SummaryCards stats={reachStats} />
+        </div>
+        {(dept?.unmappedSchools ?? 0) > 0 && (
+          <p className="nk-sub mt-2">
+            An unmapped school sees the whole catalog rather than nothing —{' '}
+            <Link href="/tenant-admin/faculty" className="underline">
+              map its disciplines
+            </Link>{' '}
+            to make its pendency meaningful.
+          </p>
+        )}
+
         <section className="nk-panel mt-6 overflow-hidden">
           <div className="nk-panel-head">
             <div>
@@ -304,7 +372,17 @@ export default function FundingDeptOverviewPage() {
             <table className="min-w-full">
               <thead>
                 <tr className="border-b border-nickel-200 bg-nickel-50">
-                  {['Member', 'Schools', 'Active', 'Submitted', 'Overdue', 'Declined', 'Follow-ups', 'Due nudges'].map(
+                  {[
+                    'Member',
+                    'Schools',
+                    'Needs somebody',
+                    'Active',
+                    'Submitted',
+                    'Overdue',
+                    'Declined',
+                    'Follow-ups',
+                    'Due nudges',
+                  ].map(
                     (heading) => (
                       <th
                         key={heading}
@@ -389,6 +467,15 @@ export default function FundingDeptOverviewPage() {
                       <td className="nk-mono px-4 py-3 text-right text-nickel-700">
                         {member.schoolCount}
                       </td>
+                      <td className="nk-mono px-4 py-3 text-right">
+                        {member.pendingInSchools > 0 ? (
+                          <span className="font-medium text-cobalt-700">
+                            {member.pendingInSchools}
+                          </span>
+                        ) : (
+                          <span className="nk-sub">0</span>
+                        )}
+                      </td>
                       <td className="nk-mono px-4 py-3 text-right text-nickel-900">{member.active}</td>
                       <td className="nk-mono px-4 py-3 text-right text-nickel-700">
                         {member.submitted}
@@ -420,9 +507,11 @@ export default function FundingDeptOverviewPage() {
         <section className="nk-panel mt-6">
           <div className="nk-panel-head">
             <div>
-              <h2 className="nk-title">Load by school</h2>
+              <h2 className="nk-title">Schools</h2>
               <p className="nk-sub">
-                Where the work actually sits — the member table above counts officers, not schools
+                Sorted by what needs somebody. That column is the one the assignment counts cannot
+                show — a school with nothing to do and a school ignoring fifty calls both read zero
+                everywhere else.
               </p>
             </div>
           </div>
@@ -430,7 +519,18 @@ export default function FundingDeptOverviewPage() {
             <table className="min-w-full">
               <thead>
                 <tr className="border-b border-nickel-200 bg-nickel-50">
-                  {['School', 'Covered by', 'Faculty', 'Engaged', 'Active', 'Overdue', 'Submitted', 'Awarded'].map(
+                  {[
+                    'School',
+                    'Covered by',
+                    'Areas',
+                    'Relevant',
+                    'Needs somebody',
+                    'Live',
+                    'Overdue',
+                    'Submitted',
+                    'Awarded',
+                    'Last contact',
+                  ].map(
                     (heading) => (
                       <th key={heading} className="nk-eyebrow px-4 py-2.5 text-left">
                         {heading}
@@ -455,17 +555,27 @@ export default function FundingDeptOverviewPage() {
                         <span className="nk-badge nk-badge-warn">nobody</span>
                       )}
                     </td>
-                    <td className="nk-sub px-4 py-3 tabular-nums">{school.faculty}</td>
                     <td className="px-4 py-3 tabular-nums">
-                      <span className="nk-sub">
-                        {school.busyFaculty}
-                        {school.faculty > 0 ? ` of ${school.faculty}` : ''}
-                      </span>
-                      {school.faculty > 0 && school.busyFaculty === 0 ? (
-                        <span className="nk-badge nk-badge-warn ml-2">nobody engaged</span>
-                      ) : null}
+                      {school.isUnmapped ? (
+                        <span className="nk-badge nk-badge-warn">none</span>
+                      ) : (
+                        <span className="nk-sub">{school.mappedAreas}</span>
+                      )}
                     </td>
-                    <td className="px-4 py-3 tabular-nums">{school.active}</td>
+                    <td className="nk-sub px-4 py-3 tabular-nums">{school.relevantOpen}</td>
+                    <td className="px-4 py-3 tabular-nums">
+                      {school.pending > 0 ? (
+                        <Link
+                          href={`/funding-dept/queue?orgUnitId=${school.id}&state=pending`}
+                          className="font-medium text-cobalt-700 hover:underline"
+                        >
+                          {school.pending}
+                        </Link>
+                      ) : (
+                        <span className="nk-sub">0</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">{school.live}</td>
                     <td className="px-4 py-3 tabular-nums">
                       {school.missed > 0 ? (
                         <span className="font-medium text-red-700">{school.missed}</span>
@@ -474,7 +584,15 @@ export default function FundingDeptOverviewPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 tabular-nums">{school.submitted}</td>
-                    <td className="px-4 py-3 tabular-nums">{school.awarded}</td>
+                    <td className="px-4 py-3 tabular-nums">
+                      {school.awarded}
+                      {school.awardAmount > 0 ? (
+                        <span className="nk-sub"> · ₹{school.awardAmount.toLocaleString('en-IN')}</span>
+                      ) : null}
+                    </td>
+                    <td className="nk-sub px-4 py-3">
+                      {school.lastContactAt ? formatDate(school.lastContactAt) : 'never'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

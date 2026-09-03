@@ -35,6 +35,22 @@ export interface ReminderSweepResult {
  * deputy the tickler still fires to the author: an unread reminder beats a
  * silently dropped one.
  */
+/**
+ * The school root an org unit sits under. Coverage rows (and therefore
+ * deputies) are keyed by the root, while an assignment snapshots the assignee's
+ * own unit — usually a department. Looking a deputy up by the department id
+ * never matched, so rerouting during leave silently did nothing. Resolve the
+ * root first.
+ */
+async function schoolRootFor(orgUnitId: string | null): Promise<string | null> {
+  if (!orgUnitId) return null
+  const unit = await prisma.tenantOrgUnit.findUnique({
+    where: { id: orgUnitId },
+    select: { path: true },
+  })
+  return unit?.path?.[0] || orgUnitId
+}
+
 async function ticklerRecipients(
   tenantId: string,
   authorUserId: string,
@@ -45,12 +61,13 @@ async function ticklerRecipients(
     select: { away_from: true, away_until: true },
   })
   if (!author || !isMemberAway(author)) return [authorUserId]
-  if (!orgUnitId) return [authorUserId]
+  const rootId = await schoolRootFor(orgUnitId)
+  if (!rootId) return [authorUserId]
 
   const deputy = await prisma.fundingDeptSchoolAssignment.findFirst({
     where: {
       tenant_id: tenantId,
-      org_unit_id: orgUnitId,
+      org_unit_id: rootId,
       is_deputy: true,
       member: { is_active: true },
     },
@@ -88,11 +105,16 @@ export async function sweepDueReminders(
     where: { remind_at: { not: null, lte: now }, reminder_sent_at: null },
     include: {
       created_by: { select: { id: true, name: true, email: true } },
+      // Present on call-level rows (no assignment yet); also stamped on
+      // assignment-level rows, so the dossier link below can always be built.
+      funding_call: { select: { id: true, title: true, scheme_title: true } },
+      org_unit: { select: { id: true, name: true } },
       assignment: {
         select: {
           id: true,
           status: true,
           tenant_id: true,
+          funding_call_id: true,
           deadline_at: true,
           assignee_user_id: true,
           assignee_org_unit_id: true,
@@ -120,7 +142,38 @@ export async function sweepDueReminders(
     }
 
     const assignment = followUp.assignment
-    if (!assignment || CLOSED_STATUSES.has(assignment.status)) {
+
+    if (!assignment) {
+      // A call-level tickler: chasing recorded against a (call, school) before
+      // anyone was assigned. There is no faculty member to remind, so this is
+      // always the author's own nudge — routed to the deputy while they are away.
+      const callTitle =
+        followUp.funding_call?.scheme_title || followUp.funding_call?.title || 'a funding call'
+      const schoolName = followUp.org_unit?.name
+      const recipients = await ticklerRecipients(
+        followUp.tenant_id,
+        followUp.created_by_user_id,
+        followUp.org_unit_id
+      )
+      await notifyQuietly({
+        tenantId: followUp.tenant_id,
+        userIds: recipients,
+        title: `Follow up on: ${callTitle}${schoolName ? ` (${schoolName})` : ''}`,
+        body: followUp.note,
+        category: 'DEADLINE',
+        linkUrl:
+          followUp.funding_call_id && followUp.org_unit_id
+            ? `/funding-dept/calls/${followUp.funding_call_id}?school=${followUp.org_unit_id}`
+            : '/funding-dept/queue',
+      })
+      result.sentToMember += 1
+      if (recipients.length > 1 || recipients[0] !== followUp.created_by_user_id) {
+        result.reroutedToDeputy += 1
+      }
+      continue
+    }
+
+    if (CLOSED_STATUSES.has(assignment.status)) {
       // Already stamped above, so a reminder for work that closed in the
       // meantime quietly retires instead of nagging about a finished call.
       result.skippedClosed += 1
@@ -169,6 +222,7 @@ export async function sweepDueReminders(
       // faculty member hears nothing. If they are on leave it goes to whoever
       // is deputising for that school instead — an unread tickler in an absent
       // officer's inbox is the silence this is meant to prevent.
+      const assigneeRoot = await schoolRootFor(assignment.assignee_org_unit_id)
       const recipients = await ticklerRecipients(
         assignment.tenant_id,
         followUp.created_by_user_id,
@@ -180,7 +234,9 @@ export async function sweepDueReminders(
         title: `Follow up on: ${callTitle}`,
         body: `${assignment.assignee?.name || assignment.assignee?.email || 'The assignee'} — ${followUp.note}`,
         category: 'DEADLINE',
-        linkUrl: '/funding-dept/assignments',
+        linkUrl: assigneeRoot
+          ? `/funding-dept/calls/${assignment.funding_call_id}?school=${assigneeRoot}`
+          : '/funding-dept/assignments',
         assignmentId: assignment.id,
       })
       result.sentToMember += 1

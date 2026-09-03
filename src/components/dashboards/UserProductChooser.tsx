@@ -14,6 +14,7 @@ import {
   Compass,
   FileSearch,
   FileText,
+  Filter,
   GraduationCap,
   LayoutDashboard,
   Lock,
@@ -185,6 +186,13 @@ const fundingDeptGroup: ProductGroup = {
       description: 'Deadlines, overdue calls and the follow-ups you scheduled.',
       href: '/funding-dept',
       icon: Compass,
+      tag: 'Department'
+    },
+    {
+      title: "My Schools' Calls",
+      description: "Open calls matching your schools' disciplines that still need somebody.",
+      href: '/funding-dept/queue',
+      icon: Filter,
       tag: 'Department'
     },
     {

@@ -8,6 +8,12 @@ import {
   parseReviewerScore,
 } from '@/lib/reviewer/content';
 import {
+  hasUsableKeys,
+  looksTruncated,
+  parseReviewerModelJson,
+  ReviewerModelJsonError,
+} from '@/lib/reviewer/modelJson';
+import {
   buildReviewerPromptScope,
   dedupeStrings,
   normalizeKey,
@@ -19,6 +25,39 @@ import { BUCKET_ORDER, resolveBucketKey } from '@/lib/reviewer/buckets';
 
 const GRANT_REVIEWER_FULL_REVIEW_STAGE = 'GRANT_REVIEWER_FULL_REVIEW';
 const GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL = 'gemini-2.5-pro';
+
+/**
+ * Appended when a first reply came back unusable — almost always because it ran
+ * into the stage's output ceiling part-way through a list. Asking for the same
+ * judgement in fewer words is far cheaper than the alternative the users hit
+ * today, which is pressing the button again for another full-price attempt.
+ */
+const COMPACT_RETRY_INSTRUCTION = `### RETRY — YOUR PREVIOUS ANSWER WAS CUT OFF
+The last reply did not finish, so none of it could be used. Answer again, complete this time:
+- Output the JSON object and nothing else. No preamble, no commentary, no code fence.
+- Keep every string under 40 words.
+- At most 4 strengths, 4 weaknesses, 4 suggestions, 4 criterion_scores, 4 compliance_flags and 4 section_recommendations.
+- In addressed_previous_points, cover the most important 6 earlier remarks only, and keep each evidence field to one short clause.
+Finishing the object matters more than covering everything.`;
+
+/**
+ * Read a section review out of a model reply, or null when nothing usable came
+ * back. A repaired (truncated) reply counts only when some of the prose
+ * survived — an object salvaged down to `{}` would otherwise overwrite a real
+ * review with an empty one.
+ */
+function readSectionReviewJson(responseText: unknown): any | null {
+  try {
+    const { value, repaired } = parseReviewerModelJson(responseText);
+    // A bare score is not a review: the section page and the panel prompt both
+    // read the prose. A salvage has to have kept some of it.
+    if (repaired && !hasUsableKeys(value, ['summary', 'weaknesses', 'strengths'])) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
 
 // The funding-call context enters every section review's prompt prefix. For
 // URL-ingested calls it can be the entire scraped document, so an uncapped
@@ -598,48 +637,66 @@ ${section.user_input}${contextSection && !priorSectionSummaries ? `
 ### EARLIER REVIEW OF ${contextSection.section_title}
 ${summarizePreviousReview(contextSection.ai_review_json)}` : ''}`;
 
-  const userPrompt = sectionTail;
-  const gatewayPrompt = `${stablePrefix}\n\n${sectionTail}`;
-
-  let responseText: string | null = null;
-
   const attachments = Array.isArray(input.attachments) ? input.attachments.filter(a => a?.google_file_id) : [];
 
-  if (attachments.length > 0) {
-    // The configured gateway is text-only, so a section with uploaded figures
-    // has to go direct to a multimodal model or the files are silently ignored.
-    responseText = await generateFromGeminiWithFiles(
-      [stablePrefix, sectionTail],
-      attachments,
-      GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL
-    );
-  } else {
-    responseText = await executeConfiguredGrantReviewerReview({
-      prompt: gatewayPrompt,
+  /**
+   * One pass at the model, down the usual ladder: the configured gateway
+   * stage, then the direct provider. `tail` lets the retry below re-ask with
+   * an extra instruction while leaving the cached prefix byte-identical.
+   */
+  const askModel = async (tail: string): Promise<string | null> => {
+    const prompt = `${stablePrefix}\n\n${tail}`;
+
+    if (attachments.length > 0) {
+      // The configured gateway is text-only, so a section with uploaded figures
+      // has to go direct to a multimodal model or the files are silently ignored.
+      return generateFromGeminiWithFiles(
+        [stablePrefix, tail],
+        attachments,
+        GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL
+      );
+    }
+
+    const viaGateway = await executeConfiguredGrantReviewerReview({
+      prompt,
       requestHeaders: input.requestHeaders,
       tenantContext: input.tenantContext,
       stageCode: input.stageCode,
       reviewerCallId: input.callId,
       promptCacheKey: `reviewer:section-review:${promptPrefixCacheKey(stablePrefix)}`,
     });
-  }
+    if (viaGateway) return viaGateway;
 
-  if (!responseText && modelType === 'O') {
-    // Use OpenAI
-    responseText = await generateFromOpenAI(userPrompt, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
-  } else if (!responseText) {
-    responseText = await generateFromGemini(gatewayPrompt, GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL);
-  }
+    if (modelType === 'O') {
+      return generateFromOpenAI(tail, DEFAULT_OPENAI_FALLBACK_MODEL, systemPrompt);
+    }
+    return generateFromGemini(prompt, GRANT_REVIEWER_FULL_REVIEW_FALLBACK_MODEL);
+  };
+
+  let responseText: string | null = await askModel(sectionTail);
 
   // Parse the response into JSON
   let reviewJson: any;
   try {
-    // Try to extract JSON from response (might be wrapped in markdown code blocks)
-    const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) || 
-                     responseText.match(/```\n([\s\S]*?)\n```/) ||
-                     [null, responseText];
-                     
-    reviewJson = JSON.parse(jsonMatch[1] || responseText);
+    reviewJson = readSectionReviewJson(responseText);
+
+    // A reply that ran out of output budget is the reviewer's most common
+    // failure, and revisions provoke it most: they must account for every
+    // earlier remark on top of a full review. Rather than handing the user a
+    // 500 and letting them pay for the whole call again — which is what the
+    // support reports describe — re-ask once for a shorter answer.
+    if (!reviewJson) {
+      console.warn(`[Reviewer] Unusable review JSON for ${section.section_title}; re-asking once for a compact answer.`);
+      responseText = await askModel(`${sectionTail}\n\n${COMPACT_RETRY_INSTRUCTION}`);
+      reviewJson = readSectionReviewJson(responseText);
+    }
+
+    if (!reviewJson) {
+      throw new ReviewerModelJsonError('No usable JSON in either attempt', {
+        truncated: looksTruncated(String(responseText || '')),
+        sample: String(responseText || '').slice(-400),
+      });
+    }
 
     // Ensure we have all expected fields
     reviewJson.score = parseReviewerScore(reviewJson.score);
@@ -706,6 +763,17 @@ ${summarizePreviousReview(contextSection.ai_review_json)}` : ''}`;
       isImprovement: isImprovement
     };
   } catch (error) {
+    if (error instanceof ReviewerModelJsonError) {
+      console.error(
+        `[Reviewer] Both review attempts for ${section.section_title} were unusable`,
+        { truncated: error.truncated, sample: error.sample }
+      );
+      throw new Error(
+        error.truncated
+          ? 'The reviewer model ran out of room before it finished this review. Try again, or split this section into shorter ones.'
+          : 'The reviewer model returned an invalid review. Please retry the review.'
+      );
+    }
     console.error('Error parsing LLM response:', error);
     throw new Error('The reviewer model returned an invalid review. Please retry the review.');
   }

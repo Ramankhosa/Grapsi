@@ -561,21 +561,23 @@ model Tenant {
   memberInvites TenantMemberInvite[]
 
   // Organizational hierarchy, faculty imports and funding call assignments
-  orgUnits          TenantOrgUnit[]
-  orgLevels         TenantOrgLevel[]
-  orgUnitManagers   OrgUnitManager[]
-  callAssignments   CallAssignment[]
-  callCandidates    CallCandidate[]
+  orgUnits             TenantOrgUnit[]
+  orgLevels            TenantOrgLevel[]
+  orgUnitManagers      OrgUnitManager[]
+  callAssignments      CallAssignment[]
+  callCandidates       CallCandidate[]
   assignmentDocuments  AssignmentDocument[]
   assignmentMilestones AssignmentMilestone[]
-  facultyImportJobs FacultyImportJob[]
-  notifications     Notification[]
+  facultyImportJobs    FacultyImportJob[]
+  notifications        Notification[]
 
   // Funding Department: central office members, their school coverage, and the
   // follow-up log they keep against assignments.
   fundingDeptMembers           FundingDeptMember[]
   fundingDeptSchoolAssignments FundingDeptSchoolAssignment[]
   assignmentFollowUps          AssignmentFollowUp[]
+  orgUnitResearchAreas         TenantOrgUnitResearchArea[]
+  callSchoolTriage             CallSchoolTriage[]
 
   @@map("tenants")
 }
@@ -706,22 +708,24 @@ model User {
   sentTenantInvites TenantMemberInvite[] @relation("TenantInviteSender")
 
   // Funding call assignments and faculty imports
-  callAssignmentsReceived CallAssignment[]   @relation("CallAssignmentAssignee")
-  callAssignmentsCreated  CallAssignment[]   @relation("CallAssignmentAssignedBy")
-  callCandidacies         CallCandidate[]    @relation("CallCandidateUser")
-  callCandidatesCreated   CallCandidate[]    @relation("CallCandidateAuthor")
+  callAssignmentsReceived     CallAssignment[]      @relation("CallAssignmentAssignee")
+  callAssignmentsCreated      CallAssignment[]      @relation("CallAssignmentAssignedBy")
+  callCandidacies             CallCandidate[]       @relation("CallCandidateUser")
+  callCandidatesCreated       CallCandidate[]       @relation("CallCandidateAuthor")
   assignmentDocumentsUploaded AssignmentDocument[]  @relation("AssignmentDocumentUploader")
   assignmentMilestonesCreated AssignmentMilestone[] @relation("AssignmentMilestoneAuthor")
-  facultyImportJobs       FacultyImportJob[]
-  notifications           Notification[]     @relation("NotificationRecipient")
-  sentNotifications       Notification[]     @relation("NotificationSender")
-  fundingCallAlerts       FundingCallAlert[]
+  facultyImportJobs           FacultyImportJob[]
+  notifications               Notification[]        @relation("NotificationRecipient")
+  sentNotifications           Notification[]        @relation("NotificationSender")
+  fundingCallAlerts           FundingCallAlert[]
 
   // Funding Department membership and the follow-up log
   fundingDeptMembership       FundingDeptMember[]           @relation("FundingDeptMemberUser")
   fundingDeptMembersAdded     FundingDeptMember[]           @relation("FundingDeptMemberAddedBy")
   fundingDeptSchoolsAssigned  FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolAssigner")
   assignmentFollowUpsAuthored AssignmentFollowUp[]          @relation("AssignmentFollowUpAuthor")
+  orgUnitResearchAreasAdded   TenantOrgUnitResearchArea[]   @relation("OrgUnitResearchAreaAuthor")
+  callSchoolTriageDecisions   CallSchoolTriage[]            @relation("CallSchoolTriageDecider")
 
   @@map("users")
 }
@@ -1156,6 +1160,8 @@ model FundingCall {
   assignments                 CallAssignment[]
   candidates                  CallCandidate[]
   alerts                      FundingCallAlert[]
+  school_triage               CallSchoolTriage[]
+  follow_ups                  AssignmentFollowUp[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -1527,19 +1533,19 @@ model IdeaIntelligenceRun {
 }
 
 model IdeaIntelligenceSession {
-  id                    String   @id @default(cuid())
-  tenantId              String?  @map("tenant_id")
-  userId                String   @map("user_id")
-  projectId             String?  @map("project_id")
-  ideaBankIdeaId        String?  @map("idea_bank_idea_id")
-  anchorPublicProjectId String?  @map("anchor_public_project_id")
-  anchorFundingCallId   String?  @map("anchor_funding_call_id")
-  linkedGrantPrepSessionId String? @map("linked_grant_prep_session_id")
-  title                 String
-  currentVersionId      String?  @map("current_version_id")
-  status                String   @default("ACTIVE")
-  createdAt             DateTime @default(now()) @map("created_at")
-  updatedAt             DateTime @updatedAt @map("updated_at")
+  id                       String   @id @default(cuid())
+  tenantId                 String?  @map("tenant_id")
+  userId                   String   @map("user_id")
+  projectId                String?  @map("project_id")
+  ideaBankIdeaId           String?  @map("idea_bank_idea_id")
+  anchorPublicProjectId    String?  @map("anchor_public_project_id")
+  anchorFundingCallId      String?  @map("anchor_funding_call_id")
+  linkedGrantPrepSessionId String?  @map("linked_grant_prep_session_id")
+  title                    String
+  currentVersionId         String?  @map("current_version_id")
+  status                   String   @default("ACTIVE")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
 
   versions             IdeaIntelligenceVersion[]
   runs                 IdeaIntelligenceRun[]
@@ -2772,6 +2778,7 @@ model ResearchAreaTaxonomyArea {
   upload                ResearchAreaTaxonomyUpload        @relation(fields: [upload_id], references: [id], onDelete: Cascade)
   saved_research_areas  ResearcherSavedResearchArea[]
   funding_call_mappings FundingCallResearchAreaTaxonomy[]
+  org_unit_mappings     TenantOrgUnitResearchArea[]
 
   @@unique([upload_id, level1_code, level2_code], map: "research_area_taxonomy_areas_upload_level_codes_key")
   @@index([upload_id, is_active], map: "idx_research_area_taxonomy_areas_upload_active")
@@ -2799,6 +2806,44 @@ model FundingCallResearchAreaTaxonomy {
   @@index([taxonomy_area_id], map: "idx_funding_call_research_area_taxonomies_area")
   @@index([taxonomy_level1_code, taxonomy_level2_code], map: "idx_funding_call_research_area_taxonomies_codes")
   @@map("funding_call_research_area_taxonomies")
+}
+
+/// The discipline identity of one org unit: which research areas this school,
+/// department or centre actually works in.
+///
+/// This is the other half of the join that makes "calls relevant to my school"
+/// answerable. A call carries FundingCallResearchAreaTaxonomy rows; a unit
+/// carries these; relevance is their intersection, resolved in
+/// src/lib/funding/callUnitRelevance.ts.
+///
+/// Mapping is deliberately per-unit rather than per-school-only: a department
+/// knows its own disciplines better than its school does, and a school's
+/// effective area set is the union over its whole subtree. So mapping only the
+/// departments still gives the school the right reach.
+model TenantOrgUnitResearchArea {
+  id               String @id @default(cuid())
+  tenant_id        String
+  org_unit_id      String
+  taxonomy_area_id String
+
+  /// manual | suggested_name | suggested_faculty — a string, following the
+  /// AssignmentFollowUp.kind convention, so a new provenance needs no
+  /// migration. Suggestions are only ever stored once an admin has confirmed
+  /// them, so this records where a confirmed row came from, not a pending guess.
+  source String @default("manual")
+
+  created_by_user_id String?
+  created_at         DateTime @default(now())
+
+  tenant        Tenant                   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  org_unit      TenantOrgUnit            @relation(fields: [org_unit_id], references: [id], onDelete: Cascade)
+  taxonomy_area ResearchAreaTaxonomyArea @relation(fields: [taxonomy_area_id], references: [id], onDelete: Cascade)
+  created_by    User?                    @relation("OrgUnitResearchAreaAuthor", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([org_unit_id, taxonomy_area_id], map: "tenant_org_unit_research_areas_unit_area_key")
+  @@index([tenant_id, org_unit_id], map: "idx_tenant_org_unit_research_areas_tenant_unit")
+  @@index([taxonomy_area_id], map: "idx_tenant_org_unit_research_areas_area")
+  @@map("tenant_org_unit_research_areas")
 }
 
 // Tenant-defined organizational hierarchy of arbitrary depth. Roots have a null
@@ -2834,24 +2879,33 @@ model TenantOrgUnit {
   /// migration 20260806160000). Never write it by hand: ~150 scripts and the
   /// faculty importer create units, and a trigger is the only thing they cannot
   /// forget. src/lib/orgUnits/tree.ts#rebuildPaths repairs it if it ever drifts.
-  path  String[] @default([])
+  path        String[] @default([])
   /// Depth from the root: 0 for roots. Equals array_length(path, 1) - 1.
-  depth Int      @default(0)
+  depth       Int      @default(0)
   /// Per-unit override of the tenant's level name, for ragged trees (e.g. a
   /// Centre sitting at the same depth as a School). Falls back to TenantOrgLevel.
-  level_label  String?
+  level_label String?
+
+  /// Local vocabulary the shared discipline catalog cannot express — a centre's
+  /// speciality, a regional theme ("tribal livelihoods"). Matched against a
+  /// call's free-text `disciplines[]` as the `keyword` relevance tier, so a
+  /// school stays reachable for work no taxonomy area covers.
+  keywords String[] @default([])
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  tenant              Tenant              @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  parent              TenantOrgUnit?      @relation("OrgUnitHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
-  children            TenantOrgUnit[]     @relation("OrgUnitHierarchy")
-  researcher_profiles  ResearcherProfile[]
-  managers             OrgUnitManager[]
-  assignee_of          CallAssignment[]              @relation("AssignmentAssigneeUnit")
-  assigner_of          CallAssignment[]              @relation("AssignmentAssignerUnit")
+  tenant                Tenant                        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  parent                TenantOrgUnit?                @relation("OrgUnitHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
+  children              TenantOrgUnit[]               @relation("OrgUnitHierarchy")
+  researcher_profiles   ResearcherProfile[]
+  managers              OrgUnitManager[]
+  assignee_of           CallAssignment[]              @relation("AssignmentAssigneeUnit")
+  assigner_of           CallAssignment[]              @relation("AssignmentAssignerUnit")
   funding_dept_coverage FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolUnit")
+  research_areas        TenantOrgUnitResearchArea[]
+  call_triage           CallSchoolTriage[]
+  follow_ups            AssignmentFollowUp[]          @relation("FollowUpOrgUnit")
 
   // NOTE: Postgres treats NULLs as distinct, so this constraint only enforces
   // uniqueness for non-root units. Root-name uniqueness is enforced by the
@@ -3009,18 +3063,18 @@ model CallAssignment {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  tenant        Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  funding_call  FundingCall    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
-  previous_assignment CallAssignment?  @relation("CallAssignmentChain", fields: [previous_assignment_id], references: [id], onDelete: SetNull)
-  superseded_by       CallAssignment?  @relation("CallAssignmentChain")
-  assignee          User           @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
-  assigned_by       User           @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
-  assignee_org_unit TenantOrgUnit? @relation("AssignmentAssigneeUnit", fields: [assignee_org_unit_id], references: [id], onDelete: SetNull)
-  assigner_org_unit TenantOrgUnit? @relation("AssignmentAssignerUnit", fields: [assigner_org_unit_id], references: [id], onDelete: SetNull)
-  notifications     Notification[]
-  follow_ups        AssignmentFollowUp[]
-  documents         AssignmentDocument[]
-  milestones        AssignmentMilestone[]
+  tenant              Tenant                @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call        FundingCall           @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  previous_assignment CallAssignment?       @relation("CallAssignmentChain", fields: [previous_assignment_id], references: [id], onDelete: SetNull)
+  superseded_by       CallAssignment?       @relation("CallAssignmentChain")
+  assignee            User                  @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
+  assigned_by         User                  @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
+  assignee_org_unit   TenantOrgUnit?        @relation("AssignmentAssigneeUnit", fields: [assignee_org_unit_id], references: [id], onDelete: SetNull)
+  assigner_org_unit   TenantOrgUnit?        @relation("AssignmentAssignerUnit", fields: [assigner_org_unit_id], references: [id], onDelete: SetNull)
+  notifications       Notification[]
+  follow_ups          AssignmentFollowUp[]
+  documents           AssignmentDocument[]
+  milestones          AssignmentMilestone[]
 
   @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
   @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
@@ -3046,10 +3100,10 @@ model AssignmentDocument {
 
   /// CONCEPT_NOTE | ENDORSEMENT | PROPOSAL | SANCTION | OTHER. A string rather
   /// than a Postgres enum, like AssignmentFollowUp.kind.
-  kind      String @default("OTHER")
-  file_name String
-  mime_type String?
-  byte_size Int    @default(0)
+  kind         String  @default("OTHER")
+  file_name    String
+  mime_type    String?
+  byte_size    Int     @default(0)
   /// Absolute path on the app server, like FundingImportAsset.storagePath.
   storage_path String
   note         String?
@@ -3082,10 +3136,10 @@ model AssignmentMilestone {
   assignment_id String
 
   /// INSTALMENT | UC | SE | REPORT | OTHER — a string, as above.
-  kind   String @default("OTHER")
-  title  String
-  due_at DateTime?
-  amount Float?
+  kind     String    @default("OTHER")
+  title    String
+  due_at   DateTime?
+  amount   Float?
   currency String?
 
   /// PENDING | SUBMITTED | CLEARED | WAIVED.
@@ -3125,7 +3179,7 @@ model CallCandidate {
   /// SHORTLISTED | APPROACHED | ASSIGNED | DECLINED | PASSED_OVER. A string
   /// rather than a Postgres enum, like AssignmentFollowUp.kind, so a new state
   /// needs no migration.
-  status String @default("SHORTLISTED")
+  status String  @default("SHORTLISTED")
   /// Why they were passed over, or any note the officer wants on the record.
   note   String?
 
@@ -3147,6 +3201,45 @@ model CallCandidate {
   @@index([tenant_id, funding_call_id], map: "idx_call_candidates_tenant_call")
   @@index([tenant_id, user_id], map: "idx_call_candidates_tenant_user")
   @@map("call_candidates")
+}
+
+/// Where one school stands on one call.
+///
+/// CallCandidate is per (call, person) — it answers "who might do this". This
+/// is per (call, school) and answers the prior question the department actually
+/// works through: "does this call concern us at all, and has anyone looked?"
+/// Without it a call that is genuinely irrelevant to a school can never be
+/// cleared, so the pendency count never reaches zero and stops being read.
+///
+/// ASSIGNED is deliberately NOT a status here — it is derived from
+/// CallAssignment at read time, so the two can never disagree.
+model CallSchoolTriage {
+  id              String @id @default(cuid())
+  tenant_id       String
+  funding_call_id String
+  org_unit_id     String
+
+  /// NEW | IN_REVIEW | SHORTLISTED | NOT_RELEVANT. A string rather than a
+  /// Postgres enum, like CallCandidate.status, so a new state needs no
+  /// migration. A missing row means NEW; rows are only written once someone
+  /// acts, so an untouched catalog costs nothing.
+  status String  @default("NEW")
+  note   String?
+
+  decided_by_user_id String?
+  decided_at         DateTime?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call FundingCall   @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  org_unit     TenantOrgUnit @relation(fields: [org_unit_id], references: [id], onDelete: Cascade)
+  decided_by   User?         @relation("CallSchoolTriageDecider", fields: [decided_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([funding_call_id, org_unit_id], map: "call_school_triage_call_unit_key")
+  @@index([tenant_id, org_unit_id, status], map: "idx_call_school_triage_tenant_unit_status")
+  @@index([funding_call_id], map: "idx_call_school_triage_call")
+  @@map("call_school_triage")
 }
 
 // In-app notification delivered to a single user. The app has no other inbox,
@@ -3253,7 +3346,7 @@ model FundingDeptMember {
   title     String?
   is_active Boolean @default(true)
 
-  added_by_user_id String?
+  added_by_user_id    String?
   /// Idempotency stamp for the weekly digest: the job skips anyone stamped
   /// within the last 5 days, so a retried or double-scheduled run cannot
   /// double-send.
@@ -3291,7 +3384,7 @@ model FundingDeptSchoolAssignment {
   assigned_by_user_id String?
   created_at          DateTime @default(now())
 
-  tenant      Tenant            @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  tenant    Tenant  @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
   /// A second, non-exclusive cover for the school. The primary row stays
   /// unique (partial unique index WHERE NOT is_deputy, added in the migration);
   /// deputies are unconstrained so a school can have a standing backup without
@@ -3314,13 +3407,30 @@ model FundingDeptSchoolAssignment {
 /// A row with remind_at set is also a scheduled nudge; the hourly sweep claims
 /// it by stamping reminder_sent_at.
 model AssignmentFollowUp {
-  id                 String @id @default(cuid())
+  id                 String  @id @default(cuid())
   tenant_id          String
-  assignment_id      String
+  /// Null for a CALL-LEVEL note: chasing recorded against a (call, school)
+  /// before anyone has been assigned — "rang the HoD, nobody free yet". The
+  /// earliest and most useful contact happens exactly then, and it had nowhere
+  /// to go while this was required. Enforced by CHECK
+  /// assignment_follow_ups_shape_check (migration 20260904100000): either
+  /// assignment_id is set, or both funding_call_id and org_unit_id are.
+  assignment_id      String?
+  /// Always stamped going forward, on assignment-level rows too (backfilled
+  /// from call_assignments), so one indexed scan reads a call's whole history:
+  /// funding_call_id = ? AND (org_unit_id = ANY(subtree) OR assignment_id IN (…)).
+  funding_call_id    String?
+  /// The school root for a call-level row; the assignee's unit snapshot for an
+  /// assignment-level row. Both sit inside the school's subtree, which is what
+  /// the dossier filters on.
+  org_unit_id        String?
   created_by_user_id String
 
-  /// NOTE | CALL | EMAIL | MEETING | REMINDER. A string rather than a Postgres
-  /// enum, like Notification.category, so new kinds need no migration.
+  /// NOTE | CALL | EMAIL | MEETING | REMINDER | TRIAGE. A string rather than a
+  /// Postgres enum, like Notification.category, so new kinds need no migration.
+  /// TRIAGE rows are written by the queue's triage route so a school's
+  /// "not relevant → restored → shortlisted" history survives (the triage row
+  /// itself only holds the latest state).
   kind        String   @default("NOTE")
   note        String
   happened_at DateTime @default(now())
@@ -3334,12 +3444,17 @@ model AssignmentFollowUp {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  tenant     Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  assignment CallAssignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
-  created_by User           @relation("AssignmentFollowUpAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+  tenant       Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  assignment   CallAssignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  // Cascade, not SetNull: a SetNull on a call-level row would violate the
+  // shape CHECK and make deleting a school throw after its own guards passed.
+  funding_call FundingCall?    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  org_unit     TenantOrgUnit?  @relation("FollowUpOrgUnit", fields: [org_unit_id], references: [id], onDelete: Cascade)
+  created_by   User            @relation("AssignmentFollowUpAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
 
   @@index([assignment_id, happened_at], map: "idx_assignment_follow_ups_assignment")
   @@index([tenant_id, created_by_user_id], map: "idx_assignment_follow_ups_author")
+  @@index([tenant_id, funding_call_id, org_unit_id, happened_at], map: "idx_assignment_follow_ups_call_unit")
   @@map("assignment_follow_ups")
 }
 

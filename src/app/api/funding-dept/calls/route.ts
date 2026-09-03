@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
+import { loadUnitAreaProfile } from '@/lib/funding/callUnitRelevance'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { canReviewDept } from '@/lib/fundingDept/shared'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
@@ -43,9 +44,15 @@ export async function GET(request: NextRequest) {
   // lists below, so every offered value matches at least one call.
   const agency = (searchParams.get('agency') || '').trim()
   const discipline = (searchParams.get('discipline') || '').trim()
+  // Controlled discipline, from the research-area catalog. `discipline` above is
+  // the legacy free-text tag; both are honoured so existing saved filters and
+  // links keep working, but the facet list now offers catalog areas.
+  const researchAreaId = (searchParams.get('researchAreaId') || '').trim()
   const fundingKind = (searchParams.get('fundingKind') || '').trim()
-  // A school: "which calls has anyone in this school been put on". Narrows the
-  // funnel to one school's workload without leaving the per-call view.
+  // A school: every call that is this school's business — the ones someone in
+  // it has been put on, PLUS the ones matching its disciplines that nobody has
+  // touched. The second half is the point: a call with no assignments used to
+  // be invisible in exactly the view that should expose it.
   const orgUnitId = (searchParams.get('orgUnitId') || '').trim()
   // Deadline window in days from now — the "closing soon" triage filter.
   const closingInDays = Number(searchParams.get('closingInDays')) || 0
@@ -99,12 +106,21 @@ export async function GET(request: NextRequest) {
   if (discipline) {
     filters.push({ disciplines: { has: discipline } })
   }
+  if (researchAreaId) {
+    filters.push({
+      research_area_taxonomies: { some: { taxonomy_area_id: researchAreaId } },
+    })
+  }
   if (fundingKind) {
     filters.push({ funding_kinds: { has: fundingKind } })
   }
   if (orgUnitId) {
-    const subtreeIds = await listSubtreeUnitIds(context.tenantId, [orgUnitId])
-    filters.push(
+    const [subtreeIds, profile] = await Promise.all([
+      listSubtreeUnitIds(context.tenantId, [orgUnitId]),
+      loadUnitAreaProfile(context.tenantId, [orgUnitId]),
+    ])
+
+    const assignedHere: Prisma.FundingCallWhereInput =
       subtreeIds.length === 0
         ? { id: '__none__' }
         : {
@@ -115,7 +131,31 @@ export async function GET(request: NextRequest) {
               },
             },
           }
-    )
+
+    if (profile.isUnmapped) {
+      // Nothing mapped for this school, so discipline relevance cannot say
+      // anything. Fall back to the assignment-derived answer this filter has
+      // always given rather than widening to the whole catalog.
+      filters.push(assignedHere)
+    } else {
+      const relevantHere: Prisma.FundingCallWhereInput[] = []
+      if (profile.areaIds.length > 0) {
+        relevantHere.push({
+          research_area_taxonomies: { some: { taxonomy_area_id: { in: profile.areaIds } } },
+        })
+      }
+      if (profile.level1Codes.length > 0) {
+        relevantHere.push({
+          research_area_taxonomies: {
+            some: { taxonomy_level1_code: { in: profile.level1Codes } },
+          },
+        })
+      }
+      if (profile.keywords.length > 0) {
+        relevantHere.push({ disciplines: { hasSome: profile.keywords } })
+      }
+      filters.push({ OR: [assignedHere, ...relevantHere] })
+    }
   }
   if (closingInDays > 0) {
     const until = new Date(now.getTime() + closingInDays * 24 * 60 * 60 * 1000)
@@ -132,6 +172,7 @@ export async function GET(request: NextRequest) {
     const facetRows = await prisma.fundingCall.findMany({
       where: visible,
       select: {
+        id: true,
         agency_name: true,
         agencyName: true,
         disciplines: true,
@@ -144,10 +185,39 @@ export async function GET(request: NextRequest) {
         (left, right) => left.localeCompare(right)
       )
 
+    // Catalog areas actually present on this tenant's visible calls. Offered
+    // alongside the raw tags rather than instead of them: a call classified
+    // into an area is filterable by a name every school shares, while the raw
+    // tag list still covers whatever has not been classified yet.
+    const areaRows = await prisma.$queryRaw<
+      Array<{ taxonomy_area_id: string; label: string; call_count: number }>
+    >(Prisma.sql`
+      SELECT m.taxonomy_area_id,
+             CASE WHEN COALESCE(m.taxonomy_level2_name, '') <> ''
+                  THEN m.taxonomy_level1_name || ' → ' || m.taxonomy_level2_name
+                  ELSE m.taxonomy_level1_name END AS label,
+             COUNT(DISTINCT m.funding_call_id)::int AS call_count
+        FROM funding_call_research_area_taxonomies m
+       WHERE m.funding_call_id = ANY(${
+         facetRows.length > 0
+           ? Prisma.sql`ARRAY[${Prisma.join(
+               facetRows.map((row) => Prisma.sql`${row.id}`)
+             )}]::text[]`
+           : Prisma.sql`ARRAY[]::text[]`
+       })
+       GROUP BY m.taxonomy_area_id, label
+       ORDER BY label ASC
+    `)
+
     return NextResponse.json({
       agencies: sortedUnique(facetRows.map((row) => row.agency_name || row.agencyName)),
       disciplines: sortedUnique(facetRows.flatMap((row) => row.disciplines)),
       fundingKinds: sortedUnique(facetRows.flatMap((row) => row.funding_kinds)),
+      researchAreas: areaRows.map((row) => ({
+        id: row.taxonomy_area_id,
+        label: row.label,
+        callCount: row.call_count,
+      })),
     })
   }
 

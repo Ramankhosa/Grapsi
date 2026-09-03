@@ -7,6 +7,7 @@ import {
   getUnassignedUpcomingCalls,
   getUpcomingDeadlines,
 } from '@/lib/assignments/dashboardService'
+import { canOpenSchoolWork } from '@/lib/fundingDept/shared'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
@@ -33,12 +34,6 @@ export async function GET(
   }
 
   const { scope } = context
-  if (!scope.isTenantWide && !scope.isHead) {
-    return NextResponse.json(
-      { error: 'This view is available to funding-department members and administrators.' },
-      { status: 403 }
-    )
-  }
 
   const unitId = (params.unitId || '').trim()
   const unit = await prisma.tenantOrgUnit.findFirst({
@@ -49,9 +44,9 @@ export async function GET(
     return NextResponse.json({ error: 'School not found.' }, { status: 404 })
   }
 
-  // A scoped caller may only open a school inside their reach — the same fence
-  // the roster and matching draw, so discovery never outruns responsibility.
-  if (!scope.isTenantWide && !scope.managedUnitIds.includes(unit.id)) {
+  // One rule for per-school work (see canOpenSchoolWork): admins and the
+  // department head open any school; everyone else only the ones they cover.
+  if (!canOpenSchoolWork(scope, unit.id)) {
     return NextResponse.json(
       { error: 'That school is outside the ones you cover.' },
       { status: 403 }
@@ -77,6 +72,9 @@ export async function GET(
     getMissedAssignments(filters, 30),
     getUnassignedUpcomingCalls(context.tenantId, {
       scopeUnitIds: unitIds,
+      // Narrowed to this school's disciplines, so the list is what this school
+      // should be doing rather than the tenant's whole open catalog.
+      relevanceUnitIds: [unit.id],
       withinDays: 60,
       limit: 15,
     }),
@@ -143,7 +141,13 @@ export async function GET(
     prisma.assignmentFollowUp.findMany({
       where: {
         tenant_id: context.tenantId,
-        assignment: { assignee_org_unit_id: { in: unitIds } },
+        // Contact on an assignment in this school, or logged against the
+        // school itself before anyone was assigned. A to-one relation filter
+        // alone would drop the second kind — the earliest chasing there is.
+        OR: [
+          { assignment: { assignee_org_unit_id: { in: unitIds } } },
+          { org_unit_id: { in: unitIds } },
+        ],
       },
       select: {
         id: true,
@@ -152,6 +156,8 @@ export async function GET(
         happened_at: true,
         remind_at: true,
         created_by: { select: { id: true, name: true, email: true } },
+        funding_call: { select: { id: true, title: true, scheme_title: true } },
+        org_unit: { select: { id: true, name: true } },
         assignment: {
           select: {
             id: true,
@@ -227,8 +233,15 @@ export async function GET(
       author: row.created_by?.name || row.created_by?.email || null,
       assignmentId: row.assignment?.id ?? null,
       facultyName: row.assignment?.assignee?.name || row.assignment?.assignee?.email || null,
+      // Call-level notes have no assignee; the dossier link still works.
+      callId: row.funding_call?.id ?? null,
+      orgUnitId: row.org_unit?.id ?? null,
       callTitle:
-        row.assignment?.funding_call?.scheme_title || row.assignment?.funding_call?.title || null,
+        row.assignment?.funding_call?.scheme_title ||
+        row.assignment?.funding_call?.title ||
+        row.funding_call?.scheme_title ||
+        row.funding_call?.title ||
+        null,
     })),
   })
 }

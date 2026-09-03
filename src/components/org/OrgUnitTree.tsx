@@ -33,7 +33,10 @@ interface Props {
   onDelete: (id: string, name: string) => void
   onAddChild: (parentId: string, name: string) => void
   onManageHeads?: (id: string, name: string) => void
+  onManageResearchAreas?: (id: string, name: string) => void
   headCounts?: Record<string, number>
+  /** Mapped research-area count per unit, so an unmapped unit is visible at a glance. */
+  areaCounts?: Record<string, number>
 }
 
 function OrgUnitRow({
@@ -44,7 +47,9 @@ function OrgUnitRow({
   onDelete,
   onAddChild,
   onManageHeads,
+  onManageResearchAreas,
   headCounts,
+  areaCounts,
 }: Omit<Props, 'nodes'> & { node: OrgUnitNode }) {
   const [collapsed, setCollapsed] = useState(false)
   const [draftName, setDraftName] = useState('')
@@ -54,6 +59,7 @@ function OrgUnitRow({
   const canNest = node.depth + 1 <= maxDepth - 1
   const childLabel = levelNameForDepth(node.depth + 1)
   const headCount = headCounts?.[node.id] || 0
+  const areaCount = areaCounts?.[node.id] || 0
 
   const submitChild = () => {
     const name = draftName.trim()
@@ -94,6 +100,8 @@ function OrgUnitRow({
               {` · ${node.rollupFacultyCount} faculty`}
               {node.facultyCount !== node.rollupFacultyCount && ` (${node.facultyCount} directly)`}
               {headCount > 0 && ` · ${headCount} head${headCount !== 1 ? 's' : ''}`}
+              {onManageResearchAreas &&
+                ` · ${areaCount > 0 ? `${areaCount} research area${areaCount !== 1 ? 's' : ''}` : 'no research areas'}`}
             </p>
           </div>
         </div>
@@ -113,6 +121,18 @@ function OrgUnitRow({
               className="text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
             >
               Heads
+            </button>
+          )}
+          {onManageResearchAreas && (
+            <button
+              onClick={() => onManageResearchAreas(node.id, node.name)}
+              className={
+                areaCount > 0
+                  ? 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'
+                  : 'text-amber-600 hover:text-amber-800 dark:text-amber-400'
+              }
+            >
+              Research areas
             </button>
           )}
           <button
@@ -165,6 +185,8 @@ function OrgUnitRow({
               onDelete={onDelete}
               onAddChild={onAddChild}
               onManageHeads={onManageHeads}
+              onManageResearchAreas={onManageResearchAreas}
+              areaCounts={areaCounts}
               headCounts={headCounts}
             />
           ))}
