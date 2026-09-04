@@ -63,6 +63,10 @@ loadDotEnv()
 const BASE_URL = (process.env.FUNDING_SCHEDULER_BASE_URL || 'http://127.0.0.1:3010').replace(/\/$/, '')
 const SECRET = process.env.FUNDING_ALERT_CRON_SECRET || ''
 const DIGEST_HOUR = Math.min(Math.max(Number(process.env.FUNDING_DIGEST_HOUR) || 3, 0), 23)
+// Local hour for the once-daily source-monitor sweep. Separated from the
+// digest hour so the watch can run before the working day while digests stay
+// where operators expect them.
+const MONITOR_HOUR = Math.min(Math.max(Number(process.env.FUNDING_MONITOR_HOUR) || 6, 0), 23)
 
 if (!SECRET) {
   console.error(
@@ -135,10 +139,18 @@ function tick() {
   if (now.getHours() === DIGEST_HOUR && minute >= 50 && due('event-user-expiry', daySlot)) {
     void post('/api/platform/users/expire-event-access')
   }
+
+  // The daily watch over monitored funder pages. Deliberately once a day and
+  // early: calls found overnight are queued before anyone starts work, and a
+  // daily rhythm is far gentler on the funders' servers than polling.
+  if (now.getHours() === MONITOR_HOUR && minute >= 10 && due('monitor-sweep', daySlot)) {
+    void post('/api/funding/monitor/sweep')
+  }
 }
 
 console.log(
-  `[funding-scheduler] started — target ${BASE_URL}, digests at ${String(DIGEST_HOUR).padStart(2, '0')}:35 local time`
+  `[funding-scheduler] started — target ${BASE_URL}, digests at ${String(DIGEST_HOUR).padStart(2, '0')}:35, ` +
+    `source-monitor sweep at ${String(MONITOR_HOUR).padStart(2, '0')}:10 local time`
 )
 tick()
 setInterval(tick, 60 * 1000)

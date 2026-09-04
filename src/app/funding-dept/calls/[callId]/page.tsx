@@ -336,6 +336,9 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               {data.triage.status === 'SHORTLISTED' && (
                 <span className="nk-badge nk-badge-ok">Shortlisted</span>
               )}
+              {data.triage.status === 'RELEVANT' && (
+                <span className="nk-badge nk-badge-ok">Pulled into this school</span>
+              )}
               {data.call.isDraft && <span className="nk-badge nk-badge-warn">Draft</span>}
             </div>
           </div>
@@ -356,6 +359,17 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               </select>
             )}
             <div className="flex flex-wrap gap-2">
+              {/* When the classifier put this call elsewhere, the school's own
+                  judgement wins — for this school only. */}
+              {data.relevance.tier === 'none' && data.triage.status !== 'RELEVANT' && (
+                <button
+                  className="nk-btn-secondary nk-btn-sm"
+                  disabled={busy}
+                  onClick={() => void setTriage('RELEVANT')}
+                >
+                  Belongs to this school
+                </button>
+              )}
               {data.triage.status !== 'SHORTLISTED' && data.triage.status !== 'NOT_RELEVANT' && (
                 <button
                   className="nk-btn-secondary nk-btn-sm"

@@ -114,7 +114,11 @@ export async function GET(request: NextRequest) {
 
   const profile = await loadUnitAreaProfile(context.tenantId, [school.id])
   const relevantSql =
-    relevanceMode === 'all' ? Prisma.sql`TRUE` : relevantCallWhereSql(profile, 'fc')
+    relevanceMode === 'all'
+      ? Prisma.sql`TRUE`
+      : // A call this school pinned counts as relevant even when the taxonomy
+        // disagrees — the classification is global, this judgement is local.
+        relevantCallWhereSql(profile, 'fc', { pinnedForUnitId: school.id })
 
   const now = new Date()
   const filters: Prisma.Sql[] = [

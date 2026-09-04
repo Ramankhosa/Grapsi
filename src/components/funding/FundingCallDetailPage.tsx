@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import type { FundingCallDetail } from '@/types/funding'
+import CallResearchAreas from '@/components/funding/CallResearchAreas'
 
 type FundingCallDetailPageProps = {
   callId: string
@@ -417,6 +418,9 @@ export default function FundingCallDetailPage({
                 </div>
               </div>
             </section>
+
+            {/* Which schools this call reaches, and the means to correct it. */}
+            <CallResearchAreas callId={callId} />
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-xl font-semibold">Import Assets</h2>

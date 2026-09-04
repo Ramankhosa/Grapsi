@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic'
  * because a queue that can only grow stops being read.
  */
 
-const TRIAGE_STATUSES = ['NEW', 'IN_REVIEW', 'SHORTLISTED', 'NOT_RELEVANT'] as const
+const TRIAGE_STATUSES = ['NEW', 'IN_REVIEW', 'RELEVANT', 'SHORTLISTED', 'NOT_RELEVANT'] as const
 
 const bodySchema = z.object({
   fundingCallId: z.string().trim().min(1),
@@ -128,6 +128,7 @@ export async function POST(request: NextRequest) {
     const label: Record<string, string> = {
       NEW: 'Restored to the queue',
       IN_REVIEW: 'Marked in review',
+      RELEVANT: `Pulled into ${unit.name} — belongs to this school`,
       SHORTLISTED: `Shortlisted for ${unit.name}`,
       NOT_RELEVANT: `Marked not relevant for ${unit.name}`,
     }

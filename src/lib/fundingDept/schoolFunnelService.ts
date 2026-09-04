@@ -83,7 +83,9 @@ async function funnelForSchool(
   const scopeArray = textArray(scopeIds)
 
   const profile = await loadUnitAreaProfile(tenantId, [school.id])
-  const relevant = relevantCallWhereSql(profile, 'fc')
+  // Same predicate the officer's own queue uses, pin included, so a head's
+  // 'pending' for a school and the officer's tab can never disagree.
+  const relevant = relevantCallWhereSql(profile, 'fc', { pinnedForUnitId: school.id })
 
   const liveAssignments = Prisma.sql`(
     SELECT COUNT(*)::int FROM call_assignments ca

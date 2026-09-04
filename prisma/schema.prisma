@@ -592,6 +592,7 @@ model Tenant {
   assignmentFollowUps          AssignmentFollowUp[]
   orgUnitResearchAreas         TenantOrgUnitResearchArea[]
   callSchoolTriage             CallSchoolTriage[]
+  monitoredSources             MonitoredSource[]
 
   @@map("tenants")
 }
@@ -734,12 +735,15 @@ model User {
   fundingCallAlerts           FundingCallAlert[]
 
   // Funding Department membership and the follow-up log
-  fundingDeptMembership       FundingDeptMember[]           @relation("FundingDeptMemberUser")
-  fundingDeptMembersAdded     FundingDeptMember[]           @relation("FundingDeptMemberAddedBy")
-  fundingDeptSchoolsAssigned  FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolAssigner")
-  assignmentFollowUpsAuthored AssignmentFollowUp[]          @relation("AssignmentFollowUpAuthor")
-  orgUnitResearchAreasAdded   TenantOrgUnitResearchArea[]   @relation("OrgUnitResearchAreaAuthor")
-  callSchoolTriageDecisions   CallSchoolTriage[]            @relation("CallSchoolTriageDecider")
+  fundingDeptMembership       FundingDeptMember[]               @relation("FundingDeptMemberUser")
+  fundingDeptMembersAdded     FundingDeptMember[]               @relation("FundingDeptMemberAddedBy")
+  fundingDeptSchoolsAssigned  FundingDeptSchoolAssignment[]     @relation("FundingDeptSchoolAssigner")
+  assignmentFollowUpsAuthored AssignmentFollowUp[]              @relation("AssignmentFollowUpAuthor")
+  callAreaOverrides           FundingCallResearchAreaTaxonomy[] @relation("CallAreaOverrideAuthor")
+  orgUnitResearchAreasAdded   TenantOrgUnitResearchArea[]       @relation("OrgUnitResearchAreaAuthor")
+  callSchoolTriageDecisions   CallSchoolTriage[]                @relation("CallSchoolTriageDecider")
+  monitoredSourcesOwned       MonitoredSource[]                 @relation("MonitoredSourceOwner")
+  monitoredChangesResolved    MonitoredChange[]                 @relation("MonitoredChangeResolver")
 
   @@map("users")
 }
@@ -2809,11 +2813,17 @@ model FundingCallResearchAreaTaxonomy {
   taxonomy_level1_name String?
   taxonomy_level2_code String?
   taxonomy_level2_name String?
+  /// auto:alias | auto:llm | manual. A `manual` row is a human's correction and
+  /// is never touched by re-classification — see mergeAutoMappings.
   source               String                   @default("manual")
   confidence           Float?
+  /// Who made the correction. Null for machine-written rows, which is what
+  /// distinguishes "the classifier decided this" from "a person overrode it".
+  created_by_user_id   String?
   created_at           DateTime                 @default(now())
   funding_call         FundingCall              @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
   taxonomy_area        ResearchAreaTaxonomyArea @relation(fields: [taxonomy_area_id], references: [id], onDelete: Cascade)
+  created_by           User?                    @relation("CallAreaOverrideAuthor", fields: [created_by_user_id], references: [id], onDelete: SetNull)
 
   @@unique([funding_call_id, taxonomy_area_id], map: "funding_call_research_area_taxonomies_call_area_key")
   @@index([funding_call_id], map: "idx_funding_call_research_area_taxonomies_call")
@@ -3530,6 +3540,7 @@ enum FeatureCode {
   FUNDING_INTELLIGENCE // Funding call intelligence / RAG / idea intelligence (Pro tier)
   GRANT_REVIEW // AI grant review / reviewer module (Pro tier)
   FUNDING_ALERTS // Proactive funding-match alerts (email + in-app) for matched researchers
+  SOURCE_MONITORING // Moni: watch funder webpages for newly posted calls
 }
 
 enum TaskCode {
@@ -8015,6 +8026,118 @@ model SystemPromptTemplate {
 /// Deliberately FK-free: job history must survive user/tenant deletion and is
 /// never joined. `job_key` is a string registry, `counts` stores the endpoint's
 /// response body verbatim so one panel can render differently-shaped payloads.
+/// A funding-source webpage Moni watches for newly posted calls.
+///
+/// tenant_id is null for the platform-curated watch list — funder sites like
+/// DST or ANRF publish the same calls for every institution, so one central
+/// list feeds every tenant's catalog. The column exists so a tenant can later
+/// watch a source of its own without a schema change.
+model MonitoredSource {
+  id                String  @id @default(cuid())
+  tenant_id         String?
+  name              String
+  url               String
+  /// AUTO resolves to FEED or HTML on the first check, once feed discovery ran.
+  mode              String  @default("AUTO")
+  feed_url          String?
+  /// CSS selector scoping the watched region; null watches the whole page.
+  selector          String?
+  /// Daily is the floor — funding calls do not appear hourly and a daily
+  /// rhythm is far gentler on the funders' servers.
+  frequency_minutes Int     @default(1440)
+  keywords          String  @default("")
+  tags              String  @default("")
+  notes             String?
+  /// Whose finds these are: they get the instant alert.
+  owner_user_id     String?
+  status            String  @default("ACTIVE")
+
+  last_checked_at DateTime?
+  last_changed_at DateTime?
+  /// Consecutive failures. Past the alert threshold the source is surfaced as
+  /// needing a manual look rather than failing silently forever.
+  fail_count      Int       @default(0)
+  last_error      String?
+
+  created_at         DateTime @default(now())
+  created_by_user_id String?
+
+  tenant      Tenant?               @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  owner       User?                 @relation("MonitoredSourceOwner", fields: [owner_user_id], references: [id], onDelete: SetNull)
+  snapshots   MonitoredSnapshot[]
+  changes     MonitoredChange[]
+  ignoreRules MonitoredIgnoreRule[]
+
+  @@index([status, last_checked_at], map: "idx_monitored_sources_due")
+  @@index([tenant_id], map: "idx_monitored_sources_tenant")
+  @@map("monitored_sources")
+}
+
+/// One fetch of a source, normalised to text. Kept as the comparison basis and
+/// as evidence — funders quietly edit and remove pages.
+model MonitoredSnapshot {
+  id           String   @id @default(cuid())
+  source_id    String
+  fetched_at   DateTime @default(now())
+  content_hash String
+  text         String
+
+  source MonitoredSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
+
+  @@index([source_id, fetched_at], map: "idx_monitored_snapshots_source")
+  @@map("monitored_snapshots")
+}
+
+/// A detected change awaiting review. Confirming one hands the page to the
+/// funding intake pipeline, which is what turns it into a FundingCall.
+model MonitoredChange {
+  id        String @id @default(cuid())
+  source_id String
+
+  /// Rendered diff: [{ t: "add" | "del" | "ctx", text }].
+  diff       Json
+  /// NEW_OPPORTUNITY | UPDATE | COSMETIC | UNKNOWN — UNKNOWN when triage is off.
+  verdict    String @default("UNKNOWN")
+  confidence Float?
+  /// { summary, opportunities: [{ title, funder, deadline, amount, link }] }.
+  extracted  Json?
+
+  /// NEW | CONFIRMED | DISMISSED | SNOOZED.
+  state               String    @default("NEW")
+  snoozed_until       DateTime?
+  resolved_at         DateTime?
+  resolved_by_user_id String?
+
+  /// Set when a reviewer confirms: the intake job that carries this find into
+  /// the funding catalog, and the call it became.
+  intake_job_id          String?
+  linked_funding_call_id String?
+
+  created_at DateTime @default(now())
+
+  source      MonitoredSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
+  resolved_by User?           @relation("MonitoredChangeResolver", fields: [resolved_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([state, created_at], map: "idx_monitored_changes_queue")
+  @@index([source_id, created_at], map: "idx_monitored_changes_source")
+  @@map("monitored_changes")
+}
+
+/// Learned noise filter: lines matching these patterns are stripped before
+/// hashing, so visitor counters and "last updated" stamps stop waking anyone.
+model MonitoredIgnoreRule {
+  id                 String   @id @default(cuid())
+  source_id          String
+  pattern            String
+  created_at         DateTime @default(now())
+  created_by_user_id String?
+
+  source MonitoredSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
+
+  @@index([source_id], map: "idx_monitored_ignore_rules_source")
+  @@map("monitored_ignore_rules")
+}
+
 model JobRun {
   id      String @id @default(cuid())
   job_key String

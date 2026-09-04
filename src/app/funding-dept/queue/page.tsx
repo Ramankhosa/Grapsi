@@ -101,8 +101,21 @@ export default function FundingDeptQueuePage() {
   const [error, setError] = useState<string | null>(null)
   const [busyCallId, setBusyCallId] = useState<string | null>(null)
 
-  const [schoolId, setSchoolId] = useState('')
-  const [state, setState] = useState<string>('pending')
+  // Seeded from the URL so a link that names a school and a tab lands on it —
+  // the department overview links straight to a school's pending queue, and an
+  // officer's notification links to their own school.
+  const [schoolId, setSchoolId] = useState(() =>
+    typeof window === 'undefined'
+      ? ''
+      : new URLSearchParams(window.location.search).get('orgUnitId') || ''
+  )
+  const [state, setState] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'pending'
+    const wanted = new URLSearchParams(window.location.search).get('state') || ''
+    return (STATES as readonly { key: string }[]).some((row) => row.key === wanted)
+      ? wanted
+      : 'pending'
+  })
   const [showAll, setShowAll] = useState(false)
 
   const load = useCallback(
@@ -326,6 +339,9 @@ export default function FundingDeptQueuePage() {
                             {call.triageStatus === 'NOT_RELEVANT' && (
                               <span className="nk-badge">Not relevant</span>
                             )}
+                            {call.triageStatus === 'RELEVANT' && (
+                              <span className="nk-badge nk-badge-ok">Pulled in</span>
+                            )}
                             {call.triageStatus === 'SHORTLISTED' && (
                               <span className="nk-badge nk-badge-ok">Shortlisted</span>
                             )}
@@ -357,6 +373,20 @@ export default function FundingDeptQueuePage() {
                               Shortlist
                             </button>
                           )}
+                          {/* Only reachable from the "show everything" view: a call
+                              the classifier filed elsewhere is invisible in the
+                              default queue, and this is what makes it stick. */}
+                          {showAll &&
+                            call.relevanceTier === 'none' &&
+                            call.triageStatus !== 'RELEVANT' && (
+                              <button
+                                onClick={() => void setTriage(call.id, 'RELEVANT')}
+                                disabled={busyCallId === call.id}
+                                className="nk-btn-sm nk-btn-secondary"
+                              >
+                                Add to my queue
+                              </button>
+                            )}
                           {call.triageStatus === 'NOT_RELEVANT' ? (
                             <button
                               onClick={() => void setTriage(call.id, 'NEW')}

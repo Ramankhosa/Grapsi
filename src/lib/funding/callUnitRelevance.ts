@@ -134,15 +134,38 @@ export async function loadUnitAreaProfile(
 export function relevantCallWhereSql(
   profile: UnitAreaProfile,
   alias = 'fc',
-  options: { includeBroad?: boolean; includeUnclassified?: boolean } = {}
+  options: {
+    includeBroad?: boolean
+    includeUnclassified?: boolean
+    /**
+     * The school whose own judgement can override the taxonomy. A call this
+     * school marked RELEVANT is in its queue whatever the classifier said —
+     * the escape hatch for a global call whose classification is right for
+     * everyone else and wrong here. Dismissal is handled by the queue's state
+     * ladder, not here, so this clause only ever ADDS.
+     */
+    pinnedForUnitId?: string | null
+  } = {}
 ): Prisma.Sql {
-  const { includeBroad = true, includeUnclassified = true } = options
+  const { includeBroad = true, includeUnclassified = true, pinnedForUnitId = null } = options
+  const callId = Prisma.raw(`${alias}.id`)
+
+  const pinnedSql = pinnedForUnitId
+    ? Prisma.sql`
+      EXISTS (
+        SELECT 1 FROM call_school_triage t
+         WHERE t.funding_call_id = ${callId}
+           AND t.org_unit_id = ${pinnedForUnitId}
+           AND t.status = 'RELEVANT'
+      )`
+    : null
+
   if (profile.isUnmapped) {
     return Prisma.sql`TRUE`
   }
 
-  const callId = Prisma.raw(`${alias}.id`)
   const clauses: Prisma.Sql[] = []
+  if (pinnedSql) clauses.push(pinnedSql)
 
   if (profile.areaIds.length > 0) {
     clauses.push(Prisma.sql`
