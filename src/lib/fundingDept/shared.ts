@@ -6,9 +6,29 @@
  */
 import type { TenantContext } from '@/lib/auth/tenantAccess'
 import type { ManagedScope } from '@/lib/orgUnits/scope'
+import prisma from '@/lib/prisma'
 
 export const FOLLOW_UP_KINDS = ['NOTE', 'CALL', 'EMAIL', 'MEETING', 'REMINDER'] as const
 export type FollowUpKind = (typeof FOLLOW_UP_KINDS)[number]
+
+/**
+ * Where the application itself stands, as opposed to `kind`, which records how
+ * the contact happened. Optional on every follow-up: most notes are just notes.
+ *
+ * SUBMITTED is the only value with a side effect. Logging it on an
+ * assignment-level follow-up marks that assignment COMPLETED through the shared
+ * submission path, which is what makes a submission visible up the hierarchy
+ * without the officer having to re-key it on a second screen.
+ */
+export const FOLLOW_UP_STAGES = ['CONTACTED', 'PREPARING', 'APPROVALS', 'SUBMITTED'] as const
+export type FollowUpStage = (typeof FOLLOW_UP_STAGES)[number]
+
+export const FOLLOW_UP_STAGE_LABELS: Record<FollowUpStage, string> = {
+  CONTACTED: 'Contacted',
+  PREPARING: 'Preparing the proposal',
+  APPROVALS: 'Internal approvals',
+  SUBMITTED: 'Submitted',
+}
 
 export const memberInclude = {
   user: { select: { id: true, name: true, email: true } },
@@ -84,6 +104,7 @@ export function serializeFollowUp(row: any) {
     fundingCallId: row.funding_call_id ?? null,
     orgUnitId: row.org_unit_id ?? null,
     kind: row.kind,
+    stage: row.stage ?? null,
     note: row.note,
     happenedAt: row.happened_at,
     remindAt: row.remind_at,
@@ -151,3 +172,80 @@ export const CANDIDATE_STATUSES = [
 ] as const
 
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number]
+
+/**
+ * The school a unit belongs to: `path[0]`, the root of the org tree branch.
+ *
+ * Coverage rows (and deputy cover) are keyed by the school root, while an
+ * assignment snapshots the assignee's own unit — usually a department. Anything
+ * that resolves "who looks after this work" from an assignment must come
+ * through here first; looking a coverage row up by the department id silently
+ * matches nothing, which is exactly how deputy rerouting was broken before.
+ */
+export async function schoolRootFor(orgUnitId: string | null): Promise<string | null> {
+  if (!orgUnitId) return null
+  const unit = await prisma.tenantOrgUnit.findUnique({
+    where: { id: orgUnitId },
+    select: { path: true },
+  })
+  return unit?.path?.[0] || orgUnitId
+}
+
+/**
+ * The schools a member answers for: their own rota plus anything they deputise
+ * on. Used to clamp what a plain member may read on the department-wide
+ * accountability views — a deputy covering a colleague's school while they are
+ * on leave must be able to see the work they are actually doing.
+ */
+export function memberReachSchoolIds(member: {
+  schools?: Array<{ id: string }>
+  deputySchools?: Array<{ id: string }>
+}): string[] {
+  const ids = new Set<string>()
+  for (const school of member.schools || []) ids.add(school.id)
+  for (const school of member.deputySchools || []) ids.add(school.id)
+  return Array.from(ids)
+}
+
+/**
+ * Everyone in the department who should hear that an application went in: the
+ * member covering the school (primary and deputy) and the department head.
+ *
+ * The assigner already gets told by the assignment route. They are frequently
+ * NOT the covering officer — a head or a colleague may have circulated the
+ * call — and the officer answerable for that school is the person whose
+ * numbers change, so telling only the assigner leaves the accountable one to
+ * find out from a dashboard.
+ */
+export async function submissionWatchers(input: {
+  tenantId: string
+  assigneeOrgUnitId: string | null
+  excludeUserIds?: string[]
+}): Promise<string[]> {
+  const exclude = new Set(input.excludeUserIds || [])
+  const recipients = new Set<string>()
+
+  const rootId = await schoolRootFor(input.assigneeOrgUnitId)
+  if (rootId) {
+    const coverage = await prisma.fundingDeptSchoolAssignment.findMany({
+      where: {
+        tenant_id: input.tenantId,
+        org_unit_id: rootId,
+        member: { is_active: true },
+      },
+      select: { member: { select: { user_id: true } } },
+    })
+    for (const row of coverage) {
+      if (row.member?.user_id) recipients.add(row.member.user_id)
+    }
+  }
+
+  const head = await prisma.fundingDeptMember.findFirst({
+    where: { tenant_id: input.tenantId, is_head: true, is_active: true },
+    select: { user_id: true },
+  })
+  if (head?.user_id) recipients.add(head.user_id)
+
+  for (const userId of exclude) recipients.delete(userId)
+  return Array.from(recipients)
+}

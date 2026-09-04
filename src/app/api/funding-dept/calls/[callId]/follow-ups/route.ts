@@ -7,7 +7,12 @@ import {
   requireTenantScope,
   type TenantScopeContext,
 } from '@/lib/auth/tenantAccess'
-import { FOLLOW_UP_KINDS, canOpenSchoolWork, serializeFollowUp } from '@/lib/fundingDept/shared'
+import {
+  FOLLOW_UP_KINDS,
+  FOLLOW_UP_STAGES,
+  canOpenSchoolWork,
+  serializeFollowUp,
+} from '@/lib/fundingDept/shared'
 import { getMembership } from '@/lib/fundingDept/membershipService'
 import { prisma } from '@/lib/prisma'
 
@@ -32,6 +37,18 @@ export const dynamic = 'force-dynamic'
 const createSchema = z.object({
   orgUnitId: z.string().trim().min(1, 'Choose the school this note is about'),
   kind: z.enum(FOLLOW_UP_KINDS).default('NOTE'),
+  /**
+   * Where the application stands. SUBMITTED is rejected here: a call-level note
+   * is chasing recorded before anyone is assigned, so there is no application
+   * to have been submitted. It goes on the assignment instead.
+   */
+  stage: z
+    .enum(FOLLOW_UP_STAGES)
+    .nullable()
+    .optional()
+    .refine((value) => value !== 'SUBMITTED', {
+      message: 'Record a submission against the assignment, not the school.',
+    }),
   note: z.string().trim().min(1, 'Add a note').max(5000),
   happenedAt: z.string().trim().nullable().optional(),
   remindAt: z.string().trim().nullable().optional(),
@@ -163,6 +180,7 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
       org_unit_id: target.unit.id,
       created_by_user_id: target.context.user.id,
       kind: payload.kind,
+      stage: payload.stage ?? null,
       note: payload.note,
       happened_at: parseDate(payload.happenedAt) || new Date(),
       remind_at: remindAt,

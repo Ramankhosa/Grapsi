@@ -12,6 +12,7 @@ import { canOpenSchoolWork } from '@/lib/fundingDept/shared'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
 import { prisma } from '@/lib/prisma'
 import { researcherSearchService } from '@/lib/services/researcherSearchService'
+import { getReportingPeriod } from '@/lib/tenant/reportingPeriod'
 
 export const dynamic = 'force-dynamic'
 
@@ -292,6 +293,10 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
   const relevance = await relevanceForCalls(profile, [call.id])
   const match = relevance.get(call.id)
 
+  // The window the institution judges activity in. Track record only means
+  // something against a stated period, and the tenant decides what a year is.
+  const period = await getReportingPeriod(context.tenantId)
+
   const liveByUser = new Map(
     liveAssignmentCounts.map((row) => [row.assignee_user_id, row._count._all])
   )
@@ -317,6 +322,42 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       requesterUserId: context.user.id,
       requesterTenantId: context.tenantId,
     })
+    // Track record for the people this call actually surfaced, over the
+    // tenant's period of consideration. Deliberately tenant-wide per person,
+    // not school-scoped: a professor's load is their load wherever the work
+    // came from, and an officer about to add to it needs the true figure.
+    const searchUserIds = (search.results || []).map((result: any) => result.userId)
+    const [periodAssigned, periodSubmitted] =
+      searchUserIds.length > 0
+        ? await Promise.all([
+            prisma.callAssignment.groupBy({
+              by: ['assignee_user_id'],
+              where: {
+                tenant_id: context.tenantId,
+                assignee_user_id: { in: searchUserIds },
+                created_at: { gte: period.start, lte: period.end },
+                status: { not: 'CANCELLED' },
+              },
+              _count: { _all: true },
+            }),
+            prisma.callAssignment.groupBy({
+              by: ['assignee_user_id'],
+              where: {
+                tenant_id: context.tenantId,
+                assignee_user_id: { in: searchUserIds },
+                submitted_at: { gte: period.start, lte: period.end },
+              },
+              _count: { _all: true },
+            }),
+          ])
+        : [[], []]
+    const assignedInPeriodByUser = new Map(
+      periodAssigned.map((row) => [row.assignee_user_id, row._count._all])
+    )
+    const submittedInPeriodByUser = new Map(
+      periodSubmitted.map((row) => [row.assignee_user_id, row._count._all])
+    )
+
     people = (search.results || []).map((result: any) => {
       const candidate = candidateByUser.get(result.userId)
       const live = liveAssignmentByUser.get(result.userId)
@@ -331,6 +372,8 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         matchReason: result.matchReason,
         researchAreas: (result.researchAreas || []).slice(0, 4),
         liveAssignments: liveByUser.get(result.userId) || 0,
+        assignedInPeriod: assignedInPeriodByUser.get(result.userId) || 0,
+        submittedInPeriod: submittedInPeriodByUser.get(result.userId) || 0,
         candidateStatus: candidate?.status ?? null,
         /** Set only while the work is live — this is what hides "Assign". */
         assignmentId: live?.id ?? null,
@@ -421,6 +464,12 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         call.visibility === 'TENANT_PRIVATE' &&
         call.status !== 'PUBLISHED' &&
         call.catalog_status !== 'PUBLISHED',
+    },
+    period: {
+      start: period.start.toISOString(),
+      end: period.end.toISOString(),
+      label: period.label,
+      isDefault: period.isDefault,
     },
     relevance: {
       tier: match?.tier ?? 'none',

@@ -15,6 +15,7 @@ import {
   YAxis,
 } from 'recharts'
 import { useAuth } from '@/lib/auth-context'
+import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 
 interface Summary {
   active: number
@@ -145,8 +146,16 @@ export default function GrantDashboardPage() {
   const [notifySaving, setNotifySaving] = useState(false)
   const [notifyError, setNotifyError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const { me } = useFundingDeptMe()
 
-  const isAdmin = Boolean(user?.roles?.some((role: string) => ADMIN_ROLES.includes(role)))
+  // Roles are the fallback, not the answer. The API has always admitted anyone
+  // whose scope grants report access — a Dean with an org-unit grant, a
+  // department officer covering schools — and gets the same rows, scoped. The
+  // page's hardcoded role list was locking those people out of an endpoint that
+  // would have served them.
+  const isAdmin =
+    me.capabilities.canViewReports ||
+    Boolean(user?.roles?.some((role: string) => ADMIN_ROLES.includes(role)))
 
   /** A School selection expands to its departments — faculty hang off departments. */
   const effectiveOrgUnitIds = useMemo(() => {

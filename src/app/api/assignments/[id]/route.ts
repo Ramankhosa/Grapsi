@@ -12,6 +12,8 @@ import {
   validateStatusTransition,
   type AssignmentStatus,
 } from '@/lib/assignments/shared'
+import { buildSubmissionUpdate } from '@/lib/assignments/submission'
+import { submissionWatchers } from '@/lib/fundingDept/shared'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
 
 export const dynamic = 'force-dynamic'
@@ -240,23 +242,20 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       data.auto_nudge_stages = []
     }
     if (payload.status === 'COMPLETED') {
-      // "Mark complete by providing submission info" — require actual proof.
-      const reference = data.submission_reference ?? record.submission_reference
-      const url = data.submission_url ?? record.submission_url
-      const notes = data.submission_notes ?? record.submission_notes
-      if (!reference && !url && !notes) {
-        return NextResponse.json(
-          {
-            error:
-              'Add submission info (reference number, link or notes) before marking this complete.',
-          },
-          { status: 400 }
-        )
+      // One shared builder owns the proof rule, so this route and the
+      // follow-up stage=SUBMITTED path cannot drift into two definitions of a
+      // submitted application.
+      const submission = buildSubmissionUpdate({
+        record,
+        reference: data.submission_reference,
+        url: data.submission_url,
+        notes: data.submission_notes,
+        submittedAt: data.submitted_at ?? null,
+      })
+      if (!submission.ok) {
+        return NextResponse.json({ error: submission.error }, { status: 400 })
       }
-      data.completed_at = new Date()
-      if (!data.submitted_at && !record.submitted_at) {
-        data.submitted_at = new Date()
-      }
+      Object.assign(data, submission.data)
     } else {
       // Re-opening or cancelling clears completion but keeps the recorded proof.
       data.completed_at = null
@@ -360,6 +359,35 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         createdByUserId: context.user.id,
         excludeUserIds: [context.user.id],
       })
+    }
+  }
+
+  // A submission is the fact the whole hierarchy is waiting on, so it goes
+  // wider than the two parties to the assignment: the officer covering that
+  // school (who is frequently not the assigner) and the department head both
+  // answer for it, and finding out from a dashboard days later is exactly the
+  // gap these views exist to close.
+  if (data.status === 'COMPLETED' && record.status !== 'COMPLETED') {
+    try {
+      const watchers = await submissionWatchers({
+        tenantId: context.tenantId,
+        assigneeOrgUnitId: updated.assignee_org_unit_id,
+        excludeUserIds: [context.user.id, updated.assigned_by_user_id],
+      })
+      if (watchers.length > 0) {
+        await notifyQuietly({
+          tenantId: context.tenantId,
+          userIds: watchers,
+          title: `Submitted: ${callTitle}`,
+          body: `${updated.assignee?.name || updated.assignee?.email || 'The assignee'} has submitted this application.`,
+          category: 'ASSIGNMENT',
+          linkUrl: '/funding-dept/accountability',
+          assignmentId: updated.id,
+          createdByUserId: context.user.id,
+        })
+      }
+    } catch (error) {
+      console.warn('Submission watchers notification failed', error)
     }
   }
 

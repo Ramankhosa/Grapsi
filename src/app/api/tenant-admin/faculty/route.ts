@@ -211,6 +211,15 @@ export async function GET(request: NextRequest) {
 
   // "Pending" = seeded (no password) but has an Employee ID, so they can
   // self-activate. "No ID" = seeded and no Employee ID, so they cannot.
+  // How many publications this person has marked for funding matching. A count,
+  // not the rows: the directory is a list of eighty people, and the titles only
+  // matter once somebody opens one.
+  const PUBLICATION_COUNT = Prisma.sql`(
+    SELECT COUNT(*)::int
+    FROM reference_library ref
+    WHERE ref.user_id = u.id AND ref."isActive" = true AND 'my-publication' = ANY(ref.tags)
+  )`
+
   const HAS_EMPLOYEE_ID = Prisma.sql`rp.employee_id IS NOT NULL AND rp.employee_id <> ''`
   const accessCondition =
     access === 'activated'
@@ -247,6 +256,11 @@ export async function GET(request: NextRequest) {
         keywords: string[]
         orgUnitId: string | null
         hasEmbedding: boolean
+        googleScholarUrl: string | null
+        scopusUrl: string | null
+        orcidUrl: string | null
+        linkedinUrl: string | null
+        publicationCount: number
         activated: boolean
         liveAssignments: number
         lastAssignedAt: Date | null
@@ -264,6 +278,11 @@ export async function GET(request: NextRequest) {
         COALESCE(rp.keywords, ARRAY[]::text[]) AS keywords,
         rp.org_unit_id AS "orgUnitId",
         (rp.embedding IS NOT NULL OR rp.embedding_voyage_1024 IS NOT NULL) AS "hasEmbedding",
+        rp.google_scholar_url AS "googleScholarUrl",
+        rp.scopus_url AS "scopusUrl",
+        rp.orcid_url AS "orcidUrl",
+        rp.linkedin_url AS "linkedinUrl",
+        ${PUBLICATION_COUNT} AS "publicationCount",
         (u."passwordHash" IS NOT NULL) AS activated,
         ${LIVE_ASSIGNMENTS} AS "liveAssignments",
         ${LAST_ASSIGNED} AS "lastAssignedAt"

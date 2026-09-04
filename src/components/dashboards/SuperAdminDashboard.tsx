@@ -10,6 +10,7 @@ import {
   Bell,
   BookMarked,
   Bot,
+  Compass,
   BrainCircuit,
   Building2,
   ChevronDown,
@@ -636,7 +637,7 @@ export default function SuperAdminDashboard() {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-2 py-3">
           <button
             onClick={() => setShowCreateTenant(true)}
             className={`nk-btn-primary w-full ${sidebarCollapsed ? 'px-0' : ''}`}
@@ -768,6 +769,13 @@ export default function SuperAdminDashboard() {
                   >
                     <Home className="h-4 w-4 text-nickel-400" aria-hidden />
                     Main dashboard
+                  </button>
+                  <button
+                    onClick={() => { router.push('/guide'); setShowUserMenu(false) }}
+                    className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] text-nickel-700 transition hover:bg-nickel-100"
+                  >
+                    <Compass className="h-4 w-4 text-nickel-400" aria-hidden />
+                    Where everything is
                   </button>
                   <button
                     onClick={() => { logout(); setShowUserMenu(false) }}

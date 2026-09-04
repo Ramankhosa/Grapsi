@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 
+import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
 import AssignDialog from '@/components/funding-dept/AssignDialog'
 import AssignmentDossier from '@/components/funding-dept/AssignmentDossier'
 import FollowUpPanel from '@/components/funding-dept/FollowUpPanel'
@@ -30,6 +31,10 @@ interface Person {
   matchReason: string | null
   researchAreas: string[]
   liveAssignments: number
+  /** Calls handed to this person inside the tenant's period of consideration. */
+  assignedInPeriod: number
+  /** Proposals they submitted inside that same period. */
+  submittedInPeriod: number
   candidateStatus: string | null
   assignmentId: string | null
   assignmentStatus: string | null
@@ -75,6 +80,7 @@ interface Dossier {
     isDraft: boolean
   }
   relevance: { tier: string; reason: string | null; isUnmapped: boolean }
+  period: { start: string; end: string; label: string; isDefault: boolean }
   triage: { status: string; note: string | null; decidedAt: string | null; decidedBy: string | null }
   queueState: string
   people: Person[]
@@ -144,6 +150,7 @@ export default function CallDossierPage({ params }: { params: { callId: string }
   const [error, setError] = useState<string | null>(null)
   const [schoolId, setSchoolId] = useState('')
   const [assignTarget, setAssignTarget] = useState<Person | null>(null)
+  const [profileTarget, setProfileTarget] = useState<Person | null>(null)
   const [reassignTarget, setReassignTarget] = useState<Assignment | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -404,7 +411,23 @@ export default function CallDossierPage({ params }: { params: { callId: string }
 
         {/* People */}
         <section className="mt-8">
-          <h2 className="nk-title text-lg">People in {data.school.name}</h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="nk-title text-lg">Best matches in {data.school.name}</h2>
+            <p className="nk-sub">
+              Ranked against this call · track record over{' '}
+              <strong>{data.period.label}</strong> ({formatDate(data.period.start)} –{' '}
+              {formatDate(data.period.end)})
+              {data.period.isDefault && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <Link href="/tenant-admin/funding-dept" className="underline">
+                    set your period
+                  </Link>
+                </>
+              )}
+            </p>
+          </div>
           <div className="nk-panel mt-3">
             {data.peopleError ? (
               <p className="nk-sub p-4">{data.peopleError}</p>
@@ -421,10 +444,11 @@ export default function CallDossierPage({ params }: { params: { callId: string }
               </p>
             ) : (
               <ul className="divide-y divide-gray-100 dark:divide-gray-700">
-                {data.people.map((person) => (
+                {data.people.map((person, index) => (
                   <li key={person.userId} className="flex flex-wrap items-start gap-3 p-4">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
+                        <span className="nk-sub tabular-nums">#{index + 1}</span>
                         <span className="text-sm font-medium text-gray-900 dark:text-white">
                           {person.name}
                         </span>
@@ -457,8 +481,26 @@ export default function CallDossierPage({ params }: { params: { callId: string }
                         {person.department || 'Department not recorded'}
                         {person.matchReason ? ` · ${person.matchReason}` : ''}
                       </p>
+                      {/* Load and output over the tenant's stated window, so an
+                          officer weighs "best match" against "already busy" and
+                          "actually submits" before adding to someone's pile. */}
+                      <p className="nk-sub mt-1 tabular-nums">
+                        In {data.period.label}: {person.assignedInPeriod}{' '}
+                        {person.assignedInPeriod === 1 ? 'call' : 'calls'} assigned ·{' '}
+                        {person.submittedInPeriod}{' '}
+                        {person.submittedInPeriod === 1 ? 'proposal' : 'proposals'} submitted
+                      </p>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
+                      {/* Before the actions on purpose: the officer deciding
+                          whether to assign wants the person's publications and
+                          Scholar page first, not after. */}
+                      <button
+                        className="nk-btn-secondary nk-btn-sm"
+                        onClick={() => setProfileTarget(person)}
+                      >
+                        Profile
+                      </button>
                       {!person.assignmentId && (
                         <button
                           className="nk-btn-primary nk-btn-sm"
@@ -638,6 +680,28 @@ export default function CallDossierPage({ params }: { params: { callId: string }
           )}
         </section>
       </div>
+
+      {profileTarget && (
+        <FacultyProfileDrawer
+          userId={profileTarget.userId}
+          fallbackName={profileTarget.name}
+          fallbackHint={profileTarget.department}
+          onClose={() => setProfileTarget(null)}
+        >
+          {!profileTarget.assignmentId && (
+            <button
+              className="nk-btn-primary"
+              onClick={() => {
+                const target = profileTarget
+                setProfileTarget(null)
+                setAssignTarget(target)
+              }}
+            >
+              Assign this call
+            </button>
+          )}
+        </FacultyProfileDrawer>
+      )}
 
       {assignTarget && (
         <AssignDialog

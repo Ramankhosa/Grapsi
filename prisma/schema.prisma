@@ -499,6 +499,20 @@ model Tenant {
   /// existing tenant changes behaviour on deploy.
   org_scope_enforced Boolean @default(false)
 
+  /// The "period of consideration": the window the funding department judges
+  /// faculty activity in. A calendar year for some institutions, an academic
+  /// year (1 Jul - 30 Jun) for others, so it is stored as two explicit dates
+  /// the tenant admin picks rather than a month offset.
+  ///
+  /// Rolled forward by whole years at read time once the window has closed, so
+  /// an academic year set once stays correct next July without anyone
+  /// re-entering it. Null means "not configured": readers fall back to the
+  /// current calendar year.
+  reporting_period_start DateTime?
+  reporting_period_end   DateTime?
+  /// What the institution calls this window ("AY 2026-27"). Display only.
+  reporting_period_label String?
+
   users     User[]
   projects  Project[]
   atiTokens ATIToken[]
@@ -3432,6 +3446,14 @@ model AssignmentFollowUp {
   /// "not relevant → restored → shortlisted" history survives (the triage row
   /// itself only holds the latest state).
   kind        String   @default("NOTE")
+  /// CONTACTED | PREPARING | APPROVALS | SUBMITTED — where the application
+  /// itself stands, as opposed to `kind`, which says how the contact happened.
+  /// Optional: most notes are just notes. A string rather than a Postgres enum
+  /// for the same reason `kind` is. SUBMITTED is the only value with a side
+  /// effect: logging it on an assignment-level row marks that assignment
+  /// COMPLETED through the shared submission path, so the whole hierarchy sees
+  /// the submission without anyone re-keying it.
+  stage       String?
   note        String
   happened_at DateTime @default(now())
 

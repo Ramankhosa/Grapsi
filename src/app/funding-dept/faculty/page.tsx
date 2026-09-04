@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 
@@ -28,7 +29,24 @@ interface FacultyRow {
   activated: boolean
   liveAssignments: number
   lastAssignedAt: string | null
+  googleScholarUrl: string | null
+  scopusUrl: string | null
+  orcidUrl: string | null
+  linkedinUrl: string | null
+  publicationCount: number
 }
+
+/**
+ * The external profiles the app stores. Shown as compact chips on the row so an
+ * officer can open Scholar or Scopus without first opening the person — the
+ * check they most often want is the one that leaves the app.
+ */
+const ROW_LINKS: Array<{ key: keyof FacultyRow; label: string; title: string }> = [
+  { key: 'googleScholarUrl', label: 'GS', title: 'Google Scholar' },
+  { key: 'scopusUrl', label: 'Scopus', title: 'Scopus' },
+  { key: 'orcidUrl', label: 'ORCID', title: 'ORCID' },
+  { key: 'linkedinUrl', label: 'in', title: 'LinkedIn' },
+]
 
 /** Distinct values present in the caller's slice of the roster. */
 interface FacultyFacets {
@@ -80,6 +98,7 @@ export default function DeptFacultyPage() {
 
   const [faculty, setFaculty] = useState<FacultyRow[]>([])
   const [total, setTotal] = useState(0)
+  const [profileTarget, setProfileTarget] = useState<FacultyRow | null>(null)
   const [embedded, setEmbedded] = useState(0)
   const [counts, setCounts] = useState({ activated: 0, pending: 0, noid: 0 })
   const [offset, setOffset] = useState(0)
@@ -484,8 +503,10 @@ export default function DeptFacultyPage() {
                       'Department',
                       'Designation',
                       'Live calls',
+                      'Publications',
                       'Research areas',
                       'Status',
+                      '',
                     ].map((heading) => (
                       <th key={heading} className="nk-eyebrow px-4 py-2.5 text-left">
                         {heading}
@@ -496,13 +517,13 @@ export default function DeptFacultyPage() {
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center">
+                      <td colSpan={10} className="px-4 py-10 text-center">
                         <p className="nk-sub">Loading faculty…</p>
                       </td>
                     </tr>
                   ) : faculty.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center">
+                      <td colSpan={10} className="px-4 py-10 text-center">
                         <p className="nk-sub">No faculty found.</p>
                       </td>
                     </tr>
@@ -514,6 +535,20 @@ export default function DeptFacultyPage() {
                             {person.name || person.email}
                           </p>
                           <p className="nk-sub mt-0.5">{person.email}</p>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {ROW_LINKS.filter((link) => person[link.key]).map((link) => (
+                              <a
+                                key={link.key}
+                                href={person[link.key] as string}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={link.title}
+                                className="nk-badge hover:border-cobalt-400 hover:text-cobalt-700"
+                              >
+                                {link.label} ↗
+                              </a>
+                            ))}
+                          </div>
                         </td>
                         <td className="nk-sub px-4 py-3 tabular-nums">{person.employeeId || '—'}</td>
                         <td className="nk-sub px-4 py-3">{person.school || '—'}</td>
@@ -533,6 +568,22 @@ export default function DeptFacultyPage() {
                             }
                           >
                             {person.liveAssignments}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={
+                              person.publicationCount > 0
+                                ? 'nk-badge tabular-nums'
+                                : 'nk-sub tabular-nums'
+                            }
+                            title={
+                              person.publicationCount > 0
+                                ? 'Publications this person marked for funding matching'
+                                : 'None marked for funding matching \u2014 not proof they have not published'
+                            }
+                          >
+                            {person.publicationCount || '\u2014'}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -569,6 +620,15 @@ export default function DeptFacultyPage() {
                             ) : null}
                           </div>
                         </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            className="nk-btn-secondary nk-btn-sm"
+                            onClick={() => setProfileTarget(person)}
+                          >
+                            Profile
+                          </button>
+                        </td>
                       </tr>
                     ))
                   )}
@@ -601,6 +661,17 @@ export default function DeptFacultyPage() {
               </div>
             ) : null}
           </div>
+        )}
+
+        {profileTarget && (
+          <FacultyProfileDrawer
+            userId={profileTarget.userId}
+            fallbackName={profileTarget.name || profileTarget.email}
+            fallbackHint={[profileTarget.department, profileTarget.school]
+              .filter(Boolean)
+              .join(' \u00b7 ')}
+            onClose={() => setProfileTarget(null)}
+          />
         )}
       </div>
     </main>

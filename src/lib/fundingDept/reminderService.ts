@@ -10,7 +10,7 @@ import prisma from '@/lib/prisma'
 import { sendEmail } from '@/lib/mailer'
 import { assignmentReminderTemplate } from '@/lib/email-templates'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
-import { isMemberAway } from './shared'
+import { isMemberAway, schoolRootFor } from './shared'
 
 /** Statuses where a nudge is pointless — the work is closed or refused. */
 const CLOSED_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'DECLINED'])
@@ -35,21 +35,6 @@ export interface ReminderSweepResult {
  * deputy the tickler still fires to the author: an unread reminder beats a
  * silently dropped one.
  */
-/**
- * The school root an org unit sits under. Coverage rows (and therefore
- * deputies) are keyed by the root, while an assignment snapshots the assignee's
- * own unit — usually a department. Looking a deputy up by the department id
- * never matched, so rerouting during leave silently did nothing. Resolve the
- * root first.
- */
-async function schoolRootFor(orgUnitId: string | null): Promise<string | null> {
-  if (!orgUnitId) return null
-  const unit = await prisma.tenantOrgUnit.findUnique({
-    where: { id: orgUnitId },
-    select: { path: true },
-  })
-  return unit?.path?.[0] || orgUnitId
-}
 
 async function ticklerRecipients(
   tenantId: string,

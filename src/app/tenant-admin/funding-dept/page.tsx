@@ -33,6 +33,19 @@ interface Member {
   isAway: boolean
 }
 
+interface PeriodSetting {
+  configured: boolean
+  stored: { start: string | null; end: string | null; label: string | null }
+  period: {
+    start: string
+    end: string
+    startDate: string
+    endDate: string
+    label: string
+    isDefault: boolean
+  }
+}
+
 interface FacultyOption {
   userId: string
   name: string | null
@@ -50,6 +63,12 @@ export default function TenantAdminFundingDeptPage() {
   const [schools, setSchools] = useState<CoverageSchool[]>([])
   const [loading, setLoading] = useState(true)
   const [showInactive, setShowInactive] = useState(false)
+
+  const [period, setPeriod] = useState<PeriodSetting | null>(null)
+  const [periodStart, setPeriodStart] = useState('')
+  const [periodEnd, setPeriodEnd] = useState('')
+  const [periodLabel, setPeriodLabel] = useState('')
+  const [savingPeriod, setSavingPeriod] = useState(false)
 
   const [search, setSearch] = useState('')
   const [results, setResults] = useState<FacultyOption[]>([])
@@ -74,10 +93,76 @@ export default function TenantAdminFundingDeptPage() {
     }
   }, [authFetch, showInactive])
 
+  const loadPeriod = useCallback(async () => {
+    const response = await authFetch('/api/tenant-admin/reporting-period')
+    if (!response.ok) return
+    const data: PeriodSetting = await response.json()
+    setPeriod(data)
+    // Seed the form with what is actually in force, so an unconfigured tenant
+    // starts from this calendar year rather than two empty boxes.
+    setPeriodStart(data.stored.start || data.period.startDate)
+    setPeriodEnd(data.stored.end || data.period.endDate)
+    setPeriodLabel(data.stored.label || '')
+  }, [authFetch])
+
   useEffect(() => {
     if (authLoading || !allowed) return
     void load()
-  }, [authLoading, allowed, load])
+    void loadPeriod()
+  }, [authLoading, allowed, load, loadPeriod])
+
+  /** Fill the form with a whole year starting on the given month/day. */
+  const presetPeriod = (startMonth: number, startDay: number) => {
+    const today = new Date()
+    let year = today.getFullYear()
+    const start = new Date(year, startMonth, startDay)
+    if (start > today) {
+      // The window that contains today is the one that began last year.
+      year -= 1
+      start.setFullYear(year)
+    }
+    const end = new Date(year + 1, startMonth, startDay)
+    end.setDate(end.getDate() - 1)
+    const iso = (value: Date) =>
+      `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(
+        value.getDate()
+      ).padStart(2, '0')}`
+    setPeriodStart(iso(start))
+    setPeriodEnd(iso(end))
+    setPeriodLabel(
+      start.getFullYear() === end.getFullYear()
+        ? String(start.getFullYear())
+        : `${start.getFullYear()}-${String(end.getFullYear()).slice(-2)}`
+    )
+  }
+
+  const savePeriod = async (clear = false) => {
+    setSavingPeriod(true)
+    try {
+      const response = await authFetch('/api/tenant-admin/reporting-period', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          clear ? { clear: true } : { start: periodStart, end: periodEnd, label: periodLabel }
+        ),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        showToast({ type: 'error', title: data.error || 'Could not save the period' })
+        return
+      }
+      setPeriod(data)
+      setPeriodStart(data.stored?.start || data.period.startDate)
+      setPeriodEnd(data.stored?.end || data.period.endDate)
+      setPeriodLabel(data.stored?.label || '')
+      showToast({
+        type: 'success',
+        title: clear ? 'Back to the calendar year' : 'Period of consideration saved',
+      })
+    } finally {
+      setSavingPeriod(false)
+    }
+  }
 
   const runSearch = async () => {
     if (!search.trim()) {
@@ -322,6 +407,93 @@ export default function TenantAdminFundingDeptPage() {
           </p>
           <div className="nk-ticks mt-3" aria-hidden />
         </header>
+
+        <section className="nk-panel mb-6">
+          <div className="nk-panel-head">
+            <div>
+              <h2 className="nk-title">Period of consideration</h2>
+              <p className="nk-sub">
+                The window faculty workload and submissions are counted over, on the call dossier
+                and in department reporting
+              </p>
+            </div>
+          </div>
+          <div className="px-5 py-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-sm">
+                <span className="nk-eyebrow block">Start</span>
+                <input
+                  type="date"
+                  className="nk-input mt-1"
+                  value={periodStart}
+                  onChange={(event) => setPeriodStart(event.target.value)}
+                />
+              </label>
+              <label className="text-sm">
+                <span className="nk-eyebrow block">End</span>
+                <input
+                  type="date"
+                  className="nk-input mt-1"
+                  value={periodEnd}
+                  onChange={(event) => setPeriodEnd(event.target.value)}
+                />
+              </label>
+              <label className="text-sm">
+                <span className="nk-eyebrow block">Name (optional)</span>
+                <input
+                  className="nk-input mt-1 max-w-[12rem]"
+                  placeholder="AY 2026-27"
+                  value={periodLabel}
+                  onChange={(event) => setPeriodLabel(event.target.value)}
+                />
+              </label>
+              <button
+                className="nk-btn-primary"
+                disabled={savingPeriod || !periodStart || !periodEnd}
+                onClick={() => void savePeriod(false)}
+              >
+                {savingPeriod ? 'Saving...' : 'Save period'}
+              </button>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="nk-sub">Quick set:</span>
+              <button className="nk-btn-secondary nk-btn-sm" onClick={() => presetPeriod(0, 1)}>
+                Calendar year (1 Jan &ndash; 31 Dec)
+              </button>
+              <button className="nk-btn-secondary nk-btn-sm" onClick={() => presetPeriod(6, 1)}>
+                Academic year (1 Jul &ndash; 30 Jun)
+              </button>
+              <button className="nk-btn-secondary nk-btn-sm" onClick={() => presetPeriod(3, 1)}>
+                Financial year (1 Apr &ndash; 31 Mar)
+              </button>
+            </div>
+
+            {period && (
+              <p className="nk-sub mt-3">
+                {period.configured ? (
+                  <>
+                    In force: <strong>{period.period.label}</strong> &mdash;{' '}
+                    {period.period.startDate} to {period.period.endDate}. It rolls forward a year
+                    automatically once it closes.{' '}
+                    <button
+                      className="underline"
+                      disabled={savingPeriod}
+                      onClick={() => void savePeriod(true)}
+                    >
+                      Reset to the calendar year
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Not set &mdash; counting the current calendar year ({period.period.startDate} to{' '}
+                    {period.period.endDate}).
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+        </section>
 
         <section className="nk-panel mb-6">
           <div className="nk-panel-head">

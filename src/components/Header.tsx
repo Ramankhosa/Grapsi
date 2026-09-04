@@ -275,7 +275,7 @@ export default function Header() {
               {/* Compact User Dropdown Menu */}
               {showUserMenu && (
                 <div
-                  className="absolute right-0 top-full mt-1 w-80 max-h-[82vh] overflow-y-auto bg-white border border-gpt-gray-200 rounded-lg shadow-lg z-50"
+                  className="absolute right-0 top-full mt-1 w-80 max-h-[calc(100vh-5rem)] overflow-y-auto overscroll-contain bg-white border border-gpt-gray-200 rounded-lg shadow-lg z-50"
                   onMouseEnter={handleMenuMouseEnter}
                   onMouseLeave={handleMenuMouseLeave}
                 >
@@ -294,6 +294,29 @@ export default function Header() {
                     >
                       <span>🏠</span>
                       <span>Dashboard</span>
+                    </Link>
+
+                    {/* First in the menu on purpose: the reader who does not
+                        know what any of the links below mean needs this one. */}
+                    <Link
+                      href="/guide"
+                      className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                      onClick={closeMenu}
+                    >
+                      <span>🧭</span>
+                      <span>Where everything is</span>
+                    </Link>
+
+                    {/* The zero-effort route into the catalog: no query, no
+                        chatbot turn, just the calls this person's own profile
+                        and papers already match. */}
+                    <Link
+                      href="/funding/my-areas"
+                      className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                      onClick={closeMenu}
+                    >
+                      <span>🎯</span>
+                      <span>Funding in My Areas</span>
                     </Link>
 
                     {canUseGrantStudio && (
@@ -352,6 +375,23 @@ export default function Header() {
                       </>
                     )}
 
+                    {/* Dean / Head of Department. Headship is an org-unit grant
+                        rather than a role, so like department membership it has
+                        to be answered by the server. These people had API access
+                        to reports and no way in. */}
+                    {fundingDept.managedUnits.length > 0 && (
+                      <>
+                        <MenuGroup label="My School" />
+                        <MenuItem
+                          href="/school-head"
+                          icon="🏫"
+                          title="My School"
+                          description="Funding reaching my faculty, and how they are responding"
+                          onClick={closeMenu}
+                        />
+                      </>
+                    )}
+
                     {/* Funding Department — membership, not a role, so it is
                         answered by the server rather than guessed from roles. */}
                     {fundingDept.isMember && (
@@ -397,6 +437,17 @@ export default function Header() {
                           icon="🎯"
                           title="Find Researchers"
                           description="Match faculty to a funding call and assign or circulate it"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
+                          href="/funding-dept/accountability"
+                          icon="📊"
+                          title={fundingDept.isHead ? 'Accountability' : 'My Schools at a Glance'}
+                          description={
+                            fundingDept.isHead
+                              ? "Member by member: what is pending, what is late, what has been submitted"
+                              : 'Pendency, silent allocations and submissions across the schools you cover'
+                          }
                           onClick={closeMenu}
                         />
                         {fundingDept.isHead && (
@@ -497,6 +548,13 @@ export default function Header() {
                           icon="📋"
                           title="Department Overview"
                           description="Pendency, load and coverage — by member and by school"
+                          onClick={closeMenu}
+                        />
+                        <MenuItem
+                          href="/funding-dept/accountability"
+                          icon="📊"
+                          title="Accountability"
+                          description="Member by member: pendency, chasing, submissions and who is behind"
                           onClick={closeMenu}
                         />
                         <MenuItem

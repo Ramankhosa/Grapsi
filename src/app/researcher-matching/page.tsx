@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
 import MatchResults, { MatchResult, SearchResponse } from '@/components/researcher-matching/MatchResults'
@@ -43,46 +44,6 @@ const CALL_CLOSING_WINDOWS = [
   { value: '90', label: 'Closing in 90 days' },
 ] as const
 
-/** The stored faculty profile shown in the "View profile" panel. */
-interface FacultyProfile {
-  userId: string
-  name: string
-  email: string
-  employeeId: string | null
-  designation: string | null
-  school: string | null
-  department: string | null
-  institution: string | null
-  careerStage: string | null
-  yearsOfExperience: number | null
-  country: string | null
-  languages: string[]
-  summary: string | null
-  researchAreas: string[]
-  keywords: string[]
-  links: {
-    googleScholar: string | null
-    scopus: string | null
-    orcid: string | null
-    linkedin: string | null
-  }
-  publications: Array<{
-    id: string
-    title: string
-    authors: string[]
-    year: number | null
-    venue: string | null
-    doi: string | null
-    url: string | null
-  }>
-}
-
-const PROFILE_LINKS: Array<{ key: keyof FacultyProfile['links']; label: string }> = [
-  { key: 'googleScholar', label: 'Google Scholar' },
-  { key: 'scopus', label: 'Scopus' },
-  { key: 'orcid', label: 'ORCID' },
-  { key: 'linkedin', label: 'LinkedIn' },
-]
 
 // Fallback only. The authoritative answer is /api/funding-dept/me, which
 // reports the server's own verdict: funding department members and org unit
@@ -148,9 +109,6 @@ export default function TenantResearcherMatchingPage() {
 
   // Profile viewer: the stored faculty profile plus external research links.
   const [profileTarget, setProfileTarget] = useState<MatchResult | null>(null)
-  const [profileData, setProfileData] = useState<FacultyProfile | null>(null)
-  const [profileLoading, setProfileLoading] = useState(false)
-  const [profileError, setProfileError] = useState<string | null>(null)
 
   // Bulk circulation: one call to many faculty in a single action.
   const [bulkSelection, setBulkSelection] = useState<string[]>([])
@@ -454,27 +412,9 @@ export default function TenantResearcherMatchingPage() {
     setAssignError(null)
   }
 
-  const openProfile = useCallback(
-    async (result: MatchResult) => {
-      setProfileTarget(result)
-      setProfileData(null)
-      setProfileError(null)
-      setProfileLoading(true)
-      try {
-        const res = await authFetch(
-          `/api/researcher-matching?action=profile&userId=${encodeURIComponent(result.userId)}`
-        )
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Could not load the profile')
-        setProfileData(data.profile)
-      } catch (e: any) {
-        setProfileError(e.message)
-      } finally {
-        setProfileLoading(false)
-      }
-    },
-    [authFetch]
-  )
+  const openProfile = useCallback((result: MatchResult) => {
+    setProfileTarget(result)
+  }, [])
 
   const toggleBulkSelection = (userId: string) => {
     setBulkSelection(current =>
@@ -1277,224 +1217,31 @@ export default function TenantResearcherMatchingPage() {
 
         {/* Profile viewer */}
         {profileTarget && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-nickel-900/50 p-4"
-            onClick={() => setProfileTarget(null)}
+          <FacultyProfileDrawer
+            userId={profileTarget.userId}
+            fallbackName={profileTarget.displayName}
+            fallbackHint={[profileTarget.department, profileTarget.institutionName]
+              .filter(Boolean)
+              .join(' \u00b7 ')}
+            onClose={() => setProfileTarget(null)}
           >
-            <div
-              className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-nickel-200 bg-white shadow-nk-sheet"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Faculty profile"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-start justify-between gap-3 border-b border-nickel-200 px-6 py-4">
-                <div className="min-w-0">
-                  <p className="nk-eyebrow">Faculty profile</p>
-                  <h3 className="mt-1 text-[17px] font-semibold text-nickel-900">
-                    {profileData?.name || profileTarget.displayName}
-                  </h3>
-                  <p className="nk-sub mt-0.5">
-                    {[
-                      profileData?.designation,
-                      profileData?.department,
-                      profileData?.school,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ') ||
-                      [profileTarget.department, profileTarget.institutionName]
-                        .filter(Boolean)
-                        .join(' · ')}
-                  </p>
-                </div>
+            {canAssign &&
+              mode === 'call' &&
+              selectedCall &&
+              !(assignedByCall[selectedCall.id] || []).includes(profileTarget.userId) && (
                 <button
                   type="button"
-                  className="nk-btn-ghost nk-btn-sm"
-                  onClick={() => setProfileTarget(null)}
-                  aria-label="Close profile"
+                  className="nk-btn-primary"
+                  onClick={() => {
+                    const target = profileTarget
+                    setProfileTarget(null)
+                    openAssign(target)
+                  }}
                 >
-                  ✕
+                  Assign call
                 </button>
-              </div>
-
-              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-                {profileLoading ? (
-                  <div className="animate-pulse space-y-3" aria-hidden>
-                    <div className="h-4 w-1/2 rounded bg-nickel-100" />
-                    <div className="h-3 w-2/3 rounded bg-nickel-100" />
-                    <div className="h-3 w-1/3 rounded bg-nickel-100" />
-                  </div>
-                ) : profileError ? (
-                  <p className="text-[13px] text-red-700">{profileError}</p>
-                ) : profileData ? (
-                  <div className="space-y-4">
-                    {/* External research profiles — the quick outbound checks. */}
-                    <div>
-                      <p className="nk-eyebrow mb-2">Research profiles</p>
-                      <div className="flex flex-wrap gap-2">
-                        {PROFILE_LINKS.filter((l) => profileData.links[l.key]).map((l) => (
-                          <a
-                            key={l.key}
-                            href={profileData.links[l.key] as string}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="nk-btn-secondary nk-btn-sm"
-                          >
-                            {l.label} ↗
-                          </a>
-                        ))}
-                        {PROFILE_LINKS.every((l) => !profileData.links[l.key]) && (
-                          <p className="nk-sub">
-                            No external profiles on file — ask them to add Google Scholar / Scopus /
-                            ORCID links to their researcher profile.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="nk-panel-quiet px-3.5 py-2.5">
-                        <p className="nk-eyebrow">Contact</p>
-                        <a
-                          href={`mailto:${profileData.email}`}
-                          className="mt-1 block truncate text-[13px] font-medium text-cobalt-700 hover:underline"
-                        >
-                          {profileData.email}
-                        </a>
-                        {profileData.employeeId && (
-                          <p className="nk-sub mt-0.5 text-[11.5px]">
-                            Employee ID {profileData.employeeId}
-                          </p>
-                        )}
-                      </div>
-                      <div className="nk-panel-quiet px-3.5 py-2.5">
-                        <p className="nk-eyebrow">Standing</p>
-                        <p className="mt-1 text-[13px] text-nickel-800">
-                          {[
-                            profileData.careerStage?.replace(/_/g, ' '),
-                            profileData.yearsOfExperience
-                              ? `${profileData.yearsOfExperience} yrs experience`
-                              : null,
-                            profileData.country,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ') || '—'}
-                        </p>
-                        {profileData.languages.length > 0 && (
-                          <p className="nk-sub mt-0.5 text-[11.5px]">
-                            Applies in {profileData.languages.join(', ')}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {profileData.summary && (
-                      <div>
-                        <p className="nk-eyebrow mb-1.5">Research summary</p>
-                        <p className="text-[13px] leading-relaxed text-nickel-700">
-                          {profileData.summary}
-                        </p>
-                      </div>
-                    )}
-
-                    {profileData.researchAreas.length > 0 && (
-                      <div>
-                        <p className="nk-eyebrow mb-1.5">Research areas</p>
-                        <div className="flex flex-wrap gap-1">
-                          {profileData.researchAreas.map((area) => (
-                            <span key={area} className="nk-badge nk-badge-live normal-case tracking-normal">
-                              {area}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profileData.keywords.length > 0 && (
-                      <div>
-                        <p className="nk-eyebrow mb-1.5">Keywords</p>
-                        <div className="flex flex-wrap gap-1">
-                          {profileData.keywords.map((kw) => (
-                            <span key={kw} className="nk-badge normal-case tracking-normal">
-                              {kw}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div>
-                      <p className="nk-eyebrow mb-1.5">
-                        Publications on file ({profileData.publications.length})
-                      </p>
-                      {profileData.publications.length === 0 ? (
-                        <p className="nk-sub">
-                          None uploaded yet — publications strengthen matching, so worth nudging.
-                        </p>
-                      ) : (
-                        <ul className="space-y-2">
-                          {profileData.publications.map((pub) => {
-                            const link = pub.doi
-                              ? `https://doi.org/${pub.doi}`
-                              : pub.url || null
-                            return (
-                              <li key={pub.id} className="border-l-2 border-nickel-200 pl-3">
-                                {link ? (
-                                  <a
-                                    href={link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-[13px] font-medium text-nickel-900 hover:text-cobalt-700 hover:underline"
-                                  >
-                                    {pub.title}
-                                  </a>
-                                ) : (
-                                  <p className="text-[13px] font-medium text-nickel-900">{pub.title}</p>
-                                )}
-                                <p className="nk-sub text-[11.5px]">
-                                  {[
-                                    pub.authors.slice(0, 4).join(', ') +
-                                      (pub.authors.length > 4 ? ' et al.' : ''),
-                                    pub.venue,
-                                    pub.year,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(' · ')}
-                                </p>
-                              </li>
-                            )
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="flex justify-end gap-2 border-t border-nickel-200 px-6 py-4">
-                <button type="button" className="nk-btn-secondary" onClick={() => setProfileTarget(null)}>
-                  Close
-                </button>
-                {canAssign &&
-                  mode === 'call' &&
-                  selectedCall &&
-                  profileTarget &&
-                  !(assignedByCall[selectedCall.id] || []).includes(profileTarget.userId) && (
-                    <button
-                      type="button"
-                      className="nk-btn-primary"
-                      onClick={() => {
-                        const target = profileTarget
-                        setProfileTarget(null)
-                        openAssign(target)
-                      }}
-                    >
-                      Assign call
-                    </button>
-                  )}
-              </div>
-            </div>
-          </div>
+              )}
+          </FacultyProfileDrawer>
         )}
 
         {/* Single assign modal */}

@@ -26,6 +26,7 @@ export type FollowUpTarget =
 interface FollowUp {
   id: string
   kind: string
+  stage: string | null
   note: string
   happenedAt: string
   remindAt: string | null
@@ -41,6 +42,25 @@ const KINDS = [
   { value: 'MEETING', label: 'Meeting' },
   { value: 'REMINDER', label: 'Reminder' },
 ]
+
+/**
+ * Where the application stands, as opposed to how the contact happened.
+ * Optional — most notes are just notes — and only SUBMITTED does anything
+ * beyond labelling the note.
+ */
+const STAGES = [
+  { value: 'CONTACTED', label: 'Contacted' },
+  { value: 'PREPARING', label: 'Preparing' },
+  { value: 'APPROVALS', label: 'Approvals' },
+  { value: 'SUBMITTED', label: 'Submitted' },
+]
+
+const STAGE_LABEL: Record<string, string> = {
+  CONTACTED: 'Contacted',
+  PREPARING: 'Preparing',
+  APPROVALS: 'Approvals',
+  SUBMITTED: 'Submitted',
+}
 
 const KIND_LABEL: Record<string, string> = {
   ...Object.fromEntries(KINDS.map((kind) => [kind.value, kind.label])),
@@ -98,6 +118,7 @@ export default function FollowUpPanel(props: Props) {
   const [saving, setSaving] = useState(false)
 
   const [kind, setKind] = useState('NOTE')
+  const [stage, setStage] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [remindAt, setRemindAt] = useState('')
   const [remindFaculty, setRemindFaculty] = useState(false)
@@ -131,6 +152,7 @@ export default function FollowUpPanel(props: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind,
+          stage,
           note: note.trim(),
           remindAt: remindAt ? new Date(remindAt).toISOString() : null,
           remindFaculty: endpoint.isCallLevel ? false : remindFaculty,
@@ -146,10 +168,13 @@ export default function FollowUpPanel(props: Props) {
       setRemindAt('')
       setRemindFaculty(false)
       setKind('NOTE')
+      setStage(null)
       showToast({
         type: 'success',
-        title: 'Follow-up recorded',
-        message: data.followUp?.remindAt
+        title: data.markedSubmitted ? 'Recorded as submitted' : 'Follow-up recorded',
+        message: data.markedSubmitted
+          ? 'The allocation is now marked submitted, and the department head has been told.'
+          : data.followUp?.remindAt
           ? remindFaculty && !endpoint.isCallLevel
             ? 'They will be reminded at the time you chose.'
             : 'You will be reminded at the time you chose.'
@@ -191,6 +216,31 @@ export default function FollowUpPanel(props: Props) {
               </button>
             ))}
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="nk-label mb-0 mr-1">Where it stands</span>
+            {STAGES.filter((option) => !(endpoint.isCallLevel && option.value === 'SUBMITTED')).map(
+              (option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setStage(stage === option.value ? null : option.value)}
+                  className={
+                    stage === option.value ? 'nk-btn-primary nk-btn-xs' : 'nk-btn-secondary nk-btn-xs'
+                  }
+                >
+                  {option.label}
+                </button>
+              )
+            )}
+            <span className="nk-sub text-[11.5px]">optional</span>
+          </div>
+          {stage === 'SUBMITTED' ? (
+            <p className="rounded-lg border border-cobalt-200 bg-cobalt-50 px-3 py-2 text-[12.5px] text-cobalt-800">
+              This marks the allocation as submitted everywhere — the school, the department and the
+              head. Put the reference number or portal link in the note so the record stands on its
+              own.
+            </p>
+          ) : null}
           <textarea
             className="nk-input min-h-[76px]"
             placeholder={
@@ -254,6 +304,15 @@ export default function FollowUpPanel(props: Props) {
             <li key={row.id} className="nk-panel px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="nk-badge">{KIND_LABEL[row.kind] || row.kind}</span>
+                {row.stage ? (
+                  <span
+                    className={
+                      row.stage === 'SUBMITTED' ? 'nk-badge nk-badge-live' : 'nk-badge'
+                    }
+                  >
+                    {STAGE_LABEL[row.stage] || row.stage}
+                  </span>
+                ) : null}
                 <span className="nk-sub">{formatWhen(row.happenedAt)}</span>
                 <span className="nk-sub">
                   · {row.author?.name || row.author?.email || 'Unknown'}

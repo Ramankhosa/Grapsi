@@ -48,6 +48,21 @@ export async function GET(request: NextRequest) {
     reachSchools = Array.from(seen.values())
   }
 
+  // The org units this person heads (Dean / HoD). Nothing to do with
+  // department membership — a Dean is not staff of the funding office — but the
+  // client needs one answer to "which dashboards apply to me", and role strings
+  // cannot supply it: headship is a grant row, not a role.
+  const grants = await prisma.orgUnitManager.findMany({
+    where: { tenant_id: context.tenantId, user_id: context.user.id, is_active: true },
+    select: {
+      title: true,
+      scope: true,
+      can_view_reports: true,
+      org_unit: { select: { id: true, name: true, code: true, depth: true } },
+    },
+    orderBy: { created_at: 'asc' },
+  })
+
   return NextResponse.json({
     isMember: Boolean(member),
     isHead: Boolean(member?.isHead),
@@ -55,6 +70,17 @@ export async function GET(request: NextRequest) {
     title: member?.title ?? null,
     schools: member?.schools ?? [],
     reachSchools,
+    managedUnits: grants
+      .filter((grant) => grant.org_unit)
+      .map((grant) => ({
+        id: grant.org_unit!.id,
+        name: grant.org_unit!.name,
+        code: grant.org_unit!.code,
+        depth: grant.org_unit!.depth,
+        title: grant.title,
+        scope: grant.scope,
+        canViewReports: grant.can_view_reports,
+      })),
     canAdminister: context.isAdmin,
     capabilities: {
       canAssign: context.scope.canAssign,

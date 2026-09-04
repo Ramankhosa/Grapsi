@@ -4,8 +4,15 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { canManageAssignment } from '@/lib/orgUnits/scope'
-import { parseDate } from '@/lib/assignments/shared'
-import { FOLLOW_UP_KINDS, serializeFollowUp } from '@/lib/fundingDept/shared'
+import { parseDate, validateStatusTransition, type AssignmentStatus } from '@/lib/assignments/shared'
+import { buildSubmissionUpdate } from '@/lib/assignments/submission'
+import {
+  FOLLOW_UP_KINDS,
+  FOLLOW_UP_STAGES,
+  serializeFollowUp,
+  submissionWatchers,
+} from '@/lib/fundingDept/shared'
+import { notifyQuietly } from '@/lib/notifications/notificationService'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,6 +28,13 @@ export const dynamic = 'force-dynamic'
 
 const createSchema = z.object({
   kind: z.enum(FOLLOW_UP_KINDS).default('NOTE'),
+  /**
+   * Where the application stands. Optional, and inert except for SUBMITTED,
+   * which also closes the assignment out through the shared submission path —
+   * an officer told over the phone that it went in should not have to record
+   * the same fact twice on two screens for the hierarchy to see it.
+   */
+  stage: z.enum(FOLLOW_UP_STAGES).nullable().optional(),
   note: z.string().trim().min(1, 'Add a note').max(5000),
   happenedAt: z.string().trim().nullable().optional(),
   remindAt: z.string().trim().nullable().optional(),
@@ -36,10 +50,17 @@ async function loadAssignment(tenantId: string, id: string) {
     where: { id, tenant_id: tenantId },
     select: {
       id: true,
+      status: true,
       funding_call_id: true,
       assigned_by_user_id: true,
       assignee_org_unit_id: true,
       assignee_user_id: true,
+      submission_reference: true,
+      submission_url: true,
+      submission_notes: true,
+      submitted_at: true,
+      assignee: { select: { id: true, name: true, email: true } },
+      funding_call: { select: { id: true, title: true, scheme_title: true } },
     },
   })
 }
@@ -102,23 +123,98 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     )
   }
 
-  const followUp = await prisma.assignmentFollowUp.create({
-    data: {
-      tenant_id: context.tenantId,
-      assignment_id: record.id,
-      // Stamped on assignment-level rows too, so a call's whole history in a
-      // school is one indexed scan rather than a union through assignments.
-      funding_call_id: record.funding_call_id,
-      org_unit_id: record.assignee_org_unit_id,
-      created_by_user_id: context.user.id,
-      kind: payload.kind,
-      note: payload.note,
-      happened_at: parseDate(payload.happenedAt) || new Date(),
-      remind_at: remindAt,
-      remind_faculty: payload.remindFaculty,
-    },
-    include: followUpInclude,
+  const happenedAt = parseDate(payload.happenedAt) || new Date()
+
+  const followUpData = {
+    tenant_id: context.tenantId,
+    assignment_id: record.id,
+    // Stamped on assignment-level rows too, so a call's whole history in a
+    // school is one indexed scan rather than a union through assignments.
+    funding_call_id: record.funding_call_id,
+    org_unit_id: record.assignee_org_unit_id,
+    created_by_user_id: context.user.id,
+    kind: payload.kind,
+    stage: payload.stage ?? null,
+    note: payload.note,
+    happened_at: happenedAt,
+    remind_at: remindAt,
+    remind_faculty: payload.remindFaculty,
+  }
+
+  // Stage SUBMITTED closes the assignment out as well as logging the note. The
+  // transition table still decides whether this caller may make that move, and
+  // the shared builder still demands proof — the note is the proof here, which
+  // is why it is required on every follow-up anyway.
+  const marksSubmitted = payload.stage === 'SUBMITTED' && record.status !== 'COMPLETED'
+  let submissionApplied = false
+
+  if (marksSubmitted) {
+    const transition = validateStatusTransition({
+      from: record.status as AssignmentStatus,
+      to: 'COMPLETED',
+      isAssignee: record.assignee_user_id === context.user.id,
+      canManage: true,
+    })
+    if (!transition.allowed) {
+      return NextResponse.json({ error: transition.reason }, { status: 400 })
+    }
+  }
+
+  const followUp = await prisma.$transaction(async (tx) => {
+    const created = await tx.assignmentFollowUp.create({
+      data: followUpData,
+      include: followUpInclude,
+    })
+
+    if (marksSubmitted) {
+      const submission = buildSubmissionUpdate({
+        record,
+        notes: record.submission_notes || payload.note,
+        submittedAt: happenedAt,
+      })
+      if (submission.ok) {
+        await tx.callAssignment.update({ where: { id: record.id }, data: submission.data })
+        submissionApplied = true
+      }
+    }
+
+    return created
   })
 
-  return NextResponse.json({ followUp: serializeFollowUp(followUp) }, { status: 201 })
+  if (submissionApplied) {
+    const callTitle =
+      record.funding_call?.scheme_title || record.funding_call?.title || 'a funding call'
+    const assigneeName = record.assignee?.name || record.assignee?.email || 'The assignee'
+    try {
+      const watchers = await submissionWatchers({
+        tenantId: context.tenantId,
+        assigneeOrgUnitId: record.assignee_org_unit_id,
+        excludeUserIds: [context.user.id],
+      })
+      // The assignee is told too: their record just changed, and they did not
+      // make the change.
+      const recipients = Array.from(new Set([...watchers, record.assignee_user_id])).filter(
+        (userId) => userId !== context.user.id
+      )
+      if (recipients.length > 0) {
+        await notifyQuietly({
+          tenantId: context.tenantId,
+          userIds: recipients,
+          title: `Submitted: ${callTitle}`,
+          body: `${assigneeName}'s application was recorded as submitted by the funding department.`,
+          category: 'ASSIGNMENT',
+          linkUrl: '/assignments',
+          assignmentId: record.id,
+          createdByUserId: context.user.id,
+        })
+      }
+    } catch (error) {
+      console.warn('Follow-up submission notification failed', error)
+    }
+  }
+
+  return NextResponse.json(
+    { followUp: serializeFollowUp(followUp), markedSubmitted: submissionApplied },
+    { status: 201 }
+  )
 }

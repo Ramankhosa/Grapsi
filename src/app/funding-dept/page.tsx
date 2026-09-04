@@ -238,6 +238,9 @@ export default function FundingDeptHomePage() {
           <Link href="/funding-dept/chase" className="nk-btn-secondary nk-btn-sm">
             Chase queue
           </Link>
+          <Link href="/funding-dept/accountability" className="nk-btn-secondary nk-btn-sm">
+            My schools at a glance
+          </Link>
           <Link href="/funding-dept/assignments" className="nk-btn-secondary nk-btn-sm">
             My assignments
           </Link>

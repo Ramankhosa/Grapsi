@@ -335,6 +335,9 @@ export default function FundingDeptOverviewPage() {
           </p>
           <div className="nk-ticks mt-3" aria-hidden />
           <div className="mt-3 flex flex-wrap gap-2">
+            <Link href="/funding-dept/accountability" className="nk-btn-primary nk-btn-sm">
+              Accountability
+            </Link>
             <Link href="/funding-dept/calls" className="nk-btn-secondary nk-btn-sm">
               Call funnel
             </Link>
@@ -548,6 +551,12 @@ export default function FundingDeptOverviewPage() {
                         className="text-[13.5px] font-medium text-cobalt-700 hover:underline"
                       >
                         {school.name}
+                      </Link>
+                      <Link
+                        href={`/funding-dept/schools/${school.id}/ledger`}
+                        className="nk-sub mt-0.5 block text-[11px] hover:underline"
+                      >
+                        every call &amp; where it stands →
                       </Link>
                     </td>
                     <td className="nk-sub px-4 py-3">

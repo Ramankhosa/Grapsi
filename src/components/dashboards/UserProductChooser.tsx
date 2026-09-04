@@ -10,6 +10,8 @@ import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 import {
   ArrowRight,
   ArrowUpRight,
+  BarChart3,
+  Building2,
   ClipboardList,
   Compass,
   FileSearch,
@@ -21,6 +23,7 @@ import {
   MessageSquare,
   Search,
   ShieldCheck,
+  Target,
   UserCircle,
   Users,
   Sparkles
@@ -53,6 +56,19 @@ const productGroups: ProductGroup[] = [
     title: 'Discover',
     caption: 'Find the calls worth your time',
     options: [
+      {
+        // First in Discover on purpose: it is the only card that needs nothing
+        // typed. The finder and the chatbot both ask a researcher to describe
+        // work the system has already embedded.
+        title: 'Funding in My Areas',
+        description:
+          'Calls matched to your profile, saved areas and papers. No searching — just open it.',
+        href: '/funding/my-areas',
+        icon: Target,
+        tag: 'For you',
+        moduleKey: 'FUNDING_DIRECTORY',
+        minTier: 'Starter'
+      },
       {
         title: 'Fund Finder',
         description:
@@ -208,6 +224,47 @@ const fundingDeptGroup: ProductGroup = {
       href: '/funding-dept/faculty',
       icon: GraduationCap,
       tag: 'Department'
+    },
+    {
+      title: 'My Schools at a Glance',
+      description: 'What is pending, what has gone quiet, and what has been submitted.',
+      href: '/funding-dept/accountability',
+      icon: BarChart3,
+      tag: 'Department'
+    }
+  ]
+}
+
+/**
+ * Shown to a Dean or Head of Department. Headship is an OrgUnitManager grant,
+ * not a role, so this is gated on the server's answer for the same reason the
+ * department group is — and until now these people had report access at the API
+ * with no way to reach it.
+ */
+const schoolHeadGroup: ProductGroup = {
+  title: 'My school',
+  caption: 'What funding reached your faculty, and what they did with it',
+  options: [
+    {
+      title: 'My School',
+      description: 'Calls open to your school, who is on them, and how your faculty respond.',
+      href: '/school-head',
+      icon: Building2,
+      tag: 'Head'
+    },
+    {
+      title: 'Assignments I Manage',
+      description: 'Every call sent to your faculty, with its status and deadline.',
+      href: '/assignments',
+      icon: ClipboardList,
+      tag: 'Head'
+    },
+    {
+      title: 'Reports & CSV',
+      description: 'Allocation, deadlines and outcomes for your branch, downloadable.',
+      href: '/tenant-admin/grant-dashboard',
+      icon: BarChart3,
+      tag: 'Head'
     }
   ]
 }
@@ -339,6 +396,7 @@ export default function UserProductChooser() {
   const groups = [
     ...visibleProductGroups,
     ...(fundingDept.isMember ? [fundingDeptGroup] : []),
+    ...(fundingDept.managedUnits.length > 0 ? [schoolHeadGroup] : []),
     ...(isTenantAdmin ? [adminGroup] : []),
   ]
 
@@ -421,6 +479,32 @@ export default function UserProductChooser() {
         <WorkshopAccessBanner />
 
         <GettingStartedCard />
+
+        {/* Near the top on purpose: the reader who does not recognise any card
+            below needs this before they start guessing at the cards. */}
+        <Link
+          href="/guide"
+          className="nk-panel-quiet group mb-8 flex items-center justify-between gap-4 p-4 transition duration-150
+                     hover:border-nickel-300 hover:bg-white
+                     focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
+                     focus-visible:outline-cobalt-600"
+        >
+          <div className="flex min-w-0 items-center gap-3.5">
+            <span className="nk-tile h-9 w-9">
+              <Compass className="h-4 w-4" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-medium text-nickel-700">Where everything is</p>
+              <p className="truncate text-[12.5px] text-nickel-500">
+                Every screen in the product, what it is for, and who can open it
+              </p>
+            </div>
+          </div>
+          <ArrowUpRight
+            className="h-4 w-4 shrink-0 text-nickel-300 transition duration-150 group-hover:text-cobalt-600"
+            aria-hidden
+          />
+        </Link>
 
         {/* ── Module bands ───────────────────────────────────────────────── */}
         <div className="space-y-10">

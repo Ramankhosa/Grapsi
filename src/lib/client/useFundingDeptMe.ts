@@ -21,6 +21,16 @@ export interface FundingDeptSchool {
   coverageId?: string
 }
 
+export interface ManagedUnit {
+  id: string
+  name: string
+  code: string | null
+  depth: number
+  title: string | null
+  scope: 'SUBTREE' | 'UNIT_ONLY'
+  canViewReports: boolean
+}
+
 export interface FundingDeptMe {
   isMember: boolean
   isHead: boolean
@@ -35,6 +45,13 @@ export interface FundingDeptMe {
    * oversees the whole department.
    */
   reachSchools: FundingDeptSchool[]
+  /**
+   * Org units this person heads (Dean / HoD), from OrgUnitManager grants.
+   * Independent of department membership: a Dean heads a school without being
+   * funding-office staff, and headship is a grant row rather than a role, so
+   * the client cannot work it out from `user.roles`.
+   */
+  managedUnits: ManagedUnit[]
   canAdminister: boolean
   capabilities: {
     canAssign: boolean
@@ -50,6 +67,7 @@ const EMPTY: FundingDeptMe = {
   title: null,
   schools: [],
   reachSchools: [],
+  managedUnits: [],
   canAdminister: false,
   capabilities: { canAssign: false, canViewReports: false, isTenantWide: false },
 }
