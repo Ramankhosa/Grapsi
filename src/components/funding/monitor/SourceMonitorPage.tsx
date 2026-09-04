@@ -6,11 +6,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 
 import MonitorAddSource from './MonitorAddSource'
+import MonitorOperators from './MonitorOperators'
 import MonitorQueue from './MonitorQueue'
 import MonitorSources from './MonitorSources'
 import type { MonitorChange, MonitorSource } from './types'
 
-type Tab = 'queue' | 'sources' | 'add'
+type Tab = 'queue' | 'sources' | 'add' | 'operators'
 
 const QUEUE_STATES = [
   { key: 'NEW', label: 'Open' },
@@ -31,6 +32,10 @@ export default function SourceMonitorPage() {
       ),
     [user?.ati_id, user?.platformPermissions, user?.roles]
   )
+
+  // Granting access is a super-admin act — the team-role endpoints enforce the
+  // same thing server-side, so this only decides whether the tab is offered.
+  const canManageOperators = Boolean(user?.roles?.includes('SUPER_ADMIN'))
 
   const [tab, setTab] = useState<Tab>('queue')
   const [queueState, setQueueState] = useState('NEW')
@@ -245,6 +250,14 @@ export default function SourceMonitorPage() {
             Add sources
           </button>
         )}
+        {canManageOperators && (
+          <button
+            className={`cb-tab ${tab === 'operators' ? 'cb-tab-active' : ''}`}
+            onClick={() => setTab('operators')}
+          >
+            Operators
+          </button>
+        )}
       </div>
 
       {tab === 'queue' && (
@@ -272,6 +285,10 @@ export default function SourceMonitorPage() {
           onToggleStatus={toggleStatus}
           onDelete={deleteSource}
         />
+      )}
+
+      {tab === 'operators' && canManageOperators && (
+        <MonitorOperators authedFetch={authedFetch} />
       )}
 
       {tab === 'add' && canOperate && (

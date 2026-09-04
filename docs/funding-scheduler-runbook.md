@@ -119,3 +119,16 @@ Confirming a find calls `fundingIntakeService.createJob`, so the page enters the
 normal funding intake pipeline and lands as a DRAFT call. The handoff is
 idempotent — re-confirming returns the existing job rather than creating a
 second.
+
+**Who can use it.** Reaching `/funding/monitor` needs a funding permission:
+`funding.operations.write` or `funding.publisher.write` to operate,
+`platform.support.read` (or SUPER_ADMIN_VIEWER) to look. Super admins always
+have it. The module's own **Operators** tab (super-admin only) is the
+funding-shaped view of Team Roles — it grants/revokes
+`FUNDING_OPERATIONS_MANAGER` through the same endpoints, merging into a user's
+existing roles rather than replacing them. Only platform users can hold a
+platform role, so a brand-new person is created in Super Admin → Users & Roles
+first, then made an operator.
+
+Entry points: the avatar dropdown ("Source Watch") for everyone with access, and
+Platform Console → Access Management → Source Watch for super admins.
