@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { motion } from 'framer-motion'
 import { useAuth } from '@/lib/auth-context'
 import AuthLoader from '@/components/ui/AuthLoader'
-import AnimatedLogo from '@/components/ui/animated-logo'
+import { BrandLockup } from '@/components/ui/BrandMark'
 
 /**
  * First-login activation for seeded accounts.
@@ -81,7 +81,7 @@ export default function SetPasswordPage() {
         <div className="flex flex-col items-center">
           <div className="mb-6 relative">
             <div className="absolute -inset-4 bg-ai-blue-500/20 blur-xl rounded-full" />
-            <AnimatedLogo size="lg" />
+            <BrandLockup size="lg" tone="dark" />
           </div>
           <h2 className="text-center text-3xl font-bold text-white tracking-tight">
             Activate your account

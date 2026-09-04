@@ -1,16 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { getAppOrigin, getRedirectUri, oauthConfig } from '@/lib/oauth-config'
 import { clearOAuthStateCookie, verifyOAuthCallbackState } from '@/lib/oauth-state'
 import { createSocialSignupToken } from '@/lib/social-signup-token'
+import {
+  checkSocialSignInAllowed,
+  issueSocialSession,
+  resolveSocialIdentity,
+  type SocialIdentity
+} from '@/lib/social-auth'
 
 // Force dynamic rendering since we access search params
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
+  const appOrigin = getAppOrigin(request.nextUrl.origin)
+
+  const loginError = (reason: string) => {
+    const response = NextResponse.redirect(new URL(`/login?error=${reason}`, appOrigin))
+    clearOAuthStateCookie(response, 'linkedin')
+    return response
+  }
+
   try {
-    const appOrigin = getAppOrigin(request.nextUrl.origin)
     const searchParams = request.nextUrl.searchParams
     const code = searchParams.get('code')
     const state = searchParams.get('state')
@@ -19,22 +30,16 @@ export async function GET(request: NextRequest) {
     // Handle OAuth errors
     if (error) {
       console.error('LinkedIn OAuth error:', error)
-      return NextResponse.redirect(
-        new URL('/login?error=oauth_error', appOrigin)
-      )
+      return loginError('oauth_error')
     }
 
     if (!code) {
-      return NextResponse.redirect(
-        new URL('/login?error=no_code', appOrigin)
-      )
+      return loginError('no_code')
     }
 
     const oauthState = verifyOAuthCallbackState(request, 'linkedin', state)
     if (!oauthState) {
-      return NextResponse.redirect(
-        new URL('/login?error=invalid_state', appOrigin)
-      )
+      return loginError('invalid_state')
     }
 
     const redirectUri = getRedirectUri('linkedin', request.nextUrl.origin)
@@ -80,130 +85,60 @@ export async function GET(request: NextRequest) {
 
     // LinkedIn OpenID Connect response format:
     // { sub, name, given_name, family_name, picture, locale, email, email_verified }
-    const profileId = linkedinUser.sub
     const firstName = linkedinUser.given_name || ''
     const lastName = linkedinUser.family_name || ''
-    const email = linkedinUser.email || ''
 
-    // Check if user already exists with this LinkedIn account
-    let user = await prisma.user.findFirst({
-      where: {
-        oauthProvider: 'LINKEDIN',
-        oauthProviderId: profileId
-      },
-      include: { tenant: true }
-    })
-
-    if (!user) {
-      // Check if user exists with same email
-      const existingUser = await prisma.user.findUnique({
-        where: { email: email },
-        include: { tenant: true }
-      })
-
-      if (existingUser) {
-        // Link existing account with LinkedIn OAuth
-        user = await prisma.user.update({
-          where: { id: existingUser.id },
-          data: {
-            oauthProvider: 'LINKEDIN',
-            oauthProviderId: profileId,
-            oauthProfile: linkedinUser,
-            emailVerified: true
-          },
-          include: { tenant: true }
-        })
-      } else {
-        // New user - redirect to registration completion with ATI token entry
-        const pendingData = {
-          provider: 'linkedin' as const,
-          providerId: profileId,
-          email: email,
-          name: `${firstName} ${lastName}`.trim(),
-          firstName: firstName,
-          lastName: lastName,
-          profile: linkedinUser
-        }
-
-        const pendingToken = createSocialSignupToken(pendingData)
-
-        const completionUrl = new URL('/register/complete-social', appOrigin)
-        completionUrl.searchParams.set('token', pendingToken)
-        completionUrl.searchParams.set('provider', 'linkedin')
-        if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
-        const response = NextResponse.redirect(completionUrl)
-        clearOAuthStateCookie(response, 'linkedin')
-        return response
-      }
+    const identity: SocialIdentity = {
+      provider: 'linkedin',
+      providerUserId: linkedinUser.sub,
+      email: linkedinUser.email ?? null,
+      emailVerified: linkedinUser.email_verified === true || linkedinUser.email_verified === 'true',
+      name: linkedinUser.name || `${firstName} ${lastName}`.trim(),
+      firstName,
+      lastName,
+      profile: linkedinUser
     }
 
-    // User exists - proceed with login
-    const accessTokenJWT = generateJWT({
-      sub: user.id,
-      email: user.email,
-      tenant_id: user.tenantId,
-      roles: user.roles,
-      ati_id: user.tenant?.atiId || null,
-      tenant_ati_id: user.tenant?.atiId || null,
-      scope: user.tenant?.atiId === 'PLATFORM' ? 'platform' : 'tenant'
-    })
+    const resolution = await resolveSocialIdentity(identity)
 
-    // Get request metadata
-    const ip = request.headers.get('x-forwarded-for') ||
-               request.headers.get('x-real-ip') ||
-               'unknown'
+    if (resolution.kind === 'error') {
+      return loginError(resolution.reason)
+    }
 
-    // Generate and store refresh token
-    const refreshTokenData = generateRefreshToken(user.id)
-    await storeRefreshToken(user.id, refreshTokenData, {
-      userAgent: request.headers.get('user-agent') || undefined,
-      ipAddress: ip
-    })
+    if (resolution.kind === 'signup') {
+      // New user - redirect to registration completion with ATI token entry
+      const pendingToken = createSocialSignupToken({
+        provider: 'linkedin',
+        providerId: identity.providerUserId,
+        email: identity.email!,
+        emailVerified: identity.emailVerified,
+        name: identity.name,
+        firstName: identity.firstName,
+        lastName: identity.lastName,
+        profile: linkedinUser
+      })
 
-    // Audit log
-    await createAuditLog({
-      actorUserId: user.id,
-      tenantId: user.tenantId || undefined,
-      action: 'USER_LOGIN',
-      resource: `user:${user.id}`,
-      ip,
-      meta: {
-        email: user.email,
-        roles: user.roles,
-        login_method: 'linkedin_oauth',
-        oauth_provider: 'LINKEDIN'
-      }
-    })
+      const completionUrl = new URL('/register/complete-social', appOrigin)
+      completionUrl.searchParams.set('token', pendingToken)
+      completionUrl.searchParams.set('provider', 'linkedin')
+      if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
+      const response = NextResponse.redirect(completionUrl)
+      clearOAuthStateCookie(response, 'linkedin')
+      return response
+    }
 
-    // Create response
-    const response = NextResponse.redirect(
-      new URL('/dashboard', appOrigin)
-    )
+    // Existing account - apply the same gate the password login route uses
+    const blocked = checkSocialSignInAllowed(resolution.user)
+    if (blocked) {
+      return loginError(blocked)
+    }
+
+    const response = NextResponse.redirect(new URL('/dashboard', appOrigin))
     clearOAuthStateCookie(response, 'linkedin')
-
-    // Set tokens as cookies
-    response.cookies.set('refresh_token', refreshTokenData.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/'
-    })
-
-    response.cookies.set('access_token', accessTokenJWT, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 15 * 60,
-      path: '/'
-    })
-
-    return response
+    return await issueSocialSession(response, request, resolution.user, 'linkedin')
 
   } catch (error) {
     console.error('LinkedIn OAuth callback error:', error)
-    return NextResponse.redirect(
-      new URL('/login?error=oauth_callback_failed', getAppOrigin(request.nextUrl.origin))
-    )
+    return loginError('oauth_callback_failed')
   }
 }

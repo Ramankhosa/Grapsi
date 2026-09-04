@@ -25,9 +25,9 @@ export default function FieldMatrix() {
   return (
     <figure className="rounded-2xl border border-hairline bg-ground p-5 sm:p-6">
       <figcaption className="border-b border-hairline pb-4">
-        <h3 className="text-[15px] font-semibold text-ink">Where the funding has already gone</h3>
+        <h3 className="text-[15px] font-semibold text-ink">Where the money has already gone</h3>
         <p className="mt-1.5 text-[13px] leading-5 text-muted">
-          Funded projects by sub-topic and year. The pale row is the white space.
+          Indian government funding in photovoltaics, by sub-topic and year. The pale row is the gap.
         </p>
       </figcaption>
 
@@ -99,8 +99,8 @@ export default function FieldMatrix() {
       </div>
 
       <p className="mt-4 text-[12px] leading-5 text-muted">
-        <span className="text-ink-soft">Explainable triage for low-resource networks</span> — 6 funded projects in five
-        years, the least crowded pocket that still clears the call&apos;s scope. Illustrative data.
+        <span className="text-ink-soft">Ageing of tandem modules in humid climates</span> — 6 funded projects in five
+        years, the least crowded pocket that still sits inside the call&apos;s scope. Illustrative data.
       </p>
     </figure>
   )

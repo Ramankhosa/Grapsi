@@ -60,7 +60,8 @@ export default function GapList({
 }: {
   directions: GapDirection[]
   rows: PriorWorkRow[]
-  onFindFunders: (direction: GapDirection) => void
+  /** Omitted on read-only surfaces (the admin report archive), which hides the action. */
+  onFindFunders?: (direction: GapDirection) => void
 }) {
   const rowsByKey = new Map(rows.map((row) => [row.key, row]))
 
@@ -171,15 +172,17 @@ export default function GapList({
 
               {direction.gap ? <EffortBand gap={direction.gap} /> : null}
 
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => onFindFunders(direction)}
-                  className="inline-flex items-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-900"
-                >
-                  <Compass className="h-4 w-4" /> Who funds this?
-                </button>
-              </div>
+              {onFindFunders ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onFindFunders(direction)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-900"
+                  >
+                    <Compass className="h-4 w-4" /> Who funds this?
+                  </button>
+                </div>
+              ) : null}
             </article>
           )
         })}

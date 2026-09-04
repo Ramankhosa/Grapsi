@@ -15,6 +15,10 @@ enum TenantStatus {
 enum UserRole {
   SUPER_ADMIN
   SUPER_ADMIN_VIEWER
+  // Platform staff with no inherent access. Lives in the PLATFORM tenant so it
+  // can receive PlatformTeamRoleAssignment grants, but `requirePlatformScope`
+  // still refuses it — every capability comes from an assigned team role.
+  PLATFORM_STAFF
   OWNER
   ADMIN
   MANAGER
@@ -597,6 +601,30 @@ model Tenant {
   @@map("tenants")
 }
 
+/// One row per (user, social provider) link. A user may link several providers
+/// (for example Google and LinkedIn) to the same account, in any order, whether
+/// the account was originally created manually or through social signup.
+model UserOAuthAccount {
+  id             String        @id @default(cuid())
+  userId         String        @map("user_id")
+  provider       OAuthProvider
+  providerUserId String        @map("provider_user_id")
+  email          String?
+  emailVerified  Boolean       @default(false) @map("email_verified")
+  profile        Json?
+  linkedAt       DateTime      @default(now()) @map("linked_at")
+  lastLoginAt    DateTime?     @map("last_login_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId], map: "user_oauth_accounts_provider_provider_user_id_key")
+  @@unique([userId, provider], map: "user_oauth_accounts_user_id_provider_key")
+  @@index([userId])
+  @@map("user_oauth_accounts")
+}
+
 enum OAuthProvider {
   GOOGLE
   FACEBOOK
@@ -620,6 +648,8 @@ model User {
   noveltySearchesCompleted Int        @default(0) // Track successful novelty searches
 
   // Social login fields
+  // Legacy single-provider columns. Kept in sync with the newest link for
+  // backwards compatibility; `oauthAccounts` is the source of truth.
   oauthProvider   OAuthProvider?
   oauthProviderId String?
   oauthProfile    Json? // Store additional OAuth profile data
@@ -653,6 +683,7 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   refreshTokens           RefreshToken[]
+  oauthAccounts           UserOAuthAccount[]
 
   // Idea Bank relations
   createdIdeaBankIdeas IdeaBankIdea[]        @relation("IdeaBankIdeaCreator")

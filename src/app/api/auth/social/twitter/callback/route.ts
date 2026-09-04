@@ -1,16 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { getAppOrigin, getRedirectUri, oauthConfig } from '@/lib/oauth-config'
 import { clearOAuthStateCookie, verifyOAuthCallbackState } from '@/lib/oauth-state'
 import { createSocialSignupToken } from '@/lib/social-signup-token'
+import {
+  checkSocialSignInAllowed,
+  issueSocialSession,
+  resolveSocialIdentity,
+  type SocialIdentity
+} from '@/lib/social-auth'
 
 // Force dynamic rendering since we access search params
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
+  const appOrigin = getAppOrigin(request.nextUrl.origin)
+
+  const loginError = (reason: string) => {
+    const response = NextResponse.redirect(new URL(`/login?error=${reason}`, appOrigin))
+    clearOAuthStateCookie(response, 'twitter')
+    return response
+  }
+
   try {
-    const appOrigin = getAppOrigin(request.nextUrl.origin)
     const searchParams = request.nextUrl.searchParams
     const code = searchParams.get('code')
     const state = searchParams.get('state')
@@ -19,22 +30,16 @@ export async function GET(request: NextRequest) {
     // Handle OAuth errors
     if (error) {
       console.error('Twitter OAuth error:', error)
-      return NextResponse.redirect(
-        new URL('/login?error=oauth_error', appOrigin)
-      )
+      return loginError('oauth_error')
     }
 
     if (!code || !state) {
-      return NextResponse.redirect(
-        new URL('/login?error=no_code', appOrigin)
-      )
+      return loginError('no_code')
     }
 
     const oauthState = verifyOAuthCallbackState(request, 'twitter', state)
     if (!oauthState?.codeVerifier) {
-      return NextResponse.redirect(
-        new URL('/login?error=invalid_state', appOrigin)
-      )
+      return loginError('invalid_state')
     }
 
     const { codeVerifier } = oauthState
@@ -78,127 +83,60 @@ export async function GET(request: NextRequest) {
     const twitterData = await userInfoResponse.json()
     const twitterUser = twitterData.data
 
-    // Twitter doesn't provide email in the basic scope
-    const email = twitterUser.username ? `${twitterUser.username}@twitter.local` : `user_${twitterUser.id}@twitter.local`
-    const name = twitterUser.name || twitterUser.username || 'Twitter User'
+    // Twitter doesn't provide email in the basic scope, so we synthesise a
+    // placeholder. It is never verified, which keeps it from ever being
+    // auto-linked onto a real account that happens to share the address.
+    const email = twitterUser.username
+      ? `${twitterUser.username}@twitter.local`
+      : `user_${twitterUser.id}@twitter.local`
 
-    // Check if user already exists with this Twitter account
-    let user = await prisma.user.findFirst({
-      where: {
-        oauthProvider: 'TWITTER',
-        oauthProviderId: twitterUser.id
-      },
-      include: { tenant: true }
-    })
-
-    if (!user) {
-      // Check if user exists with same email
-      const existingUser = await prisma.user.findUnique({
-        where: { email: email },
-        include: { tenant: true }
-      })
-
-      if (existingUser) {
-        // Link existing account with Twitter OAuth
-        user = await prisma.user.update({
-          where: { id: existingUser.id },
-          data: {
-            oauthProvider: 'TWITTER',
-            oauthProviderId: twitterUser.id,
-            oauthProfile: twitterData,
-            emailVerified: true
-          },
-          include: { tenant: true }
-        })
-      } else {
-        // New user - redirect to registration completion with ATI token entry
-        const pendingData = {
-          provider: 'twitter' as const,
-          providerId: twitterUser.id,
-          email: email,
-          name: name,
-          profile: twitterData
-        }
-
-        const pendingToken = createSocialSignupToken(pendingData)
-
-        const completionUrl = new URL('/register/complete-social', appOrigin)
-        completionUrl.searchParams.set('token', pendingToken)
-        completionUrl.searchParams.set('provider', 'twitter')
-        if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
-        const response = NextResponse.redirect(completionUrl)
-        clearOAuthStateCookie(response, 'twitter')
-        return response
-      }
+    const identity: SocialIdentity = {
+      provider: 'twitter',
+      providerUserId: twitterUser.id,
+      email,
+      emailVerified: false,
+      name: twitterUser.name || twitterUser.username || 'Twitter User',
+      profile: twitterData
     }
 
-    // User exists - proceed with login
-    const accessTokenJWT = generateJWT({
-      sub: user.id,
-      email: user.email,
-      tenant_id: user.tenantId,
-      roles: user.roles,
-      ati_id: user.tenant?.atiId || null,
-      tenant_ati_id: user.tenant?.atiId || null,
-      scope: user.tenant?.atiId === 'PLATFORM' ? 'platform' : 'tenant'
-    })
+    const resolution = await resolveSocialIdentity(identity)
 
-    // Get request metadata
-    const ip = request.headers.get('x-forwarded-for') ||
-               request.headers.get('x-real-ip') ||
-               'unknown'
+    if (resolution.kind === 'error') {
+      return loginError(resolution.reason)
+    }
 
-    // Generate and store refresh token
-    const refreshTokenData = generateRefreshToken(user.id)
-    await storeRefreshToken(user.id, refreshTokenData, {
-      userAgent: request.headers.get('user-agent') || undefined,
-      ipAddress: ip
-    })
+    if (resolution.kind === 'signup') {
+      // New user - redirect to registration completion with ATI token entry
+      const pendingToken = createSocialSignupToken({
+        provider: 'twitter',
+        providerId: identity.providerUserId,
+        email,
+        emailVerified: false,
+        name: identity.name,
+        profile: twitterData
+      })
 
-    // Audit log
-    await createAuditLog({
-      actorUserId: user.id,
-      tenantId: user.tenantId || undefined,
-      action: 'USER_LOGIN',
-      resource: `user:${user.id}`,
-      ip,
-      meta: {
-        email: user.email,
-        roles: user.roles,
-        login_method: 'twitter_oauth',
-        oauth_provider: 'TWITTER'
-      }
-    })
+      const completionUrl = new URL('/register/complete-social', appOrigin)
+      completionUrl.searchParams.set('token', pendingToken)
+      completionUrl.searchParams.set('provider', 'twitter')
+      if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
+      const response = NextResponse.redirect(completionUrl)
+      clearOAuthStateCookie(response, 'twitter')
+      return response
+    }
 
-    // Create response
-    const response = NextResponse.redirect(
-      new URL('/dashboard', appOrigin)
-    )
+    // Existing account - apply the same gate the password login route uses
+    const blocked = checkSocialSignInAllowed(resolution.user)
+    if (blocked) {
+      return loginError(blocked)
+    }
+
+    const response = NextResponse.redirect(new URL('/dashboard', appOrigin))
     clearOAuthStateCookie(response, 'twitter')
-
-    // Set tokens as cookies
-    response.cookies.set('refresh_token', refreshTokenData.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/'
-    })
-
-    response.cookies.set('access_token', accessTokenJWT, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 15 * 60,
-      path: '/'
-    })
-
-    return response
+    return await issueSocialSession(response, request, resolution.user, 'twitter')
 
   } catch (error) {
     console.error('Twitter OAuth callback error:', error)
-    return NextResponse.redirect(
-      new URL('/login?error=oauth_callback_failed', getAppOrigin(request.nextUrl.origin))
-    )
+    return loginError('oauth_callback_failed')
   }
 }

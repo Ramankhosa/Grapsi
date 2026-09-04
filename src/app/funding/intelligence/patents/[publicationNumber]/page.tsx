@@ -13,7 +13,7 @@ function decodeParam(value: string) {
 export function generateMetadata({ params }: { params: { publicationNumber: string } }) {
   const number = decodeParam(params.publicationNumber).slice(0, 60)
   return {
-    title: `${number} | Patent Search | Paper Nest`,
+    title: `${number} | Patent Search`,
     description: 'Patent record from PatentNest with citation and shortlist actions for your proposal.',
   }
 }

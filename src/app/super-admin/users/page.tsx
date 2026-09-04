@@ -42,10 +42,17 @@ type TenantOption = {
   user_count: number;
 };
 
+type PlatformTeamRoleOption = {
+  code: string;
+  label: string;
+  description: string;
+};
+
 type AssignableRoles = {
   platform: string[];
   hierarchy: string[];
   additive: string[];
+  platform_team: PlatformTeamRoleOption[];
 };
 
 type DirectoryPayload = {
@@ -67,6 +74,7 @@ type ActivationDetails = {
 const ROLE_LABELS: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin',
   SUPER_ADMIN_VIEWER: 'Super Admin (Viewer)',
+  PLATFORM_STAFF: 'Platform Staff',
   OWNER: 'Owner',
   ADMIN: 'Admin',
   MANAGER: 'Manager',
@@ -81,6 +89,7 @@ const ROLE_LABELS: Record<string, string> = {
 const ROLE_HINTS: Record<string, string> = {
   SUPER_ADMIN: 'Full platform control, including creating other super admins.',
   SUPER_ADMIN_VIEWER: 'Reads every platform screen. Cannot change anything.',
+  PLATFORM_STAFF: 'No access on its own. Gains exactly the platform team roles you grant below.',
   OWNER: 'The tenant principal. One per workspace by convention.',
   ADMIN: 'Full workspace administration, including its users and roles.',
   MANAGER: 'Runs work and teams; can read the user list but not change roles.',
@@ -95,6 +104,7 @@ const ROLE_HINTS: Record<string, string> = {
 const ROLE_CHIP: Record<string, string> = {
   SUPER_ADMIN: 'bg-violet-100 text-violet-800',
   SUPER_ADMIN_VIEWER: 'bg-violet-50 text-violet-700',
+  PLATFORM_STAFF: 'bg-cyan-100 text-cyan-800',
   OWNER: 'bg-purple-100 text-purple-800',
   ADMIN: 'bg-rose-100 text-rose-800',
   MANAGER: 'bg-sky-100 text-sky-800',
@@ -121,7 +131,7 @@ async function readJson<T>(response: Response): Promise<T> {
   return response.json().catch(() => ({})) as Promise<T>;
 }
 
-const EMPTY_ROLES: AssignableRoles = { platform: [], hierarchy: [], additive: [] };
+const EMPTY_ROLES: AssignableRoles = { platform: [], hierarchy: [], additive: [], platform_team: [] };
 
 export default function SuperAdminUsersPage() {
   const { user: authUser, isLoading, authFetch } = useAuth();
@@ -153,6 +163,7 @@ export default function SuperAdminUsersPage() {
   const [createTenantId, setCreateTenantId] = useState('');
   const [createRole, setCreateRole] = useState('');
   const [createTags, setCreateTags] = useState<string[]>([]);
+  const [createTeamRoles, setCreateTeamRoles] = useState<string[]>([]);
   const [createSendEmail, setCreateSendEmail] = useState(true);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -240,6 +251,7 @@ export default function SuperAdminUsersPage() {
     setCreateLastName('');
     setCreateRole('');
     setCreateTags([]);
+    setCreateTeamRoles([]);
     setCreateSendEmail(true);
     setCreateError(null);
   }
@@ -258,11 +270,18 @@ export default function SuperAdminUsersPage() {
     // never valid in the other.
     setCreateRole('');
     setCreateTags([]);
+    setCreateTeamRoles([]);
   }
 
   async function submitCreate() {
     if (!createTenantId || !createRole) {
       setCreateError('Pick a workspace and a role');
+      return;
+    }
+    // Caught here as well as server-side so the admin sees it against the
+    // checkboxes rather than as a banner after a round trip.
+    if (createRole === 'PLATFORM_STAFF' && createTeamRoles.length === 0) {
+      setCreateError('Platform Staff carries no access on its own — grant at least one platform team role');
       return;
     }
     setCreating(true);
@@ -277,6 +296,7 @@ export default function SuperAdminUsersPage() {
           last_name: createLastName.trim() || undefined,
           tenant_id: createTenantId,
           roles: [createRole, ...createTags],
+          platform_role_codes: createIsPlatform && createTeamRoles.length > 0 ? createTeamRoles : undefined,
           send_activation_email: createSendEmail,
         }),
       });
@@ -831,6 +851,48 @@ export default function SuperAdminUsersPage() {
                 ))}
               </div>
             </div>
+
+            {createIsPlatform ? (
+              <div className="mt-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Platform team roles
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {createRole === 'PLATFORM_STAFF'
+                    ? 'Everything this account can do comes from here. Pick at least one.'
+                    : 'Optional. Super admins already hold every capability; these matter when the account is downgraded later.'}
+                </p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {assignableRoles.platform_team.map((teamRole) => (
+                    <label
+                      key={teamRole.code}
+                      className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                        createTeamRoles.includes(teamRole.code)
+                          ? 'border-emerald-500 bg-emerald-50'
+                          : 'border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={createTeamRoles.includes(teamRole.code)}
+                        onChange={() =>
+                          setCreateTeamRoles((current) =>
+                            current.includes(teamRole.code)
+                              ? current.filter((code) => code !== teamRole.code)
+                              : [...current, teamRole.code]
+                          )
+                        }
+                        className="mt-1 h-4 w-4"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-slate-900">{teamRole.label}</span>
+                        <span className="block text-xs text-slate-500">{teamRole.description}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {!createIsPlatform ? (
               <div className="mt-5">

@@ -175,11 +175,21 @@ export default function QualityAuditPage() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Quality Audit</h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Cross-project review and report oversight for your organization.
-        </p>
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Quality Audit</h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Cross-project review and report oversight for your organization.
+          </p>
+        </div>
+        {/* This page lists what was produced; the archive opens the finished
+            reports themselves. Auditors kept asking where the report went. */}
+        <Link
+          href="/tenant-admin/reports"
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          Open the report archive
+        </Link>
       </div>
 
       {/* Summary cards */}

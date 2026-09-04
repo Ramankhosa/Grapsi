@@ -12,6 +12,7 @@ import {
   type ATIKind
 } from '@/lib/ati-kind-policy'
 import { markInviteAccepted, validateInviteEmailLock } from '@/lib/tenant-invite-service'
+import { normalizeEmail, recordOAuthAccountLink } from '@/lib/social-auth'
 
 const completeSignupSchema = z.object({
   atiToken: z.string().min(1),
@@ -34,9 +35,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const signupEmail = normalizeEmail(pendingData.email)
+    if (!signupEmail) {
+      return NextResponse.json(
+        { code: 'INVALID_PENDING_TOKEN', message: 'Social profile did not provide an email address' },
+        { status: 400 }
+      )
+    }
+
     // Check if email is already in use
-    const existingUser = await prisma.user.findUnique({
-      where: { email: pendingData.email }
+    const existingUser = await prisma.user.findFirst({
+      where: { email: { equals: signupEmail, mode: 'insensitive' } }
     })
 
     if (existingUser) {
@@ -84,7 +93,7 @@ export async function POST(request: NextRequest) {
 
     // If this token is backed by a named member invite, signup is locked to
     // the invited email address
-    const inviteLock = await validateInviteEmailLock(tokenValidation.atiToken!.id, pendingData.email)
+    const inviteLock = await validateInviteEmailLock(tokenValidation.atiToken!.id, signupEmail)
     if (!inviteLock.ok) {
       return NextResponse.json(
         { code: 'INVITE_EMAIL_MISMATCH', message: inviteLock.error },
@@ -135,7 +144,7 @@ export async function POST(request: NextRequest) {
 
       const user = await tx.user.create({
         data: {
-          email: pendingData.email,
+          email: signupEmail,
           name: pendingData.name || `${pendingData.firstName || ''} ${pendingData.lastName || ''}`.trim(),
           firstName: pendingData.firstName,
           lastName: pendingData.lastName,
@@ -149,6 +158,16 @@ export async function POST(request: NextRequest) {
           oauthProfile: pendingData.profile,
           accessExpiresAt
         }
+      })
+
+      // Record the provider link so this account can add further providers
+      // later without displacing the one it signed up with.
+      await recordOAuthAccountLink(tx, user.id, {
+        provider: pendingData.provider,
+        providerUserId: pendingData.providerId,
+        email: signupEmail,
+        emailVerified: pendingData.emailVerified ?? false,
+        profile: pendingData.profile
       })
 
       // If this signup redeemed a named member invite, mark it accepted

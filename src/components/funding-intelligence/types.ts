@@ -19,7 +19,6 @@ export type ProjectSearchItem = {
   title: string
   abstractText: string | null
   executiveSummary: string | null
-  primaryInvestigatorName: string | null
   primaryInstitutionName: string | null
   schemeName: string | null
   programName: string | null

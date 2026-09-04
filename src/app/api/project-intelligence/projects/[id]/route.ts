@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { requireFundingActor } from '@/lib/funding/access'
+import { redactProjectPeople } from '@/lib/publicProjects/redaction'
 import { publicProjectSearchService } from '@/lib/publicProjects/searchService'
 
 export const runtime = 'nodejs'
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     if (!project) {
       return NextResponse.json({ error: 'Funded project not found' }, { status: 404 })
     }
-    return NextResponse.json({ project })
+    return NextResponse.json({ project: redactProjectPeople(project) })
   } catch (error) {
     console.error('[ProjectIntelligence/Project] Failed:', error)
     return NextResponse.json({ error: 'Failed to load the funded project' }, { status: 500 })

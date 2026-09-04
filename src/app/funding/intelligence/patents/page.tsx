@@ -3,7 +3,7 @@ import { Suspense } from 'react'
 import PatentSearchPage from '@/components/funding-intelligence/patents/PatentSearchPage'
 
 export const metadata = {
-  title: 'Patent Search | Funding Intelligence | Paper Nest',
+  title: 'Patent Search | Funding Intelligence',
   description: 'Search related patents by meaning and build a prior-art shortlist you can cite in your proposal.',
 }
 

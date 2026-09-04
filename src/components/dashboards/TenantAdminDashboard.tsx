@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Copy,
+  FileText,
   GraduationCap,
   KeyRound,
   Loader2,
@@ -354,6 +355,13 @@ export default function TenantAdminDashboard() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => (window.location.href = '/tenant-admin/reports')}
+              className="nk-btn-secondary nk-btn-sm"
+            >
+              <FileText className="h-4 w-4 text-nickel-400" aria-hidden />
+              Report archive
+            </button>
             <button
               onClick={() => (window.location.href = '/tenant-admin/analytics')}
               className="nk-btn-secondary nk-btn-sm"

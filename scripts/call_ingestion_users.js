@@ -18,7 +18,12 @@ const prisma = new PrismaClient()
 
 const DEFAULT_PASSWORD = 'admin@12345'
 const PLATFORM_ROLE_CODES = ['FUNDING_OPERATIONS_MANAGER', 'FUNDING_PUBLISHER']
-const APP_ROLES = ['ADMIN']
+// PLATFORM_STAFF, not ADMIN. ADMIN-in-PLATFORM used to work only through the
+// implicit `isFundingAdminRole` backdoor in funding/access.ts, and is a shape
+// `validateRoleShape` rejects — so these accounts could not be reproduced or
+// edited through the super-admin UI. The capabilities come from
+// PLATFORM_ROLE_CODES below, which is the same path the UI now uses.
+const APP_ROLES = ['PLATFORM_STAFF']
 const ATI_PEPPER = process.env.ATI_PEPPER || 'default-pepper-change-in-prod'
 const USERS = [
   { email: 'sunil_call@gmail.com', name: 'Sunil Call' },

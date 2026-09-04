@@ -9,6 +9,7 @@ const socialSignupPendingDataSchema = z.object({
   provider: z.enum(['google', 'facebook', 'linkedin', 'twitter']),
   providerId: z.string().min(1),
   email: z.string().email(),
+  emailVerified: z.boolean().optional().default(false),
   name: z.string().optional(),
   firstName: z.string().optional(),
   lastName: z.string().optional(),
@@ -19,8 +20,14 @@ const socialSignupPendingDataSchema = z.object({
 
 export type SocialSignupPendingData = z.infer<typeof socialSignupPendingDataSchema>
 
+/** Input shape: `emailVerified` may be omitted and defaults to false. */
+export type SocialSignupPendingInput = Omit<
+  z.input<typeof socialSignupPendingDataSchema>,
+  'iat' | 'exp'
+>
+
 export function createSocialSignupToken(
-  payload: Omit<SocialSignupPendingData, 'iat' | 'exp'>
+  payload: SocialSignupPendingInput
 ): string {
   return jwt.sign(payload, SOCIAL_SIGNUP_TOKEN_SECRET, {
     expiresIn: '15m',

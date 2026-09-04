@@ -1,12 +1,28 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import AuthLoader from '@/components/ui/AuthLoader'
 import { motion } from 'framer-motion'
-import AnimatedLogo from '@/components/ui/animated-logo'
+import { BrandLockup } from '@/components/ui/BrandMark'
+
+// Human-readable messages for the ?error= codes the social OAuth callbacks
+// redirect back with.
+const SOCIAL_LOGIN_ERRORS: Record<string, string> = {
+  oauth_error: 'Sign-in was cancelled or denied by the provider.',
+  no_code: 'The provider did not return an authorization code. Please try again.',
+  invalid_state: 'Your sign-in session expired. Please try again.',
+  oauth_no_email: 'That account did not share an email address, so we cannot match it to a Grapsi account.',
+  oauth_missing_identity: 'The provider did not return a usable account id. Please try again.',
+  oauth_email_unverified: 'Please verify your email address with that provider before using it to sign in.',
+  oauth_callback_failed: 'We could not complete sign-in with that provider. Please try again.',
+  user_suspended: 'Your account is suspended. Please contact your administrator.',
+  access_expired: 'Your event access has ended. Contact your organizer to continue.',
+  invalid_scope: 'Your account has an invalid organisation association. Please contact your administrator.',
+  scope_inactive: 'Your organisation is inactive. Please contact your administrator.'
+}
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -16,6 +32,15 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const { login } = useAuth()
   const router = useRouter()
+
+  // Surface failures redirected back from the social OAuth callbacks. Read
+  // straight from the URL rather than useSearchParams so this page does not
+  // need a Suspense boundary at build time.
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('error')
+    if (!code) return
+    setError(SOCIAL_LOGIN_ERRORS[code] || 'Sign-in failed. Please try again.')
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -79,7 +104,7 @@ export default function LoginPage() {
         <div className="flex flex-col items-center">
           <div className="mb-6 relative">
             <div className="absolute -inset-4 bg-ai-blue-500/20 blur-xl rounded-full" />
-            <AnimatedLogo size="lg" />
+            <BrandLockup size="lg" tone="dark" />
           </div>
           <h2 className="text-center text-3xl font-bold text-white tracking-tight">
             Welcome Back

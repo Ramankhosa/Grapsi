@@ -13,6 +13,7 @@ export interface User {
   roles: (
     | 'SUPER_ADMIN'
     | 'SUPER_ADMIN_VIEWER'
+    | 'PLATFORM_STAFF'
     | 'OWNER'
     | 'ADMIN'
     | 'MANAGER'

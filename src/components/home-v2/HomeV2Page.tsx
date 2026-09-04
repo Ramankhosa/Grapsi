@@ -7,35 +7,50 @@ import { useEffect, useState } from 'react'
 import {
   AlertCircle,
   ArrowRight,
+  BellRing,
   Check,
+  ChevronDown,
+  ClipboardCheck,
   Database,
   FileCheck2,
-  Gauge,
+  GraduationCap,
   LockKeyhole,
+  MessageSquare,
   Search,
   ShieldCheck,
   Target,
+  Users,
 } from 'lucide-react'
+
 import { useAuth } from '@/lib/auth-context'
+import { MENTOR } from '@/lib/persona'
 import {
   audienceCards,
-  databaseRows,
+  faqs,
+  fundingMistakes,
   heroEligibility,
   heroMatches,
   heroPrecedents,
+  journeySteps,
   platformStats,
+  trainingSessions,
 } from './data'
+import AlertPreview from './AlertPreview'
+import ChatPreview from './ChatPreview'
+import CorpusTable from './CorpusTable'
 import FieldMatrix from './FieldMatrix'
 import FundedByFunder from './FundedByFunder'
-import FundingPipeline from './FundingPipeline'
+import MappingDiagram from './MappingDiagram'
+import OfficeBoard from './OfficeBoard'
+import PatentSearch from './PatentSearch'
+import ReviewScorecard from './ReviewScorecard'
+import TemplateStack from './TemplateStack'
 import { useHomeMotion } from './motion'
 
 const BTN_BASE =
   'inline-flex h-11 items-center justify-center gap-2 rounded-lg px-5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500 focus-visible:ring-offset-2 focus-visible:ring-offset-ground'
 const BTN_PRIMARY = `${BTN_BASE} bg-cobalt-600 text-white hover:bg-cobalt-700`
 const BTN_SECONDARY = `${BTN_BASE} border border-hairline bg-ground text-ink-soft hover:border-muted-soft hover:bg-inset`
-const LINK_QUIET =
-  'inline-flex items-center gap-1.5 rounded text-sm font-medium text-cobalt-600 transition hover:text-cobalt-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500 focus-visible:ring-offset-2'
 
 function useCta() {
   const router = useRouter()
@@ -44,7 +59,7 @@ function useCta() {
   return {
     user,
     goPrimary: () => router.push(user ? '/dashboard' : '/register'),
-    primaryLabel: user ? 'Go to dashboard' : 'Run a funding scan',
+    primaryLabel: user ? 'Go to my dashboard' : 'See my matched calls — free',
   }
 }
 
@@ -54,19 +69,26 @@ export default function HomeV2Page() {
       <SiteNav />
       <Hero />
       <StatsStrip />
-      <FundingPipeline />
-      <IntelligenceSection />
-      <PositioningSection />
-      <PreparationSection />
+      <MistakesSection />
+      <JourneySection />
+      <MappingSection />
+      <AlertsSection />
+      <AssistantSection />
+      <ReviewerSection />
       <EvidenceSection />
-      <TrustSection />
+      <PatentsSection />
+      <TemplatesSection />
+      <TrainingSection />
+      <OfficeSection />
       <AudienceSection />
-      <DevelopersSection />
+      <FaqSection />
       <FinalCTA />
       <SiteFooter />
     </main>
   )
 }
+
+/* ─── shared furniture ──────────────────────────────────────────────────── */
 
 function Wordmark({ className = '' }: { className?: string }) {
   return (
@@ -76,9 +98,75 @@ function Wordmark({ className = '' }: { className?: string }) {
   )
 }
 
-function Eyebrow({ children }: { children: React.ReactNode }) {
-  return <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.22em] text-cobalt-600">{children}</p>
+function Eyebrow({ children, tone = 'cobalt' }: { children: React.ReactNode; tone?: 'cobalt' | 'amber' }) {
+  return (
+    <p
+      className={`font-home-v2-mono text-[11px] uppercase tracking-[0.22em] ${
+        tone === 'amber' ? 'text-amber-700' : 'text-cobalt-600'
+      }`}
+    >
+      {children}
+    </p>
+  )
 }
+
+/** Section headline + explanation. Every headline carries the message on its own. */
+function SectionHead({
+  eyebrow,
+  title,
+  body,
+  tone = 'cobalt',
+}: {
+  eyebrow: string
+  title: string
+  body: string
+  tone?: 'cobalt' | 'amber'
+}) {
+  return (
+    <>
+      <Eyebrow tone={tone}>{eyebrow}</Eyebrow>
+      <h2 className="mt-4 text-[clamp(1.75rem,3.3vw,2.6rem)] font-semibold leading-[1.14] tracking-[-0.02em] text-ink">
+        {title}
+      </h2>
+      <p className="mt-5 max-w-xl text-[17px] leading-8 text-ink-soft">{body}</p>
+    </>
+  )
+}
+
+/** A concrete worked example. Marked off so a skimmer can find the "for instance". */
+function Example({ children, tone = 'cobalt' }: { children: React.ReactNode; tone?: 'cobalt' | 'amber' }) {
+  return (
+    <div
+      className={`mt-8 rounded-xl border-l-[3px] px-5 py-4 ${
+        tone === 'amber' ? 'border-l-amber-500 bg-amber-50/70' : 'border-l-cobalt-500 bg-cobalt-50/60'
+      }`}
+    >
+      <p
+        className={`font-home-v2-mono text-[10px] uppercase tracking-[0.18em] ${
+          tone === 'amber' ? 'text-amber-800' : 'text-cobalt-700'
+        }`}
+      >
+        For example
+      </p>
+      <p className="mt-2.5 text-[15px] leading-7 text-ink-soft">{children}</p>
+    </div>
+  )
+}
+
+function Benefits({ rows }: { rows: Array<[string, typeof Target]> }) {
+  return (
+    <ul className="mt-8 space-y-3.5">
+      {rows.map(([label, Icon]) => (
+        <li key={label} className="flex items-start gap-3">
+          <Icon className="mt-0.5 h-[18px] w-[18px] shrink-0 text-cobalt-600" aria-hidden />
+          <span className="text-[15px] leading-7 text-ink-soft">{label}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/* ─── nav ───────────────────────────────────────────────────────────────── */
 
 function SiteNav() {
   const { user } = useCta()
@@ -102,13 +190,14 @@ function SiteNav() {
           <Wordmark />
         </Link>
 
-        <nav aria-label="Primary" className="hidden items-center gap-6 md:flex lg:gap-8">
+        <nav aria-label="Primary" className="hidden items-center gap-6 lg:flex lg:gap-7">
           {[
-            ['Platform', '#pipeline'],
-            ['Intelligence', '#intelligence'],
-            ['Evidence', '#evidence'],
-            ['Security', '#security'],
-            ['Developers', '#developers'],
+            ['How it works', '#how'],
+            ['Matching', '#mapping'],
+            ['AI review', '#reviewer'],
+            ['Patent search', '#patents'],
+            ['Training', '#training'],
+            ['For institutions', '#office'],
           ].map(([label, href]) => (
             <a
               key={label}
@@ -127,14 +216,16 @@ function SiteNav() {
           >
             {user ? 'Dashboard' : 'Sign in'}
           </Link>
-          <Link href="/contact" className={`${BTN_PRIMARY} h-10 px-4`}>
-            Request a demo
+          <Link href="/register" className={`${BTN_PRIMARY} h-10 px-4`}>
+            Start free
           </Link>
         </div>
       </div>
     </header>
   )
 }
+
+/* ─── hero ──────────────────────────────────────────────────────────────── */
 
 function Hero() {
   const { primaryLabel, goPrimary } = useCta()
@@ -144,27 +235,28 @@ function Hero() {
     <section className="relative overflow-hidden">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-[560px] bg-[radial-gradient(60%_100%_at_50%_0%,rgba(29,78,216,0.055),transparent_72%)]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[560px] bg-[radial-gradient(60%_100%_at_50%_0%,rgba(29,78,216,0.06),transparent_72%)]"
       />
-      <div className="relative mx-auto max-w-6xl px-6 pb-20 pt-16 md:pb-28 md:pt-24">
+      <div className="relative mx-auto max-w-6xl px-6 pb-16 pt-14 md:pb-20 md:pt-20">
         <motion.div
           initial={reduced ? false : { opacity: 0, y: 14 }}
           animate={reduced ? undefined : { opacity: 1, y: 0 }}
           transition={{ duration: 0.55, ease: 'easeOut' }}
           className="mx-auto max-w-3xl text-center"
         >
-          <span className="inline-flex items-center gap-2 rounded-full border border-hairline bg-ground px-3 py-1 font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+          <span className="inline-flex items-center gap-2 rounded-full border border-hairline bg-ground px-3 py-1 font-home-v2-mono text-[11px] uppercase tracking-[0.16em] text-muted">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-cobalt-600" />
-            Funding intelligence platform
+            For researchers and research offices
           </span>
 
-          <h1 className="mt-6 text-[clamp(2.25rem,5.4vw,4rem)] font-semibold leading-[1.05] tracking-[-0.03em] text-ink">
-            The command center for research funding.
+          <h1 className="mt-6 text-[clamp(2.25rem,5.4vw,4rem)] font-semibold leading-[1.04] tracking-[-0.03em] text-ink">
+            The grants you can actually win, found for you.
           </h1>
 
-          <p className="mx-auto mt-6 max-w-2xl text-[17px] leading-8 text-ink-soft md:text-lg">
-            AIGrantMentor matches your research to the right calls, shows what has actually won funding, positions your
-            idea in the gaps, and prepares a submission that survives review.
+          <p className="mx-auto mt-6 max-w-2xl text-[17px] leading-8 text-ink-soft md:text-[19px] md:leading-9">
+            AIGrantMentor reads your papers, matches you to live calls from ANRF, DST, DBT, ICMR and 1,000+ funding
+            agencies and opportunities a year, tells you on WhatsApp the day one opens, and scores your draft against
+            the agency&apos;s own rubric before you submit.
           </p>
 
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -172,16 +264,13 @@ function Hero() {
               {primaryLabel}
               <ArrowRight className="h-4 w-4" aria-hidden />
             </button>
-            <a href="#pipeline" className={`${BTN_SECONDARY} w-full sm:w-auto`}>
-              See how it works
-            </a>
+            <Link href="/contact" className={`${BTN_SECONDARY} w-full sm:w-auto`}>
+              Book an institution demo
+            </Link>
           </div>
 
-          <p className="mt-6 text-[13px] text-muted">
-            No credit card · Institution-wide pilots available ·{' '}
-            <Link href="/funding/intelligence" className={LINK_QUIET}>
-              Explore the Intelligence Layer
-            </Link>
+          <p className="mt-6 text-[13px] leading-6 text-muted">
+            Free to start · No credit card · Your drafts are never used to train models
           </p>
         </motion.div>
 
@@ -206,10 +295,10 @@ function ScanPanel() {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline px-5 py-3">
         <div className="flex items-center gap-2 font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">
           <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
-          Funding scan
+          Your matched calls
         </div>
         <div className="font-home-v2-mono text-[11px] text-muted-soft">
-          214 calls scanned · 38 eligible · 6 high alignment
+          214 calls scanned · 38 you are eligible for · 6 strong matches
         </div>
       </div>
 
@@ -225,14 +314,14 @@ function ScanPanel() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-ink">{match.title}</p>
                 <p className="mt-1.5 truncate font-home-v2-mono text-[11px] text-muted">
-                  {match.programme} · {match.id} · {match.closes}
+                  {match.programme} · {match.closes}
                 </p>
               </div>
               <div className="w-20 shrink-0 pt-0.5">
                 <div className="text-right font-home-v2-mono text-xs font-semibold text-ink">{match.score}%</div>
                 <div className="mt-2 h-1 rounded-full bg-nickel-100">
                   <div
-                    className={`h-1 rounded-full ${index === 0 ? 'bg-cobalt-600' : 'bg-nickel-300'}`}
+                    className={`h-1 rounded-full ${match.tier === 'strong' ? 'bg-cobalt-600' : 'bg-nickel-300'}`}
                     style={{ width: `${match.score}%` }}
                   />
                 </div>
@@ -242,7 +331,7 @@ function ScanPanel() {
         </ul>
 
         <div className="bg-inset p-5 sm:p-6">
-          <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Why it matches</p>
+          <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Why this one matched</p>
           <h3 className="mt-3 text-[15px] font-semibold leading-6 text-ink">{selected.title}</h3>
 
           <ul className="mt-4 space-y-2.5">
@@ -262,7 +351,9 @@ function ScanPanel() {
           </ul>
 
           <div className="mt-6 border-t border-hairline pt-4">
-            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Funded precedents</p>
+            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+              What they funded before
+            </p>
             <ul className="mt-3 space-y-2">
               {heroPrecedents.map((precedent) => (
                 <li
@@ -284,12 +375,12 @@ function ScanPanel() {
 
 function StatsStrip() {
   return (
-    <section aria-label="Platform coverage" className="mx-auto max-w-6xl px-6 pb-4">
+    <section aria-label="Coverage" className="mx-auto max-w-6xl px-6 pb-4">
       <dl className="grid gap-px overflow-hidden rounded-xl border border-hairline bg-hairline sm:grid-cols-3">
         {platformStats.map((stat) => (
           <div key={stat.label} className="flex flex-col-reverse bg-ground px-6 py-6">
-            <dt className="mt-1.5 text-[13px] text-muted">{stat.label}</dt>
-            <dd className="font-home-v2-mono text-2xl font-semibold tracking-tight text-ink">{stat.value}</dd>
+            <dt className="mt-1.5 text-[13px] leading-5 text-muted">{stat.label}</dt>
+            <dd className="font-home-v2-mono text-[26px] font-semibold tracking-tight text-ink">{stat.value}</dd>
           </div>
         ))}
       </dl>
@@ -297,353 +388,438 @@ function StatsStrip() {
   )
 }
 
-function FeatureRows({ rows }: { rows: Array<[string, typeof Search]> }) {
-  return (
-    <ul className="mt-8 space-y-4">
-      {rows.map(([label, Icon]) => (
-        <li key={label} className="flex items-center gap-3 border-t border-hairline pt-4">
-          <Icon className="h-[18px] w-[18px] shrink-0 text-cobalt-600" aria-hidden />
-          <span className="text-[15px] font-medium text-ink-soft">{label}</span>
-        </li>
-      ))}
-    </ul>
-  )
-}
+/* ─── the problem, and where each fix lives ─────────────────────────────── */
 
-function IntelligenceSection() {
+function MistakesSection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section id="intelligence" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
-      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-20">
-        <div>
-          <Eyebrow>Intelligence</Eyebrow>
-          <h2 className="mt-4 text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
-            Know what gets funded before you write a word.
+    <motion.section id="mistakes" className="border-t border-hairline bg-inset py-20 md:py-24" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <div className="max-w-3xl">
+          <Eyebrow>Why proposals fail</Eyebrow>
+          <h2 className="mt-4 text-[clamp(1.75rem,3.3vw,2.6rem)] font-semibold leading-[1.14] tracking-[-0.02em] text-ink">
+            Most proposals lose before anyone reads the science.
           </h2>
-          <p className="mt-6 max-w-xl text-[17px] leading-8 text-ink-soft">
-            Matching is only useful when it is grounded in the record of prior awards. The intelligence layer connects
-            profile fit, eligibility, funded precedents, and deadline pressure in a single view.
+          <p className="mt-5 text-[17px] leading-8 text-ink-soft">
+            Seven mistakes account for most rejections, and none of them are about the quality of your research. Each one
+            has a fix, and each fix is a part of this platform.
           </p>
-          <FeatureRows
-            rows={[
-              ['Profile-aware call matching', Search],
-              ['Funded-project database', Database],
-              ['Eligibility screening', ShieldCheck],
-            ]}
-          />
         </div>
 
-        <FundedByFunder />
+        <ol className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {fundingMistakes.map((item) => (
+            <li
+              key={item.n}
+              className="flex flex-col rounded-2xl border border-hairline bg-ground p-5 transition hover:border-cobalt-200"
+            >
+              <div className="flex items-baseline gap-3">
+                <span className="font-home-v2-mono text-xs font-semibold text-nickel-400">{item.n}</span>
+                <h3 className="text-[16px] font-semibold leading-6 text-ink">{item.mistake}</h3>
+              </div>
+              <p className="mt-3 text-[14px] leading-7 text-muted">{item.body}</p>
+
+              <div className="mt-5 flex-1 border-t border-hairline pt-4">
+                <a
+                  href={item.href}
+                  className="inline-flex items-center gap-1.5 rounded font-home-v2-mono text-[10px] uppercase tracking-[0.16em] text-cobalt-700 transition hover:text-cobalt-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500"
+                >
+                  {item.fixLabel}
+                  <ArrowRight className="h-3 w-3" aria-hidden />
+                </a>
+                <p className="mt-2.5 text-[14px] leading-7 text-ink-soft">{item.fix}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
       </div>
     </motion.section>
   )
 }
 
-function PositioningSection() {
+/* ─── how it works ──────────────────────────────────────────────────────── */
+
+function JourneySection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section id="positioning" className="border-t border-hairline bg-inset py-20 md:py-28" {...reveal}>
-      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-20">
+    <motion.section id="how" className="border-t border-hairline bg-ground py-20 md:py-24" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <div className="gap-10 md:flex md:items-end md:justify-between">
+          <div className="max-w-2xl">
+            <Eyebrow>How it works</Eyebrow>
+            <h2 className="mt-4 text-[clamp(1.75rem,3.3vw,2.6rem)] font-semibold leading-[1.14] tracking-[-0.02em] text-ink">
+              You do the research. We do the chasing.
+            </h2>
+          </div>
+          <p className="mt-5 max-w-sm text-[15px] leading-7 text-muted md:mt-0">
+            Setup is one afternoon&apos;s coffee break. After that it runs whether you log in or not.
+          </p>
+        </div>
+
+        <ol className="mt-14 grid gap-x-10 gap-y-10 sm:grid-cols-2 lg:grid-cols-4">
+          {journeySteps.map((step) => (
+            <li key={step.step} className="border-t-2 border-cobalt-600 pt-5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-home-v2-mono text-xs font-semibold text-cobalt-600">{step.step}</span>
+                <span className="rounded-md bg-inset px-2 py-0.5 font-home-v2-mono text-[10px] text-muted">
+                  {step.time}
+                </span>
+              </div>
+              <p className="mt-4 font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">{step.label}</p>
+              <h3 className="mt-2.5 text-[17px] font-semibold leading-6 text-ink">{step.title}</h3>
+              <p className="mt-2.5 text-[15px] leading-7 text-ink-soft">{step.body}</p>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </motion.section>
+  )
+}
+
+/* ─── 1. profile mapping ────────────────────────────────────────────────── */
+
+function MappingSection() {
+  const { reveal } = useHomeMotion()
+
+  return (
+    <motion.section id="mapping" className="border-t border-hairline bg-inset py-20 md:py-24" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-16">
+        <div>
+          <SectionHead
+            eyebrow="Profile mapping"
+            title="We read your papers so you never read a call list again."
+            body="Keyword search hands you two hundred calls and makes you the filter. Instead, your publications and research areas are placed on a 49-discipline map — and so is every incoming call. Fit becomes a number you can trust, and the call’s eligibility rules are checked against you before it ever reaches your list."
+          />
+          <Benefits
+            rows={[
+              ['Import from Scopus, ORCID or Google Scholar — you do not retype anything.', Database],
+              ['Every call scored against your profile, with the terms it matched on shown.', Target],
+              ['Eligibility checked line by line, so you never spend a month on a call you cannot enter.', ClipboardCheck],
+            ]}
+          />
+          <Example>
+            Dr. Rao uploads 14 papers on perovskite stability. She is mapped to materials science, renewable energy and
+            condensed-matter physics. Of 214 open calls, 38 are ones she is eligible for and 6 score above 70%. She reads
+            six, not two hundred.
+          </Example>
+        </div>
+
+        <MappingDiagram />
+      </div>
+    </motion.section>
+  )
+}
+
+/* ─── 2. alerts ─────────────────────────────────────────────────────────── */
+
+function AlertsSection() {
+  const { reveal } = useHomeMotion()
+
+  return (
+    <motion.section id="alerts" className="border-t border-hairline bg-ground py-20 md:py-24" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-16">
         <div className="order-2 lg:order-1">
-          <FieldMatrix />
+          <AlertPreview />
         </div>
 
         <div className="order-1 lg:order-2">
-          <Eyebrow>Positioning engine</Eyebrow>
-          <h2 className="mt-4 text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
-            Find the white space between 2.8M funded projects.
-          </h2>
-          <p className="mt-6 max-w-xl text-[17px] leading-8 text-ink-soft">
-            Gap analysis places your idea against everything the agency has already paid for, then sharpens it into the
-            angle that is both novel and fundable.
-          </p>
-
-          <div className="mt-8 rounded-2xl border border-hairline bg-ground p-5">
-            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Before / after</p>
-            <p className="mt-4 rounded-lg border border-hairline bg-inset px-4 py-3 text-[14px] leading-6 text-muted">
-              AI tool for improving hospital workflows.
-            </p>
-            <div aria-hidden className="my-3 flex justify-center text-nickel-400">
-              <ArrowRight className="h-4 w-4 rotate-90" />
-            </div>
-            <p className="rounded-lg border border-cobalt-100 bg-cobalt-50/70 px-4 py-3 text-[14px] leading-6 text-ink-soft">
-              Explainable triage automation for resource-constrained care networks, aligned to open-science data
-              obligations and health-system resilience criteria.
-            </p>
-          </div>
+          <SectionHead
+            eyebrow="Alerts"
+            title="The call comes to you, the day it opens."
+            body="The most expensive thing you can do is find out about the right call in its last week. New calls are matched against every profile as they are published, and the people they fit are told immediately — on WhatsApp and by email, with the fit score, the deadline and the reason it matched."
+          />
+          <Benefits
+            rows={[
+              ['WhatsApp and email, whichever you actually read.', BellRing],
+              ['Instantly, a daily summary, or one digest a week — your choice.', Check],
+              ['Deadline reminders as the closing date approaches, so nothing lapses quietly.', AlertCircle],
+            ]}
+          />
+          <Example>
+            The ANRF Early Career call is published on a Tuesday morning. By 09:12 the eleven faculty it fits have it on
+            their phones, with 38 days still on the clock — not eight.
+          </Example>
         </div>
       </div>
     </motion.section>
   )
 }
 
-function PreparationSection() {
+/* ─── 3. AI assistant ───────────────────────────────────────────────────── */
+
+function AssistantSection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section id="preparation" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
-      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-20">
+    <motion.section id="assistant" className="border-t border-hairline bg-inset py-20 md:py-24" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-16">
         <div>
-          <Eyebrow>Preparation studio</Eyebrow>
-          <h2 className="mt-4 text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
-            From positioned idea to reviewer-ready submission.
-          </h2>
-          <p className="mt-6 max-w-xl text-[17px] leading-8 text-ink-soft">
-            The studio drafts against the call&apos;s own structure, keeps every claim attached to a source, and scores
-            the result before a reviewer ever sees it.
-          </p>
-          <FeatureRows
+          <SectionHead
+            eyebrow={`Meet ${MENTOR.name}`}
+            title="A mentor who has read every call, so you do not have to."
+            body={`You have questions a search box cannot answer: who funds this, how much do they give, what did the funded ones do differently, am I eligible. Ask ${MENTOR.name} the way you would ask a senior colleague. She answers from the calls and the funded-project record — and shows the records behind every number, so you can check her.`}
+          />
+          <Benefits
             rows={[
-              ['Structured drafting', FileCheck2],
-              ['Automatic citations and policy alignment', Check],
-              ['AI review against call criteria', Gauge],
+              [`${MENTOR.name} cites real award records, never a general web search.`, MessageSquare],
+              ['Compare agencies, amounts, success patterns and deadlines in one question.', Database],
+              ['Ask about a specific call and she reads that call’s own documents back to you.', FileCheck2],
             ]}
+          />
+          <Example>
+            &ldquo;Which agencies funded solid-state battery work in the last three years, and what did they pay?&rdquo;
+            — four funders, 61 projects, average award per agency, and the one call that is still open.
+          </Example>
+        </div>
+
+        <ChatPreview />
+      </div>
+    </motion.section>
+  )
+}
+
+/* ─── 4. AI grant reviewer ──────────────────────────────────────────────── */
+
+function ReviewerSection() {
+  const { reveal } = useHomeMotion()
+
+  return (
+    <motion.section id="reviewer" className="border-t border-hairline bg-ground py-20 md:py-24" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <div className="max-w-3xl">
+          <SectionHead
+            eyebrow="AI grant reviewer"
+            title="Get rejected here. It is much cheaper."
+            body="A real panel gives you a decision and, if you are lucky, one line of feedback a year later. The AI reviewer marks your draft against that specific call’s criteria and weights, tells you which sentence is costing you points and what to put there instead — while you can still change it."
           />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,0.72fr)]">
-          <div className="rounded-2xl border border-hairline bg-ground p-5">
-            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Proposal outline</p>
-            <ul className="mt-4 space-y-2">
-              {['Objectives', 'WP1 · Evidence base', 'WP2 · Prototype', 'WP3 · Evaluation', 'Budget', 'Impact'].map(
-                (item) => (
-                  <li
-                    key={item}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-hairline px-3 py-2.5 text-[13px] text-ink-soft"
-                  >
-                    <span className="truncate">{item}</span>
-                    <Check className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
-                  </li>
-                ),
-              )}
-            </ul>
+        <div className="mt-12 grid gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-16">
+          <div>
+            <Benefits
+              rows={[
+                ['Scored on the call’s own criteria and weights, not a generic checklist.', Target],
+                ['Every finding names the criterion it costs you points under.', ClipboardCheck],
+                ['Re-run it after each edit and watch the weak criteria come up.', FileCheck2],
+                ['Export the full review as a Word document for your co-PIs and your office.', FileCheck2],
+              ]}
+            />
+            <Example>
+              A first draft scores 2.8 out of 5. The reviewer finds an ageing claim with no test standard behind it,
+              ₹18L of equipment tied to no work package, and impact written for scientists instead of for the mission
+              the call funds. Three fixes, one afternoon, and the same draft scores 4.3.
+            </Example>
           </div>
 
-          <div className="rounded-2xl border border-hairline bg-inset p-5">
-            <p className="font-home-v2-mono text-[11px] uppercase tracking-[0.18em] text-muted">Evidence rail</p>
-            <ul className="mt-4 space-y-2">
-              {['Nature 2024', 'EU Green Deal S3', 'Funded: GA 101076xxx', 'NIH Data Mgmt 2025'].map((chip) => (
-                <li
-                  key={chip}
-                  className="truncate rounded-full border border-hairline bg-ground px-3 py-2 font-home-v2-mono text-[11px] text-ink-soft"
-                >
-                  {chip}
-                </li>
-              ))}
-            </ul>
-          </div>
+          <ReviewScorecard />
         </div>
       </div>
     </motion.section>
   )
 }
+
+/* ─── 5. the funded-project record ──────────────────────────────────────── */
 
 function EvidenceSection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section id="evidence" className="border-t border-hairline bg-inset py-20 md:py-28" {...reveal}>
+    <motion.section id="evidence" className="border-t border-hairline bg-inset py-20 md:py-24" {...reveal}>
       <div className="mx-auto max-w-6xl px-6">
-        <Eyebrow>Built on data, not adjectives</Eyebrow>
-        <h2 className="mt-4 max-w-3xl text-[clamp(1.875rem,3.4vw,2.75rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-ink">
-          The funded-project record becomes a working surface.
-        </h2>
+        <div className="max-w-3xl">
+          <SectionHead
+            eyebrow="The evidence"
+            title="50,000 projects your agencies have already paid for."
+            body="Every match, every gap and every template on this page is grounded in the same thing: what Indian government agencies actually funded, in your field, in the last decade. Search it by agency, topic, year and amount — and see both the crowded ground and the pocket nobody has claimed."
+          />
+        </div>
 
-        <div className="mt-12 grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-          <div className="rounded-2xl border border-hairline bg-ground p-5 sm:p-6">
-            <div className="mb-5 flex flex-wrap gap-2 font-home-v2-mono text-[11px] text-muted">
-              {['programme: all', 'year: 2023–2026', 'topic: AI'].map((chip) => (
-                <span key={chip} className="rounded-md border border-hairline bg-inset px-2 py-1">
-                  {chip}
-                </span>
-              ))}
-            </div>
-
-            <div className="-mx-1 overflow-x-auto px-1">
-              <table className="w-full min-w-[560px] text-left font-home-v2-mono text-xs">
-                <thead>
-                  <tr>
-                    {['Programme', 'Topic', 'Award', 'Year', 'Partners'].map((head) => (
-                      <th key={head} className="border-b border-hairline pb-3 pr-4 font-medium text-muted">
-                        {head}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {databaseRows.map((row) => (
-                    <tr key={row.join('-')}>
-                      {row.map((cell, index) => (
-                        <td
-                          key={cell}
-                          className={`border-b border-hairline py-3 pr-4 ${
-                            index === 0 ? 'font-medium text-ink' : 'text-ink-soft'
-                          }`}
-                        >
-                          {cell}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <p className="mt-5 text-[12px] text-muted">
-              Funded-project intelligence layer — 96 programmes, updated continuously. Illustrative data.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-hairline bg-ground p-5 sm:p-6">
-            <div className="flex items-center justify-between gap-4">
-              <h3 className="text-[15px] font-semibold text-ink">AI review scorecard</h3>
-              <span className="rounded-md bg-cobalt-50 px-2.5 py-1 font-home-v2-mono text-[11px] font-semibold text-cobalt-700">
-                4.6 / 5
-              </span>
-            </div>
-
-            <div className="mt-6 space-y-4">
-              {[
-                ['Excellence', 92],
-                ['Impact', 88],
-                ['Implementation', 84],
-                ['Eligibility', 98],
-              ].map(([label, value]) => (
-                <div key={label as string}>
-                  <div className="mb-2 flex justify-between font-home-v2-mono text-[11px] text-muted">
-                    <span>{label as string}</span>
-                    <span className="text-ink-soft">{value as number}%</span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-nickel-100">
-                    <div className="h-1.5 rounded-full bg-cobalt-600" style={{ width: `${value as number}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <p className="mt-7 border-l-2 border-cobalt-200 bg-inset px-4 py-3 text-[13px] leading-6 text-ink-soft">
-              &quot;The methodology section should address data-management obligations under the call&apos;s open-science
-              requirements.&quot;
-            </p>
+        <div className="mt-12 grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          <CorpusTable />
+          <div className="grid gap-6">
+            <FundedByFunder />
+            <FieldMatrix />
           </div>
         </div>
+
+        <Example>
+          Perovskite synthesis has been funded 135 times in five years — that ground is crowded. Ageing of tandem
+          modules in humid climates has been funded six times, and still sits inside the call&apos;s scope. That is
+          where the same idea becomes fundable.
+        </Example>
       </div>
     </motion.section>
   )
 }
 
-function TrustSection() {
+/* ─── 6. patent search ──────────────────────────────────────────────────── */
+
+function PatentsSection() {
   const { reveal } = useHomeMotion()
 
-  const pillars: Array<[string, typeof LockKeyhole, string]> = [
-    [
-      'Data governance',
-      LockKeyhole,
-      'Your proposals and ideas are never used to train models or shared across institutions. Tenant-isolated by design.',
-    ],
-    [
-      'Security',
-      ShieldCheck,
-      'Encryption in transit and at rest. Role-based access for research offices. SSO available on request.',
-    ],
-    [
-      'Methodology',
-      Target,
-      'Every match, gap, and review score is explainable. The engine shows which calls, projects, and criteria drove its conclusion.',
-    ],
-  ]
-
   return (
-    <motion.section id="security" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
-      <div className="mx-auto max-w-6xl px-6">
-        <Eyebrow>Institutional trust</Eyebrow>
-
-        <div className="mt-10 grid gap-10 md:grid-cols-3 md:gap-8">
-          {pillars.map(([title, Icon, body]) => (
-            <div key={title} className="border-t border-hairline pt-6">
-              <Icon className="h-[18px] w-[18px] text-cobalt-600" aria-hidden />
-              <h3 className="mt-5 text-[15px] font-semibold text-ink">{title}</h3>
-              <p className="mt-3 text-[15px] leading-7 text-ink-soft">{body}</p>
-            </div>
-          ))}
+    <motion.section id="patents" className="border-t border-hairline bg-ground py-20 md:py-24" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-16">
+        <div className="order-2 lg:order-1">
+          <PatentSearch />
         </div>
 
-        <div className="mt-14 rounded-2xl border border-hairline bg-inset p-6 sm:p-8">
-          <h3 className="text-[15px] font-semibold text-ink">How the intelligence is built</h3>
-          <div className="mt-5 grid gap-6 text-[14px] leading-7 text-ink-soft md:grid-cols-3">
-            <p>Public funding databases, calls, publications, and patent records are normalized into one evidence layer.</p>
-            <p>Matching and gap analysis keep source records attached, so every conclusion can be inspected.</p>
-            <p>Refresh cadence and source coverage are visible throughout institutional pilots.</p>
-          </div>
+        <div className="order-1 lg:order-2">
+          <SectionHead
+            eyebrow="Patent search"
+            title="Check the idea is new before you spend six months on it."
+            body="Every panel scores novelty, and novel means novel against the patent record, not only against papers. Search granted and published patents for prior art on your idea before you commit — then use what you did not find as the novelty claim the proposal needs."
+          />
+          <Benefits
+            rows={[
+              ['Search by concept, not just keywords, and see what each hit actually overlaps with.', Search],
+              ['Shortlist the closest prior art and keep it attached to the idea you are developing.', ShieldCheck],
+              ['Turn the gap into a novelty paragraph a reviewer can check.', FileCheck2],
+            ]}
+          />
+          <Example>
+            A search on humid-climate encapsulation for tandem modules returns 34 Indian patents. The closest scores
+            71% and covers silicon single-junction only — nothing reads on the tandem stack she is proposing. That
+            absence is the novelty paragraph.
+          </Example>
         </div>
       </div>
     </motion.section>
   )
 }
+
+/* ─── 7. templates ──────────────────────────────────────────────────────── */
+
+function TemplatesSection() {
+  const { reveal } = useHomeMotion()
+
+  return (
+    <motion.section id="templates" className="border-t border-hairline bg-ground py-20 md:py-24" {...reveal}>
+      <div className="mx-auto max-w-6xl px-6">
+        <div className="max-w-3xl">
+          <SectionHead
+            eyebrow="Proven templates"
+            title="Start from a structure that has already been funded."
+            body="A blank agency form tells you the section names and nothing about what belongs in them. These templates carry the structure of proposals that this agency has funded: how objectives were phrased, which annexures were attached, how the budget was tied to the work, and the sections where proposals usually get returned."
+          />
+        </div>
+
+        <div className="mt-12">
+          <TemplateStack />
+        </div>
+      </div>
+    </motion.section>
+  )
+}
+
+/* ─── 7. training ───────────────────────────────────────────────────────── */
+
+function TrainingSection() {
+  const { reveal } = useHomeMotion()
+
+  return (
+    <motion.section id="training" className="border-t border-hairline bg-inset py-20 md:py-24" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-16">
+        <div>
+          <SectionHead
+            tone="amber"
+            eyebrow="Live training"
+            title="Learn from the people who used to sit on the panel."
+            body="Software can tell you what the rubric says. It cannot tell you what a review committee argues about at 4pm on the second day. We run regular sessions with retired agency scientists and former programme officers — one agency and one call type at a time, with live questions from your faculty."
+          />
+          <Benefits
+            rows={[
+              ['Sessions built around a specific agency and call, not general grant-writing advice.', GraduationCap],
+              ['Led by retired scientists and programme officers from ANRF, DST, DBT and ICMR.', Users],
+              ['Live Q&A, and the recording stays available to everyone at your institution.', Check],
+            ]}
+          />
+        </div>
+
+        <ul className="space-y-3">
+          {trainingSessions.map((session) => (
+            <li key={session.title} className="rounded-2xl border border-hairline bg-ground p-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-md bg-amber-100 px-2 py-0.5 font-home-v2-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-800">
+                  {session.agency}
+                </span>
+                <span className="font-home-v2-mono text-[11px] text-muted">{session.cadence}</span>
+              </div>
+              <h3 className="mt-3 text-[16px] font-semibold leading-6 text-ink">{session.title}</h3>
+              <p className="mt-2 flex items-center gap-2 text-[14px] leading-6 text-ink-soft">
+                <GraduationCap className="h-4 w-4 shrink-0 text-amber-700" aria-hidden />
+                {session.host}
+              </p>
+            </li>
+          ))}
+          <li className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-5 text-[14px] leading-7 text-amber-900">
+            Institution plans include the full session calendar, recordings, and a session run for your campus on the
+            agency your faculty apply to most.
+          </li>
+        </ul>
+      </div>
+    </motion.section>
+  )
+}
+
+/* ─── 8. research administration ────────────────────────────────────────── */
+
+function OfficeSection() {
+  const { reveal } = useHomeMotion()
+
+  return (
+    <motion.section id="office" className="border-t border-hairline bg-ground py-20 md:py-24" {...reveal}>
+      <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 lg:grid-cols-2 lg:gap-16">
+        <div className="order-2 lg:order-1">
+          <OfficeBoard />
+        </div>
+
+        <div className="order-1 lg:order-2">
+          <SectionHead
+            eyebrow="Research administration"
+            title="Your research office finally sees the whole board."
+            body="A DSR office usually learns about a submission when someone needs a signature. Here, every open call is already matched to the faculty it fits, assigned to a school, and tracked from claim to submission — so the office spends its time chasing the calls nobody has taken, not building spreadsheets."
+          />
+          <Benefits
+            rows={[
+              ['Assign calls to schools and faculty, with accept, decline and follow-up tracked.', Users],
+              ['See where the drop-off is: matched, claimed, submitted, school by school.', Target],
+              ['Automatic reminders and weekly digests instead of chasing people by email.', BellRing],
+              ['Report submissions by school and by funding window, on your own academic calendar.', ClipboardCheck],
+            ]}
+          />
+          <Example>
+            A DST call closes in twelve days. Nine faculty match it and nobody has claimed it. The office sees that on
+            its board on day one, not on day eleven.
+          </Example>
+        </div>
+      </div>
+    </motion.section>
+  )
+}
+
+/* ─── audience ──────────────────────────────────────────────────────────── */
 
 function AudienceSection() {
   const { reveal } = useHomeMotion()
 
   return (
-    <motion.section className="border-t border-hairline bg-inset py-20 md:py-28" {...reveal}>
+    <motion.section className="border-t border-hairline bg-inset py-20 md:py-24" {...reveal}>
       <div className="mx-auto max-w-6xl px-6">
         <Eyebrow>Who it is for</Eyebrow>
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {audienceCards.map((card) => (
-            <div key={card.title} className="rounded-2xl border border-hairline bg-ground p-5">
-              <h3 className="text-[15px] font-semibold text-ink">{card.title}</h3>
-              <p className="mt-3 text-[14px] leading-7 text-ink-soft">{card.body}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </motion.section>
-  )
-}
-
-function DevelopersSection() {
-  const { reveal } = useHomeMotion()
-
-  const developers = [
-    {
-      name: 'Dr. Ramandeep Singh',
-      role: 'Professor & Deputy Dean',
-      unit: 'Division of Research & Development',
-      institution: 'Lovely Professional University, India',
-      photo: '/team/dr-ramandeep-singh.jpg',
-    },
-  ]
-
-  return (
-    <motion.section id="developers" className="border-t border-hairline bg-ground py-20 md:py-28" {...reveal}>
-      <div className="mx-auto max-w-6xl px-6">
-        <Eyebrow>Developers</Eyebrow>
-        <h2 className="mt-5 max-w-2xl text-[clamp(1.5rem,2.6vw,2rem)] font-semibold leading-[1.18] tracking-[-0.02em] text-ink">
-          Built inside a research office, for research offices.
+        <h2 className="mt-4 max-w-2xl text-[clamp(1.5rem,2.6vw,2rem)] font-semibold leading-[1.18] tracking-[-0.02em] text-ink">
+          One platform, four very different jobs.
         </h2>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {developers.map((person) => (
-            <div
-              key={person.name}
-              className="flex items-start gap-4 rounded-2xl border border-hairline bg-inset p-5"
-            >
-              <img
-                src={person.photo}
-                alt={person.name}
-                width={80}
-                height={100}
-                loading="lazy"
-                className="h-[100px] w-20 shrink-0 rounded-xl border border-hairline object-cover object-top"
-              />
-              <div className="min-w-0">
-                <h3 className="text-[15px] font-semibold text-ink">{person.name}</h3>
-                <p className="mt-1.5 text-[14px] leading-6 text-ink-soft">{person.role}</p>
-                <p className="mt-1 text-[13px] leading-6 text-muted">{person.unit}</p>
-                <p className="text-[13px] leading-6 text-muted">{person.institution}</p>
-              </div>
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {audienceCards.map((card) => (
+            <div key={card.title} className="flex flex-col rounded-2xl border border-hairline bg-ground p-5">
+              <h3 className="text-[15px] font-semibold text-ink">{card.title}</h3>
+              <p className="mt-3 flex-1 text-[14px] leading-7 text-ink-soft">{card.body}</p>
+              <p className="mt-5 border-t border-hairline pt-4 font-home-v2-mono text-[10px] uppercase tracking-[0.14em] text-cobalt-700">
+                {card.cta}
+              </p>
             </div>
           ))}
         </div>
@@ -652,28 +828,69 @@ function DevelopersSection() {
   )
 }
 
-function FinalCTA() {
-  const { goPrimary } = useCta()
+/* ─── objections ────────────────────────────────────────────────────────── */
+
+function FaqSection() {
+  const { reveal } = useHomeMotion()
 
   return (
-    <section className="border-t border-hairline bg-ground px-6 py-20 md:py-28">
+    <motion.section id="faq" className="border-t border-hairline bg-ground py-20 md:py-24" {...reveal}>
+      <div className="mx-auto grid max-w-6xl gap-12 px-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16">
+        <div>
+          <Eyebrow>Before you ask</Eyebrow>
+          <h2 className="mt-4 text-[clamp(1.75rem,3.3vw,2.6rem)] font-semibold leading-[1.14] tracking-[-0.02em] text-ink">
+            The five questions everyone asks.
+          </h2>
+          <p className="mt-5 flex items-start gap-2.5 text-[15px] leading-7 text-muted">
+            <LockKeyhole className="mt-1 h-4 w-4 shrink-0 text-cobalt-600" aria-hidden />
+            Tenant-isolated by design. Encrypted in transit and at rest. SSO on request.
+          </p>
+        </div>
+
+        <div className="divide-y divide-hairline border-t border-hairline">
+          {faqs.map((faq) => (
+            <details key={faq.q} className="group py-5">
+              <summary className="flex cursor-pointer list-none items-start justify-between gap-4 rounded text-[16px] font-medium leading-7 text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500">
+                {faq.q}
+                <ChevronDown
+                  className="mt-1 h-4 w-4 shrink-0 text-muted transition-transform duration-200 group-open:rotate-180"
+                  aria-hidden
+                />
+              </summary>
+              <p className="mt-3 max-w-2xl pr-8 text-[15px] leading-7 text-ink-soft">{faq.a}</p>
+            </details>
+          ))}
+        </div>
+      </div>
+    </motion.section>
+  )
+}
+
+/* ─── close ─────────────────────────────────────────────────────────────── */
+
+function FinalCTA() {
+  const { primaryLabel, goPrimary } = useCta()
+
+  return (
+    <section className="border-t border-hairline bg-ground px-6 py-20 md:py-24">
       <div className="mx-auto max-w-6xl rounded-2xl border border-hairline bg-inset px-6 py-16 text-center md:px-16">
         <h2 className="mx-auto max-w-2xl text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold leading-[1.14] tracking-[-0.02em] text-ink">
           Your next funded project is already in the data.
         </h2>
         <p className="mx-auto mt-5 max-w-xl text-[17px] leading-8 text-ink-soft">
-          See what AIGrantMentor finds for your research profile in under five minutes.
+          Add your papers and see the calls you match, the money your agencies have already paid for work like yours,
+          and what a reviewer would say about your draft.
         </p>
         <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <button type="button" onClick={goPrimary} className={`${BTN_PRIMARY} w-full sm:w-auto`}>
-            Run your first funding scan
+            {primaryLabel}
             <ArrowRight className="h-4 w-4" aria-hidden />
           </button>
           <Link href="/contact" className={`${BTN_SECONDARY} w-full sm:w-auto`}>
-            Request an institutional demo
+            Book an institution demo
           </Link>
         </div>
-        <p className="mt-6 text-[13px] text-muted">No credit card · Institution-wide pilots available</p>
+        <p className="mt-6 text-[13px] text-muted">Free to start · No credit card · Campus-wide pilots available</p>
       </div>
     </section>
   )
@@ -682,33 +899,34 @@ function FinalCTA() {
 function SiteFooter() {
   const columns: Array<{ title: string; links: Array<[string, string]> }> = [
     {
-      title: 'Platform',
+      title: 'For researchers',
       links: [
-        ['Funding pipeline', '#pipeline'],
-        ['Preparation studio', '#preparation'],
-        ['AI review', '#evidence'],
+        ['Matched calls', '#mapping'],
+        ['WhatsApp and email alerts', '#alerts'],
+        ['AI funding assistant', '#assistant'],
+        ['AI grant reviewer', '#reviewer'],
       ],
     },
     {
-      title: 'Intelligence',
+      title: 'Evidence',
       links: [
-        ['Call matching', '#intelligence'],
-        ['Funded projects', '#evidence'],
-        ['Gap positioning', '#positioning'],
+        ['Funded-project record', '#evidence'],
+        ['Patent search', '#patents'],
+        ['Agency templates', '#templates'],
+        ['Live training', '#training'],
       ],
     },
     {
-      title: 'Institutions',
+      title: 'For institutions',
       links: [
-        ['Security', '#security'],
-        ['Intelligence layer', '/funding/intelligence'],
-        ['Pilots', '/contact'],
+        ['Research administration', '#office'],
+        ['Security and data', '#faq'],
+        ['Book a demo', '/contact'],
       ],
     },
     {
       title: 'Company',
       links: [
-        ['Developers', '#developers'],
         ['Contact', '/contact'],
         ['Privacy', '/privacy'],
         ['Terms', '/terms'],
@@ -722,7 +940,8 @@ function SiteFooter() {
         <div>
           <Wordmark />
           <p className="mt-4 max-w-xs text-[13px] leading-6 text-muted">
-            Funding intelligence for research offices, labs, and the people who write the proposals.
+            Funding intelligence for research offices, labs, and the people who write the proposals. Built inside a
+            university research office.
           </p>
         </div>
 

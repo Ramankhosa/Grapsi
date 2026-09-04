@@ -370,6 +370,71 @@ function cryptoRandomId() {
   return `ptr_${crypto.randomUUID().replace(/-/g, '')}`;
 }
 
+/**
+ * Grant platform team roles to a brand-new account inside the caller's own
+ * transaction.
+ *
+ * `replaceUserRoles` cannot serve this case: it opens a transaction of its own
+ * and pre-checks `isPlatformUser`, which reads a row that does not exist yet
+ * when provisioning is mid-flight. Provisioning has already established the
+ * account belongs to the PLATFORM tenant, so the check would be redundant
+ * anyway — and doing the grant in the same transaction as the insert means an
+ * admin never ends up with a staff account that silently has no capabilities.
+ *
+ * Insert-only by design: a user created moments ago has nothing to revoke.
+ */
+export async function grantPlatformRolesInTransaction(
+  tx: Prisma.TransactionClient,
+  input: { targetUserId: string; roleCodes: string[]; assignedByUserId: string }
+): Promise<PlatformRoleCode[]> {
+  const roleCodes = normalizeRoleCodes(input.roleCodes);
+  if (roleCodes.length === 0) {
+    return [];
+  }
+
+  for (const roleCode of roleCodes) {
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO platform_team_role_assignments (
+        id, user_id, role_code, assigned_by_user_id, is_active, created_at, updated_at
+      )
+      VALUES (
+        ${cryptoRandomId()},
+        ${input.targetUserId},
+        ${roleCode},
+        ${input.assignedByUserId},
+        true,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      )
+      ON CONFLICT (user_id, role_code)
+      DO UPDATE SET
+        assigned_by_user_id = EXCLUDED.assigned_by_user_id,
+        is_active = true,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+  }
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.assignedByUserId,
+      action: 'PLATFORM_TEAM_ROLE_ASSIGNMENT_GRANT',
+      resource: `user:${input.targetUserId}`,
+      meta: {
+        targetUserId: input.targetUserId,
+        roleCodes,
+        grantedAtProvisioning: true,
+      },
+    },
+  });
+
+  return roleCodes;
+}
+
+/** Validate role codes without touching the database. */
+export function parsePlatformRoleCodes(roleCodes: string[]): PlatformRoleCode[] {
+  return normalizeRoleCodes(roleCodes);
+}
+
 export const platformTeamRoleService = new PlatformTeamRoleService();
 
 export async function getUserPlatformRoleCodes(userId: string): Promise<PlatformRoleCode[]> {

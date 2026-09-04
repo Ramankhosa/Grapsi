@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, Building2, FileSearch, Filter, Landmark, Loader2, MapPin,
+  ArrowRight, Building2, FileSearch, Filter, Loader2, MapPin,
   Search, SlidersHorizontal, Sparkles, Users, X, Zap,
 } from 'lucide-react'
 
@@ -155,7 +155,6 @@ function ResultCard({ item }: { item: ProjectSearchItem }) {
       </Link>
 
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-500">
-        {item.primaryInvestigatorName ? <span className="flex items-center gap-1.5"><Landmark className="h-3.5 w-3.5" />{item.primaryInvestigatorName}</span> : null}
         {item.primaryInstitutionName ? <span className="flex min-w-0 items-center gap-1.5"><Building2 className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{item.primaryInstitutionName}</span></span> : null}
         {item.state ? <span className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />{item.state}</span> : null}
       </div>

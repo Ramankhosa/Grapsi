@@ -14,10 +14,26 @@ const jetbrainsMono = localFont({
   variable: '--font-home-v2-mono',
 })
 
+const TITLE = 'AIGrantMentor — The grants you can actually win, found for you'
+const DESCRIPTION =
+  'AIGrantMentor reads your papers, matches you to live calls from ANRF, DST, DBT, ICMR and 1,000+ funding agencies and opportunities a year, alerts you on WhatsApp the day one opens, and scores your draft against the agency’s own rubric before you submit.'
+
 export const metadata: Metadata = {
-  title: 'AIGrantMentor - Funding Intelligence Platform',
-  description:
-    'AIGrantMentor turns funding records, calls, and reviewer criteria into a command center for research funding.',
+  // `absolute` opts out of the root layout's "%s | AIGrantMentor" template,
+  // which would otherwise append the brand to a title that already carries it.
+  title: { absolute: TITLE },
+  description: DESCRIPTION,
+  openGraph: {
+    title: TITLE,
+    description: DESCRIPTION,
+    type: 'website',
+    siteName: 'AIGrantMentor',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: TITLE,
+    description: DESCRIPTION,
+  },
 }
 
 export default function HomePage() {

@@ -34,6 +34,9 @@ const createSchema = z.object({
   last_name: z.string().trim().max(80).optional(),
   tenant_id: z.string().min(1),
   roles: z.array(z.string().min(1)).min(1).max(6),
+  // Platform team roles granted alongside the account, so standing up an
+  // operator is one action instead of create-then-go-to-Team-Roles.
+  platform_role_codes: z.array(z.string().min(1)).max(8).optional(),
   // Default true: provisioning normally means "get this person in", and the
   // link is returned either way for out-of-band delivery.
   send_activation_email: z.boolean().default(true)
@@ -119,6 +122,7 @@ export async function POST(request: NextRequest) {
       lastName: body.last_name ?? null,
       tenantId: body.tenant_id,
       roles: body.roles as UserRole[],
+      platformRoleCodes: body.platform_role_codes,
       actorUserId: authUser!.sub,
       sendActivationEmail: body.send_activation_email,
       ip: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown'
@@ -135,6 +139,7 @@ export async function POST(request: NextRequest) {
           email: result.user.email,
           name: result.user.name,
           roles: result.user.roles,
+          platform_role_codes: result.user.platformRoleCodes,
           status: result.user.status,
           tenant_id: result.user.tenantId,
           tenant_name: result.user.tenantName,

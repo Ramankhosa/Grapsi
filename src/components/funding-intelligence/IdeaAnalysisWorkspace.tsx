@@ -12,6 +12,7 @@ import { useAuth } from '@/lib/auth-context'
 import { GRANT_PREP_ENABLED } from '@/lib/access/killSwitches'
 import { buildGrantPrepEntryUrl } from '@/lib/grants/workspaceNavigation'
 import type { AgencyIpYield, PriorWork, PriorWorkRow } from '@/lib/ideaIntelligence/priorWork'
+import { fallbackPriorWork } from './priorWorkFallback'
 import CoverageMap from './CoverageMap'
 import FunderDrawer from './FunderDrawer'
 import GapList, { type GapDirection } from './GapList'
@@ -201,53 +202,6 @@ function asStrings(value: unknown) { return Array.isArray(value) ? value.map(asS
 
 function reportDirections(report: Record<string, unknown> | null): GapDirection[] {
   return Array.isArray((report as any)?.whitespaceDirections) ? (report as any).whitespaceDirections : []
-}
-
-/**
- * Runs made before the prior-work pass existed have no merged list stored. Show
- * their retrieved awards rather than an empty screen — with no coverage map or
- * gap readings, which those runs genuinely never computed.
- */
-function fallbackPriorWork(run: AnalysisRun): PriorWork {
-  const rows: PriorWorkRow[] = (run.retrievalResults?.projects || []).map((project) => ({
-    key: `legacy:${project.id}`,
-    kind: 'funded' as const,
-    title: project.title,
-    org: project.primaryInstitutionName,
-    year: project.sanctionYear,
-    facetsCovered: [],
-    matchBasis: 'Retrieved for this idea before aspect-level coverage was recorded.',
-    award: {
-      id: project.id,
-      abstract: project.abstractText && project.abstractText.toUpperCase() !== 'NA' ? project.abstractText : null,
-      agencyName: project.fundingAgency || project.sourceKey,
-      schemeName: project.schemeName,
-      budgetAmount: project.budgetAmount,
-      budgetCurrency: project.budgetCurrency,
-      durationMonths: null,
-      status: 'unknown' as const,
-      hasReportedOutput: false,
-      patentCount: 0,
-      publicationCount: 0,
-      relevanceScore: project.relevanceScore,
-      duplicateIds: [],
-    },
-    patent: null,
-  }))
-  return {
-    rows,
-    coverage: [],
-    gaps: [],
-    agencyIpYield: [],
-    crossHolders: [],
-    summary: {
-      totalRows: rows.length,
-      fundedRows: rows.length,
-      patentedRows: 0,
-      duplicateAwardsCollapsed: 0,
-      patentFamiliesCollapsed: 0,
-    },
-  }
 }
 
 function ProgressPanel({ run }: { run: AnalysisRun }) {
@@ -652,7 +606,7 @@ export default function IdeaAnalysisWorkspace({ runId }: { runId: string }) {
 
   const priorWork = useMemo<PriorWork | null>(() => {
     if (!run || run.status !== 'COMPLETED') return null
-    return run.scores?.priorWork || fallbackPriorWork(run)
+    return run.scores?.priorWork || fallbackPriorWork((run.retrievalResults?.projects || []) as any)
   }, [run])
 
   const directions = useMemo(() => reportDirections(run?.report || null), [run?.report])

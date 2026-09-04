@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { requireFundingActor } from '@/lib/funding/access'
+import { redactProjectListPeople } from '@/lib/publicProjects/redaction'
 import { publicProjectSearchService } from '@/lib/publicProjects/searchService'
 
 export const runtime = 'nodejs'
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
       tenantId: auth.actor.tenantId,
       userId: auth.actor.id,
     })
-    return NextResponse.json(response)
+    return NextResponse.json({ ...response, results: redactProjectListPeople(response.results) })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message || 'Invalid search request' }, { status: 400 })

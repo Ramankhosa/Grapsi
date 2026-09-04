@@ -180,6 +180,14 @@ const adminGroup: ProductGroup = {
       tag: 'Admin'
     },
     {
+      title: 'Report Archive',
+      description:
+        'Every grant-reviewer and funding-intelligence report your members have run, with who ran it and from which school.',
+      href: '/tenant-admin/reports',
+      icon: FileText,
+      tag: 'Admin'
+    },
+    {
       title: 'Team & Workspace Admin',
       description: 'Invite members, manage access codes, and oversee workspace usage.',
       href: '/admin',

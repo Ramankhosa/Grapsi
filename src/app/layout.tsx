@@ -19,10 +19,14 @@ const cormorant = localFont({
 })
 
 export const metadata: Metadata = {
-  title: 'Paper Nest.ai - "Where Ideas Hatch Into Patents"',
-  description: 'Draft, validate, and protect inventions - effortlessly, intelligently, and globally. AI-powered patent writing for innovators.',
+  title: {
+    default: 'AIGrantMentor',
+    template: '%s | AIGrantMentor',
+  },
+  description:
+    'Find the research funding calls that fit your work, get told the day they open, and have your proposal reviewed against the agency rubric before you submit.',
   icons: {
-    icon: '/animations/logo-video.gif',
+    icon: '/brand/aigrantmentor-mark.svg',
   },
 }
 

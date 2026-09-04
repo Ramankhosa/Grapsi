@@ -1,16 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { getAppOrigin, getRedirectUri, oauthConfig } from '@/lib/oauth-config'
 import { clearOAuthStateCookie, verifyOAuthCallbackState } from '@/lib/oauth-state'
 import { createSocialSignupToken } from '@/lib/social-signup-token'
+import {
+  checkSocialSignInAllowed,
+  issueSocialSession,
+  resolveSocialIdentity,
+  type SocialIdentity
+} from '@/lib/social-auth'
 
 // Force dynamic rendering since we access search params
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
+  const appOrigin = getAppOrigin(request.nextUrl.origin)
+
+  const loginError = (reason: string) => {
+    const response = NextResponse.redirect(new URL(`/login?error=${reason}`, appOrigin))
+    clearOAuthStateCookie(response, 'facebook')
+    return response
+  }
+
   try {
-    const appOrigin = getAppOrigin(request.nextUrl.origin)
     const searchParams = request.nextUrl.searchParams
     const code = searchParams.get('code')
     const state = searchParams.get('state')
@@ -19,22 +30,16 @@ export async function GET(request: NextRequest) {
     // Handle OAuth errors
     if (error) {
       console.error('Facebook OAuth error:', error)
-      return NextResponse.redirect(
-        new URL('/login?error=oauth_error', appOrigin)
-      )
+      return loginError('oauth_error')
     }
 
     if (!code) {
-      return NextResponse.redirect(
-        new URL('/login?error=no_code', appOrigin)
-      )
+      return loginError('no_code')
     }
 
     const oauthState = verifyOAuthCallbackState(request, 'facebook', state)
     if (!oauthState) {
-      return NextResponse.redirect(
-        new URL('/login?error=invalid_state', appOrigin)
-      )
+      return loginError('invalid_state')
     }
 
     const redirectUri = getRedirectUri('facebook', request.nextUrl.origin)
@@ -71,125 +76,59 @@ export async function GET(request: NextRequest) {
 
     const facebookUser = await userInfoResponse.json()
 
-    // Check if user already exists with this Facebook account
-    let user = await prisma.user.findFirst({
-      where: {
-        oauthProvider: 'FACEBOOK',
-        oauthProviderId: facebookUser.id
-      },
-      include: { tenant: true }
-    })
-
-    if (!user) {
-      // Check if user exists with same email
-      const existingUser = await prisma.user.findUnique({
-        where: { email: facebookUser.email },
-        include: { tenant: true }
-      })
-
-      if (existingUser) {
-        // Link existing account with Facebook OAuth
-        user = await prisma.user.update({
-          where: { id: existingUser.id },
-          data: {
-            oauthProvider: 'FACEBOOK',
-            oauthProviderId: facebookUser.id,
-            oauthProfile: facebookUser,
-            emailVerified: true
-          },
-          include: { tenant: true }
-        })
-      } else {
-        // New user - redirect to registration completion with ATI token entry
-        const pendingData = {
-          provider: 'facebook' as const,
-          providerId: facebookUser.id,
-          email: facebookUser.email,
-          name: facebookUser.name,
-          firstName: facebookUser.first_name,
-          lastName: facebookUser.last_name,
-          profile: facebookUser
-        }
-
-        const pendingToken = createSocialSignupToken(pendingData)
-
-        const completionUrl = new URL('/register/complete-social', appOrigin)
-        completionUrl.searchParams.set('token', pendingToken)
-        completionUrl.searchParams.set('provider', 'facebook')
-        if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
-        const response = NextResponse.redirect(completionUrl)
-        clearOAuthStateCookie(response, 'facebook')
-        return response
-      }
+    const identity: SocialIdentity = {
+      provider: 'facebook',
+      providerUserId: facebookUser.id,
+      email: facebookUser.email ?? null,
+      // Facebook only returns an email once the account holder has confirmed
+      // it, so its presence is the verification signal.
+      emailVerified: !!facebookUser.email,
+      name: facebookUser.name,
+      firstName: facebookUser.first_name,
+      lastName: facebookUser.last_name,
+      profile: facebookUser
     }
 
-    // User exists - proceed with login
-    const accessTokenJWT = generateJWT({
-      sub: user.id,
-      email: user.email,
-      tenant_id: user.tenantId,
-      roles: user.roles,
-      ati_id: user.tenant?.atiId || null,
-      tenant_ati_id: user.tenant?.atiId || null,
-      scope: user.tenant?.atiId === 'PLATFORM' ? 'platform' : 'tenant'
-    })
+    const resolution = await resolveSocialIdentity(identity)
 
-    // Get request metadata
-    const ip = request.headers.get('x-forwarded-for') ||
-               request.headers.get('x-real-ip') ||
-               'unknown'
+    if (resolution.kind === 'error') {
+      return loginError(resolution.reason)
+    }
 
-    // Generate and store refresh token
-    const refreshTokenData = generateRefreshToken(user.id)
-    await storeRefreshToken(user.id, refreshTokenData, {
-      userAgent: request.headers.get('user-agent') || undefined,
-      ipAddress: ip
-    })
+    if (resolution.kind === 'signup') {
+      // New user - redirect to registration completion with ATI token entry
+      const pendingToken = createSocialSignupToken({
+        provider: 'facebook',
+        providerId: identity.providerUserId,
+        email: identity.email!,
+        emailVerified: identity.emailVerified,
+        name: identity.name,
+        firstName: identity.firstName,
+        lastName: identity.lastName,
+        profile: facebookUser
+      })
 
-    // Audit log
-    await createAuditLog({
-      actorUserId: user.id,
-      tenantId: user.tenantId || undefined,
-      action: 'USER_LOGIN',
-      resource: `user:${user.id}`,
-      ip,
-      meta: {
-        email: user.email,
-        roles: user.roles,
-        login_method: 'facebook_oauth',
-        oauth_provider: 'FACEBOOK'
-      }
-    })
+      const completionUrl = new URL('/register/complete-social', appOrigin)
+      completionUrl.searchParams.set('token', pendingToken)
+      completionUrl.searchParams.set('provider', 'facebook')
+      if (oauthState.inviteToken) completionUrl.searchParams.set('invite', oauthState.inviteToken)
+      const response = NextResponse.redirect(completionUrl)
+      clearOAuthStateCookie(response, 'facebook')
+      return response
+    }
 
-    // Create response
-    const response = NextResponse.redirect(
-      new URL('/dashboard', appOrigin)
-    )
+    // Existing account - apply the same gate the password login route uses
+    const blocked = checkSocialSignInAllowed(resolution.user)
+    if (blocked) {
+      return loginError(blocked)
+    }
+
+    const response = NextResponse.redirect(new URL('/dashboard', appOrigin))
     clearOAuthStateCookie(response, 'facebook')
-
-    // Set tokens as cookies
-    response.cookies.set('refresh_token', refreshTokenData.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/'
-    })
-
-    response.cookies.set('access_token', accessTokenJWT, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 15 * 60,
-      path: '/'
-    })
-
-    return response
+    return await issueSocialSession(response, request, resolution.user, 'facebook')
 
   } catch (error) {
     console.error('Facebook OAuth callback error:', error)
-    return NextResponse.redirect(
-      new URL('/login?error=oauth_callback_failed', getAppOrigin(request.nextUrl.origin))
-    )
+    return loginError('oauth_callback_failed')
   }
 }

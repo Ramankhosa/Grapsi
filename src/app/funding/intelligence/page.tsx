@@ -3,7 +3,7 @@ import { Suspense } from 'react'
 import ExplorerPage from '@/components/funding-intelligence/ExplorerPage'
 
 export const metadata = {
-  title: 'Funding Intelligence | Paper Nest',
+  title: 'Funding Intelligence',
   description: 'Search awarded research and position your next idea with funding evidence.',
 }
 

@@ -557,7 +557,8 @@ export default function SuperAdminDashboard() {
         { label: 'Platform Analytics', icon: TrendingUp, href: '/super-admin/analytics' },
         { label: 'User Service Usage', icon: Users, href: '/super-admin/user-service-usage' },
         { label: 'Quota Controller', icon: Gauge, href: '/super-admin/quota-controller' },
-        { label: 'Jobs & Schedules', icon: Clock, href: '/super-admin/jobs', badge: 'NEW' }
+        { label: 'Jobs & Schedules', icon: Clock, href: '/super-admin/jobs', badge: 'NEW' },
+        { label: 'Report Archive', icon: FileText, href: '/super-admin/reports', badge: 'NEW' }
       ]
     },
     {

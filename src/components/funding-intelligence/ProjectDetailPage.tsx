@@ -4,22 +4,11 @@ import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, Building2, CalendarDays, ExternalLink, FileText,
-  Landmark, Loader2, MapPin, Sparkles, Users, WalletCards,
+  Loader2, MapPin, Sparkles, WalletCards,
 } from 'lucide-react'
 
 import { useAuth } from '@/lib/auth-context'
 import type { ProjectSearchItem } from './types'
-
-type Participant = {
-  id: string
-  role: string
-  name: string
-  institutionName: string | null
-  departmentName: string | null
-  city: string | null
-  state: string | null
-  country: string | null
-}
 
 type ProjectDetail = {
   id: string
@@ -47,7 +36,6 @@ type ProjectDetail = {
   outputPlannedText: string | null
   outputAchievedText: string | null
   keywords: string[]
-  primaryInvestigatorName: string | null
   primaryInstitutionName: string | null
   departmentName: string | null
   city: string | null
@@ -63,7 +51,6 @@ type ProjectDetail = {
   patents: unknown
   outcomes: unknown
   source: { name: string; baseUrl: string }
-  participants: Participant[]
 }
 
 function formatBudget(amount: number | null, currency = 'INR') {
@@ -146,7 +133,6 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
           <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-teal-100/70"><span className="rounded-full border border-teal-100/20 bg-white/10 px-2.5 py-1 text-teal-50">{fundingSource}</span>{project.schemeName ? <span>{project.schemeName}</span> : null}</div>
           <h1 className="mt-4 max-w-4xl text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">{project.title}</h1>
           <div className="mt-6 flex flex-wrap gap-x-6 gap-y-3 text-sm text-teal-50/75">
-            {project.primaryInvestigatorName ? <span className="flex items-center gap-2"><Landmark className="h-4 w-4" />{project.primaryInvestigatorName}</span> : null}
             {project.primaryInstitutionName ? <span className="flex items-center gap-2"><Building2 className="h-4 w-4" />{project.primaryInstitutionName}</span> : null}
             {project.state ? <span className="flex items-center gap-2"><MapPin className="h-4 w-4" />{project.state}</span> : null}
           </div>
@@ -159,8 +145,6 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
           {project.objectivesText ? <EvidenceSection title="Objectives">{project.objectivesText}</EvidenceSection> : null}
           {project.deliverablesText || project.outputPlannedText ? <EvidenceSection title="Planned outputs">{project.deliverablesText || project.outputPlannedText}</EvidenceSection> : null}
           {project.outputAchievedText ? <EvidenceSection title="Reported outcomes">{project.outputAchievedText}</EvidenceSection> : null}
-
-          {project.participants.length ? <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="flex items-center gap-2"><Users className="h-5 w-5 text-teal-700" /><h2 className="text-lg font-semibold">Project team</h2></div><div className="mt-4 divide-y divide-slate-100">{project.participants.map((participant) => <div key={participant.id} className="py-3 first:pt-0 last:pb-0"><p className="text-sm font-semibold text-slate-800">{participant.name}</p><p className="mt-1 text-xs text-slate-500">{[participant.role.replace(/_/g, ' '), participant.institutionName, participant.departmentName].filter(Boolean).join(' · ')}</p></div>)}</div></section> : null}
         </div>
 
         <aside className="space-y-5 lg:sticky lg:top-5 lg:self-start">

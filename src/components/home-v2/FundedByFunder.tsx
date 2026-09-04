@@ -16,7 +16,7 @@ export default function FundedByFunder() {
       <figcaption className="border-b border-hairline pb-4">
         <h3 className="text-[15px] font-semibold text-ink">Who funds work like yours</h3>
         <p className="mt-1.5 text-[13px] leading-5 text-muted">
-          Funded projects matching &ldquo;AI for adaptive health systems&rdquo;, 2021–2025.
+          Indian government projects matching &ldquo;photovoltaic materials&rdquo;, 2021–2025.
         </p>
       </figcaption>
 
@@ -47,7 +47,7 @@ export default function FundedByFunder() {
 
       <p className="mt-5 border-t border-hairline pt-4 text-[12px] leading-5 text-muted">
         Bar length = funded projects; the figure beside it is total awarded. Closest precedent to your idea:{' '}
-        <span className="text-ink-soft">GA-101094521 · €1.2M · 2024</span>. Illustrative data.
+        <span className="text-ink-soft">Perovskite tandem stability · ₹48L · DST · 2024</span>. Illustrative data.
       </p>
     </figure>
   )

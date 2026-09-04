@@ -4,6 +4,10 @@ import { generateToken, hashToken } from '@/lib/token-utils'
 import { sendEmail, SITE_URL } from '@/lib/mailer'
 import { activationTemplate } from '@/lib/email-templates'
 import { createAuditLog } from '@/lib/auth'
+import {
+  grantPlatformRolesInTransaction,
+  parsePlatformRoleCodes
+} from '@/lib/services/platformTeamRoleService'
 
 /**
  * Direct user provisioning for administrators.
@@ -27,8 +31,25 @@ import { createAuditLog } from '@/lib/auth'
  * coherent shape for the tenant it lands in.
  */
 
-/** Platform staff roles. Only ever valid inside the PLATFORM tenant. */
-export const PLATFORM_ROLES = ['SUPER_ADMIN', 'SUPER_ADMIN_VIEWER'] as unknown as UserRole[]
+/**
+ * Platform staff roles. Only ever valid inside the PLATFORM tenant.
+ *
+ * PLATFORM_STAFF is the empty base: it is a legal primary role here purely so
+ * the account qualifies for `PlatformTeamRoleAssignment` grants, and carries no
+ * access of its own — `requirePlatformScope` keys off SUPER_ADMIN /
+ * SUPER_ADMIN_VIEWER, so staff never reach the platform console. Before it
+ * existed the only way to hand somebody a scoped capability (say, funding call
+ * ingestion) was to make them a Super Admin Viewer first, which granted
+ * cross-tenant read over every platform screen on the way.
+ */
+export const PLATFORM_ROLES = ['SUPER_ADMIN', 'SUPER_ADMIN_VIEWER', 'PLATFORM_STAFF'] as unknown as UserRole[]
+
+/**
+ * Platform roles that are meaningful on their own. PLATFORM_STAFF is excluded:
+ * it is inert until team roles are attached, so callers that ask "does this
+ * account do anything by itself?" want this list, not `PLATFORM_ROLES`.
+ */
+export const PLATFORM_CONSOLE_ROLES = ['SUPER_ADMIN', 'SUPER_ADMIN_VIEWER'] as unknown as UserRole[]
 
 /**
  * The hierarchy slot inside a customer tenant. Exactly one of these, or one
@@ -101,7 +122,7 @@ export function validateRoleShape(
     return {
       ok: false,
       message: options.platformTenant
-        ? 'Pick a platform role (Super Admin or Super Admin Viewer)'
+        ? 'Pick a platform role (Super Admin, Super Admin Viewer or Platform Staff)'
         : 'Pick one primary role (Owner, Admin, Manager, Analyst or Viewer)'
     }
   }
@@ -115,7 +136,7 @@ export function validateRoleShape(
     if (!isPlatformRole(primary)) {
       return {
         ok: false,
-        message: 'Platform staff hold Super Admin or Super Admin Viewer — tenant roles do not apply inside the platform workspace'
+        message: 'Platform staff hold Super Admin, Super Admin Viewer or Platform Staff — tenant roles do not apply inside the platform workspace'
       }
     }
     const tags = unique.filter(role => isAdditiveRole(role))
@@ -140,6 +161,12 @@ export interface ProvisionUserInput {
   /** Tenant the account lands in. Pass the PLATFORM tenant to create staff. */
   tenantId: string
   roles: UserRole[]
+  /**
+   * Platform team roles (FUNDING_OPERATIONS_MANAGER, …) granted in the same
+   * transaction as the account. Only meaningful in the PLATFORM tenant; a
+   * non-empty list anywhere else is rejected rather than silently dropped.
+   */
+  platformRoleCodes?: string[]
   actorUserId: string
   /** When false the admin delivers the returned activation link themselves. */
   sendActivationEmail: boolean
@@ -151,6 +178,8 @@ export interface ProvisionedUser {
   email: string
   name: string | null
   roles: UserRole[]
+  /** Platform team roles granted at creation, empty for tenant accounts. */
+  platformRoleCodes: string[]
   status: string
   tenantId: string
   tenantName: string
@@ -203,9 +232,47 @@ export async function provisionUser(input: ProvisionUserInput): Promise<Provisio
     }
   }
 
-  const shape = validateRoleShape(input.roles, { platformTenant: tenant.atiId === 'PLATFORM' })
+  const isPlatformTenant = tenant.atiId === 'PLATFORM'
+
+  const shape = validateRoleShape(input.roles, { platformTenant: isPlatformTenant })
   if (!shape.ok) {
     return { ok: false, code: 'INVALID_ROLES', message: shape.message, status: 400 }
+  }
+
+  // Parsed before the insert so an unknown code fails the whole call rather
+  // than leaving an account behind that the admin then has to hunt down.
+  let platformRoleCodes: string[] = []
+  if (input.platformRoleCodes?.length) {
+    if (!isPlatformTenant) {
+      return {
+        ok: false,
+        code: 'INVALID_PLATFORM_ROLES',
+        message: 'Platform team roles only apply to accounts in the platform workspace',
+        status: 400
+      }
+    }
+    try {
+      platformRoleCodes = parsePlatformRoleCodes(input.platformRoleCodes)
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'INVALID_PLATFORM_ROLES',
+        message: error instanceof Error ? error.message : 'Unknown platform role',
+        status: 400
+      }
+    }
+  }
+
+  // PLATFORM_STAFF is inert on its own, so an account created with neither a
+  // console role nor a team role could not do anything at all — almost always a
+  // half-finished form rather than an intent.
+  if (isPlatformTenant && shape.roles[0] === ('PLATFORM_STAFF' as UserRole) && platformRoleCodes.length === 0) {
+    return {
+      ok: false,
+      code: 'INVALID_PLATFORM_ROLES',
+      message: 'Platform Staff carries no access on its own — pick at least one platform team role',
+      status: 400
+    }
   }
 
   // Emails are globally unique, so a clash may be in another organization
@@ -262,6 +329,14 @@ export async function provisionUser(input: ProvisionUserInput): Promise<Provisio
       }
     })
 
+    if (platformRoleCodes.length > 0) {
+      await grantPlatformRolesInTransaction(tx, {
+        targetUserId: created.id,
+        roleCodes: platformRoleCodes,
+        assignedByUserId: input.actorUserId
+      })
+    }
+
     return created
   })
 
@@ -274,8 +349,9 @@ export async function provisionUser(input: ProvisionUserInput): Promise<Provisio
     meta: {
       email: user.email,
       roles: shape.roles,
+      platformRoleCodes,
       tenantName: tenant.name,
-      isPlatformStaff: tenant.atiId === 'PLATFORM',
+      isPlatformStaff: isPlatformTenant,
       activationEmailRequested: input.sendActivationEmail
     }
   })
@@ -313,6 +389,7 @@ export async function provisionUser(input: ProvisionUserInput): Promise<Provisio
       email: user.email,
       name: user.name,
       roles: user.roles,
+      platformRoleCodes,
       status: user.status,
       tenantId: tenant.id,
       tenantName: tenant.name,

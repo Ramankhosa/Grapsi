@@ -9,6 +9,7 @@ import {
   isPlatformRole,
   validateRoleShape
 } from '@/lib/user-provisioning'
+import { PLATFORM_ROLE_DEFINITIONS } from '@/lib/platformTeamRoles'
 
 /**
  * Cross-tenant user directory and role authority for the platform console.
@@ -235,7 +236,15 @@ export function getAssignableRoles() {
   return {
     platform: PLATFORM_ROLES,
     hierarchy: TENANT_HIERARCHY_ROLES,
-    additive: ADDITIVE_ROLES
+    additive: ADDITIVE_ROLES,
+    // The capability presets a platform account can be granted. Sent with the
+    // role pools so the create form can offer them inline rather than sending
+    // the admin to Team Roles as a second trip.
+    platform_team: PLATFORM_ROLE_DEFINITIONS.map(role => ({
+      code: role.code,
+      label: role.label,
+      description: role.description
+    }))
   }
 }
 

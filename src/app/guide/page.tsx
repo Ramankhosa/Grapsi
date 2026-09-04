@@ -329,6 +329,13 @@ const SECTIONS: Section[] = [
         audience: 'orgAdmin',
       },
       {
+        href: '/tenant-admin/reports',
+        name: 'Report archive',
+        what: 'Every AI grant-reviewer and funding-intelligence report your members have run, with who ran it and from which school. Read-only.',
+        restrictedTo: 'owners, admins and quality auditors',
+        audience: 'qualityAuditor',
+      },
+      {
         href: '/quality-audit',
         name: 'Quality audit',
         what: 'Review generated output against the source material.',
@@ -342,6 +349,13 @@ const SECTIONS: Section[] = [
     title: 'Platform administration',
     blurb: 'Anthropic-of-the-institution stuff: the catalogue, the models, the money, the jobs.',
     entries: [
+      {
+        href: '/super-admin/reports',
+        name: 'Report archive (all tenants)',
+        what: 'Every grant-reviewer and funding-intelligence report run on the platform, filterable by tenant, school, person and date.',
+        restrictedTo: 'super admins',
+        audience: 'superAdmin',
+      },
       {
         href: '/super-admin/funding',
         name: 'Funding catalogue',
