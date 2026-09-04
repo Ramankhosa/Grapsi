@@ -14,6 +14,9 @@ const DEFAULT_O1_TIMEOUT_MS = 120000
 const DEFAULT_OPENAI_MAX_RETRIES = 3
 const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504])
 const EXTENDED_PROMPT_CACHE_MODELS = new Set([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.5-pro',
   'gpt-5.4',
@@ -41,6 +44,11 @@ export class OpenAIProvider implements LLMProvider {
     'gpt-5.4-pro',
     'gpt-5.5',
     'gpt-5.5-pro',
+    // GPT-5.6 capability tiers (Sol = flagship, Terra = mid, Luna = cheapest)
+    'gpt-5.6',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
     'gpt-5-mini',
     'gpt-5-nano',
     // GPT-5 Thinking Variants (alias to base model + reasoning controls)
@@ -467,6 +475,10 @@ export class OpenAIProvider implements LLMProvider {
       'gpt-5.4-pro': { input: 1050000, output: 128000 },
       'gpt-5.5': { input: 1050000, output: 128000 },
       'gpt-5.5-pro': { input: 1050000, output: 128000 },
+      'gpt-5.6': { input: 400000, output: 128000 },
+      'gpt-5.6-sol': { input: 400000, output: 128000 },
+      'gpt-5.6-terra': { input: 400000, output: 128000 },
+      'gpt-5.6-luna': { input: 400000, output: 128000 },
       'gpt-5-mini': { input: 128000, output: 16384 },
       'gpt-5-nano': { input: 64000, output: 8192 },
       // GPT-3.5 Series
@@ -490,9 +502,13 @@ export class OpenAIProvider implements LLMProvider {
       'gpt-4-turbo': { input: 0.00001, output: 0.00003 },         // $10/$30 per M
       'gpt-4': { input: 0.00003, output: 0.00006 },               // $30/$60 per M
       // GPT-5 Series (estimated pricing)
-      'gpt-5': { input: 0.00001, output: 0.00003 },               // $10/$30 per M
-      'gpt-5.1': { input: 0.000012, output: 0.000036 },           // $12/$36 per M
-      'gpt-5.2': { input: 0.000012, output: 0.000036 },           // $12/$36 per M (placeholder - update if pricing differs)
+      'gpt-5': { input: 0.00000125, output: 0.00001 },            // $1.25/$10 per M
+      'gpt-5.1': { input: 0.00000125, output: 0.00001 },          // $1.25/$10 per M
+      'gpt-5.2': { input: 0.00000175, output: 0.000014 },         // $1.75/$14 per M
+      'gpt-5.6': { input: 0.000005, output: 0.00003 },            // alias of Sol: $5/$30 per M
+      'gpt-5.6-sol': { input: 0.000005, output: 0.00003 },        // $5/$30 per M
+      'gpt-5.6-terra': { input: 0.0000025, output: 0.000015 },    // $2.50/$15 per M
+      'gpt-5.6-luna': { input: 0.000001, output: 0.000006 },      // $1/$6 per M
       'gpt-5.4': { input: 0.0000025, output: 0.000015 },          // $2.50/$15 per M
       'gpt-5.4-mini': { input: 0.00000075, output: 0.0000045 },   // $0.75/$4.50 per M
       'gpt-5.4-nano': { input: 0.0000002, output: 0.00000125 },   // $0.20/$1.25 per M

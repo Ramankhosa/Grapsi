@@ -55,6 +55,7 @@ export class DeepSeekProvider implements LLMProvider {
       'deepseek-v4-pro': 'deepseek-v4-pro',
       'DeepSeek-V4-Flash': 'deepseek-v4-flash',
       'deepseek-v4-flash': 'deepseek-v4-flash',
+      'deepseek-v4-flash-vision-exp': 'deepseek-v4-flash-vision-exp',
       'deepseek-chat': 'deepseek-chat',
       'deepseek-reasoner': 'deepseek-reasoner'
     }
@@ -196,6 +197,7 @@ export class DeepSeekProvider implements LLMProvider {
       'DeepSeek-V4-Pro': { input: 1000000, output: 384000 },
       'deepseek-v4-flash': { input: 1000000, output: 384000 },
       'DeepSeek-V4-Flash': { input: 1000000, output: 384000 },
+      'deepseek-v4-flash-vision-exp': { input: 1000000, output: 384000 },
       'deepseek-chat': { input: 1000000, output: 384000 },
       'deepseek-reasoner': { input: 1000000, output: 384000 }
     }
@@ -205,10 +207,12 @@ export class DeepSeekProvider implements LLMProvider {
   getCostPerToken(modelName: string): { input: number; output: number } {
     // Cost per token in USD
     const costs: Record<string, { input: number; output: number }> = {
-      'deepseek-v4-pro': { input: 0.00000174, output: 0.00000348 },
-      'DeepSeek-V4-Pro': { input: 0.00000174, output: 0.00000348 },
-      'deepseek-v4-flash': { input: 0.00000014, output: 0.00000028 },
-      'DeepSeek-V4-Flash': { input: 0.00000014, output: 0.00000028 },
+      // Peak-hour cache-miss rates (off-peak is half); see seed-llm-models.ts
+      'deepseek-v4-pro': { input: 0.00000132, output: 0.00000396 },
+      'DeepSeek-V4-Pro': { input: 0.00000132, output: 0.00000396 },
+      'deepseek-v4-flash': { input: 0.00000044, output: 0.00000132 },
+      'DeepSeek-V4-Flash': { input: 0.00000044, output: 0.00000132 },
+      'deepseek-v4-flash-vision-exp': { input: 0.00000044, output: 0.00000132 },
       'deepseek-chat': { input: 0.00000014, output: 0.00000028 },
       'deepseek-reasoner': { input: 0.00000055, output: 0.00000219 }
     }

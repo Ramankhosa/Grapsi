@@ -51,8 +51,11 @@ const MAX_FALLBACK_DEPTH = 3
 
 // Model class to default model mapping (for backward compatibility)
 const MODEL_CLASS_DEFAULTS: Record<string, string> = {
-  'BASE_S': 'gemini-2.0-flash-lite',
-  'BASE_M': 'gemini-2.0-flash',
+  // gemini-2.0-flash / -lite were shut down 1 Jun 2026. Fallbacks must stay on
+  // Google here: this path runs when nothing else resolved, and the Google key
+  // is the one that is always configured.
+  'BASE_S': 'gemini-3.1-flash',
+  'BASE_M': 'gemini-3.1-flash',
   'PRO_M': 'gpt-4o-mini',
   'PRO_L': 'gpt-4o',
   'ADVANCED': 'claude-3.5-sonnet'
@@ -259,7 +262,7 @@ async function getPlanDefault(planId: string, taskCode: TaskCode): Promise<Model
   if (!access) return null
 
   // Map ModelClass to a default model code
-  const modelCode = MODEL_CLASS_DEFAULTS[access.defaultClass.code] || 'gemini-2.0-flash'
+  const modelCode = MODEL_CLASS_DEFAULTS[access.defaultClass.code] || 'gemini-3.1-flash'
 
   // Get the model from registry
   const model = await prisma.lLMModel.findFirst({
@@ -338,10 +341,10 @@ async function getSystemDefault(): Promise<ModelResolutionResult> {
   })
 
   return {
-    modelCode: anyModel?.code || 'gemini-2.0-flash',
+    modelCode: anyModel?.code || 'gemini-3.1-flash',
     modelId: anyModel?.id || '',
     provider: anyModel?.provider || 'google',
-    displayName: anyModel?.displayName || 'Gemini 2.0 Flash',
+    displayName: anyModel?.displayName || 'Gemini 3.1 Flash',
     supportsVision: anyModel?.supportsVision ?? true,
     supportsStreaming: anyModel?.supportsStreaming ?? true,
     contextWindow: anyModel?.contextWindow ?? 1000000,

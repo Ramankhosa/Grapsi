@@ -42,8 +42,12 @@ export class GeminiProvider implements LLMProvider {
     'gemini-1.5-pro': 'gemini-1.5-pro-002',
     'gemini-1.5-flash': 'gemini-1.5-flash-002',
     // Gemini 2.x variants (align to current GA/preview IDs)
-    'gemini-2.0-flash': 'gemini-2.0-flash-001',
-    'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite-001',
+    // Retired 1 Jun 2026 (hard shutdown) — alias onto the 2.5 line so stored
+    // stage configs that still name them keep working.
+    'gemini-2.0-flash': 'gemini-2.5-flash',
+    'gemini-2.0-flash-001': 'gemini-2.5-flash',
+    'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
+    'gemini-2.0-flash-lite-001': 'gemini-2.5-flash-lite',
     // Experimental models (pass through as-is)
     'gemini-2.0-flash-exp': 'gemini-2.0-flash-exp',
     'gemini-2.0-flash-thinking-exp': 'gemini-2.0-flash-thinking-exp',

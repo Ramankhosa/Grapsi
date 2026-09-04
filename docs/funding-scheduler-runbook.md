@@ -71,6 +71,16 @@ Optional env:
 - `FUNDING_SCHEDULER_BASE_URL` — default `http://127.0.0.1:3010`
 - `FUNDING_DIGEST_HOUR` — local hour for digests/weekly report, default 3
 - `FUNDING_MONITOR_HOUR` — local hour for the source-monitor sweep, default 6
+
+### Cost note: DeepSeek peak hours
+
+DeepSeek bills peak rates between **01:00–04:00 and 06:00–10:00 UTC**; everything
+outside those windows is half price. Any sweep that runs LLM extraction — the
+source-monitor sweep in particular — is cheaper scheduled outside them. On an
+IST host (UTC+5:30) the defaults already land off-peak (digest 03:35 IST =
+22:05 UTC, monitor 06:10 IST = 00:40 UTC), but a long sweep started at 00:40 UTC
+can spill into the 01:00 peak window. If the monitor sweep is doing heavy
+extraction, set `FUNDING_MONITOR_HOUR=11` (05:30 UTC) or later.
 - `GRAPSI_ENV_FILE` — explicit env file path (otherwise `.env.production`, then `.env`, beside the repo root)
 
 ## Manual fire (testing)

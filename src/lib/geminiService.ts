@@ -54,8 +54,9 @@ const getGeminiModelName = (modelName: string): string => {
     'gemini-1.5-flash': 'gemini-1.5-flash',
     'gemini-1.5-flash-lite': 'gemini-1.5-flash-lite',
     'gemini-2.0-pro': 'gemini-2.0-pro',
-    'gemini-2.0-flash': 'gemini-2.0-flash',
-    'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite',
+    // Retired 1 Jun 2026 — self-heal old stored configs onto the 2.5 line.
+    'gemini-2.0-flash': 'gemini-2.5-flash',
+    'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
     'gemini-2.5-pro': 'gemini-2.5-pro',
     'gemini-2.5-flash': 'gemini-2.5-flash',
     'gemini-2.5-pro-preview': 'gemini-2.5-pro-preview',
@@ -85,7 +86,7 @@ const getGeminiFallbackModel = (modelName: string): string => {
     return 'gemini-2.5-pro';
   }
 
-  return 'gemini-2.0-flash';
+  return 'gemini-2.5-flash';
 };
 
 function readPositiveInt(value: string | undefined, fallback: number): number {
@@ -447,7 +448,7 @@ async function runGeminiTextRequest(
   throw wrapGeminiError(lastError, modelName, maxAttempts);
 }
 
-export async function generateFromGemini(prompt: string, model: string = 'gemini-2.0-flash') {
+export async function generateFromGemini(prompt: string, model: string = 'gemini-2.5-flash') {
   debugGemini('generateFromGemini called', { model, promptLength: prompt.length });
 
   try {

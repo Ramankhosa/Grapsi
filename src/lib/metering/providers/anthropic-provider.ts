@@ -19,6 +19,9 @@ export class AnthropicProvider implements LLMProvider {
     'claude-opus-4.6',
     // Claude 3.7 models
     'claude-3-7-sonnet',
+    // Claude 4.5 models
+    'claude-haiku-4.5',
+    'claude-haiku-4-5',
     // Claude 3.5 models
     'claude-3-5-sonnet',
     'claude-3-5-haiku', 
@@ -130,6 +133,9 @@ export class AnthropicProvider implements LLMProvider {
       'claude-3-5-sonnet': 'claude-3-7-sonnet-20250219',
       'claude-3-5-sonnet-latest': 'claude-3-7-sonnet-20250219',
       'claude-sonnet-3.5': 'claude-3-7-sonnet-20250219',
+      // Claude Haiku 4.5 — current cheap tier
+      'claude-haiku-4.5': 'claude-haiku-4-5',
+      'claude-haiku-4-5': 'claude-haiku-4-5',
       // Claude 3.5 Haiku variations -> use latest haiku
       'claude-3.5-haiku': 'claude-3-5-haiku-20241022',
       'claude-3-5-haiku': 'claude-3-5-haiku-20241022',
@@ -310,6 +316,9 @@ export class AnthropicProvider implements LLMProvider {
       'claude-opus-4.6': { input: 1000000, output: 128000 },
       // Claude 3.7 models
       'claude-3-7-sonnet': { input: 200000, output: 16384 },
+      // Claude 4.5 models
+      'claude-haiku-4.5': { input: 200000, output: 64000 },
+      'claude-haiku-4-5': { input: 200000, output: 64000 },
       // Claude 3.5 models
       'claude-3-5-sonnet': { input: 200000, output: 8192 },
       'claude-3-5-haiku': { input: 200000, output: 8192 },
@@ -334,6 +343,9 @@ export class AnthropicProvider implements LLMProvider {
       'claude-opus-4.6': { input: 0.000005, output: 0.000025 },
       // Claude 3.7 models
       'claude-3-7-sonnet': { input: 0.000003, output: 0.000015 },
+      // Claude 4.5 models
+      'claude-haiku-4.5': { input: 0.000001, output: 0.000005 },
+      'claude-haiku-4-5': { input: 0.000001, output: 0.000005 },
       // Claude 3.5 models
       'claude-3-5-sonnet': { input: 0.000003, output: 0.000015 },
       'claude-3-5-haiku': { input: 0.0000008, output: 0.000004 },

@@ -106,6 +106,10 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gpt-5': 'openai',
     'gpt-5.1': 'openai',
     'gpt-5.2': 'openai',
+    'gpt-5.6': 'openai',
+    'gpt-5.6-sol': 'openai',
+    'gpt-5.6-terra': 'openai',
+    'gpt-5.6-luna': 'openai',
     'gpt-5.4': 'openai',
     'gpt-5.4-mini': 'openai',
     'gpt-5.4-nano': 'openai',
@@ -138,6 +142,8 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     // Anthropic - Canonical API model IDs (with dates)
     'claude-3-5-sonnet-20241022': 'anthropic',
     'claude-3-5-haiku-20241022': 'anthropic',
+    'claude-haiku-4.5': 'anthropic',
+    'claude-haiku-4-5': 'anthropic',
     'claude-3-opus-20240229': 'anthropic',
     'claude-3-sonnet-20240229': 'anthropic',
     'claude-3-haiku-20240307': 'anthropic',
@@ -166,6 +172,8 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'grok-2': 'grok',
 
     // Zhipu (GLM)
+    'glm-5.3': 'zhipu',
+    'glm-5.3-flash': 'zhipu',
     'glm-5.2': 'zhipu',
     'glm-5.1': 'zhipu',
     'glm-5': 'zhipu',
