@@ -92,14 +92,15 @@ async function main() {
       isDefault: false
     },
     {
+      // NOTE: scheduled for shutdown 16 Oct 2026 — migrate before then.
       code: 'gemini-2.5-flash',
       displayName: 'Gemini 2.5 Flash (Nano Banana)',
       provider: 'google',
       contextWindow: 1000000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 15,     // $0.15
-      outputCostPer1M: 60,    // $0.60
+      inputCostPer1M: 30,     // $0.30
+      outputCostPer1M: 250,   // $2.50
       isActive: true,
       isDefault: false
     },
@@ -116,6 +117,8 @@ async function main() {
       isDefault: true  // System default - cost effective
     },
     {
+      // RETIRED 1 Jun 2026 — hard shutdown, the endpoint errors. Kept inactive
+      // so historical usage_logs rows still resolve their model.
       code: 'gemini-2.0-flash',
       displayName: 'Gemini 2.0 Flash',
       provider: 'google',
@@ -124,10 +127,12 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 10,     // $0.10
       outputCostPer1M: 40,    // $0.40
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
+      // RETIRED 1 Jun 2026 — hard shutdown, the endpoint errors. Kept inactive
+      // so historical usage_logs rows still resolve their model.
       code: 'gemini-2.0-flash-lite',
       displayName: 'Gemini 2.0 Flash Lite',
       provider: 'google',
@@ -136,11 +141,13 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 8,      // $0.08
       outputCostPer1M: 30,    // $0.30
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     // Gemini 2.0 Experimental Models (best for image generation)
     {
+      // RETIRED 1 Jun 2026 — hard shutdown, the endpoint errors. Kept inactive
+      // so historical usage_logs rows still resolve their model.
       code: 'gemini-2.0-flash-exp',
       displayName: 'Gemini 2.0 Flash Experimental (Best Image Output)',
       provider: 'google',
@@ -149,10 +156,12 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 10,     // $0.10
       outputCostPer1M: 40,    // $0.40
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
+      // RETIRED 1 Jun 2026 — hard shutdown, the endpoint errors. Kept inactive
+      // so historical usage_logs rows still resolve their model.
       code: 'gemini-2.0-flash-thinking-exp',
       displayName: 'Gemini 2.0 Flash Thinking (Higher Quality Reasoning)',
       provider: 'google',
@@ -161,7 +170,7 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 30,     // $0.30
       outputCostPer1M: 120,   // $1.20
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
@@ -178,6 +187,7 @@ async function main() {
     },
     // Gemini 1.5 Series
     {
+      // RETIRED — superseded by the 2.5/3.x line.
       code: 'gemini-1.5-pro',
       displayName: 'Gemini 1.5 Pro',
       provider: 'google',
@@ -186,10 +196,11 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 125,
       outputCostPer1M: 500,
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
+      // RETIRED — superseded by the 2.5/3.x line.
       code: 'gemini-1.5-flash',
       displayName: 'Gemini 1.5 Flash',
       provider: 'google',
@@ -198,7 +209,7 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 8,      // $0.075
       outputCostPer1M: 30,    // $0.30
-      isActive: true,
+      isActive: false,
       isDefault: false
     },
     {
@@ -381,11 +392,11 @@ async function main() {
       code: 'gpt-5.1',
       displayName: 'GPT-5.1',
       provider: 'openai',
-      contextWindow: 256000,
+      contextWindow: 400000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 150,    // $1.50
-      outputCostPer1M: 1200,  // $12.00
+      inputCostPer1M: 125,    // $1.25
+      outputCostPer1M: 1000,  // $10.00
       isActive: true,
       isDefault: false
     },
@@ -393,11 +404,11 @@ async function main() {
       code: 'gpt-5.2',
       displayName: 'GPT-5.2',
       provider: 'openai',
-      contextWindow: 256000,
+      contextWindow: 400000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 150,    // $1.50 (placeholder)
-      outputCostPer1M: 1200,  // $12.00 (placeholder)
+      inputCostPer1M: 175,    // $1.75
+      outputCostPer1M: 1400,  // $14.00
       isActive: true,
       isDefault: false
     },
@@ -450,6 +461,42 @@ async function main() {
       isDefault: false
     },
     {
+      code: 'gpt-5.6-sol',
+      displayName: 'GPT-5.6 Sol',
+      provider: 'openai',
+      contextWindow: 400000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 3000,  // $30.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.6-terra',
+      displayName: 'GPT-5.6 Terra',
+      provider: 'openai',
+      contextWindow: 400000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 250,    // $2.50
+      outputCostPer1M: 1500,  // $15.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.6-luna',
+      displayName: 'GPT-5.6 Luna',
+      provider: 'openai',
+      contextWindow: 400000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 600,   // $6.00
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'gpt-5.5',
       displayName: 'GPT-5.5',
       provider: 'openai',
@@ -481,8 +528,8 @@ async function main() {
       contextWindow: 256000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 150,    // $1.50 (placeholder)
-      outputCostPer1M: 1200,  // $12.00 (placeholder)
+      inputCostPer1M: 125,    // $1.50 (placeholder)
+      outputCostPer1M: 1000,  // $12.00 (placeholder)
       isActive: true,
       isDefault: false
     },
@@ -493,8 +540,8 @@ async function main() {
       contextWindow: 256000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 150,    // $1.50 (placeholder)
-      outputCostPer1M: 1200,  // $12.00 (placeholder)
+      inputCostPer1M: 175,    // $1.50 (placeholder)
+      outputCostPer1M: 1400,  // $12.00 (placeholder)
       isActive: true,
       isDefault: false
     },
@@ -502,10 +549,10 @@ async function main() {
       code: 'gpt-5-mini',
       displayName: 'GPT-5 Mini',
       provider: 'openai',
-      contextWindow: 128000,
+      contextWindow: 400000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 50,     // $0.50
+      inputCostPer1M: 25,     // $0.25
       outputCostPer1M: 200,   // $2.00
       isActive: true,
       isDefault: false
@@ -514,11 +561,11 @@ async function main() {
       code: 'gpt-5-nano',
       displayName: 'GPT-5 Nano',
       provider: 'openai',
-      contextWindow: 64000,
+      contextWindow: 400000,
       supportsVision: true,
       supportsStreaming: true,
-      inputCostPer1M: 25,     // $0.25
-      outputCostPer1M: 100,   // $1.00
+      inputCostPer1M: 5,      // $0.05
+      outputCostPer1M: 40,    // $0.40
       isActive: true,
       isDefault: false
     },
@@ -649,6 +696,18 @@ async function main() {
       isDefault: false
     },
     {
+      code: 'claude-haiku-4.5',
+      displayName: 'Claude Haiku 4.5',
+      provider: 'anthropic',
+      contextWindow: 200000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 500,   // $5.00
+      isActive: true,
+      isDefault: false
+    },
+    {
       code: 'claude-3-5-haiku',
       displayName: 'Claude 3.5 Haiku',
       provider: 'anthropic',
@@ -741,8 +800,8 @@ async function main() {
       contextWindow: 1000000,
       supportsVision: false,
       supportsStreaming: true,
-      inputCostPer1M: 174,    // $1.74
-      outputCostPer1M: 348,   // $3.48
+      inputCostPer1M: 132,    // $1.32 peak cache-miss ($0.66 off-peak)
+      outputCostPer1M: 396,   // $3.96 peak ($1.98 off-peak)
       isActive: true,
       isDefault: false
     },
@@ -753,8 +812,8 @@ async function main() {
       contextWindow: 1000000,
       supportsVision: false,
       supportsStreaming: true,
-      inputCostPer1M: 14,     // $0.14
-      outputCostPer1M: 28,    // $0.28
+      inputCostPer1M: 44,     // $0.44 peak cache-miss ($0.22 off-peak)
+      outputCostPer1M: 132,   // $1.32 peak ($0.66 off-peak)
       isActive: true,
       isDefault: false
     },
@@ -879,8 +938,32 @@ async function main() {
       contextWindow: 200000,
       supportsVision: false,
       supportsStreaming: true,
-      inputCostPer1M: 140,    // $1.40
+      inputCostPer1M: 91,     // $0.91
+      outputCostPer1M: 286,   // $2.86
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5.3',
+      displayName: 'GLM-5.3',
+      provider: 'zhipu',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 140,    // $1.40 (cached input $0.26)
       outputCostPer1M: 440,   // $4.40
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5.3-flash',
+      displayName: 'GLM-5.3 Flash',
+      provider: 'zhipu',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 15,     // $0.15 (cached input $0.015)
+      outputCostPer1M: 50,    // $0.50
       isActive: true,
       isDefault: false
     },
@@ -891,8 +974,8 @@ async function main() {
       contextWindow: 200000,
       supportsVision: false,
       supportsStreaming: true,
-      inputCostPer1M: 160,    // $1.60
-      outputCostPer1M: 480,   // $4.80
+      inputCostPer1M: 140,    // $1.40
+      outputCostPer1M: 440,   // $4.40
       isActive: true,
       isDefault: false
     },
@@ -1137,7 +1220,7 @@ async function main() {
       sortOrder: 1,
       description: 'PDF transcription for funding-call intake before structured field extraction.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
+      models: { FREE_PLAN: 'gemini-3.1-flash', PRO_PLAN: 'gemini-3.1-flash', ENTERPRISE_PLAN: 'gemini-3.1-flash' }
     },
     {
       code: 'FUNDING_CALL_INGEST_TEXT',
@@ -1146,7 +1229,7 @@ async function main() {
       sortOrder: 2,
       description: 'Structured funding-call facts extraction from URL content, pasted text, and transcribed PDF text.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 24000 },
-      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'FUNDING_CHAT_ORCHESTRATOR',
@@ -1155,7 +1238,7 @@ async function main() {
       sortOrder: 3,
       description: 'Classify and structure user funding-chat intent.',
       tokenLimits: { maxTokensIn: 24000, maxTokensOut: 6000 },
-      models: { FREE_PLAN: 'gemini-2.0-flash-lite', PRO_PLAN: 'gemini-2.0-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'FUNDING_CHAT_QUERY_ENRICHMENT',
@@ -1164,7 +1247,7 @@ async function main() {
       sortOrder: 4,
       description: 'Expand research-area searches for retrieval.',
       tokenLimits: { maxTokensIn: 24000, maxTokensOut: 4000 },
-      models: { FREE_PLAN: 'gemini-2.0-flash-lite', PRO_PLAN: 'gemini-2.0-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'FUNDING_CHAT_NARRATIVE',
@@ -1173,7 +1256,7 @@ async function main() {
       sortOrder: 5,
       description: 'Generate grounded recommendation summaries and follow-up answers.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.0-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3' }
     },
     {
       code: 'FUNDING_CHAT_EMBEDDING',
@@ -1191,7 +1274,7 @@ async function main() {
       sortOrder: 17,
       description: 'Answer funding-strategy and general questions conversationally inside the finder chat.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 4000 },
-      models: { FREE_PLAN: 'gemini-2.0-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3' }
     },
     {
       code: 'FUNDING_DOC_QA',
@@ -1200,7 +1283,7 @@ async function main() {
       sortOrder: 18,
       description: 'Answer questions about a specific funding call grounded in its ingested document chunks.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 4000 },
-      models: { FREE_PLAN: 'gemini-2.0-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3' }
     },
     {
       code: 'IDEA_INTELLIGENCE_STRUCTURE',
@@ -1209,7 +1292,7 @@ async function main() {
       sortOrder: 7,
       description: 'Convert free-form research ideas into searchable facets, keywords, and semantic queries.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.0-flash-lite', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'IDEA_INTELLIGENCE_EVIDENCE_MAP',
@@ -1218,7 +1301,7 @@ async function main() {
       sortOrder: 8,
       description: 'Map idea facets against funded projects, publications, patents, and web evidence.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'IDEA_INTELLIGENCE_REPORT',
@@ -1227,7 +1310,7 @@ async function main() {
       sortOrder: 9,
       description: 'Generate evidence-grounded positioning recommendations and next steps from the cross-corpus matrix.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'IDEA_INTELLIGENCE_REFINE',
@@ -1236,7 +1319,7 @@ async function main() {
       sortOrder: 10,
       description: 'Generate refined idea versions from completed landscape analysis and user refinement goals.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'FUNDING_DOCUMENT_RETRIEVAL',
@@ -1263,7 +1346,7 @@ async function main() {
       sortOrder: 13,
       description: 'Extract grant template structure from text assets.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
-      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'FUNDING_TEMPLATE_EXTRACT_MULTIMODAL',
@@ -1272,7 +1355,7 @@ async function main() {
       sortOrder: 14,
       description: 'Extract grant template structure from PDF and image assets.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 32000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
+      models: { FREE_PLAN: 'gemini-3.1-flash', PRO_PLAN: 'gemini-3.1-flash', ENTERPRISE_PLAN: 'gemini-3.1-flash' }
     },
     {
       code: 'FUNDING_GUIDELINE_EXTRACT_TEXT',
@@ -1281,7 +1364,7 @@ async function main() {
       sortOrder: 15,
       description: 'Extract structured grant-writing guidelines from call text.',
       tokenLimits: { maxTokensIn: 200000, maxTokensOut: 24000 },
-      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'GRANT_PREP_CHAT',
@@ -1290,7 +1373,7 @@ async function main() {
       sortOrder: 0,
       description: 'Run the interactive Grant Prep coaching chat, marker extraction, response repair, and compact follow-up generation.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-3.1-flash', PRO_PLAN: 'gemini-3.1-flash', ENTERPRISE_PLAN: 'deepseek-v4-flash' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3' }
     },
     {
       code: 'PAPER_BLUEPRINT_GEN',
@@ -1299,7 +1382,7 @@ async function main() {
       sortOrder: 1,
       description: 'Build the working grant blueprint, scope, contribution path, and must-cover dimensions from the active context.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'GRANT_BLUEPRINT_GEN',
@@ -1308,7 +1391,7 @@ async function main() {
       sortOrder: 2,
       description: 'Generate grant-specific blueprint dimensions, section framing, and evaluation anchors from prep context.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'RESEARCH_INTENT_LOCK',
@@ -1317,7 +1400,7 @@ async function main() {
       sortOrder: 3,
       description: 'Lock the core grant intent, scope boundaries, and decision-critical assumptions before drafting.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5' }
     },
     {
       code: 'ARGUMENT_PLAN',
@@ -1326,7 +1409,7 @@ async function main() {
       sortOrder: 4,
       description: 'Plan the argument sequence, evidence posture, and persuasive structure for the grant narrative.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'PAPER_ARCHETYPE_DETECTION',
@@ -1335,7 +1418,7 @@ async function main() {
       sortOrder: 5,
       description: 'Classify evidence and reference material into archetypes for downstream extraction and mapping.',
       tokenLimits: { maxTokensIn: 24000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash-lite', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
 
     {
@@ -1345,7 +1428,7 @@ async function main() {
       sortOrder: 1,
       description: 'Support literature review retrieval planning, search framing, and source-targeting prompts.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5-mini' }
     },
     {
       code: 'SEARCH_STRATEGY_PLANNING',
@@ -1354,7 +1437,7 @@ async function main() {
       sortOrder: 2,
       description: 'Turn the research problem and grant blueprint into a structured literature search strategy.',
       tokenLimits: { maxTokensIn: 40000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'SEARCH_QUERY_GENERATION',
@@ -1363,7 +1446,7 @@ async function main() {
       sortOrder: 3,
       description: 'Generate database-ready query sets, synonyms, filters, and retrieval variants for literature search.',
       tokenLimits: { maxTokensIn: 24000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'PAPER_LITERATURE_SUMMARIZE',
@@ -1372,7 +1455,7 @@ async function main() {
       sortOrder: 4,
       description: 'Extract structured evidence, claims, metrics, and limitations from full-text literature for grant use.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'PAPER_LITERATURE_GAP',
@@ -1381,7 +1464,7 @@ async function main() {
       sortOrder: 5,
       description: 'Identify evidence gaps, unresolved questions, and positioning opportunities from the literature base.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'LITERATURE_RELEVANCE',
@@ -1390,7 +1473,7 @@ async function main() {
       sortOrder: 6,
       description: 'Rank and filter candidate papers against the active grant topic, blueprint, and search intent.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash-lite', PRO_PLAN: 'gpt-4o-mini', ENTERPRISE_PLAN: 'gpt-5-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'CITATION_BLUEPRINT_MAPPING',
@@ -1399,7 +1482,7 @@ async function main() {
       sortOrder: 7,
       description: 'Map extracted evidence and citations onto blueprint dimensions, sections, and grant-use cases.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5-mini', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'PAPER_REVIEW_COHERENCE',
@@ -1408,7 +1491,7 @@ async function main() {
       sortOrder: 8,
       description: 'Check coherence between extracted evidence, mapped citations, and the grant blueprint dimension structure.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
 
     {
@@ -1418,7 +1501,7 @@ async function main() {
       sortOrder: 1,
       description: 'Reorganize selected draft text into coherent grant sections and subsections.',
       tokenLimits: { maxTokensIn: 24000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5' }
     },
     {
       code: 'PAPER_SECTION_DRAFT',
@@ -1427,7 +1510,7 @@ async function main() {
       sortOrder: 2,
       description: 'Generate the primary evidence-grounded grant section draft from blueprint, evidence, and grant context.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+      models: { FREE_PLAN: 'deepseek-v4-flash', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
     },
     {
       code: 'PAPER_SECTION_GEN',
@@ -1436,7 +1519,7 @@ async function main() {
       sortOrder: 3,
       description: 'Finalize grant section drafts in compatibility and memory-aware flows while preserving blueprint and evidence fidelity.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'deepseek-v4-pro', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
+      models: { FREE_PLAN: 'deepseek-v4-flash', PRO_PLAN: 'deepseek-v4-pro', ENTERPRISE_PLAN: 'deepseek-v4-pro' }
     },
     {
       code: 'PAPER_SECTION_IMPROVE',
@@ -1445,7 +1528,7 @@ async function main() {
       sortOrder: 4,
       description: 'Run targeted section-level improvement passes, including cleanup, citation repair, and coherence fixes.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'PAPER_MEMORY_EXTRACT',
@@ -1454,7 +1537,7 @@ async function main() {
       sortOrder: 5,
       description: 'Extract compact structured draft memory for downstream grant-writing consistency across sections.',
       tokenLimits: { maxTokensIn: 24000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gpt-4o-mini', ENTERPRISE_PLAN: 'gpt-4o-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'PAPER_TEXT_ACTION',
@@ -1463,7 +1546,7 @@ async function main() {
       sortOrder: 6,
       description: 'Apply focused edit actions such as rewrite, condense, expand, or formalize on selected grant text.',
       tokenLimits: { maxTokensIn: 24000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'PAPER_FIGURE_SUGGESTION',
@@ -1472,7 +1555,7 @@ async function main() {
       sortOrder: 7,
       description: 'Suggest figures, charts, and diagrams that strengthen the grant story and evidence presentation.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'PAPER_CHART_GENERATOR',
@@ -1481,7 +1564,7 @@ async function main() {
       sortOrder: 8,
       description: 'Generate structured chart specifications for grant figures and quantitative summaries.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gpt-4o', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'PAPER_DIAGRAM_GENERATOR',
@@ -1490,7 +1573,7 @@ async function main() {
       sortOrder: 9,
       description: 'Generate Mermaid or PlantUML diagrams that explain methods, workflows, or systems in the grant.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gpt-4o', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'PAPER_DIAGRAM_FROM_TEXT',
@@ -1499,7 +1582,7 @@ async function main() {
       sortOrder: 10,
       description: 'Convert highlighted grant text directly into diagram specifications and visual structure.',
       tokenLimits: { maxTokensIn: 48000, maxTokensOut: 12000 },
-      models: { FREE_PLAN: 'gpt-4o', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2-thinking' }
     },
     {
       code: 'PAPER_SKETCH_GENERATION',
@@ -1517,7 +1600,7 @@ async function main() {
       sortOrder: 12,
       description: 'Infer concise figure metadata from generated visuals for captions and downstream drafting workflows.',
       tokenLimits: { maxTokensIn: 16000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gpt-4o-mini', PRO_PLAN: 'gpt-4o-mini', ENTERPRISE_PLAN: 'gpt-4o-mini' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'PAPER_MANUSCRIPT_REVIEW',
@@ -1526,7 +1609,7 @@ async function main() {
       sortOrder: 13,
       description: 'Run a structured grant-draft review across sections, claims, evidence, and figure references.',
       tokenLimits: { maxTokensIn: 96000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'PAPER_MANUSCRIPT_REVIEW_CONTEXT_SUMMARY',
@@ -1535,7 +1618,7 @@ async function main() {
       sortOrder: 14,
       description: 'Extract compact neighboring-section summaries so grant review can stay focused without losing context.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'PAPER_MANUSCRIPT_IMPROVE',
@@ -1544,7 +1627,7 @@ async function main() {
       sortOrder: 15,
       description: 'Apply accepted review fixes to improve the grant draft with high edit fidelity.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'PAPER_EXPORT_EXTRACTION',
@@ -1553,7 +1636,7 @@ async function main() {
       sortOrder: 16,
       description: 'Extract structured formatting and submission-profile settings from templates, examples, or guidelines.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
 
     {
@@ -1563,7 +1646,7 @@ async function main() {
       sortOrder: 1,
       description: 'Generate compact LLM-consumable summaries for mapped grant reviewer sections.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 8000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'GRANT_REVIEWER_FULL_REVIEW',
@@ -1572,7 +1655,7 @@ async function main() {
       sortOrder: 2,
       description: 'Generate the full grant reviewer evaluation from mapped sections, template rules, and manual rubric context.',
       tokenLimits: { maxTokensIn: 96000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gemini-2.5-pro', PRO_PLAN: 'gemini-2.5-pro', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gemini-2.5-pro' }
     },
     {
       code: 'GRANT_REVIEWER_FINAL_REPORT',
@@ -1581,7 +1664,7 @@ async function main() {
       sortOrder: 3,
       description: 'Compile the final panel report and revision comparisons from completed section reviews.',
       tokenLimits: { maxTokensIn: 96000, maxTokensOut: 16000 },
-      models: { FREE_PLAN: 'gpt-5.2', PRO_PLAN: 'gpt-5.2', ENTERPRISE_PLAN: 'gpt-5.2' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'gpt-5.2' }
     },
     {
       code: 'GRANT_REVIEWER_LANDSCAPE_DISTILL',
@@ -1590,7 +1673,7 @@ async function main() {
       sortOrder: 4,
       description: 'Distill a proposal into search facets and queries for the prior-work landscape scan.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 2000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'GRANT_REVIEWER_LANDSCAPE_FACET_MAP',
@@ -1599,7 +1682,7 @@ async function main() {
       sortOrder: 5,
       description: 'Tag retrieved funded projects and patents with the proposal facets they touch.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 6000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3-flash' }
     },
     {
       code: 'GRANT_REVIEWER_NOVELTY',
@@ -1608,7 +1691,7 @@ async function main() {
       sortOrder: 6,
       description: 'Evidence-bounded novelty verdict positioning the proposal against the retrieved landscape.',
       tokenLimits: { maxTokensIn: 64000, maxTokensOut: 4000 },
-      models: { FREE_PLAN: 'gemini-2.5-flash', PRO_PLAN: 'gemini-2.5-flash', ENTERPRISE_PLAN: 'gemini-2.5-flash' }
+      models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3', ENTERPRISE_PLAN: 'glm-5.3' }
     }
   ];
 

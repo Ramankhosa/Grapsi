@@ -7,6 +7,15 @@ import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { collectOpenAICompatibleChatCompletionStream } from './streaming-utils'
 
+const VALID_REASONING_EFFORTS = new Set(['low', 'high', 'max'])
+
+// Override with ZHIPU_FLASH_REASONING_EFFORT=high (or 'max', or empty to opt out).
+const ZHIPU_FLASH_DEFAULT_EFFORT = (() => {
+  const raw = (process.env.ZHIPU_FLASH_REASONING_EFFORT ?? 'low').trim()
+  if (!raw) return null
+  return VALID_REASONING_EFFORTS.has(raw) ? raw : 'low'
+})()
+
 export class ZhipuProvider implements LLMProvider {
   name = 'zhipu'
   supportedModels = [
@@ -147,11 +156,26 @@ export class ZhipuProvider implements LLMProvider {
         )
       }
 
-      const createParams = {
+      // GLM 5.x always thinks — the API rejects thinking:{type:'disabled'} with
+      // "use low, high or max" — and reasoning tokens bill as output. On a real
+      // extraction prompt the default spends 123 completion tokens (107 of them
+      // reasoning) where reasoning_effort:'low' spends 11 for the same answer.
+      // Flash is the cheap tier and carries the mechanical stages, so it defaults
+      // to 'low'; anything else keeps Zhipu's default unless the caller asks.
+      const requestedEffort = (request.parameters as any)?.reasoningEffort
+      const effort = VALID_REASONING_EFFORTS.has(requestedEffort)
+        ? requestedEffort
+        : actualModel.endsWith('-flash')
+          ? (ZHIPU_FLASH_DEFAULT_EFFORT || undefined)
+          : undefined
+      const createParams: Record<string, any> = {
         model: actualModel,
         messages,
         max_tokens: maxTokens,
         temperature: request.parameters?.temperature ?? 0.7
+      }
+      if (effort) {
+        createParams.reasoning_effort = effort
       }
 
       if (request.stream?.onToken) {
