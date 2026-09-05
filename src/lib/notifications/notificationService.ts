@@ -15,7 +15,9 @@ export type NotificationCategory =
   | 'DEADLINE'
   | 'OUTCOME'
   | 'ANNOUNCEMENT'
-  | 'FUNDING_MATCH';
+  | 'FUNDING_MATCH'
+  /** The proposal desk: a draft arrived, a review was shared, a cut-off nears. */
+  | 'PROPOSAL';
 
 export interface CreateNotificationsInput {
   tenantId: string;

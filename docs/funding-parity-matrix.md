@@ -32,8 +32,8 @@ This tracks GrantMentor funding-domain modules migrated into Grapsi and how they
 | `pages/api/recommendations/**/*` | `src/app/api/recommendations/**/*` | active |
 | `pages/api/researcher/**/*` | `src/app/api/researcher/**/*` | active |
 | `pages/api/chatbot/index.ts` | `src/app/api/chatbot/route.ts` | active |
-| `pages/api/chatbot/funding-advisor.ts` | `src/app/api/chatbot/funding-advisor/route.ts` | active |
-| `pages/api/chatbot/funding-advisor-fallback.ts` | `src/app/api/chatbot/funding-advisor-fallback/route.ts` | active |
+| `pages/api/chatbot/funding-advisor.ts` | `src/app/api/chatbot/funding-advisor/route.ts` | retired (410) — open-ended advisor chat, replaced by `/api/recommendations` finder conversations |
+| `pages/api/chatbot/funding-advisor-fallback.ts` | `src/app/api/chatbot/funding-advisor-fallback/route.ts` | retired (410) — see funding-advisor |
 | `pages/api/chatbot/funding-search.ts` | `src/app/api/chatbot/funding-search/route.ts` | active |
 | `pages/api/chatbot/funding-detailed-analysis.ts` | `src/app/api/chatbot/funding-detailed-analysis/route.ts` | active |
 

@@ -7,6 +7,8 @@
  *
  * Endpoints driven (all POST, authenticated with x-funding-alert-secret):
  *   /api/funding-dept/reminders/sweep   hourly   reminder ladder + escalations
+ *   /api/proposals/reviews/sweep        10 min   resume stranded proposal reviews
+ *   /api/proposals/sweep                hourly   cut-off nudges, review SLA, agency-stale
  *   /api/funding/alerts/dispatch        hourly   healing sweep for undispatched published calls
  *   /api/funding/alerts/digest          daily + Monday   queued alert digests
  *   /api/funding-dept/reports/weekly    Monday   department digest to members + head
@@ -124,6 +126,21 @@ function tick() {
   }
   if (minute >= 20 && due('alert-sweep', hourSlot)) {
     void post('/api/funding/alerts/dispatch')
+  }
+
+  // Proposal reviews run inside the web process, so a deploy mid-run leaves a
+  // row stranded. Six times an hour is frequent enough that an officer watching
+  // the progress bar sees it resume rather than hang, and each pass is a single
+  // indexed query when there is nothing to do.
+  const tenMinuteSlot = `${hourSlot}-${Math.floor(minute / 10)}`
+  if (due('proposal-review-sweep', tenMinuteSlot)) {
+    void post('/api/proposals/reviews/sweep')
+  }
+
+  // The desk's three standing watches: a cut-off approaching with no revision,
+  // a draft nobody has turned around, and an agency that has gone quiet.
+  if (minute >= 40 && due('proposal-sweep', hourSlot)) {
+    void post('/api/proposals/sweep')
   }
 
   // Daily digest, then the weekly bundle and department report on Mondays.

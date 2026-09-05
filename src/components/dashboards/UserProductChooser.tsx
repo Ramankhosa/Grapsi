@@ -134,6 +134,17 @@ const productGroups: ProductGroup[] = [
         tag: 'Analysis',
         moduleKey: 'GRANT_REVIEW',
         minTier: 'Pro'
+      },
+      {
+        // Deliberately not gated on a module: the desk is record-keeping the
+        // whole institution needs, and a researcher whose office asked for a
+        // draft must be able to reach it whatever the plan includes.
+        title: 'My Proposals',
+        description:
+          'Your applications with the funding department: drafts, the reviews they send back, budget and submission.',
+        href: '/proposals',
+        icon: FileText,
+        tag: 'Submission'
       }
     ]
   },

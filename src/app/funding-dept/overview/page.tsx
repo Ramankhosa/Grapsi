@@ -47,6 +47,9 @@ interface SchoolRow {
   submitted: number
   declined: number
   awarded: number
+  /** The proposal desk's numbers for this school. */
+  proposalsInReview: number
+  proposalsCleared: number
   faculty: number
   busyFaculty: number
   mappedAreas: number
@@ -530,6 +533,7 @@ export default function FundingDeptOverviewPage() {
                     'Needs somebody',
                     'Live',
                     'Overdue',
+                    'Proposals',
                     'Submitted',
                     'Awarded',
                     'Last contact',
@@ -590,6 +594,24 @@ export default function FundingDeptOverviewPage() {
                         <span className="font-medium text-red-700">{school.missed}</span>
                       ) : (
                         <span className="nk-sub">0</span>
+                      )}
+                    </td>
+                    {/*
+                      The desk's own work in this school: applications being
+                      written or read, and those cleared and waiting to go. A
+                      dash rather than a zero when there are none — the column
+                      should not shout at a school that simply has none open.
+                    */}
+                    <td className="px-4 py-3 tabular-nums">
+                      {school.proposalsInReview > 0 || school.proposalsCleared > 0 ? (
+                        <>
+                          <span>{school.proposalsInReview}</span>
+                          {school.proposalsCleared > 0 ? (
+                            <span className="nk-sub"> · {school.proposalsCleared} cleared</span>
+                          ) : null}
+                        </>
+                      ) : (
+                        <span className="nk-sub">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3 tabular-nums">{school.submitted}</td>

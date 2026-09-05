@@ -193,6 +193,8 @@ interface AllocationRow {
   last_follow_up_at: Date | null
   last_stage: string | null
   has_workspace: boolean
+  proposal_status: string | null
+  proposal_activity_at: Date | null
 }
 
 // Interval literals cannot be parameterised, and a bound integer arrives as
@@ -236,7 +238,12 @@ async function loadAllocations(tenantId: string, schoolIds: string[]): Promise<A
          WHERE gs."fundingCallId" = ca.funding_call_id
            AND gs."createdByUserId" = ca.assignee_user_id
            AND gs."tenantId" = ca.tenant_id
-      ) AS has_workspace
+      ) AS has_workspace,
+      -- The proposal desk's record for this allocation, if one was opened.
+      -- The activity timestamp is what stops a researcher who is uploading
+      -- revisions every week from reading as silent.
+      pr.status AS proposal_status,
+      pr.updated_at AS proposal_activity_at
     FROM call_assignments ca
     JOIN LATERAL (
       SELECT unnest(u.path) AS school_id
@@ -253,6 +260,7 @@ async function loadAllocations(tenantId: string, schoolIds: string[]): Promise<A
        ORDER BY f.happened_at DESC
        LIMIT 1
     ) fu ON TRUE
+    LEFT JOIN grant_proposals pr ON pr.assignment_id = ca.id
     WHERE ca.tenant_id = ${tenantId}
   `)
 }
@@ -446,7 +454,10 @@ export async function getMemberSchoolMatrix(
       row,
       row.last_follow_up_at ? { happened_at: row.last_follow_up_at, stage: row.last_stage } : null,
       row.has_workspace,
-      now
+      now,
+      row.proposal_status
+        ? { status: row.proposal_status, latestActivityAt: row.proposal_activity_at }
+        : null
     )
     progressCache.set(row.assignment_id, progress)
     return progress
@@ -680,6 +691,12 @@ export interface LedgerAllocation {
   followUpCount: number
   submittedAt: Date | null
   submissionReference: string | null
+  /**
+   * The proposal record behind this allocation, when the applicant has opened
+   * one. Null is a real answer — plenty of assignments never become a proposal
+   * — so the ledger says "no record" rather than implying one is missing.
+   */
+  proposal: { id: string; status: string; versionNo: number } | null
 }
 
 export interface LedgerCall {
@@ -832,6 +849,10 @@ export async function getSchoolCallLedger(
           last_stage: string | null
           follow_up_count: number
           has_workspace: boolean
+          proposal_status: string | null
+          proposal_activity_at: Date | null
+          proposal_id: string | null
+          proposal_version_no: number | null
         }>
       >(Prisma.sql`
         SELECT ca.id,
@@ -861,10 +882,15 @@ export async function getSchoolCallLedger(
                   WHERE gs."fundingCallId" = ca.funding_call_id
                     AND gs."createdByUserId" = ca.assignee_user_id
                     AND gs."tenantId" = ca.tenant_id
-               )                              AS has_workspace
+               )                              AS has_workspace,
+               pr.status                      AS proposal_status,
+               pr.updated_at                  AS proposal_activity_at,
+               pr.id                          AS proposal_id,
+               pr.current_version_no          AS proposal_version_no
           FROM call_assignments ca
           JOIN users au ON au.id = ca.assignee_user_id
           LEFT JOIN users bu ON bu.id = ca.assigned_by_user_id
+          LEFT JOIN grant_proposals pr ON pr.assignment_id = ca.id
           LEFT JOIN LATERAL (
             SELECT f.happened_at, f.kind, f.note
               FROM assignment_follow_ups f
@@ -889,7 +915,10 @@ export async function getSchoolCallLedger(
         ? { happened_at: row.last_follow_up_at, stage: row.last_stage, kind: row.last_follow_up_kind }
         : null,
       row.has_workspace,
-      now
+      now,
+      row.proposal_status
+        ? { status: row.proposal_status, latestActivityAt: row.proposal_activity_at }
+        : null
     )
     if (progress.goneQuiet) attention.goneQuiet += 1
     if (progress.overdueUnchased) attention.overdueUnchased += 1
@@ -910,6 +939,13 @@ export async function getSchoolCallLedger(
       followUpCount: row.follow_up_count,
       submittedAt: row.submitted_at,
       submissionReference: row.submission_reference,
+      proposal: row.proposal_id
+        ? {
+            id: row.proposal_id,
+            status: row.proposal_status || 'DRAFT',
+            versionNo: row.proposal_version_no ?? 0,
+          }
+        : null,
     }
     const list = allocationsByCall.get(row.funding_call_id)
     if (list) list.push(allocation)

@@ -21,6 +21,13 @@ const CATEGORY_STYLES: Record<string, string> = {
   OUTCOME: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
   ANNOUNCEMENT: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
   FUNDING_MATCH: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
+  PROPOSAL: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300',
+}
+
+/** The raw category is an enum name; this is what a reader should see. */
+const CATEGORY_LABELS: Record<string, string> = {
+  FUNDING_MATCH: 'FUNDING',
+  PROPOSAL: 'PROPOSAL',
 }
 
 export default function NotificationsPage() {
@@ -159,7 +166,7 @@ export default function NotificationsPage() {
                       {!item.readAt && <span className="h-2 w-2 rounded-full bg-blue-600 flex-shrink-0" />}
                       <h2 className="text-sm font-semibold text-gray-900 dark:text-white">{item.title}</h2>
                       <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full ${CATEGORY_STYLES[item.category] || CATEGORY_STYLES.ANNOUNCEMENT}`}>
-                        {item.category}
+                        {CATEGORY_LABELS[item.category] || item.category}
                       </span>
                     </div>
                     {item.body && (

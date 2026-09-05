@@ -17,6 +17,49 @@ function getHeaderValue(headers: Record<string, string>, headerName: string): st
 }
 
 /**
+ * Tenant context for work that has no request behind it.
+ *
+ * Background jobs (a proposal review the officer started and then closed the
+ * tab on) still spend model tokens, and the gateway picks the stage's model
+ * from the tenant's plan. Passing a context without `planId` silently drops the
+ * run onto the system default model, so the plan is resolved properly here
+ * rather than left blank.
+ *
+ * Returns null when the tenant is not active — a suspended tenant's queued job
+ * must not keep spending.
+ */
+export async function resolveTenantContextForUser(input: {
+  tenantId: string
+  userId: string
+}): Promise<TenantContext | null> {
+  const { prisma } = await import('@/lib/prisma')
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: input.tenantId },
+    include: {
+      tenantPlans: {
+        where: {
+          status: 'ACTIVE',
+          effectiveFrom: { lte: new Date() },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+        orderBy: { effectiveFrom: 'desc' },
+        take: 1,
+      },
+    },
+  })
+
+  if (!tenant || tenant.status !== 'ACTIVE') return null
+
+  return {
+    tenantId: tenant.id,
+    planId: tenant.tenantPlans[0]?.planId,
+    tenantStatus: tenant.status,
+    userId: input.userId,
+  } as TenantContext
+}
+
+/**
  * Extract tenant context from existing JWT token
  * This bridges the gap between current auth and metering
  */

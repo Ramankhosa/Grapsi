@@ -31,6 +31,7 @@ interface Allocation {
   followUpCount: number
   submittedAt: string | null
   submissionReference: string | null
+  proposal: { id: string; status: string; versionNo: number } | null
 }
 
 interface LedgerCall {
@@ -411,6 +412,17 @@ export default function SchoolLedgerPage({ params }: { params: { unitId: string 
                               <p className="nk-sub mt-1 text-[11px]">
                                 ref {allocation.submissionReference}
                               </p>
+                            ) : null}
+                            {allocation.proposal ? (
+                              <Link
+                                href={`/funding-dept/proposals/${allocation.proposal.id}`}
+                                className="mt-1 block text-[11px] text-cobalt-700 hover:underline"
+                              >
+                                proposal
+                                {allocation.proposal.versionNo > 0
+                                  ? ` · v${allocation.proposal.versionNo}`
+                                  : ''}
+                              </Link>
                             ) : null}
                           </td>
                           <td className="px-3 py-3 align-top">

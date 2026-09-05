@@ -509,3 +509,334 @@ export function fundingDeptWeeklyHeadTemplate(params: {
     text,
   }
 }
+
+// ---------------------------------------------------------------------------
+// The proposal desk
+//
+// Three moments where an in-app notice is not enough, because the recipient is
+// being asked to act by a date: a review has come back, a cut-off is upon them,
+// and — for the office rather than the applicant — a draft has been sitting
+// unread past the service level the department set itself.
+// ---------------------------------------------------------------------------
+
+/** A review the funding department has just sent back to the applicant. */
+export function proposalReviewSharedTemplate(params: {
+  email: string
+  name?: string | null
+  proposalTitle: string
+  agency: string | null
+  score: number | null
+  recommendation: string | null
+  officerNote: string | null
+  officerName: string | null
+  priorityActions?: string[]
+  proposalId: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/proposals/${params.proposalId}`
+  const actions = (params.priorityActions || []).slice(0, 3)
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">${
+      params.officerName ? `${escapeHtml(params.officerName)} at the` : 'The'
+    } funding department has reviewed your draft and sent the report back.</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.proposalTitle)}</div>
+      ${params.agency ? `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0">${escapeHtml(params.agency)}</p>` : ''}
+      ${
+        params.score != null
+          ? `<p style="color:${brand.gray500}; font-size:14px; margin:8px 0 0"><strong>Overall score:</strong> ${params.score.toFixed(1)} out of 10${params.recommendation ? ` · ${escapeHtml(String(params.recommendation).replace(/_/g, ' '))}` : ''}</p>`
+          : ''
+      }
+      ${
+        params.officerNote
+          ? `<p style="border-left:3px solid #E2E8F0; margin:12px 0 0; padding-left:12px; color:${brand.gray500}; font-size:14px">${escapeHtml(params.officerNote)}</p>`
+          : ''
+      }
+    </div>
+    ${
+      actions.length
+        ? `<p style="color:${brand.gray700}; font-weight:600; font-size:14px; margin:16px 0 6px">What to fix first</p>
+           <ul style="color:${brand.gray500}; font-size:14px; line-height:1.6; padding-left:18px; margin:0">
+             ${actions.map((action) => `<li>${escapeHtml(action)}</li>`).join('')}
+           </ul>`
+        : ''
+    }
+    <p style="color:${brand.gray500}; line-height:1.6">Read the full remarks, then upload your revised draft on the same page.</p>
+    ${primaryButton(url, 'Read the review')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>`
+
+  const text =
+    `Hi ${displayName}, the funding department has reviewed your draft of "${params.proposalTitle}".` +
+    `${params.score != null ? ` Overall score ${params.score.toFixed(1)}/10.` : ''}` +
+    `${params.officerNote ? ` Note: ${params.officerNote}` : ''}` +
+    `${actions.length ? ` Fix first: ${actions.join('; ')}.` : ''}` +
+    ` Read it and upload your revision: ${url}`
+
+  return {
+    subject: `Your proposal review is ready: ${params.proposalTitle.slice(0, 70)}`,
+    html: shell('Your proposal review is ready', body),
+    text,
+  }
+}
+
+/** The department's cut-off for a revised draft is close. */
+export function proposalCutoffTemplate(params: {
+  email: string
+  name?: string | null
+  proposalTitle: string
+  cutoffDate: string
+  daysLeft: number
+  proposalId: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/proposals/${params.proposalId}`
+  const urgent = params.daysLeft <= 1
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">${
+      urgent
+        ? 'Your funding department stops accepting revised drafts tomorrow.'
+        : `Your funding department stops accepting revised drafts in ${params.daysLeft} days.`
+    }</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.proposalTitle)}</div>
+      <p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Cut-off:</strong> ${escapeHtml(params.cutoffDate)}</p>
+    </div>
+    <p style="color:${brand.gray500}; line-height:1.6">They need the remaining days to read and clear it before the agency deadline. If you need longer, speak to your funding officer.</p>
+    ${primaryButton(url, 'Upload your revision')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>`
+
+  const text =
+    `Hi ${displayName}, the funding department's cut-off for revised drafts of "${params.proposalTitle}" is ${params.cutoffDate}` +
+    `${urgent ? ' — tomorrow.' : ` (${params.daysLeft} days).`}` +
+    ` Upload your revision: ${url}`
+
+  return {
+    subject: urgent
+      ? `Due tomorrow: revised draft for ${params.proposalTitle.slice(0, 60)}`
+      : `${params.daysLeft} days left: revised draft for ${params.proposalTitle.slice(0, 55)}`,
+    html: shell(urgent ? 'Your revision is due tomorrow' : 'Your revision is due soon', body),
+    text,
+  }
+}
+
+/** A draft the office has left unread, or a finished review it has not sent. */
+export function proposalReviewSlaTemplate(params: {
+  email: string
+  name?: string | null
+  proposalTitle: string
+  researcherName: string
+  versionNo: number
+  waitingDays: number
+  state: 'unreviewed' | 'unsent'
+  proposalId: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/funding-dept/proposals/${params.proposalId}`
+  const what =
+    params.state === 'unsent'
+      ? 'has been reviewed but the report has not been sent back'
+      : 'has not been reviewed yet'
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">A draft in one of your schools ${what}.</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.proposalTitle)}</div>
+      <p style="color:${brand.gray500}; font-size:14px; margin:4px 0">${escapeHtml(params.researcherName)} · version ${params.versionNo}</p>
+      <p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Waiting:</strong> ${params.waitingDays} days</p>
+    </div>
+    ${primaryButton(url, 'Open the proposal')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>`
+
+  const text =
+    `Hi ${displayName}, "${params.proposalTitle}" (${params.researcherName}, v${params.versionNo}) ${what}` +
+    ` after ${params.waitingDays} days. Open it: ${url}`
+
+  return {
+    subject: `Waiting ${params.waitingDays} days: ${params.proposalTitle.slice(0, 60)}`,
+    html: shell('A proposal draft is waiting', body),
+    text,
+  }
+}
+
+/** A fresh draft has arrived for the officer who covers that school. */
+export function proposalVersionUploadedTemplate(params: {
+  email: string
+  name?: string | null
+  proposalTitle: string
+  researcherName: string
+  versionNo: number
+  note: string | null
+  proposalId: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/funding-dept/proposals/${params.proposalId}`
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">${escapeHtml(params.researcherName)} has uploaded ${params.versionNo === 1 ? 'a draft' : `version ${params.versionNo}`} for review.</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.proposalTitle)}</div>
+      ${
+        params.note
+          ? `<p style="border-left:3px solid #E2E8F0; margin:12px 0 0; padding-left:12px; color:${brand.gray500}; font-size:14px">${escapeHtml(params.note)}</p>`
+          : ''
+      }
+    </div>
+    ${primaryButton(url, 'Open the proposal')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>`
+
+  const text =
+    `Hi ${displayName}, ${params.researcherName} uploaded version ${params.versionNo} of "${params.proposalTitle}".` +
+    `${params.note ? ` Note: ${params.note}` : ''} Open it: ${url}`
+
+  return {
+    subject: `New draft from ${params.researcherName}: ${params.proposalTitle.slice(0, 55)}`,
+    html: shell('A new proposal draft', body),
+    text,
+  }
+}
+
+/**
+ * A letter the institution has issued and the applicant needs in hand.
+ *
+ * This one earns an email without question: an endorsement letter usually has
+ * to be attached to a submission with a deadline, and an in-app badge is not
+ * where somebody will find it at nine in the evening.
+ */
+export function proposalDocumentIssuedTemplate(params: {
+  email: string
+  name?: string | null
+  proposalTitle: string
+  documentTitle: string
+  referenceNo: string | null
+  issuedOn: string | null
+  signedBy: string | null
+  proposalId: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/proposals/${params.proposalId}`
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">Your funding department has issued the ${escapeHtml(
+      params.documentTitle.toLowerCase()
+    )} for your proposal. Download it and attach it to your submission.</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.documentTitle)}</div>
+      <p style="color:${brand.gray500}; font-size:14px; margin:4px 0">${escapeHtml(params.proposalTitle)}</p>
+      ${params.referenceNo ? `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Reference:</strong> ${escapeHtml(params.referenceNo)}</p>` : ''}
+      ${params.issuedOn ? `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Issued:</strong> ${escapeHtml(params.issuedOn)}</p>` : ''}
+      ${params.signedBy ? `<p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Signed by:</strong> ${escapeHtml(params.signedBy)}</p>` : ''}
+    </div>
+    <p style="color:${brand.gray500}; line-height:1.6">The signed copy is on your proposal page, under Letters.</p>
+    ${primaryButton(url, 'Download the letter')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>`
+
+  const text =
+    `Hi ${displayName}, your funding department has issued the ${params.documentTitle} for "${params.proposalTitle}"` +
+    `${params.referenceNo ? ` (${params.referenceNo})` : ''}.` +
+    ` Download it: ${url}`
+
+  return {
+    subject: `${params.documentTitle} issued: ${params.proposalTitle.slice(0, 55)}`,
+    html: shell(`${params.documentTitle} issued`, body),
+    text,
+  }
+}
+
+/** A tickler the officer set on themselves has come due. */
+export function proposalFollowUpDueTemplate(params: {
+  email: string
+  name?: string | null
+  proposalTitle: string
+  note: string
+  proposalId: string
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/funding-dept/proposals/${params.proposalId}`
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">You asked to be reminded about this one.</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.proposalTitle)}</div>
+      <p style="border-left:3px solid #E2E8F0; margin:12px 0 0; padding-left:12px; color:${brand.gray500}; font-size:14px">${escapeHtml(params.note)}</p>
+    </div>
+    ${primaryButton(url, 'Open the proposal')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>`
+
+  const text = `Hi ${displayName}, your reminder on "${params.proposalTitle}": ${params.note}. Open it: ${url}`
+
+  return {
+    subject: `Reminder: ${params.proposalTitle.slice(0, 60)}`,
+    html: shell('Your reminder', body),
+    text,
+  }
+}
+
+/** A post-award obligation the agency expects by a date. */
+export function proposalObligationDueTemplate(params: {
+  email: string
+  name?: string | null
+  proposalTitle: string
+  obligation: string
+  dueDate: string
+  daysLeft: number
+  proposalId: string
+  forOfficer: boolean
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = params.forOfficer
+    ? `${SITE_URL}/funding-dept/proposals/${params.proposalId}`
+    : `${SITE_URL}/proposals/${params.proposalId}`
+  const overdue = params.daysLeft < 0
+
+  const body = `
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">${
+      overdue
+        ? `This is now ${Math.abs(params.daysLeft)} days overdue with the agency.`
+        : params.daysLeft === 0
+          ? 'This is due today.'
+          : `This is due in ${params.daysLeft} days.`
+    }</p>
+    <div style="border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:16px 0">
+      <div style="color:${brand.gray700}; font-weight:600; font-size:16px; margin-bottom:6px">${escapeHtml(params.obligation)}</div>
+      <p style="color:${brand.gray500}; font-size:14px; margin:4px 0">${escapeHtml(params.proposalTitle)}</p>
+      <p style="color:${brand.gray500}; font-size:14px; margin:4px 0"><strong>Due:</strong> ${escapeHtml(params.dueDate)}</p>
+    </div>
+    <p style="color:${brand.gray500}; line-height:1.6">A missed utilisation certificate is the usual reason a next instalment is held.</p>
+    ${primaryButton(url, 'Open the project')}
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>`
+
+  const text =
+    `Hi ${displayName}, ${params.obligation} for "${params.proposalTitle}" is due ${params.dueDate}` +
+    `${overdue ? ` — ${Math.abs(params.daysLeft)} days overdue.` : '.'} Open it: ${url}`
+
+  return {
+    subject: overdue
+      ? `Overdue: ${params.obligation} for ${params.proposalTitle.slice(0, 45)}`
+      : `Due ${params.dueDate}: ${params.obligation}`,
+    html: shell(overdue ? 'An agency obligation is overdue' : 'An agency obligation is due', body),
+    text,
+  }
+}

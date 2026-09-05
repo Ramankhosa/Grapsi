@@ -36,6 +36,8 @@ const JOB_KEYS = [
   'alerts-digest-weekly',
   'reports-weekly',
   'event-user-expiry',
+  'proposal-reviews-sweep',
+  'proposals-sweep',
 ] as const
 
 const RUNS_PER_JOB = 10

@@ -718,8 +718,12 @@ export async function checkServiceAccess(
     // without this the very people sourcing calls are locked out of
     // FUNDING_DISCOVERY. Membership is a deliberate appointment (tenant admins
     // create it), so it carries the same weight as a role grant here.
+    //
+    // GRANT_REVIEW is on the same footing: running the reviewer over a faculty
+    // member's draft IS the department's job, and a MEMBER-role officer would
+    // otherwise be refused at the moment they try to do it.
     const deptException =
-      serviceType === 'FUNDING_DISCOVERY' &&
+      (serviceType === 'FUNDING_DISCOVERY' || serviceType === 'GRANT_REVIEW') &&
       (await prisma.fundingDeptMember.findFirst({
         where: { tenant_id: tenantId, user_id: userId, is_active: true },
         select: { id: true }

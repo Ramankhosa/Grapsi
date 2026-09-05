@@ -82,6 +82,25 @@ export interface AssignmentProgress {
   goneQuiet: boolean
   /** Past its internal deadline and not chased since that date passed. */
   overdueUnchased: boolean
+  /**
+   * Where the proposal record stands, when one exists. Deliberately NOT a
+   * `code`: the ladder's codes partition every allocation into exactly one
+   * bucket, and adding proposal states to it would re-cut every count on every
+   * dashboard built before the desk existed. This rides alongside instead.
+   */
+  proposalStatus: string | null
+}
+
+/**
+ * The proposal record for an allocation, when the applicant has opened one.
+ *
+ * Its `latestActivityAt` matters even where its status does not: a researcher
+ * who uploaded a draft yesterday has not "gone quiet", however long it has been
+ * since anyone logged a phone call.
+ */
+export interface ProgressProposal {
+  status: string
+  latestActivityAt?: Date | string | null
 }
 
 function toDate(value: Date | string | null | undefined): Date | null {
@@ -111,7 +130,8 @@ export function deriveAssignmentProgress(
   assignment: ProgressAssignment,
   lastFollowUp: ProgressFollowUp | null | undefined,
   hasDraftWorkspace: boolean,
-  now: Date = new Date()
+  now: Date = new Date(),
+  proposal?: ProgressProposal | null
 ): AssignmentProgress {
   const status = String(assignment.status || '').toUpperCase()
   const outcome = String(assignment.outcome || 'PENDING').toUpperCase()
@@ -122,7 +142,12 @@ export function deriveAssignmentProgress(
   const createdAt = toDate(assignment.created_at)
   const deadlineAt = toDate(assignment.deadline_at)
 
-  const candidates = [followUpAt, respondedAt, submittedAt, createdAt].filter(
+  // Work on the proposal itself counts as activity. Without this a researcher
+  // uploading a revision every week still reads as silent, because the
+  // department had not written a note about it.
+  const proposalActivityAt = proposal?.latestActivityAt ? toDate(proposal.latestActivityAt) : null
+
+  const candidates = [followUpAt, respondedAt, submittedAt, createdAt, proposalActivityAt].filter(
     (value): value is Date => value !== null
   )
   const lastActionAt =
@@ -141,7 +166,9 @@ export function deriveAssignmentProgress(
   else if (status === 'CANCELLED') code = 'CANCELLED'
   else if (deadlineAt && deadlineAt < now) code = 'OVERDUE'
   else if (status === 'ASSIGNED' && !respondedAt) code = 'AWAITING_REPLY'
-  else if (hasDraftWorkspace) code = 'DRAFTING'
+  // A proposal record with a draft in it is the same fact the Draft One
+  // workspace stood for: this person has started writing.
+  else if (hasDraftWorkspace || proposal) code = 'DRAFTING'
   else code = 'IN_HAND'
 
   const isLive = LIVE_PROGRESS_CODES.includes(code)
@@ -158,6 +185,7 @@ export function deriveAssignmentProgress(
     // "nobody is on this": the department knew the date and let it go by.
     overdueUnchased:
       code === 'OVERDUE' && Boolean(deadlineAt) && (!followUpAt || followUpAt < deadlineAt!),
+    proposalStatus: proposal?.status ?? null,
   }
 }
 

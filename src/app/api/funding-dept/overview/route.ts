@@ -232,6 +232,10 @@ export async function GET(request: NextRequest) {
         pending: extra?.pending ?? 0,
         shortlisted: extra?.shortlisted ?? 0,
         awardAmount: extra?.awardAmount ?? 0,
+        proposalsInReview: extra?.proposalsInReview ?? 0,
+        proposalsCleared: extra?.proposalsCleared ?? 0,
+        proposalsSubmitted: extra?.proposalsSubmitted ?? 0,
+        proposalsSanctioned: extra?.proposalsSanctioned ?? 0,
         lastContactAt: extra?.lastContactAt ?? null,
       }
     }),

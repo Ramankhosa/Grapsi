@@ -1,6 +1,8 @@
 'use client'
 
 import Link from 'next/link'
+
+import ProposalStatusChip from '@/components/proposals/ProposalStatusChip'
 import { useParams } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -48,6 +50,17 @@ interface ContactEntry {
   callTitle: string | null
 }
 
+interface SchoolProposal {
+  id: string
+  title: string
+  status: string
+  agencyName: string
+  reviewCutoffAt: string | null
+  versionNo: number
+  reviewStatus: string
+  pi: { id: string; name: string | null }
+}
+
 interface OpenCall {
   id: string
   title: string | null
@@ -60,6 +73,7 @@ interface SchoolData {
   coveredBy: { id: string; name: string; isMe: boolean } | null
   summary: { active: number; submitted: number; missed: number; declined: number; total: number }
   openCalls: OpenCall[]
+  proposals: SchoolProposal[]
   faculty: SchoolFaculty[]
   assignments: SchoolAssignment[]
   recentContact: ContactEntry[]
@@ -368,6 +382,45 @@ export default function SchoolWorkspacePage() {
             </div>
           </section>
         </div>
+
+        {/*
+          What this school has in front of the desk right now. Sits above the
+          contact log because it is the work; the log is the trail behind it.
+        */}
+        {data.proposals.length > 0 ? (
+          <section className="nk-panel mt-4">
+            <div className="nk-panel-head">
+              <div>
+                <h2 className="nk-title">Proposals in hand</h2>
+                <p className="nk-sub">Applications from this school the department is processing</p>
+              </div>
+              <span className="nk-badge">{data.proposals.length}</span>
+            </div>
+            <div className="px-5 py-4">
+              <ul className="divide-y divide-hairline">
+                {data.proposals.map((proposal) => (
+                  <li key={proposal.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2.5">
+                    <Link
+                      href={`/funding-dept/proposals/${proposal.id}`}
+                      className="min-w-0 flex-1 text-[13px] font-medium text-cobalt-700 hover:underline"
+                    >
+                      {proposal.title}
+                    </Link>
+                    <span className="nk-sub text-[12px]">{proposal.pi.name}</span>
+                    <ProposalStatusChip status={proposal.status} />
+                    <span className="nk-sub text-[11px]">
+                      {proposal.versionNo > 0 ? `v${proposal.versionNo}` : 'no draft'}
+                      {proposal.reviewStatus === 'REVIEWED' ? ' · review not sent' : ''}
+                      {proposal.reviewStatus === 'NONE' && proposal.versionNo > 0
+                        ? ' · not reviewed'
+                        : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        ) : null}
 
         <section className="nk-panel mt-4">
           <div className="nk-panel-head">

@@ -164,6 +164,10 @@ export const assignmentInclude = {
       assignee: { select: { id: true, name: true, email: true } },
     },
   },
+  // The proposal record, when one has been opened. Carried here so a list of
+  // assignments can offer "open the proposal" or "start one" without a second
+  // round trip per row.
+  proposal: { select: { id: true, status: true, current_version_no: true } },
 }
 
 export function serializeAssignment(record: any) {
@@ -187,6 +191,13 @@ export function serializeAssignment(record: any) {
     awardCurrency: record.award_currency,
     decisionAt: record.decision_at,
     createdAt: record.created_at,
+    proposal: record.proposal
+      ? {
+          id: record.proposal.id,
+          status: record.proposal.status,
+          versionNo: record.proposal.current_version_no,
+        }
+      : null,
     call: record.funding_call
       ? {
           id: record.funding_call.id,

@@ -20,6 +20,7 @@ const empty: TimelineSources = {
   documents: [],
   milestones: [],
   notifications: [],
+  proposalEvents: [],
 };
 
 function assignment(overrides: Partial<TimelineSources['assignments'][number]>) {
@@ -215,3 +216,72 @@ describe('call timeline', () => {
     expect(truncatedBefore).toBeNull();
   });
 });
+
+describe('proposal events on a call timeline', () => {
+  const proposal = {
+    id: 'p1',
+    title: 'Coastal resilience mapping',
+    assignment_id: 'a1',
+    pi: { name: 'Dr Neha Sharma', email: 'neha@example.edu' },
+  }
+
+  function event(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'e1',
+      kind: 'VERSION_UPLOADED',
+      from_status: null,
+      to_status: null,
+      payload: { versionNo: 2 },
+      created_at: new Date('2026-09-05T10:00:00Z'),
+      actor: { name: 'Dr Neha Sharma', email: 'neha@example.edu' },
+      proposal,
+      ...overrides,
+    } as any
+  }
+
+  it('names the researcher, because a call page shows many of them', () => {
+    const timeline = buildTimeline({ ...empty, proposalEvents: [event()] })
+    expect(timeline.events).toHaveLength(1)
+    expect(timeline.events[0].kind).toBe('PROPOSAL')
+    expect(timeline.events[0].title).toContain('Dr Neha Sharma')
+    expect(timeline.events[0].title).toContain('draft v2')
+  })
+
+  it('carries the assignment id so the row links to the right record', () => {
+    const timeline = buildTimeline({ ...empty, proposalEvents: [event()] })
+    expect(timeline.events[0].assignmentId).toBe('a1')
+  })
+
+  it('reports a shared review with its score', () => {
+    const timeline = buildTimeline({
+      ...empty,
+      proposalEvents: [event({ kind: 'REVIEW_SHARED', payload: { score: 6.5 } })],
+    })
+    expect(timeline.events[0].title).toContain('Review sent to')
+    expect(timeline.events[0].detail).toContain('6.5')
+  })
+
+  it('leaves the desk’s own mechanics off a shared call history', () => {
+    const timeline = buildTimeline({
+      ...empty,
+      proposalEvents: [
+        event({ id: 'e2', kind: 'REVIEW_QUEUED' }),
+        event({ id: 'e3', kind: 'TEAM_CHANGED' }),
+        event({ id: 'e4', kind: 'BUDGET_CHANGED' }),
+        event({ id: 'e5', kind: 'NOTE' }),
+      ],
+    })
+    expect(timeline.events).toHaveLength(0)
+  })
+
+  it('merges into the same ordering as everything else', () => {
+    const timeline = buildTimeline({
+      ...empty,
+      proposalEvents: [
+        event({ id: 'old', created_at: new Date('2026-09-01T10:00:00Z') }),
+        event({ id: 'new', created_at: new Date('2026-09-09T10:00:00Z') }),
+      ],
+    })
+    expect(timeline.events.map((e) => e.refId)).toEqual(['new', 'old'])
+  })
+})

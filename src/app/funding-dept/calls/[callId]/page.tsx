@@ -1,6 +1,8 @@
 'use client'
 
 import Link from 'next/link'
+
+import ProposalStatusChip from '@/components/proposals/ProposalStatusChip'
 import { useCallback, useEffect, useState } from 'react'
 
 import FacultyProfileDrawer from '@/components/faculty/FacultyProfileDrawer'
@@ -38,6 +40,21 @@ interface Person {
   candidateStatus: string | null
   assignmentId: string | null
   assignmentStatus: string | null
+}
+
+interface DossierProposal {
+  id: string
+  title: string
+  status: string
+  versionNo: number
+  reviewStatus: string
+  lastScore: number | null
+  sharedAt: string | null
+  reviewCutoffAt: string | null
+  submittedAt: string | null
+  sanctionedAmount: number | null
+  currency: string
+  pi: { id: string; name: string | null }
 }
 
 interface TimelineEvent {
@@ -88,6 +105,7 @@ interface Dossier {
   assignments: Assignment[]
   unattributedAssignments: Assignment[]
   timeline: TimelineEvent[]
+  proposals: DossierProposal[]
   truncatedBefore: string | null
 }
 
@@ -110,6 +128,7 @@ const KIND_LABEL: Record<string, string> = {
   DOCUMENT: 'Document',
   MILESTONE: 'Milestone',
   NUDGE: 'Auto-nudge',
+  PROPOSAL: 'Proposal',
 }
 
 function formatDate(value: string | null) {
@@ -649,6 +668,69 @@ export default function CallDossierPage({ params }: { params: { callId: string }
             </div>
           )}
         </section>
+
+        {/*
+          The applications this call actually produced here. The history below
+          says what happened; this says what exists and where each one stands.
+        */}
+        {(data.proposals?.length ?? 0) > 0 ? (
+          <section className="mt-8">
+            <h2 className="nk-title text-lg">Proposals</h2>
+            <p className="nk-sub mt-1">
+              Applications from {data.school.name} against this call.
+            </p>
+            <div className="nk-panel mt-3 cb-scroll-x overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr className="border-b border-hairline">
+                    <th className="nk-eyebrow px-4 py-2.5 text-left">Researcher</th>
+                    <th className="nk-eyebrow px-3 py-2.5 text-left">Status</th>
+                    <th className="nk-eyebrow px-3 py-2.5 text-right">Draft</th>
+                    <th className="nk-eyebrow px-3 py-2.5 text-right">Score</th>
+                    <th className="nk-eyebrow px-4 py-2.5 text-left">Where it stands</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.proposals.map((proposal) => (
+                    <tr key={proposal.id} className="border-b border-hairline/60">
+                      <td className="px-4 py-3">
+                        <Link
+                          href={`/funding-dept/proposals/${proposal.id}`}
+                          className="font-medium text-cobalt-700 hover:underline"
+                        >
+                          {proposal.pi.name}
+                        </Link>
+                        <p className="nk-sub text-[11px]">{proposal.title}</p>
+                      </td>
+                      <td className="px-3 py-3">
+                        <ProposalStatusChip status={proposal.status} />
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {proposal.versionNo > 0 ? `v${proposal.versionNo}` : '—'}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {proposal.lastScore != null ? proposal.lastScore.toFixed(1) : '—'}
+                      </td>
+                      <td className="nk-sub px-4 py-3 text-[12px]">
+                        {proposal.sanctionedAmount != null
+                          ? `Sanctioned ${proposal.currency} ${proposal.sanctionedAmount.toLocaleString()}`
+                          : proposal.submittedAt
+                            ? `Submitted ${formatDate(proposal.submittedAt)}`
+                            : proposal.reviewStatus === 'REVIEWED'
+                              ? 'Review finished, not yet sent'
+                              : proposal.reviewStatus === 'SHARED'
+                                ? `Review sent ${proposal.sharedAt ? formatDate(proposal.sharedAt) : ''}`
+                                : proposal.versionNo > 0
+                                  ? 'Draft waiting to be reviewed'
+                                  : 'No draft yet'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
 
         {/* History */}
         <section className="mt-8">

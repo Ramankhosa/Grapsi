@@ -110,7 +110,11 @@ async function claimMilestoneStage(milestoneId: string, stage: string) {
  */
 async function sweepMilestones(now: Date, limit: number, result: EscalationResult) {
   const milestones = await prisma.assignmentMilestone.findMany({
+    // Assignment-owned only. A proposal's own obligations are chased by the
+    // proposal sweep, which knows to tell its PI and covering officer rather
+    // than an assignee this row does not have.
     where: {
+      assignment_id: { not: null },
       status: 'PENDING',
       due_at: { not: null },
       assignment: { outcome: 'AWARDED' },

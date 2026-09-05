@@ -345,4 +345,101 @@ describe('RecommendationConversationService conversational intents', () => {
     );
     expect(parsed.intent).toBe('out_of_scope');
   });
+
+  it('never relays orchestrator free text for small talk, so chit-chat cannot carry an answer', async () => {
+    const service = new RecommendationConversationService();
+    vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue({
+      intent: 'small_talk',
+      confidence: 0.9,
+      requiresConfirmation: false,
+      assistantSuggestion: 'Ha! My favourite film is Interstellar — the physics is surprisingly accurate. What about you?',
+    });
+    const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(null);
+
+    const outcome = await (service as any).createTurnOutcome(
+      baseParams(service, "how's your day going? what's your favourite film?")
+    );
+
+    expect(outcome.intent).toBe('small_talk');
+    expect(outcome.assistantContent).not.toContain('Interstellar');
+    expect(outcome.assistantContent).toContain('funding');
+    expect(mocks.gatewayText).not.toHaveBeenCalled();
+    expect(searchSpy).not.toHaveBeenCalled();
+  });
+
+  it('redirects general_help with nothing listed instead of relaying an ungrounded answer', async () => {
+    const service = new RecommendationConversationService();
+    vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue({
+      intent: 'general_help',
+      confidence: 0.8,
+      requiresConfirmation: false,
+      assistantSuggestion: 'TRL stands for Technology Readiness Level, a 1-9 scale…',
+    });
+    const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(null);
+
+    const outcome = await (service as any).createTurnOutcome(baseParams(service, 'what is TRL?'));
+
+    expect(outcome.intent).toBe('out_of_scope');
+    expect(outcome.assistantContent).toContain('outside what I can help with');
+    expect(outcome.assistantContent).not.toContain('Technology Readiness');
+    expect(mocks.gatewayText).not.toHaveBeenCalled();
+    expect(searchSpy).not.toHaveBeenCalled();
+  });
+
+  it('still answers result questions through general_help when results are listed', async () => {
+    const service = new RecommendationConversationService();
+    vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue({
+      intent: 'general_help',
+      confidence: 0.9,
+      requiresConfirmation: false,
+      assistantSuggestion: 'None of the listed calls is rolling — result 1 closes on 1 Sep 2026.',
+    });
+    const run = makeRun([makeResult('call-1')]);
+
+    const outcome = await (service as any).createTurnOutcome(baseParams(service, 'are any of these rolling?', run));
+
+    expect(outcome.intent).toBe('general_help');
+    expect(outcome.assistantContent).toContain('result 1 closes');
+  });
+
+  it('answers capability questions deterministically without the orchestrator', async () => {
+    const service = new RecommendationConversationService();
+    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM').mockRejectedValue(new Error('should not be called'));
+    const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(null);
+
+    for (const message of ['What can you help me with?', 'what can you do', 'help', 'How does this work?']) {
+      const outcome = await (service as any).createTurnOutcome(baseParams(service, message));
+      expect(outcome.intent, message).toBe('general_help');
+      expect(outcome.assistantContent, message).toContain('find funding');
+      expect(outcome.assistantContent, message).toContain('do not suggest research topics');
+    }
+
+    expect(llmSpy).not.toHaveBeenCalled();
+    expect(mocks.gatewayText).not.toHaveBeenCalled();
+    expect(searchSpy).not.toHaveBeenCalled();
+  });
+
+  it('catches "what aims/methods should I propose" on the fast path', () => {
+    const service = new RecommendationConversationService();
+    const run = makeRun([makeResult('call-1')]);
+    for (const message of [
+      'what aims should I propose for result 2?',
+      'What objectives could we include for this call',
+      'what methodology should I use for the first one?',
+    ]) {
+      const fast = (service as any).parseFastPathTurn({ message, state: makeState(), latestRun: run });
+      expect(fast?.intent, message).toBe('out_of_scope');
+    }
+  });
+
+  it('bounds the orchestrator suggestion so an essay cannot come through the JSON channel', () => {
+    const service = new RecommendationConversationService();
+    const essay = Array.from({ length: 40 }, (_, i) => `Sentence number ${i + 1} explains a little more about the topic.`).join(' ');
+    const parsed = (service as any).processOrchestratorOutput(
+      { intent: 'clarification_needed', assistantSuggestion: essay },
+      { message: 'explain peer review to me', state: makeState() }
+    );
+    expect(parsed.assistantSuggestion.length).toBeLessThanOrEqual(900);
+    expect(parsed.assistantSuggestion.endsWith('.')).toBe(true);
+  });
 });

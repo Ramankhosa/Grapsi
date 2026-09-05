@@ -598,6 +598,22 @@ model Tenant {
   callSchoolTriage             CallSchoolTriage[]
   monitoredSources             MonitoredSource[]
 
+  /// Per-tenant proposal-desk policy: how many days before the agency deadline
+  /// the internal cut-off falls, whether faculty may record their own agency
+  /// submission, and the budget heads this institution uses.
+  proposal_settings Json?
+
+  // Grant proposals: the tenant's own applications and everything about them.
+  grantProposals           GrantProposal[]
+  grantProposalVersions    GrantProposalVersion[]
+  grantProposalReviews     GrantProposalReview[]
+  grantProposalTeamMembers GrantProposalTeamMember[]
+  grantProposalBudgetLines GrantProposalBudgetLine[]
+  grantProposalEvents      GrantProposalEvent[]
+  grantProposalDocuments   GrantProposalDocument[]
+  grantProposalFollowUps   GrantProposalFollowUp[]
+  grantProposalChecklist   GrantProposalChecklistItem[]
+
   @@map("tenants")
 }
 
@@ -775,6 +791,19 @@ model User {
   callSchoolTriageDecisions   CallSchoolTriage[]                @relation("CallSchoolTriageDecider")
   monitoredSourcesOwned       MonitoredSource[]                 @relation("MonitoredSourceOwner")
   monitoredChangesResolved    MonitoredChange[]                 @relation("MonitoredChangeResolver")
+
+  // Grant proposals
+  grantProposalsAsPi         GrantProposal[]              @relation("GrantProposalPi")
+  grantProposalsCreated      GrantProposal[]              @relation("GrantProposalAuthor")
+  grantProposalsCleared      GrantProposal[]              @relation("GrantProposalClearedBy")
+  grantProposalVersions      GrantProposalVersion[]       @relation("GrantProposalVersionUploader")
+  grantProposalReviewsRun    GrantProposalReview[]        @relation("GrantProposalReviewRunner")
+  grantProposalReviewsShared GrantProposalReview[]        @relation("GrantProposalReviewSharer")
+  grantProposalTeamSeats     GrantProposalTeamMember[]    @relation("GrantProposalTeamUser")
+  grantProposalEvents        GrantProposalEvent[]         @relation("GrantProposalEventActor")
+  grantProposalDocuments     GrantProposalDocument[]      @relation("GrantProposalDocumentIssuer")
+  grantProposalFollowUps     GrantProposalFollowUp[]      @relation("GrantProposalFollowUpAuthor")
+  grantProposalChecklist     GrantProposalChecklistItem[] @relation("GrantProposalChecklistCompleter")
 
   @@map("users")
 }
@@ -1211,6 +1240,7 @@ model FundingCall {
   alerts                      FundingCallAlert[]
   school_triage               CallSchoolTriage[]
   follow_ups                  AssignmentFollowUp[]
+  proposals                   GrantProposal[]
 
   @@index([tenantId, visibility])
   @@index([status])
@@ -2193,6 +2223,7 @@ model GrantSession {
   structuredFieldResponses  GrantStructuredFieldResponse[]
   reviewerSectionGrantLinks ReviewerSectionGrantLink[]
   diagrams                  GrantDiagram[]
+  proposals                 GrantProposal[]
 
   @@index([projectId, status])
   @@index([tenantId])
@@ -2458,6 +2489,7 @@ model ReviewerCall {
   user                     User                       @relation(fields: [user_id], references: [id], onDelete: Cascade)
   reviewer_sections        ReviewerSection[]
   grant_section_links      ReviewerSectionGrantLink[]
+  proposal                 GrantProposal?
 
   @@index([user_id])
   @@index([tenantId])
@@ -2961,6 +2993,9 @@ model TenantOrgUnit {
   research_areas        TenantOrgUnitResearchArea[]
   call_triage           CallSchoolTriage[]
   follow_ups            AssignmentFollowUp[]          @relation("FollowUpOrgUnit")
+  proposals             GrantProposal[]               @relation("GrantProposalSchool")
+  proposals_as_pi_unit  GrantProposal[]               @relation("GrantProposalPiUnit")
+  proposal_team_seats   GrantProposalTeamMember[]     @relation("GrantProposalTeamUnit")
 
   // NOTE: Postgres treats NULLs as distinct, so this constraint only enforces
   // uniqueness for non-root units. Root-name uniqueness is enforced by the
@@ -3130,6 +3165,7 @@ model CallAssignment {
   follow_ups          AssignmentFollowUp[]
   documents           AssignmentDocument[]
   milestones          AssignmentMilestone[]
+  proposal            GrantProposal?
 
   @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
   @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
@@ -3186,9 +3222,16 @@ model AssignmentDocument {
 /// exactly where the office's work continues. Due dates here feed the same
 /// escalation sweep that chases a submission deadline.
 model AssignmentMilestone {
-  id            String @id @default(cuid())
-  tenant_id     String
-  assignment_id String
+  id        String @id @default(cuid())
+  tenant_id String
+
+  /// Null for a PROPOSAL-level obligation. A sanctioned grant that arrived as
+  /// an agency letter has no assignment behind it, and its utilisation
+  /// certificate is no less due for that. Enforced by CHECK
+  /// assignment_milestones_owner_check: exactly one of assignment_id or
+  /// proposal_id is set.
+  assignment_id String?
+  proposal_id   String?
 
   /// INSTALMENT | UC | SE | REPORT | OTHER — a string, as above.
   kind     String    @default("OTHER")
@@ -3210,10 +3253,12 @@ model AssignmentMilestone {
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
 
-  tenant     Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  assignment CallAssignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
-  created_by User           @relation("AssignmentMilestoneAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+  tenant     Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  assignment CallAssignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  proposal   GrantProposal?  @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  created_by User            @relation("AssignmentMilestoneAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
 
+  @@index([proposal_id, due_at], map: "idx_assignment_milestones_proposal")
   @@index([assignment_id, due_at], map: "idx_assignment_milestones_assignment")
   @@index([tenant_id, status, due_at], map: "idx_assignment_milestones_due")
   @@map("assignment_milestones")
@@ -3519,6 +3564,480 @@ model AssignmentFollowUp {
   @@index([tenant_id, created_by_user_id], map: "idx_assignment_follow_ups_author")
   @@index([tenant_id, funding_call_id, org_unit_id, happened_at], map: "idx_assignment_follow_ups_call_unit")
   @@map("assignment_follow_ups")
+}
+
+// ---------------------------------------------------------------------------
+// Grant proposals: the tenant's own applications, from the faculty member's
+// first draft to the agency's decision.
+//
+// The department already tracked the *request* (CallAssignment: who was asked,
+// did they accept, did they submit). It had nowhere to hold the proposal
+// itself - the document, its successive drafts, the internal review each draft
+// was given, the money asked for, who else is on it, and what the agency said
+// afterwards. That work lived in email and a shared drive, which is where it
+// stopped being findable the moment an officer moved on.
+// ---------------------------------------------------------------------------
+
+/// One application: one principal investigator, one call (catalog or ad hoc),
+/// many drafts.
+///
+/// The call may be null: an agency letter or a private scheme that never
+/// entered the catalog is still an application the office has to process, so
+/// `agency_name` is a snapshot rather than a join.
+model GrantProposal {
+  id        String @id @default(cuid())
+  tenant_id String
+
+  /// The catalog call this answers, when there is one. SetNull rather than
+  /// Cascade: deleting a call must not erase the record that an application
+  /// was written and submitted.
+  funding_call_id  String?
+  /// The delegation this grew out of. Unique because one assignment produces
+  /// at most one application; a second attempt at the same call is a new
+  /// assignment (or an ad hoc proposal).
+  assignment_id    String? @unique
+  /// The Draft One workspace, when the PI wrote it inside Grapsi.
+  grant_session_id String?
+
+  /// ONE reviewer workspace for the whole proposal, reused by every version.
+  /// That is what makes version N+1 import as *revisions* of the same sections,
+  /// so the review can answer "did they address what we said last time".
+  reviewer_call_id String? @unique
+
+  pi_user_id     String
+  /// School root at creation (path[0]), snapshotted so moving a department next
+  /// semester does not rewrite which school a past application belonged to.
+  org_unit_id    String
+  /// The PI's own unit at creation (department, usually).
+  pi_org_unit_id String?
+
+  title              String
+  /// Never null: the reviewer needs an agency name, and for an ad hoc call
+  /// there is no row to read one from.
+  agency_name        String
+  scheme_title       String?
+  agency_deadline_at DateTime?
+  /// The department's own cut-off - the date after which a faculty member can
+  /// no longer upload a fresh draft for review, because the office needs time
+  /// to clear it. Distinct from the agency deadline and always earlier.
+  review_cutoff_at   DateTime?
+
+  /// DRAFT | IN_REVIEW | CLEARED | SUBMITTED | UNDER_AGENCY_REVIEW |
+  /// REVISION_REQUESTED | SANCTIONED | REJECTED | WITHDRAWN | CLOSED.
+  /// A string, like every other status in this module, so a new state needs no
+  /// migration. Backed by CHECK grant_proposals_status_check.
+  ///
+  /// Whether a review has been *shared* is deliberately NOT a proposal status:
+  /// it is per-version (grant_proposal_versions.review_status), and duplicating
+  /// it here would mean two fields to keep honest on every upload.
+  status             String @default("DRAFT")
+  current_version_no Int    @default(0)
+
+  /// Which cut-off nudges have already gone out (D3, D1). The array is both
+  /// record and lock, exactly like CallAssignment.auto_nudge_stages; cleared
+  /// when the cut-off moves or a fresh version lands.
+  nudge_stages String[] @default([])
+
+  duration_months    Int?
+  /// Float, not Decimal: the module's money columns (award_amount, milestone
+  /// amounts) are all double precision, and Prisma Decimal serialises as a
+  /// string through NextResponse.json.
+  requested_amount   Float?
+  currency           String    @default("INR")
+  sanctioned_amount  Float?
+  sanction_reference String?
+  sanction_date      DateTime?
+
+  submitted_at             DateTime?
+  submission_reference     String?
+  submission_url           String?
+  agency_status_note       String?
+  agency_status_updated_at DateTime?
+
+  /// The funded project's own dates, set once it is sanctioned. `project_end_at`
+  /// moves when an agency grants an extension, which is why it is a date rather
+  /// than a duration derived from the start.
+  project_start_at DateTime?
+  project_end_at   DateTime?
+
+  cleared_by_user_id String?
+  cleared_at         DateTime?
+  created_by_user_id String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant        Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call  FundingCall?    @relation(fields: [funding_call_id], references: [id], onDelete: SetNull)
+  assignment    CallAssignment? @relation(fields: [assignment_id], references: [id], onDelete: SetNull)
+  grant_session GrantSession?   @relation(fields: [grant_session_id], references: [id], onDelete: SetNull)
+  reviewer_call ReviewerCall?   @relation(fields: [reviewer_call_id], references: [id], onDelete: SetNull)
+  pi            User            @relation("GrantProposalPi", fields: [pi_user_id], references: [id], onDelete: Cascade)
+  created_by    User            @relation("GrantProposalAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+  cleared_by    User?           @relation("GrantProposalClearedBy", fields: [cleared_by_user_id], references: [id], onDelete: SetNull)
+  org_unit      TenantOrgUnit   @relation("GrantProposalSchool", fields: [org_unit_id], references: [id], onDelete: Cascade)
+  pi_org_unit   TenantOrgUnit?  @relation("GrantProposalPiUnit", fields: [pi_org_unit_id], references: [id], onDelete: SetNull)
+
+  versions   GrantProposalVersion[]
+  reviews    GrantProposalReview[]
+  team       GrantProposalTeamMember[]
+  budget     GrantProposalBudgetLine[]
+  events     GrantProposalEvent[]
+  documents  GrantProposalDocument[]
+  follow_ups GrantProposalFollowUp[]
+  checklist  GrantProposalChecklistItem[]
+  milestones AssignmentMilestone[]
+
+  @@index([tenant_id, status], map: "idx_grant_proposals_tenant_status")
+  @@index([tenant_id, org_unit_id, status], map: "idx_grant_proposals_unit")
+  @@index([pi_user_id], map: "idx_grant_proposals_pi")
+  @@index([funding_call_id], map: "idx_grant_proposals_call")
+  @@map("grant_proposals")
+}
+
+/// One uploaded draft. Versions are append-only: a revision never overwrites
+/// the draft the office already reviewed, because the review that was sent back
+/// has to keep pointing at the text it judged.
+model GrantProposalVersion {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+
+  version_no   Int
+  file_name    String
+  mime_type    String?
+  byte_size    Int     @default(0)
+  /// Absolute path on the app server, like AssignmentDocument.storage_path.
+  storage_path String
+  /// Content hash, unique per proposal: re-uploading identical bytes is a
+  /// mistake to report, not a new version to review and bill for.
+  sha256       String
+
+  /// The faculty member's cover note for this draft.
+  note            String?
+  /// Why an officer accepted this upload after the cut-off. Required by the
+  /// service in that case, so the exception is always explained.
+  override_reason String?
+
+  /// NONE | QUEUED | RUNNING | REVIEWED | FAILED | SHARED. Denormalised from
+  /// the review row so a list of twenty proposals does not need twenty joins.
+  review_status String @default("NONE")
+
+  uploaded_by_user_id String
+  created_at          DateTime @default(now())
+
+  tenant      Tenant               @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal    GrantProposal        @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  uploaded_by User                 @relation("GrantProposalVersionUploader", fields: [uploaded_by_user_id], references: [id], onDelete: Cascade)
+  review      GrantProposalReview?
+
+  @@unique([proposal_id, version_no], map: "grant_proposal_versions_no_key")
+  @@unique([proposal_id, sha256], map: "grant_proposal_versions_sha_key")
+  @@index([proposal_id, created_at], map: "idx_grant_proposal_versions_proposal")
+  @@map("grant_proposal_versions")
+}
+
+/// One server-side reviewer run against one version.
+///
+/// The run is a background job, not a request: the officer starts it and closes
+/// the tab. `heartbeat_at` is what lets a sweep tell a live run from one whose
+/// worker was killed mid-way, and the claim UPDATE is what stops two workers
+/// reviewing the same draft twice.
+model GrantProposalReview {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+  /// Unique: one run per version. Re-running replaces this row's state rather
+  /// than accumulating attempts, so "the review of v2" is never ambiguous.
+  version_id  String @unique
+
+  reviewer_call_id String
+  /// Who pressed the button. Note the LLM spend is billed to the reviewer
+  /// workspace's owner (the first officer), so this is attribution, not billing.
+  run_by_user_id   String
+
+  /// QUEUED | IMPORTING | REVIEWING | REPORTING | DONE | FAILED | CANCELLED.
+  status  String @default("QUEUED")
+  attempt Int    @default(0)
+
+  /// Live step ledger the officer's screen polls: every entry is a real
+  /// completed unit of work, never a timer pretending to be progress.
+  progress       Json?
+  /// What the deterministic splitter managed to place, so a bad import is
+  /// visible instead of silently producing a thin review.
+  import_summary Json?
+
+  started_at   DateTime?
+  /// Stamped after every step. A run whose heartbeat is stale is dead, and the
+  /// sweep may reclaim it; using started_at instead would steal a healthy
+  /// long-running job.
+  heartbeat_at DateTime?
+  finished_at  DateTime?
+  error        String?
+  /// IMPORT_UNMAPPED | QUOTA | RATE_LIMITED | NO_REVIEWED_SECTIONS | UNKNOWN.
+  error_code   String?
+  /// Set when an officer mapped the sections by hand and asked for a re-run.
+  skip_import  Boolean   @default(false)
+
+  overall_score  Float?
+  recommendation String?
+
+  /// The report AS SENT, frozen at share time. The reviewer workspace keeps
+  /// moving as later versions are reviewed; what a faculty member was told in
+  /// August must still read the same in December.
+  report_snapshot   Json?
+  docx_storage_path String?
+
+  shared_at         DateTime?
+  shared_by_user_id String?
+  /// The officer's covering remark. Faculty see this one.
+  officer_note      String?
+  /// The department's own note on the draft. Faculty never see this one.
+  internal_note     String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant    Tenant               @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal  GrantProposal        @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  version   GrantProposalVersion @relation(fields: [version_id], references: [id], onDelete: Cascade)
+  run_by    User                 @relation("GrantProposalReviewRunner", fields: [run_by_user_id], references: [id], onDelete: Cascade)
+  shared_by User?                @relation("GrantProposalReviewSharer", fields: [shared_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([proposal_id, created_at], map: "idx_grant_proposal_reviews_proposal")
+  @@index([status, heartbeat_at], map: "idx_grant_proposal_reviews_sweep")
+  @@map("grant_proposal_reviews")
+}
+
+/// A person on the application. Internal members carry a user_id and can open
+/// the proposal; external collaborators are recorded by name only.
+model GrantProposalTeamMember {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+
+  user_id     String?
+  name        String
+  email       String?
+  affiliation String?
+  org_unit_id String?
+  /// PI | CO_PI | CO_I | COLLABORATOR | MENTOR.
+  role        String  @default("CO_PI")
+  is_external Boolean @default(false)
+  sort_order  Int     @default(0)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant   Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal GrantProposal  @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  user     User?          @relation("GrantProposalTeamUser", fields: [user_id], references: [id], onDelete: SetNull)
+  org_unit TenantOrgUnit? @relation("GrantProposalTeamUnit", fields: [org_unit_id], references: [id], onDelete: SetNull)
+
+  @@index([proposal_id, sort_order], map: "idx_grant_proposal_team_proposal")
+  @@index([user_id], map: "idx_grant_proposal_team_user")
+  @@map("grant_proposal_team_members")
+}
+
+/// One budget cell: a head of expenditure in a project year.
+///
+/// Rows rather than a JSON blob because the register sums them across
+/// proposals, and a school's ask by head is a question the office is asked.
+model GrantProposalBudgetLine {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+
+  /// MANPOWER | EQUIPMENT | CONSUMABLES | TRAVEL | CONTINGENCY | OVERHEADS | OTHER.
+  head    String
+  year_no Int     @default(1)
+  amount  Float   @default(0)
+  note    String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant   Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal GrantProposal @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+
+  @@unique([proposal_id, head, year_no], map: "grant_proposal_budget_key")
+  @@map("grant_proposal_budget_lines")
+}
+
+/// Everything that happened to a proposal, in order.
+///
+/// This is the audit trail, the faculty member's activity feed and the source
+/// the call dossier's timeline merges - one table rather than three, with
+/// `visible_to_faculty` deciding which of them a row appears in. An internal
+/// note about why a draft was held back is a real event; it is simply not the
+/// applicant's to read.
+model GrantProposalEvent {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+
+  actor_user_id      String?
+  /// CREATED | VERSION_UPLOADED | REVIEW_QUEUED | REVIEW_DONE | REVIEW_FAILED |
+  /// REVIEW_SHARED | CUTOFF_SET | CLEARED | SUBMITTED | AGENCY_STATUS |
+  /// TEAM_CHANGED | BUDGET_CHANGED | NOTE | REOPENED.
+  kind               String
+  from_status        String?
+  to_status          String?
+  payload            Json?
+  visible_to_faculty Boolean @default(true)
+
+  created_at DateTime @default(now())
+
+  tenant   Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal GrantProposal @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  actor    User?         @relation("GrantProposalEventActor", fields: [actor_user_id], references: [id], onDelete: SetNull)
+
+  @@index([proposal_id, created_at], map: "idx_grant_proposal_events_proposal")
+  @@index([tenant_id, created_at], map: "idx_grant_proposal_events_tenant")
+  @@map("grant_proposal_events")
+}
+
+/// A document the department ISSUES on a proposal: the endorsement letter, the
+/// forwarding letter, an NOC, the sanction order it received.
+///
+/// The direction is what separates this from GrantProposalVersion. A version is
+/// the applicant's work coming in; this is the institution's paper going out,
+/// and it is usually a signed sheet somebody scanned. It carries a reference
+/// number and an issue date because that is how the office and the agency will
+/// both refer to it later.
+model GrantProposalDocument {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+
+  /// ENDORSEMENT | FORWARDING | NOC | SANCTION_ORDER | AGREEMENT | CERTIFICATE
+  /// | OTHER. A string, like every other status in this module.
+  kind String @default("ENDORSEMENT")
+
+  /// The institution's own reference for the letter ("LPU/DSR/2026/114"), which
+  /// is what an agency quotes back and what an auditor searches on.
+  reference_no String?
+  /// The date printed on the letter, which is not the date it was scanned.
+  issued_on    DateTime?
+  /// Who signed it — the Registrar, the Dean, the Director of Research.
+  signed_by    String?
+
+  title        String
+  file_name    String
+  mime_type    String?
+  byte_size    Int     @default(0)
+  /// Absolute path on the app server, like GrantProposalVersion.storage_path.
+  storage_path String
+  note         String?
+
+  /// Almost always true — an endorsement letter exists precisely so the
+  /// applicant can attach it to their submission. False covers the internal
+  /// file copy an office wants on the record but not in the applicant's hands.
+  visible_to_faculty Boolean @default(true)
+
+  issued_by_user_id String
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  tenant                     Tenant                       @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal                   GrantProposal                @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  issued_by                  User                         @relation("GrantProposalDocumentIssuer", fields: [issued_by_user_id], references: [id], onDelete: Cascade)
+  GrantProposalChecklistItem GrantProposalChecklistItem[]
+
+  @@index([proposal_id, created_at], map: "idx_grant_proposal_documents_proposal")
+  @@index([tenant_id, kind], map: "idx_grant_proposal_documents_kind")
+  @@map("grant_proposal_documents")
+}
+
+/// A dated touchpoint on a proposal: the call to the PI, the email to the
+/// agency, the corridor conversation that produced a real update.
+///
+/// Separate from AssignmentFollowUp because the lifecycles differ. An
+/// assignment follow-up chases somebody to take a call up and stops when they
+/// answer; this one runs for years, through submission and into the post-award
+/// paperwork, and it carries the agency status the officer learned.
+///
+/// A row with remind_at set is also a tickler: the hourly proposal sweep claims
+/// it by stamping reminder_sent_at, the same claim-then-act lock the assignment
+/// reminders use.
+model GrantProposalFollowUp {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+
+  /// CALL | EMAIL | MEETING | PORTAL | NOTE — how the contact happened.
+  kind        String   @default("CALL")
+  note        String
+  happened_at DateTime @default(now())
+
+  /// The proposal status this contact established, when it established one.
+  /// Recorded here as well as on the proposal so the log explains why the
+  /// status moved, not merely that it did.
+  recorded_status String?
+
+  /// When set, the sweep nudges the officer at this time.
+  remind_at        DateTime?
+  reminder_sent_at DateTime?
+
+  /// The department's contact log is its own; a note the applicant should see
+  /// is marked as such deliberately.
+  visible_to_faculty Boolean @default(false)
+
+  created_by_user_id String
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  tenant     Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal   GrantProposal @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  created_by User          @relation("GrantProposalFollowUpAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+
+  @@index([proposal_id, happened_at], map: "idx_grant_proposal_follow_ups_proposal")
+  @@index([remind_at], map: "idx_grant_proposal_follow_ups_remind")
+  @@map("grant_proposal_follow_ups")
+}
+
+/// One line of the bundle an agency demands alongside the proposal itself: the
+/// PI's CV, the endorsement letter, the budget justification, the ethics
+/// clearance, the plagiarism certificate, the undertaking.
+///
+/// This is what makes "cleared for submission" mean something. Without it the
+/// clearance is one person's recollection that everything was attached.
+model GrantProposalChecklistItem {
+  id          String @id @default(cuid())
+  tenant_id   String
+  proposal_id String
+
+  label       String
+  /// Whether the proposal can be cleared while this is outstanding.
+  is_required Boolean @default(true)
+
+  /// PENDING | DONE | WAIVED | NOT_APPLICABLE. WAIVED and NOT_APPLICABLE are
+  /// distinct on purpose: one is a decision the office made and should have to
+  /// explain, the other is a line that never applied to this call.
+  status String  @default("PENDING")
+  note   String?
+
+  /// The issued document that satisfies this line, when one does. An
+  /// endorsement letter ticks its own row rather than being ticked by hand.
+  document_id String?
+
+  /// Whether the applicant sees this line. Most are theirs to act on.
+  visible_to_faculty Boolean @default(true)
+
+  completed_by_user_id String?
+  completed_at         DateTime?
+  sort_order           Int       @default(0)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant       Tenant                 @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  proposal     GrantProposal          @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  document     GrantProposalDocument? @relation(fields: [document_id], references: [id], onDelete: SetNull)
+  completed_by User?                  @relation("GrantProposalChecklistCompleter", fields: [completed_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([proposal_id, sort_order], map: "idx_grant_proposal_checklist_proposal")
+  @@map("grant_proposal_checklist_items")
 }
 
 enum ApplicantCategory {

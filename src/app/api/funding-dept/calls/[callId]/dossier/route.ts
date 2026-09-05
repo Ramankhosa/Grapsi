@@ -156,6 +156,8 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     documents,
     milestones,
     notifications,
+    proposals,
+    proposalEvents,
     liveAssignmentCounts,
   ] = await Promise.all([
     prisma.callSchoolTriage.findUnique({
@@ -271,6 +273,69 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
           take: SOURCE_CAP,
         })
       : Promise.resolve([]),
+    // The applications this call produced in this school, as records rather
+    // than as history — the timeline says what happened, this says what exists.
+    prisma.grantProposal.findMany({
+      where: {
+        tenant_id: context.tenantId,
+        funding_call_id: call.id,
+        org_unit_id: { in: scopeIds },
+      },
+      orderBy: { updated_at: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        current_version_no: true,
+        review_cutoff_at: true,
+        submitted_at: true,
+        sanctioned_amount: true,
+        currency: true,
+        pi: { select: { id: true, name: true, email: true } },
+        versions: {
+          orderBy: { version_no: 'desc' },
+          take: 1,
+          select: { review_status: true },
+        },
+        reviews: {
+          where: { shared_at: { not: null } },
+          orderBy: { shared_at: 'desc' },
+          take: 1,
+          select: { overall_score: true, shared_at: true },
+        },
+      },
+    }),
+    // What happened to the applications this call produced in this school:
+    // drafts arriving, reviews going back, clearance, the agency's answer.
+    // Internal notes are excluded — a call's shared history is not the place
+    // for the department's private assessment of one applicant.
+    prisma.grantProposalEvent.findMany({
+      where: {
+        tenant_id: context.tenantId,
+        visible_to_faculty: true,
+        proposal: { funding_call_id: call.id, org_unit_id: { in: scopeIds } },
+      },
+      select: {
+        id: true,
+        kind: true,
+        from_status: true,
+        to_status: true,
+        payload: true,
+        created_at: true,
+        actor: { select: { name: true, email: true } },
+        proposal: {
+          select: {
+            id: true,
+            title: true,
+            assignment_id: true,
+            pi: { select: { name: true, email: true } },
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+      take: SOURCE_CAP,
+    }),
     // How much each person in this school is already carrying, so an officer
     // sees load before adding to it.
     prisma.callAssignment.groupBy({
@@ -393,10 +458,12 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     documents: documents.length >= SOURCE_CAP,
     milestones: milestones.length >= SOURCE_CAP,
     notifications: notifications.length >= SOURCE_CAP,
+    proposalEvents: proposalEvents.length >= SOURCE_CAP,
   }
 
   const timeline = buildTimeline(
     {
+      proposalEvents,
       followUps,
       candidates: candidates.map((row) => ({
         id: row.id,
@@ -452,6 +519,20 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
       covered: coveredIds.includes(unit.id),
     })),
     school: { id: school.id, name: school.name, code: school.code },
+    proposals: proposals.map((row) => ({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      versionNo: row.current_version_no,
+      reviewStatus: row.versions[0]?.review_status ?? 'NONE',
+      lastScore: row.reviews[0]?.overall_score ?? null,
+      sharedAt: row.reviews[0]?.shared_at ?? null,
+      reviewCutoffAt: row.review_cutoff_at,
+      submittedAt: row.submitted_at,
+      sanctionedAmount: row.sanctioned_amount,
+      currency: row.currency,
+      pi: { id: row.pi.id, name: row.pi.name || row.pi.email },
+    })),
     call: {
       id: call.id,
       title: call.scheme_title || call.title,

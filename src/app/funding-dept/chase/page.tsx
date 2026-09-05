@@ -41,6 +41,7 @@ interface ChaseRow {
   } | null
   reasons: Reason[]
   priority: number
+  proposal: { id: string; status: string; versionNo: number } | null
 }
 
 interface ChaseData {
@@ -54,6 +55,9 @@ interface ChaseData {
     remindersDue: number
     deadlineNear: number
     goneQuiet: number
+    reviewPending: number
+    unsharedReview: number
+    cutoffNear: number
   }
 }
 
@@ -63,6 +67,11 @@ const REASON_STYLE: Record<string, string> = {
   REMINDER_DUE: 'nk-badge nk-badge-warn',
   DEADLINE_NEAR: 'nk-badge nk-badge-live',
   GONE_QUIET: 'nk-badge',
+  // The desk's own backlog: work sitting with the department, not with the
+  // researcher. Amber rather than red — it is the officer's to clear.
+  REVIEW_PENDING: 'bg-amber-50 text-amber-800 border-amber-200',
+  UNSHARED_REVIEW: 'bg-amber-50 text-amber-800 border-amber-200',
+  CUTOFF_NEAR: 'bg-cobalt-50 text-cobalt-700 border-cobalt-200',
 }
 
 const FILTERS = [
@@ -476,6 +485,20 @@ export default function ChaseQueuePage() {
                       >
                         Open
                       </Link>
+                      {/*
+                        When the reason for chasing is the proposal itself, the
+                        call dossier is a detour — send the officer straight to
+                        the draft they need to act on.
+                      */}
+                      {row.proposal ? (
+                        <Link
+                          href={`/funding-dept/proposals/${row.proposal.id}`}
+                          className="nk-btn-ghost nk-btn-xs"
+                        >
+                          Proposal
+                          {row.proposal.versionNo > 0 ? ` v${row.proposal.versionNo}` : ''}
+                        </Link>
+                      ) : null}
                     </div>
                   </div>
                 </li>

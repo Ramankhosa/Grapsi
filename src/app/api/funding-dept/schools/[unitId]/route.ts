@@ -182,8 +182,45 @@ export async function GET(
     },
   })
 
+  // The proposals this school has open with the desk, newest first. The list
+  // is short by nature — a school works on a handful at a time — so it is
+  // returned whole rather than paged.
+  const proposals = await prisma.grantProposal.findMany({
+    where: {
+      tenant_id: context.tenantId,
+      org_unit_id: unit.id,
+      status: { in: ['DRAFT', 'IN_REVIEW', 'CLEARED', 'SUBMITTED', 'UNDER_AGENCY_REVIEW', 'REVISION_REQUESTED'] },
+    },
+    orderBy: { updated_at: 'desc' },
+    take: 25,
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      agency_name: true,
+      review_cutoff_at: true,
+      current_version_no: true,
+      pi: { select: { id: true, name: true, email: true } },
+      versions: {
+        orderBy: { version_no: 'desc' },
+        take: 1,
+        select: { review_status: true, created_at: true },
+      },
+    },
+  })
+
   return NextResponse.json({
     school: { id: unit.id, name: unit.name, code: unit.code, kind: unit.kind },
+    proposals: proposals.map((row) => ({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      agencyName: row.agency_name,
+      reviewCutoffAt: row.review_cutoff_at,
+      versionNo: row.current_version_no,
+      reviewStatus: row.versions[0]?.review_status ?? 'NONE',
+      pi: { id: row.pi.id, name: row.pi.name || row.pi.email },
+    })),
     coveredBy: coverage?.member?.is_active
       ? {
           id: coverage.member.user.id,

@@ -327,7 +327,7 @@ export default function FinderChatComposer({
                 if (!disabled) onSubmit();
               }
             }}
-            placeholder={sending ? 'Waiting for the answer…' : 'Ask anything — find calls, check eligibility, plan a submission…'}
+            placeholder={sending ? 'Waiting for the answer…' : 'Describe your research topic, or ask about a call — eligibility, deadlines, documents…'}
             className="max-h-40 min-h-[40px] flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-sm leading-6 text-ink outline-none placeholder:text-muted-soft focus:ring-0 disabled:cursor-not-allowed disabled:text-muted"
           />
 

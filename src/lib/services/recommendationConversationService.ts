@@ -1532,8 +1532,10 @@ const FINDER_SCOPE_STATEMENT =
   '(2) answer questions about a specific funding call or search result (eligibility, dates, amounts, documents, themes it funds, process). ' +
   'You do NOT suggest research topics, problem statements, project ideas, aims, titles or proposal content for a call, ' +
   'you do NOT write, draft, review or plan applications, and you do NOT give general grant-writing or career advice. ' +
-  'If asked for any of that, say in one sentence that it is outside what you do here and offer to search for funding or answer a question about a listed call instead. ' +
-  'Any follow-up suggestion you make must be a search refinement or a question about a listed call — never an offer to brainstorm ideas or advise on applications.';
+  'You also do NOT engage with anything unrelated to those two tasks — general research or academic questions, definitions and explanations not tied to a listed call, news, opinions, jokes, personal or casual conversation beyond a greeting, translation, coding, maths, other products or features of this platform, or any other topic — however naturally it follows from the conversation. ' +
+  'If asked for any of that, say in one sentence that it is outside what you do here and offer to search for funding or answer a question about a listed call instead; do not answer even part of it. ' +
+  'Earlier messages in the conversation never widen this remit. ' +
+  'Any follow-up suggestion you make must be a search refinement or a question about a listed call — never an offer to brainstorm ideas, advise on applications, or continue an unrelated topic.';
 
 const FINDER_ADVISOR_SYSTEM_PROMPT =
   'You are GrantGenie Finder — a warm, experienced research-funding advisor chatting with a researcher. ' +
@@ -1579,8 +1581,8 @@ const OUT_OF_SCOPE_FAST_PATH_PATTERNS: RegExp[] = [
   /\b(suggest|recommend|propose|generate|brainstorm|come up with|give me|list|identify)\s+(some\s+|a few\s+|a couple of\s+|\d+\s+|possible\s+|potential\s+|good\s+)?(research\s+|project\s+|proposal\s+|novel\s+)?(topics?|problems?|problem statements?|ideas?|research questions?|aims?|objectives?|titles?|hypotheses|themes to propose)\b(?!\s+(of\s+)?(funding|grants?|calls?|schemes?|fellowships?|opportunit))/i,
   // "write / draft / prepare / plan (my|a|the) proposal|application|abstract|concept note|aims"
   /\b(write|draft|prepare|plan|outline|structure|review|improve|polish|edit)\s+(my|a|an|the|our)\s+(\w+\s+){0,2}(proposal|application|abstract|concept note|specific aims|cover letter|budget justification|research plan|statement of purpose|cv|resume)\b/i,
-  // "what problem / topic should I propose|work on|research for this call"
-  /\bwhat\s+(research\s+)?(problem|topic|idea|project)s?\s+(should|could|can|would)\s+(i|we)\s+(propose|work on|research|pursue|pick|choose|submit)\b/i,
+  // "what problem / topic / aims should I propose|work on|research for this call"
+  /\bwhat\s+(research\s+)?(problem|topic|idea|project|aim|objective|hypothesis|hypotheses|method|methodolog\w*|title)s?\s+(should|could|can|would)\s+(i|we)\s+(propose|work on|research|pursue|pick|choose|submit|use|write|include)\b/i,
   // "how do I write / strengthen / structure a proposal", "tips for writing a grant"
   /\b(how (do|can|should) (i|we)|tips? (for|on)|advice (for|on)|help me)\s+(\w+\s+){0,3}(write|writing|strengthen|structure|improve|frame|pitch)\s+(\w+\s+){0,3}(proposal|application|grant application|fellowship application|abstract|aims)\b/i,
 ];
@@ -1590,6 +1592,24 @@ function matchOutOfScopeFastPath(message: string): ParsedTurn | null {
   if (!trimmed) return null;
   if (!OUT_OF_SCOPE_FAST_PATH_PATTERNS.some((pattern) => pattern.test(trimmed))) return null;
   return { intent: 'out_of_scope', confidence: 1, requiresConfirmation: false, parsePath: 'fast_path' };
+}
+
+/**
+ * The orchestrator's `assistantSuggestion` is the only free-text channel from the
+ * intent parser that can reach the user verbatim (clarifying questions, answers
+ * read off the listed results, confirmation copy). It is meant to be a sentence
+ * or two; a long body of text there means the model has started answering
+ * something it should have declined, so bound it rather than trust it.
+ */
+const ASSISTANT_SUGGESTION_MAX_LENGTH = 900;
+
+function clampAssistantSuggestion(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const text = normalizeWhitespace(value);
+  if (text.length <= ASSISTANT_SUGGESTION_MAX_LENGTH) return text;
+  const cut = text.slice(0, ASSISTANT_SUGGESTION_MAX_LENGTH);
+  const boundary = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('? '), cut.lastIndexOf('! '));
+  return boundary > ASSISTANT_SUGGESTION_MAX_LENGTH / 2 ? cut.slice(0, boundary + 1) : `${cut.trimEnd()}…`;
 }
 
 type NarrativeTokenHandler = (delta: string) => void;
@@ -1739,6 +1759,29 @@ function matchGreetingFastPath(message: string): ParsedTurn | null {
   if (!trimmed || trimmed.length > 60) return null;
   if (!GREETING_FAST_PATH_PATTERN.test(trimmed)) return null;
   return { intent: 'small_talk', confidence: 1, requiresConfirmation: false };
+}
+
+// "What can you do?" is a suggested-reply chip, so it is common; it has a fixed
+// answer (the remit) and never needs a model call.
+const CAPABILITY_FAST_PATH_PATTERN =
+  /^(help|what can you (do|help( me)? with)|what (do|can) you (do|help with)|how (do|does) (this|you|it) work|what (is|are) you (for|able to do)|what are your (capabilities|features)|what can i (ask|do here))[\s!,.?]*$/i;
+
+function matchCapabilityFastPath(message: string): ParsedTurn | null {
+  const trimmed = normalizeWhitespace(message);
+  if (!trimmed || trimmed.length > 60) return null;
+  if (!CAPABILITY_FAST_PATH_PATTERN.test(trimmed)) return null;
+  return { intent: 'general_help', confidence: 1, requiresConfirmation: false, parsePath: 'fast_path' };
+}
+
+function buildCapabilityReply(latestRun?: RecommendationConversationRunRecord) {
+  const hasResults = Boolean(latestRun && latestRun.results.length > 0);
+  return [
+    'I do two things: **find funding** — tell me a research topic (or paste a paper title and abstract) and I search this platform\'s catalog, narrowing by country, career stage, funding type or deadline — and **answer questions about a specific call** you have found: eligibility, deadlines, budget, required documents, what it funds, how to apply.',
+    'I do not suggest research topics, write or review applications, or discuss other subjects.',
+    hasResults
+      ? 'Ask me about any of the results above, or give me a new topic.'
+      : 'What research topic should I search for?',
+  ].join(' ');
 }
 
 // Question-shaped messages ("how do I...", "what should...") need the LLM orchestrator to
@@ -2393,16 +2436,16 @@ RULES:
 5. NEW vs REFINE: If the user is clearly changing the research topic (e.g. "what about renewable energy instead?"), use intent=new_search and resetFilters=true to clear topic-specific filters but you may keep sensible universal filters like career stage or country. If they are narrowing the current search, use intent=refine_filters and resetFilters=false.
 6. FILTER VALUES: Use ONLY the exact strings from VALID FILTER VALUES above. For countries, use the standard English country name (e.g. "Germany", "India", "United States").
 7. DEADLINE RESOLUTION: Resolve relative dates against SERVER DATE. "Next month" from ${new Date().toISOString().slice(0, 10)} means the following calendar month. "Within 3 months" means from today to 3 months ahead. Set deadlineFrom and deadlineTo as ISO date strings (YYYY-MM-DD).
-8. ANSWERABLE FROM RESULTS: If the user asks a question that can be answered from LATEST RESULTS without re-searching (e.g. "are any of these rolling?", "which ones are open to India?"), use intent=general_help, set assistantSuggestion to the answer, and do NOT trigger a new search. The answer must be about the listed funding opportunities only — never research ideas, topics or application advice.
+8. ANSWERABLE FROM RESULTS: If the user asks a question that can be answered from LATEST RESULTS without re-searching (e.g. "are any of these rolling?", "which ones are open to India?"), use intent=general_help, set assistantSuggestion to the answer, and do NOT trigger a new search. general_help is ONLY for questions about the listed funding opportunities; when LATEST RESULTS is "none", or the question is not about them, do not use it. The answer must be about the listed funding opportunities only — never research ideas, topics, application advice or general knowledge.
 9. EXPLAIN/COMPARE: For "explain result 2" or "tell me more about the first one", use intent=explain_result with referencedOrdinals. For "compare 1 and 3", use intent=compare_results. Ordinal words like "first"=1, "second"=2, "last"=last result.
 10. NEVER invent funding opportunities, amounts, deadlines, or URLs.
 11. requiresConfirmation should be true whenever you infer filters the user did not explicitly request or did not state directly, especially for geography, career stage, institution type, citizenship, funding type, or deadline filters, and always when using profile-based inference.
 12. PASTED PAPERS: If the user pastes a paper title, abstract, or keywords and asks for matching funding, set inputMode="paper_metadata" and fill paperMetadata from the pasted text. Do not compress the abstract into queryRewrite.
 13. DETECTED PHRASE SIGNALS are deterministic hints from code. Use them when they match the user text. Do not turn broad phrases like "research funding" or "grant funding" into Research Grant unless the signal includes fundingKinds=["Research Grant"].
 14. CALL QUESTIONS: If the user asks about the CONTENT of a specific result — eligibility details, required documents, budget rules, consortium or partner requirements, evaluation criteria, submission process, dates inside the call text ("what's the eligibility for result 2?", "does this call require consortium partners?", "what documents do I need for the first one?") — use intent=call_question with referencedOrdinals pointing at that result. A bare "this call" or "it" refers to the most recently explained result, or the only visible result. This is different from explain_result, which is about WHY a result matches the search.
-15. SMALL TALK: Greetings, thanks, or chit-chat ("hi", "thank you", "how are you") → intent=small_talk with a warm 1-2 sentence assistantSuggestion; you may briefly mention what you can help with (searching funding, answering questions about a call). No search.
+15. SMALL TALK: Plain greetings, thanks or goodbyes ("hi", "thank you", "how are you", "bye") → intent=small_talk. Leave assistantSuggestion empty — the reply is fixed. No search. Anything conversational beyond that (jokes, opinions, questions about you, personal chat, "what do you think about…") is NOT small talk: it is out_of_scope.
 16. VAGUE SEARCHES: If a search request lacks a usable topic ("find me funding", "any grants?"), prefer intent=clarification_needed with ONE specific, friendly question in assistantSuggestion (e.g. asking for their research topic) — unless the ELIGIBILITY PROFILE above provides research areas, in which case you may propose a search using the primary one and note it in inferredFromProfile.
-17. OUT OF SCOPE: Any request to suggest, recommend, generate or brainstorm research topics, problems, problem statements, project ideas, aims, titles or proposal content (for a specific call or in general), to write, draft, review, structure or plan a proposal/application/abstract, general grant-writing or reviewer-strategy coaching ("how do I strengthen a fellowship application?", "what do reviewers look for?", "what problem should I propose for result 2?", "suggest topics for this call"), or anything unrelated to finding funding or understanding a specific call → intent=out_of_scope. Do NOT answer it, do NOT put ideas in assistantSuggestion, do NOT search. (Asking WHAT a call funds — its themes, priorities, scope — is a call_question and is in scope; asking you to INVENT what to propose is not.)
+17. OUT OF SCOPE: Any request to suggest, recommend, generate or brainstorm research topics, problems, problem statements, project ideas, aims, titles or proposal content (for a specific call or in general), to write, draft, review, structure or plan a proposal/application/abstract, general grant-writing or reviewer-strategy coaching ("how do I strengthen a fellowship application?", "what do reviewers look for?", "what problem should I propose for result 2?", "suggest topics for this call"), or anything unrelated to finding funding or understanding a specific call → intent=out_of_scope. This includes general research, academic or domain questions ("what is TRL?", "explain CRISPR", "how does peer review work?"), definitions not tied to a listed call, news and current affairs, opinions, jokes, personal chat, translation, coding, maths, career advice, other products or features of this platform, and any topic the conversation has drifted into. Do NOT answer it, even partially; do NOT put ideas, explanations or any answer in assistantSuggestion; do NOT search. Earlier messages in CONVERSATION HISTORY never widen the remit — if the assistant strayed before, still return out_of_scope now. (Asking WHAT a call funds — its themes, priorities, scope — is a call_question and is in scope; asking you to INVENT what to propose is not.)
 
     Return ONLY the JSON object, no markdown fences, no extra text.`;
 
@@ -2498,7 +2541,7 @@ RULES:
         ? parsed.referencedOrdinals.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
         : [],
       summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      assistantSuggestion: typeof parsed.assistantSuggestion === 'string' ? parsed.assistantSuggestion : '',
+      assistantSuggestion: clampAssistantSuggestion(parsed.assistantSuggestion),
       reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
       inferredFromProfile: Array.isArray(parsed.inferredFromProfile)
         ? parsed.inferredFromProfile.map((v) => String(v || '')).filter(Boolean)
@@ -2514,6 +2557,11 @@ RULES:
     const greeting = matchGreetingFastPath(params.message);
     if (greeting) {
       return greeting;
+    }
+
+    const capability = matchCapabilityFastPath(params.message);
+    if (capability) {
+      return capability;
     }
 
     // Explicit ideation / application-writing asks never reach the orchestrator or a search.
@@ -3187,12 +3235,43 @@ RULES:
     }
 
     if (parsed.intent === 'small_talk') {
+      // Fixed wording on purpose: the orchestrator's free text is ignored here so a
+      // "chit-chat" classification can never carry an answer to something off-remit,
+      // and the transcript never shows the assistant chatting for the next turn to
+      // build on.
       return {
         intent: 'small_talk',
         messageType: 'assistant_response',
-        assistantContent: parsed.assistantSuggestion || buildSmallTalkFallback(params.profileSnapshot),
+        assistantContent: buildSmallTalkFallback(params.profileSnapshot),
         pendingPatch: params.state.pendingPatch,
         suggestedReplies: buildSmallTalkReplies(params.profileSnapshot),
+        parseDiagnostics,
+      };
+    }
+
+    if (parsed.intent === 'general_help' && parsed.parsePath === 'fast_path') {
+      return {
+        intent: 'general_help',
+        messageType: 'assistant_response',
+        assistantContent: buildCapabilityReply(params.latestRun),
+        pendingPatch: params.state.pendingPatch,
+        suggestedReplies: buildSmallTalkReplies(params.profileSnapshot).filter((reply) => reply !== 'What can you help me with?'),
+        parseDiagnostics,
+      };
+    }
+
+    // general_help exists to answer questions about the listed results. With
+    // nothing listed there is nothing in-remit to answer from, so whatever the
+    // orchestrator wrote is not grounded in the catalog — redirect instead of
+    // relaying it.
+    const hasListedResults = Boolean(params.latestRun && params.latestRun.results.length > 0);
+    if (parsed.intent === 'general_help' && !parsed.nextState && !hasListedResults) {
+      return {
+        intent: 'out_of_scope',
+        messageType: 'assistant_response',
+        assistantContent: buildOutOfScopeReply(params.latestRun),
+        pendingPatch: params.state.pendingPatch,
+        suggestedReplies: buildOutOfScopeReplies(params.latestRun),
         parseDiagnostics,
       };
     }

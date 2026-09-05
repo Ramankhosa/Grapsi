@@ -23,10 +23,25 @@ const UNANSWERED_DAYS = 3
 const DEADLINE_WINDOW_DAYS = 14
 
 type Reason = {
-  code: 'OVERDUE' | 'UNANSWERED' | 'REMINDER_DUE' | 'DEADLINE_NEAR' | 'GONE_QUIET'
+  code:
+    | 'OVERDUE'
+    | 'UNANSWERED'
+    | 'REVIEW_PENDING'
+    | 'UNSHARED_REVIEW'
+    | 'REMINDER_DUE'
+    | 'CUTOFF_NEAR'
+    | 'DEADLINE_NEAR'
+    | 'GONE_QUIET'
   label: string
   weight: number
 }
+
+/**
+ * A draft waiting on the department is the one kind of backlog the officer
+ * causes rather than chases, so it outranks everything except a missed
+ * deadline: the applicant has done their part and is waiting.
+ */
+const REVIEW_PENDING_DAYS = 2
 
 export async function GET(request: NextRequest) {
   const context = await requireTenantScope(request)
@@ -78,6 +93,21 @@ export async function GET(request: NextRequest) {
       assignee_org_unit: { select: { id: true, name: true } },
       funding_call: {
         select: { id: true, title: true, scheme_title: true, agencyName: true, close_date: true },
+      },
+      // The proposal record, so work sitting with the department shows up in
+      // the department's own backlog rather than only on the desk.
+      proposal: {
+        select: {
+          id: true,
+          status: true,
+          review_cutoff_at: true,
+          current_version_no: true,
+          versions: {
+            orderBy: { version_no: 'desc' },
+            take: 1,
+            select: { review_status: true, created_at: true },
+          },
+        },
       },
       follow_ups: {
         select: {
@@ -156,6 +186,39 @@ export async function GET(request: NextRequest) {
         })
       }
     }
+    // ---- the proposal desk's own backlog --------------------------------
+    const proposal = (record as any).proposal
+    if (proposal && ['DRAFT', 'IN_REVIEW'].includes(proposal.status)) {
+      const latest = proposal.versions?.[0]
+      const waitingDays = latest ? days(latest.created_at) ?? 0 : 0
+
+      if (latest?.review_status === 'NONE' && waitingDays >= REVIEW_PENDING_DAYS) {
+        reasons.push({
+          code: 'REVIEW_PENDING',
+          label: `Draft v${proposal.current_version_no} unreviewed for ${waitingDays} days`,
+          weight: 90 + Math.min(waitingDays, 20),
+        })
+      }
+
+      // Worse than unreviewed: the work is done and simply has not been sent.
+      if (latest?.review_status === 'REVIEWED') {
+        reasons.push({
+          code: 'UNSHARED_REVIEW',
+          label: `Review of v${proposal.current_version_no} finished but not sent`,
+          weight: 95,
+        })
+      }
+
+      const cutoffIn = daysUntil(proposal.review_cutoff_at)
+      if (cutoffIn !== null && cutoffIn >= 0 && cutoffIn <= 7) {
+        reasons.push({
+          code: 'CUTOFF_NEAR',
+          label: cutoffIn === 0 ? 'Revision cut-off today' : `Revision cut-off in ${cutoffIn} days`,
+          weight: 65 - cutoffIn,
+        })
+      }
+    }
+
     if (reminder?.remind_at && new Date(reminder.remind_at).getTime() <= now) {
       reasons.push({
         code: 'REMINDER_DUE',
@@ -186,6 +249,13 @@ export async function GET(request: NextRequest) {
     return {
       id: record.id,
       status: record.status,
+      proposal: proposal
+        ? {
+            id: proposal.id,
+            status: proposal.status,
+            versionNo: proposal.current_version_no,
+          }
+        : null,
       deadlineAt: record.deadline_at,
       deadlineIn,
       respondedAt: record.responded_at,
@@ -251,6 +321,9 @@ export async function GET(request: NextRequest) {
       remindersDue: tally.REMINDER_DUE || 0,
       deadlineNear: tally.DEADLINE_NEAR || 0,
       goneQuiet: tally.GONE_QUIET || 0,
+      reviewPending: tally.REVIEW_PENDING || 0,
+      unsharedReview: tally.UNSHARED_REVIEW || 0,
+      cutoffNear: tally.CUTOFF_NEAR || 0,
     },
   })
 }

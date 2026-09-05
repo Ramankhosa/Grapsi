@@ -297,6 +297,7 @@ export default function Header() {
                 ]
               : []),
             { href: '/assignments', icon: '\u{1F4CB}', title: 'Assignments', description: 'Calls assigned to you, with their deadlines and follow-ups' },
+            { href: '/proposals', icon: '\u{1F4DD}', title: 'My Proposals', description: 'Your applications: drafts, the reviews sent back, budget and submission' },
             ...(isFeatureEnabled('ENABLE_PAPER_WRITING_UI')
               ? [{ href: '/library', icon: '\u{1F4DA}', title: 'Reference Library', description: 'Shared references and reading across your work' }]
               : []),
@@ -319,6 +320,7 @@ export default function Header() {
             label: 'My school',
             items: [
               { href: '/school-head', icon: '\u{1F3EB}', title: 'School home', description: 'Calls reaching your faculty, and how they are responding' },
+              { href: '/school-head/proposals', icon: '\u{1F4DD}', title: 'Proposals from My School', description: 'What your faculty are applying for, and where each application stands' },
             ],
           },
         ],
@@ -338,6 +340,7 @@ export default function Header() {
               { href: '/funding-dept', icon: '\u{1F9ED}', title: 'My Worklist', description: 'Deadlines, follow-ups due and open calls in your schools' },
               { href: '/funding-dept/queue', icon: '\u{1F9EA}', title: "My Schools' Calls", description: 'Open calls matching your schools, and what is still unassigned' },
               { href: '/funding-dept/chase', icon: '\u23F0', title: 'Chase Queue', description: 'Everything overdue, unanswered or gone quiet, worst first' },
+              { href: '/funding-dept/proposals', icon: '\u{1F4DD}', title: 'Proposal Desk', description: 'Every application in your schools: drafts, reviews, clearance and the agency outcome' },
               { href: '/funding-dept/assignments', icon: '\u{1F5C2}\uFE0F', title: 'Calls I Assigned', description: 'Track, chase and update the assignments you handed out' },
               { href: '/funding-dept/faculty', icon: '\u{1F393}', title: 'Faculty in My Schools', description: 'Directory of the faculty your coverage lets you assign to' },
               { href: '/researcher-matching', icon: '\u{1F3AF}', title: 'Find Researchers', description: 'Match faculty to a funding call and assign or circulate it' },

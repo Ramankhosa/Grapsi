@@ -154,6 +154,44 @@ export async function requireReviewerCallAccess(
     }
   }
 
+  // A workspace opened by the proposal desk belongs to the department, not to
+  // the one officer who happened to press the button. A colleague covering the
+  // school, a deputy standing in during leave, or the department head must be
+  // able to open it — otherwise a review started on Friday is unreachable by
+  // whoever is at the desk on Monday.
+  //
+  // Faculty are deliberately NOT admitted here. They read the frozen snapshot
+  // the officer chose to share, through the proposal routes; the live workspace
+  // holds the department's working state.
+  if (call.tenantId && session.user.tenantId === call.tenantId) {
+    const proposal = await prisma.grantProposal.findUnique({
+      where: { reviewer_call_id: callId },
+      select: { tenant_id: true, org_unit_id: true },
+    })
+    if (proposal && proposal.tenant_id === session.user.tenantId) {
+      const { resolveManagedScope } = await import('@/lib/orgUnits/scope')
+      const { canOpenSchoolWork } = await import('@/lib/fundingDept/shared')
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: proposal.tenant_id },
+        select: { org_scope_enforced: true },
+      })
+      const roles = session.user.roles || []
+      const scope = await resolveManagedScope({
+        tenantId: proposal.tenant_id,
+        userId: session.user.id,
+        roles,
+        enforceScope: Boolean(tenant?.org_scope_enforced),
+      })
+      const isTenantAdmin = roles.some((role) => ['OWNER', 'ADMIN', 'CALL_ADMIN'].includes(role))
+      if (
+        isTenantAdmin ||
+        (scope.fundingDept.isMember && canOpenSchoolWork(scope, proposal.org_unit_id))
+      ) {
+        return call
+      }
+    }
+  }
+
   res.status(403).json({ error: 'Not authorized to access this call' })
   return null
 }

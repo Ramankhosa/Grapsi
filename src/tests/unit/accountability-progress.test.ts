@@ -173,3 +173,57 @@ describe('progress buckets', () => {
     expect(buckets.overdueUnchased).toBe(1)
   })
 })
+
+describe('deriveAssignmentProgress with a proposal record', () => {
+  const now = new Date('2026-09-20T10:00:00Z')
+
+  const live = {
+    status: 'ACCEPTED',
+    outcome: 'PENDING',
+    created_at: new Date('2026-08-01T10:00:00Z'),
+    responded_at: new Date('2026-08-02T10:00:00Z'),
+    submitted_at: null,
+    deadline_at: new Date('2026-10-01T10:00:00Z'),
+  } as any
+
+  it('counts an open proposal as drafting, like a Draft One workspace', () => {
+    const withProposal = deriveAssignmentProgress(live, null, false, now, {
+      status: 'IN_REVIEW',
+    })
+    expect(withProposal.code).toBe('DRAFTING')
+
+    const without = deriveAssignmentProgress(live, null, false, now, null)
+    expect(without.code).toBe('IN_HAND')
+  })
+
+  it('treats a fresh draft as activity, so the applicant is not "gone quiet"', () => {
+    const silent = deriveAssignmentProgress(live, null, false, now, null)
+    expect(silent.goneQuiet).toBe(true)
+
+    const active = deriveAssignmentProgress(live, null, false, now, {
+      status: 'IN_REVIEW',
+      latestActivityAt: new Date('2026-09-18T10:00:00Z'),
+    })
+    expect(active.goneQuiet).toBe(false)
+    expect(active.daysSilent).toBe(2)
+  })
+
+  it('reports the proposal status alongside the code, never inside it', () => {
+    const progress = deriveAssignmentProgress(live, null, false, now, { status: 'CLEARED' })
+    expect(progress.proposalStatus).toBe('CLEARED')
+    // The ladder's own codes are untouched, so every existing count still sums.
+    expect(['AWARDED','REJECTED','SUBMITTED','DECLINED','CANCELLED','OVERDUE','AWAITING_REPLY','DRAFTING','IN_HAND'])
+      .toContain(progress.code)
+  })
+
+  it('never lets a proposal outrank a real outcome', () => {
+    const awarded = deriveAssignmentProgress(
+      { ...live, outcome: 'AWARDED' },
+      null,
+      false,
+      now,
+      { status: 'IN_REVIEW' }
+    )
+    expect(awarded.code).toBe('AWARDED')
+  })
+})

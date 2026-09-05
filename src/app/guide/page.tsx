@@ -153,6 +153,12 @@ const SECTIONS: Section[] = [
         audience: 'everyone',
       },
       {
+        href: '/proposals',
+        name: 'My proposals',
+        what: 'Your applications with the funding department: upload each draft, read the review they send back, download your endorsement letter, see what still has to be attached, keep the budget and co-investigators, record the date you submitted, and follow the certificates due once it is funded.',
+        audience: 'everyone',
+      },
+      {
         href: '/personas',
         name: 'Writing personas',
         what: 'Teach the drafting tools your voice from samples of your own writing.',
@@ -209,6 +215,13 @@ const SECTIONS: Section[] = [
         audience: 'fundingDept',
       },
       {
+        href: '/funding-dept/proposals',
+        name: 'Proposal desk',
+        what: 'Every application from your schools: run the AI review on a draft, send the report back, set the cut-off for revisions, tick off the attachments, issue the endorsement letter, clear it for submission, log what the researcher tells you, and track the utilisation certificates once it is sanctioned. Exports as a spreadsheet.',
+        restrictedTo: 'funding department members',
+        audience: 'fundingDept',
+      },
+      {
         href: '/funding-dept/faculty',
         name: 'Faculty directory',
         what: 'The people in the schools you cover, with their areas and current load.',
@@ -248,6 +261,13 @@ const SECTIONS: Section[] = [
         href: '/school-head',
         name: 'My school',
         what: 'Calls open to your school, how many nobody has taken up, who your funding department contact is, and how your faculty are responding to what they are sent.',
+        restrictedTo: 'Deans and Heads of Department',
+        audience: 'schoolHead',
+      },
+      {
+        href: '/school-head/proposals',
+        name: 'Proposals from my school',
+        what: 'What your faculty are applying for and where each application stands. Read-only, and without the funding department’s internal notes.',
         restrictedTo: 'Deans and Heads of Department',
         audience: 'schoolHead',
       },

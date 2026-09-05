@@ -8,15 +8,12 @@ import {
   getReviewerSession as getServerSession,
   requireReviewerCallAccess,
 } from '@/lib/reviewer-auth-api'
-import { hasMeaningfulSectionContent } from '@/lib/reviewer/content'
 import {
-  buildProposalTargets,
-  countProposalWords,
-  splitProposalWithFormat,
-} from '@/lib/reviewer/proposalSplit'
-import { resolveBucketKey } from '@/lib/reviewer/buckets'
+  commitProposalImport,
+  loadImportTargets,
+  previewProposalImport,
+} from '@/lib/reviewer/proposalImport'
 import { extractTextFromDocumentBytes } from '@/lib/reviewer/sourceText'
-import prisma from '../../../../../lib/prisma'
 
 export const config = {
   api: {
@@ -26,7 +23,6 @@ export const config = {
   },
 }
 
-const MAX_PROPOSAL_CHARS = 400000
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 const MAX_JSON_BYTES = 5 * 1024 * 1024
 
@@ -78,10 +74,9 @@ async function readUploadedProposal(req: NextApiRequest): Promise<{ text: string
 /**
  * Split a full proposal into the workspace's sections.
  *
- * `preview` (default) is deterministic and spends no tokens: the text is cut at
- * heading lines and each piece is matched to a section derived from the
- * approved template's structure. The client shows the mapping, the user fixes
- * whatever the matcher could not place, then `commit` writes the assignments.
+ * The splitting and writing live in `src/lib/reviewer/proposalImport.ts`, which
+ * the proposal desk's background runner shares. What remains here is the HTTP:
+ * multipart parsing, auth, and status codes.
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -115,159 +110,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-
-    const call = await prisma.reviewerCall.findUnique({
-      where: { id: callId },
-      select: { id: true, parsed_json: true },
-    })
-
-    if (!call) {
+    const ctx = await loadImportTargets(callId)
+    if (!ctx) {
       return res.status(404).json({ error: 'Reviewer workspace not found' })
     }
 
-    const parsedContext = call.parsed_json && typeof call.parsed_json === 'object' ? call.parsed_json : {}
-    const templateSections = Array.isArray(parsedContext.template_sections)
-      ? parsedContext.template_sections
-      : []
-
-    const existingSections = await prisma.reviewerSection.findMany({
-      where: { call_id: callId },
-      orderBy: [{ section_title: 'asc' }, { version: 'desc' }],
-      select: {
-        id: true,
-        section_title: true,
-        version: true,
-        status: true,
-        user_input: true,
-        reviewerBucketKey: true,
-        mappingJson: true,
-      },
-    })
-
-    // One row per title (newest version) — that is what an import can fill.
-    const latestByTitle = new Map<string, typeof existingSections[number]>()
-    for (const section of existingSections) {
-      if (!latestByTitle.has(section.section_title)) {
-        latestByTitle.set(section.section_title, section)
-      }
-    }
-
-    const targets = buildProposalTargets(
-      Array.from(latestByTitle.values()).map((section) => ({
-        section_title: section.section_title,
-        reviewerBucketKey: section.reviewerBucketKey,
-      })),
-      templateSections
-    )
-
     // ---- Commit -----------------------------------------------------------
     if (body?.action === 'commit') {
-      const assignments = Array.isArray(body.assignments) ? body.assignments : []
-      if (assignments.length === 0) {
-        return res.status(400).json({ error: 'No section assignments were supplied' })
+      const result = await commitProposalImport(callId, ctx, body.assignments)
+      if (!result.ok) {
+        return res.status(400).json({ error: result.error })
       }
-
-      // Several segments may target one section (a proposal often splits
-      // Methodology into sub-headings), so merge by title in the given order.
-      // Only the sections the preview offered. Without this any string the
-      // client sent became a brand-new section, so one typo left an orphan
-      // nothing would ever review.
-      const offeredTitles = new Set(targets.map((target) => target.title))
-      const rejected: string[] = []
-
-      const merged = new Map<string, string[]>()
-      for (const assignment of assignments) {
-        const title = String(assignment?.targetTitle || '').trim()
-        const blockText = String(assignment?.body || '').trim()
-        if (!title || !blockText) continue
-        if (!offeredTitles.has(title)) {
-          if (!rejected.includes(title)) rejected.push(title)
-          continue
-        }
-        const heading = String(assignment?.heading || '').trim()
-        const block = heading && !blockText.startsWith(heading) ? `## ${heading}\n${blockText}` : blockText
-        const bucket = merged.get(title) || []
-        bucket.push(block)
-        merged.set(title, bucket)
-      }
-
-      if (merged.size === 0) {
-        return res.status(400).json({
-          error: rejected.length
-            ? `No recognised section was assigned. Unknown: ${rejected.join(', ')}`
-            : 'Every assignment was empty. Assign at least one section.',
-        })
-      }
-
-      const written = []
-      const skipped = []
-
-      for (const [title, blocks] of merged.entries()) {
-        const content = blocks.join('\n\n').trim()
-        if (!hasMeaningfulSectionContent(content)) {
-          skipped.push({ title, reason: 'no_meaningful_content' })
-          continue
-        }
-
-        const existing = latestByTitle.get(title)
-
-        // An untouched seeded draft is filled in place; anything already
-        // reviewed (or already carrying text) becomes a new revision so the
-        // earlier review and its remarks are preserved.
-        if (existing && existing.status === 'draft' && !hasMeaningfulSectionContent(existing.user_input)) {
-          await prisma.reviewerSection.update({
-            where: { id: existing.id },
-            data: { user_input: content },
-          })
-          written.push({ title, sectionId: existing.id, version: existing.version || 1, mode: 'filled' })
-          continue
-        }
-
-        if (existing) {
-          const version = Number(existing.version || 1) + 1
-          const created = await prisma.reviewerSection.create({
-            data: {
-              call_id: callId,
-              section_title: title,
-              user_input: content,
-              ai_review_json: {},
-              status: 'draft',
-              version,
-              previous_section_id: existing.id,
-              is_revision: true,
-              review_linked_context: true,
-              reviewerBucketKey: existing.reviewerBucketKey || resolveBucketKey({ section_title: title }),
-              ...(existing.mappingJson ? { mappingJson: existing.mappingJson } : {}),
-            },
-            select: { id: true, version: true },
-          })
-          written.push({ title, sectionId: created.id, version: created.version, mode: 'revision' })
-          continue
-        }
-
-        const created = await prisma.reviewerSection.create({
-          data: {
-            call_id: callId,
-            section_title: title,
-            user_input: content,
-            ai_review_json: {},
-            status: 'draft',
-            version: 1,
-            review_linked_context: true,
-            reviewerBucketKey: resolveBucketKey({ section_title: title }),
-          },
-          select: { id: true, version: true },
-        })
-        written.push({ title, sectionId: created.id, version: created.version, mode: 'created' })
-      }
-
-      return res.status(200).json({
-        written,
-        skipped: [
-          ...skipped,
-          ...rejected.map((title) => ({ title, reason: 'unknown_section' })),
-        ],
-      })
+      return res.status(200).json({ written: result.written, skipped: result.skipped })
     }
 
     // ---- Preview ----------------------------------------------------------
@@ -290,50 +144,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       text = String(body?.text || '')
     }
 
-    text = text.slice(0, MAX_PROPOSAL_CHARS)
-
     if (!text.trim()) {
       return res.status(400).json({
         error: 'No readable text was found. Paste the proposal text, or upload a text-based PDF or DOCX.',
       })
     }
 
-    // Format-aware: cut at the call's own section structure when the document
-    // follows it, and subtract the format's instruction lines everywhere.
-    const { matches, splitMode, formatLinesRemoved } = splitProposalWithFormat(text, targets, {
-      templateSections,
-    })
-
-    return res.status(200).json({
-      filename,
-      chars: text.length,
-      words: countProposalWords(text),
-      splitMode,
-      formatLinesRemoved,
-      targets: targets.map((target) => ({
-        title: target.title,
-        bucketKey: target.bucketKey,
-        aliases: target.aliases || [],
-        wordLimit: target.wordLimit ?? null,
-        charLimit: target.charLimit ?? null,
-        hasContent: hasMeaningfulSectionContent(latestByTitle.get(target.title)?.user_input || ''),
-        status: latestByTitle.get(target.title)?.status || null,
-      })),
-      segments: matches.map((match) => ({
-        order: match.order,
-        heading: match.heading,
-        body: match.body,
-        words: countProposalWords(match.body),
-        targetTitle: match.targetTitle,
-        matchedBy: match.matchedBy,
-      })),
-      unmatchedCount: matches.filter((match) => !match.targetTitle).length,
-      // The whole proposal minus text the matcher placed nowhere, so the UI can
-      // warn when a large share of the document would be dropped.
-      unmatchedWords: matches
-        .filter((match) => !match.targetTitle)
-        .reduce((total, match) => total + countProposalWords(match.body), 0),
-    })
+    return res.status(200).json({ filename, ...previewProposalImport(text, ctx) })
   } catch (error) {
     console.error('Error importing proposal:', error)
     const message = error instanceof Error ? error.message : 'Failed to import the proposal'

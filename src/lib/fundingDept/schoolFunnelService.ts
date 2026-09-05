@@ -38,6 +38,17 @@ export interface SchoolFunnelRow {
   awardAmount: number
   overdue: number
   faculty: number
+  /**
+   * The proposal desk's own numbers for this school: applications being
+   * written or reviewed, cleared and waiting to go, and sanctioned. Separate
+   * from `submitted`/`awarded`, which count assignments — a school may have
+   * proposals with no assignment behind them at all.
+   */
+  proposalsInReview: number
+  proposalsCleared: number
+  proposalsSubmitted: number
+  proposalsSanctioned: number
+  proposalSanctionedAmount: number
   lastContactAt: Date | null
   /**
    * Pending calls that have been sitting there longer than the department's
@@ -96,7 +107,7 @@ async function funnelForSchool(
   )`
   const state = queueStateSql(liveAssignments, 'tri')
 
-  const [callRows, workRows, facultyRows, contactRows] = await Promise.all([
+  const [callRows, workRows, facultyRows, proposalRows, contactRows] = await Promise.all([
     prisma.$queryRaw<
       Array<{
         relevant_open: number
@@ -153,6 +164,31 @@ async function funnelForSchool(
       SELECT COUNT(*)::int AS count FROM researcher_profiles rp
        WHERE rp.org_unit_id = ANY(${scopeArray})
     `),
+    // Proposals are keyed on the school root they were opened against, which is
+    // this row's own school — no subtree expansion, unlike the assignment
+    // counts above, which key on the assignee's department.
+    prisma.$queryRaw<
+      Array<{
+        in_review: number
+        cleared: number
+        submitted: number
+        sanctioned: number
+        sanctioned_amount: number
+      }>
+    >(Prisma.sql`
+      SELECT
+        COUNT(*) FILTER (WHERE gp.status IN ('DRAFT','IN_REVIEW'))::int AS in_review,
+        COUNT(*) FILTER (WHERE gp.status = 'CLEARED')::int              AS cleared,
+        COUNT(*) FILTER (
+          WHERE gp.status IN ('SUBMITTED','UNDER_AGENCY_REVIEW','REVISION_REQUESTED','SANCTIONED','REJECTED')
+        )::int AS submitted,
+        COUNT(*) FILTER (WHERE gp.status = 'SANCTIONED')::int           AS sanctioned,
+        COALESCE(SUM(gp.sanctioned_amount) FILTER (WHERE gp.status = 'SANCTIONED'), 0)::float
+          AS sanctioned_amount
+      FROM grant_proposals gp
+      WHERE gp.tenant_id = ${tenantId}
+        AND gp.org_unit_id = ${school.id}
+    `),
     // The last time anyone in the department did anything about this school:
     // a note on one of its assignments, or a call-level note against the school
     // itself. The second kind is exactly the early chasing that used to be
@@ -189,6 +225,11 @@ async function funnelForSchool(
     awardAmount: work?.award_amount ?? 0,
     overdue: work?.overdue ?? 0,
     faculty: facultyRows[0]?.count ?? 0,
+    proposalsInReview: proposalRows[0]?.in_review ?? 0,
+    proposalsCleared: proposalRows[0]?.cleared ?? 0,
+    proposalsSubmitted: proposalRows[0]?.submitted ?? 0,
+    proposalsSanctioned: proposalRows[0]?.sanctioned ?? 0,
+    proposalSanctionedAmount: proposalRows[0]?.sanctioned_amount ?? 0,
     lastContactAt: contactRows[0]?.last_contact ?? null,
     untouchedPending: calls?.untouched_pending ?? 0,
   }
@@ -276,5 +317,10 @@ export async function getDepartmentTotals(tenantId: string, rows: SchoolFunnelRo
     submitted: rows.reduce((sum, row) => sum + row.submitted, 0),
     awarded: rows.reduce((sum, row) => sum + row.awarded, 0),
     awardAmount: rows.reduce((sum, row) => sum + row.awardAmount, 0),
+    proposalsInReview: rows.reduce((sum, row) => sum + row.proposalsInReview, 0),
+    proposalsCleared: rows.reduce((sum, row) => sum + row.proposalsCleared, 0),
+    proposalsSubmitted: rows.reduce((sum, row) => sum + row.proposalsSubmitted, 0),
+    proposalsSanctioned: rows.reduce((sum, row) => sum + row.proposalsSanctioned, 0),
+    proposalSanctionedAmount: rows.reduce((sum, row) => sum + row.proposalSanctionedAmount, 0),
   }
 }

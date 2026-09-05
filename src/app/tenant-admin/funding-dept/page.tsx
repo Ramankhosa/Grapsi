@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 
+import ProposalSettingsCard from '@/components/proposals/ProposalSettingsCard'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
 import SchoolCoverageEditor, {
@@ -407,6 +408,15 @@ export default function TenantAdminFundingDeptPage() {
           </p>
           <div className="nk-ticks mt-3" aria-hidden />
         </header>
+
+        {/*
+          How this office runs the proposal desk. Sits above the reporting
+          window because it decides which stages exist at all, and the window
+          only describes how they are counted.
+        */}
+        <div className="mb-6">
+          <ProposalSettingsCard />
+        </div>
 
         <section className="nk-panel mb-6">
           <div className="nk-panel-head">

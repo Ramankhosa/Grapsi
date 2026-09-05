@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useFundingDeptMe } from '@/lib/client/useFundingDeptMe'
@@ -24,6 +25,8 @@ interface Assignment {
   awardCurrency: string | null
   decisionAt: string | null
   createdAt: string
+  /** The proposal record, once one has been opened for this call. */
+  proposal: { id: string; status: string; versionNo: number } | null
   call: {
     id: string
     title: string
@@ -118,6 +121,7 @@ export default function AssignmentsPage() {
 
   // One dossier (documents + milestones) open at a time on the mine view.
   const [openDossierId, setOpenDossierId] = useState<string | null>(null)
+  const [startingProposalId, setStartingProposalId] = useState<string | null>(null)
 
   // Decline modal — a reason is required, so it cannot be a bare button.
   const [declining, setDeclining] = useState<Assignment | null>(null)
@@ -152,6 +156,32 @@ export default function AssignmentsPage() {
   useEffect(() => {
     if (user) fetchAssignments(view)
   }, [user, view, fetchAssignments])
+
+  /**
+   * Open the proposal record for a call already assigned to you, and go
+   * straight to it. Everything the record needs is derivable from the
+   * assignment, so this asks the researcher for nothing.
+   */
+  const startProposal = useCallback(
+    async (assignmentId: string) => {
+      setStartingProposalId(assignmentId)
+      setError(null)
+      try {
+        const res = await authFetch('/api/proposals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assignmentId }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Could not start a proposal for this call')
+        window.location.href = `/proposals/${data.proposal.id}`
+      } catch (e: any) {
+        setError(e.message)
+        setStartingProposalId(null)
+      }
+    },
+    [authFetch]
+  )
 
   const patchAssignment = async (assignment: Assignment, body: Record<string, unknown>) => {
     const res = await authFetch(`/api/assignments/${assignment.id}`, {
@@ -555,6 +585,34 @@ export default function AssignmentsPage() {
                           : 'Documents & milestones'}
                       </button>
                     )}
+                    {/*
+                      The proposal record: where the draft, the department's
+                      review and the budget live. Offered on every live
+                      assignment, because starting one is how the work actually
+                      begins and hunting for the button elsewhere is friction at
+                      exactly the wrong moment.
+                    */}
+                    {view === 'mine' &&
+                      !['CANCELLED', 'DECLINED'].includes(assignment.status) &&
+                      (assignment.proposal ? (
+                        <Link
+                          href={`/proposals/${assignment.proposal.id}`}
+                          className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                        >
+                          Open proposal
+                          {assignment.proposal.versionNo > 0
+                            ? ` (v${assignment.proposal.versionNo})`
+                            : ''}
+                        </Link>
+                      ) : (
+                        <button
+                          onClick={() => void startProposal(assignment.id)}
+                          disabled={startingProposalId === assignment.id}
+                          className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50 dark:text-blue-400"
+                        >
+                          {startingProposalId === assignment.id ? 'Starting…' : 'Start proposal'}
+                        </button>
+                      ))}
                   </div>
                   {view === 'mine' && openDossierId === assignment.id && (
                     // Forced-light wrapper: the dossier uses the nk-* light

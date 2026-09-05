@@ -1,6 +1,6 @@
 # Funding scheduler runbook
 
-Six endpoints are cron-protected and do nothing until something calls
+Eight endpoints are cron-protected and do nothing until something calls
 them on a schedule. `scripts/funding-scheduler.js` is that something — a
 dependency-free Node process that fires them against the local web app.
 
@@ -12,6 +12,8 @@ dependency-free Node process that fires them against the local web app.
 | `POST /api/funding-dept/reports/weekly` | Mondays at `FUNDING_DIGEST_HOUR`:35 | Weekly digest to each department member and the head |
 | `POST /api/platform/users/expire-event-access` | daily at `FUNDING_DIGEST_HOUR`:50 | Suspends EVENT users past their access window and revokes their refresh tokens |
 | `POST /api/funding/monitor/sweep` | daily at `FUNDING_MONITOR_HOUR`:10 (default 06:10) | Checks every due monitored funder page; queues genuinely new calls for review |
+| `POST /api/proposals/reviews/sweep` | every 10 minutes | Resumes proposal AI reviews whose worker went away (a deploy mid-run, a killed process). Claims by `heartbeat_at`, so a healthy long run is never stolen |
+| `POST /api/proposals/sweep` | hourly (:40) | The proposal desk's five watches: cut-off D3/D1 nudges to the applicant; the review service level (a draft unreviewed or unsent past `PROPOSAL_REVIEW_SLA_DAYS`); applications the agency has gone quiet on past `PROPOSAL_AGENCY_STALE_DAYS`; follow-up ticklers an officer set a date on; and post-award obligations falling due (D30/D14/D7/D1, then once when overdue) |
 
 All six authenticate with the `x-funding-alert-secret` header. Every job is
 idempotent server-side (unique-key claims, conditional updates, a 5-day digest
@@ -41,6 +43,49 @@ Feature Access). Unentitled matches are skipped at dispatch (logged as
 lost the feature are closed out with `email_status = 'skipped'`. If alerts stop
 platform-wide after a deploy, the usual cause is that the migration adding the
 enum value ran but the seed did not.
+
+
+### Proposal desk tuning
+
+Most of this desk is configured **per tenant**, not by environment: a tenant
+admin sets it at `/tenant-admin/funding-dept` and it is stored in
+`tenants.proposal_settings`. Which stages the office runs (AI review, budget,
+co-investigators, agency tracking, the internal cut-off, endorsement letters,
+the pre-submission checklist, post-award tracking), who may do what, the three
+timings and the checklist a new proposal starts with all live there. Everything
+defaults to on, so a tenant that never opens the screen gets the full process.
+
+The environment variables below are only the fallback for a tenant with no
+settings row, plus the one figure that is genuinely operational rather than a
+policy choice.
+
+| Variable | Default | What it changes |
+| --- | --- | --- |
+| `PROPOSAL_REVIEW_STALE_MINUTES` | 20 | How long a review run may go without a heartbeat before the sweep treats it as dead and takes it over. Operational, not per tenant — raise it if reviews legitimately run longer than this between sections |
+| `PROPOSAL_REVIEW_SLA_DAYS` | 3 | Fallback service level, when a tenant has not set one |
+| `PROPOSAL_AGENCY_STALE_DAYS` | 60 | Fallback agency-silence threshold, when a tenant has not set one |
+
+Both sweeps read each tenant's own settings and skip work the tenant has
+switched off, reporting the count as `skippedDisabled` — so a low nudge count is
+not by itself a sign that something is broken.
+
+Every nudge ladder records the rung it fired on the row itself, so a rung fires
+once and the next one still fires. The ladders are ordered longest window first
+and matched with `.filter().pop()`, never `.find()`: `find` returns the *widest*
+match, which means once D3 has fired the D1 nudge — the one that matters — is
+silently skipped for ever. `src/tests/unit/proposal-nudge-ladder.test.ts` pins
+this; if you add a rung, add it to that test.
+
+The sweep's counters are `cutoffNudges`, `slaWarnings`, `agencyStaleWarnings`,
+`followUpReminders` and `obligationNudges`. A reminder is claimed with a
+conditional update before the mail is sent, so two overlapping sweeps cannot
+send the same tickler twice.
+
+**`FUNDING_UPLOADS_PATH` must be an absolute path in production.** Proposal
+drafts, issued endorsement letters and the Word review documents are written
+under it; the default resolves
+against `process.cwd()`, which inside a release directory means every upload is
+deleted by the next deploy.
 
 ## Production setup (one time)
 

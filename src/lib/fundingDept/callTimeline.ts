@@ -30,6 +30,7 @@ export type TimelineKind =
   | 'DOCUMENT'
   | 'MILESTONE'
   | 'NUDGE'
+  | 'PROPOSAL'
 
 export interface TimelineEvent {
   /** ISO timestamp. */
@@ -103,7 +104,12 @@ export interface TimelineSources {
     status: string
     created_at: Date | string
     completed_at: Date | string | null
-    assignment_id: string
+    /**
+     * Null when the obligation belongs to a proposal rather than an
+     * assignment — a sanctioned grant that arrived as an agency letter still
+     * owes a utilisation certificate.
+     */
+    assignment_id: string | null
   }>
   notifications: Array<{
     id: string
@@ -111,6 +117,23 @@ export interface TimelineSources {
     body: string | null
     created_at: Date | string
     assignment_id: string | null
+  }>
+  /**
+   * What happened to the applications themselves: drafts arriving, reviews
+   * going back, clearance, submission, the agency's answer.
+   *
+   * Only rows the department may see — an internal note on a proposal is not
+   * part of a shared call history, and the caller filters before it gets here.
+   */
+  proposalEvents: Array<{
+    id: string
+    kind: string
+    from_status: string | null
+    to_status: string | null
+    payload: any
+    created_at: Date | string
+    actor: Person | null
+    proposal: { id: string; title: string; assignment_id: string | null; pi: Person | null }
   }>
 }
 
@@ -452,11 +475,70 @@ const KIND_ORDER: TimelineKind[] = [
   'NUDGE',
   'DOCUMENT',
   'MILESTONE',
+  'PROPOSAL',
   'SUBMITTED',
   'COMPLETED',
   'OUTCOME',
   'CANCELLED',
 ]
+
+/**
+ * Proposal history, phrased for a reader looking at the CALL rather than at one
+ * application: the researcher is named, because on a call's page "a draft
+ * arrived" is only useful if you know whose.
+ */
+function fromProposalEvents(rows: TimelineSources['proposalEvents']): TimelineEvent[] {
+  const events: TimelineEvent[] = []
+
+  for (const row of rows) {
+    const applicant = row.proposal.pi?.name || row.proposal.pi?.email || 'a researcher'
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {}
+    let title: string | null = null
+    let detail: string | null = null
+
+    switch (row.kind) {
+      case 'CREATED':
+        title = `${applicant} opened a proposal`
+        detail = row.proposal.title
+        break
+      case 'VERSION_UPLOADED':
+        title = `${applicant} uploaded draft v${payload.versionNo ?? '?'}`
+        detail = typeof payload.note === 'string' ? payload.note : null
+        break
+      case 'REVIEW_SHARED':
+        title = `Review sent to ${applicant}`
+        detail =
+          typeof payload.score === 'number' ? `Scored ${payload.score.toFixed(1)}` : null
+        break
+      case 'CLEARED':
+        title = `${applicant}'s proposal cleared for submission`
+        break
+      case 'SUBMITTED':
+        title = `${applicant} submitted to the agency`
+        detail = typeof payload.submissionReference === 'string' ? payload.submissionReference : null
+        break
+      case 'AGENCY_STATUS':
+        title = `Agency: ${String(row.to_status || '').toLowerCase().replace(/_/g, ' ')} — ${applicant}`
+        break
+      default:
+        // Queue mechanics, team edits and budget edits are noise on a call's
+        // history; the proposal's own page has them.
+        continue
+    }
+
+    events.push({
+      at: iso(row.created_at),
+      kind: 'PROPOSAL',
+      title,
+      detail,
+      actor: who(row.actor),
+      assignmentId: row.proposal.assignment_id,
+      refId: row.id,
+    })
+  }
+
+  return events
+}
 
 export function buildTimeline(sources: TimelineSources, caps: TimelineCaps = {}): Timeline {
   const perSource: Array<[keyof TimelineSources, TimelineEvent[]]> = [
@@ -466,6 +548,7 @@ export function buildTimeline(sources: TimelineSources, caps: TimelineCaps = {})
     ['documents', fromDocuments(sources.documents)],
     ['milestones', fromMilestones(sources.milestones)],
     ['notifications', fromNotifications(sources.notifications)],
+    ['proposalEvents', fromProposalEvents(sources.proposalEvents || [])],
   ]
 
   // The horizon: the newest "oldest row" among the sources that were cut off.
