@@ -654,6 +654,11 @@ model User {
   signupAtiTokenId         String? // Track which ATI token was used for signup
   email                    String     @unique
   passwordHash             String?
+  // Set by an administrator-issued reset. The next successful password login
+  // hands back a one-time reset token instead of a session, so a temporary
+  // password can only ever buy the holder a password change.
+  mustChangePassword       Boolean    @default(false)
+  passwordChangedAt        DateTime?
   name                     String?
   firstName                String?
   lastName                 String?

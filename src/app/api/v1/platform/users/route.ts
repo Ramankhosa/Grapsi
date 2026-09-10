@@ -85,6 +85,9 @@ export async function GET(request: NextRequest) {
         tenant_ati_id: user.tenantAtiId,
         is_platform_staff: user.isPlatformStaff,
         is_pending_activation: user.isPendingActivation,
+        has_password: user.hasPassword,
+        must_change_password: user.mustChangePassword,
+        password_changed_at: user.passwordChangedAt ? user.passwordChangedAt.toISOString() : null,
         created_at: user.createdAt.toISOString(),
         updated_at: user.updatedAt.toISOString()
       })),

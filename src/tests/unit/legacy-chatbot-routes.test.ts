@@ -11,6 +11,7 @@ vi.mock('@/lib/fundingIntake/routeAuth', () => ({
 
 import { POST as advisorPost } from '@/app/api/chatbot/funding-advisor/route'
 import { POST as fallbackPost } from '@/app/api/chatbot/funding-advisor-fallback/route'
+import { POST as searchPost } from '@/app/api/chatbot/funding-search/route'
 
 function makeRequest(path: string, body: unknown) {
   return new NextRequest(`http://localhost${path}`, {
@@ -32,6 +33,7 @@ describe('legacy advisor chatbot routes', () => {
     ['funding-advisor', advisorPost, { action: 'conversation', query: 'what do you think about the election?' }],
     ['funding-advisor', advisorPost, { action: 'advice', params: { opportunityDetails: 'Scheme X' } }],
     ['funding-advisor-fallback', fallbackPost, { query: 'tell me a joke' }],
+    ['funding-search', searchPost, { query: 'AI in agriculture' }],
   ])('%s answers 410 LEGACY_CHATBOT_DISABLED for an authorised caller instead of chatting', async (name, handler, body) => {
     mocks.requireFundingImporterRequest.mockResolvedValue({
       actor: { id: 'user-1', email: 'u@example.com', tenantId: 'tenant-1' },

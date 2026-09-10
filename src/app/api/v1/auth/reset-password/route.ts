@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { hashPassword } from '@/lib/auth'
+import { hashPassword, revokeAllUserTokens } from '@/lib/auth'
 import { hashToken } from '@/lib/token-utils'
 
 export async function POST(request: NextRequest) {
@@ -19,9 +19,20 @@ export async function POST(request: NextRequest) {
 
     const newHash = await hashPassword(password)
     await prisma.$transaction([
-      prisma.user.update({ where: { id: rec.userId }, data: { passwordHash: newHash } }),
+      prisma.user.update({
+        where: { id: rec.userId },
+        // Clearing mustChangePassword is what ends a forced change: this route
+        // is the only way out of one, so the flag and the new password have to
+        // land together.
+        data: { passwordHash: newHash, mustChangePassword: false, passwordChangedAt: new Date() }
+      }),
       prisma.passwordResetToken.update({ where: { id: rec.id }, data: { usedAt: new Date() } })
     ])
+
+    // Whoever held a session before the reset should not keep it — the usual
+    // reason somebody resets a password is that they think another person has
+    // it.
+    await revokeAllUserTokens(rec.userId, 'password_reset')
 
     return NextResponse.json({ success: true })
   } catch (e) {

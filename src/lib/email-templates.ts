@@ -154,6 +154,44 @@ export function resetTemplate(email: string, name: string | null | undefined, to
   return { subject: `Reset your ${brand.name} password`, html, text }
 }
 
+/**
+ * Sent when a support admin resets somebody's password for them.
+ *
+ * Worth its own template rather than reusing `resetTemplate`: that one opens
+ * with "we received a request to reset your password", which reads as a
+ * phishing attempt to a person who made no such request, and quotes the
+ * one-hour self-service expiry that does not apply here.
+ */
+export function adminPasswordResetTemplate(params: {
+  email: string
+  name?: string | null
+  token: string
+  expiresInHours?: number
+}) {
+  const displayName = friendlyName(params.email, params.name)
+  const url = `${SITE_URL}/reset-password?token=${encodeURIComponent(params.token)}`
+  const hours = params.expiresInHours ?? 24
+  const expiryPhrase = hours >= 48 ? `${Math.round(hours / 24)} days` : hours === 1 ? '1 hour' : `${hours} hours`
+  const html = `
+  <div style="font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 640px; margin: 0 auto; padding: 24px; background: #ffffff">
+    <div style="text-align:center; margin-bottom: 16px">
+      <div style="display:inline-block; background:${brand.primary}; color:#fff; padding:8px 12px; border-radius:12px; font-weight:600;">${brand.name}</div>
+    </div>
+    <h2 style="color:${brand.gray700}; margin: 12px 0 8px">Set a new password</h2>
+    <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName},</p>
+    <p style="color:${brand.gray500}; line-height:1.6">A ${brand.name} administrator has started a password reset for <strong>${params.email}</strong>, usually because you asked support for help getting back in. Your current password still works until you use the link below.</p>
+    <div style="margin:24px 0">
+      <a href="${url}" style="background:${brand.primary}; color:#fff; text-decoration:none; padding:12px 20px; border-radius:10px; display:inline-block; font-weight:600">Set New Password</a>
+    </div>
+    <p style="color:${brand.gray500}; font-size:13px">If the button doesn't work, copy this link:<br/>
+      <a href="${url}" style="color:${brand.primary}">${url}</a>
+    </p>
+    <p style="color:${brand.gray500}; font-size:12px">This link expires in ${expiryPhrase}. If you did not ask for help signing in, contact your administrator — and ignore this email, since nothing has changed on your account.</p>
+  </div>`
+  const text = `Hi ${displayName}, a ${brand.name} administrator started a password reset for ${params.email}. Set a new password: ${url} (expires in ${expiryPhrase}). Your current password works until you use this link.`
+  return { subject: `Set a new ${brand.name} password`, html, text }
+}
+
 // Funding call titles and agencies come from ingested source documents, so
 // they are escaped before being interpolated into alert HTML.
 function escapeHtml(value: string): string {

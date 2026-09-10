@@ -148,7 +148,7 @@ export async function POST(request: NextRequest) {
     const passwordHash = await hashPassword(parsed.data.password)
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash, emailVerified: true },
+      data: { passwordHash, emailVerified: true, passwordChangedAt: new Date() },
     })
     clearRate(rateKey)
 

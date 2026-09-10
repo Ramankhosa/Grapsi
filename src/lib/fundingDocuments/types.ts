@@ -95,6 +95,8 @@ export interface FundingDocumentSearchRequest {
   minSimilarity?: number;
   access: RecommendationAccessScope;
   llmContext?: FundingLlmRoutingContext | null;
+  /** Pre-computed query vector (from `embedQuery`) so a second pass does not re-embed the same question. */
+  queryEmbedding?: number[];
 }
 
 export interface FundingDocumentSearchResult {

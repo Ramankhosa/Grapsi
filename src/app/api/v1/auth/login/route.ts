@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { verifyPassword, generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { isAccessExpired } from '@/lib/ati-kind-policy'
+import { startForcedPasswordChange } from '@/lib/admin-password-reset'
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -72,6 +73,23 @@ export async function POST(request: NextRequest) {
     if (user.status !== 'ACTIVE') {
       return NextResponse.json(
         { code: 'USER_SUSPENDED', message: 'User account is suspended' },
+        { status: 401 }
+      )
+    }
+
+    // An administrator reset this password by hand, so the credential just
+    // proven is single-use: hand back a short-lived reset token instead of a
+    // session. Deliberately after the suspension check — a suspended account
+    // should not learn that its temporary password was correct.
+    if (user.mustChangePassword) {
+      const forced = await startForcedPasswordChange(user.id)
+      return NextResponse.json(
+        {
+          code: 'PASSWORD_CHANGE_REQUIRED',
+          message: 'Your administrator reset this password. Choose a new one to finish signing in.',
+          reset_token: forced.token,
+          reset_expires_at: forced.expiresAt.toISOString()
+        },
         { status: 401 }
       )
     }

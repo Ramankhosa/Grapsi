@@ -49,6 +49,11 @@ export interface PlatformUserSummary {
   isPlatformStaff: boolean
   /** No password and no social provider — the account was created but never activated. */
   isPendingActivation: boolean
+  /** A password login exists at all, so a reset is a meaningful thing to offer. */
+  hasPassword: boolean
+  /** Admin-forced: the next login has to go through a password change. */
+  mustChangePassword: boolean
+  passwordChangedAt: Date | null
   createdAt: Date
   updatedAt: Date
 }
@@ -84,6 +89,8 @@ function toSummary(user: {
   tenantId: string | null
   passwordHash: string | null
   oauthProvider: string | null
+  mustChangePassword: boolean
+  passwordChangedAt: Date | null
   createdAt: Date
   updatedAt: Date
   tenant: { id: string; name: string; atiId: string } | null
@@ -102,6 +109,9 @@ function toSummary(user: {
     tenantAtiId: user.tenant?.atiId ?? null,
     isPlatformStaff: user.tenant?.atiId === PLATFORM_ATI_ID || user.roles.some(isPlatformRole),
     isPendingActivation: !user.passwordHash && !user.oauthProvider,
+    hasPassword: !!user.passwordHash,
+    mustChangePassword: user.mustChangePassword,
+    passwordChangedAt: user.passwordChangedAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt
   }
@@ -168,6 +178,8 @@ export async function listPlatformUsers(
         tenantId: true,
         passwordHash: true,
         oauthProvider: true,
+        mustChangePassword: true,
+        passwordChangedAt: true,
         createdAt: true,
         updatedAt: true,
         tenant: { select: { id: true, name: true, atiId: true } }

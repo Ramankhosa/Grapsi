@@ -29,6 +29,9 @@ type PlatformUser = {
   tenant_ati_id: string | null;
   is_platform_staff: boolean;
   is_pending_activation: boolean;
+  has_password: boolean;
+  must_change_password: boolean;
+  password_changed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -69,6 +72,20 @@ type ActivationDetails = {
   expiresAt: string;
   emailSent: boolean;
   emailError: string | null;
+  /** Reset links and activation links render through the same banner. */
+  kind: 'activation' | 'reset';
+};
+
+/**
+ * A password an admin has just set for somebody else. Held in memory only — it
+ * is never stored in readable form, so once this is dismissed the only way back
+ * is to set another one.
+ */
+type TemporaryPasswordDetails = {
+  email: string;
+  password: string;
+  mustChange: boolean;
+  sessionsRevoked: boolean;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -154,6 +171,17 @@ export default function SuperAdminUsersPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [activation, setActivation] = useState<ActivationDetails | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Password recovery
+  const [resetting, setResetting] = useState<PlatformUser | null>(null);
+  const [resetMode, setResetMode] = useState<'link' | 'temporary'>('link');
+  const [resetSendEmail, setResetSendEmail] = useState(true);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetRequireChange, setResetRequireChange] = useState(true);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [tempPassword, setTempPassword] = useState<TemporaryPasswordDetails | null>(null);
+  const [tempCopied, setTempCopied] = useState(false);
 
   // Create form
   const [showCreate, setShowCreate] = useState(false);
@@ -313,6 +341,7 @@ export default function SuperAdminUsersPage() {
         expiresAt: payload.activation_expires_at,
         emailSent: Boolean(payload.activation_email_sent),
         emailError: payload.activation_email_error || null,
+        kind: 'activation',
       });
       setCopied(false);
       setSuccess(`${payload.user.email} created in ${payload.user.tenant_name}.`);
@@ -403,10 +432,106 @@ export default function SuperAdminUsersPage() {
         expiresAt: payload.activation_expires_at,
         emailSent: Boolean(payload.activation_email_sent),
         emailError: payload.activation_email_error || null,
+        kind: 'activation',
       });
       setCopied(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to reissue the activation link');
+    }
+  }
+
+  function openReset(target: PlatformUser) {
+    setResetting(target);
+    setResetMode('link');
+    setResetSendEmail(true);
+    setResetPassword('');
+    setResetRequireChange(true);
+    setResetError(null);
+    setTempPassword(null);
+    setError(null);
+  }
+
+  async function submitReset() {
+    if (!resetting) return;
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      const body =
+        resetMode === 'link'
+          ? { action: 'send_password_reset', send_email: resetSendEmail }
+          : {
+              action: 'set_temporary_password',
+              password: resetPassword.trim() || undefined,
+              require_change: resetRequireChange,
+            };
+      const response = await authFetch(`/api/v1/platform/users/${resetting.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = await readJson<any>(response);
+      if (!response.ok) {
+        throw new Error(payload.message || 'Failed to reset the password');
+      }
+
+      if (resetMode === 'link') {
+        setActivation({
+          email: resetting.email,
+          link: payload.activation_link,
+          expiresAt: payload.activation_expires_at,
+          emailSent: Boolean(payload.activation_email_sent),
+          emailError: payload.activation_email_error || null,
+          kind: 'reset',
+        });
+        setCopied(false);
+      } else {
+        // Held in state and nowhere else — this is the one moment it is
+        // readable.
+        setTempPassword({
+          email: resetting.email,
+          password: payload.temporary_password,
+          mustChange: Boolean(payload.must_change_password),
+          sessionsRevoked: Boolean(payload.sessions_revoked),
+        });
+        setTempCopied(false);
+      }
+
+      setResetting(null);
+      await loadUsers();
+    } catch (nextError) {
+      setResetError(nextError instanceof Error ? nextError.message : 'Failed to reset the password');
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
+  /** Lift a forced change without touching the password — for one set in error. */
+  async function clearForcedChange(target: PlatformUser) {
+    setError(null);
+    try {
+      const response = await authFetch(`/api/v1/platform/users/${target.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'require_password_change', required: false }),
+      });
+      const payload = await readJson<any>(response);
+      if (!response.ok) {
+        throw new Error(payload.message || 'Failed to clear the password change');
+      }
+      setSuccess(`${target.email} can sign in with their current password again.`);
+      await loadUsers();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to clear the password change');
+    }
+  }
+
+  async function copyTempPassword() {
+    if (!tempPassword) return;
+    try {
+      await navigator.clipboard.writeText(tempPassword.password);
+      setTempCopied(true);
+    } catch {
+      setTempCopied(false);
     }
   }
 
@@ -482,16 +607,19 @@ export default function SuperAdminUsersPage() {
           <section className="rounded-lg border border-sky-200 bg-sky-50 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-sky-900">Activation link for {activation.email}</div>
+                <div className="text-sm font-semibold text-sky-900">
+                  {activation.kind === 'reset' ? 'Password reset link' : 'Activation link'} for {activation.email}
+                </div>
                 <p className="mt-1 text-xs text-sky-800">
                   {activation.emailSent
                     ? 'Emailed to them. Share this link too if the message does not arrive — it sets their password.'
                     : 'Send this link to them — it is how they set their password.'}{' '}
                   Expires {new Date(activation.expiresAt).toLocaleString()}.
+                  {activation.kind === 'reset' ? ' Their current password keeps working until they use it.' : ''}
                 </p>
                 {activation.emailError ? (
                   <p className="mt-1 text-xs font-medium text-rose-700">
-                    The account was created, but the email failed: {activation.emailError}
+                    The link was created, but the email failed: {activation.emailError}
                   </p>
                 ) : null}
               </div>
@@ -514,6 +642,45 @@ export default function SuperAdminUsersPage() {
             </div>
             <code className="mt-3 block break-all rounded border border-sky-200 bg-white px-3 py-2 font-mono text-xs text-slate-700">
               {activation.link}
+            </code>
+          </section>
+        ) : null}
+
+        {tempPassword ? (
+          <section className="rounded-lg border border-amber-300 bg-amber-50 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-amber-900">
+                  Temporary password for {tempPassword.email}
+                </div>
+                <p className="mt-1 text-xs text-amber-900">
+                  Shown once — it is stored only as a hash, so nobody can read it back. Pass it on over a channel
+                  you trust, not email.
+                  {tempPassword.mustChange
+                    ? ' They will be asked to choose their own password as soon as they sign in with it.'
+                    : ' They can keep using it until they change it themselves.'}
+                  {tempPassword.sessionsRevoked ? ' Their other sessions have been signed out.' : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyTempPassword()}
+                  className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
+                >
+                  {tempCopied ? 'Copied' : 'Copy password'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTempPassword(null)}
+                  className="rounded-md border border-amber-400 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:border-amber-500"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+            <code className="mt-3 block break-all rounded border border-amber-300 bg-white px-3 py-2 font-mono text-sm tracking-wide text-slate-800">
+              {tempPassword.password}
             </code>
           </section>
         ) : null}
@@ -668,6 +835,11 @@ export default function SuperAdminUsersPage() {
                               Not activated
                             </div>
                           ) : null}
+                          {row.must_change_password ? (
+                            <div className="mt-1 inline-block rounded bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-800">
+                              Must change password
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           <div className="text-slate-700">{row.tenant_name || '—'}</div>
@@ -698,6 +870,11 @@ export default function SuperAdminUsersPage() {
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500">
                           {new Date(row.created_at).toLocaleDateString()}
+                          {row.password_changed_at ? (
+                            <span className="mt-1 block text-[11px] text-slate-400">
+                              Password set {new Date(row.password_changed_at).toLocaleDateString()}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3 text-right">
                           {canWrite && !isSelf ? (
@@ -716,6 +893,24 @@ export default function SuperAdminUsersPage() {
                                   className="text-xs font-semibold text-slate-600 hover:text-slate-900"
                                 >
                                   Resend link
+                                </button>
+                              ) : null}
+                              {row.has_password ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openReset(row)}
+                                  className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+                                >
+                                  Reset password
+                                </button>
+                              ) : null}
+                              {row.must_change_password ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void clearForcedChange(row)}
+                                  className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+                                >
+                                  Cancel forced change
                                 </button>
                               ) : null}
                               <button
@@ -964,6 +1159,150 @@ export default function SuperAdminUsersPage() {
                 className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
               >
                 {creating ? 'Creating...' : 'Create user'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {resetting ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-semibold text-slate-900">Reset password for {displayName(resetting)}</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              {resetting.email}
+              {resetting.tenant_name ? ` · ${resetting.tenant_name}` : ''}
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              For people who cannot reset it themselves — a mailbox that no longer exists, a wrong address on the
+              roster, or mail that simply is not arriving. Everything here is written to the audit log.
+            </p>
+
+            <div className="mt-5 space-y-2">
+              <label
+                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                  resetMode === 'link' ? 'border-sky-500 bg-sky-50' : 'border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="resetMode"
+                  value="link"
+                  checked={resetMode === 'link'}
+                  onChange={() => setResetMode('link')}
+                  className="mt-1 h-4 w-4"
+                />
+                <span className="text-sm text-slate-800">
+                  Send a reset link
+                  <span className="block text-xs text-slate-500">
+                    Safest option. Their current password keeps working until they use it, and the link is shown to
+                    you as well so you can hand it over. Valid 24 hours.
+                  </span>
+                </span>
+              </label>
+              <label
+                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                  resetMode === 'temporary' ? 'border-sky-500 bg-sky-50' : 'border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="resetMode"
+                  value="temporary"
+                  checked={resetMode === 'temporary'}
+                  onChange={() => setResetMode('temporary')}
+                  className="mt-1 h-4 w-4"
+                />
+                <span className="text-sm text-slate-800">
+                  Set a temporary password
+                  <span className="block text-xs text-slate-500">
+                    For when they cannot receive the link at all. Shown to you once so you can read it out, and
+                    every open session on the account is signed out immediately.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            {resetMode === 'link' ? (
+              <label className="mt-5 flex items-center gap-3 rounded-lg border border-slate-200 p-3">
+                <input
+                  type="checkbox"
+                  checked={resetSendEmail}
+                  onChange={(event) => setResetSendEmail(event.target.checked)}
+                  className="h-4 w-4"
+                />
+                <span className="text-sm text-slate-700">
+                  Email them the link now
+                  <span className="block text-xs text-slate-500">
+                    Shown to you either way. Leave it off if you already know the address does not work.
+                  </span>
+                </span>
+              </label>
+            ) : (
+              <div className="mt-5 space-y-4">
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Temporary password
+                  </span>
+                  <input
+                    value={resetPassword}
+                    onChange={(event) => setResetPassword(event.target.value)}
+                    placeholder="Leave blank to generate a strong one"
+                    className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    A generated password avoids look-alike characters, so it survives being read down a phone line.
+                    Twelve characters minimum if you type your own.
+                  </span>
+                </label>
+                <label className="flex items-center gap-3 rounded-lg border border-slate-200 p-3">
+                  <input
+                    type="checkbox"
+                    checked={resetRequireChange}
+                    onChange={(event) => setResetRequireChange(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  <span className="text-sm text-slate-700">
+                    Make them choose their own password at next sign-in
+                    <span className="block text-xs text-slate-500">
+                      Recommended. The temporary password then buys nothing but the password change itself.
+                    </span>
+                  </span>
+                </label>
+                {!resetRequireChange ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    Without this, a password you chose and delivered over chat or a phone call stays live on the
+                    account indefinitely.
+                  </div>
+                ) : null}
+              </div>
+            )}
+
+            {resetError ? (
+              <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                {resetError}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setResetting(null)}
+                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitReset()}
+                disabled={resetBusy}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {resetBusy
+                  ? 'Working...'
+                  : resetMode === 'link'
+                    ? 'Create reset link'
+                    : 'Set temporary password'}
               </button>
             </div>
           </div>

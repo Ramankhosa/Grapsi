@@ -66,6 +66,13 @@ export default function LoginPage() {
         router.push(`/set-password?email=${encodeURIComponent(email)}`)
         return
       }
+      // An administrator reset this password by hand. The credential was
+      // correct, so the login handed back a one-time token instead of a
+      // session — spend it on choosing a real password.
+      if (result.code === 'PASSWORD_CHANGE_REQUIRED' && result.resetToken) {
+        router.push(`/reset-password?token=${encodeURIComponent(result.resetToken)}&forced=1`)
+        return
+      }
       // Check if this is a social login account
       if (result.error?.includes('uses') && result.error?.includes('login')) {
         // Extract provider from error message

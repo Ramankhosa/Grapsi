@@ -58,10 +58,25 @@ export async function enrichRecommendationResultsWithDocumentEvidence(
 
   const topLimit = Math.max(1, Math.min(options.limit || 5, 5));
   const topResults = results.slice(0, topLimit);
+
+  // Every lookup below runs the SAME question against a different call, so the
+  // query vector is identical: embed it once and hand it to each search. Letting
+  // searchChunks embed on its own cost one identical embedding per top result.
+  let queryEmbedding: number[];
+  try {
+    queryEmbedding = await fundingDocumentRetrievalService.embedQuery(query, options.llmContext);
+  } catch (error) {
+    // Evidence is an enhancement layered onto an already-complete result set, so a
+    // failed embedding returns the results unenriched instead of failing the search.
+    console.warn('Funding document evidence enrichment skipped; query embedding failed.', error);
+    return results;
+  }
+
   const enrichedTop = await Promise.all(
     topResults.map(async (result) => {
       const chunks = await fundingDocumentRetrievalService.searchChunks({
         query,
+        queryEmbedding,
         fundingCallId: result.id,
         sectionTypes: [...EVIDENCE_SECTION_TYPES],
         callStatus: 'any',

@@ -109,7 +109,7 @@ function makeState() {
     inputMode: 'research_area' as const,
     query: { researchArea: 'artificial intelligence' },
     filters: createDefaultFilters(),
-    filterMode: 'manual' as const,
+    filterMode: 'manual' as 'manual' | 'auto',
     pendingPatch: null,
     lastRunId: 'run-1',
     lastTurnIndex: 1,
@@ -441,5 +441,125 @@ describe('RecommendationConversationService conversational intents', () => {
     );
     expect(parsed.assistantSuggestion.length).toBeLessThanOrEqual(900);
     expect(parsed.assistantSuggestion.endsWith('.')).toBe(true);
+  });
+
+  it('answers bare acknowledgements and closers from fixed copy, free of model calls and quota', async () => {
+    const service = new RecommendationConversationService();
+    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM').mockRejectedValue(new Error('llm down'));
+    const searchSpy = vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(null);
+    const run = makeRun([makeResult('call-1')]);
+
+    for (const message of ['ok', 'Okay, thanks!', 'great', 'bye', 'yes please', 'no', 'got it', 'never mind', 'cool \u{1F44D}']) {
+      const outcome = await (service as any).createTurnOutcome(baseParams(service, message, run));
+      expect(outcome.intent, message).toBe('small_talk');
+      expect(outcome.llmFree, message).toBe(true);
+      expect(outcome.assistantContent, message).toContain('Got it');
+    }
+    expect(llmSpy).not.toHaveBeenCalled();
+    expect(searchSpy).not.toHaveBeenCalled();
+    expect(mocks.gatewayText).not.toHaveBeenCalled();
+  });
+
+  it('does not mistake short real requests for acknowledgements', () => {
+    const service = new RecommendationConversationService();
+    for (const message of ['AI', 'IoT security', 'okay find grants for solar cells', 'no deadline', 'yes to India only']) {
+      const fast = (service as any).parseFastPathTurn({ message, state: makeState(), latestRun: undefined });
+      expect(fast?.intent ?? 'none', message).not.toBe('small_talk');
+    }
+  });
+
+  it('turns emoji-only or bare-number messages into fixed replies or result references, never a model call', async () => {
+    const service = new RecommendationConversationService();
+    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM').mockRejectedValue(new Error('llm down'));
+    const run = makeRun([makeResult('call-1'), makeResult('call-2')]);
+
+    const emoji = await (service as any).createTurnOutcome(baseParams(service, '\u{1F44D}', run));
+    expect(emoji.intent).toBe('clarification_needed');
+    expect(emoji.llmFree).toBe(true);
+    expect(emoji.assistantContent).toContain('research topic');
+
+    const punctuation = await (service as any).createTurnOutcome(baseParams(service, '???'));
+    expect(punctuation.intent).toBe('clarification_needed');
+
+    const ordinal = (service as any).parseFastPathTurn({ message: '2', state: makeState(), latestRun: run });
+    expect(ordinal).toMatchObject({ intent: 'explain_result', referencedOrdinals: [2] });
+
+    const outOfRange = (service as any).parseFastPathTurn({ message: '7', state: makeState(), latestRun: run });
+    expect(outOfRange?.intent).toBe('clarification_needed');
+    expect(llmSpy).not.toHaveBeenCalled();
+  });
+
+  function makeSearchResponse(results: RecommendationRawResultItem[]) {
+    return {
+      rawResults: results,
+      totalResults: results.length,
+      appliedFilters: createDefaultFilters(),
+      normalizedQuery: { researchArea: 'artificial intelligence' },
+      noResultsReason: results.length === 0 ? 'no_matches' : null,
+      lowConfidence: false,
+      degradedMode: null,
+      relaxationSuggestions: [],
+      strictFilterRecovery: null,
+      areaBreakdown: [],
+    };
+  }
+
+  it('answers mechanical filter tweaks with the deterministic summary instead of a narrative model call', async () => {
+    const service = new RecommendationConversationService();
+    const run = makeRun([makeResult('call-1')]);
+    const llmSpy = vi.spyOn(service as any, 'parseTurnWithLLM').mockRejectedValue(new Error('should not run'));
+    vi.spyOn(service as any, 'runGroundedSearch').mockResolvedValue(makeSearchResponse([makeResult('call-1')]));
+    const params = baseParams(service, '', run);
+    params.state = { ...makeState(), filterMode: 'auto' };
+
+    for (const message of ['sort by deadline soonest', 'only rolling opportunities', 'show more results', 'clear all filters']) {
+      mocks.gatewayText.mockClear();
+      const outcome = await (service as any).createTurnOutcome({ ...params, input: { message } });
+      expect(outcome.messageType, message).toBe('assistant_response');
+      expect(outcome.assistantContent, message).toContain('Scheme call-1');
+      expect(mocks.gatewayText, message).not.toHaveBeenCalled();
+    }
+    expect(llmSpy).not.toHaveBeenCalled();
+  });
+
+  it('still narrates a topic search through the model, but not when it finds nothing', async () => {
+    const service = new RecommendationConversationService();
+    const searchSpy = vi.spyOn(service as any, 'runGroundedSearch');
+    vi.spyOn(service as any, 'parseTurnWithLLM').mockResolvedValue({
+      intent: 'new_search',
+      confidence: 0.9,
+      requiresConfirmation: false,
+      nextState: { inputMode: 'research_area', query: { researchArea: 'quantum sensing' }, filters: createDefaultFilters() },
+      summary: 'Searching for quantum sensing.',
+    });
+
+    searchSpy.mockResolvedValue(makeSearchResponse([makeResult('call-1')]));
+    mocks.gatewayText.mockImplementation(async () => ({ rawText: 'Narrated answer.' }));
+    const found = await (service as any).createTurnOutcome(baseParams(service, 'grants for quantum sensing'));
+    expect(found.assistantContent).toContain('Narrated answer.');
+    expect(mocks.gatewayText).toHaveBeenCalledTimes(1);
+
+    mocks.gatewayText.mockClear();
+    searchSpy.mockResolvedValue(makeSearchResponse([]));
+    const empty = await (service as any).createTurnOutcome(baseParams(service, 'grants for quantum sensing'));
+    expect(empty.assistantContent).toContain('could not find');
+    expect(mocks.gatewayText).not.toHaveBeenCalled();
+  });
+
+  it('does not block call questions that mention reviewing or outlining the application process', () => {
+    const service = new RecommendationConversationService();
+    const run = makeRun([makeResult('call-1'), makeResult('call-2')]);
+    for (const message of [
+      'review the application process for result 2',
+      'outline the application procedure for result 1',
+      'structure the proposal requirements of result 2 for me',
+    ]) {
+      const fast = (service as any).parseFastPathTurn({ message, state: makeState(), latestRun: run });
+      expect(fast?.intent ?? 'none', message).not.toBe('out_of_scope');
+    }
+    for (const message of ['review my application', 'outline the proposal for result 2', 'draft our application for result 1']) {
+      const fast = (service as any).parseFastPathTurn({ message, state: makeState(), latestRun: run });
+      expect(fast?.intent, message).toBe('out_of_scope');
+    }
   });
 });

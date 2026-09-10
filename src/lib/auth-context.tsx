@@ -33,7 +33,7 @@ export interface User {
 interface AuthContextType {
   user: User | null
   token: string | null
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; code?: string }>
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; code?: string; resetToken?: string }>
   logout: (logoutAll?: boolean) => Promise<void>
   signup: (email: string, password: string, atiToken: string, firstName: string, lastName: string, isTrialInvite?: boolean) => Promise<{ success: boolean; error?: string }>
   // First-login activation for seeded accounts (email + Employee ID -> set password + sign in)
@@ -388,7 +388,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await refreshUser(newToken)
         return { success: true }
       } else {
-        return { success: false, error: data.message || 'Login failed', code: data.code }
+        // reset_token only comes back with PASSWORD_CHANGE_REQUIRED, where the
+        // password was right but an admin has forced a change.
+        return {
+          success: false,
+          error: data.message || 'Login failed',
+          code: data.code,
+          resetToken: data.reset_token
+        }
       }
     } catch (error) {
       return { success: false, error: 'Network error' }

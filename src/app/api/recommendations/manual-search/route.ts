@@ -6,7 +6,7 @@ import {
   RATE_LIMIT_WINDOW_MS,
   RECOMMENDATION_SORT_OPTIONS,
 } from '@/lib/recommendations/constants'
-import { checkRateLimit } from '@/lib/recommendations/rateLimit'
+import { buildFinderRateLimitKey, checkRateLimit } from '@/lib/recommendations/rateLimit'
 import { requireRecommendationUser, toRecommendationAccessScope } from '@/lib/recommendations/request-auth'
 import type { RecommendationDirectoryRequest, RecommendationPreferenceFlags, RecommendationProfileSnapshot } from '@/lib/recommendations/types'
 import { summarizeFilters, validateNormalizedControlledFilters } from '@/lib/recommendations/utils'
@@ -48,14 +48,6 @@ const requestSchema = z.object({
   usePublicationContext: z.boolean().optional(),
 })
 
-function getRequestIp(request: NextRequest) {
-  const forwarded = request.headers.get('x-forwarded-for')
-  if (forwarded) {
-    return forwarded.split(',')[0].trim()
-  }
-  return request.headers.get('x-real-ip') || 'unknown'
-}
-
 export async function POST(request: NextRequest) {
   const auth = await requireRecommendationUser(request)
   if ('response' in auth) {
@@ -69,7 +61,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: validationError }, { status: 400 })
     }
 
-    const userKey = `${auth.userId}:${getRequestIp(request)}:manual`
+    // Per-user only: a client-supplied X-Forwarded-For must not mint fresh buckets
+    // (each novel query costs a query-enrichment model call plus an embedding).
+    const userKey = buildFinderRateLimitKey('manual', auth.userId)
     const rateLimit = checkRateLimit(userKey, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS)
     if (!rateLimit.allowed) {
       return NextResponse.json(

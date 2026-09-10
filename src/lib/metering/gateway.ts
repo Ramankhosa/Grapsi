@@ -163,6 +163,16 @@ export class LLMGateway {
         console.warn('[Gateway]   This will NOT honor plan-specific LLM configurations!')
       }
 
+      // A caller's own output cap (a 900-token chat narrative, an 1800-token intent
+      // JSON) must never be widened to the stage default: on GLM, reasoning tokens
+      // bill as output, so the cap is the cost ceiling. Take the smaller of the two.
+      const requestedMaxTokensOut = Number((llmRequest.parameters as { maxTokensOut?: unknown } | undefined)?.maxTokensOut)
+      if (Number.isFinite(requestedMaxTokensOut) && requestedMaxTokensOut > 0) {
+        decision.maxTokensOut = decision.maxTokensOut
+          ? Math.min(decision.maxTokensOut, Math.floor(requestedMaxTokensOut))
+          : Math.floor(requestedMaxTokensOut)
+      }
+
       const requestedPrimaryModel = typeof llmRequest.metadata?.primaryModelCode === 'string'
         ? llmRequest.metadata.primaryModelCode.trim()
         : ''

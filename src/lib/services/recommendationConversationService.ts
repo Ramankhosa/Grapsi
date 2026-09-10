@@ -206,6 +206,8 @@ type TurnOutcome = {
   suggestedReplies?: string[];
   suggestedFilterChips?: FinderFilterSuggestionChip[];
   parseDiagnostics?: NonNullable<RecommendationSearchDiagnostics['chat']>;
+  /** True when the turn ran no model and no search: it is answered from fixed copy and does not consume chat quota. */
+  llmFree?: boolean;
 };
 
 function normalizeInputMode(value: unknown): RecommendationInputMode {
@@ -1580,7 +1582,8 @@ const OUT_OF_SCOPE_FAST_PATH_PATTERNS: RegExp[] = [
   // "suggest / recommend / propose / brainstorm (some|a few|5) (research) topics|problems|ideas|…"
   /\b(suggest|recommend|propose|generate|brainstorm|come up with|give me|list|identify)\s+(some\s+|a few\s+|a couple of\s+|\d+\s+|possible\s+|potential\s+|good\s+)?(research\s+|project\s+|proposal\s+|novel\s+)?(topics?|problems?|problem statements?|ideas?|research questions?|aims?|objectives?|titles?|hypotheses|themes to propose)\b(?!\s+(of\s+)?(funding|grants?|calls?|schemes?|fellowships?|opportunit))/i,
   // "write / draft / prepare / plan (my|a|the) proposal|application|abstract|concept note|aims"
-  /\b(write|draft|prepare|plan|outline|structure|review|improve|polish|edit)\s+(my|a|an|the|our)\s+(\w+\s+){0,2}(proposal|application|abstract|concept note|specific aims|cover letter|budget justification|research plan|statement of purpose|cv|resume)\b/i,
+  // The noun must be the thing being written: "review the application process/deadline/portal for result 2" is a call question.
+  /\b(write|draft|prepare|plan|outline|structure|review|improve|polish|edit)\s+(my|a|an|the|our)\s+(\w+\s+){0,2}(proposal|application|abstract|concept note|specific aims|cover letter|budget justification|research plan|statement of purpose|cv|resume)\b(?!\s+(process(es)?|procedures?|deadlines?|dates?|timelines?|fees?|portal|forms?|window|period|cycle|rounds?|stages?|steps?|requirements?|guidelines?|link|status|is|was|are|open|opens|closes?|closing|due))/i,
   // "what problem / topic / aims should I propose|work on|research for this call"
   /\bwhat\s+(research\s+)?(problem|topic|idea|project|aim|objective|hypothesis|hypotheses|method|methodolog\w*|title)s?\s+(should|could|can|would)\s+(i|we)\s+(propose|work on|research|pursue|pick|choose|submit|use|write|include)\b/i,
   // "how do I write / strengthen / structure a proposal", "tips for writing a grant"
@@ -1761,6 +1764,53 @@ function matchGreetingFastPath(message: string): ParsedTurn | null {
   return { intent: 'small_talk', confidence: 1, requiresConfirmation: false };
 }
 
+// Bare acknowledgements, closers and stray confirm/reject words ("ok", "great",
+// "bye", "yes" with nothing pending) carry no request. They used to cost an
+// orchestrator call that classified them as small talk anyway; answer them from
+// fixed copy instead. Pending-patch decisions are handled before this runs.
+const ACKNOWLEDGEMENT_FAST_PATH_PATTERN =
+  /^(ok(ay)?|k|kk|sure|cool|nice|great|good|fine|alright|all right|got it|noted|understood|perfect|awesome|super|wow|oh|hmm+|hm+|yes|yep|yeah|y|no|nope|n|nah|not now|never ?mind|no thanks|no thank you|ty|thx|thank u|thanks?( a lot| so much| you)?|cheers|bye|goodbye|see you|see ya|later|done|apply|confirm|go ahead|proceed|cancel|stop|skip)( (please|then|now|thanks?|ok|okay|bye))*$/i;
+
+const ACKNOWLEDGEMENT_MARKER = 'acknowledgement';
+
+function matchAcknowledgementFastPath(message: string): ParsedTurn | null {
+  const normalized = normalizeKey(message);
+  if (!normalized || normalized.length > 40) return null;
+  if (!ACKNOWLEDGEMENT_FAST_PATH_PATTERN.test(normalized)) return null;
+  return { intent: 'small_talk', confidence: 1, requiresConfirmation: false, parsePath: 'fast_path', summary: ACKNOWLEDGEMENT_MARKER };
+}
+
+function buildAcknowledgementReply(latestRun?: RecommendationConversationRunRecord) {
+  const hasResults = Boolean(latestRun && latestRun.results.length > 0);
+  return hasResults
+    ? 'Got it. Ask me about any of the results above (eligibility, deadlines, budget, required documents), refine the search, or give me a new research topic.'
+    : 'Got it. Whenever you are ready, tell me a research topic and I will search the catalog, or ask me about a call you have already found.';
+}
+
+const LOW_SIGNAL_REPLY =
+  'I did not catch a request in that. Tell me a research topic to search for, or ask me about one of the listed calls (for example "what is the eligibility for result 2?").';
+
+// Emoji-only, punctuation-only or single-letter messages carry nothing to parse,
+// so they never reach the orchestrator. A bare number after a result list is a
+// reference to that result.
+function matchLowSignalFastPath(message: string, latestRun?: RecommendationConversationRunRecord): ParsedTurn | null {
+  const trimmed = normalizeWhitespace(message);
+  if (!trimmed) return null;
+
+  const ordinalOnly = trimmed.match(/^#?\s*(\d{1,2})$/);
+  if (ordinalOnly) {
+    const ordinal = Number(ordinalOnly[1]);
+    if (latestRun && ordinal >= 1 && ordinal <= latestRun.results.length) {
+      return { intent: 'explain_result', confidence: 1, requiresConfirmation: false, referencedOrdinals: [ordinal], parsePath: 'fast_path' };
+    }
+    return { intent: 'clarification_needed', confidence: 1, requiresConfirmation: false, parsePath: 'fast_path', assistantSuggestion: LOW_SIGNAL_REPLY };
+  }
+
+  const letters = trimmed.replace(/[^\p{L}]/gu, '');
+  if (letters.length >= 2) return null;
+  return { intent: 'clarification_needed', confidence: 1, requiresConfirmation: false, parsePath: 'fast_path', assistantSuggestion: LOW_SIGNAL_REPLY };
+}
+
 // "What can you do?" is a suggested-reply chip, so it is common; it has a fixed
 // answer (the remit) and never needs a model call.
 const CAPABILITY_FAST_PATH_PATTERN =
@@ -1794,6 +1844,16 @@ function isConversationalQuestionMessage(message: string) {
   return CONVERSATIONAL_QUESTION_PATTERN.test(normalizeWhitespace(message));
 }
 
+// Filter tweaks the heuristic parser resolved on its own (sort, rolling, deadline,
+// amount, country/kind chips, "show more", "clear filters") are mechanical: the
+// topic did not change and the result cards say everything, so, like the filter
+// panel, they get the deterministic summary rather than a narrative model call.
+const MECHANICAL_FAST_PATH_INTENTS = new Set<RecommendationConversationIntent>(['refine_filters', 'browse_more', 'clear_filters']);
+
+function isMechanicalFastPathTurn(parsed: ParsedTurn) {
+  return parsed.parsePath === 'fast_path' && MECHANICAL_FAST_PATH_INTENTS.has(parsed.intent);
+}
+
 /**
  * Deterministic (LLM-free) line for filter-only updates. Changing a filter is a
  * mechanical action — it never sends a chat message and never spends an LLM call,
@@ -1819,6 +1879,9 @@ async function buildNarrativeForSearch(
 ) {
   const fallback = buildDeterministicSearchSummary(response, preface);
   if (isAborted(signal)) return fallback;
+  // Nothing to narrate: the deterministic summary already names the blocking
+  // filters and the broadening suggestions, and a model cannot add facts here.
+  if (response.rawResults.length === 0) return fallback;
   const currentDate = new Date().toISOString().slice(0, 10);
   const activeFilterDescriptions = describeActiveFilters(response.appliedFilters);
   const strictRetryDescriptions = response.strictFilterRecovery
@@ -2559,6 +2622,16 @@ RULES:
       return greeting;
     }
 
+    const acknowledgement = matchAcknowledgementFastPath(params.message);
+    if (acknowledgement) {
+      return acknowledgement;
+    }
+
+    const lowSignal = matchLowSignalFastPath(params.message, params.latestRun);
+    if (lowSignal) {
+      return lowSignal;
+    }
+
     const capability = matchCapabilityFastPath(params.message);
     if (capability) {
       return capability;
@@ -2994,6 +3067,7 @@ RULES:
             messageType: 'assistant_notice',
             assistantContent: 'Okay, I left the active filters unchanged.',
             pendingPatch: null,
+            llmFree: true,
           };
         }
 
@@ -3242,10 +3316,14 @@ RULES:
       return {
         intent: 'small_talk',
         messageType: 'assistant_response',
-        assistantContent: buildSmallTalkFallback(params.profileSnapshot),
+        assistantContent:
+          parsed.summary === ACKNOWLEDGEMENT_MARKER
+            ? buildAcknowledgementReply(params.latestRun)
+            : buildSmallTalkFallback(params.profileSnapshot),
         pendingPatch: params.state.pendingPatch,
         suggestedReplies: buildSmallTalkReplies(params.profileSnapshot),
         parseDiagnostics,
+        llmFree: parsed.parsePath === 'fast_path',
       };
     }
 
@@ -3257,6 +3335,7 @@ RULES:
         pendingPatch: params.state.pendingPatch,
         suggestedReplies: buildSmallTalkReplies(params.profileSnapshot).filter((reply) => reply !== 'What can you help me with?'),
         parseDiagnostics,
+        llmFree: true,
       };
     }
 
@@ -3287,6 +3366,7 @@ RULES:
         pendingPatch: params.state.pendingPatch,
         suggestedReplies: buildOutOfScopeReplies(params.latestRun),
         parseDiagnostics,
+        llmFree: parsed.parsePath === 'fast_path',
       };
     }
 
@@ -3317,6 +3397,7 @@ RULES:
           parsed.assistantSuggestion ||
           'You can ask me to search for funding, narrow the filters, compare two results, or explain why a result matches.',
         pendingPatch: params.state.pendingPatch,
+        llmFree: parsed.parsePath === 'fast_path',
       };
     }
 
@@ -3396,12 +3477,15 @@ RULES:
     }
 
     const searchResult = await this.runGroundedSearch(parsed.nextState, params.access, params.profileSnapshot, params.llmContext, events, params.selectedResearchAreas);
+    const searchPreface = buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I updated the funding search.', parsed.inferredFromProfile);
     emitComposing();
     return {
       intent: parsed.intent,
       messageType: 'assistant_response',
       assistantContent: appendPreferenceOptInTip(
-        await buildNarrativeForSearch(searchResult, buildSearchPreface(parsed.summary || parsed.assistantSuggestion || 'I updated the funding search.', parsed.inferredFromProfile), params.llmContext, emitToken, signal),
+        isMechanicalFastPathTurn(parsed)
+          ? buildDeterministicSearchSummary(searchResult, searchPreface)
+          : await buildNarrativeForSearch(searchResult, searchPreface, params.llmContext, emitToken, signal),
         preferenceTip
       ),
       nextState: {
@@ -3640,12 +3724,20 @@ RULES:
         clientTurnId: input.clientTurnId,
       });
 
-      await completeFundingChatMessage(usageReservation, {
-        conversationId,
-        turnIndex: reserved.turnIndex,
-      }).catch(usageError => {
-        console.error('Failed to record funding chat message usage:', usageError);
-      });
+      if (outcome.llmFree) {
+        // Fixed replies that ran no model and no search cost nothing, so they do
+        // not eat the user's chat quota either; the per-user rate limit still applies.
+        await releaseFundingChatMessage(usageReservation).catch(usageError => {
+          console.error('Failed to release funding chat message reservation:', usageError);
+        });
+      } else {
+        await completeFundingChatMessage(usageReservation, {
+          conversationId,
+          turnIndex: reserved.turnIndex,
+        }).catch(usageError => {
+          console.error('Failed to record funding chat message usage:', usageError);
+        });
+      }
 
       return response;
     } catch (error) {

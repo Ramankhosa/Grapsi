@@ -1272,7 +1272,7 @@ async function main() {
       displayName: 'AI Fund Finder Conversational Answer',
       featureCode: 'FUNDING_DISCOVERY',
       sortOrder: 17,
-      description: 'Answer funding-strategy and general questions conversationally inside the finder chat.',
+      description: 'Answer grounded questions about the listed funding results inside the finder chat.',
       tokenLimits: { maxTokensIn: 32000, maxTokensOut: 4000 },
       models: { FREE_PLAN: 'glm-5.3-flash', PRO_PLAN: 'glm-5.3-flash', ENTERPRISE_PLAN: 'glm-5.3' }
     },

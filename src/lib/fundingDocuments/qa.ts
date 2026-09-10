@@ -315,29 +315,39 @@ export async function answerCallQuestionForChat(
   const routedSections = sectionTypesForQuestionCategory(category).filter(isFundingDocumentSectionType);
   let chunks: FundingDocumentSearchResult[] = [];
   try {
-    chunks = await fundingDocumentRetrievalService.searchChunks({
-      query: question,
-      fundingCallId: request.callId,
-      sectionTypes: routedSections,
-      callStatus: 'any',
-      topK: 6,
-      minSimilarity: 0.25,
-      access: request.access,
-      llmContext: request.llmContext,
-    });
+    // A call with no embedded document text has nothing to retrieve: skip the
+    // question embedding entirely and answer from the structured fields.
+    const hasChunks = await fundingDocumentRetrievalService.hasGeneratedChunks(request.callId);
+    // Embed the question once; the widened pass below reuses the same vector.
+    const queryEmbedding = hasChunks ? await fundingDocumentRetrievalService.embedQuery(question, request.llmContext) : null;
 
-    if (chunks.length < 2) {
-      const widened = await fundingDocumentRetrievalService.searchChunks({
+    if (queryEmbedding) {
+      chunks = await fundingDocumentRetrievalService.searchChunks({
         query: question,
+        queryEmbedding,
         fundingCallId: request.callId,
+        sectionTypes: routedSections,
         callStatus: 'any',
         topK: 6,
-        minSimilarity: 0.22,
+        minSimilarity: 0.25,
         access: request.access,
         llmContext: request.llmContext,
       });
-      const byId = new Map([...chunks, ...widened].map((chunk) => [chunk.chunkId, chunk]));
-      chunks = Array.from(byId.values()).sort((left, right) => right.similarity - left.similarity).slice(0, 6);
+
+      if (chunks.length < 2) {
+        const widened = await fundingDocumentRetrievalService.searchChunks({
+          query: question,
+          queryEmbedding,
+          fundingCallId: request.callId,
+          callStatus: 'any',
+          topK: 6,
+          minSimilarity: 0.22,
+          access: request.access,
+          llmContext: request.llmContext,
+        });
+        const byId = new Map([...chunks, ...widened].map((chunk) => [chunk.chunkId, chunk]));
+        chunks = Array.from(byId.values()).sort((left, right) => right.similarity - left.similarity).slice(0, 6);
+      }
     }
   } catch (error) {
     console.warn('Funding chat document retrieval failed; answering from structured fields only.', error);

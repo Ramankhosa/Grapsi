@@ -100,21 +100,26 @@ export class FundingDocumentRetrievalService {
     };
   }
 
-  async searchChunks(request: FundingDocumentSearchRequest): Promise<FundingDocumentSearchResult[]> {
-    const query = String(request.query || '').trim();
-    if (!query) {
-      return [];
-    }
+  /** True when the call has at least one chunk with a generated embedding, i.e. retrieval can return anything at all. */
+  async hasGeneratedChunks(fundingCallId: string): Promise<boolean> {
+    const count = await prisma.fundingCallDocumentChunk.count({
+      where: { funding_call_id: fundingCallId, embedding_status: 'generated' },
+    });
+    return count > 0;
+  }
 
-    const topK = Math.max(1, Math.min(Number(request.topK || 8), 25));
-    const minSimilarity = Math.max(0, Math.min(Number(request.minSimilarity ?? 0.35), 1));
-    const documentHealth = getDocumentEmbeddingHealth('RETRIEVAL_DOCUMENT');
+  /**
+   * Embed a retrieval question once. Callers that search twice (section-routed,
+   * then widened) pass the vector back in via `queryEmbedding` instead of paying
+   * for a second identical embedding.
+   */
+  async embedQuery(query: string, llmContext?: FundingDocumentSearchRequest['llmContext']): Promise<number[]> {
     const response = await embeddingService.generateEmbedding(
       query,
-      request.llmContext?.tenantId
+      llmContext?.tenantId
         ? {
-            tenantId: request.llmContext.tenantId,
-            userId: request.llmContext.userId || undefined,
+            tenantId: llmContext.tenantId,
+            userId: llmContext.userId || undefined,
             taskCode: 'FUNDING_CHAT',
             stageCode: 'FUNDING_DOCUMENT_RETRIEVAL',
             operation: 'funding_document_query_embedding',
@@ -129,6 +134,21 @@ export class FundingDocumentRetrievalService {
     if (response.error || response.embedding.length === 0) {
       throw new Error(response.error || 'Could not generate document retrieval query embedding');
     }
+    return response.embedding;
+  }
+
+  async searchChunks(request: FundingDocumentSearchRequest): Promise<FundingDocumentSearchResult[]> {
+    const query = String(request.query || '').trim();
+    if (!query) {
+      return [];
+    }
+
+    const topK = Math.max(1, Math.min(Number(request.topK || 8), 25));
+    const minSimilarity = Math.max(0, Math.min(Number(request.minSimilarity ?? 0.35), 1));
+    const documentHealth = getDocumentEmbeddingHealth('RETRIEVAL_DOCUMENT');
+    const queryEmbedding = request.queryEmbedding?.length
+      ? request.queryEmbedding
+      : await this.embedQuery(query, request.llmContext);
 
     const conditions: Prisma.Sql[] = [
       Prisma.sql`d.is_active = true`,
@@ -171,7 +191,7 @@ export class FundingDocumentRetrievalService {
           c.page_end AS "pageEnd",
           d.version AS "documentVersion",
           d.quality_flags AS "qualityFlags",
-          (1 - (${aliasedChunkEmbeddingColumnSql()} <=> ${vectorLiteralSql(response.embedding)}))::float AS similarity
+          (1 - (${aliasedChunkEmbeddingColumnSql()} <=> ${vectorLiteralSql(queryEmbedding)}))::float AS similarity
         FROM funding_call_document_chunks c
         JOIN funding_call_documents d ON d.id = c.document_id
         JOIN funding_calls fc ON fc.id = c.funding_call_id
