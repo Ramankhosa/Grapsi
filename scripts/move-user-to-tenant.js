@@ -8,15 +8,23 @@
  * `tenantId` is not already the target, and `provisionUser` returns EMAIL_TAKEN
  * rather than adopting the address. This script is the escape hatch.
  *
- * Two modes:
- *   move    - repoint the account at another tenant, keeping the login intact
- *   release - rename the address so it can be re-registered from scratch
+ * Three modes:
+ *   move          - repoint the account at another tenant, keeping the login intact
+ *   release       - rename the address so it can be re-registered from scratch
+ *   unlink-social - drop the account social login links
+ *
+ * A release on its own is not enough when the account has social logins.
+ * `resolveSocialIdentity` matches on (provider, provider user id) before it
+ * ever looks at the email, and the provider's user id does not change when the
+ * address does — so Google would keep signing the person into the renamed
+ * account and would never reach their new one. Unlink after releasing.
  *
  * Nothing is written without --apply.
  *
  *   node scripts/move-user-to-tenant.js --email a@b.com
  *   node scripts/move-user-to-tenant.js --email a@b.com --tenant LPU --roles MEMBER --apply
  *   node scripts/move-user-to-tenant.js --email a@b.com --release a+old@b.com --apply
+ *   node scripts/move-user-to-tenant.js --email a+old@b.com --unlink-social --apply
  */
 
 const { PrismaClient } = require('@prisma/client');
@@ -35,8 +43,8 @@ function parseArgs(argv) {
     const token = argv[i];
     if (!token.startsWith('--')) continue;
     const key = token.slice(2);
-    if (key === 'apply') {
-      args.apply = true;
+    if (key === 'apply' || key === 'unlink-social') {
+      args[key] = true;
       continue;
     }
     args[key] = argv[i + 1];
@@ -53,6 +61,9 @@ async function describe(email) {
       emailVerified: true, createdAt: true, tenantId: true,
       tenant: { select: { id: true, name: true, atiId: true } },
       researcher_profile: { select: { id: true, org_unit_id: true } },
+      oauthAccounts: {
+        select: { id: true, provider: true, providerUserId: true, email: true, lastLoginAt: true }
+      },
       _count: {
         select: {
           projects: true, draftingSessions: true, notifications: true,
@@ -76,6 +87,10 @@ async function describe(email) {
   console.log(`  created       ${user.createdAt.toISOString()}`);
   console.log(`  tenant        ${user.tenant ? `${user.tenant.name} (${user.tenant.atiId}) ${user.tenant.id}` : '(none)'}`);
   console.log(`  oauth links   ${user._count.oauthAccounts}`);
+  user.oauthAccounts.forEach(link => {
+    const seen = link.lastLoginAt ? link.lastLoginAt.toISOString() : 'never';
+    console.log(`    ${link.provider} id=${link.providerUserId} email=${link.email || '(none)'} last login ${seen}`);
+  });
   console.log('Owned rows that stay attached to this account through a move');
   console.log(`  projects ${user._count.projects}  drafting ${user._count.draftingSessions}  notifications ${user._count.notifications}  usage ${user._count.usageLogs}  audit ${user._count.auditLogs}`);
   if (user.researcher_profile) {
@@ -155,7 +170,10 @@ async function release(user, newEmail, apply) {
   console.log('  The account, its data and its password stay put under the new address.');
   console.log(`  ${user.email} becomes free to register again against any ATI token.`);
   if (user._count.oauthAccounts > 0) {
-    console.log(`  ${user._count.oauthAccounts} social login link(s) stay on the renamed account.`);
+    console.log(`  WARNING: ${user._count.oauthAccounts} social login link(s) stay on the renamed`);
+    console.log('  account and still answer to the same provider sign-in, because the');
+    console.log('  provider user id does not change with the address. Follow this with');
+    console.log(`  --email ${target} --unlink-social --apply`);
   }
 
   if (!apply) {
@@ -167,10 +185,42 @@ async function release(user, newEmail, apply) {
   console.log(`\nReleased. ${user.email} is now free; the old account lives at ${target}.`);
 }
 
+async function unlinkSocial(user, apply) {
+  if (user.oauthAccounts.length === 0) {
+    console.log(`\n${user.email} has no social login links. Nothing to do.`);
+    return;
+  }
+
+  console.log(`\nUnlink ${user.oauthAccounts.length} social login(s) from ${user.email}`);
+  user.oauthAccounts.forEach(link => {
+    console.log(`  ${link.provider} id=${link.providerUserId} email=${link.email || '(none)'}`);
+  });
+  console.log('  The account keeps its data and its password. Signing in with that');
+  console.log('  provider afterwards falls through to the email match, so it reaches');
+  console.log('  whichever account currently owns the provider address.');
+
+  if (!apply) {
+    console.log('\nDry run. Re-run with --apply to write.');
+    return;
+  }
+
+  await prisma.$transaction(async tx => {
+    await tx.userOAuthAccount.deleteMany({ where: { userId: user.id } });
+    // The legacy single-provider columns mirror the newest link, so clear them
+    // together or the row keeps advertising a link that no longer exists.
+    await tx.user.update({
+      where: { id: user.id },
+      data: { oauthProvider: null, oauthProviderId: null, oauthProfile: null }
+    });
+  });
+
+  console.log(`\nUnlinked. ${user.email} is now password-only.`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.email) {
-    console.log('Usage: node scripts/move-user-to-tenant.js --email <address> [--tenant <ATI_ID|id> [--roles A,B]] [--release <new address>] [--apply]');
+    console.log('Usage: node scripts/move-user-to-tenant.js --email <address> [--tenant <ATI_ID|id> [--roles A,B]] [--release <new address>] [--unlink-social] [--apply]');
     process.exitCode = 1;
     return;
   }
@@ -182,17 +232,21 @@ async function main() {
     return;
   }
 
-  if (args.tenant && args.release) {
-    throw new Error('Pick one of --tenant or --release, not both.');
+  const modes = ['tenant', 'release', 'unlink-social'].filter(mode => args[mode]);
+  if (modes.length > 1) {
+    throw new Error(`Pick one mode, not ${modes.length}: ${modes.join(', ')}.`);
   }
 
   if (args.tenant) {
     await move(user, args.tenant, args.roles, Boolean(args.apply));
   } else if (args.release) {
     await release(user, args.release, Boolean(args.apply));
+  } else if (args['unlink-social']) {
+    await unlinkSocial(user, Boolean(args.apply));
   } else {
     await listTenants();
-    console.log('\nPass --tenant <ATI_ID> to move this account, or --release <new address> to free the email.');
+    console.log('\nPass --tenant <ATI_ID> to move this account, --release <new address> to free');
+    console.log('the email, or --unlink-social to drop its social login links.');
   }
 }
 
