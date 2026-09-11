@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, Suspense, useCallback, useEffect, useState } from 'react'
 
 import BacklogTab from '@/components/funding-dept/BacklogTab'
 import EfficiencyTab from '@/components/funding-dept/EfficiencyTab'
@@ -136,7 +136,7 @@ function daysAgo(value: string | null) {
   return Math.floor((Date.now() - new Date(value).getTime()) / 86400000)
 }
 
-export default function AccountabilityPage() {
+function AccountabilityContent() {
   const { authFetch, isLoading: authLoading } = useAuth()
   const { me, loading: meLoading } = useFundingDeptMe()
 
@@ -609,5 +609,24 @@ export default function AccountabilityPage() {
         ) : null}
       </div>
     </main>
+  )
+}
+
+// `useSearchParams` opts the whole subtree into client-side rendering, and Next
+// refuses to prerender it without a boundary to fall back to. Without this the
+// production build fails on this route with "missing-suspense-with-csr-bailout".
+export default function AccountabilityPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="nk-ground nk-wash">
+          <div className="mx-auto max-w-7xl px-4 py-16">
+            <p className="nk-sub">Loading the accountability view…</p>
+          </div>
+        </main>
+      }
+    >
+      <AccountabilityContent />
+    </Suspense>
   )
 }

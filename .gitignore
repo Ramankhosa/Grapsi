@@ -18,6 +18,9 @@ yarn-error.log*
 **/.next/
 # Alternate dist dirs from NEXT_DIST_DIR (see .claude/launch.json)
 .next-*/
+# scripts/safe-build.sh build/rollback dirs
+.next.incoming/
+.next.prev/
 out/
 
 # Production deploy artifacts (release dirs / current symlink if deploying in-tree)

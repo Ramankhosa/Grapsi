@@ -39,6 +39,10 @@
     ".next-claude/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next.prev",
+    "tmp",
+    "backups",
+    "database-backup"
   ]
 }

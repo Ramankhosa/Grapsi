@@ -128,3 +128,38 @@ newest N.
 struggling database can't make the process look down and trigger a needless
 restart. Used by the deploy health-gate and suitable for nginx / GCP LB checks.
 ```
+
+## Build time: what costs what, and the knobs
+
+A cold `next build` here compiles 110 App Router pages, 467 route handlers and
+~1,570 source files, so it is inherently a multi-minute job. These switches drop
+the phases the production box does not need. All of them default to the fast
+setting for `scripts/deploy.sh`; a plain local `npm run build` still does
+everything.
+
+| Knob | Default | What it does |
+| --- | --- | --- |
+| `NEXT_OUTPUT_STANDALONE` | unset | `1` emits `.next/standalone` **and** re-enables `outputFileTracing`. Only the `releases/` + `ecosystem.config.js` layout runs that server. The live box runs `next start` from the checkout and never reads it, so tracing every server file through ~1.7 GB of `node_modules` and copying the result was the longest phase of the build for nothing. |
+| `NEXT_SKIP_CHECKS` | `1` in `safe-build.sh` | Skips the in-build ESLint and TypeScript passes. The type pass re-checks ~1,750 files and has to chew through the 26 MB Prisma client declaration file that 232 models and 131 enums generate. Run `npm run lint` and `npx tsc --noEmit` where the code is written instead. Set `NEXT_SKIP_CHECKS=0` to keep them in the build. |
+| `BUILD_NICE` | `5` | CPU priority of the build. Was `10`, the floor, which on a box also running the live app and the sibling patentnest app stretched the wall time badly. `0` for the fastest build, `10` if a deploy visibly slows the site. |
+| `BUILD_IONICE` | `5` | Same for disk priority (`ionice -c2 -n$BUILD_IONICE`). |
+
+Two other things that used to cost minutes and are now gone:
+
+- **The build cache is moved, not copied.** `safe-build.sh` hands `.next/cache`
+  to `.next.incoming` with a rename instead of a >1 GB `cp -a` at the lowest IO
+  priority. Next keys its webpack cache on the Next version and the config, not
+  on `distDir`, so a cache built as `.next` stays valid as `.next.incoming`. On
+  a failed build a trap moves it straight back.
+- **`experimental.optimizeCss` is off.** Critters was inlining 1.8 kB of a
+  285 kB stylesheet, i.e. nothing, at ~130 ms on each of 218 prerendered pages.
+
+**Editing `next.config.js` invalidates the entire webpack cache.** Next registers
+the config file as a webpack build dependency, so the first build after any
+config change is a cold one. Expect the usual slow build once, then fast ones.
+
+To see where the time actually went, run this in the repo after a build:
+
+```bash
+node -e 'const s={};require("fs").readFileSync(".next/trace","utf8").trim().split("\n").forEach(l=>{try{JSON.parse(l).forEach(x=>{if(!x.parentId)s[x.name]=(s[x.name]||0)+x.duration})}catch(e){}});Object.entries(s).sort((a,b)=>b[1]-a[1]).slice(0,20).forEach(([n,d])=>console.log((d/1e6).toFixed(1).padStart(8)+"s  "+n))'
+```

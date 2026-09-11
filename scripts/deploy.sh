@@ -64,11 +64,20 @@ SKIP_PRISMA="${SKIP_PRISMA:-0}"
 LIVE="$REPO_DIR/.next"
 PREV="$REPO_DIR/.next.prev"
 
-# Keep the build polite: on a shared box a full `next build` can otherwise
-# starve the live server (and the sibling patentnest app) of CPU and disk I/O.
+# Keep the build polite, but not invisible. On a shared box a full `next build`
+# can starve the live server (and the sibling patentnest app) of CPU and disk,
+# so it runs at reduced priority. It used to run at `nice -n 10` / `ionice -n 7`,
+# the floor of both scales, which on a busy box stretched a ~6 minute build well
+# past 10: safe-build.sh already writes to `.next.incoming` and never touches the
+# live `.next`, so the build cannot disturb the running app by finishing sooner.
+# Raise BUILD_NICE/BUILD_IONICE back towards 10 if a deploy ever visibly slows
+# the site, or set BUILD_NICE=0 for the fastest possible build.
+BUILD_NICE="${BUILD_NICE:-5}"
+BUILD_IONICE="${BUILD_IONICE:-5}"
+
 NICE=(); IONICE=()
-command -v nice   >/dev/null 2>&1 && NICE=(nice -n 10)
-command -v ionice >/dev/null 2>&1 && IONICE=(ionice -c2 -n7)
+if command -v nice >/dev/null 2>&1; then NICE=(nice -n "$BUILD_NICE"); fi
+if command -v ionice >/dev/null 2>&1; then IONICE=(ionice -c2 -n "$BUILD_IONICE"); fi
 
 cd "$REPO_DIR"
 

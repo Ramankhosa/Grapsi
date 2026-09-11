@@ -77,15 +77,56 @@ fi
 # ----- 1. clean any leftover incoming dir from a previous aborted run --------
 rm -rf "$INCOMING"
 
-# ----- 2. warm the build cache so the incremental build stays fast -----------
+# ----- 2. hand the incremental build cache over to the incoming build --------
+# The webpack cache is the difference between a ~2 minute rebuild and a ~10
+# minute one, so the incoming build must inherit it. This used to `cp -a` the
+# whole directory, which on this repo is well over a GB of byte copying at the
+# lowest IO priority, all of it before webpack even starts. A rename is
+# instantaneous because both paths are on the same filesystem.
+#
+# Nothing the live server needs at request time lives in `cache/`: it is the
+# webpack cache plus the on-demand image and fetch caches, all of which Next
+# rebuilds by itself. If the build fails we move it straight back, so the only
+# way to lose it is a hard kill mid-build, which costs one cold rebuild.
+#
+# Next keys its webpack cache on the Next version and the config, not on
+# distDir, so a cache built as `.next` is still valid as `.next.incoming`.
+CACHE_MOVED=0
+restore_cache() {
+  if [ "$CACHE_MOVED" = "1" ] && [ -d "$INCOMING/cache" ] && [ ! -d "$LIVE/cache" ]; then
+    mkdir -p "$LIVE"
+    mv "$INCOMING/cache" "$LIVE/cache" 2>/dev/null || true
+    log "build did not complete; build cache returned to $LIVE/cache"
+  fi
+}
+trap restore_cache EXIT INT TERM
+
 if [ -d "$LIVE/cache" ]; then
   mkdir -p "$INCOMING"
-  cp -a "$LIVE/cache" "$INCOMING/cache" 2>/dev/null || true
+  if mv "$LIVE/cache" "$INCOMING/cache" 2>/dev/null; then
+    CACHE_MOVED=1
+    log "moved the build cache into $INCOMING (incremental build)"
+  else
+    warn "could not move $LIVE/cache; falling back to a copy"
+    cp -a "$LIVE/cache" "$INCOMING/cache" 2>/dev/null || true
+  fi
 fi
 
 # ----- 3. build into the incoming dir (live .next stays up the whole time) ---
-log "building into $INCOMING — the live $LIVE keeps serving…"
+# NEXT_SKIP_CHECKS drops the in-build ESLint and TypeScript passes. They re-check
+# ~1,750 files on a box whose only job is to produce a bundle; run them where the
+# code is written instead:  npm run lint  &&  npx tsc --noEmit
+# Set NEXT_SKIP_CHECKS=0 before this script to keep them.
+export NEXT_SKIP_CHECKS="${NEXT_SKIP_CHECKS:-1}"
+if [ "$NEXT_SKIP_CHECKS" = "1" ]; then
+  warn "skipping in-build lint + typecheck (NEXT_SKIP_CHECKS=1)."
+  warn "run them where the code is written:  npm run lint  &&  npx tsc --noEmit"
+fi
+
+log "building into $INCOMING - the live $LIVE keeps serving..."
+BUILD_STARTED_AT=$(date +%s)
 NEXT_TELEMETRY_DISABLED=1 NEXT_DIST_DIR="$INCOMING" npm run build:cached
+log "build finished in $(( $(date +%s) - BUILD_STARTED_AT ))s"
 
 # ----- 4. validate before swapping ------------------------------------------
 [ -f "$INCOMING/BUILD_ID" ] \
@@ -105,6 +146,7 @@ if [ -f "$RSF" ]; then
 fi
 
 # ----- 6. near-atomic swap, keeping the previous build for rollback ----------
+CACHE_MOVED=0  # the cache now belongs to $INCOMING, which becomes the live build
 log "swapping in the new build (previous kept as $PREV)…"
 rm -rf "$PREV"
 [ -e "$LIVE" ] && mv "$LIVE" "$PREV"
