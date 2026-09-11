@@ -30,6 +30,7 @@ type PlatformUser = {
   is_platform_staff: boolean;
   is_pending_activation: boolean;
   has_password: boolean;
+  oauth_provider: string | null;
   must_change_password: boolean;
   password_changed_at: string | null;
   created_at: string;
@@ -86,6 +87,9 @@ type TemporaryPasswordDetails = {
   password: string;
   mustChange: boolean;
   sessionsRevoked: boolean;
+  /** The account had no password before this, so it just gained a way in. */
+  addedPasswordLogin: boolean;
+  oauthProvider: string | null;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -142,6 +146,11 @@ function roleLabel(role: string) {
 function displayName(user: PlatformUser) {
   const explicit = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
   return explicit || user.name || user.email;
+}
+
+/** GOOGLE -> Google. The enum is shouted; the sentence around it is not. */
+function providerLabel(provider: string) {
+  return provider.charAt(0) + provider.slice(1).toLowerCase();
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -492,6 +501,8 @@ export default function SuperAdminUsersPage() {
           password: payload.temporary_password,
           mustChange: Boolean(payload.must_change_password),
           sessionsRevoked: Boolean(payload.sessions_revoked),
+          addedPasswordLogin: Boolean(payload.added_password_login),
+          oauthProvider: payload.oauth_provider || null,
         });
         setTempCopied(false);
       }
@@ -660,6 +671,11 @@ export default function SuperAdminUsersPage() {
                     ? ' They will be asked to choose their own password as soon as they sign in with it.'
                     : ' They can keep using it until they change it themselves.'}
                   {tempPassword.sessionsRevoked ? ' Their other sessions have been signed out.' : ''}
+                  {tempPassword.addedPasswordLogin
+                    ? tempPassword.oauthProvider
+                      ? ` This account had no password before, so it now signs in either way — ${providerLabel(tempPassword.oauthProvider)} still works.`
+                      : ' This account had no password before, so this is now its way in.'
+                    : ''}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -895,15 +911,17 @@ export default function SuperAdminUsersPage() {
                                   Resend link
                                 </button>
                               ) : null}
-                              {row.has_password ? (
-                                <button
-                                  type="button"
-                                  onClick={() => openReset(row)}
-                                  className="text-xs font-semibold text-slate-600 hover:text-slate-900"
-                                >
-                                  Reset password
-                                </button>
-                              ) : null}
+                              {/* Shown on every account. Hiding it for people
+                                  with no password of their own made the whole
+                                  feature invisible in the case it exists for —
+                                  the modal explains what applies instead. */}
+                              <button
+                                type="button"
+                                onClick={() => openReset(row)}
+                                className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+                              >
+                                Reset password
+                              </button>
                               {row.must_change_password ? (
                                 <button
                                   type="button"
@@ -1178,6 +1196,15 @@ export default function SuperAdminUsersPage() {
               roster, or mail that simply is not arriving. Everything here is written to the audit log.
             </p>
 
+            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <span className="font-semibold text-slate-700">How they sign in today: </span>
+              {resetting.has_password
+                ? `Password${resetting.oauth_provider ? `, and ${providerLabel(resetting.oauth_provider)}` : ''}.`
+                : resetting.oauth_provider
+                  ? `${providerLabel(resetting.oauth_provider)} only — there is no password on this account yet.`
+                  : 'No password set yet — the account was created but never activated.'}
+            </div>
+
             <div className="mt-5 space-y-2">
               <label
                 className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
@@ -1193,10 +1220,13 @@ export default function SuperAdminUsersPage() {
                   className="mt-1 h-4 w-4"
                 />
                 <span className="text-sm text-slate-800">
-                  Send a reset link
+                  {resetting.has_password ? 'Send a reset link' : 'Send a set-password link'}
                   <span className="block text-xs text-slate-500">
-                    Safest option. Their current password keeps working until they use it, and the link is shown to
-                    you as well so you can hand it over. Valid 24 hours.
+                    Safest option.{' '}
+                    {resetting.has_password
+                      ? 'Their current password keeps working until they use it, and the link is shown to you as well so you can hand it over.'
+                      : 'The link lets them choose a password themselves, and it is shown to you as well so you can hand it over.'}{' '}
+                    Valid 24 hours.
                   </span>
                 </span>
               </label>
@@ -1218,6 +1248,11 @@ export default function SuperAdminUsersPage() {
                   <span className="block text-xs text-slate-500">
                     For when they cannot receive the link at all. Shown to you once so you can read it out, and
                     every open session on the account is signed out immediately.
+                    {!resetting.has_password
+                      ? resetting.oauth_provider
+                        ? ` This account has no password, so it gains one — ${providerLabel(resetting.oauth_provider)} sign-in keeps working alongside it.`
+                        : ' This account has no password, so this is what gets them in without waiting on email.'
+                      : ''}
                   </span>
                 </span>
               </label>

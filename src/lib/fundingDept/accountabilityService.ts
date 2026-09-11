@@ -20,13 +20,13 @@
  */
 
 import { getSummary } from '@/lib/assignments/dashboardService'
+import { notTakenUpSql } from '@/lib/assignments/shared'
 import { loadUnitAreaProfile, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { getReportingPeriod } from '@/lib/tenant/reportingPeriod'
 
 import {
-  UNANSWERED_DAYS,
   addToBuckets,
   deriveAssignmentProgress,
   emptyBuckets,
@@ -40,9 +40,11 @@ import {
   type AccountabilityFlag,
   type FlagInput,
 } from './accountabilityFlags'
+import { textArray } from './callSql'
 import { listMembers } from './membershipService'
-import { queueStateFor, type QueueState } from './queueState'
+import { isCallUntouched, queueStateFor, type QueueState } from './queueState'
 import { getSchoolFunnel, type SchoolFunnelRow } from './schoolFunnelService'
+import { flagThresholdsFrom, getDeptSettings, type DeptSettings } from './settings'
 import { isMemberAway, serializeMember } from './shared'
 
 /* -------------------------------------------------------------------------- */
@@ -108,8 +110,15 @@ export interface MatrixSchoolRow {
   followUpsInWindow: number
   callsCirculatedInWindow: number
   triageDecisionsInWindow: number
+  /** Of those triage decisions, how many declared the call none of the school's business. */
+  dismissedInWindow: number
   /** Applications that went in from this school inside the window. */
   submittedInWindow: number
+  /**
+   * Faculty here who have never been sent a single call and could have been.
+   * Never windowed, and excludes anyone unmatchable — see loadActivity.
+   */
+  facultyNeverEngaged: number
   dueNudges: number
   lastActionAt: Date | null
   lastActorName: string | null
@@ -138,6 +147,7 @@ export interface MatrixMemberRow {
     followUpsInWindow: number
     callsCirculatedInWindow: number
     submittedInWindow: number
+    facultyNeverEngaged: number
     dueNudges: number
     awardAmount: number
   }
@@ -198,12 +208,15 @@ interface AllocationRow {
 }
 
 // Interval literals cannot be parameterised, and a bound integer arrives as
-// bigint which make_interval() rejects. A constant from our own source, so raw.
-const UNANSWERED_INTERVAL = Prisma.raw(`INTERVAL '${UNANSWERED_DAYS} days'`)
-
-function textArray(values: string[]): Prisma.Sql {
-  return Prisma.sql`ARRAY[${Prisma.join(values.map((value) => Prisma.sql`${value}`))}]::text[]`
+// bigint which make_interval() rejects. The value now comes from tenant
+// settings, so it is forced to a bounded integer before interpolation rather
+// than trusted to have been validated upstream.
+function daysInterval(days: number) {
+  const safe = Math.min(Math.max(Math.round(Number(days) || 0), 0), 3650)
+  return Prisma.raw(`INTERVAL '${safe} days'`)
 }
+
+
 
 /**
  * Every allocation landing in the given schools, with the two facts the
@@ -274,16 +287,20 @@ async function loadActivity(
   followUps: Map<string, number>
   circulated: Map<string, number>
   triage: Map<string, number>
+  dismissed: Map<string, number>
   submitted: Map<string, number>
   dueNudges: Map<string, number>
+  neverEngaged: Map<string, number>
   lastAction: Map<string, { at: Date; name: string | null }>
 }> {
   const empty = {
     followUps: new Map<string, number>(),
     circulated: new Map<string, number>(),
     triage: new Map<string, number>(),
+    dismissed: new Map<string, number>(),
     submitted: new Map<string, number>(),
     dueNudges: new Map<string, number>(),
+    neverEngaged: new Map<string, number>(),
     lastAction: new Map<string, { at: Date; name: string | null }>(),
   }
   if (schoolIds.length === 0) return empty
@@ -297,7 +314,8 @@ async function loadActivity(
     LIMIT 1
   )`
 
-  const [followUps, circulated, triage, submitted, dueNudges, lastAction] = await Promise.all([
+  const [followUps, circulated, triage, dismissed, submitted, dueNudges, neverEngaged, lastAction] =
+    await Promise.all([
     prisma.$queryRaw<Array<{ key: string; count: number }>>(Prisma.sql`
       SELECT ${schoolOf(Prisma.sql`f.org_unit_id`)} || ':' || f.created_by_user_id AS key,
              COUNT(*)::int AS count
@@ -321,6 +339,21 @@ async function loadActivity(
         FROM call_school_triage t
        WHERE t.tenant_id = ${tenantId}
          AND t.decided_by_user_id IS NOT NULL
+         AND t.decided_at BETWEEN ${window.start} AND ${window.end}
+         AND t.org_unit_id = ANY(${schools})
+       GROUP BY 1
+    `),
+    // Of those decisions, the ones that cleared a call by declaring it none of
+    // the school's business. Counted separately because the ratio is the only
+    // thing that distinguishes triage from queue-emptying, and the officer who
+    // does the second looks identical to the one who does the first on every
+    // other number in this service.
+    prisma.$queryRaw<Array<{ key: string; count: number }>>(Prisma.sql`
+      SELECT t.org_unit_id || ':' || t.decided_by_user_id AS key, COUNT(*)::int AS count
+        FROM call_school_triage t
+       WHERE t.tenant_id = ${tenantId}
+         AND t.decided_by_user_id IS NOT NULL
+         AND t.status = 'NOT_RELEVANT'
          AND t.decided_at BETWEEN ${window.start} AND ${window.end}
          AND t.org_unit_id = ANY(${schools})
        GROUP BY 1
@@ -352,6 +385,42 @@ async function loadActivity(
          AND ${schoolOf(Prisma.sql`f.org_unit_id`)} IS NOT NULL
        GROUP BY 1
     `),
+    // Faculty in each school who have never been sent a single call, and who
+    // could have been.
+    //
+    // Keyed by SCHOOL, like submissions and for the same reason: a person nobody
+    // ever approached is the school's gap, whoever would have done the approaching.
+    // Not windowed, because "never" is not a date range — and like every other
+    // pendency figure here, a snapshot rather than an artefact of the filter.
+    //
+    // The two reachability tests are the fairness rule. Somebody who never set a
+    // password cannot accept anything, and somebody with no research areas and no
+    // alert subscriptions cannot be matched to a call at all. Both are gaps for
+    // an administrator to close, and counting them here would blame an officer
+    // for data they do not own.
+    prisma.$queryRaw<Array<{ key: string; count: number }>>(Prisma.sql`
+      SELECT key, COUNT(*)::int AS count FROM (
+        SELECT ${schoolOf(Prisma.sql`rp.org_unit_id`)} AS key
+          FROM researcher_profiles rp
+          JOIN users usr ON usr.id = rp.user_id
+         WHERE usr."tenantId" = ${tenantId}
+           AND NOT (usr.roles && ARRAY['SUPER_ADMIN','SUPER_ADMIN_VIEWER']::"UserRole"[])
+           AND usr."passwordHash" IS NOT NULL
+           AND (
+             COALESCE(array_length(rp.research_areas, 1), 0) > 0
+             OR EXISTS (
+               SELECT 1 FROM researcher_saved_research_areas sa
+                WHERE sa.user_id = rp.user_id AND sa.use_for_alerts = true
+             )
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM call_assignments ca
+              WHERE ca.assignee_user_id = rp.user_id AND ca.tenant_id = ${tenantId}
+           )
+      ) rows
+       WHERE key IS NOT NULL
+       GROUP BY key
+    `),
     // The last thing anyone did in each school, and who did it. Not windowed —
     // "last touched in March" is precisely what a narrow window would hide.
     prisma.$queryRaw<Array<{ school_id: string; at: Date; name: string | null }>>(Prisma.sql`
@@ -376,8 +445,10 @@ async function loadActivity(
     followUps: toMap(followUps),
     circulated: toMap(circulated),
     triage: toMap(triage),
+    dismissed: toMap(dismissed),
     submitted: toMap(submitted),
     dueNudges: toMap(dueNudges),
+    neverEngaged: toMap(neverEngaged),
     lastAction: new Map(
       lastAction.map((row) => [row.school_id, { at: row.at, name: row.name }])
     ),
@@ -402,9 +473,12 @@ export async function getMemberSchoolMatrix(
     /** Clamp to these schools (a plain member sees only their own reach). */
     schoolIds?: string[]
     now?: Date
+    settings?: DeptSettings
   }
 ): Promise<MemberSchoolMatrix> {
   const now = options.now ?? new Date()
+  const settings = options.settings ?? (await getDeptSettings(tenantId))
+  const thresholds = flagThresholdsFrom(settings)
   const allMembers = await listMembers(tenantId)
   const members = options.memberIds
     ? allMembers.filter((member) => options.memberIds!.includes(member.id))
@@ -424,9 +498,9 @@ export async function getMemberSchoolMatrix(
   const showUncovered = !options.memberIds && !options.schoolIds
   const funnelScope = showUncovered ? undefined : Array.from(coveredSchoolIds)
   const funnel = showUncovered
-    ? await getSchoolFunnel(tenantId)
+    ? await getSchoolFunnel(tenantId, undefined, settings)
     : funnelScope && funnelScope.length > 0
-      ? await getSchoolFunnel(tenantId, funnelScope)
+      ? await getSchoolFunnel(tenantId, funnelScope, settings)
       : []
   const funnelBySchool = new Map(funnel.map((row) => [row.schoolId, row]))
 
@@ -483,8 +557,13 @@ export async function getMemberSchoolMatrix(
     const followUpsInWindow = activity.followUps.get(key) ?? 0
     const callsCirculatedInWindow = activity.circulated.get(key) ?? 0
     const triageDecisionsInWindow = activity.triage.get(key) ?? 0
+    const dismissedInWindow = activity.dismissed.get(key) ?? 0
     const submittedInWindow = activity.submitted.get(schoolId) ?? 0
     const dueNudges = activity.dueNudges.get(key) ?? 0
+    // Never-engaged faculty belong to the school, so a deputy covering during
+    // leave sees the same number the officer on the rota does. It is the school
+    // gap either of them has to close.
+    const facultyNeverEngaged = activity.neverEngaged.get(schoolId) ?? 0
     const last = activity.lastAction.get(schoolId) ?? null
 
     const flagInput: FlagInput = {
@@ -494,10 +573,14 @@ export async function getMemberSchoolMatrix(
       dueNudges,
       live,
       actionsInWindow: followUpsInWindow + callsCirculatedInWindow + triageDecisionsInWindow,
+      decidedInWindow: triageDecisionsInWindow,
+      dismissedInWindow,
+      submittedInWindow,
+      reachableFacultyUnengaged: facultyNeverEngaged,
       isUnmapped: funnelRow?.isUnmapped ?? false,
       isAway,
     }
-    const { flags, score } = computeFlags(flagInput)
+    const { flags, score } = computeFlags(flagInput, thresholds)
 
     return {
       schoolId,
@@ -516,7 +599,9 @@ export async function getMemberSchoolMatrix(
       followUpsInWindow,
       callsCirculatedInWindow,
       triageDecisionsInWindow,
+      dismissedInWindow,
       submittedInWindow,
+      facultyNeverEngaged,
       dueNudges,
       lastActionAt: last?.at ?? null,
       lastActorName: last?.name ?? null,
@@ -554,6 +639,7 @@ export async function getMemberSchoolMatrix(
       followUpsInWindow: 0,
       callsCirculatedInWindow: 0,
       submittedInWindow: 0,
+      facultyNeverEngaged: 0,
       dueNudges: 0,
       awardAmount: 0,
     }
@@ -567,6 +653,7 @@ export async function getMemberSchoolMatrix(
       totals.followUpsInWindow += school.followUpsInWindow
       totals.callsCirculatedInWindow += school.callsCirculatedInWindow
       totals.submittedInWindow += school.submittedInWindow
+      totals.facultyNeverEngaged += school.facultyNeverEngaged
       totals.dueNudges += school.dueNudges
       totals.awardAmount += school.awardAmount
       for (const key of Object.keys(totals.buckets) as Array<keyof ProgressBuckets>) {
@@ -589,9 +676,14 @@ export async function getMemberSchoolMatrix(
             school.followUpsInWindow +
             school.callsCirculatedInWindow +
             school.triageDecisionsInWindow,
+          decidedInWindow: school.triageDecisionsInWindow,
+          dismissedInWindow: school.dismissedInWindow,
+          submittedInWindow: school.submittedInWindow,
+          reachableFacultyUnengaged: school.facultyNeverEngaged,
         })),
         { isAway }
-      )
+      ),
+      thresholds
     )
 
     return {
@@ -645,13 +737,13 @@ export async function getMemberSchoolMatrix(
             actionsInWindow: 1,
             isUnmapped: row.isUnmapped,
             isUncovered: true,
-          }).flags,
+          }, thresholds).flags,
         }))
     : []
 
   return {
     window: options.window,
-    thresholds: DEFAULT_THRESHOLDS,
+    thresholds,
     members: memberRows,
     uncovered,
     totals: {
@@ -735,9 +827,10 @@ export interface SchoolCallLedger {
 export async function getSchoolCallLedger(
   tenantId: string,
   schoolId: string,
-  options: { window: ActivityWindow; now?: Date }
+  options: { window: ActivityWindow; now?: Date; settings?: DeptSettings }
 ): Promise<SchoolCallLedger> {
   const now = options.now ?? new Date()
+  const settings = options.settings ?? (await getDeptSettings(tenantId))
 
   const school = await prisma.tenantOrgUnit.findFirst({
     where: { id: schoolId, tenant_id: tenantId },
@@ -782,7 +875,7 @@ export async function getSchoolCallLedger(
              SELECT COUNT(*)::int FROM call_assignments ca
               WHERE ca.funding_call_id = fc.id
                 AND ca.tenant_id = ${tenantId}
-                AND ca.status NOT IN ('CANCELLED', 'DECLINED')
+                AND ${notTakenUpSql('ca')}
                 AND ca.assignee_org_unit_id = ANY(${scopeArray})
            )                                                  AS live_assignments,
            act.happened_at                                    AS last_action_at,
@@ -960,11 +1053,17 @@ export async function getSchoolCallLedger(
     const daysSincePublished = row.published_at
       ? Math.max(0, Math.floor((now.getTime() - new Date(row.published_at).getTime()) / 86400000))
       : null
-    const isUntouched =
-      queueState === 'pending' &&
-      !row.last_action_at &&
-      !row.triage_status &&
-      (daysSincePublished ?? 0) >= 7
+    // One shared definition with the funnel and the backlog report. Note the
+    // test is a triage DECISION, not a triage row: the pendency sweep creates
+    // rows to hold its escalation stamp, and row existence would have let the
+    // sweep quietly clear the very backlog it reports.
+    const isUntouched = isCallUntouched({
+      queueState,
+      triageDecidedAt: row.triage_decided_at,
+      lastActionAt: row.last_action_at,
+      daysSinceEntered: daysSincePublished,
+      untouchedDays: settings.untouchedDays,
+    })
     if (isUntouched) counts.untouched += 1
 
     return {
@@ -1047,9 +1146,13 @@ export interface FacultyResponsivenessRow {
 export async function getFacultyResponsiveness(
   tenantId: string,
   unitIds: string[],
-  window: ActivityWindow
+  window: ActivityWindow,
+  settings?: DeptSettings
 ): Promise<FacultyResponsivenessRow[]> {
   if (unitIds.length === 0) return []
+  const unanswered = daysInterval(
+    (settings ?? (await getDeptSettings(tenantId))).unansweredDays
+  )
   const units = textArray(unitIds)
 
   const rows = await prisma.$queryRaw<
@@ -1077,7 +1180,7 @@ export async function getFacultyResponsiveness(
            COUNT(*) FILTER (
              WHERE ca.status = 'ASSIGNED'
                AND ca.responded_at IS NULL
-               AND ca.created_at < now() - ${UNANSWERED_INTERVAL}
+               AND ca.created_at < now() - ${unanswered}
            )::int                                                AS awaiting_reply,
            COUNT(*) FILTER (
              WHERE ca.status IN ('ACCEPTED','IN_PROGRESS')

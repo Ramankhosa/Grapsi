@@ -1,3 +1,4 @@
+import { notTakenUpSql } from '@/lib/assignments/shared'
 import { loadActiveAreas } from '@/lib/funding/disciplineClassifier'
 import { isGroupArea, matchAreas, type MatchableArea } from '@/lib/funding/disciplineMatcher'
 import prisma from '@/lib/prisma'
@@ -221,7 +222,7 @@ async function rungAssignments(ctx: Ctx, scopeIds: string[]): Promise<RungResult
        AND ca.assignee_org_unit_id = ANY(ARRAY[${Prisma.join(
          scopeIds.map((id) => Prisma.sql`${id}`)
        )}]::text[])
-       AND ca.status NOT IN ('CANCELLED', 'DECLINED')
+       AND ${notTakenUpSql('ca')}
      LIMIT 200
   `)
   const tags = rows.flatMap((row) => row.disciplines || [])

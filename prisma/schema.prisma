@@ -596,12 +596,20 @@ model Tenant {
   assignmentFollowUps          AssignmentFollowUp[]
   orgUnitResearchAreas         TenantOrgUnitResearchArea[]
   callSchoolTriage             CallSchoolTriage[]
+  fundingDeptSnapshots         FundingDeptWeeklySnapshot[]
   monitoredSources             MonitoredSource[]
 
   /// Per-tenant proposal-desk policy: how many days before the agency deadline
   /// the internal cut-off falls, whether faculty may record their own agency
   /// submission, and the budget heads this institution uses.
   proposal_settings Json?
+
+  /// Per-tenant funding-department policy: how long a relevant call may sit
+  /// unallocated before it is a pendency, how long live work may go quiet, and
+  /// whether the pendency ladder escalates past the officer. Defaults match the
+  /// constants these thresholds replaced, so a tenant that never opens the
+  /// screen sees no change.
+  dept_settings Json?
 
   // Grant proposals: the tenant's own applications and everything about them.
   grantProposals           GrantProposal[]
@@ -973,6 +981,12 @@ model AuditLog {
   actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  // Added when the log first gained a reader. Each leads with the column a
+  // filter narrows on and ends with createdAt, which is both the sort order and
+  // the pagination cursor, so a filtered page is one index scan.
+  @@index([tenantId, createdAt], map: "idx_audit_logs_tenant_created")
+  @@index([actorUserId, createdAt], map: "idx_audit_logs_actor_created")
+  @@index([action, createdAt], map: "idx_audit_logs_action_created")
   @@map("audit_logs")
 }
 
@@ -2997,6 +3011,7 @@ model TenantOrgUnit {
   funding_dept_coverage FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolUnit")
   research_areas        TenantOrgUnitResearchArea[]
   call_triage           CallSchoolTriage[]
+  dept_snapshots        FundingDeptWeeklySnapshot[]   @relation("FundingDeptSnapshotUnit")
   follow_ups            AssignmentFollowUp[]          @relation("FollowUpOrgUnit")
   proposals             GrantProposal[]               @relation("GrantProposalSchool")
   proposals_as_pi_unit  GrantProposal[]               @relation("GrantProposalPiUnit")
@@ -3087,6 +3102,11 @@ enum CallAssignmentStatus {
   IN_PROGRESS
   COMPLETED
   CANCELLED
+  /// The internal deadline and the call both went by and the faculty member
+  /// never applied. Distinct from CANCELLED, which is the department’s own
+  /// withdrawal: conflating the two made “we pulled it” and “they let it die”
+  /// the same number, and left dead work sitting in OVERDUE forever.
+  LAPSED
   DECLINED
 }
 
@@ -3142,6 +3162,11 @@ model CallAssignment {
   submission_notes     String?
   submitted_at         DateTime?
   completed_at         DateTime?
+
+  /// When an officer closed this out as never applied for. Dated separately
+  /// from updated_at, which moves on any edit, so reporting can say when the
+  /// opportunity was actually lost. submitted_at and completed_at stay null.
+  lapsed_at DateTime?
 
   // Final funding decision, recorded by an admin after submission. Drives the
   // success-rate and funding-won reporting.
@@ -3331,6 +3356,22 @@ model CallSchoolTriage {
   status String  @default("NEW")
   note   String?
 
+  /// Which rungs of the pendency ladder have already fired for this (call,
+  /// school): OFFICER, HEAD, ADMIN. Appended exactly once each by a guarded
+  /// UPDATE, the same claim-then-act lock CallAssignment.auto_nudge_stages
+  /// uses, so an hourly sweep cannot nag twice.
+  ///
+  /// This is why `decided_at`, not row existence, decides whether a human has
+  /// looked at a call: the sweep creates a row to hold its stamp, and a stamp
+  /// is not a decision.
+  escalation_stages String[] @default([])
+
+  /// When a rung last fired. The ladder walks its rungs in order and waits the
+  /// configured gap between them, which it cannot do from the array alone —
+  /// without this, an existing backlog escalated straight to the administrators
+  /// on the first sweep, claiming two earlier notices that were never sent.
+  last_escalated_at DateTime?
+
   decided_by_user_id String?
   decided_at         DateTime?
   created_at         DateTime  @default(now())
@@ -3471,6 +3512,7 @@ model FundingDeptMember {
   user               User                          @relation("FundingDeptMemberUser", fields: [user_id], references: [id], onDelete: Cascade)
   added_by           User?                         @relation("FundingDeptMemberAddedBy", fields: [added_by_user_id], references: [id], onDelete: SetNull)
   school_assignments FundingDeptSchoolAssignment[]
+  weekly_snapshots   FundingDeptWeeklySnapshot[]
 
   @@unique([tenant_id, user_id], map: "funding_dept_members_tenant_user_key")
   @@index([tenant_id, is_active], map: "idx_funding_dept_members_tenant_active")
@@ -3503,6 +3545,57 @@ model FundingDeptSchoolAssignment {
   @@unique([tenant_id, org_unit_id, member_id], map: "funding_dept_school_member_key")
   @@index([member_id], map: "idx_funding_dept_school_member")
   @@map("funding_dept_school_assignments")
+}
+
+/// One week's numbers for one school, so "is this getting better" has an answer.
+///
+/// Every other figure in this module is a live snapshot, which is right for
+/// "what is pending now" and useless for "is the backlog growing". An officer
+/// who cleared forty calls and one who never had any read identically.
+///
+/// Keyed on the SCHOOL, not the member: coverage is reassigned, and a history
+/// keyed on a rota that moves cannot be read backwards. `member_id` is a
+/// snapshot of who covered it that week — the same reason
+/// CallAssignment.assignee_org_unit_id is a snapshot rather than a join — and is
+/// null for a school nobody covered, which is precisely the history a head most
+/// needs.
+model FundingDeptWeeklySnapshot {
+  id        String @id @default(cuid())
+  tenant_id String
+
+  /// Monday (UTC) of the week these numbers describe. With the unique key below
+  /// this is what makes a retried or double-scheduled run a no-op.
+  week_start  DateTime @db.Date
+  member_id   String?
+  org_unit_id String
+
+  // Point-in-time funnel, as at the moment the snapshot ran.
+  relevant_open     Int @default(0)
+  pending           Int @default(0)
+  untouched_pending Int @default(0)
+  live              Int @default(0)
+  gone_quiet        Int @default(0)
+  overdue_unchased  Int @default(0)
+  due_nudges        Int @default(0)
+
+  // What happened during the week itself.
+  submitted_in_week Int @default(0)
+  actions_in_week   Int @default(0)
+
+  /// The weighted attention score from computeFlags, so the trend line is the
+  /// same measure the grid sorts by.
+  score Int @default(0)
+
+  created_at DateTime @default(now())
+
+  tenant   Tenant             @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  member   FundingDeptMember? @relation(fields: [member_id], references: [id], onDelete: SetNull)
+  org_unit TenantOrgUnit      @relation("FundingDeptSnapshotUnit", fields: [org_unit_id], references: [id], onDelete: Cascade)
+
+  @@unique([tenant_id, week_start, org_unit_id], map: "funding_dept_weekly_snapshots_week_unit_key")
+  @@index([tenant_id, org_unit_id, week_start], map: "idx_funding_dept_snapshots_unit_week")
+  @@index([tenant_id, member_id, week_start], map: "idx_funding_dept_snapshots_member_week")
+  @@map("funding_dept_weekly_snapshots")
 }
 
 /// A dated touchpoint on an assignment: the phone call, the corridor reminder,

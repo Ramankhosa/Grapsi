@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 
+import DeptSettingsCard from '@/components/funding-dept/DeptSettingsCard'
 import ProposalSettingsCard from '@/components/proposals/ProposalSettingsCard'
 import { useAuth, useRoleAccess } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
@@ -416,6 +417,16 @@ export default function TenantAdminFundingDeptPage() {
         */}
         <div className="mb-6">
           <ProposalSettingsCard />
+        </div>
+
+        {/*
+          When the office counts itself behind, and who is told. Sits below the
+          desk settings and above the reporting window: those decide which stages
+          exist, this decides when they are late, and the window only describes
+          how activity is counted.
+        */}
+        <div className="mb-6">
+          <DeptSettingsCard />
         </div>
 
         <section className="nk-panel mb-6">

@@ -3,6 +3,9 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 
+import BacklogTab from '@/components/funding-dept/BacklogTab'
+import FacultyEngagementTab from '@/components/funding-dept/FacultyEngagementTab'
+
 import SummaryCards from '@/components/funding-dept/SummaryCards'
 import { useAuth } from '@/lib/auth-context'
 
@@ -72,6 +75,17 @@ const WINDOWS = [
   { key: '30d', label: 'Last 30 days' },
 ]
 
+/**
+ * Three views of one school. Officer efficiency is deliberately absent: it
+ * measures the funding department's own people, and stays with the department.
+ */
+const TABS = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'backlog', label: 'Unallocated calls' },
+  { key: 'faculty', label: 'Faculty engagement' },
+] as const
+type TabKey = (typeof TABS)[number]['key']
+
 function shortDate(value: string | null) {
   if (!value) return 'never'
   return new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' })
@@ -82,6 +96,7 @@ export default function SchoolHeadPage() {
 
   const [data, setData] = useState<OverviewData | null>(null)
   const [windowKey, setWindowKey] = useState('reporting')
+  const [tab, setTab] = useState<TabKey>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -164,7 +179,34 @@ export default function SchoolHeadPage() {
           </div>
         </header>
 
-        {data.sections.map((section) => {
+        <nav className="mb-6 flex flex-wrap gap-1.5 border-b border-nickel-200" aria-label="Views">
+          {TABS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setTab(option.key)}
+              aria-current={tab === option.key ? 'page' : undefined}
+              className={`-mb-px border-b-2 px-3 py-2 text-[13px] font-medium ${
+                tab === option.key
+                  ? 'border-cobalt-600 text-cobalt-700'
+                  : 'border-transparent text-nickel-500 hover:text-nickel-900'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </nav>
+
+        {/*
+          The same two components the funding department uses, unchanged. They
+          send no school filter, and the server clamps the answer to the units
+          this person actually heads — so there is one clamp to get right rather
+          than one per caller.
+        */}
+        {tab === 'backlog' ? <BacklogTab windowKey={windowKey} /> : null}
+        {tab === 'faculty' ? <FacultyEngagementTab windowKey={windowKey} /> : null}
+
+        {tab !== 'overview' ? null : data.sections.map((section) => {
           const stats = [
             {
               label: 'Open to us',

@@ -24,6 +24,10 @@ export const FLAG_CODES = [
   'SILENT_LIVE',
   'DUE_NUDGES',
   'NO_ACTIVITY',
+  'SLOW_FIRST_TOUCH',
+  'HIGH_DISMISSAL',
+  'NO_SUBMISSIONS',
+  'FACULTY_UNENGAGED',
   'UNCOVERED',
   'UNMAPPED_SCHOOL',
   'AWAY',
@@ -42,11 +46,17 @@ export interface AccountabilityFlag {
 export interface FlagThresholds {
   untouchedDays: number
   silentDays: number
+  /** Days from a call arriving that a first look is expected inside. */
+  firstTouchTargetDays?: number
+  /** Share of decided calls dismissed as not relevant, above which it is flagged. */
+  dismissalRateWarnPct?: number
 }
 
 export const DEFAULT_THRESHOLDS: FlagThresholds = {
   untouchedDays: UNTOUCHED_DAYS,
   silentDays: SILENT_DAYS,
+  firstTouchTargetDays: 3,
+  dismissalRateWarnPct: 40,
 }
 
 /** The facts a flag set is computed from. One member, or one school row. */
@@ -63,6 +73,28 @@ export interface FlagInput {
   live: number
   /** Anything this member did in the window: notes, assignments, triage. */
   actionsInWindow: number
+
+  /* ---- Optional, supplied by the efficiency and engagement reports --------
+   * All default to zero or null so every existing caller and sumFlagInputs keep
+   * working unchanged, and a flag whose fact nobody supplied stays silent rather
+   * than firing on a default.
+   */
+  /** Median days from a call arriving to anyone looking at it. */
+  medianFirstTouchDays?: number | null
+  /** Calls this member decided on in the window. The denominator below. */
+  decidedInWindow?: number
+  /** Of those, how many were dismissed as not relevant. */
+  dismissedInWindow?: number
+  /** Applications that went in from these schools during the window. */
+  submittedInWindow?: number
+  /**
+   * Faculty in these schools who could have been sent something and were not.
+   * Excludes anyone unmatchable — see the UNREACHABLE rule in the engagement
+   * report — because an unmatchable person is a data gap for the administrator
+   * to close, not neglect by this officer.
+   */
+  reachableFacultyUnengaged?: number
+
   /** No discipline mapping, so no calls route here. */
   isUnmapped?: boolean
   /** No member covers this school at all. */
@@ -165,6 +197,74 @@ export function computeFlags(
     })
   }
 
+  // Slow to look at a call that arrives. Separate from UNTOUCHED_PENDING, which
+  // counts what is still sitting there: someone can have cleared the backlog and
+  // still take three weeks to react to each new call.
+  const firstTouchTarget =
+    thresholds.firstTouchTargetDays ?? DEFAULT_THRESHOLDS.firstTouchTargetDays!
+  if (
+    input.medianFirstTouchDays !== null &&
+    input.medianFirstTouchDays !== undefined &&
+    input.medianFirstTouchDays > firstTouchTarget
+  ) {
+    const days = Math.round(input.medianFirstTouchDays * 10) / 10
+    flags.push({
+      code: 'SLOW_FIRST_TOUCH',
+      count: Math.round(input.medianFirstTouchDays),
+      weight: 6,
+      label: `Takes ${days} days on average to look at a new call, against a target of ${firstTouchTarget}`,
+      informational: false,
+    })
+  }
+
+  // The cheapest way to empty a queue is to call everything irrelevant, and
+  // nothing else in the system would notice. Informational and weightless on
+  // purpose: a school really can receive mostly off-discipline calls, so this
+  // asks a question rather than making an accusation.
+  const decided = input.decidedInWindow ?? 0
+  const dismissed = input.dismissedInWindow ?? 0
+  const dismissalWarn = thresholds.dismissalRateWarnPct ?? DEFAULT_THRESHOLDS.dismissalRateWarnPct!
+  // A handful of decisions cannot establish a rate: three dismissals out of four
+  // is noise, not a pattern.
+  if (decided >= 10 && (dismissed / decided) * 100 > dismissalWarn) {
+    const pct = Math.round((dismissed / decided) * 100)
+    flags.push({
+      code: 'HIGH_DISMISSAL',
+      count: dismissed,
+      weight: 0,
+      label: `${pct}% of decisions were "not relevant" — ${dismissed} of ${decided}`,
+      informational: true,
+    })
+  }
+
+  // Nothing reached an agency all period. Three guards, each load-bearing:
+  // the caller must actually have supplied the figure (absent is not zero — a
+  // flag that fires on a default is a flag nobody can trust), there must have
+  // been work to convert, and it is weighted below the pendency flags because
+  // submitting is the faculty member's act, not the officer's.
+  if (input.submittedInWindow !== undefined && input.submittedInWindow === 0 && input.live >= 3) {
+    flags.push({
+      code: 'NO_SUBMISSIONS',
+      count: input.live,
+      weight: 10,
+      label: `No application went in this period, from ${input.live} live ${plural(input.live, 'allocation', 'allocations')}`,
+      informational: false,
+    })
+  }
+
+  if ((input.reachableFacultyUnengaged ?? 0) > 0) {
+    const count = input.reachableFacultyUnengaged!
+    flags.push({
+      code: 'FACULTY_UNENGAGED',
+      // Capped, so one large school cannot outweigh every real pendency in the
+      // ranking. The exact count is still on the row.
+      weight: 4 * Math.min(count, 10),
+      count,
+      label: `${count} ${plural(count, 'faculty member', 'faculty')} in these schools have been sent nothing at all`,
+      informational: false,
+    })
+  }
+
   if (input.isUnmapped) {
     flags.push({
       code: 'UNMAPPED_SCHOOL',
@@ -190,6 +290,9 @@ export function sumFlagInputs(rows: FlagInput[], overrides: Partial<FlagInput> =
     dueNudges: 0,
     live: 0,
     actionsInWindow: 0,
+    decidedInWindow: 0,
+    dismissedInWindow: 0,
+    reachableFacultyUnengaged: 0,
   }
   for (const row of rows) {
     total.untouchedPending += row.untouchedPending
@@ -198,6 +301,18 @@ export function sumFlagInputs(rows: FlagInput[], overrides: Partial<FlagInput> =
     total.dueNudges += row.dueNudges
     total.live += row.live
     total.actionsInWindow += row.actionsInWindow
+    total.decidedInWindow = (total.decidedInWindow ?? 0) + (row.decidedInWindow ?? 0)
+    total.dismissedInWindow = (total.dismissedInWindow ?? 0) + (row.dismissedInWindow ?? 0)
+    // Left undefined unless at least one school supplied it, so NO_SUBMISSIONS
+    // stays silent for a caller that does not count submissions at all.
+    if (row.submittedInWindow !== undefined) {
+      total.submittedInWindow = (total.submittedInWindow ?? 0) + row.submittedInWindow
+    }
+    total.reachableFacultyUnengaged =
+      (total.reachableFacultyUnengaged ?? 0) + (row.reachableFacultyUnengaged ?? 0)
   }
+  // medianFirstTouchDays is deliberately absent: a median of medians is not a
+  // median. The caller passes the member-level figure through `overrides` when
+  // it has computed one.
   return { ...total, ...overrides }
 }

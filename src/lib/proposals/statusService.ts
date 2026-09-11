@@ -12,6 +12,7 @@
  *     without the write-back a sanctioned grant would show as still pending on
  *     every dashboard built before this module existed.
  */
+import { isTakenUp } from '@/lib/assignments/shared'
 import { buildSubmissionUpdate } from '@/lib/assignments/submission'
 import { submissionWatchers } from '@/lib/fundingDept/shared'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
@@ -164,7 +165,7 @@ export async function transitionProposal(input: TransitionProposalInput) {
             submitted_at: true,
           },
         })
-        if (assignment && !['CANCELLED', 'DECLINED'].includes(assignment.status)) {
+        if (assignment && isTakenUp(assignment.status)) {
           const submission = buildSubmissionUpdate({
             record: assignment,
             reference: input.submissionReference ?? null,

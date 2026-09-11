@@ -10,10 +10,12 @@ import prisma from '@/lib/prisma'
 import { sendEmail } from '@/lib/mailer'
 import { assignmentReminderTemplate } from '@/lib/email-templates'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
+import { NOT_TAKEN_UP_STATUSES } from '@/lib/assignments/shared'
+
 import { isMemberAway, schoolRootFor } from './shared'
 
-/** Statuses where a nudge is pointless — the work is closed or refused. */
-const CLOSED_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'DECLINED'])
+/** Statuses where a nudge is pointless — the work is closed, refused or dead. */
+const CLOSED_STATUSES = new Set(['COMPLETED', ...NOT_TAKEN_UP_STATUSES])
 
 export interface ReminderSweepResult {
   considered: number

@@ -17,7 +17,9 @@ export type NotificationCategory =
   | 'ANNOUNCEMENT'
   | 'FUNDING_MATCH'
   /** The proposal desk: a draft arrived, a review was shared, a cut-off nears. */
-  | 'PROPOSAL';
+  | 'PROPOSAL'
+  /** The source watcher saw a funder page change and wants somebody to look. */
+  | 'FUNDING_MONITOR';
 
 export interface CreateNotificationsInput {
   tenantId: string;

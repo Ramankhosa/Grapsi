@@ -1,4 +1,5 @@
 import { sendEmail } from '@/lib/mailer'
+import { notifyQuietly } from '@/lib/notifications/notificationService'
 import { prisma } from '@/lib/prisma'
 
 import type { TriageResult } from './triage'
@@ -100,22 +101,17 @@ export async function sendChangeAlert(input: {
     // In-app notification too, but only for users who belong to a tenant —
     // Notification is tenant-scoped and a platform account has no tenant row.
     if (!person.tenantId) continue
-    try {
-      await prisma.notification.create({
-        data: {
-          tenant_id: person.tenantId,
-          user_id: person.id,
-          title: subject,
-          body: input.triage?.summary ?? `${input.sourceName} changed — review the find.`,
-          category: 'FUNDING_MONITOR',
-          link_url: `/funding/monitor?change=${input.changeId}`,
-        },
-      })
-    } catch (error) {
-      console.error(
-        '[monitor] in-app notification failed:',
-        error instanceof Error ? error.message : error
-      )
-    }
+    // Through the shared helper, not prisma directly. Writing the row by hand
+    // is how this category came to exist outside NotificationCategory and
+    // outside the inbox style map, so it rendered as a grey pill reading
+    // FUNDING_MONITOR for months with nothing to catch it at compile time.
+    await notifyQuietly({
+      tenantId: person.tenantId,
+      userIds: [person.id],
+      title: subject,
+      body: input.triage?.summary ?? `${input.sourceName} changed — review the find.`,
+      category: 'FUNDING_MONITOR',
+      linkUrl: `/funding/monitor?change=${input.changeId}`,
+    })
   }
 }

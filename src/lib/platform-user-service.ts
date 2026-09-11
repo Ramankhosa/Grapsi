@@ -51,6 +51,8 @@ export interface PlatformUserSummary {
   isPendingActivation: boolean
   /** A password login exists at all, so a reset is a meaningful thing to offer. */
   hasPassword: boolean
+  /** Social provider on the account, so the console can say how they sign in. */
+  oauthProvider: string | null
   /** Admin-forced: the next login has to go through a password change. */
   mustChangePassword: boolean
   passwordChangedAt: Date | null
@@ -110,6 +112,7 @@ function toSummary(user: {
     isPlatformStaff: user.tenant?.atiId === PLATFORM_ATI_ID || user.roles.some(isPlatformRole),
     isPendingActivation: !user.passwordHash && !user.oauthProvider,
     hasPassword: !!user.passwordHash,
+    oauthProvider: user.oauthProvider,
     mustChangePassword: user.mustChangePassword,
     passwordChangedAt: user.passwordChangedAt,
     createdAt: user.createdAt,

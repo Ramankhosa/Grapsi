@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { requireFundingOperatorRequest } from '@/lib/fundingIntake/routeAuth'
 import { isCronRequest, withJobRun } from '@/lib/jobs/jobRuns'
+import { writeWeeklySnapshots } from '@/lib/fundingDept/snapshotService'
 import { sendWeeklyDigests } from '@/lib/fundingDept/weeklyReportService'
 
 export const runtime = 'nodejs'
@@ -15,9 +16,14 @@ const weeklySchema = z.object({
 /**
  * POST /api/funding-dept/reports/weekly
  *
- * Sends each department member their pending worklist and each head the
- * department rollup. Intended for a Monday-morning schedule. Re-running it the
- * same week is a no-op: every recipient is stamped and skipped for five days.
+ * Writes the weekly snapshot, then sends each department member their pending
+ * worklist and each head the department rollup. Intended for a Monday-morning
+ * schedule. Re-running it the same week is a no-op: the snapshot is idempotent on
+ * its week key, and every mail recipient is stamped and skipped for five days.
+ *
+ * The snapshot goes FIRST so the digest can quote the delta — "untouched backlog
+ * 14, was 9 a week ago" — rather than a bare number the reader has no way to
+ * judge. It also rides this schedule rather than adding a cron entry of its own.
  *
  * Pass tenantId to run it for one organization, e.g. when testing.
  */
@@ -46,8 +52,9 @@ export async function POST(request: NextRequest) {
     { jobKey: 'reports-weekly', trigger: cron ? 'schedule' : 'manual', triggeredBy },
     async () => {
       try {
+        const snapshots = await writeWeeklySnapshots({ tenantId: body.tenantId })
         const result = await sendWeeklyDigests({ tenantId: body.tenantId })
-        return NextResponse.json(result)
+        return NextResponse.json({ ...result, snapshots })
       } catch (error) {
         console.error('[FUNDING-DEPT] Weekly report failed:', error)
         return NextResponse.json(

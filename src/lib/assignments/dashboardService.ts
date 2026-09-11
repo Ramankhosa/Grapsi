@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 
 import prisma from '../prisma';
 import { loadUnitAreaProfile, relevantCallWhereSql } from '../funding/callUnitRelevance';
+import { notTakenUpSql } from './shared';
 
 /**
  * Tenant grant-portfolio analytics.
@@ -14,11 +15,15 @@ import { loadUnitAreaProfile, relevantCallWhereSql } from '../funding/callUnitRe
  *   Submitted — the assignee recorded submission info (status COMPLETED).
  *   Missed    — still open but the internal deadline has passed.
  *
- * Cancelled and declined assignments are deliberately excluded from all three
- * buckets and reported in their own columns. A decline is an answer, not a
+ * Cancelled, declined and lapsed assignments are deliberately excluded from all
+ * three buckets and reported in their own columns. A decline is an answer, not a
  * failure to answer: counting it as missed would blame the department for work
  * the faculty member explicitly turned down, and would hide the real signal —
  * that this call still needs somebody.
+ *
+ * Lapsed is the third such answer and the bluntest: the call closed and nobody
+ * applied. It was previously indistinguishable from missed, which is why a dead
+ * allocation used to sit in the overdue column for years.
  *
  * A fourth, org-level metric — funding calls that expired with nobody assigned
  * — is tracked in `getUnassignedExpiredCalls`, because "we missed it entirely"
@@ -162,6 +167,7 @@ const BUCKET_COLUMNS = Prisma.sql`
   COUNT(*) FILTER (WHERE ${IS_MISSED})::int    AS "missed",
   COUNT(*) FILTER (WHERE ca.status = 'CANCELLED')::int      AS "cancelled",
   COUNT(*) FILTER (WHERE ca.status = 'DECLINED')::int       AS "declined",
+  COUNT(*) FILTER (WHERE ca.status = 'LAPSED')::int         AS "lapsed",
   COUNT(*) FILTER (WHERE ca.outcome = 'AWARDED')::int       AS "awarded",
   COUNT(*) FILTER (WHERE ca.outcome = 'REJECTED')::int      AS "rejected",
   COUNT(*)::int                                             AS "total",
@@ -174,6 +180,8 @@ export interface DashboardSummary {
   missed: number;
   cancelled: number;
   declined: number;
+  /** Closed out because the call went by and nobody applied. */
+  lapsed: number;
   awarded: number;
   rejected: number;
   total: number;
@@ -206,6 +214,7 @@ export async function getSummary(filters: DashboardFilters): Promise<DashboardSu
     missed: row?.missed || 0,
     cancelled: row?.cancelled || 0,
     declined: row?.declined || 0,
+    lapsed: row?.lapsed || 0,
     awarded: row?.awarded || 0,
     rejected: row?.rejected || 0,
     total: row?.total || 0,
@@ -380,11 +389,11 @@ export async function getUnassignedUpcomingCalls(
       ? relevantCallWhereSql(await loadUnitAreaProfile(tenantId, relevanceUnitIds), 'fc')
       : Prisma.sql`TRUE`;
 
-  // A cancelled or declined assignment means nobody is on this call: the
-  // request was withdrawn or turned down. Both must leave the call visible
-  // here, or a decline would quietly remove it from the very list whose job is
-  // to say "this still needs somebody".
-  const notTakenUp = Prisma.sql`x.status NOT IN ('CANCELLED', 'DECLINED')`;
+  // A cancelled, declined or lapsed assignment means nobody is on this call:
+  // the request was withdrawn, turned down, or nobody ever applied. All three
+  // must leave the call visible here, or a decline would quietly remove it from
+  // the very list whose job is to say "this still needs somebody".
+  const notTakenUp = notTakenUpSql('x');
 
   const coveredPredicate = scopeUnitIds
     ? Prisma.sql`
@@ -440,6 +449,7 @@ export interface ReportRow {
   missed: number;
   cancelled: number;
   declined: number;
+  lapsed: number;
   awarded: number;
   rejected: number;
   total: number;
@@ -504,6 +514,7 @@ const CSV_COLUMNS: Array<[keyof ReportRow, string]> = [
   ['missed', 'Missed'],
   ['cancelled', 'Cancelled'],
   ['declined', 'Declined'],
+  ['lapsed', 'Lapsed'],
   ['awarded', 'Awarded'],
   ['rejected', 'Rejected'],
   ['total', 'Total'],

@@ -8,7 +8,7 @@ import AssignmentDossier from '@/components/funding-dept/AssignmentDossier'
 
 interface Assignment {
   id: string
-  status: 'ASSIGNED' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'DECLINED'
+  status: 'ASSIGNED' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'LAPSED' | 'DECLINED'
   message: string | null
   deadlineAt: string | null
   declinedReason: string | null
@@ -58,6 +58,7 @@ const STATUS_STYLES: Record<Assignment['status'], { label: string; className: st
   IN_PROGRESS: { label: 'In progress', className: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300' },
   COMPLETED: { label: 'Completed', className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' },
   CANCELLED: { label: 'Cancelled', className: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' },
+  LAPSED: { label: 'Not applied for', className: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' },
   DECLINED: { label: 'Declined', className: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300' },
 }
 
@@ -593,7 +594,7 @@ export default function AssignmentsPage() {
                       exactly the wrong moment.
                     */}
                     {view === 'mine' &&
-                      !['CANCELLED', 'DECLINED'].includes(assignment.status) &&
+                      !['CANCELLED', 'DECLINED', 'LAPSED'].includes(assignment.status) &&
                       (assignment.proposal ? (
                         <Link
                           href={`/proposals/${assignment.proposal.id}`}

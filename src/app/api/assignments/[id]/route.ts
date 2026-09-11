@@ -21,6 +21,15 @@ export const dynamic = 'force-dynamic'
 const updateSchema = z.object({
   status: z.enum(ASSIGNMENT_STATUSES).optional(),
   declineReason: z.string().trim().max(2000).optional(),
+  /**
+   * Why nobody applied, required when closing out as LAPSED.
+   *
+   * Separate from declineReason because the two are different facts and get read
+   * differently: a decline is the faculty member answer, in their words; this is
+   * the department's verdict about them. Collapsing them would put an officer
+   * sentence in a field the record presents as the applicant's own.
+   */
+  lapsedReason: z.string().trim().max(2000).optional(),
   submissionReference: z.string().trim().max(200).nullable().optional(),
   submissionUrl: z.string().trim().max(2000).nullable().optional(),
   submissionNotes: z.string().trim().max(5000).nullable().optional(),
@@ -117,6 +126,18 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     if (payload.status === 'DECLINED' && !payload.declineReason) {
       return NextResponse.json(
         { error: 'Please add a short reason so the department knows why.' },
+        { status: 400 }
+      )
+    }
+    // A lapse is a judgement recorded against somebody who is not in the room,
+    // and it removes the call from every chase queue. It has to say why, or in a
+    // year nobody can tell a missed opportunity from a tidied-up dashboard.
+    if (payload.status === 'LAPSED' && !payload.lapsedReason) {
+      return NextResponse.json(
+        {
+          error:
+            'Add a short reason — what happened, and whether the call can still be applied for.',
+        },
         { status: 400 }
       )
     }
@@ -260,6 +281,17 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       // Re-opening or cancelling clears completion but keeps the recorded proof.
       data.completed_at = null
     }
+    if (payload.status === 'LAPSED') {
+      // Its own timestamp, unlike a cancellation, because reporting has to be
+      // able to date the lost opportunity without reading the contact log. No
+      // submitted_at: nothing was submitted, which is the entire point.
+      data.lapsed_at = new Date()
+    } else if (record.status === 'LAPSED') {
+      // Reopened — the applicant did send it after all, or the agency reopened
+      // the call. Clearing the stamp keeps "is this lapsed" a single question
+      // with a single answer.
+      data.lapsed_at = null
+    }
     data.status = payload.status
   }
 
@@ -293,6 +325,28 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       })
     } catch (error) {
       console.warn('Assignment re-request: follow-up log failed', error)
+    }
+  }
+
+  // The reason a lapse was recorded belongs in the contact log beside every
+  // other thing the department did about this call, not only in a status column.
+  // Written after the update so a failed write cannot leave an orphan note
+  // explaining a lapse that never happened.
+  if (data.status === 'LAPSED' && record.status !== 'LAPSED') {
+    try {
+      await prisma.assignmentFollowUp.create({
+        data: {
+          tenant_id: context.tenantId,
+          assignment_id: record.id,
+          funding_call_id: record.funding_call_id,
+          org_unit_id: record.assignee_org_unit_id,
+          created_by_user_id: context.user.id,
+          kind: 'NOTE',
+          note: `Closed out as not applied for. ${payload.lapsedReason}`,
+        },
+      })
+    } catch (error) {
+      console.warn('Assignment lapse: follow-up log failed', error)
     }
   }
 
@@ -344,15 +398,23 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       })
     } else {
       const reRequested = data.status === 'ASSIGNED' && record.status === 'DECLINED'
+      const lapsed = data.status === 'LAPSED'
       await notifyQuietly({
         tenantId: context.tenantId,
         userIds: [updated.assignee_user_id],
         title: reRequested
           ? `Please reconsider: ${callTitle}`
-          : `Assignment updated: ${callTitle}`,
+          : lapsed
+            ? `Closed with no application: ${callTitle}`
+            : `Assignment updated: ${callTitle}`,
+        // The assignee is always told, and told why. A lapse is recorded about
+        // them without their agreement, so learning of it is how they get to
+        // correct the record if the department has it wrong.
         body: reRequested
           ? 'The funding department has asked you to look at this call again.'
-          : `Status is now ${humanStatus(data.status)}.`,
+          : lapsed
+            ? `The funding department closed this as not applied for: ${payload.lapsedReason}`
+            : `Status is now ${humanStatus(data.status)}.`,
         category: 'ASSIGNMENT',
         linkUrl: '/assignments',
         assignmentId: updated.id,

@@ -25,6 +25,7 @@ export type TimelineKind =
   | 'COMPLETED'
   | 'OUTCOME'
   | 'CANCELLED'
+  | 'LAPSED'
   | 'FOLLOW_UP'
   | 'REMINDER_SENT'
   | 'DOCUMENT'
@@ -81,6 +82,7 @@ export interface TimelineSources {
     declined_reason: string | null
     submitted_at: Date | string | null
     completed_at: Date | string | null
+    lapsed_at?: Date | string | null
     decision_at: Date | string | null
     outcome: string
     award_amount: number | null
@@ -392,6 +394,22 @@ function fromAssignments(rows: TimelineSources['assignments']): TimelineEvent[] 
         approximate: true,
       })
     }
+
+    if (row.status === 'LAPSED') {
+      // Unlike a cancellation this has its own timestamp, so it is exact. The
+      // reason lives in the follow-up the close-out writes, which appears in
+      // this same timeline a moment later.
+      events.push({
+        at: iso(row.lapsed_at || row.updated_at),
+        kind: 'LAPSED',
+        title: `${assignee} did not apply`,
+        detail: 'Closed out by the department',
+        actor: null,
+        assignmentId: row.id,
+        refId: `${row.id}:lapsed`,
+        approximate: !row.lapsed_at,
+      })
+    }
   }
   return events
 }
@@ -480,6 +498,7 @@ const KIND_ORDER: TimelineKind[] = [
   'COMPLETED',
   'OUTCOME',
   'CANCELLED',
+  'LAPSED',
 ]
 
 /**

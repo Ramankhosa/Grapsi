@@ -485,6 +485,15 @@ export function fundingDeptWeeklyHeadTemplate(params: {
     followUps: number
   }>
   uncoveredSchools: string[]
+  /**
+   * This week unallocated backlog against last week, from the weekly snapshot.
+   *
+   * Optional, and omitted entirely until two weeks of history exist. A bare
+   * "14 unallocated" tells a head nothing they can act on; "14, was 9" is the
+   * whole message. Saying "14, no change" when the truth is "we have no idea
+   * what last week was" would be worse than saying nothing.
+   */
+  backlog?: { current: number; previous: number | null } | null
   overviewUrl: string
 }) {
   const displayName = friendlyName(params.email, params.name)
@@ -522,8 +531,30 @@ export function fundingDeptWeeklyHeadTemplate(params: {
            <p style="color:${brand.gray500}; font-size:13px; margin:0">${params.uncoveredSchools.map(escapeHtml).join(', ')}</p>
          </div>`
 
+  const trend = (() => {
+    if (!params.backlog) return ''
+    const { current, previous } = params.backlog
+    const change = previous === null ? null : current - previous
+    const phrase =
+      change === null
+        ? 'no comparison yet'
+        : change > 0
+          ? `up ${change} on last week`
+          : change < 0
+            ? `down ${Math.abs(change)} on last week`
+            : 'unchanged on last week'
+    // Red only when it grew. A backlog that is falling is the officer doing the
+    // job, and colouring it as an alarm teaches the reader to ignore the colour.
+    const alarm = change !== null && change > 0
+    return `<div style="border:1px solid ${alarm ? '#FCA5A5' : '#E2E8F0'}; background:${alarm ? '#FEF2F2' : '#F8FAFC'}; border-radius:12px; padding:14px 16px; margin:16px 0">
+           <div style="color:${alarm ? '#B91C1C' : brand.gray700}; font-weight:600; font-size:14px; margin-bottom:4px">${current} call${current === 1 ? '' : 's'} relevant to a school with nobody on them</div>
+           <p style="color:${brand.gray500}; font-size:13px; margin:0">${escapeHtml(phrase)}</p>
+         </div>`
+  })()
+
   const body = `
     <p style="color:${brand.gray500}; line-height:1.6">Hi ${displayName}, here is how the department is tracking this week.</p>
+    ${trend}
     ${table}
     ${uncovered}
     ${primaryButton(params.overviewUrl, 'Open the department overview')}`
@@ -536,6 +567,11 @@ export function fundingDeptWeeklyHeadTemplate(params: {
           `- ${row.name}: ${row.active} active, ${row.submitted} submitted, ${row.missed} overdue, ${row.declined} declined, ${row.followUps} follow-ups`
       )
       .join('\n') +
+    (params.backlog
+      ? `\nUnallocated calls: ${params.backlog.current}${
+          params.backlog.previous === null ? '' : ` (was ${params.backlog.previous} last week)`
+        }`
+      : '') +
     (params.uncoveredSchools.length > 0
       ? `\nUncovered schools: ${params.uncoveredSchools.join(', ')}`
       : '') +

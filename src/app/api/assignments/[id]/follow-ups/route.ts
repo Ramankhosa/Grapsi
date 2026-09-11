@@ -39,6 +39,18 @@ const createSchema = z.object({
   happenedAt: z.string().trim().nullable().optional(),
   remindAt: z.string().trim().nullable().optional(),
   remindFaculty: z.boolean().default(false),
+  /**
+   * Proof for a submission the officer is recording on the faculty member
+   * behalf, alongside stage SUBMITTED.
+   *
+   * Until these existed the note was the only proof, so an officer told "it went
+   * in, reference BT/PR/4471/2026" had to bury that string in prose and nothing
+   * could ever query it. The department has to be able to answer "submitted
+   * where, under what number" a year later, which is the same bar the
+   * assignee's own screen is held to.
+   */
+  submissionReference: z.string().trim().max(200).nullable().optional(),
+  submissionUrl: z.string().trim().max(2000).nullable().optional(),
 })
 
 const followUpInclude = {
@@ -158,6 +170,19 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     if (!transition.allowed) {
       return NextResponse.json({ error: transition.reason }, { status: 400 })
     }
+  } else if (payload.submissionReference || payload.submissionUrl) {
+    // Proof with nothing to attach it to. Refused rather than silently dropped:
+    // an officer who typed a reference number and saw it vanish would reasonably
+    // believe the submission had been recorded.
+    return NextResponse.json(
+      {
+        error:
+          record.status === 'COMPLETED'
+            ? 'This is already recorded as submitted. Edit the submission details on the assignment itself.'
+            : 'Set the stage to Submitted to record submission details.',
+      },
+      { status: 400 }
+    )
   }
 
   const followUp = await prisma.$transaction(async (tx) => {
@@ -167,8 +192,14 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     })
 
     if (marksSubmitted) {
+      // The shared builder, so this path and the assignment own PATCH cannot
+      // drift into two definitions of a submitted application. `happenedAt` is
+      // the submission date on purpose: an officer logging a Friday phone call
+      // about a Tuesday submission must be able to date it Tuesday.
       const submission = buildSubmissionUpdate({
         record,
+        reference: payload.submissionReference,
+        url: payload.submissionUrl,
         notes: record.submission_notes || payload.note,
         submittedAt: happenedAt,
       })

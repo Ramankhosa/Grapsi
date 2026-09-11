@@ -18,6 +18,9 @@ const STYLES: Record<ProgressCode, string> = {
   REJECTED: 'border-nickel-300 bg-nickel-100 text-nickel-600',
   DECLINED: 'border-rose-200 bg-rose-50 text-rose-700',
   CANCELLED: 'border-nickel-200 bg-nickel-50 text-nickel-500',
+  // Read as a loss, not as neutral housekeeping: a call closed with nobody on
+  // it is the outcome the whole department exists to prevent.
+  LAPSED: 'border-rose-300 bg-rose-50 text-rose-800',
   OVERDUE: 'border-red-300 bg-red-50 text-red-700',
   AWAITING_REPLY: 'border-amber-300 bg-amber-50 text-amber-800',
   DRAFTING: 'border-cobalt-300 bg-cobalt-50 text-cobalt-700',

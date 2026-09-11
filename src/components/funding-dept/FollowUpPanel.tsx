@@ -122,6 +122,9 @@ export default function FollowUpPanel(props: Props) {
   const [note, setNote] = useState('')
   const [remindAt, setRemindAt] = useState('')
   const [remindFaculty, setRemindFaculty] = useState(false)
+  // Only ever sent with stage SUBMITTED; the route refuses them otherwise.
+  const [submissionReference, setSubmissionReference] = useState('')
+  const [submissionUrl, setSubmissionUrl] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -156,6 +159,12 @@ export default function FollowUpPanel(props: Props) {
           note: note.trim(),
           remindAt: remindAt ? new Date(remindAt).toISOString() : null,
           remindFaculty: endpoint.isCallLevel ? false : remindFaculty,
+          ...(stage === 'SUBMITTED'
+            ? {
+                submissionReference: submissionReference.trim() || null,
+                submissionUrl: submissionUrl.trim() || null,
+              }
+            : {}),
         }),
       })
       const data = await response.json()
@@ -169,6 +178,8 @@ export default function FollowUpPanel(props: Props) {
       setRemindFaculty(false)
       setKind('NOTE')
       setStage(null)
+      setSubmissionReference('')
+      setSubmissionUrl('')
       showToast({
         type: 'success',
         title: data.markedSubmitted ? 'Recorded as submitted' : 'Follow-up recorded',
@@ -235,11 +246,38 @@ export default function FollowUpPanel(props: Props) {
             <span className="nk-sub text-[11.5px]">optional</span>
           </div>
           {stage === 'SUBMITTED' ? (
-            <p className="rounded-lg border border-cobalt-200 bg-cobalt-50 px-3 py-2 text-[12.5px] text-cobalt-800">
-              This marks the allocation as submitted everywhere — the school, the department and the
-              head. Put the reference number or portal link in the note so the record stands on its
-              own.
-            </p>
+            <div className="space-y-2 rounded-lg border border-cobalt-200 bg-cobalt-50 px-3 py-2.5">
+              <p className="text-[12.5px] text-cobalt-800">
+                This marks the allocation as submitted everywhere — the school, the department and
+                the head. The faculty member is told too, since they did not record it themselves.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="block">
+                  <span className="nk-label">Agency reference</span>
+                  <input
+                    className="nk-input"
+                    value={submissionReference}
+                    onChange={(event) => setSubmissionReference(event.target.value)}
+                    placeholder="e.g. BT/PR/4471/2026"
+                    maxLength={200}
+                  />
+                </label>
+                <label className="block">
+                  <span className="nk-label">Portal link</span>
+                  <input
+                    className="nk-input"
+                    value={submissionUrl}
+                    onChange={(event) => setSubmissionUrl(event.target.value)}
+                    placeholder="https://…"
+                    maxLength={2000}
+                  />
+                </label>
+              </div>
+              <p className="nk-sub text-[11.5px]">
+                Both optional — the note itself counts as proof. Fill in what the faculty member told
+                you, so the record can answer “submitted where, under what number” next year.
+              </p>
+            </div>
           ) : null}
           <textarea
             className="nk-input min-h-[76px]"

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+import { notTakenUpSql } from '@/lib/assignments/shared'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import {
   loadUnitAreaProfile,
@@ -32,7 +33,7 @@ const STATES = ['pending', 'shortlisted', 'assigned', 'dismissed', 'all'] as con
 type QueueState = (typeof STATES)[number]
 
 /** Assignments in these states mean nobody is actually on the call. */
-const NOT_TAKEN_UP = Prisma.sql`ca.status NOT IN ('CANCELLED', 'DECLINED')`
+const NOT_TAKEN_UP = notTakenUpSql('ca')
 
 /**
  * Visibility, matching `getUnassignedUpcomingCalls` exactly — a tenant's own

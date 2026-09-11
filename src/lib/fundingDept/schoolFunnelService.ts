@@ -1,14 +1,11 @@
+import { notTakenUpSql } from '@/lib/assignments/shared'
 import { loadUnitAreaProfile, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 
-import { UNTOUCHED_DAYS } from './accountabilityProgress'
-
-// A bound parameter arrives as bigint, which make_interval() will not take, and
-// an interval literal cannot be parameterised at all. These are numeric
-// constants from our own source, never user input, so raw is safe here.
-const UNTOUCHED_INTERVAL = Prisma.raw(`INTERVAL '${UNTOUCHED_DAYS} days'`)
-import { queueStateSql } from './queueState'
+import { callEnteredAtSql, textArray, visibleCallSql } from './callSql'
+import { queueStateSql, untouchedSql } from './queueState'
+import { getDeptSettings, type DeptSettings } from './settings'
 
 /**
  * Each school as a funnel: how much is relevant, how much is untouched, how
@@ -59,19 +56,10 @@ export interface SchoolFunnelRow {
 }
 
 /** Assignments in these states mean nobody is actually on the call. */
-const NOT_TAKEN_UP = Prisma.sql`ca.status NOT IN ('CANCELLED', 'DECLINED')`
+const NOT_TAKEN_UP = notTakenUpSql('ca')
 const OPEN_STATUSES = Prisma.sql`('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')`
 
-function visibleSql(tenantId: string): Prisma.Sql {
-  return Prisma.sql`(
-    (fc."tenantId" = ${tenantId} AND (fc.status = 'PUBLISHED' OR fc.catalog_status = 'PUBLISHED'))
-    OR (fc."tenantId" IS NULL AND fc.visibility = 'GLOBAL_PUBLISHED' AND fc.status = 'PUBLISHED')
-  )`
-}
-
-function textArray(values: string[]): Prisma.Sql {
-  return Prisma.sql`ARRAY[${Prisma.join(values.map((value) => Prisma.sql`${value}`))}]::text[]`
-}
+const visibleSql = (tenantId: string) => visibleCallSql(tenantId, 'fc')
 
 /**
  * One school's funnel.
@@ -84,7 +72,8 @@ function textArray(values: string[]): Prisma.Sql {
  */
 async function funnelForSchool(
   tenantId: string,
-  school: { id: string; name: string; code: string | null }
+  school: { id: string; name: string; code: string | null },
+  settings: DeptSettings
 ): Promise<SchoolFunnelRow> {
   const subtree = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT id FROM tenant_org_units
@@ -107,6 +96,22 @@ async function funnelForSchool(
   )`
   const state = queueStateSql(liveAssignments, 'tri')
 
+  // Pending, and old enough that nobody can call it new. The entry date falls
+  // back through published -> created because an imported call may never have
+  // been published as such. One shared definition with the ledger and the
+  // backlog report — see untouchedSql.
+  const untouched = untouchedSql({
+    pending: state.pending,
+    triageAlias: 'tri',
+    enteredAt: callEnteredAtSql('fc'),
+    contactExists: Prisma.sql`EXISTS (
+      SELECT 1 FROM assignment_follow_ups f
+       WHERE f.funding_call_id = fc.id
+         AND f.org_unit_id = ANY(${scopeArray})
+    )`,
+    untouchedDays: settings.untouchedDays,
+  })
+
   const [callRows, workRows, facultyRows, proposalRows, contactRows] = await Promise.all([
     prisma.$queryRaw<
       Array<{
@@ -123,18 +128,7 @@ async function funnelForSchool(
              COUNT(*) FILTER (WHERE ${state.shortlisted})::int AS shortlisted,
              COUNT(*) FILTER (WHERE ${state.assigned})::int    AS assigned,
              COUNT(*) FILTER (WHERE ${state.dismissed})::int   AS dismissed,
-             -- Pending, and old enough that nobody can call it new. The date
-             -- falls back through published -> created because an imported
-             -- call may never have been published as such.
-             COUNT(*) FILTER (
-               WHERE ${state.pending}
-                 AND COALESCE(fc."publishedAt", fc."createdAt") < now() - ${UNTOUCHED_INTERVAL}
-                 AND NOT EXISTS (
-                   SELECT 1 FROM assignment_follow_ups f
-                    WHERE f.funding_call_id = fc.id
-                      AND f.org_unit_id = ANY(${scopeArray})
-                 )
-             )::int AS untouched_pending
+             COUNT(*) FILTER (WHERE ${untouched})::int          AS untouched_pending
         FROM funding_calls fc
         LEFT JOIN call_school_triage tri
                ON tri.funding_call_id = fc.id AND tri.org_unit_id = ${school.id}
@@ -237,8 +231,10 @@ async function funnelForSchool(
 
 export async function getSchoolFunnel(
   tenantId: string,
-  schoolIds?: string[]
+  schoolIds?: string[],
+  settings?: DeptSettings
 ): Promise<SchoolFunnelRow[]> {
+  const thresholds = settings ?? (await getDeptSettings(tenantId))
   const schools = await prisma.tenantOrgUnit.findMany({
     where: {
       tenant_id: tenantId,
@@ -252,7 +248,7 @@ export async function getSchoolFunnel(
 
   const rows: SchoolFunnelRow[] = []
   for (const school of schools) {
-    rows.push(await funnelForSchool(tenantId, school))
+    rows.push(await funnelForSchool(tenantId, school, thresholds))
   }
   // The school most behind first: that is the row a head opens the page to find.
   return rows.sort((left, right) => right.pending - left.pending || left.name.localeCompare(right.name))
@@ -270,9 +266,11 @@ export async function getSchoolFunnel(
  */
 export async function getFunnelForUnits(
   tenantId: string,
-  unitIds: string[]
+  unitIds: string[],
+  settings?: DeptSettings
 ): Promise<SchoolFunnelRow[]> {
   if (unitIds.length === 0) return []
+  const thresholds = settings ?? (await getDeptSettings(tenantId))
   const units = await prisma.tenantOrgUnit.findMany({
     where: { tenant_id: tenantId, id: { in: unitIds }, is_active: true },
     select: { id: true, name: true, code: true },
@@ -281,7 +279,7 @@ export async function getFunnelForUnits(
 
   const rows: SchoolFunnelRow[] = []
   for (const unit of units) {
-    rows.push(await funnelForSchool(tenantId, unit))
+    rows.push(await funnelForSchool(tenantId, unit, thresholds))
   }
   return rows
 }

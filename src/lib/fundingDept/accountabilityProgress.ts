@@ -26,6 +26,7 @@ export const PROGRESS_CODES = [
   'SUBMITTED',
   'DECLINED',
   'CANCELLED',
+  'LAPSED',
   'OVERDUE',
   'AWAITING_REPLY',
   'DRAFTING',
@@ -39,6 +40,7 @@ export const PROGRESS_LABELS: Record<ProgressCode, string> = {
   SUBMITTED: 'Submitted',
   DECLINED: 'Declined',
   CANCELLED: 'Withdrawn by department',
+  LAPSED: 'Nobody applied',
   OVERDUE: 'Past the internal deadline',
   AWAITING_REPLY: 'Awaiting reply',
   DRAFTING: 'Writing the proposal',
@@ -164,6 +166,10 @@ export function deriveAssignmentProgress(
   else if (status === 'COMPLETED') code = 'SUBMITTED'
   else if (status === 'DECLINED') code = 'DECLINED'
   else if (status === 'CANCELLED') code = 'CANCELLED'
+  // Settled, so it is ranked with the other closures rather than left to fall
+  // through to OVERDUE — which is exactly where a dead allocation used to sit,
+  // forever, inflating every backlog the department reported.
+  else if (status === 'LAPSED') code = 'LAPSED'
   else if (deadlineAt && deadlineAt < now) code = 'OVERDUE'
   else if (status === 'ASSIGNED' && !respondedAt) code = 'AWAITING_REPLY'
   // A proposal record with a draft in it is the same fact the Draft One
@@ -204,6 +210,7 @@ export interface ProgressBuckets {
   rejected: number
   declined: number
   cancelled: number
+  lapsed: number
   goneQuiet: number
   overdueUnchased: number
 }
@@ -219,6 +226,7 @@ export function emptyBuckets(): ProgressBuckets {
     rejected: 0,
     declined: 0,
     cancelled: 0,
+    lapsed: 0,
     goneQuiet: 0,
     overdueUnchased: 0,
   }
@@ -234,6 +242,7 @@ const BUCKET_BY_CODE: Record<ProgressCode, keyof ProgressBuckets> = {
   REJECTED: 'rejected',
   DECLINED: 'declined',
   CANCELLED: 'cancelled',
+  LAPSED: 'lapsed',
 }
 
 export function addToBuckets(buckets: ProgressBuckets, progress: AssignmentProgress): void {

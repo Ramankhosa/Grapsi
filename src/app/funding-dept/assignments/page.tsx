@@ -34,6 +34,7 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   IN_PROGRESS: { label: 'In progress', className: 'nk-badge nk-badge-live' },
   COMPLETED: { label: 'Submitted', className: 'nk-badge nk-badge-ok' },
   CANCELLED: { label: 'Cancelled', className: 'nk-badge' },
+  LAPSED: { label: 'Not applied for', className: 'nk-badge nk-badge-danger' },
   DECLINED: { label: 'Declined', className: 'nk-badge nk-badge-danger' },
 }
 
@@ -43,6 +44,7 @@ const FILTERS = [
   { value: 'ACCEPTED', label: 'Accepted' },
   { value: 'IN_PROGRESS', label: 'In progress' },
   { value: 'DECLINED', label: 'Declined' },
+  { value: 'LAPSED', label: 'Not applied for' },
   { value: 'COMPLETED', label: 'Submitted' },
 ]
 
@@ -144,13 +146,18 @@ export default function DeptAssignmentsPage() {
     return tally
   }, [assignments])
 
-  const patchStatus = async (assignment: Assignment, status: string, label: string) => {
+  const patchStatus = async (
+    assignment: Assignment,
+    status: string,
+    label: string,
+    extra: Record<string, unknown> = {}
+  ) => {
     setBusyId(assignment.id)
     try {
       const response = await authFetch(`/api/assignments/${assignment.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, ...extra }),
       })
       const data = await response.json()
       if (!response.ok) {
@@ -381,6 +388,34 @@ export default function DeptAssignmentsPage() {
                           Pass on
                         </button>
                       ) : null}
+                      {/* Two different closures, deliberately not one. Cancel is
+                          the department withdrawing the request; this is the
+                          faculty member never having applied. Collapsing them
+                          left dead work sitting in the overdue column for years
+                          and made "we pulled it" and "they let it die" the same
+                          number on every report. */}
+                      {['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'].includes(assignment.status) ? (
+                        <button
+                          type="button"
+                          className="nk-btn-ghost nk-btn-sm"
+                          disabled={busyId === assignment.id}
+                          onClick={() => {
+                            // A judgement recorded about somebody who is not in
+                            // the room, and one that removes the call from every
+                            // chase queue. It says why, or in a year nobody can
+                            // tell a missed opportunity from a tidied dashboard.
+                            const reason = window.prompt(
+                              'Closing this as never applied for. What happened?'
+                            )
+                            if (!reason?.trim()) return
+                            void patchStatus(assignment, 'LAPSED', 'Close out', {
+                              lapsedReason: reason.trim(),
+                            })
+                          }}
+                        >
+                          Not applied for
+                        </button>
+                      ) : null}
                       {['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'].includes(assignment.status) ? (
                         <button
                           type="button"
@@ -389,6 +424,16 @@ export default function DeptAssignmentsPage() {
                           onClick={() => patchStatus(assignment, 'CANCELLED', 'Cancel')}
                         >
                           Cancel
+                        </button>
+                      ) : null}
+                      {assignment.status === 'LAPSED' ? (
+                        <button
+                          type="button"
+                          className="nk-btn-secondary nk-btn-sm"
+                          disabled={busyId === assignment.id}
+                          onClick={() => patchStatus(assignment, 'IN_PROGRESS', 'Reopen')}
+                        >
+                          Reopen
                         </button>
                       ) : null}
                       <button

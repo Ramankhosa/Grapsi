@@ -1,17 +1,24 @@
 /**
- * Funding scheduler — fires the four cron-protected funding endpoints that are
- * otherwise inert. Run it as its own PM2 process next to the web app:
+ * Funding scheduler — fires the cron-protected endpoints that are otherwise
+ * inert. Run it as its own PM2 process next to the web app:
  *
  *   pm2 start scripts/funding-scheduler.js --name grapsi-funding-scheduler
  *   pm2 save
  *
  * Endpoints driven (all POST, authenticated with x-funding-alert-secret):
- *   /api/funding-dept/reminders/sweep   hourly   reminder ladder + escalations
+ *   /api/funding-dept/reminders/sweep   hourly   reminder ladder, escalations,
+ *                                                pendency ladder, job health
  *   /api/proposals/reviews/sweep        10 min   resume stranded proposal reviews
  *   /api/proposals/sweep                hourly   cut-off nudges, review SLA, agency-stale
  *   /api/funding/alerts/dispatch        hourly   healing sweep for undispatched published calls
  *   /api/funding/alerts/digest          daily + Monday   queued alert digests
- *   /api/funding-dept/reports/weekly    Monday   department digest to members + head
+ *   /api/funding-dept/reports/weekly    Monday   weekly snapshot, then member + head digests
+ *   /api/platform/users/expire-event-access  daily   suspend expired workshop users
+ *   /api/funding/monitor/sweep          daily    re-check watched funder pages
+ *
+ * Keep this list in step with src/lib/jobs/registry.ts, which is what the
+ * operations console renders and what the health check measures staleness
+ * against. A unit test fails if the two disagree.
  *
  * Every endpoint is idempotent (unique-key claims, conditional updates, 5-day
  * digest stamps), so an overlapping or repeated fire is harmless — this script

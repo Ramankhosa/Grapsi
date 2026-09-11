@@ -1,0 +1,12 @@
+-- LAPSED: the call closed and the faculty member never applied.
+--
+-- Alone in its own migration on purpose. Postgres permits ALTER TYPE ... ADD
+-- VALUE inside a transaction (which is what Prisma wraps each file in), but the
+-- new value cannot be USED in that same transaction. Keeping this file free of
+-- anything that references 'LAPSED' is what makes it safe.
+--
+-- Positional, because CallAssignmentStatus declaration order is the lifecycle
+-- order and GET /api/assignments sorts by it (Postgres orders enums by
+-- declaration, not alphabetically). LAPSED belongs beside CANCELLED: both are
+-- closures without a submission.
+ALTER TYPE "CallAssignmentStatus" ADD VALUE 'LAPSED' AFTER 'CANCELLED';

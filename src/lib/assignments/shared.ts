@@ -4,6 +4,7 @@
  * These live outside the route files because Next.js App Router only permits
  * HTTP handlers and a fixed set of config exports from a `route.ts`.
  */
+import { Prisma } from '@/lib/prisma-generated'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 
 /** Listed in lifecycle order, matching the Postgres enum's declaration order. */
@@ -13,6 +14,7 @@ export const ASSIGNMENT_STATUSES = [
   'IN_PROGRESS',
   'COMPLETED',
   'CANCELLED',
+  'LAPSED',
   'DECLINED',
 ] as const
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number]
@@ -23,6 +25,48 @@ export const OPEN_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = [
   'ACCEPTED',
   'IN_PROGRESS',
 ]
+
+/**
+ * Statuses under which nobody is actually on the call any more, so the call
+ * itself goes back to needing somebody.
+ *
+ * One definition, exported, because this predicate was written out by hand in
+ * eight places. When LAPSED was added, any site that kept its own copy would
+ * have held a lapsed call out of the pending queue forever — the report whose
+ * whole job is to say "this still needs somebody" would have been the one place
+ * it never appeared.
+ */
+export const NOT_TAKEN_UP_STATUSES: readonly AssignmentStatus[] = [
+  'CANCELLED',
+  'DECLINED',
+  'LAPSED',
+]
+
+/**
+ * `TRUE` when this row leaves the call un-taken-up. Pass the table's alias.
+ *
+ * The status list is emitted as SQL literals rather than bound parameters, and
+ * that is not a style choice. A bound parameter arrives typed as `text`, and
+ * Postgres has no `"CallAssignmentStatus" <> text` operator, so the query fails
+ * outright (42883). Unquoted literals stay untyped and coerce to the enum, which
+ * also keeps idx_call_assignments_tenant_status usable — a `status::text` cast
+ * would compile but silently give up the index on the busiest table here.
+ *
+ * Safe because the values are a compile-time constant from this file. The guard
+ * is there so that stays true if somebody later makes the list dynamic.
+ */
+export function notTakenUpSql(alias = 'ca'): Prisma.Sql {
+  const literals = NOT_TAKEN_UP_STATUSES.map((status) => {
+    if (!/^[A-Z_]+$/.test(status)) throw new Error(`Unsafe assignment status: ${status}`)
+    return `'${status}'`
+  }).join(', ')
+  return Prisma.sql`${Prisma.raw(`${alias}.status NOT IN (${literals})`)}`
+}
+
+/** The same fact for callers holding a row rather than writing SQL. */
+export function isTakenUp(status: string | null | undefined): boolean {
+  return !NOT_TAKEN_UP_STATUSES.includes(String(status || '') as AssignmentStatus)
+}
 
 type TransitionActor = 'assignee' | 'manager' | 'either'
 
@@ -43,12 +87,14 @@ const TRANSITIONS: Record<AssignmentStatus, Partial<Record<AssignmentStatus, Tra
     IN_PROGRESS: 'either',
     COMPLETED: 'either',
     CANCELLED: 'manager',
+    LAPSED: 'manager',
   },
   ACCEPTED: {
     IN_PROGRESS: 'either',
     COMPLETED: 'either',
     DECLINED: 'assignee',
     CANCELLED: 'manager',
+    LAPSED: 'manager',
     // Same reset a manager has from IN_PROGRESS: put the request back to
     // unanswered, e.g. after the scope of the call changed.
     ASSIGNED: 'manager',
@@ -56,6 +102,7 @@ const TRANSITIONS: Record<AssignmentStatus, Partial<Record<AssignmentStatus, Tra
   IN_PROGRESS: {
     COMPLETED: 'either',
     CANCELLED: 'manager',
+    LAPSED: 'manager',
     ASSIGNED: 'manager',
   },
   COMPLETED: {
@@ -66,6 +113,19 @@ const TRANSITIONS: Record<AssignmentStatus, Partial<Record<AssignmentStatus, Tra
   },
   CANCELLED: {
     ASSIGNED: 'manager',
+  },
+  // Lapsing is the department's judgement, never the assignee's: a faculty
+  // member calling their own work dead is a decline, which already exists and
+  // reads honestly. Reachable only from live work — a COMPLETED record was
+  // submitted, so there is nothing to lapse.
+  //
+  // Both ways out are a manager's, because the fact that reopens a lapse always
+  // arrives from outside: the applicant did send it after all, or the agency
+  // reopened the call.
+  LAPSED: {
+    ASSIGNED: 'manager',
+    IN_PROGRESS: 'manager',
+    CANCELLED: 'manager',
   },
   DECLINED: {
     // Re-request: asking the same person again after a conversation.
@@ -186,6 +246,7 @@ export function serializeAssignment(record: any) {
     submissionNotes: record.submission_notes,
     submittedAt: record.submitted_at,
     completedAt: record.completed_at,
+    lapsedAt: record.lapsed_at ?? null,
     outcome: record.outcome,
     awardAmount: record.award_amount,
     awardCurrency: record.award_currency,

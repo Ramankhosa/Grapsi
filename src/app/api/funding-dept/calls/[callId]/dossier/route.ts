@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-import { assignmentInclude, serializeAssignment } from '@/lib/assignments/shared'
+import { assignmentInclude, isTakenUp, serializeAssignment } from '@/lib/assignments/shared'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { loadUnitAreaProfile, relevanceForCalls } from '@/lib/funding/callUnitRelevance'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
@@ -366,11 +366,12 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     liveAssignmentCounts.map((row) => [row.assignee_user_id, row._count._all])
   )
   const candidateByUser = new Map(candidates.map((row) => [row.user_id, row]))
-  // Only work still in hand blocks a fresh assignment. A cancelled or declined
-  // one is history: the person is available again, and the UI must offer them.
+  // Only work still in hand blocks a fresh assignment. A cancelled, declined or
+  // lapsed one is history: the person is available again, and the UI must offer
+  // them.
   const liveAssignmentByUser = new Map(
     assignments
-      .filter((row) => !['CANCELLED', 'DECLINED'].includes(row.status))
+      .filter((row) => isTakenUp(row.status))
       .map((row) => [row.assignee_user_id, row])
   )
   const lastAssignmentByUser = new Map(assignments.map((row) => [row.assignee_user_id, row]))
@@ -483,6 +484,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
         declined_reason: row.declined_reason,
         submitted_at: row.submitted_at,
         completed_at: row.completed_at,
+        lapsed_at: row.lapsed_at,
         decision_at: row.decision_at,
         outcome: row.outcome,
         award_amount: row.award_amount,
@@ -507,9 +509,7 @@ export async function GET(request: NextRequest, { params }: { params: { callId: 
     caps
   )
 
-  const liveCount = assignments.filter(
-    (row) => !['CANCELLED', 'DECLINED'].includes(row.status)
-  ).length
+  const liveCount = assignments.filter((row) => isTakenUp(row.status)).length
 
   return NextResponse.json({
     schools: selectableUnits.map((unit) => ({

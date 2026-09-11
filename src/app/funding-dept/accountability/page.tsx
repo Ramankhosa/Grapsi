@@ -1,8 +1,12 @@
 'use client'
 
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Fragment, useCallback, useEffect, useState } from 'react'
 
+import BacklogTab from '@/components/funding-dept/BacklogTab'
+import EfficiencyTab from '@/components/funding-dept/EfficiencyTab'
+import FacultyEngagementTab from '@/components/funding-dept/FacultyEngagementTab'
 import FlagChips from '@/components/funding-dept/FlagChips'
 import SummaryCards from '@/components/funding-dept/SummaryCards'
 import { useAuth } from '@/lib/auth-context'
@@ -108,6 +112,20 @@ const WINDOWS = [
   { key: '30d', label: 'Last 30 days' },
 ]
 
+/**
+ * Four views of one question, in the order a head works through it: who is
+ * behind, what exactly is waiting, who has been left out, and how fast anyone is
+ * moving. The first three are levels and the last is a rate — which is the one
+ * that separates a cleared queue from an empty one.
+ */
+const TABS = [
+  { key: 'members', label: 'By member' },
+  { key: 'backlog', label: 'Unallocated calls' },
+  { key: 'faculty', label: 'Faculty engagement' },
+  { key: 'efficiency', label: 'How fast' },
+] as const
+type TabKey = (typeof TABS)[number]['key']
+
 function shortDate(value: string | null) {
   if (!value) return 'never'
   return new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
@@ -121,6 +139,15 @@ function daysAgo(value: string | null) {
 export default function AccountabilityPage() {
   const { authFetch, isLoading: authLoading } = useAuth()
   const { me, loading: meLoading } = useFundingDeptMe()
+
+  // The pendency notices link straight to ?tab=backlog, so somebody chased about
+  // a specific backlog lands on the list rather than on a grid they then have to
+  // navigate.
+  const searchParams = useSearchParams()
+  const requestedTab = searchParams?.get('tab') ?? null
+  const [tab, setTab] = useState<TabKey>(
+    TABS.some((option) => option.key === requestedTab) ? (requestedTab as TabKey) : 'members'
+  )
 
   const [data, setData] = useState<MatrixData | null>(null)
   const [windowKey, setWindowKey] = useState('reporting')
@@ -274,6 +301,29 @@ export default function AccountabilityPage() {
 
         <SummaryCards stats={stats} />
 
+        <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-nickel-200" aria-label="Views">
+          {TABS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setTab(option.key)}
+              aria-current={tab === option.key ? 'page' : undefined}
+              className={`-mb-px border-b-2 px-3 py-2 text-[13px] font-medium ${
+                tab === option.key
+                  ? 'border-cobalt-600 text-cobalt-700'
+                  : 'border-transparent text-nickel-500 hover:text-nickel-900'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </nav>
+
+        {tab === 'backlog' ? <BacklogTab windowKey={windowKey} /> : null}
+        {tab === 'faculty' ? <FacultyEngagementTab windowKey={windowKey} /> : null}
+        {tab === 'efficiency' ? <EfficiencyTab windowKey={windowKey} /> : null}
+
+        {tab !== 'members' ? null : (
         <section className="nk-panel mt-6 overflow-hidden">
           <div className="nk-panel-head">
             <div>
@@ -501,8 +551,9 @@ export default function AccountabilityPage() {
             </table>
           </div>
         </section>
+        )}
 
-        {(data?.uncovered.length ?? 0) > 0 ? (
+        {tab === 'members' && (data?.uncovered.length ?? 0) > 0 ? (
           <section className="nk-panel mt-6 overflow-hidden">
             <div className="nk-panel-head">
               <div>

@@ -20,6 +20,10 @@ const TONE: Record<string, string> = {
   SILENT_LIVE: 'border-amber-300 bg-amber-50 text-amber-800',
   DUE_NUDGES: 'border-amber-200 bg-amber-50/70 text-amber-700',
   NO_ACTIVITY: 'border-red-200 bg-red-50/70 text-red-700',
+  NO_SUBMISSIONS: 'border-red-200 bg-red-50/70 text-red-700',
+  FACULTY_UNENGAGED: 'border-amber-300 bg-amber-50 text-amber-800',
+  SLOW_FIRST_TOUCH: 'border-amber-200 bg-amber-50/70 text-amber-700',
+  HIGH_DISMISSAL: 'border-nickel-200 bg-nickel-50 text-nickel-600',
   UNMAPPED_SCHOOL: 'border-nickel-200 bg-nickel-50 text-nickel-600',
   AWAY: 'border-nickel-200 bg-nickel-50 text-nickel-600',
 }
@@ -31,6 +35,10 @@ const SHORT: Record<string, string> = {
   SILENT_LIVE: 'gone quiet',
   DUE_NUDGES: 'reminders not acted on',
   NO_ACTIVITY: 'nothing recorded',
+  NO_SUBMISSIONS: 'no applications went in',
+  FACULTY_UNENGAGED: 'faculty sent nothing',
+  SLOW_FIRST_TOUCH: 'days to react, over target',
+  HIGH_DISMISSAL: 'dismissed as not relevant',
   UNMAPPED_SCHOOL: 'no disciplines mapped',
   AWAY: 'on leave',
 }

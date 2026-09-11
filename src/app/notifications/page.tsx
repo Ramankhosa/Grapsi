@@ -22,12 +22,16 @@ const CATEGORY_STYLES: Record<string, string> = {
   ANNOUNCEMENT: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
   FUNDING_MATCH: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
   PROPOSAL: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300',
+  FUNDING_MONITOR: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300',
 }
 
 /** The raw category is an enum name; this is what a reader should see. */
 const CATEGORY_LABELS: Record<string, string> = {
   FUNDING_MATCH: 'FUNDING',
   PROPOSAL: 'PROPOSAL',
+  // Without this the pill reads FUNDING_MONITOR, which is the enum name rather
+  // than anything a reader recognises.
+  FUNDING_MONITOR: 'SOURCE WATCH',
 }
 
 export default function NotificationsPage() {

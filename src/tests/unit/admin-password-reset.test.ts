@@ -96,12 +96,6 @@ describe('guards shared by every action', () => {
     expect(result).toMatchObject({ ok: false, code: 'USER_NOT_FOUND', status: 404 })
   })
 
-  it('refuses a social-only account rather than inventing a password login', async () => {
-    mocks.userFindUnique.mockResolvedValue(targetUser({ passwordHash: null, oauthProvider: 'GOOGLE' }))
-    const result = await issuePasswordReset({ targetUserId: 'user-1', actorUserId: ACTOR, sendEmail: false })
-    expect(result).toMatchObject({ ok: false, code: 'SOCIAL_ACCOUNT' })
-    expect((result as { message: string }).message).toContain('Google')
-  })
 })
 
 describe('issuePasswordReset', () => {
@@ -142,11 +136,37 @@ describe('issuePasswordReset', () => {
 })
 
 describe('setTemporaryPassword', () => {
-  it('refuses an account with no password to replace', async () => {
+  // The rescue case: no password, and the link they would normally use cannot
+  // reach them. Refusing here is what left the console with nothing to offer.
+  it('gives a never-activated account a password and says so', async () => {
     mocks.userFindUnique.mockResolvedValue(targetUser({ passwordHash: null }))
     const result = await setTemporaryPassword({ targetUserId: 'user-1', actorUserId: ACTOR })
-    expect(result).toMatchObject({ ok: false, code: 'NOT_ACTIVATED' })
-    expect(mocks.transaction).not.toHaveBeenCalled()
+
+    if (!result.ok) throw new Error('expected success')
+    expect(result.addedPasswordLogin).toBe(true)
+    expect(result.oauthProvider).toBeNull()
+    expect(mocks.transaction).toHaveBeenCalled()
+  })
+
+  it('gives a social-only account a password without disturbing the social login', async () => {
+    mocks.userFindUnique.mockResolvedValue(targetUser({ passwordHash: null, oauthProvider: 'GOOGLE' }))
+    const result = await setTemporaryPassword({ targetUserId: 'user-1', actorUserId: ACTOR })
+
+    if (!result.ok) throw new Error('expected success')
+    expect(result.addedPasswordLogin).toBe(true)
+    expect(result.oauthProvider).toBe('GOOGLE')
+    // Nothing in the write touches the provider columns.
+    const [[updateArgs]] = mocks.userUpdate.mock.calls
+    expect(updateArgs.data).not.toHaveProperty('oauthProvider')
+    expect(mocks.createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: expect.objectContaining({ addedPasswordLogin: true }) })
+    )
+  })
+
+  it('reports an ordinary reset as not adding a login', async () => {
+    const result = await setTemporaryPassword({ targetUserId: 'user-1', actorUserId: ACTOR })
+    if (!result.ok) throw new Error('expected success')
+    expect(result.addedPasswordLogin).toBe(false)
   })
 
   it('refuses a supplied password under the length floor', async () => {

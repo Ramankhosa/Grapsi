@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { unstable_noStore as noStore } from 'next/cache'
 import { useAuth } from '@/lib/auth-context'
+import { JOB_REGISTRY, jobHealth, type JobHealth } from '@/lib/jobs/registry'
 
 interface JobRunRow {
   id: string
@@ -29,59 +30,6 @@ interface JobEntry {
  * Run-now POSTs the endpoints directly — they accept interactive
  * funding-operator auth, so no proxy is needed.
  */
-const JOBS: Array<{
-  jobKey: string
-  label: string
-  description: string
-  cadence: string
-  endpoint: string
-  body?: Record<string, unknown>
-}> = [
-  {
-    jobKey: 'reminders-sweep',
-    label: 'Reminder sweep',
-    description: 'Due follow-up reminders plus the D30/D14/D7/D1 and no-acknowledgement nudge ladder.',
-    cadence: 'Hourly at :05',
-    endpoint: '/api/funding-dept/reminders/sweep',
-  },
-  {
-    jobKey: 'alerts-dispatch',
-    label: 'Alert dispatch',
-    description: 'Healing sweep: funding-match alerts for published calls never dispatched.',
-    cadence: 'Hourly at :20',
-    endpoint: '/api/funding/alerts/dispatch',
-  },
-  {
-    jobKey: 'alerts-digest-daily',
-    label: 'Daily alert digest',
-    description: 'Bundles queued alerts into one email per user on a daily frequency.',
-    cadence: 'Daily at digest hour :35',
-    endpoint: '/api/funding/alerts/digest',
-    body: { frequency: 'daily' },
-  },
-  {
-    jobKey: 'alerts-digest-weekly',
-    label: 'Weekly alert digest',
-    description: 'Bundles queued alerts for users on a weekly frequency.',
-    cadence: 'Mondays at digest hour :35',
-    endpoint: '/api/funding/alerts/digest',
-    body: { frequency: 'weekly' },
-  },
-  {
-    jobKey: 'reports-weekly',
-    label: 'Department weekly reports',
-    description: 'Worklist digest to each funding-department member and the rollup to the head.',
-    cadence: 'Mondays at digest hour :35',
-    endpoint: '/api/funding-dept/reports/weekly',
-  },
-  {
-    jobKey: 'event-user-expiry',
-    label: 'Event-user expiry',
-    description: 'Suspends EVENT/workshop users past their access window and revokes refresh tokens.',
-    cadence: 'Daily at digest hour :50',
-    endpoint: '/api/platform/users/expire-event-access',
-  },
-]
 
 const num = (value: unknown): number => (typeof value === 'number' ? value : 0)
 
@@ -137,6 +85,19 @@ const STATUS_PILL: Record<string, string> = {
   succeeded: 'bg-emerald-900/50 text-emerald-300 border border-emerald-700',
   failed: 'bg-red-900/50 text-red-300 border border-red-700',
   running: 'bg-cyan-900/50 text-cyan-300 border border-cyan-700',
+}
+
+/** Staleness reads differently from a failure, so it gets its own pill. */
+const HEALTH_PILL: Record<JobHealth, string> = {
+  ok: '',
+  stale: 'bg-amber-500/15 text-amber-300 border border-amber-500/40',
+  never: 'bg-rose-500/15 text-rose-300 border border-rose-500/40',
+}
+
+const HEALTH_LABEL: Record<JobHealth, string> = {
+  ok: '',
+  stale: 'overdue',
+  never: 'never run',
 }
 
 export default function SuperAdminJobsPage() {
@@ -213,7 +174,7 @@ export default function SuperAdminJobsPage() {
     [fetchJobs]
   )
 
-  const runNow = async (job: (typeof JOBS)[number]) => {
+  const runNow = async (job: (typeof JOB_REGISTRY)[number]) => {
     setError(null)
     setRunningKey(job.jobKey)
     try {
@@ -282,10 +243,14 @@ export default function SuperAdminJobsPage() {
           </div>
         ) : (
           <div className="space-y-6">
-            {JOBS.map((job) => {
+            {JOB_REGISTRY.map((job) => {
               const entry = byKey.get(job.jobKey)
               const newest = entry?.runs[0]
               const isPending = runningKey === job.jobKey || newest?.status === 'running'
+              // Computed here rather than server-side on purpose: this badge has
+              // to work when nothing is running at all, which is exactly the
+              // state that went unnoticed in production for months.
+              const health = jobHealth(job, entry?.lastSuccessAt ?? null)
               return (
                 <div key={job.jobKey} className="bg-slate-800 rounded-xl p-6 border border-slate-700">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -299,6 +264,14 @@ export default function SuperAdminJobsPage() {
                             }`}
                           >
                             {newest.status}
+                          </span>
+                        )}
+                        {health !== 'ok' && (
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-xs font-semibold ${HEALTH_PILL[health]}`}
+                            title={`Expected about every ${job.expectedIntervalMinutes} minutes`}
+                          >
+                            {HEALTH_LABEL[health]}
                           </span>
                         )}
                       </div>

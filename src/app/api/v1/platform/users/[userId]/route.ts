@@ -152,7 +152,9 @@ export async function PATCH(
         email: result.email,
         temporary_password: result.temporaryPassword,
         must_change_password: result.mustChangePassword,
-        sessions_revoked: result.sessionsRevoked
+        sessions_revoked: result.sessionsRevoked,
+        added_password_login: result.addedPasswordLogin,
+        oauth_provider: result.oauthProvider
       })
     }
 

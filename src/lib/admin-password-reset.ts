@@ -26,10 +26,18 @@ import { adminPasswordResetTemplate } from '@/lib/email-templates'
  *
  * Authority is not decided here — callers gate on `requirePlatformScope`, which
  * admits only a full SUPER_ADMIN. What this module enforces is the part that
- * does not depend on the caller's rank: nobody acts on their own account (a
- * temporary password on yourself is a lockout waiting to happen, and
- * self-service reset is right there), and nothing quietly invents a password
- * login for an account that only ever had a social one.
+ * does not depend on the caller's rank: nobody acts on their own account, since
+ * a temporary password on yourself is a lockout waiting to happen and
+ * self-service reset is right there.
+ *
+ * Accounts with no password of their own — never activated, or signed up
+ * through Google — are handled rather than refused. An earlier version turned
+ * them away on the grounds that an admin should not invent a password login for
+ * somebody. The refusal was worse than the thing it prevented: it hid the whole
+ * feature from the console with no explanation, in exactly the situation it
+ * exists for. A super admin can already create an account with any role, so the
+ * capability was never the line; visibility is. The action is labelled for what
+ * it does, forces a change, revokes sessions, and is audited.
  */
 
 /**
@@ -74,17 +82,12 @@ interface TargetUser {
 }
 
 /**
- * Load the target and apply the guards every action here shares.
- *
- * `requirePassword` separates the link path — fine for an account that has no
- * password yet, where it simply becomes an activation link — from the
- * temporary-password path, which would otherwise bolt a password login onto an
- * account whose owner has only ever used Google.
+ * Load the target and apply the two guards every action here shares: it exists,
+ * and it is not the caller.
  */
 async function loadTarget(
   targetUserId: string,
-  actorUserId: string,
-  options: { requirePassword: boolean }
+  actorUserId: string
 ): Promise<{ ok: true; user: TargetUser } | AdminPasswordFailure> {
   if (targetUserId === actorUserId) {
     return {
@@ -111,25 +114,6 @@ async function loadTarget(
 
   if (!user) {
     return { ok: false, code: 'USER_NOT_FOUND', message: 'User not found', status: 404 }
-  }
-
-  if (!user.passwordHash && user.oauthProvider) {
-    const provider = user.oauthProvider.charAt(0) + user.oauthProvider.slice(1).toLowerCase()
-    return {
-      ok: false,
-      code: 'SOCIAL_ACCOUNT',
-      message: `This account signs in with ${provider} and has no password to reset.`,
-      status: 400
-    }
-  }
-
-  if (options.requirePassword && !user.passwordHash) {
-    return {
-      ok: false,
-      code: 'NOT_ACTIVATED',
-      message: 'This account has never set a password. Send the activation link instead.',
-      status: 400
-    }
   }
 
   return {
@@ -193,7 +177,7 @@ export async function issuePasswordReset(params: {
   sendEmail: boolean
   ip?: string
 }): Promise<IssuePasswordResetResult> {
-  const target = await loadTarget(params.targetUserId, params.actorUserId, { requirePassword: false })
+  const target = await loadTarget(params.targetUserId, params.actorUserId)
   if (!target.ok) return target
   const { user } = target
 
@@ -252,6 +236,10 @@ export type SetTemporaryPasswordResult =
       temporaryPassword: string
       mustChangePassword: boolean
       sessionsRevoked: boolean
+      /** The account had no password before, so it just gained one as a way in. */
+      addedPasswordLogin: boolean
+      /** Set when the account also has a social login that still works. */
+      oauthProvider: string | null
     }
   | AdminPasswordFailure
 
@@ -261,6 +249,11 @@ export type SetTemporaryPasswordResult =
  *
  * Outstanding reset links are burned too: leaving one live after a manual reset
  * means two ways into the account when the admin believes there is one.
+ *
+ * On an account with no password this creates one. That is the point when mail
+ * is not being delivered: a person whose only route in was a link they cannot
+ * receive has no route in at all. A social login on the account is untouched
+ * and keeps working alongside the new password.
  */
 export async function setTemporaryPassword(params: {
   targetUserId: string
@@ -271,7 +264,7 @@ export async function setTemporaryPassword(params: {
   requireChange?: boolean
   ip?: string
 }): Promise<SetTemporaryPasswordResult> {
-  const target = await loadTarget(params.targetUserId, params.actorUserId, { requirePassword: true })
+  const target = await loadTarget(params.targetUserId, params.actorUserId)
   if (!target.ok) return target
   const { user } = target
 
@@ -287,6 +280,7 @@ export async function setTemporaryPassword(params: {
 
   const password = supplied || generateTemporaryPassword()
   const requireChange = params.requireChange !== false
+  const addedPasswordLogin = !user.passwordHash
   const passwordHash = await hashPassword(password)
 
   await prisma.$transaction([
@@ -311,7 +305,7 @@ export async function setTemporaryPassword(params: {
     action: 'USER_PASSWORD_SET_BY_ADMIN',
     resource: `user:${user.id}`,
     ip: params.ip || 'unknown',
-    meta: { email: user.email, requireChange, generated: !supplied }
+    meta: { email: user.email, requireChange, generated: !supplied, addedPasswordLogin }
   })
 
   return {
@@ -319,7 +313,9 @@ export async function setTemporaryPassword(params: {
     email: user.email,
     temporaryPassword: password,
     mustChangePassword: requireChange,
-    sessionsRevoked: true
+    sessionsRevoked: true,
+    addedPasswordLogin,
+    oauthProvider: user.oauthProvider
   }
 }
 
@@ -335,6 +331,10 @@ export type RequirePasswordChangeResult =
  * between colleagues, or one mailed in plaintext years ago. Sessions are
  * revoked by default, because leaving the open ones alive means the flag does
  * nothing until the person happens to sign out.
+ *
+ * The flag gates password sign-in only. Somebody who gets in through Google is
+ * not stopped by it, so on a social account it is a no-op until a password is
+ * actually used.
  */
 export async function requirePasswordChange(params: {
   targetUserId: string
@@ -343,7 +343,7 @@ export async function requirePasswordChange(params: {
   revokeSessions?: boolean
   ip?: string
 }): Promise<RequirePasswordChangeResult> {
-  const target = await loadTarget(params.targetUserId, params.actorUserId, { requirePassword: true })
+  const target = await loadTarget(params.targetUserId, params.actorUserId)
   if (!target.ok) return target
   const { user } = target
 

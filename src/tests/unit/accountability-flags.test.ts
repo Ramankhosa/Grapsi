@@ -95,3 +95,126 @@ describe('sumFlagInputs', () => {
     expect(computeFlags(total).flags.map((flag) => flag.code)).toEqual(['AWAY'])
   })
 })
+
+/**
+ * The four codes added with the efficiency and engagement reports.
+ *
+ * Each carries a fairness rule that the count alone does not express, and each
+ * rule below is one the first version got wrong.
+ */
+describe('efficiency and engagement flags', () => {
+  it('stays silent on a fact the caller never supplied', () => {
+    // The single most important property here. These fields default to
+    // undefined, not zero, so a caller that does not count submissions must not
+    // trip a flag saying nobody submitted anything.
+    const quiet = computeFlags(input({ live: 8, actionsInWindow: 4 }))
+    expect(codes(quiet)).not.toContain('NO_SUBMISSIONS')
+    expect(codes(quiet)).not.toContain('SLOW_FIRST_TOUCH')
+    expect(codes(quiet)).not.toContain('HIGH_DISMISSAL')
+    expect(codes(quiet)).not.toContain('FACULTY_UNENGAGED')
+  })
+
+  it('names a slow reaction only above the target', () => {
+    const thresholds = { untouchedDays: 7, silentDays: 14, firstTouchTargetDays: 3 }
+    expect(codes(computeFlags(input({ medianFirstTouchDays: 2 }), thresholds))).not.toContain(
+      'SLOW_FIRST_TOUCH'
+    )
+    const slow = computeFlags(input({ medianFirstTouchDays: 9.4 }), thresholds)
+    expect(codes(slow)).toContain('SLOW_FIRST_TOUCH')
+    expect(slow.flags[0].label).toContain('9.4 days')
+    // Never fires on "no calls arrived, so no median".
+    expect(codes(computeFlags(input({ medianFirstTouchDays: null }), thresholds))).not.toContain(
+      'SLOW_FIRST_TOUCH'
+    )
+  })
+
+  it('asks about a dismissal rate rather than accusing, and only on enough decisions', () => {
+    const thresholds = { untouchedDays: 7, silentDays: 14, dismissalRateWarnPct: 40 }
+    // Three out of four is noise, not a pattern.
+    expect(
+      codes(computeFlags(input({ decidedInWindow: 4, dismissedInWindow: 3 }), thresholds))
+    ).not.toContain('HIGH_DISMISSAL')
+
+    const high = computeFlags(
+      input({ decidedInWindow: 20, dismissedInWindow: 15 }),
+      thresholds
+    )
+    expect(codes(high)).toContain('HIGH_DISMISSAL')
+    const flag = high.flags.find((entry) => entry.code === 'HIGH_DISMISSAL')!
+    // Informational and weightless: a school really can receive mostly
+    // off-discipline calls, so this must not push anyone up the ranking.
+    expect(flag.informational).toBe(true)
+    expect(flag.weight).toBe(0)
+    expect(high.score).toBe(0)
+  })
+
+  it('reports no submissions only where there was work to convert', () => {
+    expect(
+      codes(computeFlags(input({ submittedInWindow: 0, live: 2 })))
+    ).not.toContain('NO_SUBMISSIONS')
+    expect(codes(computeFlags(input({ submittedInWindow: 0, live: 3 })))).toContain(
+      'NO_SUBMISSIONS'
+    )
+    expect(codes(computeFlags(input({ submittedInWindow: 1, live: 9 })))).not.toContain(
+      'NO_SUBMISSIONS'
+    )
+  })
+
+  it('caps the weight of unengaged faculty so one large school cannot swamp the ranking', () => {
+    const small = computeFlags(input({ reachableFacultyUnengaged: 2 }))
+    const huge = computeFlags(input({ reachableFacultyUnengaged: 400 }))
+    expect(small.score).toBe(8)
+    expect(huge.score).toBe(40)
+    // The real count still reaches the row, so nothing is hidden.
+    expect(huge.flags[0].count).toBe(400)
+  })
+
+  it('collapses every one of them to AWAY for somebody on leave', () => {
+    const away = computeFlags(
+      input({
+        isAway: true,
+        medianFirstTouchDays: 40,
+        decidedInWindow: 30,
+        dismissedInWindow: 29,
+        submittedInWindow: 0,
+        live: 9,
+        reachableFacultyUnengaged: 12,
+      })
+    )
+    expect(codes(away)).toEqual(['AWAY'])
+    expect(away.score).toBe(0)
+  })
+})
+
+describe('sumFlagInputs with the new fields', () => {
+  it('adds the counts and leaves submissions undefined when nobody counted them', () => {
+    const total = sumFlagInputs([
+      input({ decidedInWindow: 4, dismissedInWindow: 1, reachableFacultyUnengaged: 2 }),
+      input({ decidedInWindow: 6, dismissedInWindow: 3, reachableFacultyUnengaged: 5 }),
+    ])
+    expect(total.decidedInWindow).toBe(10)
+    expect(total.dismissedInWindow).toBe(4)
+    expect(total.reachableFacultyUnengaged).toBe(7)
+    // Left undefined so the member row does not fire NO_SUBMISSIONS on a
+    // default when the school rows never carried the figure.
+    expect(total.submittedInWindow).toBeUndefined()
+  })
+
+  it('sums submissions once at least one school supplied them', () => {
+    const total = sumFlagInputs([
+      input({ submittedInWindow: 2 }),
+      input({ submittedInWindow: 0 }),
+    ])
+    expect(total.submittedInWindow).toBe(2)
+  })
+
+  it('does not average medians, which would not be a median', () => {
+    const total = sumFlagInputs([
+      input({ medianFirstTouchDays: 2 }),
+      input({ medianFirstTouchDays: 40 }),
+    ])
+    expect(total.medianFirstTouchDays).toBeUndefined()
+    // The caller passes its own member-level figure through the overrides.
+    expect(sumFlagInputs([], { medianFirstTouchDays: 12 }).medianFirstTouchDays).toBe(12)
+  })
+})

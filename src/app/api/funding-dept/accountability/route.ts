@@ -5,8 +5,7 @@ import {
   getMemberSchoolMatrix,
   resolveActivityWindow,
 } from '@/lib/fundingDept/accountabilityService'
-import { getMembership } from '@/lib/fundingDept/membershipService'
-import { canReviewDept, memberReachSchoolIds, serializeMember } from '@/lib/fundingDept/shared'
+import { isLensError, refuseSchoolHead, resolveReportLens } from '@/lib/fundingDept/reportAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,6 +26,9 @@ export const dynamic = 'force-dynamic'
  * A member is clamped rather than refused on purpose: an officer should be able
  * to see what the head sees about them. Nothing here is meant to be a secret
  * scorecard, and a number somebody cannot check is a number they cannot fix.
+ *
+ * The clamp itself lives in `resolveReportLens`, shared with the three report
+ * endpoints beside this one. Four copies of it would have become four rules.
  */
 export async function GET(request: NextRequest) {
   const context = await requireTenantScope(request)
@@ -37,49 +39,29 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const window = await resolveActivityWindow(context.tenantId, searchParams.get('window'))
 
-  const reviewsDept = canReviewDept(context, context.scope)
-  const membership = await getMembership(context.tenantId, context.user.id)
-  const isActiveMember = Boolean(membership?.is_active)
-
-  if (!reviewsDept && !isActiveMember) {
-    return NextResponse.json(
-      { error: 'Only the funding department can see this.' },
-      { status: 403 }
-    )
-  }
-
-  const requestedSchool = (searchParams.get('schoolId') || '').trim() || null
-  const requestedMember = (searchParams.get('memberId') || '').trim() || null
-
-  let memberIds: string[] | undefined
-  let schoolIds: string[] | undefined
-
-  if (reviewsDept) {
-    if (requestedMember) memberIds = [requestedMember]
-    if (requestedSchool) schoolIds = [requestedSchool]
-  } else {
-    // Clamped to this member's own reach. A requested school outside it
-    // narrows to nothing rather than widening — the same shape the roster and
-    // matching routes use.
-    const serialized = serializeMember(membership)
-    const reach = memberReachSchoolIds(serialized)
-    memberIds = [serialized.id]
-    schoolIds = requestedSchool
-      ? reach.filter((id) => id === requestedSchool)
-      : reach.length > 0
-        ? reach
-        : ['__none__']
-  }
-
-  const matrix = await getMemberSchoolMatrix(context.tenantId, { window, memberIds, schoolIds })
-
-  return NextResponse.json({
-    ...matrix,
-    lens: reviewsDept ? 'department' : 'member',
-    viewer: {
-      memberId: membership?.id ?? null,
-      isHead: Boolean(membership?.is_head),
-      canReviewDept: reviewsDept,
-    },
+  const lens = await resolveReportLens(context, {
+    schoolId: searchParams.get('schoolId'),
+    memberId: searchParams.get('memberId'),
   })
+  if (isLensError(lens)) {
+    return NextResponse.json({ error: lens.error }, { status: lens.status })
+  }
+
+  // Closed to a school head. This grid is officer by officer, with each one's
+  // flags and attention score — the department's own performance management,
+  // not a report about any one school. A Dean's two reports are on their own
+  // page; see refuseSchoolHead for where that line comes from.
+  const refusal = refuseSchoolHead(lens)
+  if (refusal) return refusal
+
+  const matrix = await getMemberSchoolMatrix(context.tenantId, {
+    window,
+    memberIds: lens.memberIds,
+    // `undefined` is the matrix own "every school", and only a head or admin who
+    // asked for no filter gets it. A member who named a school outside their
+    // reach keeps the empty list and sees nothing, which is the point.
+    schoolIds: lens.allSchools ? undefined : lens.schoolIds,
+  })
+
+  return NextResponse.json({ ...matrix, lens: lens.lens, viewer: lens.viewer })
 }

@@ -449,3 +449,37 @@ async function writeAudit(input: {
     console.warn(`Funding department: audit log failed (${input.action})`, error)
   }
 }
+
+/**
+ * Coverage keyed by ANY unit id, not just a school root.
+ *
+ * `getSchoolCoverage` walks depth-0 roots, because that is where the department
+ * rota is held. A Head of Department, though, is granted a *department* — so
+ * looking their unit up in that map misses, and every row on their reports read
+ * "nobody covers this school" when in fact somebody did. Resolving each unit
+ * through `path[0]` first is what makes the school-head lens tell the truth.
+ *
+ * A unit whose root has no covering officer is simply absent from the result,
+ * which callers already treat as uncovered.
+ */
+export async function getCoverageForUnits(tenantId: string, unitIds: string[]) {
+  const wanted = Array.from(new Set(unitIds.filter(Boolean)))
+  const byUnit = new Map<string, Awaited<ReturnType<typeof getSchoolCoverage>>[number]>()
+  if (wanted.length === 0) return byUnit
+
+  const [coverage, units] = await Promise.all([
+    getSchoolCoverage(tenantId),
+    prisma.tenantOrgUnit.findMany({
+      where: { tenant_id: tenantId, id: { in: wanted } },
+      select: { id: true, path: true },
+    }),
+  ])
+  const byRoot = new Map(coverage.map((row) => [row.id, row]))
+
+  for (const unit of units) {
+    // A root's own path starts with itself, so this covers both cases.
+    const row = byRoot.get(unit.path[0] ?? unit.id)
+    if (row) byUnit.set(unit.id, row)
+  }
+  return byUnit
+}

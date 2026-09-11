@@ -420,6 +420,7 @@ export default function Header() {
               { href: '/researcher-matching', icon: '\u{1F3AF}', title: 'Find Researchers', description: 'Match faculty to a funding call, then assign or bulk-circulate it' },
               { href: '/funding-dept/overview', icon: '\u{1F4CB}', title: 'Department Overview', description: 'Pendency, load and coverage, by member and by school' },
               { href: '/funding-dept/accountability', icon: '\u{1F4CA}', title: 'Accountability', description: 'Member by member: pendency, chasing, submissions and who is behind' },
+              { href: '/tenant-admin/dsr-accountability', icon: '🧾', title: 'Sponsored Research Oversight', description: 'Unallocated calls, faculty nobody has approached, and how fast the office moves' },
               { href: '/funding-dept/calls', icon: '\u{1F4C8}', title: 'Call Funnel', description: 'Every call with who it reached: matched, assigned, submitted, awarded' },
             ],
           },
@@ -431,6 +432,7 @@ export default function Header() {
                 ? [
                     { href: '/tenant-admin/reports', icon: '\u{1F5C4}\uFE0F', title: 'Report Archive', description: 'Every grant-reviewer and funding-intelligence report your members have run' },
                     { href: '/tenant-admin/analytics', icon: '\u{1F4C9}', title: 'Usage Analytics', description: 'Who is using which service, and how much' },
+                    { href: '/tenant-admin/audit', icon: '🔏', title: 'Audit Trail', description: 'Who changed a role, an account or a coverage assignment, and when' },
                     { href: '/quality-audit', icon: '\u{1F50D}', title: 'Quality Audit', description: "Review AI output quality across the organization's projects" },
                   ]
                 : []),
@@ -457,6 +459,7 @@ export default function Header() {
                     { href: '/super-admin/reports', icon: '\u{1F5C4}\uFE0F', title: 'Report Archive', description: 'Every reviewer and funding-intelligence report, across all tenants' },
                     { href: '/super-admin/analytics', icon: '\u{1F4C8}', title: 'Platform Analytics', description: 'Usage, cost and growth across the platform' },
                     { href: '/super-admin/jobs', icon: '\u23F1\uFE0F', title: 'Jobs & Schedules', description: 'Scheduled sweeps and digests, and whether they are still running' },
+                    { href: '/super-admin/audit', icon: '🔏', title: 'Audit Trail', description: 'Every recorded change across every organization' },
                   ],
                 },
               ]

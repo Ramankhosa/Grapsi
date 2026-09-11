@@ -20,6 +20,7 @@ import {
   getUnassignedUpcomingCalls,
   getUpcomingDeadlines,
 } from '@/lib/assignments/dashboardService'
+import { backlogDeltas, weekStartFor } from './snapshotService'
 
 /** A weekly job that runs twice in one week must not mail twice. */
 const MIN_DIGEST_GAP_DAYS = 5
@@ -284,7 +285,31 @@ export async function sendWeeklyDigests(
       console.warn('Weekly digest: uncovered school lookup failed', error)
     }
 
-    if (memberRows.length === 0 && uncoveredSchools.length === 0) {
+    // This week unallocated backlog against last week. Read from the snapshot the
+    // same job wrote a moment ago, rather than recomputed, so the mail and the
+    // history cannot disagree. Null until two weeks exist, and the template then
+    // omits the line rather than claiming nothing changed.
+    let backlog: { current: number; previous: number | null } | null = null
+    try {
+      const deltas = await backlogDeltas(head.tenant_id, weekStartFor(now))
+      if (deltas.size > 0) {
+        let current = 0
+        let previous = 0
+        let sawPrevious = false
+        for (const delta of deltas.values()) {
+          current += delta.current
+          if (delta.previous !== null) {
+            previous += delta.previous
+            sawPrevious = true
+          }
+        }
+        backlog = { current, previous: sawPrevious ? previous : null }
+      }
+    } catch (error) {
+      console.warn('Weekly digest: backlog delta lookup failed', error)
+    }
+
+    if (memberRows.length === 0 && uncoveredSchools.length === 0 && !backlog) {
       result.skippedNothingPending += 1
       continue
     }
@@ -300,6 +325,7 @@ export async function sendWeeklyDigests(
             name: head.user.name,
             memberRows,
             uncoveredSchools,
+            backlog,
             overviewUrl,
           }),
         })

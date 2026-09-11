@@ -123,6 +123,7 @@ const KIND_LABEL: Record<string, string> = {
   COMPLETED: 'Completed',
   OUTCOME: 'Outcome',
   CANCELLED: 'Cancelled',
+  LAPSED: 'Not applied for',
   FOLLOW_UP: 'Contact',
   REMINDER_SENT: 'Reminder',
   DOCUMENT: 'Document',

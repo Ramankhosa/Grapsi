@@ -1,0 +1,11 @@
+-- When the pendency ladder last escalated this (call, school).
+--
+-- escalation_stages records THAT a rung fired, not when, and without the date
+-- the ladder could only anchor each rung to the age of the call. On an existing
+-- backlog that meant every call older than three weeks escalated straight to the
+-- administrators on the very first sweep, under a message that said the officer
+-- and the head had already been told. They had not.
+--
+-- With a date the ladder walks its rungs in order and waits the configured gap
+-- between them, so the message is true whenever it is sent.
+ALTER TABLE "call_school_triage" ADD COLUMN "last_escalated_at" TIMESTAMP(3);

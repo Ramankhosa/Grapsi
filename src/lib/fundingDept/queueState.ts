@@ -58,3 +58,81 @@ export function queueStateFor(triageStatus: string | null | undefined, liveAssig
   if (status === 'SHORTLISTED') return 'shortlisted'
   return 'pending'
 }
+
+/* -------------------------------------------------------------------------- */
+/* Untouched: pending for long enough that nobody can call it new             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Whether a relevant call has been sitting in a school with nobody on it and
+ * nobody looking at it.
+ *
+ * This lived in two places with two different definitions. The funnel asked
+ * "has anyone logged contact", ignoring triage entirely; the ledger asked "does
+ * a triage row exist", ignoring its contents. A call marked IN_REVIEW with no
+ * note counted as untouched in one number and not the other, and a head read
+ * both on adjacent screens.
+ *
+ * The agreed definition, and the reason for each clause:
+ *
+ *   pending            somebody already on it, shortlisted or dismissed is not
+ *                      a pendency — the ladder above decides which
+ *   no triage DECISION `decided_at IS NULL`, never row existence. The pendency
+ *                      sweep creates rows to hold its escalation stamp, and a
+ *                      stamp is not a decision. Testing existence would have let
+ *                      the sweep erase the backlog it exists to report
+ *   no contact         a call-level note against the school counts, which is
+ *                      exactly the early chasing that happens before anyone is
+ *                      assigned
+ *   old enough         published this morning is not neglect
+ */
+export interface UntouchedInput {
+  queueState: QueueState
+  /** When a human recorded a triage decision, not when the row appeared. */
+  triageDecidedAt: Date | string | null | undefined
+  /** Most recent follow-up on this call in this school, of any kind. */
+  lastActionAt: Date | string | null | undefined
+  /** Whole days since the call entered the system. Null when that is unknown. */
+  daysSinceEntered: number | null
+  untouchedDays: number
+}
+
+export function isCallUntouched(input: UntouchedInput): boolean {
+  if (input.queueState !== 'pending') return false
+  if (input.triageDecidedAt) return false
+  if (input.lastActionAt) return false
+  return (input.daysSinceEntered ?? 0) >= input.untouchedDays
+}
+
+/**
+ * The same predicate in SQL.
+ *
+ * `contactExists` is supplied by the caller because the join differs: the funnel
+ * matches follow-ups on (call, unit subtree), while a ledger also reaches them
+ * through the assignment. Everything else is fixed here so the four clauses
+ * cannot drift apart again.
+ */
+export function untouchedSql(options: {
+  /** The `pending` fragment from `queueStateSql`. */
+  pending: Prisma.Sql
+  /** Alias of the LEFT-JOINed call_school_triage row. */
+  triageAlias?: string
+  /** Expression yielding when the call entered the system. */
+  enteredAt: Prisma.Sql
+  /** Correlated EXISTS(...) for any follow-up on this call in this school. */
+  contactExists: Prisma.Sql
+  untouchedDays: number
+}): Prisma.Sql {
+  const alias = options.triageAlias || 'tri'
+  // An interval literal cannot be parameterised, and a bound integer arrives as
+  // bigint which make_interval() rejects. This value reaches us from tenant
+  // settings, so it is forced to a bounded integer before interpolation rather
+  // than trusted to have been validated upstream.
+  const days = Math.min(Math.max(Math.round(Number(options.untouchedDays) || 0), 0), 3650)
+  return Prisma.sql`(
+    ${options.pending}
+    AND ${Prisma.raw(alias)}.decided_at IS NULL
+    AND ${options.enteredAt} < now() - ${Prisma.raw(`INTERVAL '${days} days'`)}
+    AND NOT ${options.contactExists}
+  )`
+}

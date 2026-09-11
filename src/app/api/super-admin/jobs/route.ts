@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import prisma from '@/lib/prisma'
+import { JOB_KEYS } from '@/lib/jobs/registry'
 
 async function verifySuperAdmin(request: NextRequest) {
   const authResult = await authenticateUser(request)
@@ -28,17 +29,6 @@ async function verifySuperAdmin(request: NextRequest) {
   return { user: authResult.user }
 }
 
-/** The job registry: every jobKey withJobRun is called with. */
-const JOB_KEYS = [
-  'reminders-sweep',
-  'alerts-dispatch',
-  'alerts-digest-daily',
-  'alerts-digest-weekly',
-  'reports-weekly',
-  'event-user-expiry',
-  'proposal-reviews-sweep',
-  'proposals-sweep',
-] as const
 
 const RUNS_PER_JOB = 10
 
