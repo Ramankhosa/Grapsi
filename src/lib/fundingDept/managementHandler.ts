@@ -10,8 +10,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
   try {
     const params=new URL(request.url).searchParams
     const window=await managementWindow(access.context.tenantId,params)
-    const mode=params.get('mode') || (['pending','deadline-risk','coverage'].includes(view)?'pending':'cohort')
-    if(!['pending','activity','cohort'].includes(mode))return NextResponse.json({error:'Unknown report mode.'},{status:400})
+    const mode=params.get('mode') || (['pending','deadline-risk','opportunity-gaps','coverage'].includes(view)?'pending':'cohort')
+    if(!['pending','activity','cohort','portfolio'].includes(mode))return NextResponse.json({error:'Unknown report mode.'},{status:400})
     const requested=params.get('memberId')
     if(!access.department && requested && requested!==access.memberId)return NextResponse.json({error:'This portfolio is outside your access.'},{status:403})
     const scopeKey=reportScopeKey(access),filterKey=reportFilterKey(params,view)
@@ -31,7 +31,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
     const pageSize=Math.max(1,Math.min(100,Number.parseInt(params.get('pageSize') || '20',10)||20))
     const slice=<T,>(items:T[])=>({rows:items.slice((page-1)*pageSize,page*pageSize),total:items.length,page,pageSize})
     const level=params.get('level') || 'summary'
-    const calls=report.members.filter(m=>!params.get('drillMemberId')||m.id===params.get('drillMemberId')).flatMap(m=>m.schools.filter(s=>!params.get('drillSchoolId')||s.id===params.get('drillSchoolId')).flatMap(s=>s.calls.filter(c=>!params.get('drillCallId')||c.id===params.get('drillCallId'))))
+    const contexts=report.members.filter(m=>!params.get('drillMemberId')||m.id===params.get('drillMemberId')).flatMap(m=>m.schools.filter(s=>!params.get('drillSchoolId')||s.id===params.get('drillSchoolId')).flatMap(s=>s.calls.filter(c=>!params.get('drillCallId')||c.id===params.get('drillCallId')).map(c=>({member:m,school:s,call:c}))))
+    const calls=contexts.map(row=>row.call)
     const items=calls.flatMap(c=>c.applications)
     const nextActions=report.actions.filter(a=>a.status==='OPEN')
     let payload:unknown
@@ -39,9 +40,16 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
     else if(level==='applications')payload=slice(items)
     else if(level==='matches')payload=slice(calls.flatMap(c=>c.matches))
     else if(view==='performance')payload={rows:report.performance,weekly:report.weekly}
-    else if(view==='weekly-review')payload={...report.weekly,urgentActions:nextActions.filter(a=>a.blocker || a.due_at && a.due_at<=window.asOf)}
+    else if(view==='weekly-review')payload={...report.weekly,urgentActions:nextActions.filter(a=>a.blocker || a.due_at && a.due_at<=window.asOf),
+      urgentOpportunities:contexts.filter(({call})=>call.quality==='confirmed'&&call.gaps.some(g=>['UNTOUCHED','MATCHED_UNALLOCATED','APPROACHED_UNALLOCATED'].includes(g))&&
+        (!call.deadline || call.deadline.getTime()<=window.asOf.getTime()+30*86400000)).map(({member,school,call})=>({...call,memberName:member.name,schoolName:school.name,applications:undefined,matches:undefined}))}
     else if(view==='coverage')payload=slice(report.faculty)
-    else if(view==='pending'||view==='deadline-risk'||view==='outcomes') {
+    else if(view==='opportunity-gaps') {
+      const rows=contexts.filter(({call})=>call.quality==='confirmed'&&call.gaps.length>0).map(({member,school,call})=>({...call,memberId:member.id,memberName:member.name,schoolName:school.name,applications:undefined,matches:undefined}))
+      rows.sort((a,b)=>Number(b.gaps.includes('UNTOUCHED'))-Number(a.gaps.includes('UNTOUCHED')) || Number(b.matchedUnallocated)-Number(a.matchedUnallocated) ||
+        (a.deadline?.getTime()??Infinity)-(b.deadline?.getTime()??Infinity) || `${a.schoolId}:${a.id}`.localeCompare(`${b.schoolId}:${b.id}`))
+      payload={...slice(rows)}
+    } else if(view==='pending'||view==='deadline-risk'||view==='outcomes') {
       const list=view==='outcomes'?items.filter(a=>a.submitted):items.filter(a=>a.outstanding)
       list.sort((a,b)=>Number(b.exceptions.includes('overdue'))-Number(a.exceptions.includes('overdue')) ||
         Math.min(...[a.agency_deadline,a.nextAction?.due_at].filter(Boolean).map(d=>new Date(d!).getTime()),Infinity)-
@@ -49,6 +57,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
       payload={...slice(list),unallocated:calls.filter(c=>c.unallocated).map(c=>({...c,matches:undefined})),actions:nextActions}
     }else payload={members:report.members.map(m=>({...m,schools:m.schools.map(s=>({...s,calls:undefined,totals:{
       relevant:s.calls.filter(c=>c.quality==='confirmed').length,matches:s.calls.reduce((n,c)=>n+c.matchedFaculty,0),
+      actedOn:s.calls.filter(c=>c.quality==='confirmed'&&c.actedOn).length,untouched:s.calls.filter(c=>c.quality==='confirmed'&&!c.actedOn).length,
+      matchedUnallocated:s.calls.filter(c=>c.matchedUnallocated).length,
       allocated:s.calls.reduce((n,c)=>n+c.allocated,0),independent:s.calls.reduce((n,c)=>n+c.independent,0),
       followedUp:s.calls.reduce((n,c)=>n+c.followedUp,0),submitted:s.calls.reduce((n,c)=>n+c.submitted,0),verified:s.calls.reduce((n,c)=>n+c.verified,0),
       pending:s.calls.reduce((n,c)=>n+c.pending,0),overdue:s.calls.reduce((n,c)=>n+c.overdue,0),

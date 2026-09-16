@@ -9,7 +9,7 @@ export function reportScopeKey(access:{department:boolean;deputy:boolean;schoolI
   return hash([access.department,access.deputy,access.schoolIds?[...access.schoolIds].sort():null])
 }
 export function reportFilterKey(params:URLSearchParams,view:string){
-  return hash([view,[...params.entries()].filter(([k])=>!['snapshot','page','pageSize','format','level','drillSchoolId','drillCallId','drillMemberId'].includes(k)).sort(([a],[b])=>a.localeCompare(b))])
+  return hash(['opportunity-action-v2',view,[...params.entries()].filter(([k])=>!['snapshot','page','pageSize','format','level','drillSchoolId','drillCallId','drillMemberId'].includes(k)).sort(([a],[b])=>a.localeCompare(b))])
 }
 const dateKeys=new Set(['asOf','start','end','at','deadline','firstSeen','stageEnteredAt','historySince','created_at','updated_at','submitted_at','internal_deadline','review_deadline','agency_deadline','happened_at','due_at','completed_at','verified_at','occurred_at','first_seen_at','last_seen_at'])
 function revive(value:unknown,key=''):any {

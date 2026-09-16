@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applicationState, csvCell, evidenceFingerprint, hasSubmissionEvidence, inPeriod, ratio } from '@/lib/fundingDept/managementRules'
+import { applicationState, csvCell, evidenceFingerprint, hasSubmissionEvidence, inPeriod, opportunityActionState, ratio } from '@/lib/fundingDept/managementRules'
 import type { ApplicationRow } from '@/lib/fundingDept/managementRules'
 
 const row=(overrides:Partial<ApplicationRow>={}):ApplicationRow=>({id:'assignment:a',tenant_id:'t',school_id:'s',call_id:'c',assignment_id:'a',proposal_id:null,faculty_id:'f',allocated_by:'o',created_at:new Date('2026-01-01'),assignment_status:'IN_PROGRESS',outcome:'PENDING',proposal_status:'DRAFT',submitted_at:null,submission_reference:null,submission_url:null,submission_notes:null,submission_recorder:null,internal_deadline:null,review_deadline:null,agency_deadline:null,title:'Call',agency:null,requested_amount:null,sanctioned_amount:null,currency:'INR',version_no:1,updated_at:new Date('2026-01-01'),...overrides})
@@ -12,4 +12,10 @@ describe('canonical DSR management rules',()=>{
   it('uses a half-open reporting boundary',()=>{const start=new Date('2026-01-01'),end=new Date('2026-02-01');expect(inPeriod(start,start,end)).toBe(true);expect(inPeriod(end,start,end)).toBe(false)})
   it('shows percentage denominators and neutral empty values',()=>{expect(ratio(2,4)).toEqual({numerator:2,denominator:4,percent:50});expect(ratio(0,0).percent).toBeNull()})
   it('neutralizes formulas in CSV exports',()=>expect(csvCell('=HYPERLINK("x")')).toBe('"\'=HYPERLINK(""x"")"'))
+  it('does not treat an automated researcher match as human action',()=>expect(opportunityActionState({applications:0,candidatesReviewed:0,externalContacts:0,recordedActions:0,dispositionRecorded:false})).toEqual({touched:false,signals:[]}))
+  it('recognizes each auditable opportunity action signal',()=>{
+    expect(opportunityActionState({applications:1,candidatesReviewed:1,externalContacts:1,recordedActions:1,dispositionRecorded:true})).toEqual({
+      touched:true,signals:['APPLICATION_OR_ALLOCATION','FACULTY_REVIEWED','EXTERNAL_FACULTY_CONTACT','NAMED_ACTION','NO_UPTAKE_DECISION'],
+    })
+  })
 })

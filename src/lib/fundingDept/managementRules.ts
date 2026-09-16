@@ -1,8 +1,15 @@
 /** Pure reporting rules shared by the reports and their tests. */
 import { createHash } from 'node:crypto'
 
-export type ReportMode = 'pending' | 'cohort' | 'activity'
+export type ReportMode = 'pending' | 'cohort' | 'activity' | 'portfolio'
 export type WaitingWith = 'FACULTY' | 'DSR' | 'REVIEWER' | 'APPROVER' | 'AGENCY'
+export type OpportunityActionInput = {
+  applications: number
+  candidatesReviewed: number
+  externalContacts: number
+  recordedActions: number
+  dispositionRecorded: boolean
+}
 export type ApplicationRow = {
   id: string; tenant_id: string; school_id: string | null; call_id: string | null
   assignment_id: string | null; proposal_id: string | null; faculty_id: string
@@ -59,6 +66,19 @@ export function ratio(numerator: number, denominator: number) {
 export function median(values: number[]) {
   const sorted = values.filter(Number.isFinite).sort((a,b) => a-b)
   return sorted.length ? Math.round((sorted[Math.floor((sorted.length-1)/2)] + sorted[Math.floor(sorted.length/2)]) / 2 * 10) / 10 : null
+}
+/** Matching is automated evidence, not human action. A call becomes "acted on"
+ * only when a person records engagement, an application/allocation, a named
+ * action, or a considered no-uptake decision. */
+export function opportunityActionState(input: OpportunityActionInput) {
+  const signals = [
+    input.applications > 0 ? 'APPLICATION_OR_ALLOCATION' : null,
+    input.candidatesReviewed > 0 ? 'FACULTY_REVIEWED' : null,
+    input.externalContacts > 0 ? 'EXTERNAL_FACULTY_CONTACT' : null,
+    input.recordedActions > 0 ? 'NAMED_ACTION' : null,
+    input.dispositionRecorded ? 'NO_UPTAKE_DECISION' : null,
+  ].filter(Boolean) as string[]
+  return { touched: signals.length > 0, signals }
 }
 export const day = 86400000
 export function csvCell(value: unknown) {

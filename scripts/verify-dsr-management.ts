@@ -7,7 +7,6 @@ import { getManagementReport } from '../src/lib/fundingDept/managementService'
 import { saveAction, verifySubmission } from '../src/lib/fundingDept/managementActions'
 import { exportTables, managementExport } from '../src/lib/fundingDept/managementExport'
 import { readReportSnapshot, writeReportSnapshot } from '../src/lib/fundingDept/reportSnapshot'
-import { persistMatchingRun } from '../src/lib/fundingDept/matchingRun'
 
 async function main(){
   const host=new URL(process.env.DATABASE_URL!).hostname
@@ -50,6 +49,16 @@ async function main(){
     const activity=await run({mode:'activity',start:new Date(now.getTime()-30*86400000)})
     ok(activity.activity.submissions===2 && activity.activity.allocations===0,'Period activity uses actual submission and allocation dates')
     ok(pending.applications.find(a=>a.id===`assignment:${allocations[1].id}`)?.overdue.agency,'Drafting work retains an independent overdue flag')
+    await prisma.researcherProfile.create({data:{user_id:faculty.id,org_unit_id:school.id,display_name:'faculty'}})
+    const gapCall=await prisma.fundingCall.create({data:{tenantId:id,createdByUserId:primary.id,updatedByUserId:primary.id,title:'Matched but unallocated',visibility:'TENANT_PRIVATE',status:'PUBLISHED',deadlineAt:new Date(now.getTime()+14*86400000),createdAt:now}})
+    await prisma.callSchoolTriage.create({data:{tenant_id:id,org_unit_id:school.id,funding_call_id:gapCall.id,status:'RELEVANT',created_at:now}})
+    await prisma.fundingOpportunityMatch.create({data:{tenant_id:id,funding_call_id:gapCall.id,user_id:faculty.id,org_unit_id:school.id,school_id:school.id,match_score:0.91,match_tier:'STRONG',match_reason:'Fixture research alignment',source:'fixture',source_version:'v1',first_seen_at:now,last_seen_at:now}})
+    let coverageReport=await run({mode:'portfolio'})
+    let gap=coverageReport.members.flatMap(m=>m.schools.flatMap(s=>s.calls)).find(c=>c.id===gapCall.id)!
+    ok(gap.matchedUnallocated && gap.actionState==='UNTOUCHED' && gap.matches[0]?.allocationStatus==='PENDING_ALLOCATION','Automated match exposes pending researcher allocation without counting as human action')
+    await saveAction(id,school.id,primary.id,{callId:gapCall.id,title:'Contact matched researcher',ownerUserId:primary.id,waitingWith:'DSR',dueAt:new Date(Date.now()+86400000).toISOString()})
+    coverageReport=await run({mode:'portfolio'});gap=coverageReport.members.flatMap(m=>m.schools.flatMap(s=>s.calls)).find(c=>c.id===gapCall.id)!
+    ok(gap.actedOn && gap.touchSignals.includes('NAMED_ACTION') && coverageReport.totals.actedOn+coverageReport.totals.untouched===coverageReport.totals.callSchoolOpportunities,'Mapped-call action coverage reconciles and records named intervention')
     const appId=`assignment:${allocations[1].id}`
     const action=await saveAction(id,school.id,primary.id,{applicationId:appId,title:'Prepare draft',ownerUserId:faculty.id,waitingWith:'FACULTY',dueAt:new Date(Date.now()+86400000).toISOString()})
     await assert.rejects(()=>saveAction(id,school.id,primary.id,{id:action.id,version:action.version,ownerUserId:primary.id}),/Explain/)
