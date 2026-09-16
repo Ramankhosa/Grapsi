@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
+import { snapshotFundingOpportunity } from '@/lib/fundingDept/opportunitySnapshot'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { canAssignToUser, resolveAssignerUnitId } from '@/lib/orgUnits/scope'
 import { listSubtreeUnitIds } from '@/lib/orgUnits/tree'
@@ -244,6 +245,18 @@ export async function POST(request: NextRequest) {
       assigner_org_unit_id: await resolveAssignerUnitId(context.scope),
     },
     include: assignmentInclude,
+  })
+
+  await snapshotFundingOpportunity({
+    tenantId: context.tenantId,
+    fundingCallId: call.id,
+    userId: assignee.id,
+    orgUnitId: permission.assigneeUnitId,
+    score: payload.matchScore ?? null,
+    tier: payload.matchTier ?? null,
+    reason: payload.matchBasis || null,
+    source: 'assignment',
+    sourceVersion: 'assignment-v1',
   })
 
   await notifyNewAssignment({

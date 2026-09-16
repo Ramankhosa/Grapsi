@@ -25,6 +25,7 @@ export const dynamic = 'force-dynamic'
 
 const postSchema = z.object({
   kind: z.enum(FOLLOW_UP_KINDS).default('CALL'),
+  contactTarget: z.enum(['FACULTY','AGENCY','INTERNAL','UNKNOWN']).default('UNKNOWN'),
   note: z.string().trim().min(1, 'Write down what was said').max(5000),
   happenedAt: z.string().trim().nullable().optional(),
   recordStatus: z.enum(PROPOSAL_STATUSES).nullable().optional(),
@@ -85,6 +86,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       actorUserId: context.user.id,
       lens: access.lens,
       kind: payload.kind,
+      contactTarget: payload.contactTarget,
       note: payload.note,
       happenedAt: parseDate(payload.happenedAt),
       recordStatus: payload.recordStatus ?? null,

@@ -37,6 +37,7 @@ export const dynamic = 'force-dynamic'
 const createSchema = z.object({
   orgUnitId: z.string().trim().min(1, 'Choose the school this note is about'),
   kind: z.enum(FOLLOW_UP_KINDS).default('NOTE'),
+  contactTarget: z.enum(['FACULTY','AGENCY','INTERNAL','UNKNOWN']).default('FACULTY'),
   /**
    * Where the application stands. SUBMITTED is rejected here: a call-level note
    * is chasing recorded before anyone is assigned, so there is no application
@@ -180,6 +181,7 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
       org_unit_id: target.unit.id,
       created_by_user_id: target.context.user.id,
       kind: payload.kind,
+      contact_target: ['CALL','EMAIL','MEETING'].includes(payload.kind) ? payload.contactTarget : 'INTERNAL',
       stage: payload.stage ?? null,
       note: payload.note,
       happened_at: parseDate(payload.happenedAt) || new Date(),

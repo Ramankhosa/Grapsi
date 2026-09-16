@@ -60,6 +60,7 @@ export default function FollowUpPanel({
   const { showToast } = useToast()
 
   const [kind, setKind] = useState<ProposalFollowUpKind>('CALL')
+  const [contactTarget, setContactTarget] = useState('UNKNOWN')
   const [note, setNote] = useState('')
   const [recordStatus, setRecordStatus] = useState('')
   const [sanctionAmount, setSanctionAmount] = useState('')
@@ -79,6 +80,7 @@ export default function FollowUpPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind,
+          contactTarget,
           note: note.trim(),
           recordStatus: recordStatus || null,
           remindAt: remindAt || null,
@@ -133,6 +135,7 @@ export default function FollowUpPanel({
         </p>
 
         <div className="grid gap-3 sm:grid-cols-3">
+          <label className="nk-label">Contact with<select className="nk-select mt-1 w-full" value={contactTarget} onChange={e=>setContactTarget(e.target.value)}><option value="UNKNOWN">Not specified (excluded from faculty coverage)</option><option value="FACULTY">Faculty</option><option value="AGENCY">Funding agency</option><option value="INTERNAL">Internal coordination</option></select></label>
           <div>
             <label className="nk-label" htmlFor="fu-kind">
               How

@@ -3,6 +3,7 @@ import { sendEmail, SITE_URL } from '../mailer';
 import { fundingOpportunityTemplate, fundingAlertDigestTemplate } from '../email-templates';
 import { filterTenantsWithFeature } from '../entitlement-service';
 import { matchedAlertKeywords } from '../funding/alertKeywordBoost';
+import { snapshotFundingOpportunity } from '../fundingDept/opportunitySnapshot';
 import type { ResearcherSearchResult } from './researcherSearchService';
 import { researcherSearchService } from './researcherSearchService';
 
@@ -439,6 +440,21 @@ export class FundingAlertService {
           select: { id: true },
         });
         alertId = alert.id;
+        // Alert delivery remains available if the reporting projection is
+        // temporarily unavailable; the alert row itself is dated evidence and
+        // the reporting backfill can reconstruct it without inventing history.
+        await snapshotFundingOpportunity({
+          tenantId: user.tenantId,
+          fundingCallId: call.id,
+          userId: user.id,
+          score: match.score,
+          tier: match.matchTier,
+          reason: match.matchReason || null,
+          source: 'alert',
+          sourceVersion: 'funding-alert-v1',
+        }).catch((snapshotError) => {
+          console.warn('Could not persist the funding opportunity snapshot.', snapshotError);
+        });
       } catch (error) {
         if (isUniqueViolation(error)) {
           result.skippedExisting += 1;

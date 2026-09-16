@@ -14,12 +14,8 @@ import {
   fundingDeptWeeklyMemberTemplate,
 } from '@/lib/email-templates'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
-import {
-  getMissedAssignments,
-  getSummary,
-  getUnassignedUpcomingCalls,
-  getUpcomingDeadlines,
-} from '@/lib/assignments/dashboardService'
+import { getManagementReport, type ManagementReport } from './managementService'
+import { day, inPeriod } from './managementRules'
 import { backlogDeltas, weekStartFor } from './snapshotService'
 
 /** A weekly job that runs twice in one week must not mail twice. */
@@ -97,71 +93,32 @@ export async function sendWeeklyDigests(
 
   const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
+  const reportCache=new Map<string,Promise<ManagementReport>>()
+  const reportFor=(tenantId:string)=>{if(!reportCache.has(tenantId))reportCache.set(tenantId,getManagementReport(tenantId,{asOf:now,start:since,end:new Date(now.getTime()+1),mode:'pending'}));return reportCache.get(tenantId)!}
   for (const member of members) {
-    const filters = { tenantId: member.tenant_id, assignedByUserIds: [member.user_id] }
     const schoolUnitIds = member.school_assignments.map((row) => row.org_unit_id)
 
     let summary
-    let dueSoon: Awaited<ReturnType<typeof getUpcomingDeadlines>> = []
+    let dueSoon: Array<{callTitle:string;facultyName:string|null;deadlineAt:Date|null}> = []
     let overdueReminders: Array<{ note: string; facultyName: string | null }> = []
     let openCalls: Array<{ title: string | null; closesAt: Date | null }> = []
     let followUpCount = 0
 
     try {
-      const [summaryRow, upcoming, reminders, calls, followUps] = await Promise.all([
-        getSummary(filters),
-        getUpcomingDeadlines(filters, 30, 10),
-        prisma.assignmentFollowUp.findMany({
-          where: {
-            tenant_id: member.tenant_id,
-            created_by_user_id: member.user_id,
-            reminder_sent_at: null,
-            remind_at: { not: null, lte: now },
-          },
-          select: {
-            note: true,
-            assignment: { select: { assignee: { select: { name: true, email: true } } } },
-            // Call-level reminders (no assignee yet) still need a name in the mail.
-            funding_call: { select: { title: true, scheme_title: true } },
-            org_unit: { select: { name: true } },
-          },
-          orderBy: { remind_at: 'asc' },
-          take: 10,
-        }),
-        schoolUnitIds.length > 0
-          ? getUnassignedUpcomingCalls(member.tenant_id, {
-              scopeUnitIds: schoolUnitIds,
-              // Only calls in these schools' disciplines. A weekly mail listing
-              // the whole tenant's open catalog is the kind a reader stops
-              // opening, which costs more than sending nothing.
-              relevanceUnitIds: schoolUnitIds,
-              withinDays: 45,
-              limit: 10,
-            })
-          : Promise.resolve([]),
-        prisma.assignmentFollowUp.count({
-          where: {
-            tenant_id: member.tenant_id,
-            created_by_user_id: member.user_id,
-            happened_at: { gte: since },
-          },
-        }),
-      ])
-      summary = summaryRow
-      dueSoon = upcoming
-      overdueReminders = reminders.map((row) => ({
-        note: row.note,
-        facultyName:
-          row.assignment?.assignee?.name ||
-          row.assignment?.assignee?.email ||
-          // No assignee yet: say which call and school it was logged against.
-          [row.funding_call?.scheme_title || row.funding_call?.title, row.org_unit?.name]
-            .filter(Boolean)
-            .join(' — ') ||
-          null,
-      }))
-      openCalls = calls
-      followUpCount = followUps
+      const report=await reportFor(member.tenant_id)
+      const applications=report.applications.filter(a=>schoolUnitIds.includes(a.school_id!))
+      const open=applications.filter(a=>a.outstanding)
+      summary={active:open.length,submitted:applications.filter(a=>a.submitted).length,
+        missed:applications.filter(a=>a.stage==='LAPSED_NOT_APPLIED').length,declined:applications.filter(a=>a.stage==='DECLINED').length}
+      dueSoon=open.filter(a=>a.agency_deadline&&a.agency_deadline>=now&&a.agency_deadline.getTime()<=now.getTime()+30*day)
+        .sort((a,b)=>a.agency_deadline!.getTime()-b.agency_deadline!.getTime()).slice(0,10)
+        .map(a=>({callTitle:a.title,facultyName:a.faculty?.name||null,deadlineAt:a.agency_deadline}))
+      overdueReminders=report.actions.filter(a=>schoolUnitIds.includes(a.school_id)&&a.status==='OPEN'&&a.due_at&&a.due_at<=now).slice(0,10)
+        .map(a=>({note:a.title+(a.blocker?' · '+a.blocker:''),facultyName:a.owner_name}))
+      openCalls=report.members.flatMap(m=>m.schools.filter(s=>schoolUnitIds.includes(s.id)).flatMap(s=>s.calls))
+        .filter(c=>c.unallocated&&(!c.deadline||c.deadline>=now)).slice(0,10).map(c=>({title:c.title,closesAt:c.deadline}))
+      followUpCount=report.performance.find(p=>p.id===member.id)?.performedContacts||0
+
     } catch (error) {
       result.failed += 1
       console.warn(`Weekly digest: could not build worklist for ${member.user.email}`, error)
@@ -275,7 +232,7 @@ export async function sendWeeklyDigests(
           tenant_id: head.tenant_id,
           depth: 0,
           is_active: true,
-          funding_dept_coverage: { none: {} },
+          funding_dept_coverage: { none: { is_deputy: false, member: { is_active: true } } },
         },
         select: { name: true },
         orderBy: { name: 'asc' },
@@ -314,7 +271,7 @@ export async function sendWeeklyDigests(
       continue
     }
 
-    const overviewUrl = `${SITE_URL}/funding-dept/overview`
+    const overviewUrl = `${SITE_URL}/funding-dept/accountability`
     try {
       if (head.user.email) {
         await sendEmail({

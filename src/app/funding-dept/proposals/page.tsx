@@ -39,6 +39,8 @@ interface RegisterRow {
   latestVersion: { versionNo: number; reviewStatus: string; uploadedAt: string } | null
   lastSharedReview: { score: number | null; sharedAt: string } | null
   nextAction: { actor: string; text: string }
+  submissionRecordedBy: string | null
+  reporting: { evidenceStatus: string; verifiedAt: string | null; verifiedBy: string | null; revisionDeadline: string | null; agencyFollowUpDue: string | null; finalDecision: string | null; nextAction: { title:string;owner_name:string;waiting_with:string;due_at:string|null } | null } | null
 }
 
 function formatDate(value: string | null): string {
@@ -233,17 +235,20 @@ export default function ProposalRegisterPage() {
           </div>
         ) : (
           <div className="nk-panel cb-scroll-x overflow-x-auto">
-            <table className="w-full min-w-[1000px] text-sm">
+            <table className="w-full min-w-[1350px] text-sm">
               <thead>
                 <tr className="border-b border-hairline">
                   <th className="nk-label px-4 py-3 text-left">Proposal</th>
                   <th className="nk-label px-3 py-3 text-left">Researcher</th>
                   <th className="nk-label px-3 py-3 text-left">School</th>
                   <th className="nk-label px-3 py-3 text-left">Status</th>
+                  <th className="nk-label px-3 py-3 text-left">Submission evidence</th>
                   <th className="nk-label px-3 py-3 text-right">Draft</th>
                   <th className="nk-label px-3 py-3 text-right">Score</th>
                   <th className="nk-label px-3 py-3 text-right">Cut-off</th>
                   <th className="nk-label px-4 py-3 text-left">Waiting on</th>
+                  <th className="nk-label px-4 py-3 text-left">Agency / revision</th>
+                  <th className="nk-label px-4 py-3 text-left">Final decision</th>
                 </tr>
               </thead>
               <tbody>
@@ -263,6 +268,7 @@ export default function ProposalRegisterPage() {
                     <td className="px-3 py-3">
                       <ProposalStatusChip status={row.status} />
                     </td>
+                    <td className="px-3 py-3"><span className={row.reporting?.evidenceStatus==='VERIFIED'?'nk-badge nk-badge-live':row.reporting?.evidenceStatus==='MISSING'?'nk-badge nk-badge-warn':'nk-badge'}>{row.reporting?.evidenceStatus ? row.reporting.evidenceStatus.toLowerCase().replace('_',' ') : '—'}</span><p className="nk-hint text-xs">{row.reporting?.verifiedBy?`Checked by ${row.reporting.verifiedBy}`:row.submissionRecordedBy?`Recorded by ${row.submissionRecordedBy}`:''}</p></td>
                     <td className="px-3 py-3 text-right">
                       <span className="nk-mono">
                         {row.currentVersionNo > 0 ? `v${row.currentVersionNo}` : '—'}
@@ -288,7 +294,7 @@ export default function ProposalRegisterPage() {
                               : 'nk-badge'
                         }
                       >
-                        {row.nextAction?.actor === 'officer'
+                        {row.reporting?.nextAction ? `${row.reporting.nextAction.owner_name}: ${row.reporting.nextAction.title}` : row.nextAction?.actor === 'officer'
                           ? 'Department'
                           : row.nextAction?.actor === 'faculty'
                             ? 'Researcher'
@@ -297,6 +303,8 @@ export default function ProposalRegisterPage() {
                               : '—'}
                       </span>
                     </td>
+                    <td className="px-4 py-3"><p>Agency follow-up: {formatDate(row.reporting?.agencyFollowUpDue||null)}</p><p>Revision: {formatDate(row.reporting?.revisionDeadline||null)}</p></td>
+                    <td className="px-4 py-3">{row.reporting?.finalDecision ? <ProposalStatusChip status={row.reporting.finalDecision}/> : 'Pending decision'}</td>
                   </tr>
                 ))}
               </tbody>

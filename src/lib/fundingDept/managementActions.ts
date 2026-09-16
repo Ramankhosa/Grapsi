@@ -1,0 +1,81 @@
+import { randomUUID } from 'node:crypto'
+import prisma from '@/lib/prisma'
+import { Prisma } from '@/lib/prisma-generated'
+import { applicationState, evidenceFingerprint, hasSubmissionEvidence, type ApplicationRow } from './managementRules'
+import type { ActionRow } from './managementService'
+
+export class ManagementError extends Error { constructor(message:string,public status=400){super(message)} }
+export async function resolveTarget(tenantId:string,schoolId:string,applicationId?:string|null,callId?:string|null) {
+  if(applicationId){
+    const rows=await prisma.$queryRaw<ApplicationRow[]>(Prisma.sql`SELECT * FROM dsr_applications WHERE tenant_id=${tenantId} AND school_id=${schoolId} AND id=${applicationId}`)
+    if(!rows[0])throw new ManagementError('Application not found.',404)
+    return {applicationId:rows[0].id,callId:rows[0].call_id,application:rows[0]}
+  }
+  if(!callId)throw new ManagementError('Select a call or application.')
+  const call=await prisma.fundingCall.findFirst({where:{id:callId,OR:[{tenantId},{tenantId:null,visibility:'GLOBAL_PUBLISHED',status:'PUBLISHED'}]},select:{id:true}})
+  if(!call)throw new ManagementError('Call not found.',404)
+  return {applicationId:null,callId:call.id,application:null}
+}
+export function validateActionChange(before: Pick<ActionRow,'owner_user_id'|'due_at'>,after:{ownerUserId?:string;dueAt?:string|null;reason?:string}) {
+  const reassigned=after.ownerUserId!==undefined && after.ownerUserId!==before.owner_user_id
+  const extended=after.dueAt!==undefined && before.due_at && (!after.dueAt || new Date(after.dueAt)>new Date(before.due_at))
+  if((reassigned||extended)&&!after.reason?.trim())throw new ManagementError('Explain the reassignment or deadline extension.')
+}
+export async function saveAction(tenantId:string,schoolId:string,actorId:string,input:{id?:string;applicationId?:string|null;callId?:string|null;title?:string;ownerUserId?:string;waitingWith?:string;dueAt?:string|null;blocker?:string|null;deadlineType?:string;isNext?:boolean;status?:string;version?:number;reason?:string}) {
+  return prisma.$transaction(async tx=>{
+    // One lock per school prevents two concurrent requests from creating two next actions.
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM tenant_org_units WHERE id=${schoolId} AND tenant_id=${tenantId} FOR UPDATE`)
+    const before=input.id?(await tx.$queryRaw<ActionRow[]>(Prisma.sql`SELECT * FROM dsr_actions WHERE id=${input.id} AND tenant_id=${tenantId} AND school_id=${schoolId} FOR UPDATE`))[0]:null
+    if(input.id&&!before)throw new ManagementError('Action not found.',404)
+    if(before && input.version!==before.version)throw new ManagementError('This action changed. Refresh and try again.',409)
+    if(before)validateActionChange(before,input)
+    const target=await resolveTarget(tenantId,schoolId,before?.application_id || input.applicationId,before?.call_id || input.callId)
+    const owner=input.ownerUserId || before?.owner_user_id
+    if(!owner || !await tx.user.findFirst({where:{id:owner,tenantId,status:'ACTIVE'},select:{id:true}}))throw new ManagementError('Choose an active owner in this organization.')
+    const title=input.title ?? before?.title; const waiting=input.waitingWith ?? before?.waiting_with
+    if(!title?.trim()||!waiting)throw new ManagementError('Confirm the next action and who it is waiting with.')
+    if(waiting==='AGENCY'&&!await tx.fundingDeptMember.findFirst({where:{tenant_id:tenantId,user_id:owner,is_active:true},select:{id:true}}))throw new ManagementError('Agency waiting needs an active DSR officer responsible for the next follow-up.')
+    const status=input.status || before?.status || 'OPEN';const isNext=status==='OPEN'&&(input.isNext ?? before?.is_next ?? true)
+    const due=input.dueAt===undefined?before?.due_at || null:input.dueAt?new Date(input.dueAt):null
+    if(due&&!Number.isFinite(due.getTime()))throw new ManagementError('Invalid action due date.')
+    const id=before?.id || randomUUID()
+    if(isNext){
+      const displaced=await tx.$queryRaw<ActionRow[]>(Prisma.sql`SELECT * FROM dsr_actions WHERE tenant_id=${tenantId} AND school_id=${schoolId}
+        AND application_id IS NOT DISTINCT FROM ${target.applicationId} AND call_id IS NOT DISTINCT FROM ${target.callId} AND is_next AND status='OPEN' AND id<>${id}`)
+      for(const prior of displaced){
+        await tx.$executeRaw(Prisma.sql`UPDATE dsr_actions SET is_next=false,version=version+1,updated_at=now() WHERE id=${prior.id}`)
+        await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data)
+          VALUES(${tenantId},${schoolId},'ACTION',${prior.id},${actorId},'NEXT_ACTION_CHANGED',${JSON.stringify(prior)}::jsonb,${JSON.stringify({...prior,is_next:false,version:prior.version+1})}::jsonb)`)
+      }
+    }
+    const rows=await tx.$queryRaw<ActionRow[]>(Prisma.sql`INSERT INTO dsr_actions(id,tenant_id,school_id,call_id,application_id,title,owner_user_id,waiting_with,due_at,blocker,deadline_type,is_next,status,created_by_user_id,completed_at)
+      VALUES(${id},${tenantId},${schoolId},${target.callId},${target.applicationId},${title.trim()},${owner},${waiting},${due},${input.blocker ?? before?.blocker ?? null},${input.deadlineType || before?.deadline_type || 'ACTION'},${isNext},${status},${actorId},${status==='DONE'?new Date():null})
+      ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,owner_user_id=EXCLUDED.owner_user_id,waiting_with=EXCLUDED.waiting_with,
+      due_at=EXCLUDED.due_at,blocker=EXCLUDED.blocker,deadline_type=EXCLUDED.deadline_type,is_next=EXCLUDED.is_next,status=EXCLUDED.status,
+      completed_at=CASE WHEN EXCLUDED.status='DONE' THEN COALESCE(dsr_actions.completed_at,now()) ELSE NULL END,updated_at=now(),version=dsr_actions.version+1 RETURNING *`)
+    const kind=!before?'CREATED':before.status!==status?(status==='DONE'?'COMPLETED':'REOPENED'):before.owner_user_id!==owner?'REASSIGNED':'UPDATED'
+    await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,before_data,after_data,reason)
+      VALUES(${tenantId},${schoolId},'ACTION',${id},${actorId},${kind},${before?JSON.stringify(before):null}::jsonb,${JSON.stringify(rows[0])}::jsonb,${input.reason || null})`)
+    return rows[0]
+  })
+}
+export async function verifySubmission(tenantId:string,schoolId:string,applicationId:string,actorId:string,note:string) {
+  return prisma.$transaction(async tx=>{
+    const target=await resolveTarget(tenantId,schoolId,applicationId)
+    const row=target.application!
+    // Lock the canonical source; status/evidence updates cannot race verification.
+    if(row.assignment_id)await tx.$queryRaw(Prisma.sql`SELECT id FROM call_assignments WHERE id=${row.assignment_id} FOR UPDATE`)
+    if(row.proposal_id)await tx.$queryRaw(Prisma.sql`SELECT id FROM grant_proposals WHERE id=${row.proposal_id} FOR UPDATE`)
+    const fresh=(await tx.$queryRaw<ApplicationRow[]>(Prisma.sql`SELECT * FROM dsr_applications WHERE id=${applicationId} AND tenant_id=${tenantId}`))[0]
+    const docs=await tx.$queryRaw<Array<{id:string}>>(Prisma.sql`SELECT id FROM assignment_documents WHERE assignment_id=${row.assignment_id} AND kind='PROPOSAL' AND tenant_id=${tenantId}
+      UNION ALL SELECT id FROM grant_proposal_documents WHERE proposal_id=${row.proposal_id} AND kind='SUBMISSION_PROOF' AND tenant_id=${tenantId}`)
+    if(!applicationState(fresh).submitted || !hasSubmissionEvidence(fresh,docs.map(d=>d.id)))throw new ManagementError('Record a submission and supporting reference, portal record or submission document first. Notes alone cannot be verified.')
+    const fingerprint=evidenceFingerprint(fresh,docs.map(d=>d.id))
+    await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_submission_verifications(tenant_id,application_id,evidence_fingerprint,reviewer_user_id,evidence_note)
+      VALUES(${tenantId},${applicationId},${fingerprint},${actorId},${note}) ON CONFLICT(tenant_id,application_id)
+      DO UPDATE SET evidence_fingerprint=EXCLUDED.evidence_fingerprint,reviewer_user_id=EXCLUDED.reviewer_user_id,evidence_note=EXCLUDED.evidence_note,verified_at=now()`)
+    await tx.$executeRaw(Prisma.sql`INSERT INTO dsr_events(tenant_id,school_id,entity_type,entity_id,actor_user_id,kind,reason,after_data)
+      VALUES(${tenantId},${schoolId},'VERIFICATION',${applicationId},${actorId},'VERIFIED',${note},${JSON.stringify({fingerprint})}::jsonb)`)
+    return {verified:true}
+  })
+}

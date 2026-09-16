@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { visibleFundingCallWhere } from '@/lib/funding/callVisibility'
 import { CANDIDATE_STATUSES } from '@/lib/fundingDept/shared'
+import { snapshotFundingOpportunity } from '@/lib/fundingDept/opportunitySnapshot'
 import { canAssignToUser } from '@/lib/orgUnits/scope'
 import { prisma } from '@/lib/prisma'
 
@@ -169,6 +170,16 @@ export async function POST(request: NextRequest, { params }: { params: { callId:
       ...(payload.note !== undefined ? { note: payload.note } : {}),
     },
     select: { id: true, status: true, note: true },
+  })
+
+  await snapshotFundingOpportunity({
+    tenantId: auth.tenantId,
+    fundingCallId: params.callId,
+    userId: payload.userId,
+    score: payload.matchScore ?? null,
+    tier: payload.matchTier ?? null,
+    source: 'candidate',
+    sourceVersion: 'candidate-v1',
   })
 
   return NextResponse.json({ candidate }, { status: 201 })

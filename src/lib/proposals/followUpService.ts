@@ -28,6 +28,7 @@ export interface RecordFollowUpInput {
   actorUserId: string
   lens: ProposalLens
   kind: ProposalFollowUpKind
+  contactTarget?: 'FACULTY' | 'AGENCY' | 'INTERNAL' | 'UNKNOWN'
   note: string
   happenedAt?: Date | null
   /** Where this contact establishes the proposal now stands, if anywhere new. */
@@ -76,6 +77,7 @@ export async function recordProposalFollowUp(input: RecordFollowUpInput) {
         tenant_id: proposal.tenant_id,
         proposal_id: proposal.id,
         kind: input.kind,
+        contact_target: input.kind === 'NOTE' ? 'INTERNAL' : input.contactTarget || 'UNKNOWN',
         note: note.slice(0, 5000),
         // An officer logging on Friday a call they had on Tuesday must be able
         // to date it Tuesday.

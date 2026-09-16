@@ -1,0 +1,39 @@
+import AdmZip from 'adm-zip'
+import type { ManagementReport } from './managementService'
+import { csvCell } from './managementRules'
+export function exportTables(report:ManagementReport) {
+  const summaries:unknown[][]=[['Level','ID','Name','Schools','Relevant call-school opportunities','Distinct calls','Allocations','Independent applications','Pending','Submitted','Verified','Followed-up allocations','Overdue','Unallocated calls']]
+  const t=report.totals
+  summaries.push(['Department','','',t.schools,t.callSchoolOpportunities,t.distinctCalls,t.allocated,t.independent,t.pending,t.submitted,t.verified,t.followedUp,t.overdue,t.unallocated])
+  const records:unknown[][]=[['Member','School','Call ID','Call','Quality','Match completeness','Application ID','Faculty','Allocation or independent','Stage','Work state','Recorded submission','Verified at','Reference','Submission recorder','External faculty contacts','Next action','Pending with','Owner','Due','Blocker','Agency deadline','Review deadline','Overdue','Currency','Requested','Sanctioned']]
+  for(const member of report.members){const s=member.totals;summaries.push(['Member',member.id,member.name,s.schools,s.callSchoolOpportunities,s.distinctCalls,s.allocated,s.independent,s.pending,s.submitted,s.verified,s.followedUp,s.overdue,s.unallocated])
+    for(const school of member.schools)for(const call of school.calls){
+      if(!call.applications.length)records.push([member.name,school.name,call.id,call.title,call.quality,call.matchCompleteness,'','','','','','','','','',0,call.actions.find(a=>a.is_next)?.title || '','', '', '',call.disposition?.explanation || '',call.deadline?.toISOString()])
+      for(const a of call.applications)records.push([member.name,school.name,call.id,call.title,call.quality,call.matchCompleteness,a.id,a.faculty?.name,a.independent?'Independent':'Allocation',a.stage,a.workState,a.submitted_at?.toISOString(),a.verification?.verified_at?.toISOString(),a.submission_reference,a.submissionRecorder?.name,a.contactEvents,a.nextAction?.title,a.nextAction?.waiting_with,a.nextAction?.owner_name,a.nextAction?.due_at?.toISOString(),a.nextAction?.blocker,a.agency_deadline?.toISOString(),a.review_deadline?.toISOString(),a.exceptions.includes('overdue'),a.currency,a.requested_amount,a.sanctioned_amount])
+    }
+  }
+  const metadata:unknown[][]=[['Report date',report.asOf.toISOString()],['Mode',report.mode],['Period start',report.period.start.toISOString()],['Period end (exclusive)',report.period.end.toISOString()],['History complete',report.weekly.complete],['Matching complete',report.quality.matchingComplete]]
+  const performance:unknown[][]=[['Member','Opportunity workload','Outstanding applications','Allocations submitted','Allocation cohort','Submission conversion %','Faculty-contacted allocations','Allocation cohort','Contact coverage %','Timely actions','Dated completed actions','Timely action %','Sanctioned decisions','Decided submissions','Funding success %','Undecided submissions','Independent submissions','Period submissions','Previous equivalent period','Allocations performed','Contacts performed','Submissions recorded']]
+  for(const p of report.performance)performance.push([p.name,p.workload.callSchoolOpportunities,p.workload.outstanding,p.submissionConversion.numerator,p.submissionConversion.denominator,p.submissionConversion.percent,p.facultyContactCoverage.numerator,p.facultyContactCoverage.denominator,p.facultyContactCoverage.percent,p.timelyActions.numerator,p.timelyActions.denominator,p.timelyActions.percent,p.fundingSuccess.numerator,p.fundingSuccess.denominator,p.fundingSuccess.percent,p.undecided,p.independentSubmissions,p.periodSubmissions,p.previousPeriodSubmissions,p.performedAllocations,p.performedContacts,p.performedSubmissions])
+  const weekly:unknown[][]=[['Member','Opening','New','Reopened','Transfers in','Resolved','Transfers out','Closing','Reconciled']]
+  for(const row of report.weekly.members)weekly.push([row.name,row.opening,row.newWork,row.reopened,row.transfersIn,row.resolved,row.transfersOut,row.closing,row.reconciled])
+  const coverage:unknown[][]=[['Faculty','Recorded suitable opportunities','Approached','Never approached','Formal allocations','Active applications','Submitted applications','School IDs','Completeness note']]
+  for(const row of report.faculty)coverage.push([row.name,row.suitableOpportunities,row.approached,row.neverApproached,row.allocations,row.active,row.submitted,row.schoolIds.join(' | '),row.completeness])
+  const actions:unknown[][]=[['Action ID','School ID','Call ID','Application ID','Action','Owner','Waiting with','Status','Next action','Due','Deadline type','Blocker','Completed','Version']]
+  for(const row of report.actions)actions.push([row.id,row.school_id,row.call_id,row.application_id,row.title,row.owner_name,row.waiting_with,row.status,row.is_next,row.due_at?.toISOString(),row.deadline_type,row.blocker,row.completed_at?.toISOString(),row.version])
+  return [{name:'Definitions',rows:metadata},{name:'Summary',rows:summaries},{name:'Applications',rows:records},{name:'Actions',rows:actions},{name:'Performance',rows:performance},{name:'Weekly movement',rows:weekly},{name:'Faculty coverage',rows:coverage}]
+}
+function xml(value:unknown){return String(value??'').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function column(index:number){let n=index+1,s='';while(n){n--;s=String.fromCharCode(65+n%26)+s;n=Math.floor(n/26)}return s}
+export function managementExport(report:ManagementReport,format:'csv'|'xlsx') {
+  const tables=exportTables(report)
+  if(format==='csv')return tables.map(t=>[[t.name],...t.rows].map(row=>row.map(csvCell).join(',')).join('\r\n')).join('\r\n\r\n')
+  const zip=new AdmZip();const add=(path:string,value:string)=>zip.addFile(path,Buffer.from(value))
+  const ns='http://schemas.openxmlformats.org'
+  add('[Content_Types].xml',`<Types xmlns="${ns}/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${tables.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`)
+  add('_rels/.rels',`<Relationships xmlns="${ns}/package/2006/relationships"><Relationship Id="rId1" Type="${ns}/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`)
+  add('xl/workbook.xml',`<workbook xmlns="${ns}/spreadsheetml/2006/main" xmlns:r="${ns}/officeDocument/2006/relationships"><sheets>${tables.map((t,i)=>`<sheet name="${t.name}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('')}</sheets></workbook>`)
+  add('xl/_rels/workbook.xml.rels',`<Relationships xmlns="${ns}/package/2006/relationships">${tables.map((_,i)=>`<Relationship Id="rId${i+1}" Type="${ns}/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')}</Relationships>`)
+  tables.forEach((t,i)=>add(`xl/worksheets/sheet${i+1}.xml`,`<worksheet xmlns="${ns}/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetData>${t.rows.map((row,r)=>`<row r="${r+1}">${row.map((v,c)=>typeof v==='number'?`<c r="${column(c)}${r+1}"><v>${v}</v></c>`:`<c r="${column(c)}${r+1}" t="inlineStr"><is><t xml:space="preserve">${xml(v)}</t></is></c>`).join('')}</row>`).join('')}</sheetData></worksheet>`))
+  return new Uint8Array(zip.toBuffer())
+}

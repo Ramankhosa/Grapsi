@@ -597,6 +597,7 @@ model Tenant {
   orgUnitResearchAreas         TenantOrgUnitResearchArea[]
   callSchoolTriage             CallSchoolTriage[]
   fundingDeptSnapshots         FundingDeptWeeklySnapshot[]
+  fundingOpportunityMatches    FundingOpportunityMatch[]
   monitoredSources             MonitoredSource[]
 
   /// Per-tenant proposal-desk policy: how many days before the agency deadline
@@ -783,16 +784,18 @@ model User {
   sentTenantInvites TenantMemberInvite[] @relation("TenantInviteSender")
 
   // Funding call assignments and faculty imports
-  callAssignmentsReceived     CallAssignment[]      @relation("CallAssignmentAssignee")
-  callAssignmentsCreated      CallAssignment[]      @relation("CallAssignmentAssignedBy")
-  callCandidacies             CallCandidate[]       @relation("CallCandidateUser")
-  callCandidatesCreated       CallCandidate[]       @relation("CallCandidateAuthor")
-  assignmentDocumentsUploaded AssignmentDocument[]  @relation("AssignmentDocumentUploader")
-  assignmentMilestonesCreated AssignmentMilestone[] @relation("AssignmentMilestoneAuthor")
+  callAssignmentsReceived     CallAssignment[]          @relation("CallAssignmentAssignee")
+  callAssignmentsCreated      CallAssignment[]          @relation("CallAssignmentAssignedBy")
+  callCandidacies             CallCandidate[]           @relation("CallCandidateUser")
+  callCandidatesCreated       CallCandidate[]           @relation("CallCandidateAuthor")
+  assignmentDocumentsUploaded AssignmentDocument[]      @relation("AssignmentDocumentUploader")
+  assignmentMilestonesCreated AssignmentMilestone[]     @relation("AssignmentMilestoneAuthor")
   facultyImportJobs           FacultyImportJob[]
-  notifications               Notification[]        @relation("NotificationRecipient")
-  sentNotifications           Notification[]        @relation("NotificationSender")
+  notifications               Notification[]            @relation("NotificationRecipient")
+  sentNotifications           Notification[]            @relation("NotificationSender")
   fundingCallAlerts           FundingCallAlert[]
+  fundingOpportunityMatches   FundingOpportunityMatch[] @relation("FundingOpportunityMatchUser")
+  assignmentSubmissionsLogged CallAssignment[]          @relation("CallAssignmentSubmissionRecorder")
 
   // Funding Department membership and the follow-up log
   fundingDeptMembership       FundingDeptMember[]               @relation("FundingDeptMemberUser")
@@ -809,6 +812,7 @@ model User {
   grantProposalsAsPi         GrantProposal[]              @relation("GrantProposalPi")
   grantProposalsCreated      GrantProposal[]              @relation("GrantProposalAuthor")
   grantProposalsCleared      GrantProposal[]              @relation("GrantProposalClearedBy")
+  grantSubmissionsLogged     GrantProposal[]              @relation("GrantProposalSubmissionRecorder")
   grantProposalVersions      GrantProposalVersion[]       @relation("GrantProposalVersionUploader")
   grantProposalReviewsRun    GrantProposalReview[]        @relation("GrantProposalReviewRunner")
   grantProposalReviewsShared GrantProposalReview[]        @relation("GrantProposalReviewSharer")
@@ -1258,6 +1262,7 @@ model FundingCall {
   candidates                  CallCandidate[]
   alerts                      FundingCallAlert[]
   school_triage               CallSchoolTriage[]
+  opportunity_matches         FundingOpportunityMatch[]
   follow_ups                  AssignmentFollowUp[]
   proposals                   GrantProposal[]
 
@@ -3001,21 +3006,23 @@ model TenantOrgUnit {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  tenant                Tenant                        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  parent                TenantOrgUnit?                @relation("OrgUnitHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
-  children              TenantOrgUnit[]               @relation("OrgUnitHierarchy")
-  researcher_profiles   ResearcherProfile[]
-  managers              OrgUnitManager[]
-  assignee_of           CallAssignment[]              @relation("AssignmentAssigneeUnit")
-  assigner_of           CallAssignment[]              @relation("AssignmentAssignerUnit")
-  funding_dept_coverage FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolUnit")
-  research_areas        TenantOrgUnitResearchArea[]
-  call_triage           CallSchoolTriage[]
-  dept_snapshots        FundingDeptWeeklySnapshot[]   @relation("FundingDeptSnapshotUnit")
-  follow_ups            AssignmentFollowUp[]          @relation("FollowUpOrgUnit")
-  proposals             GrantProposal[]               @relation("GrantProposalSchool")
-  proposals_as_pi_unit  GrantProposal[]               @relation("GrantProposalPiUnit")
-  proposal_team_seats   GrantProposalTeamMember[]     @relation("GrantProposalTeamUnit")
+  tenant                     Tenant                        @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  parent                     TenantOrgUnit?                @relation("OrgUnitHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
+  children                   TenantOrgUnit[]               @relation("OrgUnitHierarchy")
+  researcher_profiles        ResearcherProfile[]
+  managers                   OrgUnitManager[]
+  assignee_of                CallAssignment[]              @relation("AssignmentAssigneeUnit")
+  assigner_of                CallAssignment[]              @relation("AssignmentAssignerUnit")
+  funding_dept_coverage      FundingDeptSchoolAssignment[] @relation("FundingDeptSchoolUnit")
+  research_areas             TenantOrgUnitResearchArea[]
+  call_triage                CallSchoolTriage[]
+  dept_snapshots             FundingDeptWeeklySnapshot[]   @relation("FundingDeptSnapshotUnit")
+  follow_ups                 AssignmentFollowUp[]          @relation("FollowUpOrgUnit")
+  proposals                  GrantProposal[]               @relation("GrantProposalSchool")
+  proposals_as_pi_unit       GrantProposal[]               @relation("GrantProposalPiUnit")
+  proposal_team_seats        GrantProposalTeamMember[]     @relation("GrantProposalTeamUnit")
+  opportunity_matches        FundingOpportunityMatch[]     @relation("FundingOpportunityMatchUnit")
+  school_opportunity_matches FundingOpportunityMatch[]     @relation("FundingOpportunityMatchSchool")
 
   // NOTE: Postgres treats NULLs as distinct, so this constraint only enforces
   // uniqueness for non-root units. Root-name uniqueness is enforced by the
@@ -3157,11 +3164,15 @@ model CallAssignment {
   assigner_org_unit_id String?
 
   // Submission proof recorded by the assignee on completion.
-  submission_reference String?
-  submission_url       String?
-  submission_notes     String?
-  submitted_at         DateTime?
-  completed_at         DateTime?
+  submission_reference           String?
+  submission_url                 String?
+  submission_notes               String?
+  submitted_at                   DateTime?
+  completed_at                   DateTime?
+  /// User who entered the submission evidence in Grapsi.
+  submission_recorded_by_user_id String?
+  /// REFERENCE | URL | DOCUMENT | NOTE | MIXED | MISSING.
+  submission_evidence_status     String?
 
   /// When an officer closed this out as never applied for. Dated separately
   /// from updated_at, which moves on any edit, so reporting can say when the
@@ -3183,19 +3194,20 @@ model CallAssignment {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  tenant              Tenant                @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  funding_call        FundingCall           @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
-  previous_assignment CallAssignment?       @relation("CallAssignmentChain", fields: [previous_assignment_id], references: [id], onDelete: SetNull)
-  superseded_by       CallAssignment?       @relation("CallAssignmentChain")
-  assignee            User                  @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
-  assigned_by         User                  @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
-  assignee_org_unit   TenantOrgUnit?        @relation("AssignmentAssigneeUnit", fields: [assignee_org_unit_id], references: [id], onDelete: SetNull)
-  assigner_org_unit   TenantOrgUnit?        @relation("AssignmentAssignerUnit", fields: [assigner_org_unit_id], references: [id], onDelete: SetNull)
-  notifications       Notification[]
-  follow_ups          AssignmentFollowUp[]
-  documents           AssignmentDocument[]
-  milestones          AssignmentMilestone[]
-  proposal            GrantProposal?
+  tenant                 Tenant                @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call           FundingCall           @relation(fields: [funding_call_id], references: [id], onDelete: Cascade)
+  previous_assignment    CallAssignment?       @relation("CallAssignmentChain", fields: [previous_assignment_id], references: [id], onDelete: SetNull)
+  superseded_by          CallAssignment?       @relation("CallAssignmentChain")
+  assignee               User                  @relation("CallAssignmentAssignee", fields: [assignee_user_id], references: [id], onDelete: Cascade)
+  assigned_by            User                  @relation("CallAssignmentAssignedBy", fields: [assigned_by_user_id], references: [id], onDelete: Cascade)
+  submission_recorded_by User?                 @relation("CallAssignmentSubmissionRecorder", fields: [submission_recorded_by_user_id], references: [id], onDelete: SetNull, map: "call_assignments_submission_recorder_fkey")
+  assignee_org_unit      TenantOrgUnit?        @relation("AssignmentAssigneeUnit", fields: [assignee_org_unit_id], references: [id], onDelete: SetNull)
+  assigner_org_unit      TenantOrgUnit?        @relation("AssignmentAssignerUnit", fields: [assigner_org_unit_id], references: [id], onDelete: SetNull)
+  notifications          Notification[]
+  follow_ups             AssignmentFollowUp[]
+  documents              AssignmentDocument[]
+  milestones             AssignmentMilestone[]
+  proposal               GrantProposal?
 
   @@unique([funding_call_id, assignee_user_id], map: "call_assignments_call_assignee_key")
   @@index([tenant_id, assignee_user_id], map: "idx_call_assignments_tenant_assignee")
@@ -3331,6 +3343,40 @@ model CallCandidate {
   @@index([tenant_id, funding_call_id], map: "idx_call_candidates_tenant_call")
   @@index([tenant_id, user_id], map: "idx_call_candidates_tenant_user")
   @@map("call_candidates")
+}
+
+/// Durable call-to-faculty relevance used by the DSR member funnel. Dynamic
+/// matches change as profiles and ranking rules change, so the report needs the
+/// score and explanation that were visible when the opportunity was surfaced.
+model FundingOpportunityMatch {
+  id              String   @id @default(cuid())
+  tenant_id       String
+  funding_call_id String
+  user_id         String
+  org_unit_id     String?
+  school_id       String?
+  match_score     Float?
+  match_tier      String?
+  match_reason    String?
+  source          String
+  source_version  String?
+  inferred        Boolean  @default(false)
+  first_seen_at   DateTime @default(now())
+  last_seen_at    DateTime @default(now())
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  tenant       Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Cascade, map: "funding_opportunity_matches_tenant_fkey")
+  funding_call FundingCall    @relation(fields: [funding_call_id], references: [id], onDelete: Cascade, map: "funding_opportunity_matches_call_fkey")
+  user         User           @relation("FundingOpportunityMatchUser", fields: [user_id], references: [id], onDelete: Cascade, map: "funding_opportunity_matches_user_fkey")
+  org_unit     TenantOrgUnit? @relation("FundingOpportunityMatchUnit", fields: [org_unit_id], references: [id], onDelete: SetNull, map: "funding_opportunity_matches_unit_fkey")
+  school       TenantOrgUnit? @relation("FundingOpportunityMatchSchool", fields: [school_id], references: [id], onDelete: SetNull, map: "funding_opportunity_matches_school_fkey")
+
+  @@unique([tenant_id, funding_call_id, user_id, school_id], map: "funding_opportunity_matches_identity_key")
+  @@index([tenant_id, school_id, first_seen_at], map: "idx_funding_opportunity_matches_school_seen")
+  @@index([tenant_id, funding_call_id], map: "idx_funding_opportunity_matches_call")
+  @@index([tenant_id, user_id], map: "idx_funding_opportunity_matches_user")
+  @@map("funding_opportunity_matches")
 }
 
 /// Where one school stands on one call.
@@ -3630,6 +3676,7 @@ model AssignmentFollowUp {
   /// "not relevant → restored → shortlisted" history survives (the triage row
   /// itself only holds the latest state).
   kind        String   @default("NOTE")
+  contact_target String @default("FACULTY")
   /// CONTACTED | PREPARING | APPROVALS | SUBMITTED — where the application
   /// itself stands, as opposed to `kind`, which says how the contact happened.
   /// Optional: most notes are just notes. A string rather than a Postgres enum
@@ -3746,11 +3793,13 @@ model GrantProposal {
   sanction_reference String?
   sanction_date      DateTime?
 
-  submitted_at             DateTime?
-  submission_reference     String?
-  submission_url           String?
-  agency_status_note       String?
-  agency_status_updated_at DateTime?
+  submitted_at                   DateTime?
+  submission_reference           String?
+  submission_url                 String?
+  submission_recorded_by_user_id String?
+  submission_evidence_status     String?
+  agency_status_note             String?
+  agency_status_updated_at       DateTime?
 
   /// The funded project's own dates, set once it is sanctioned. `project_end_at`
   /// moves when an agency grants an extension, which is why it is a date rather
@@ -3765,16 +3814,17 @@ model GrantProposal {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  tenant        Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-  funding_call  FundingCall?    @relation(fields: [funding_call_id], references: [id], onDelete: SetNull)
-  assignment    CallAssignment? @relation(fields: [assignment_id], references: [id], onDelete: SetNull)
-  grant_session GrantSession?   @relation(fields: [grant_session_id], references: [id], onDelete: SetNull)
-  reviewer_call ReviewerCall?   @relation(fields: [reviewer_call_id], references: [id], onDelete: SetNull)
-  pi            User            @relation("GrantProposalPi", fields: [pi_user_id], references: [id], onDelete: Cascade)
-  created_by    User            @relation("GrantProposalAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
-  cleared_by    User?           @relation("GrantProposalClearedBy", fields: [cleared_by_user_id], references: [id], onDelete: SetNull)
-  org_unit      TenantOrgUnit   @relation("GrantProposalSchool", fields: [org_unit_id], references: [id], onDelete: Cascade)
-  pi_org_unit   TenantOrgUnit?  @relation("GrantProposalPiUnit", fields: [pi_org_unit_id], references: [id], onDelete: SetNull)
+  tenant                 Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  funding_call           FundingCall?    @relation(fields: [funding_call_id], references: [id], onDelete: SetNull)
+  assignment             CallAssignment? @relation(fields: [assignment_id], references: [id], onDelete: SetNull)
+  grant_session          GrantSession?   @relation(fields: [grant_session_id], references: [id], onDelete: SetNull)
+  reviewer_call          ReviewerCall?   @relation(fields: [reviewer_call_id], references: [id], onDelete: SetNull)
+  pi                     User            @relation("GrantProposalPi", fields: [pi_user_id], references: [id], onDelete: Cascade)
+  created_by             User            @relation("GrantProposalAuthor", fields: [created_by_user_id], references: [id], onDelete: Cascade)
+  cleared_by             User?           @relation("GrantProposalClearedBy", fields: [cleared_by_user_id], references: [id], onDelete: SetNull)
+  submission_recorded_by User?           @relation("GrantProposalSubmissionRecorder", fields: [submission_recorded_by_user_id], references: [id], onDelete: SetNull, map: "grant_proposals_submission_recorder_fkey")
+  org_unit               TenantOrgUnit   @relation("GrantProposalSchool", fields: [org_unit_id], references: [id], onDelete: Cascade)
+  pi_org_unit            TenantOrgUnit?  @relation("GrantProposalPiUnit", fields: [pi_org_unit_id], references: [id], onDelete: SetNull)
 
   versions   GrantProposalVersion[]
   reviews    GrantProposalReview[]
@@ -4065,6 +4115,7 @@ model GrantProposalFollowUp {
 
   /// CALL | EMAIL | MEETING | PORTAL | NOTE — how the contact happened.
   kind        String   @default("CALL")
+  contact_target String @default("UNKNOWN")
   note        String
   happened_at DateTime @default(now())
 

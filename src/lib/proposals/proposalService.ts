@@ -10,9 +10,11 @@
  * at read time, because a department moving between schools next semester must
  * not rewrite whose application last year's grant was.
  */
-import type { Prisma } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 
 import { schoolRootFor } from '@/lib/fundingDept/shared'
+import { textArray } from '@/lib/fundingDept/callSql'
+import { evidenceFingerprint, hasSubmissionEvidence, type ApplicationRow } from '@/lib/fundingDept/managementRules'
 import prisma from '@/lib/prisma'
 import { getReportingPeriod } from '@/lib/tenant/reportingPeriod'
 
@@ -464,6 +466,22 @@ export async function listProposals(input: ListProposalsInput) {
   ])
 
   const viewerLens: ProposalLens = input.lens
+  const applicationIds = rows.map(row => row.assignment_id ? `assignment:${row.assignment_id}` : `proposal:${row.id}`)
+  const [canonical, proofRows, verificationRows, actionRows] = input.view === 'register' && applicationIds.length
+    ? await Promise.all([
+        prisma.$queryRaw<ApplicationRow[]>(Prisma.sql`SELECT * FROM dsr_applications WHERE tenant_id=${input.tenantId} AND id=ANY(${textArray(applicationIds)})`),
+        prisma.$queryRaw<Array<{application_id:string;id:string}>>(Prisma.sql`
+          SELECT 'assignment:'||assignment_id application_id,id FROM assignment_documents WHERE tenant_id=${input.tenantId} AND kind='PROPOSAL' AND 'assignment:'||assignment_id=ANY(${textArray(applicationIds)})
+          UNION ALL SELECT COALESCE('assignment:'||p.assignment_id,'proposal:'||p.id),d.id FROM grant_proposal_documents d JOIN grant_proposals p ON p.id=d.proposal_id
+          WHERE p.tenant_id=${input.tenantId} AND d.kind='SUBMISSION_PROOF' AND COALESCE('assignment:'||p.assignment_id,'proposal:'||p.id)=ANY(${textArray(applicationIds)})`),
+        prisma.$queryRaw<Array<{application_id:string;evidence_fingerprint:string;verified_at:Date;reviewer_name:string}>>(Prisma.sql`
+          SELECT v.application_id,v.evidence_fingerprint,v.verified_at,COALESCE(u.name,u.email) reviewer_name FROM dsr_submission_verifications v JOIN users u ON u.id=v.reviewer_user_id
+          WHERE v.tenant_id=${input.tenantId} AND v.application_id=ANY(${textArray(applicationIds)})`),
+        prisma.$queryRaw<Array<{application_id:string;title:string;waiting_with:string;due_at:Date|null;deadline_type:string;owner_name:string}>>(Prisma.sql`
+          SELECT a.application_id,a.title,a.waiting_with,a.due_at,a.deadline_type,COALESCE(u.name,u.email) owner_name FROM dsr_actions a JOIN users u ON u.id=a.owner_user_id
+          WHERE a.tenant_id=${input.tenantId} AND a.application_id=ANY(${textArray(applicationIds)}) AND a.status='OPEN' AND a.is_next`),
+      ])
+    : [[],[],[],[]] as [ApplicationRow[],Array<{application_id:string;id:string}>,Array<{application_id:string;evidence_fingerprint:string;verified_at:Date;reviewer_name:string}>,Array<{application_id:string;title:string;waiting_with:string;due_at:Date|null;deadline_type:string;owner_name:string}>]
 
   return {
     total,
@@ -472,8 +490,22 @@ export async function listProposals(input: ListProposalsInput) {
     proposals: rows.map((row) => {
       const latest = (row as any).versions?.[0] || null
       const lastShared = (row as any).reviews?.[0] || null
+      const applicationId = row.assignment_id ? `assignment:${row.assignment_id}` : `proposal:${row.id}`
+      const current = canonical.find(item=>item.id===applicationId)
+      const documents = proofRows.filter(item=>item.application_id===applicationId).map(item=>item.id)
+      const verification = current ? verificationRows.find(item=>item.application_id===applicationId && item.evidence_fingerprint===evidenceFingerprint(current,documents)) : null
+      const action = actionRows.find(item=>item.application_id===applicationId) || null
       return {
         ...serializeProposal(row, viewerLens),
+        reporting: input.view==='register' ? {
+          applicationId,
+          evidenceStatus: !current?.submitted_at ? 'NOT_SUBMITTED' : verification ? 'VERIFIED' : current && hasSubmissionEvidence(current,documents) ? 'RECORDED' : 'MISSING',
+          verifiedAt: verification?.verified_at || null, verifiedBy: verification?.reviewer_name || null,
+          nextAction: action,
+          revisionDeadline: action?.deadline_type==='REVISION' ? action.due_at : null,
+          agencyFollowUpDue: action?.waiting_with==='AGENCY' ? action.due_at : null,
+          finalDecision: ['SANCTIONED','REJECTED','WITHDRAWN','CLOSED'].includes(row.status) ? row.status : null,
+        } : null,
         latestVersion: latest
           ? {
               versionNo: latest.version_no,

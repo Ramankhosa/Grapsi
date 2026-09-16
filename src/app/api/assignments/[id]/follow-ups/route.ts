@@ -6,6 +6,7 @@ import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { canManageAssignment } from '@/lib/orgUnits/scope'
 import { parseDate, validateStatusTransition, type AssignmentStatus } from '@/lib/assignments/shared'
 import { buildSubmissionUpdate } from '@/lib/assignments/submission'
+import { submissionEvidenceStatus } from '@/lib/fundingDept/opportunitySnapshot'
 import {
   FOLLOW_UP_KINDS,
   FOLLOW_UP_STAGES,
@@ -28,6 +29,7 @@ export const dynamic = 'force-dynamic'
 
 const createSchema = z.object({
   kind: z.enum(FOLLOW_UP_KINDS).default('NOTE'),
+  contactTarget: z.enum(['FACULTY','AGENCY','INTERNAL','UNKNOWN']).default('FACULTY'),
   /**
    * Where the application stands. Optional, and inert except for SUBMITTED,
    * which also closes the assignment out through the shared submission path —
@@ -146,6 +148,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     org_unit_id: record.assignee_org_unit_id,
     created_by_user_id: context.user.id,
     kind: payload.kind,
+    contact_target: ['CALL','EMAIL','MEETING'].includes(payload.kind) ? payload.contactTarget : 'INTERNAL',
     stage: payload.stage ?? null,
     note: payload.note,
     happened_at: happenedAt,
@@ -186,6 +189,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   }
 
   const followUp = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${context.user.id}, true)`
     const created = await tx.assignmentFollowUp.create({
       data: followUpData,
       include: followUpInclude,
@@ -204,7 +208,18 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         submittedAt: happenedAt,
       })
       if (submission.ok) {
-        await tx.callAssignment.update({ where: { id: record.id }, data: submission.data })
+        await tx.callAssignment.update({
+          where: { id: record.id },
+          data: {
+            ...submission.data,
+            submission_recorded_by_user_id: context.user.id,
+            submission_evidence_status: submissionEvidenceStatus({
+              reference: submission.data.submission_reference,
+              url: submission.data.submission_url,
+              notes: submission.data.submission_notes,
+            }),
+          },
+        })
         submissionApplied = true
       }
     }

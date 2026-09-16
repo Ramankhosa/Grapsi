@@ -13,6 +13,7 @@ import {
   type AssignmentStatus,
 } from '@/lib/assignments/shared'
 import { buildSubmissionUpdate } from '@/lib/assignments/submission'
+import { submissionEvidenceStatus } from '@/lib/fundingDept/opportunitySnapshot'
 import { submissionWatchers } from '@/lib/fundingDept/shared'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
 
@@ -277,6 +278,12 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         return NextResponse.json({ error: submission.error }, { status: 400 })
       }
       Object.assign(data, submission.data)
+      data.submission_recorded_by_user_id = context.user.id
+      data.submission_evidence_status = submissionEvidenceStatus({
+        reference: data.submission_reference,
+        url: data.submission_url,
+        notes: data.submission_notes,
+      })
     } else {
       // Re-opening or cancelling clears completion but keeps the recorded proof.
       data.completed_at = null
@@ -299,10 +306,9 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     return NextResponse.json({ error: 'Nothing to update.' }, { status: 400 })
   }
 
-  const updated = await prisma.callAssignment.update({
-    where: { id: record.id },
-    data,
-    include: assignmentInclude,
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${context.user.id}, true)`
+    return tx.callAssignment.update({ where: { id: record.id }, data, include: assignmentInclude })
   })
 
   // A re-request wipes the decline from the record, so keep the reason in the

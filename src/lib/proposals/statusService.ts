@@ -15,6 +15,7 @@
 import { isTakenUp } from '@/lib/assignments/shared'
 import { buildSubmissionUpdate } from '@/lib/assignments/submission'
 import { submissionWatchers } from '@/lib/fundingDept/shared'
+import { submissionEvidenceStatus } from '@/lib/fundingDept/opportunitySnapshot'
 import { notifyQuietly } from '@/lib/notifications/notificationService'
 import prisma from '@/lib/prisma'
 
@@ -123,6 +124,8 @@ export async function transitionProposal(input: TransitionProposalInput) {
     data.submitted_at = input.submittedAt || now
     data.submission_reference = reference
     data.submission_url = url
+    data.submission_recorded_by_user_id = input.actorUserId
+    data.submission_evidence_status = submissionEvidenceStatus({ reference, url, notes })
     data.agency_status_updated_at = now
     payload.submissionReference = reference
   }
@@ -144,6 +147,7 @@ export async function transitionProposal(input: TransitionProposalInput) {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${input.actorUserId}, true)`
     const row = await tx.grantProposal.update({
       where: { id: proposal.id },
       data,
@@ -174,7 +178,18 @@ export async function transitionProposal(input: TransitionProposalInput) {
             submittedAt: input.submittedAt || now,
           })
           if (submission.ok) {
-            await tx.callAssignment.update({ where: { id: assignment.id }, data: submission.data })
+            await tx.callAssignment.update({
+              where: { id: assignment.id },
+              data: {
+                ...submission.data,
+                submission_recorded_by_user_id: input.actorUserId,
+                submission_evidence_status: submissionEvidenceStatus({
+                  reference: submission.data.submission_reference,
+                  url: submission.data.submission_url,
+                  notes: submission.data.submission_notes,
+                }),
+              },
+            })
             submissionApplied = true
           }
         }

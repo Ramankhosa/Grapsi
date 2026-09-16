@@ -912,6 +912,12 @@ export class ResearcherSearchService {
       ? await loadCallEligibility(input.fundingCallId).catch(() => null)
       : null;
 
+    if (input.fundingCallId && input.requesterTenantId) {
+      const { persistMatchingRun } = await import('@/lib/fundingDept/matchingRun');
+      await persistMatchingRun({tenantId:input.requesterTenantId,callId:input.fundingCallId,actorId:input.requesterUserId,
+        orgUnitIds:input.filters?.orgUnitIds,filters:input.filters || {},candidateCount:merged.length,
+        results:gated.filter(r=>r.matchTier!=='weak').map(r=>({userId:r.userId,score:r.score,matchTier:r.matchTier,matchReason:r.matchReason}))});
+    }
     const results = gated.slice(0, limit).map((result) => ({
       ...result,
       eligibilityFlags: eligibilityFlagsFor(result, callEligibility),

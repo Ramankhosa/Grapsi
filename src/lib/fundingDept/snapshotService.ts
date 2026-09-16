@@ -23,7 +23,9 @@
  */
 import prisma from '@/lib/prisma'
 
-import { getMemberSchoolMatrix, resolveActivityWindow } from './accountabilityService'
+import { resolveActivityWindow } from './accountabilityService'
+import { getManagementReport } from './managementService'
+import { inPeriod } from './managementRules'
 import { getDeptSettingsFor, type DeptSettings } from './settings'
 
 export interface SnapshotResult {
@@ -73,106 +75,31 @@ async function snapshotTenant(
     key: '30d' as const,
   }
 
-  const matrix = await getMemberSchoolMatrix(tenantId, { window, now, settings })
-
-  // A school appears under every member who answers for it — primary and any
-  // deputy — so the rows are collapsed to one per school here, preferring the
-  // officer on the rota. Two rows for one school would break the unique key and,
-  // worse, double every total read back out of the history.
-  const bySchool = new Map<
-    string,
-    { memberId: string | null; role: 'primary' | 'deputy'; row: (typeof matrix.members)[number]['schools'][number] }
-  >()
-  for (const member of matrix.members) {
-    for (const school of member.schools) {
-      const existing = bySchool.get(school.schoolId)
-      if (!existing || (existing.role === 'deputy' && school.role === 'primary')) {
-        bySchool.set(school.schoolId, { memberId: member.id, role: school.role, row: school })
-      }
-    }
-  }
-
+  const report = await getManagementReport(tenantId, {...window,asOf:now,mode:'pending'})
   const writes: Array<ReturnType<typeof prisma.fundingDeptWeeklySnapshot.upsert>> = []
-
-  for (const [schoolId, entry] of bySchool) {
-    const row = entry.row
-    writes.push(
-      prisma.fundingDeptWeeklySnapshot.upsert({
-        where: {
-          tenant_id_week_start_org_unit_id: {
-            tenant_id: tenantId,
-            week_start: weekStart,
-            org_unit_id: schoolId,
-          },
-        },
-        create: {
-          tenant_id: tenantId,
-          week_start: weekStart,
-          org_unit_id: schoolId,
-          member_id: entry.memberId,
-          relevant_open: row.relevantOpen,
-          pending: row.pending,
-          untouched_pending: row.untouchedPending,
-          live: row.live,
-          gone_quiet: row.buckets.goneQuiet,
-          overdue_unchased: row.buckets.overdueUnchased,
-          due_nudges: row.dueNudges,
-          submitted_in_week: row.submittedInWindow,
-          actions_in_week:
-            row.followUpsInWindow + row.callsCirculatedInWindow + row.triageDecisionsInWindow,
-          score: Math.round(row.score),
-        },
-        // Overwritten rather than skipped on a re-run, so a sweep re-run after a
-        // data fix corrects the week instead of preserving the wrong numbers.
-        update: {
-          member_id: entry.memberId,
-          relevant_open: row.relevantOpen,
-          pending: row.pending,
-          untouched_pending: row.untouchedPending,
-          live: row.live,
-          gone_quiet: row.buckets.goneQuiet,
-          overdue_unchased: row.buckets.overdueUnchased,
-          due_nudges: row.dueNudges,
-          submitted_in_week: row.submittedInWindow,
-          actions_in_week:
-            row.followUpsInWindow + row.callsCirculatedInWindow + row.triageDecisionsInWindow,
-          score: Math.round(row.score),
-        },
-      })
-    )
-  }
-
-  // Schools nobody covers get a row too, with a null member. Leaving them out
-  // would make an uncovered school look like it had no backlog, which is the
-  // exact opposite of the truth and the one gap this history most needs to show.
-  for (const uncovered of matrix.uncovered) {
-    if (bySchool.has(uncovered.schoolId)) continue
-    const data = {
-      member_id: null,
-      relevant_open: uncovered.relevantOpen,
-      pending: uncovered.pending,
-      untouched_pending: uncovered.untouchedPending,
-      live: uncovered.live,
-      gone_quiet: 0,
-      overdue_unchased: 0,
-      due_nudges: 0,
-      submitted_in_week: 0,
-      actions_in_week: 0,
-      score: 0,
+  for (const member of report.members) for (const school of member.schools) {
+    const apps=report.applications.filter(a=>a.school_id===school.id)
+    const open=apps.filter(a=>a.outstanding)
+    const actions=report.actions.filter(a=>a.school_id===school.id)
+    const data={
+      member_id:member.id==='unassigned'?null:member.id,
+      relevant_open:school.calls.filter(c=>c.quality==='confirmed' && (!c.deadline||c.deadline>=now)).length,
+      pending:school.calls.filter(c=>c.unallocated && (!c.deadline||c.deadline>=now)).length,
+      untouched_pending:school.calls.filter(c=>c.unallocated&&!c.lastAction).length,
+      live:open.length,
+      gone_quiet:open.filter(a=>!a.followedUp).length,
+      overdue_unchased:open.filter(a=>a.exceptions.includes('overdue')&&!a.followedUp).length,
+      due_nudges:actions.filter(a=>a.status==='OPEN'&&a.due_at&&a.due_at<now).length,
+      submitted_in_week:apps.filter(a=>inPeriod(a.submitted_at,window.start,window.end)).length,
+      actions_in_week:actions.filter(a=>inPeriod(a.completed_at,window.start,window.end)).length+
+        apps.reduce((n,a)=>n+a.contacts.filter(c=>c.target==='FACULTY'&&['CALL','EMAIL','MEETING'].includes(c.kind)&&inPeriod(c.happened_at,window.start,window.end)).length,0),
+      // Retained only for legacy storage compatibility; no overall ranking.
+      score:0,
     }
-    writes.push(
-      prisma.fundingDeptWeeklySnapshot.upsert({
-        where: {
-          tenant_id_week_start_org_unit_id: {
-            tenant_id: tenantId,
-            week_start: weekStart,
-            org_unit_id: uncovered.schoolId,
-          },
-        },
-        create: { tenant_id: tenantId, week_start: weekStart, org_unit_id: uncovered.schoolId, ...data },
-        update: data,
-      })
-    )
+    writes.push(prisma.fundingDeptWeeklySnapshot.upsert({
+      where:{tenant_id_week_start_org_unit_id:{tenant_id:tenantId,week_start:weekStart,org_unit_id:school.id}},
+      create:{tenant_id:tenantId,week_start:weekStart,org_unit_id:school.id,...data},update:data,
+    }))
   }
 
   if (writes.length > 0) {

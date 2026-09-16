@@ -21,7 +21,12 @@
 
 import { getSummary } from '@/lib/assignments/dashboardService'
 import { notTakenUpSql } from '@/lib/assignments/shared'
-import { loadUnitAreaProfile, relevantCallWhereSql } from '@/lib/funding/callUnitRelevance'
+import {
+  loadUnitAreaProfile,
+  relevanceForCalls,
+  relevantCallWhereSql,
+  type CallRelevance,
+} from '@/lib/funding/callUnitRelevance'
 import prisma from '@/lib/prisma'
 import { Prisma } from '@/lib/prisma-generated'
 import { getReportingPeriod } from '@/lib/tenant/reportingPeriod'
@@ -55,7 +60,7 @@ export interface ActivityWindow {
   start: Date
   end: Date
   label: string
-  key: 'reporting' | '30d' | '90d'
+  key: 'reporting' | '30d' | '90d' | 'custom'
 }
 
 /**
@@ -775,14 +780,23 @@ export interface LedgerAllocation {
   status: string
   outcome: string
   deadlineAt: Date | null
+  allocatedAt: Date
   progress: AssignmentProgress
   lastFollowUpAt: Date | null
   lastFollowUpKind: string | null
   /** Officer lens only; stripped for a Dean by `redactLedgerForSchoolHead`. */
   lastFollowUpNote: string | null
   followUpCount: number
+  externalContactCount: number
+  lastExternalContactAt: Date | null
+  lastExternalContactKind: string | null
+  lastExternalContactBy: { id: string; name: string | null } | null
   submittedAt: Date | null
   submissionReference: string | null
+  submissionUrl: string | null
+  submissionNotes: string | null
+  submissionEvidenceStatus: string | null
+  submissionRecordedBy: { id: string; name: string | null } | null
   /**
    * The proposal record behind this allocation, when the applicant has opened
    * one. Null is a real answer — plenty of assignments never become a proposal
@@ -805,6 +819,7 @@ export interface LedgerCall {
   lastActionAt: Date | null
   lastActorName: string | null
   isUntouched: boolean
+  relevance: CallRelevance
   allocations: LedgerAllocation[]
 }
 
@@ -846,7 +861,7 @@ export async function getSchoolCallLedger(
   const scopeArray = textArray(scopeIds)
 
   const profile = await loadUnitAreaProfile(tenantId, [schoolId])
-  const relevant = relevantCallWhereSql(profile, 'fc')
+  const relevant = relevantCallWhereSql(profile, 'fc', { pinnedForUnitId: schoolId })
 
   const callRows = await prisma.$queryRaw<
     Array<{
@@ -915,10 +930,10 @@ export async function getSchoolCallLedger(
              )
            )
      ORDER BY COALESCE(fc.close_date, fc."deadlineAt") ASC NULLS LAST
-     LIMIT 300
   `)
 
   const callIds = callRows.map((row) => row.call_id)
+  const relevanceByCall = await relevanceForCalls(profile, callIds)
   const allocationRows = callIds.length
     ? await prisma.$queryRaw<
         Array<{
@@ -936,11 +951,21 @@ export async function getSchoolCallLedger(
           submitted_at: Date | null
           created_at: Date
           submission_reference: string | null
+          submission_url: string | null
+          submission_notes: string | null
+          submission_evidence_status: string | null
+          submission_recorded_by_id: string | null
+          submission_recorded_by_name: string | null
           last_follow_up_at: Date | null
           last_follow_up_kind: string | null
           last_follow_up_note: string | null
           last_stage: string | null
           follow_up_count: number
+          external_contact_count: number
+          last_external_contact_at: Date | null
+          last_external_contact_kind: string | null
+          last_external_contact_by_id: string | null
+          last_external_contact_by_name: string | null
           has_workspace: boolean
           proposal_status: string | null
           proposal_activity_at: Date | null
@@ -962,6 +987,11 @@ export async function getSchoolCallLedger(
                ca.submitted_at,
                ca.created_at,
                ca.submission_reference,
+               ca.submission_url,
+               ca.submission_notes,
+               ca.submission_evidence_status,
+               ca.submission_recorded_by_user_id AS submission_recorded_by_id,
+               COALESCE(su.name, su.email)        AS submission_recorded_by_name,
                fu.happened_at                 AS last_follow_up_at,
                fu.kind                        AS last_follow_up_kind,
                fu.note                        AS last_follow_up_note,
@@ -970,6 +1000,13 @@ export async function getSchoolCallLedger(
                  ORDER BY s.happened_at DESC LIMIT 1) AS last_stage,
                (SELECT COUNT(*)::int FROM assignment_follow_ups c WHERE c.assignment_id = ca.id)
                                               AS follow_up_count,
+               (SELECT COUNT(*)::int FROM assignment_follow_ups c
+                 WHERE c.assignment_id = ca.id AND c.kind IN ('CALL','EMAIL','MEETING'))
+                                              AS external_contact_count,
+               ext.happened_at                 AS last_external_contact_at,
+               ext.kind                        AS last_external_contact_kind,
+               ext.actor_id                    AS last_external_contact_by_id,
+               ext.actor_name                  AS last_external_contact_by_name,
                EXISTS (
                  SELECT 1 FROM grant_sessions gs
                   WHERE gs."fundingCallId" = ca.funding_call_id
@@ -983,6 +1020,7 @@ export async function getSchoolCallLedger(
           FROM call_assignments ca
           JOIN users au ON au.id = ca.assignee_user_id
           LEFT JOIN users bu ON bu.id = ca.assigned_by_user_id
+          LEFT JOIN users su ON su.id = ca.submission_recorded_by_user_id
           LEFT JOIN grant_proposals pr ON pr.assignment_id = ca.id
           LEFT JOIN LATERAL (
             SELECT f.happened_at, f.kind, f.note
@@ -991,6 +1029,15 @@ export async function getSchoolCallLedger(
              ORDER BY f.happened_at DESC
              LIMIT 1
           ) fu ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT f.happened_at, f.kind, f.created_by_user_id AS actor_id,
+                   COALESCE(eu.name, eu.email) AS actor_name
+              FROM assignment_follow_ups f
+              LEFT JOIN users eu ON eu.id = f.created_by_user_id
+             WHERE f.assignment_id = ca.id AND f.kind IN ('CALL','EMAIL','MEETING')
+             ORDER BY f.happened_at DESC
+             LIMIT 1
+          ) ext ON TRUE
          WHERE ca.tenant_id = ${tenantId}
            AND ca.assignee_org_unit_id = ANY(${scopeArray})
            AND ca.funding_call_id = ANY(${textArray(callIds)})
@@ -1025,13 +1072,26 @@ export async function getSchoolCallLedger(
       status: row.status,
       outcome: row.outcome,
       deadlineAt: row.deadline_at,
+      allocatedAt: row.created_at,
       progress,
       lastFollowUpAt: row.last_follow_up_at,
       lastFollowUpKind: row.last_follow_up_kind,
       lastFollowUpNote: row.last_follow_up_note,
       followUpCount: row.follow_up_count,
+      externalContactCount: row.external_contact_count,
+      lastExternalContactAt: row.last_external_contact_at,
+      lastExternalContactKind: row.last_external_contact_kind,
+      lastExternalContactBy: row.last_external_contact_by_id
+        ? { id: row.last_external_contact_by_id, name: row.last_external_contact_by_name }
+        : null,
       submittedAt: row.submitted_at,
       submissionReference: row.submission_reference,
+      submissionUrl: row.submission_url,
+      submissionNotes: row.submission_notes,
+      submissionEvidenceStatus: row.submission_evidence_status,
+      submissionRecordedBy: row.submission_recorded_by_id
+        ? { id: row.submission_recorded_by_id, name: row.submission_recorded_by_name }
+        : null,
       proposal: row.proposal_id
         ? {
             id: row.proposal_id,
@@ -1080,6 +1140,10 @@ export async function getSchoolCallLedger(
       lastActionAt: row.last_action_at,
       lastActorName: row.last_actor_name,
       isUntouched,
+      relevance:
+        row.triage_status === 'RELEVANT'
+          ? { tier: 'direct', reason: 'Marked relevant by the school' }
+          : relevanceByCall.get(row.call_id) || { tier: 'none', reason: null },
       allocations: allocationsByCall.get(row.call_id) || [],
     }
   })

@@ -120,6 +120,7 @@ export const MAX_BUDGET_YEARS = 10
 
 /** Documents the institution issues on a proposal. */
 export const PROPOSAL_DOCUMENT_KINDS = [
+  'SUBMISSION_PROOF',
   'ENDORSEMENT',
   'FORWARDING',
   'NOC',
@@ -131,6 +132,7 @@ export const PROPOSAL_DOCUMENT_KINDS = [
 export type ProposalDocumentKind = (typeof PROPOSAL_DOCUMENT_KINDS)[number]
 
 export const PROPOSAL_DOCUMENT_LABELS: Record<ProposalDocumentKind, string> = {
+  SUBMISSION_PROOF: 'Submission proof / portal acknowledgement',
   ENDORSEMENT: 'Endorsement letter',
   FORWARDING: 'Forwarding letter',
   NOC: 'No-objection certificate',
@@ -238,6 +240,7 @@ export const proposalInclude = {
   pi: { select: { id: true, name: true, email: true } },
   created_by: { select: { id: true, name: true, email: true } },
   cleared_by: { select: { id: true, name: true, email: true } },
+  submission_recorded_by: { select: { id: true, name: true, email: true } },
   org_unit: { select: { id: true, name: true, code: true } },
   pi_org_unit: { select: { id: true, name: true, code: true } },
   funding_call: {
@@ -294,6 +297,10 @@ export function serializeProposal(row: any, lens: ProposalLens) {
     submittedAt: row.submitted_at ?? null,
     submissionReference: row.submission_reference ?? null,
     submissionUrl: row.submission_url ?? null,
+    submissionEvidenceStatus: row.submission_evidence_status ?? null,
+    submissionRecordedBy: internal
+      ? row.submission_recorded_by?.name || row.submission_recorded_by?.email || null
+      : null,
     agencyStatusNote: row.agency_status_note ?? null,
     agencyStatusUpdatedAt: row.agency_status_updated_at ?? null,
     clearedAt: row.cleared_at ?? null,

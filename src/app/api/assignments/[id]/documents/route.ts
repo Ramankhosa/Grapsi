@@ -4,6 +4,7 @@ import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { writeFundingBufferAsset } from '@/lib/funding/storage'
 import { canManageAssignment } from '@/lib/orgUnits/scope'
 import { prisma } from '@/lib/prisma'
+import { submissionEvidenceStatus } from '@/lib/fundingDept/opportunitySnapshot'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,6 +28,10 @@ async function loadAssignment(tenantId: string, id: string) {
       assigned_by_user_id: true,
       assignee_org_unit_id: true,
       assignee_user_id: true,
+      submitted_at: true,
+      submission_reference: true,
+      submission_url: true,
+      submission_notes: true,
     },
   })
 }
@@ -133,20 +138,37 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     buffer,
   })
 
-  const created = await prisma.assignmentDocument.create({
-    data: {
-      tenant_id: context.tenantId,
-      assignment_id: record.id,
-      kind,
-      file_name: file.name || 'document',
-      mime_type: file.type || null,
-      byte_size: stored.byteSize,
-      storage_path: stored.storagePath,
-      note,
-      visible_to_assignee: visibleToAssignee,
-      uploaded_by_user_id: context.user.id,
-    },
-    select: { id: true, file_name: true, kind: true, byte_size: true },
+  const created = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${context.user.id}, true)`
+    const document = await tx.assignmentDocument.create({
+      data: {
+        tenant_id: context.tenantId,
+        assignment_id: record.id,
+        kind,
+        file_name: file.name || 'document',
+        mime_type: file.type || null,
+        byte_size: stored.byteSize,
+        storage_path: stored.storagePath,
+        note,
+        visible_to_assignee: visibleToAssignee,
+        uploaded_by_user_id: context.user.id,
+      },
+      select: { id: true, file_name: true, kind: true, byte_size: true },
+    })
+    if (record.submitted_at && kind === 'PROPOSAL') {
+      await tx.callAssignment.update({
+        where: { id: record.id },
+        data: {
+          submission_evidence_status: submissionEvidenceStatus({
+            reference: record.submission_reference,
+            url: record.submission_url,
+            notes: record.submission_notes,
+            hasDocument: true,
+          }),
+        },
+      })
+    }
+    return document
   })
 
   return NextResponse.json({ document: created }, { status: 201 })

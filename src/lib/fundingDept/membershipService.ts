@@ -288,6 +288,7 @@ export async function setMemberSchools(input: {
 
   try {
     await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${input.actorUserId}, true)`
       if (toRemove.length > 0) {
         await tx.fundingDeptSchoolAssignment.deleteMany({
           where: { member_id: member.id, org_unit_id: { in: toRemove }, is_deputy: asDeputy },

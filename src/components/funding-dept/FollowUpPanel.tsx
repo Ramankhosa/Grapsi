@@ -118,6 +118,7 @@ export default function FollowUpPanel(props: Props) {
   const [saving, setSaving] = useState(false)
 
   const [kind, setKind] = useState('NOTE')
+  const [contactTarget, setContactTarget] = useState('FACULTY')
   const [stage, setStage] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [remindAt, setRemindAt] = useState('')
@@ -155,6 +156,7 @@ export default function FollowUpPanel(props: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind,
+          contactTarget,
           stage,
           note: note.trim(),
           remindAt: remindAt ? new Date(remindAt).toISOString() : null,
@@ -213,6 +215,7 @@ export default function FollowUpPanel(props: Props) {
       <div className="nk-panel-quiet px-4 py-4">
         <p className="nk-eyebrow">Record a follow-up</p>
         <div className="mt-3 space-y-3">
+          <label className="nk-label">Contact with<select className="nk-select ml-2" value={contactTarget} onChange={e=>setContactTarget(e.target.value)}><option value="FACULTY">Faculty</option><option value="AGENCY">Funding agency</option><option value="INTERNAL">Internal coordination</option><option value="UNKNOWN">Not specified</option></select></label>
           <div className="flex flex-wrap gap-2">
             {KINDS.map((option) => (
               <button

@@ -6,6 +6,7 @@ import { notifyNewAssignment } from '@/lib/assignments/notifyAssignment'
 import { isAccessError, requireTenantScope } from '@/lib/auth/tenantAccess'
 import { canAssignToUser, canManageAssignment, resolveAssignerUnitId } from '@/lib/orgUnits/scope'
 import { prisma } from '@/lib/prisma'
+import { snapshotFundingOpportunity } from '@/lib/fundingDept/opportunitySnapshot'
 
 export const dynamic = 'force-dynamic'
 
@@ -131,6 +132,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // One transaction: a successor that exists while its predecessor is still
   // shown as live would double-count the same work on every dashboard.
   const created = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('grapsi.actor_id', ${context.user.id}, true)`
     if (stillOpen) {
       await tx.callAssignment.update({
         where: { id: original.id },
@@ -162,6 +164,15 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
   const previousName =
     original.assignee?.name || original.assignee?.email || 'a colleague'
+
+  await snapshotFundingOpportunity({
+    tenantId: context.tenantId,
+    fundingCallId: original.funding_call_id,
+    userId: assignee.id,
+    orgUnitId: permission.assigneeUnitId,
+    source: 'assignment',
+    sourceVersion: 'assignment-v1',
+  })
 
   await notifyNewAssignment({
     tenantId: context.tenantId,
