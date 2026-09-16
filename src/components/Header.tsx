@@ -155,7 +155,31 @@ function MenuBranch({
   children: React.ReactNode
 }) {
   const rowRef = useRef<HTMLDivElement>(null)
+  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [flip, setFlip] = useState(false)
+
+  const cancelClose = useCallback(() => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current)
+      closeTimeoutRef.current = null
+    }
+  }, [])
+
+  const openBranch = useCallback(() => {
+    cancelClose()
+    onOpen()
+  }, [cancelClose, onOpen])
+
+  const scheduleClose = useCallback(() => {
+    cancelClose()
+    closeTimeoutRef.current = setTimeout(() => {
+      onClose()
+      onHint(null)
+      closeTimeoutRef.current = null
+    }, 300)
+  }, [cancelClose, onClose, onHint])
+
+  useEffect(() => cancelClose, [cancelClose])
 
   /**
    * Panels open leftwards from a menu anchored to the right edge, so by the
@@ -175,11 +199,8 @@ function MenuBranch({
     <div
       ref={rowRef}
       className="relative"
-      onMouseEnter={onOpen}
-      onMouseLeave={() => {
-        onClose()
-        onHint(null)
-      }}
+      onMouseEnter={openBranch}
+      onMouseLeave={scheduleClose}
     >
       {/* A branch's own explanation is printed at the top of the panel it opens,
           not floated beside it: the panel occupies exactly the space a floating
@@ -219,17 +240,23 @@ function MenuBranch({
 
       {open ? (
         <div
-          className={`absolute top-0 z-10 max-h-[70vh] w-64 overflow-y-auto overscroll-contain rounded-lg border border-gpt-gray-200 bg-white py-1 shadow-lg max-sm:static max-sm:mx-0 max-sm:w-full max-sm:rounded-none max-sm:border-0 max-sm:border-t max-sm:bg-gpt-gray-50/60 max-sm:shadow-none ${
-            flip ? 'left-full ml-1' : 'right-full mr-1'
-          } ${clip ? '' : 'sm:max-h-none sm:overflow-visible'}`}
+          className={`absolute top-0 z-10 w-[calc(16rem+0.5rem)] max-sm:static max-sm:w-full ${
+            flip ? 'left-full pl-2' : 'right-full pr-2'
+          } max-sm:p-0`}
         >
-          {description ? (
-            <div className="mb-1 border-b border-gpt-gray-100 px-3 pb-2 pt-1">
-              <p className="text-xs font-semibold text-gpt-gray-800">{label}</p>
-              <p className="mt-0.5 text-[11px] leading-snug text-gpt-gray-500">{description}</p>
-            </div>
-          ) : null}
-          {children}
+          <div
+            className={`max-h-[70vh] w-64 overflow-y-auto overscroll-contain rounded-lg border border-gpt-gray-200 bg-white py-1 shadow-lg max-sm:w-full max-sm:rounded-none max-sm:border-0 max-sm:border-t max-sm:bg-gpt-gray-50/60 max-sm:shadow-none ${
+              clip ? '' : 'sm:max-h-none sm:overflow-visible'
+            }`}
+          >
+            {description ? (
+              <div className="mb-1 border-b border-gpt-gray-100 px-3 pb-2 pt-1">
+                <p className="text-xs font-semibold text-gpt-gray-800">{label}</p>
+                <p className="mt-0.5 text-[11px] leading-snug text-gpt-gray-500">{description}</p>
+              </div>
+            ) : null}
+            {children}
+          </div>
         </div>
       ) : null}
     </div>
@@ -247,7 +274,6 @@ export default function Header() {
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isSendingReset, setIsSendingReset] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
-  const menuTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const platformPermissions = user?.platformPermissions || []
   const isPlatformAdmin = Boolean(user?.roles?.includes('ADMIN') && user?.ati_id === 'PLATFORM')
   const canOpenPlatformFunding =
@@ -509,22 +535,6 @@ export default function Header() {
     setHint(null)
   }, [])
 
-  // Clear any pending timeout
-  const clearMenuTimeout = useCallback(() => {
-    if (menuTimeoutRef.current) {
-      clearTimeout(menuTimeoutRef.current)
-      menuTimeoutRef.current = null
-    }
-  }, [])
-
-  // Start auto-close timeout
-  const startMenuTimeout = useCallback(() => {
-    clearMenuTimeout()
-    menuTimeoutRef.current = setTimeout(() => {
-      closeMenu()
-    }, 8000) // Auto-close once the pointer has been away this long
-  }, [closeMenu, clearMenuTimeout])
-
   // Handle clicks outside dropdown to close it
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -560,21 +570,13 @@ export default function Header() {
       document.removeEventListener('mousedown', handleClickOutside)
       document.removeEventListener('keydown', handleEscapeKey)
       window.removeEventListener('scroll', handleScroll, true)
-      clearMenuTimeout()
     }
-  }, [showUserMenu, closeMenu, clearMenuTimeout])
+  }, [showUserMenu, closeMenu])
 
   // Reset menu state when user changes (after login/logout)
   useEffect(() => {
     closeMenu()
   }, [user?.user_id, closeMenu])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      clearMenuTimeout()
-    }
-  }, [clearMenuTimeout])
 
   const handleSignOut = () => {
     closeMenu()
@@ -615,15 +617,6 @@ export default function Header() {
       setOpenGroup(null)
       setShowUserMenu(true)
     }
-  }
-
-  // Reset auto-close timeout when user interacts with menu
-  const handleMenuMouseEnter = () => {
-    clearMenuTimeout()
-  }
-
-  const handleMenuMouseLeave = () => {
-    startMenuTimeout()
   }
 
   if (isLoading) {
@@ -718,8 +711,6 @@ export default function Header() {
               {showUserMenu && (
                 <div
                   className="absolute right-0 top-full z-50 mt-1 w-72 rounded-lg border border-gpt-gray-200 bg-white shadow-lg max-h-[calc(100vh-5rem)] overflow-y-auto overscroll-contain sm:max-h-none sm:overflow-visible"
-                  onMouseEnter={handleMenuMouseEnter}
-                  onMouseLeave={handleMenuMouseLeave}
                 >
                   {/* User Info */}
                   <div className="px-3 py-2 border-b border-gpt-gray-200 bg-gpt-gray-50">
