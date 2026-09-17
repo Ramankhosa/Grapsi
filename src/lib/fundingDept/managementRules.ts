@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto'
 
 export type ReportMode = 'pending' | 'cohort' | 'activity' | 'portfolio'
+export type AttentionFilter = 'upcoming-21' | 'missed-unallocated-no-submission'
 export type WaitingWith = 'FACULTY' | 'DSR' | 'REVIEWER' | 'APPROVER' | 'AGENCY'
 export type OpportunityActionInput = {
   applications: number
@@ -50,6 +51,36 @@ export function inPeriod(value: Date | string | null | undefined, start: Date, e
 }
 export function overdueAt(value: Date | string | null | undefined, at: Date) {
   return Boolean(value && new Date(value).getTime() < at.getTime())
+}
+/** Calendar-day deadline classification in the department's reporting timezone.
+ * Funding-call dates are date-like values, so a call due today must not become
+ * "missed" halfway through the day just because its stored timestamp is 00:00. */
+export function indiaCalendarDay(value: Date | string) {
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return null
+  const shifted = new Date(parsed.getTime() + 330 * 60_000)
+  return Math.floor(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) / day)
+}
+export function deadlineAttention(value: Date | string | null | undefined, at: Date) {
+  if (!value) return { daysToDeadline: null, status: 'UNKNOWN' as const, upcoming21: false, missed: false }
+  const deadlineDay = indiaCalendarDay(value)
+  const reportDay = indiaCalendarDay(at)
+  if (deadlineDay === null || reportDay === null) return { daysToDeadline: null, status: 'UNKNOWN' as const, upcoming21: false, missed: false }
+  const daysToDeadline = deadlineDay - reportDay
+  return {
+    daysToDeadline,
+    status: daysToDeadline < 0 ? 'MISSED' as const : daysToDeadline <= 21 ? 'UPCOMING_21' as const : 'FUTURE' as const,
+    upcoming21: daysToDeadline >= 0 && daysToDeadline <= 21,
+    missed: daysToDeadline < 0,
+  }
+}
+export function opportunityDeadlineAttention(input:{deadline:Date|string|null|undefined;asOf:Date;quality:string;formalAllocations:number;submissions:number;outstandingApplications:number}) {
+  const deadline=deadlineAttention(input.deadline,input.asOf)
+  const confirmed=input.quality==='confirmed'
+  return {...deadline,
+    upcoming21:confirmed && deadline.upcoming21 && (input.formalAllocations===0 || input.outstandingApplications>0),
+    missedUnallocatedNoSubmission:confirmed && deadline.missed && input.formalAllocations===0 && input.submissions===0,
+  }
 }
 export function evidenceFingerprint(row: ApplicationRow, documents: string[]) {
   return createHash('sha256').update(JSON.stringify([

@@ -13,6 +13,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
     const mode=params.get('mode') || (['pending','deadline-risk','opportunity-gaps','coverage'].includes(view)?'pending':'cohort')
     if(!['pending','activity','cohort','portfolio'].includes(mode))return NextResponse.json({error:'Unknown report mode.'},{status:400})
     const requested=params.get('memberId')
+    const attention=params.get('attention')
+    if(attention&&!['upcoming-21','missed-unallocated-no-submission'].includes(attention))return NextResponse.json({error:'Unknown attention filter.'},{status:400})
     if(!access.department && requested && requested!==access.memberId)return NextResponse.json({error:'This portfolio is outside your access.'},{status:403})
     const scopeKey=reportScopeKey(access),filterKey=reportFilterKey(params,view)
     let snapshot=params.get('snapshot')
@@ -20,7 +22,8 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
       ...window,schoolIds:access.schoolIds,memberId:access.deputy?null:requested,
       schoolId:params.get('schoolId'),callId:params.get('callId'),callSearch:params.get('callSearch'),mode:mode as ReportMode,
       workState:params.get('workState'),stage:params.get('stage'),relevance:params.get('relevance'),exception:params.get('exception'),
-      waitingWith:params.get('waitingWith'),horizon:['7','14','30'].includes(params.get('horizon') || '')?Number(params.get('horizon')):null,
+      waitingWith:params.get('waitingWith'),horizon:['7','14','21','30'].includes(params.get('horizon') || '')?Number(params.get('horizon')):null,
+      attention:attention as 'upcoming-21'|'missed-unallocated-no-submission'|null,
     })
     if(!snapshot)snapshot=await writeReportSnapshot(access.context.tenantId,access.context.user.id,scopeKey,filterKey,report)
     const format=params.get('format')
@@ -65,6 +68,6 @@ export async function managementReportHandler(request:NextRequest,view='funnel')
     }}))}))}
     return NextResponse.json({snapshot,asOf:report.asOf,mode:report.mode,period:report.period,windowLabel:window.label,timezone:window.timezone,
       portfolio:access.deputy?'deputy':'primary',lens:access.department?'department':'member',totals:report.totals,activity:report.activity,
-      quality:report.quality,options:report.options,...payload as object},{headers:{'Cache-Control':'private, no-store'}})
+      attentionCounts:report.attentionCounts,quality:report.quality,options:report.options,...payload as object},{headers:{'Cache-Control':'private, no-store'}})
   }catch(error){console.error('DSR management report failed',error);return NextResponse.json({error:error instanceof Error?error.message:'Report unavailable.'},{status:error instanceof ManagementError?error.status:500})}
 }

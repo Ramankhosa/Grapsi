@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applicationState, csvCell, evidenceFingerprint, hasSubmissionEvidence, inPeriod, opportunityActionState, ratio } from '@/lib/fundingDept/managementRules'
+import { applicationState, csvCell, deadlineAttention, evidenceFingerprint, hasSubmissionEvidence, inPeriod, opportunityActionState, opportunityDeadlineAttention, ratio } from '@/lib/fundingDept/managementRules'
 import type { ApplicationRow } from '@/lib/fundingDept/managementRules'
 
 const row=(overrides:Partial<ApplicationRow>={}):ApplicationRow=>({id:'assignment:a',tenant_id:'t',school_id:'s',call_id:'c',assignment_id:'a',proposal_id:null,faculty_id:'f',allocated_by:'o',created_at:new Date('2026-01-01'),assignment_status:'IN_PROGRESS',outcome:'PENDING',proposal_status:'DRAFT',submitted_at:null,submission_reference:null,submission_url:null,submission_notes:null,submission_recorder:null,internal_deadline:null,review_deadline:null,agency_deadline:null,title:'Call',agency:null,requested_amount:null,sanctioned_amount:null,currency:'INR',version_no:1,updated_at:new Date('2026-01-01'),...overrides})
@@ -17,5 +17,20 @@ describe('canonical DSR management rules',()=>{
     expect(opportunityActionState({applications:1,candidatesReviewed:1,externalContacts:1,recordedActions:1,dispositionRecorded:true})).toEqual({
       touched:true,signals:['APPLICATION_OR_ALLOCATION','FACULTY_REVIEWED','EXTERNAL_FACULTY_CONTACT','NAMED_ACTION','NO_UPTAKE_DECISION'],
     })
+  })
+  it('classifies the inclusive 21-day window using India calendar dates',()=>{
+    const asOf=new Date('2026-09-17T18:00:00+05:30')
+    expect(deadlineAttention('2026-09-17T00:00:00.000Z',asOf)).toMatchObject({daysToDeadline:0,upcoming21:true,missed:false})
+    expect(deadlineAttention('2026-10-08T00:00:00.000Z',asOf)).toMatchObject({daysToDeadline:21,upcoming21:true})
+    expect(deadlineAttention('2026-10-09T00:00:00.000Z',asOf)).toMatchObject({daysToDeadline:22,upcoming21:false})
+    expect(deadlineAttention('2026-09-16T00:00:00.000Z',asOf)).toMatchObject({daysToDeadline:-1,missed:true})
+  })
+  it('only calls a passed relevant opportunity missed when allocation and submission are both absent',()=>{
+    const base={deadline:'2026-09-16T00:00:00.000Z',asOf:new Date('2026-09-17T12:00:00+05:30'),quality:'confirmed',formalAllocations:0,submissions:0,outstandingApplications:0}
+    expect(opportunityDeadlineAttention(base).missedUnallocatedNoSubmission).toBe(true)
+    expect(opportunityDeadlineAttention({...base,formalAllocations:1}).missedUnallocatedNoSubmission).toBe(false)
+    expect(opportunityDeadlineAttention({...base,submissions:1}).missedUnallocatedNoSubmission).toBe(false)
+    expect(opportunityDeadlineAttention({...base,quality:'dismissed'}).missedUnallocatedNoSubmission).toBe(false)
+    expect(opportunityDeadlineAttention({...base,deadline:null}).missedUnallocatedNoSubmission).toBe(false)
   })
 })
